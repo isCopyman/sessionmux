@@ -33,7 +33,7 @@ export interface SplitNode {
 
 export type LayoutNode = GroupLeaf | SplitNode
 
-export type SplitDirection = "right" | "down"
+export type SplitDirection = "left" | "right" | "up" | "down"
 
 /** Group id of the initial (and post-reset) single-leaf layout. */
 export const ROOT_GROUP_ID = "g-main"
@@ -121,10 +121,11 @@ function collapse(node: LayoutNode): LayoutNode {
 }
 
 /**
- * Split `groupId` toward `direction`, placing the new group `newGroupId` after
- * it. Same-orientation parent → sibling insert halving the split group's
- * share; otherwise the leaf is replaced by a binary split (deterministic node
- * id derived from the new group id). Unknown group → same tree reference.
+ * Split `groupId` toward `direction`, placing the new group before it for
+ * left/up and after it for right/down. Same-orientation parent → sibling
+ * insert halving the split group's share; otherwise the leaf is replaced by a
+ * binary split (deterministic node id derived from the new group id). Unknown
+ * group → same tree reference.
  */
 export function splitGroup(
   tree: LayoutNode,
@@ -133,7 +134,8 @@ export function splitGroup(
   newGroupId: string
 ): LayoutNode {
   const orientation: SplitOrientation =
-    direction === "right" ? "horizontal" : "vertical"
+    direction === "left" || direction === "right" ? "horizontal" : "vertical"
+  const insertBefore = direction === "left" || direction === "up"
 
   const walk = (node: LayoutNode): LayoutNode => {
     if (node.type === "group") {
@@ -142,7 +144,9 @@ export function splitGroup(
         type: "split",
         id: `s-${newGroupId}`,
         orientation,
-        children: [node, singleGroupLayout(newGroupId)],
+        children: insertBefore
+          ? [singleGroupLayout(newGroupId), node]
+          : [node, singleGroupLayout(newGroupId)],
         ratios: [0.5, 0.5],
       }
     }
@@ -155,8 +159,9 @@ export function splitGroup(
         const ratios = [...node.ratios]
         const share = ratios[idx] / 2
         ratios[idx] = share
-        children.splice(idx + 1, 0, singleGroupLayout(newGroupId))
-        ratios.splice(idx + 1, 0, share)
+        const insertionIndex = insertBefore ? idx : idx + 1
+        children.splice(insertionIndex, 0, singleGroupLayout(newGroupId))
+        ratios.splice(insertionIndex, 0, share)
         return { ...node, children, ratios }
       }
     }

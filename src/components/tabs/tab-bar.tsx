@@ -19,6 +19,8 @@ import {
 import {
   clientPointFromDrag,
   dropIndexFromMidpoints,
+  splitDropEdgeFromPoint,
+  type SplitDropEdge,
 } from "@/lib/tab-drag-drop"
 import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
 import { useIsCoarsePointer } from "@/hooks/use-is-coarse-pointer"
@@ -51,6 +53,7 @@ export function TabBar({ groupId }: TabBarProps) {
     pinTab,
     toggleGroupTile,
     splitTab,
+    snapTabToSplit,
     moveTabToGroup,
     toggleGroupOrientation,
     dissolveGroup,
@@ -91,7 +94,6 @@ export function TabBar({ groupId }: TabBarProps) {
   // Split-group context-menu wiring, shared by every tab in this strip.
   const orderedLeaves = useMemo(() => leafIds(groupLayout), [groupLayout])
   const isSplit = orderedLeaves.length > 1
-  const canSplitMove = groupTabs.length >= 2
   const moveTargets = useMemo<TabMoveTarget[]>(() => {
     if (!isSplit) return []
     return orderedLeaves
@@ -117,36 +119,52 @@ export function TabBar({ groupId }: TabBarProps) {
     [dissolveGroup, stripGroupId]
   )
 
-  // ── Cross-group drag & drop (split-group strips only) ────────────────────
+  // ── Pane drag & drop + edge snapping ────────────────────────────────────
   // The dragged tab itself is axis-locked to its own strip (Reorder drag="x" +
   // overflow clipping), so crossing groups is pointer-based: hit-test the
-  // element under the cursor for another group's strip or shell, highlight it,
-  // and commit the move on release. Same-group hits resolve to null — a drop
-  // there is just the ordinary within-strip reorder.
+  // pane shell under the cursor, highlight either its center or nearest edge,
+  // and commit the move/split on release. The source pane's center remains an
+  // ordinary within-strip reorder; its edges are valid split targets.
   const isDropTarget = useTabStore(
-    (s) => groupId != null && s.tabDrag?.overGroupId === groupId
+    (s) =>
+      groupId != null &&
+      s.tabDrag?.overGroupId === groupId &&
+      s.tabDrag?.splitEdge == null
   )
   const resolveDropTarget = useCallback(
     (
       clientX: number,
       clientY: number
-    ): { gid: string; el: Element; strip: boolean } | null => {
-      if (groupId == null) return null
+    ): {
+      gid: string
+      el: Element
+      strip: boolean
+      splitEdge: SplitDropEdge | null
+    } | null => {
       const el = document.elementFromPoint(clientX, clientY)
       if (!el) return null
       const strip = el.closest("[data-conv-group-strip]")
       if (strip) {
         const gid = strip.getAttribute("data-conv-group-strip")
-        return gid && gid !== groupId ? { gid, el: strip, strip: true } : null
+        return gid && gid !== stripGroupId
+          ? { gid, el: strip, strip: true, splitEdge: null }
+          : null
       }
       const shell = el.closest("[data-conv-group-shell]")
       if (shell) {
         const gid = shell.getAttribute("data-conv-group-shell")
-        return gid && gid !== groupId ? { gid, el: shell, strip: false } : null
+        if (!gid) return null
+        const splitEdge = splitDropEdgeFromPoint(
+          clientX,
+          clientY,
+          shell.getBoundingClientRect()
+        )
+        if (gid === stripGroupId && splitEdge == null) return null
+        return { gid, el: shell, strip: false, splitEdge }
       }
       return null
     },
-    [groupId]
+    [stripGroupId]
   )
   const handleTabDrag = useCallback(
     (
@@ -162,6 +180,7 @@ export function TabBar({ groupId }: TabBarProps) {
         x,
         y,
         overGroupId: target?.gid ?? null,
+        splitEdge: target?.splitEdge ?? null,
       })
     },
     [resolveDropTarget, updateTabDrag]
@@ -176,6 +195,10 @@ export function TabBar({ groupId }: TabBarProps) {
       const target = resolveDropTarget(x, y)
       endTabDrag()
       if (!target) return
+      if (target.splitEdge) {
+        snapTabToSplit(tab.id, target.gid, target.splitEdge)
+        return
+      }
       // Strip drop: land at the cursor position (midpoint count). Shell-body
       // drop: append (the store clamps the oversized index to the tail).
       const index = target.strip
@@ -191,9 +214,8 @@ export function TabBar({ groupId }: TabBarProps) {
         : Number.MAX_SAFE_INTEGER
       moveTabToGroup(tab.id, target.gid, { index })
     },
-    [resolveDropTarget, endTabDrag, moveTabToGroup]
+    [resolveDropTarget, endTabDrag, moveTabToGroup, snapTabToSplit]
   )
-  const crossDragEnabled = groupId != null && isSplit
 
   // New-conversation affordance at the end of the tab strip. Mirrors the
   // sidebar's "New chat": return to the conversation workspace, then open a
@@ -295,8 +317,8 @@ export function TabBar({ groupId }: TabBarProps) {
       axis="x"
       values={groupTabs}
       onReorder={handleReorder}
-      // Cross-group drop target: group strips advertise their group id for the
-      // drag hit-test and tint while a foreign tab hovers.
+      // Pane drop target: strips advertise their group id for center moves;
+      // shells advertise the larger area and edge-split zones.
       data-conv-group-strip={groupId ?? undefined}
       // Fills the title-bar strip and shrinks browser-style to share the row (see
       // TabItem): flush (`gap-0`) so hairline separators read as dividers, no
@@ -343,13 +365,11 @@ export function TabBar({ groupId }: TabBarProps) {
             folderName={folderInfo?.name ?? null}
             folderBranch={branches.get(tab.folderId) ?? null}
             isSplit={isSplit}
-            canSplitMove={canSplitMove && !isDraft}
+            canSplitMove={!isDraft}
             canMoveToGroup={!isDraft}
             moveTargets={moveTargets}
-            onTabDrag={crossDragEnabled && !isDraft ? handleTabDrag : undefined}
-            onTabDragEnd={
-              crossDragEnabled && !isDraft ? handleTabDragEnd : undefined
-            }
+            onTabDrag={!isDraft ? handleTabDrag : undefined}
+            onTabDragEnd={!isDraft ? handleTabDragEnd : undefined}
             onSwitch={switchTab}
             onClose={closeTab}
             onCloseOthers={closeOtherTabs}

@@ -13,7 +13,7 @@
 |---|---|---|---|
 | [#403 Claude `/rename` 自定义名称](https://github.com/xintaofei/codeg/issues/403) | Closed | Claude 标题保真 | 主 RFC `SYNC-001`、Milestone 0 回归 |
 | [#404 已导入会话不更新 `updated_at`](https://github.com/xintaofei/codeg/issues/404) | Closed | 活动时间与排序 | 主 RFC `SYNC-002`、Milestone 0 回归 |
-| [#456 新窗口与拖拽分屏/吸附](https://github.com/xintaofei/codeg/issues/456) | Open | App Window、边缘 drop zone | 主 RFC `WIN-006`、`LAYOUT-001..004` |
+| [#456 新窗口与拖拽分屏/吸附](https://github.com/xintaofei/codeg/issues/456) | Open；本地分支已完成单窗口吸附 | App Window、边缘 drop zone | 主 RFC `WIN-006`、`LAYOUT-001..004` |
 | [#457 Codex 未读取真实会话名称](https://github.com/xintaofei/codeg/issues/457) | Open | Codex `session_index.jsonl` 标题 | 主 RFC `SYNC-001` |
 | [#458 自动同步已导入的本地会话](https://github.com/xintaofei/codeg/issues/458) | Open | 文件监听、增量刷新 | 主 RFC `SYNC-002..005` |
 | [#459 Collection / 主题树](https://github.com/xintaofei/codeg/issues/459) | Open | 语义分类；本地设计采用唯一主要归属 | 主 RFC `COL-001..004` |
@@ -92,7 +92,7 @@ Split docking (#456 部分) ── 可独立提前交付
 建议实施批次：
 
 1. **P0 基线可靠性**：核实 #403/#404 修复，处理 #457，建立 #458 的增量同步基础；
-2. **P1 快速体验收益**：完成 #456 的拖边吸附，不等待完整多窗口；
+2. **P1 快速体验收益**：#456 的单窗口拖边吸附已在本地分支完成；继续验证后，不等待完整多窗口；
 3. **P2 逻辑 Workbench**：实现 #460，保存多套分屏与 Session 组合；
 4. **P3 Collection**：实现 #459；如果侧栏重构更适合提前，也可与 P2 并行；
 5. **P4 大量会话、物理多窗口与资源 Pane**：Session Center、可选全文检索、完成 #456 剩余部分，

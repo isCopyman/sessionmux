@@ -23,7 +23,7 @@ import {
   selectIsSplit,
   useTabStore,
 } from "@/stores/tab-store"
-import { leafIds } from "@/lib/tab-group-layout"
+import { computeRects, leafIds } from "@/lib/tab-group-layout"
 import {
   buildNewConversationDraftStorageKey,
   loadMessageInputDraftV2,
@@ -1912,15 +1912,80 @@ describe("TabProvider tab groups", () => {
     expect(store().groupSelection[g1]).toBe("conv-1-codex-2")
   })
 
-  it("split-and-move is a no-op when the tab is alone in its group", async () => {
+  it("split-and-move leaves a draft when the tab is alone in its group", async () => {
     await renderWithTabs([tabItem(1, 1, true)])
+    const home = leaves()[0]
 
     act(() => {
       store().splitTab("conv-1-codex-1", "right", { move: true })
     })
 
-    expect(selectIsSplit(store())).toBe(false)
-    expect(leaves()).toHaveLength(1)
+    expect(selectIsSplit(store())).toBe(true)
+    expect(leaves()).toHaveLength(2)
+    const movedTo = newLeafBeside(home)
+    const replacement = store().rawTabs.find(
+      (tab) => tab.conversationId == null
+    )
+    expect(replacement).toBeDefined()
+    expect(groupOfId(replacement!.id)).toBe(home)
+    expect(groupOfId("conv-1-codex-1")).toBe(movedTo)
+    expect(store().activeTabId).toBe("conv-1-codex-1")
+  })
+
+  it("edge-snaps a persisted tab before the target pane", async () => {
+    await renderWithTabs([tabItem(1, 1, true), tabItem(1, 2)])
+    const home = leaves()[0]
+
+    act(() => {
+      store().snapTabToSplit("conv-1-codex-2", home, "left")
+    })
+
+    const movedTo = newLeafBeside(home)
+    expect(leaves()).toEqual([movedTo, home])
+    expect(groupOfId("conv-1-codex-2")).toBe(movedTo)
+    expect(groupOfId("conv-1-codex-1")).toBe(home)
+    const rects = computeRects(store().groupLayout).groups
+    expect(rects.get(movedTo)?.x).toBe(0)
+    expect(rects.get(home)?.x).toBe(50)
+  })
+
+  it("edge-snaps the only persisted tab and keeps a source draft", async () => {
+    await renderWithTabs([tabItem(1, 1, true)])
+    const home = leaves()[0]
+
+    act(() => {
+      store().snapTabToSplit("conv-1-codex-1", home, "right")
+    })
+
+    const movedTo = newLeafBeside(home)
+    const replacement = store().rawTabs.find(
+      (tab) => tab.conversationId == null
+    )
+    expect(replacement).toBeDefined()
+    expect(groupOfId(replacement!.id)).toBe(home)
+    expect(groupOfId("conv-1-codex-1")).toBe(movedTo)
+    expect(store().activeTabId).toBe("conv-1-codex-1")
+  })
+
+  it("edge-snaps into a foreign pane without draining the source", async () => {
+    await renderWithTabs([tabItem(1, 1, true), tabItem(1, 2), tabItem(2, 3)])
+    const home = leaves()[0]
+    act(() => {
+      store().splitTab("conv-1-codex-2", "right", { move: true })
+    })
+    const right = newLeafBeside(home)
+
+    act(() => {
+      store().snapTabToSplit("conv-2-codex-3", right, "up")
+    })
+
+    const snapped = groupOfId("conv-2-codex-3")
+    expect(snapped).not.toBe(home)
+    expect(snapped).not.toBe(right)
+    expect(groupOfId("conv-1-codex-1")).toBe(home)
+    expect(groupOfId("conv-1-codex-2")).toBe(right)
+    const rects = computeRects(store().groupLayout).groups
+    expect(rects.get(snapped)?.y).toBeLessThan(rects.get(right)!.y)
   })
 
   it("plain split seeds the new group with a draft inheriting the context tab", async () => {

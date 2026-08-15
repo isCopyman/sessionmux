@@ -35,6 +35,16 @@ describe("splitGroup", () => {
     expect(tree.orientation).toBe("vertical")
   })
 
+  it("places left/up splits before the target group", () => {
+    const left = splitGroup(leaf("a"), "a", "left", "b") as SplitNode
+    expect(left.orientation).toBe("horizontal")
+    expect(leafIds(left)).toEqual(["b", "a"])
+
+    const up = splitGroup(leaf("a"), "a", "up", "b") as SplitNode
+    expect(up.orientation).toBe("vertical")
+    expect(leafIds(up)).toEqual(["b", "a"])
+  })
+
   it("flattens a same-orientation split into a sibling insert", () => {
     const two = splitGroup(leaf("a"), "a", "right", "b")
     const three = splitGroup(two, "a", "right", "c") as SplitNode
@@ -42,6 +52,13 @@ describe("splitGroup", () => {
     expect(leafIds(three)).toEqual(["a", "c", "b"])
     // "a" halves its own share; "b" keeps its half.
     expect(three.ratios).toEqual([0.25, 0.25, 0.5])
+  })
+
+  it("flattens a same-orientation left split before its target", () => {
+    const two = splitGroup(leaf("a"), "a", "right", "b")
+    const three = splitGroup(two, "b", "left", "c") as SplitNode
+    expect(leafIds(three)).toEqual(["a", "c", "b"])
+    expect(three.ratios).toEqual([0.5, 0.25, 0.25])
   })
 
   it("nests a cross-orientation split", () => {

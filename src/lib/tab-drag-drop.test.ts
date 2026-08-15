@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest"
-import { clientPointFromDrag, dropIndexFromMidpoints } from "./tab-drag-drop"
+import {
+  clientPointFromDrag,
+  dropIndexFromMidpoints,
+  splitDropEdgeFromPoint,
+} from "./tab-drag-drop"
 
 describe("dropIndexFromMidpoints", () => {
   const midpoints = [100, 200, 300]
@@ -42,5 +46,32 @@ describe("clientPointFromDrag", () => {
       x: 7,
       y: 8,
     })
+  })
+})
+
+describe("splitDropEdgeFromPoint", () => {
+  const rect = { left: 100, top: 50, width: 400, height: 200 }
+
+  it("maps the four edge bands to split directions", () => {
+    expect(splitDropEdgeFromPoint(110, 150, rect)).toBe("left")
+    expect(splitDropEdgeFromPoint(490, 150, rect)).toBe("right")
+    expect(splitDropEdgeFromPoint(300, 55, rect)).toBe("up")
+    expect(splitDropEdgeFromPoint(300, 245, rect)).toBe("down")
+  })
+
+  it("keeps the pane center as an ordinary move target", () => {
+    expect(splitDropEdgeFromPoint(300, 150, rect)).toBeNull()
+  })
+
+  it("chooses the nearest normalized edge at a corner", () => {
+    // 5% from the left, 10% from the top.
+    expect(splitDropEdgeFromPoint(120, 70, rect)).toBe("left")
+    // 20% from the left, 2.5% from the top.
+    expect(splitDropEdgeFromPoint(180, 55, rect)).toBe("up")
+  })
+
+  it("rejects points outside or degenerate geometry", () => {
+    expect(splitDropEdgeFromPoint(99, 150, rect)).toBeNull()
+    expect(splitDropEdgeFromPoint(100, 50, { ...rect, width: 0 })).toBeNull()
   })
 })

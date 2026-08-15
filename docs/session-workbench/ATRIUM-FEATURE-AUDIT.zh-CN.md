@@ -146,7 +146,7 @@ Atrium 的 Wing/Room 可以作为侧栏、拖拽和恢复交互的参考，但�
 | Room 自动命名 | 标题来自 Harness 或首条 Prompt；Codex 仍有缺口 | ◐ | 原生名 > 人工锁定 > 本地生成 > Prompt 兜底 |
 | 二叉 mosaic 任意分屏和比例 | 已有 `groupLayout` 嵌套分屏和持久化 | ✅ | 复用，不重写 |
 | Pane subtab 分组 | 每个 split group 已可容纳多个 Tab | ✅ | 复用 |
-| 拖 Pane 到边缘创建 split | 可跨组拖动，但缺边缘 drop zone | ◐ | P0/P1：#456 |
+| 拖 Pane 到边缘创建 split | 已支持标签拖到四边新建 Pane、中央加入既有 Pane，并显示吸附预览 | ✅ | 已完成 #456 的单窗口吸附部分；物理窗口仍后置 |
 | Pane 最大化、交换、等分、锁比例 | 部分布局操作，未形成 Atrium 完整交互 | ◐ | 最大化/等分优先，其他按反馈补 |
 | Popout overlay、Resident dock | 无等价完整机制 | ❌ | 可后置，不是核心 |
 | 水平 Room Tab / 垂直 Room Sidebar | 只有 Folder/Session 侧栏和主 Tab | ◐ | Workbench 切换器 + Session Library 优先 |

@@ -36,6 +36,7 @@ import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { useTabActions, useTabStore } from "@/contexts/tab-context"
 import { groupOfTab, isReparentUnmount } from "@/stores/tab-store"
 import { computeRects, leafIds } from "@/lib/tab-group-layout"
+import type { SplitDropEdge } from "@/lib/tab-drag-drop"
 import { useTaskContext } from "@/contexts/task-context"
 import { cn, copyTextFromMenu, randomUUID } from "@/lib/utils"
 import { useConnectionLifecycle } from "@/hooks/use-connection-lifecycle"
@@ -1927,6 +1928,21 @@ const ConversationTabView = memo(function ConversationTabView({
 // tolerance — ratio math can land a hair off exact 0 / 100.
 const GROUP_EDGE_EPSILON = 0.1
 
+function splitDropOverlayPosition(edge: SplitDropEdge | null): string {
+  switch (edge) {
+    case "left":
+      return "inset-y-0 left-0 w-1/2"
+    case "right":
+      return "inset-y-0 right-0 w-1/2"
+    case "up":
+      return "inset-x-0 top-0 h-1/2"
+    case "down":
+      return "inset-x-0 bottom-0 h-1/2"
+    default:
+      return "inset-0"
+  }
+}
+
 /**
  * Corner reserve for a TOP-EDGE split-group strip. While split there is no
  * dedicated title-bar row above the shells (the workspace layout drops it
@@ -1984,6 +2000,7 @@ export function ConversationDetailPanel() {
   // Narrow: only the drop-TARGET group id (for the shell highlight ring) — the
   // per-frame x/y writes during a drag never re-render the panel.
   const dragOverGroupId = useTabStore((s) => s.tabDrag?.overGroupId ?? null)
+  const dragSplitEdge = useTabStore((s) => s.tabDrag?.splitEdge ?? null)
   const {
     openNewConversationTab,
     closeTab,
@@ -2507,9 +2524,16 @@ export function ConversationDetailPanel() {
               )}
             </div>
           </TileScrollContainer>
-          {/* Drop-target cue while a tab from another group hovers here. */}
+          {/* Drop-target cue for an existing-pane move or edge split. */}
           {dragOverGroupId === groupId && (
-            <div className="pointer-events-none absolute inset-0 z-30 bg-primary/5 ring-2 ring-inset ring-primary/30" />
+            <div
+              data-split-drop-edge={dragSplitEdge ?? undefined}
+              className={cn(
+                "pointer-events-none absolute z-30 ring-2 ring-inset ring-primary/35 transition-[inset,width,height] duration-75",
+                dragSplitEdge ? "bg-primary/10" : "bg-primary/5",
+                splitDropOverlayPosition(dragSplitEdge)
+              )}
+            />
           )}
         </div>
       </div>

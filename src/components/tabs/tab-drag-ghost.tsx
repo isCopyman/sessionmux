@@ -4,17 +4,17 @@ import { createPortal } from "react-dom"
 import { useTabStore } from "@/contexts/tab-context"
 
 /**
- * Floating chip that follows the pointer while a conversation tab is dragged
- * over ANOTHER split group. The dragged tab itself is axis-locked inside its
- * own strip (Reorder `drag="x"` + overflow clipping), so this ghost is the
- * only visual that crosses group boundaries — it appears exactly while a
- * foreign drop target is live, alongside that target's highlight.
+ * Floating chip that follows the pointer while a conversation tab has a live
+ * pane drop target. The dragged tab itself is axis-locked inside its own strip
+ * (Reorder `drag="x"` + overflow clipping), so this ghost is the only visual
+ * that crosses pane boundaries. It appears for both an existing-pane move and
+ * an edge-split target, including an edge of the source pane.
  *
  * Portal to <body>: ancestors animate with transforms, which would re-anchor
  * `position: fixed` to themselves instead of the viewport.
  *
  * Text-selection suppression during a drag is NOT here: it belongs to every tab
- * drag (within-group sorting, the unsplit strip), not just the cross-group ones
+ * drag (within-group sorting, the unsplit strip), not just the pane moves
  * that produce a ghost, so `TabItem` holds it via `drag-selection-guard`.
  */
 export function TabDragGhost() {

@@ -50,8 +50,8 @@ interface TabItemProps {
   folderBranch: string | null
   /** More than one split group exists — shows the group-management items. */
   isSplit: boolean
-  /** This tab's group has ≥ 2 tabs, so "Split and Move" leaves a non-empty
-   *  group behind (moving the only tab would just shift the group). */
+  /** This persisted tab can use "Split and Move". When it is the pane's only
+   *  tab, the store leaves a fresh draft behind so the source pane stays live. */
   canSplitMove: boolean
   /** This tab may change groups at all. False for DRAFTS: an unsent draft is the
    *  group's own scratch slot (its composer text, folder and agent live with the
@@ -59,9 +59,8 @@ interface TabItemProps {
    *  affordances are hidden — the group-management items stay. */
   canMoveToGroup: boolean
   moveTargets: TabMoveTarget[]
-  /** Cross-group drag (split-group strips only): pointer tracking during the
-   *  drag and the drop commit. Undefined = single-group strip, no cross-group
-   *  semantics. */
+  /** Pane drag/drop: tracks foreign groups and edge-split targets. Undefined
+   *  for drafts, which remain bound to the pane that owns their composer. */
   onTabDrag?: (
     tab: TabItemData,
     event: MouseEvent | TouchEvent | PointerEvent,

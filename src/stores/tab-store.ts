@@ -26,6 +26,7 @@ import {
   type LayoutNode,
   type SplitDirection,
 } from "@/lib/tab-group-layout"
+import type { SplitDropEdge } from "@/lib/tab-drag-drop"
 import {
   loadLastActiveContext,
   saveLastActiveContext,
@@ -147,10 +148,10 @@ export interface TabStoreState {
   groupSelection: Record<string, string>
   tileByGroup: Record<string, boolean>
   /**
-   * Transient cross-group tab drag (never persisted): the dragged tab, the
-   * live pointer position, and the FOREIGN group currently under the pointer
-   * (null while over the tab's own strip / no valid target). Drives the
-   * drop-target highlight and the floating ghost chip; cleared on drag end.
+   * Transient pane tab drag (never persisted): the dragged tab, live pointer
+   * position, pane under the pointer, and optional edge-split target. The pane
+   * id is null while no move/split target is active. Drives target previews and
+   * the floating ghost chip; cleared on drag end.
    */
   tabDrag: {
     tabId: string
@@ -158,6 +159,7 @@ export interface TabStoreState {
     x: number
     y: number
     overGroupId: string | null
+    splitEdge: SplitDropEdge | null
   } | null
   childSummaries: Map<number, DbConversationSummary>
   /**
@@ -202,6 +204,11 @@ export interface TabStoreState {
     tabId: string,
     direction: SplitDirection,
     opts: { move: boolean }
+  ) => void
+  snapTabToSplit: (
+    tabId: string,
+    targetGroupId: string,
+    direction: SplitDirection
   ) => void
   moveTabToGroup: (
     tabId: string,
@@ -510,6 +517,20 @@ export function groupOfTab(
   const assigned = groupOf[tabId]
   if (assigned != null && leafIds(layout).includes(assigned)) return assigned
   return firstLeafId(layout)
+}
+
+/** Preserve every tab's current effective group before a layout mutation that
+ * can insert a new leaf before today's first leaf. Missing assignments normally
+ * mean "first leaf"; without materializing them, a left/up split would silently
+ * reinterpret those tabs as belonging to the newly inserted group. */
+function materializeGroupAssignments(
+  st: Pick<TabStoreState, "rawTabs" | "groupOf" | "groupLayout">
+): Record<string, string> {
+  const assignments = { ...st.groupOf }
+  for (const tab of st.rawTabs) {
+    assignments[tab.id] = groupOfTab(st.groupOf, st.groupLayout, tab.id)
+  }
+  return assignments
 }
 
 /** True when more than one group exists (the canonical tree keeps a split root
@@ -1105,6 +1126,55 @@ function makeReplacementDraftTab(preferred?: TabItemInternal): TabItemInternal {
   }
 }
 
+/** Fresh draft used when a split needs a second pane or when edge-snapping the
+ * only persisted tab out of its source pane. Unlike the generic close-tab
+ * replacement above, this deliberately preserves chat mode: splitting a chat
+ * session should leave a chat draft, not jump to an unrelated project. */
+function makeSplitDraftTab(context: TabItemInternal): TabItemInternal {
+  const { allFolders, folders } = useAppWorkspaceStore.getState()
+  const inherit =
+    context.conversationId != null || !context.agentTypeProvisional
+      ? context.agentType
+      : null
+  const contextIsChat =
+    context.isChat === true ||
+    allFolders.find((folder) => folder.id === context.folderId)?.kind === "chat"
+
+  if (contextIsChat) {
+    const { agentType, provisional } = resolveAgentForFolder(0, inherit, null)
+    return {
+      id: makeNewConversationTabId(),
+      kind: "conversation",
+      folderId: 0,
+      conversationId: null,
+      agentType,
+      title: runtime.labels.newConversation,
+      isPinned: true,
+      workingDir: undefined,
+      agentTypeProvisional: provisional,
+      isChat: true,
+    }
+  }
+
+  const { agentType, provisional } = resolveAgentForFolder(
+    context.folderId,
+    inherit
+  )
+  return {
+    id: makeNewConversationTabId(),
+    kind: "conversation",
+    folderId: context.folderId,
+    conversationId: null,
+    agentType,
+    title: runtime.labels.newConversation,
+    isPinned: true,
+    workingDir:
+      context.workingDir ??
+      folders.find((folder) => folder.id === context.folderId)?.path,
+    agentTypeProvisional: provisional,
+  }
+}
+
 function initialTabState() {
   const activeWorkbenchId = readActiveWorkbenchId()
   return {
@@ -1410,11 +1480,9 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
       // A draft belongs to the group that spawned it (see `moveTabToGroup`);
       // plain split still seeds the new group with its own draft.
       if (tab.conversationId == null) return
-      // Moving the group's only tab would just shift the group — pointless.
       const groupSize = st.rawTabs.filter(
         (t) => groupOfTab(st.groupOf, st.groupLayout, t.id) === sourceGroup
       ).length
-      if (groupSize < 2) return
       const newGroupId = makeGroupId()
       const nextLayout = splitGroup(
         st.groupLayout,
@@ -1423,9 +1491,20 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
         newGroupId
       )
       if (nextLayout === st.groupLayout) return
+      // If this was the pane's only tab, keep the source pane useful with a
+      // fresh draft while the real session moves to the requested edge. This
+      // makes drag-to-split and the context-menu action behave naturally even
+      // in the common one-tab workbench.
+      const replacement = groupSize === 1 ? makeSplitDraftTab(tab) : null
+      const assignments = materializeGroupAssignments(st)
       set({
+        rawTabs: replacement ? [...st.rawTabs, replacement] : st.rawTabs,
         groupLayout: nextLayout,
-        groupOf: { ...st.groupOf, [tabId]: newGroupId },
+        groupOf: {
+          ...assignments,
+          [tabId]: newGroupId,
+          ...(replacement ? { [replacement.id]: sourceGroup } : {}),
+        },
         activeTabId: tabId,
       })
       recomputeTabs()
@@ -1443,52 +1522,48 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
       newGroupId
     )
     if (nextLayout === st.groupLayout) return
-    const inherit =
-      tab.conversationId != null || !tab.agentTypeProvisional
-        ? tab.agentType
-        : null
-    const { allFolders, folders } = useAppWorkspaceStore.getState()
-    const contextIsChat =
-      tab.isChat === true ||
-      allFolders.find((f) => f.id === tab.folderId)?.kind === "chat"
-    let newTab: TabItemInternal
-    if (contextIsChat) {
-      const { agentType, provisional } = resolveAgentForFolder(0, inherit, null)
-      newTab = {
-        id: makeNewConversationTabId(),
-        kind: "conversation",
-        folderId: 0,
-        conversationId: null,
-        agentType,
-        title: runtime.labels.newConversation,
-        isPinned: true,
-        workingDir: undefined,
-        agentTypeProvisional: provisional,
-        isChat: true,
-      }
-    } else {
-      const { agentType, provisional } = resolveAgentForFolder(
-        tab.folderId,
-        inherit
-      )
-      newTab = {
-        id: makeNewConversationTabId(),
-        kind: "conversation",
-        folderId: tab.folderId,
-        conversationId: null,
-        agentType,
-        title: runtime.labels.newConversation,
-        isPinned: true,
-        workingDir:
-          tab.workingDir ?? folders.find((f) => f.id === tab.folderId)?.path,
-        agentTypeProvisional: provisional,
-      }
-    }
+    const newTab = makeSplitDraftTab(tab)
+    const assignments = materializeGroupAssignments(st)
     set({
       rawTabs: [...st.rawTabs, newTab],
       groupLayout: nextLayout,
-      groupOf: { ...st.groupOf, [newTab.id]: newGroupId },
+      groupOf: { ...assignments, [newTab.id]: newGroupId },
       activeTabId: newTab.id,
+    })
+    recomputeTabs()
+    runtime.activateConversationPane()
+  },
+
+  snapTabToSplit: (tabId, targetGroupId, direction) => {
+    const st = get()
+    const tab = st.rawTabs.find((item) => item.id === tabId)
+    if (!tab || tab.conversationId == null) return
+    if (!leafIds(st.groupLayout).includes(targetGroupId)) return
+
+    const sourceGroup = groupOfTab(st.groupOf, st.groupLayout, tabId)
+    const newGroupId = makeGroupId()
+    const nextLayout = splitGroup(
+      st.groupLayout,
+      targetGroupId,
+      direction,
+      newGroupId
+    )
+    if (nextLayout === st.groupLayout) return
+
+    const sourceSize = st.rawTabs.filter(
+      (item) => groupOfTab(st.groupOf, st.groupLayout, item.id) === sourceGroup
+    ).length
+    const replacement = sourceSize === 1 ? makeSplitDraftTab(tab) : null
+    const assignments = materializeGroupAssignments(st)
+    set({
+      rawTabs: replacement ? [...st.rawTabs, replacement] : st.rawTabs,
+      groupLayout: nextLayout,
+      groupOf: {
+        ...assignments,
+        [tabId]: newGroupId,
+        ...(replacement ? { [replacement.id]: sourceGroup } : {}),
+      },
+      activeTabId: tabId,
     })
     recomputeTabs()
     runtime.activateConversationPane()
@@ -1562,7 +1637,8 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
       prev.tabId === drag.tabId &&
       prev.x === drag.x &&
       prev.y === drag.y &&
-      prev.overGroupId === drag.overGroupId
+      prev.overGroupId === drag.overGroupId &&
+      prev.splitEdge === drag.splitEdge
     ) {
       return
     }
@@ -2701,6 +2777,7 @@ export function useTabActions() {
       pinTab: s.pinTab,
       toggleGroupTile: s.toggleGroupTile,
       splitTab: s.splitTab,
+      snapTabToSplit: s.snapTabToSplit,
       moveTabToGroup: s.moveTabToGroup,
       toggleGroupOrientation: s.toggleGroupOrientation,
       dissolveGroup: s.dissolveGroup,
