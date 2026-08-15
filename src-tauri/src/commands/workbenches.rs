@@ -31,6 +31,25 @@ pub async fn rename_workbench_core(
         .map_err(AppCommandError::from)
 }
 
+pub async fn duplicate_workbench_core(
+    conn: &sea_orm::DatabaseConnection,
+    source_id: i32,
+    name: Option<String>,
+) -> Result<WorkbenchInfo, AppCommandError> {
+    workbench_service::duplicate(conn, source_id, name)
+        .await
+        .map_err(AppCommandError::from)
+}
+
+pub async fn reorder_workbenches_core(
+    conn: &sea_orm::DatabaseConnection,
+    ordered_ids: Vec<i32>,
+) -> Result<Vec<WorkbenchInfo>, AppCommandError> {
+    workbench_service::reorder(conn, ordered_ids)
+        .await
+        .map_err(AppCommandError::from)
+}
+
 pub async fn delete_workbench_core(
     conn: &sea_orm::DatabaseConnection,
     id: i32,
@@ -65,6 +84,25 @@ pub async fn rename_workbench(
     name: String,
 ) -> Result<WorkbenchInfo, AppCommandError> {
     rename_workbench_core(&db.conn, id, name).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn duplicate_workbench(
+    db: tauri::State<'_, AppDatabase>,
+    source_id: i32,
+    name: Option<String>,
+) -> Result<WorkbenchInfo, AppCommandError> {
+    duplicate_workbench_core(&db.conn, source_id, name).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn reorder_workbenches(
+    db: tauri::State<'_, AppDatabase>,
+    ordered_ids: Vec<i32>,
+) -> Result<Vec<WorkbenchInfo>, AppCommandError> {
+    reorder_workbenches_core(&db.conn, ordered_ids).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -146,6 +184,75 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn duplicate_workbench_copies_tab_references_without_copying_sessions() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/codeg-workbench-duplicate").await;
+        let conversation_id = seed_conversation(&db, folder_id, AgentType::Codex).await;
+        save_workbench_tabs_core(
+            &db.conn,
+            &EventEmitter::Noop,
+            1,
+            vec![tab(folder_id, conversation_id)],
+            0,
+            "test".into(),
+        )
+        .await
+        .expect("save source");
+
+        let copy = duplicate_workbench_core(&db.conn, 1, Some("Main Copy".into()))
+            .await
+            .expect("duplicate");
+        let copied_tabs = list_workbench_tabs_core(&db.conn, copy.id)
+            .await
+            .expect("copy tabs");
+        assert_eq!(copy.name, "Main Copy");
+        assert_eq!(copied_tabs.items.len(), 1);
+        assert_eq!(copied_tabs.items[0].conversation_id, Some(conversation_id));
+        let session =
+            crate::db::service::conversation_service::get_by_id(&db.conn, conversation_id)
+                .await
+                .expect("same session remains authoritative");
+        assert_eq!(session.id, conversation_id);
+    }
+
+    #[tokio::test]
+    async fn reorder_workbenches_persists_one_complete_order() {
+        let db = fresh_in_memory_db().await;
+        let review = create_workbench_core(&db.conn, Some("Review".into()))
+            .await
+            .expect("create review");
+        let experiments = create_workbench_core(&db.conn, Some("Experiments".into()))
+            .await
+            .expect("create experiments");
+
+        let reordered = reorder_workbenches_core(&db.conn, vec![experiments.id, 1, review.id])
+            .await
+            .expect("reorder");
+        assert_eq!(
+            reordered.iter().map(|item| item.id).collect::<Vec<_>>(),
+            vec![experiments.id, 1, review.id]
+        );
+        assert_eq!(
+            reordered
+                .iter()
+                .map(|item| item.position)
+                .collect::<Vec<_>>(),
+            vec![0, 1, 2]
+        );
+
+        let error = reorder_workbenches_core(&db.conn, vec![1, review.id, review.id])
+            .await
+            .expect_err("duplicate ids are rejected");
+        assert!(
+            error
+                .detail
+                .as_deref()
+                .is_some_and(|detail| detail.contains("exactly once")),
+            "validation detail should explain the complete-order contract"
+        );
+    }
+
+    #[tokio::test]
     async fn deleting_workbench_keeps_sessions_and_protects_last_workbench() {
         let db = fresh_in_memory_db().await;
         let folder_id = seed_folder(&db, "/tmp/codeg-workbench-delete").await;
@@ -177,7 +284,10 @@ mod tests {
         )
         .await
         .expect_err("a deleted workbench cannot be resurrected by a stale tab save");
-        assert!(stale_save.to_string().contains("Workbench"));
+        assert!(stale_save
+            .detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("Workbench")));
         let session =
             crate::db::service::conversation_service::get_by_id(&db.conn, conversation_id)
                 .await
@@ -190,6 +300,9 @@ mod tests {
         let error = delete_workbench_core(&db.conn, 1)
             .await
             .expect_err("last workbench is protected");
-        assert!(error.to_string().contains("last workbench"));
+        assert!(error
+            .detail
+            .as_deref()
+            .is_some_and(|detail| detail.contains("last workbench")));
     }
 }

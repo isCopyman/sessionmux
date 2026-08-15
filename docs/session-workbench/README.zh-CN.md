@@ -4,9 +4,10 @@
 > 适用范围：Codeg `main` 上的 Session 组织、工作台与后续协作层设计  
 > 原则：先兼容现有 Codeg，再以显式迁移逐步实现新模型。
 
-截至 2026-08-15，Codex 原生标题同步和命名 Workbench 基础已经实现；顶部工作台标签、
-Collection、Session Center、内容全文检索、系统多窗口及协作层仍按本文档分阶段开发。文档中的
-“最终效果”不能被误读为当前版本已经全部具备。
+截至 2026-08-15，Codex 原生标题同步、命名 Workbench、顶部工作台标签、工作台复制/排序、
+Session Center、可选内容全文检索和单窗口拖边吸附已经在本地开发分支实现；Collection、工作台
+归档/最近关闭、系统多窗口及协作层仍按本文档分阶段开发。文档中的“最终效果”不能被误读为
+当前版本已经全部具备。
 
 ## 你应该看哪一份
 
@@ -88,7 +89,7 @@ Atrium 审计只提供外部参考，不是需求事实源。竞品功能与产�
 | Harness | `conversation.agent_type` | 不另造 `harness` 字段 |
 | 本地显示名 | `conversation.title`、`title_locked` | 保留源标题同步和人工锁定规则 |
 | Execution Context | `folder_id`、`folder.path`、`origin_cwd`、运行时设置 | 第一阶段不新建 `execution_context_id` |
-| Workbench | 已有独立 `workbench` 实体及按工作台分区的 `opened_tab` 基础 | 继续独立演进，不复用 Folder；顶部标签和系统窗口挂载仍待实现 |
+| Workbench | 已有独立 `workbench` 实体、按工作台分区的 `opened_tab`、顶部标签及复制/排序 | 继续独立演进，不复用 Folder；归档、最近关闭和系统窗口挂载仍待实现 |
 | Collection | 尚无语义分类实体 | 建议新增唯一主要归属，不复用 Folder 层级 |
 | Group Conversation / 群聊 | 尚无“多 Session 群聊”实体 | 协作轨道候选；稳定 Session 投递后新增独立关系与共享事件，不能误用现有 `chat_channel` |
 | Task / Issue | 已有 `work_task`，但它是编码执行流水线 | 长期 Topic 不得包装成 `work_task` |

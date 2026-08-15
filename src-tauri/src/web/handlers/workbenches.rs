@@ -23,6 +23,19 @@ pub struct RenameWorkbenchParams {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct DuplicateWorkbenchParams {
+    pub source_id: i32,
+    pub name: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReorderWorkbenchesParams {
+    pub ordered_ids: Vec<i32>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DeleteWorkbenchParams {
     pub id: i32,
 }
@@ -50,6 +63,25 @@ pub async fn rename_workbench(
 ) -> Result<Json<WorkbenchInfo>, AppCommandError> {
     Ok(Json(
         workbenches::rename_workbench_core(&state.db.conn, params.id, params.name).await?,
+    ))
+}
+
+pub async fn duplicate_workbench(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<DuplicateWorkbenchParams>,
+) -> Result<Json<WorkbenchInfo>, AppCommandError> {
+    Ok(Json(
+        workbenches::duplicate_workbench_core(&state.db.conn, params.source_id, params.name)
+            .await?,
+    ))
+}
+
+pub async fn reorder_workbenches(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<ReorderWorkbenchesParams>,
+) -> Result<Json<Vec<WorkbenchInfo>>, AppCommandError> {
+    Ok(Json(
+        workbenches::reorder_workbenches_core(&state.db.conn, params.ordered_ids).await?,
     ))
 }
 

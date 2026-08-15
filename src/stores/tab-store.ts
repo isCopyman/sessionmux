@@ -263,6 +263,9 @@ export interface TabStoreState {
   consumeRemoteActivation: () => boolean
   onPreviewTabReplaced: (callback: (tabId: string) => void) => () => void
   switchWorkbench: (workbenchId: number) => Promise<void>
+  /** Force the mounted workbench's debounced tab/layout state to durable
+   * storage. Used before duplicating its snapshot. */
+  flushActiveWorkbench: () => Promise<void>
 
   // ── Orchestration (driven by TabRuntimeEffects) ──────────────────────────────
   hydrate: () => () => void
@@ -761,6 +764,78 @@ function persistGroupState() {
   } catch {
     /* ignore */
   }
+}
+
+/** Copy the durable layout portion of a workbench to a new identity. Drafts
+ * are deliberately omitted: they are editable device-local buffers, not
+ * Session references. Empty draft-only leaves are normalized on first mount. */
+export function duplicateWorkbenchLocalState(
+  sourceWorkbenchId: number,
+  targetWorkbenchId: number
+) {
+  if (typeof window === "undefined") return
+  try {
+    const raw = localStorage.getItem(groupStorageKey(sourceWorkbenchId))
+    if (!raw) return
+    const parsed = JSON.parse(raw) as Record<string, unknown>
+    if (!parsed || !isLayoutNode(parsed.layout)) return
+    const assignments = sanitizeStringRecord(parsed.assignments)
+    const persistentTabIds = new Set(Object.keys(assignments))
+    const selection = Object.fromEntries(
+      Object.entries(sanitizeStringRecord(parsed.selection)).filter(
+        ([, tabId]) => persistentTabIds.has(tabId)
+      )
+    )
+    localStorage.setItem(
+      groupStorageKey(targetWorkbenchId),
+      JSON.stringify({
+        ...parsed,
+        assignments,
+        selection,
+        drafts: [],
+        activeDraft: null,
+      })
+    )
+  } catch {
+    /* a missing/corrupt local layout falls back to one pane */
+  }
+}
+
+async function flushMountedWorkbenchSnapshot(st: TabStoreState) {
+  if (groupPersistTimer) {
+    clearTimeout(groupPersistTimer)
+    groupPersistTimer = null
+  }
+  persistGroupState()
+  if (saveTimer) {
+    clearTimeout(saveTimer)
+    saveTimer = null
+  }
+  const currentItems = buildPersistItems(st.rawTabs, st.activeTabId)
+  const currentPayload = JSON.stringify(currentItems)
+  if (currentPayload === lastSavedPayload) return
+
+  let outcome = await persistTabsForWorkbench(
+    st.activeWorkbenchId,
+    currentItems,
+    version
+  )
+  version = Math.max(version, outcome.version)
+  // The version is global across workbenches. A simultaneous write to a
+  // different workbench can reject this save even though our own snapshot did
+  // not conflict; retry once against the newly observed clock.
+  if (!outcome.accepted) {
+    outcome = await persistTabsForWorkbench(
+      st.activeWorkbenchId,
+      currentItems,
+      version
+    )
+    version = Math.max(version, outcome.version)
+  }
+  if (!outcome.accepted) {
+    throw new Error("Workbench changed concurrently; please retry")
+  }
+  lastSavedPayload = currentPayload
 }
 
 /**
@@ -2066,44 +2141,11 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
     const epoch = ++workbenchSwitchEpoch
     set({ switchingWorkbench: true, switchingWorkbenchId: workbenchId })
 
-    // Commit the current workbench before replacing the mounted tab set. This
-    // bypasses the ordinary 500ms debounce so a quick switch cannot strand the
-    // user's last open/close/focus operation in memory.
-    if (groupPersistTimer) {
-      clearTimeout(groupPersistTimer)
-      groupPersistTimer = null
-    }
-    persistGroupState()
-    if (saveTimer) {
-      clearTimeout(saveTimer)
-      saveTimer = null
-    }
-    const currentItems = buildPersistItems(initial.rawTabs, initial.activeTabId)
-    const currentPayload = JSON.stringify(currentItems)
     try {
-      if (currentPayload !== lastSavedPayload) {
-        let outcome = await persistTabsForWorkbench(
-          initial.activeWorkbenchId,
-          currentItems,
-          version
-        )
-        version = Math.max(version, outcome.version)
-        // The version is global across workbenches. A simultaneous write to a
-        // different workbench can reject this save even though our own snapshot
-        // did not conflict; retry once against the newly observed clock.
-        if (!outcome.accepted) {
-          outcome = await persistTabsForWorkbench(
-            initial.activeWorkbenchId,
-            currentItems,
-            version
-          )
-          version = Math.max(version, outcome.version)
-        }
-        if (!outcome.accepted) {
-          throw new Error("Workbench changed concurrently; please retry")
-        }
-        lastSavedPayload = currentPayload
-      }
+      // Commit the current workbench before replacing the mounted tab set. This
+      // bypasses the ordinary 500ms debounce so a quick switch cannot strand
+      // the user's last open/close/focus operation in memory.
+      await flushMountedWorkbenchSnapshot(initial)
 
       if (epoch !== workbenchSwitchEpoch) return
       // Fetch first so a disconnected backend or deleted workbench leaves the
@@ -2155,6 +2197,10 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
       }
       throw error
     }
+  },
+
+  flushActiveWorkbench: async () => {
+    await flushMountedWorkbenchSnapshot(get())
   },
 
   hydrate: () => {

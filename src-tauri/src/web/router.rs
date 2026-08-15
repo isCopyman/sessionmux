@@ -1232,6 +1232,14 @@ pub fn build_router(
             post(handlers::workbenches::rename_workbench),
         )
         .route(
+            "/duplicate_workbench",
+            post(handlers::workbenches::duplicate_workbench),
+        )
+        .route(
+            "/reorder_workbenches",
+            post(handlers::workbenches::reorder_workbenches),
+        )
+        .route(
             "/delete_workbench",
             post(handlers::workbenches::delete_workbench),
         )

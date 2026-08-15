@@ -142,19 +142,19 @@ Atrium 的 Wing/Room 可以作为侧栏、拖拽和恢复交互的参考，但�
 | Workspace：命名的 Project 集合、记忆焦点 | Folder 侧栏主要按物理目录组织 | ◐ | 用 Collection + Workbench 表达，不照搬 Workspace |
 | Project：绑定一个目录 | `folder`/cwd 已成熟 | ✅ | 保留为 Execution Context |
 | Wing：Room 文件夹、折叠、拖拽、最近焦点 | 无 Room/Wing 实体 | ❌ | Collection 树可借鉴交互；Session 主要归属保持唯一 |
-| Room：持久 mosaic 工作现场 | 当前只有一套设备本地全局布局 | ◐ | P0：命名 Workbench |
+| Room：持久 mosaic 工作现场 | 已有多套命名 Workbench，可分别恢复 Session 与分屏 | ✅/◐ | 单窗口基础已完成；归档/最近关闭和物理窗口后置 |
 | Room 自动命名 | 标题来自 Harness 或首条 Prompt；Codex 仍有缺口 | ◐ | 原生名 > 人工锁定 > 本地生成 > Prompt 兜底 |
 | 二叉 mosaic 任意分屏和比例 | 已有 `groupLayout` 嵌套分屏和持久化 | ✅ | 复用，不重写 |
 | Pane subtab 分组 | 每个 split group 已可容纳多个 Tab | ✅ | 复用 |
 | 拖 Pane 到边缘创建 split | 已支持标签拖到四边新建 Pane、中央加入既有 Pane，并显示吸附预览 | ✅ | 已完成 #456 的单窗口吸附部分；物理窗口仍后置 |
 | Pane 最大化、交换、等分、锁比例 | 部分布局操作，未形成 Atrium 完整交互 | ◐ | 最大化/等分优先，其他按反馈补 |
 | Popout overlay、Resident dock | 无等价完整机制 | ❌ | 可后置，不是核心 |
-| 水平 Room Tab / 垂直 Room Sidebar | 已有顶部 Workbench 标签和侧栏管理入口；尚缺打开/关闭挂载及跨窗口拖动 | ◐ | 先补复制、排序和挂载状态，再做物理多窗口 |
+| 水平 Room Tab / 垂直 Room Sidebar | 已有顶部 Workbench 标签、侧栏管理、复制和持久化排序；尚缺打开/关闭挂载及跨窗口拖动 | ◐ | 下一步补挂载状态，再做物理多窗口 |
 | Favorites、settled/hidden、运行状态徽标 | 有 pinned/opened/status 的部分基础 | ◐ | 纳入 Quick Access |
-| Library：保存 Room/Pane 模板 | 无正式 Library | ❌ | 先做“保存/复制 Workbench” |
+| Library：保存 Room/Pane 模板 | 可复制整套 Workbench 的 Session 引用与布局，但尚无模板库 | ◐ | 先观察复制是否已满足日常需求 |
 | 最近关闭 Room/Pane 并完整恢复 | 关闭 Tab 不删 Session，但无完整状态历史 | ◐ | P1：最近关闭与撤销 |
 | Vault：全 App 快照、预览差异、安全恢复 | 有常规数据备份，缺工作现场快照系统 | ◐ | P1/P2：先做可恢复 Workbench 快照 |
-| 跨适配器历史全文搜索 | 目前主要搜标题/目录等元数据 | ❌ | P1，高价值；比项目记忆更基础 |
+| 跨适配器历史全文搜索 | Session Center 与 Quick Open 已接入可选 ctx 正文搜索；失败时退化为元数据搜索 | ✅/◐ | 继续补预览、归属反馈和更多 Harness 验证 |
 
 ### 5.2 Harness、Session 和聊天界面
 

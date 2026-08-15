@@ -3,6 +3,7 @@ use sea_orm::{
     ActiveModelTrait, ActiveValue::NotSet, ColumnTrait, DatabaseConnection, EntityTrait,
     IntoActiveModel, PaginatorTrait, QueryFilter, QueryOrder, Set, TransactionTrait,
 };
+use std::collections::HashSet;
 
 use crate::db::entities::{opened_tab, workbench};
 use crate::db::error::DbError;
@@ -79,6 +80,96 @@ pub async fn rename(
     active.name = Set(name);
     active.updated_at = Set(Utc::now());
     Ok(to_info(active.update(conn).await?))
+}
+
+pub async fn duplicate(
+    conn: &DatabaseConnection,
+    source_id: i32,
+    requested_name: Option<String>,
+) -> Result<WorkbenchInfo, DbError> {
+    let txn = conn.begin().await?;
+    let source = workbench::Entity::find_by_id(source_id)
+        .one(&txn)
+        .await?
+        .ok_or_else(|| DbError::NotFound(format!("Workbench {source_id}")))?;
+    let max_position = workbench::Entity::find()
+        .order_by_desc(workbench::Column::Position)
+        .one(&txn)
+        .await?
+        .map(|row| row.position)
+        .unwrap_or(-1);
+    let default_name = format!("{} Copy", source.name);
+    let name = normalize_name(requested_name.as_deref().unwrap_or(&default_name))?;
+    let now = Utc::now();
+    let created = workbench::ActiveModel {
+        id: NotSet,
+        name: Set(name),
+        position: Set(max_position + 1),
+        created_at: Set(now),
+        updated_at: Set(now),
+    }
+    .insert(&txn)
+    .await?;
+
+    let tabs = opened_tab::Entity::find()
+        .filter(opened_tab::Column::WorkbenchId.eq(source_id))
+        .order_by_asc(opened_tab::Column::Position)
+        .order_by_asc(opened_tab::Column::Id)
+        .all(&txn)
+        .await?;
+    for tab in tabs {
+        opened_tab::ActiveModel {
+            id: NotSet,
+            workbench_id: Set(created.id),
+            folder_id: Set(tab.folder_id),
+            conversation_id: Set(tab.conversation_id),
+            agent_type: Set(tab.agent_type),
+            position: Set(tab.position),
+            is_active: Set(tab.is_active),
+            is_pinned: Set(tab.is_pinned),
+            created_at: Set(now),
+            updated_at: Set(now),
+        }
+        .insert(&txn)
+        .await?;
+    }
+    txn.commit().await?;
+    Ok(to_info(created))
+}
+
+pub async fn reorder(
+    conn: &DatabaseConnection,
+    ordered_ids: Vec<i32>,
+) -> Result<Vec<WorkbenchInfo>, DbError> {
+    let txn = conn.begin().await?;
+    let rows = workbench::Entity::find().all(&txn).await?;
+    let existing: HashSet<i32> = rows.iter().map(|row| row.id).collect();
+    let requested: HashSet<i32> = ordered_ids.iter().copied().collect();
+    if ordered_ids.len() != rows.len()
+        || requested.len() != ordered_ids.len()
+        || requested != existing
+    {
+        return Err(DbError::Validation(
+            "Workbench order must contain every workbench exactly once".into(),
+        ));
+    }
+
+    let now = Utc::now();
+    for (position, id) in ordered_ids.into_iter().enumerate() {
+        let row = rows
+            .iter()
+            .find(|row| row.id == id)
+            .expect("validated workbench id");
+        if row.position == position as i32 {
+            continue;
+        }
+        let mut active = row.clone().into_active_model();
+        active.position = Set(position as i32);
+        active.updated_at = Set(now);
+        active.update(&txn).await?;
+    }
+    txn.commit().await?;
+    list(conn).await
 }
 
 pub async fn delete(conn: &DatabaseConnection, id: i32) -> Result<(), DbError> {

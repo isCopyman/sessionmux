@@ -112,19 +112,21 @@ Codeg 0.25.0 当前代码已经区分 owner 与 viewer：
 
 因此，多窗口最难的“同一原生 Session 只有一份运行时、输出广播到多个客户端”并非从零开始。
 
-### 4.2 当前阻碍多工作台的状态
+### 4.2 已完成的单窗口 Workbench 分区，以及剩余边界
 
-现有 Tab 层仍假定单一全局工作现场：
+当前本地分支已经完成：
 
-- `makeConversationTabId(folderId, agentType, conversationId)` 生成 canonical Tab ID；
-- `openTab` 和 `bindConversationTab` 会在当前全局 Store 内去重同一 Conversation；
-- `opened_tab` 作为一张全局集合保存；
-- `tab_service` 使用全局 `opened_tabs_version` 做 CAS；
-- `is_active` 和 `tabs://changed` 会把活动标签状态镜像给其他客户端；
-- `workspace:tab-groups:v1` 只保存一套布局。
+- 独立 `workbench` 实体和 `opened_tab.workbench_id`；
+- `tab_service` 按 Workbench 读写 Session 引用，旧 API 继续映射到 `Main`；
+- 分屏树、组内选择、Tile 状态和设备本地草稿按 Workbench 键保存；
+- 当前物理窗口的活动 Workbench 使用 `sessionStorage` 保存，不再由多个窗口共享一个焦点键；
+- 顶部标签可创建、切换、复制和持久化排序 Workbench；复制生成新 ID，只复制 Session 引用与
+  布局，不复制未发送草稿。
 
-这些机制能防止单窗口重复 Tab，却把 Session 身份、显示实例、布局所有权和窗口焦点混在一起。
-若只增加 Tauri Window，不先拆分状态，两个物理窗口会互相清空 Tab、切换焦点或覆盖布局。
+仍然存在的多窗口边界是：`makeConversationTabId(folderId, agentType, conversationId)` 在当前页面
+Store 内仍是 canonical Tab ID；同步版本与 `tabs://changed` 还没有完全拆成 Session、Workbench
+和 App Window 三层事件；同一 Workbench 也尚无显式 mount 所有权。因此可以安全使用单窗口多
+Workbench，但不能只增加一个 Tauri Window 就宣称完成多窗口，否则仍可能出现布局双写和焦点覆盖。
 
 ## 5. 身份与所有权模型
 

@@ -17,6 +17,7 @@ import {
   useAppWorkspaceStore,
 } from "@/stores/app-workspace-store"
 import {
+  duplicateWorkbenchLocalState,
   groupOfTab,
   isReparentUnmount,
   resetTabStore,
@@ -2310,6 +2311,37 @@ describe("TabProvider tab groups", () => {
     expect(selectIsSplit(store())).toBe(true)
     expect(groupOfId("conv-1-codex-2")).toBe(movedGroup)
     expect(groupOfId("conv-1-codex-1")).not.toBe(movedGroup)
+  })
+
+  it("duplicates a saved layout without copying device-local drafts", async () => {
+    await renderWithTabs([tabItem(1, 1, true)])
+    act(() => {
+      store().splitTab("conv-1-codex-1", "right", { move: false })
+    })
+    const source = JSON.parse(
+      localStorage.getItem("workspace:tab-groups:v1")!
+    ) as {
+      assignments: Record<string, string>
+      drafts: Array<{ id: string }>
+      activeDraft: string | null
+    }
+    expect(source.drafts).toHaveLength(1)
+    expect(source.activeDraft).toBe(source.drafts[0]?.id)
+
+    duplicateWorkbenchLocalState(1, 7)
+
+    const copy = JSON.parse(
+      localStorage.getItem("workspace:workbench:7:tab-groups:v1")!
+    ) as {
+      assignments: Record<string, string>
+      selection: Record<string, string>
+      drafts: unknown[]
+      activeDraft: string | null
+    }
+    expect(copy.assignments).toEqual(source.assignments)
+    expect(copy.drafts).toEqual([])
+    expect(copy.activeDraft).toBeNull()
+    expect(Object.values(copy.selection)).not.toContain(source.drafts[0]?.id)
   })
 
   // Drafts are device-local (no DB row before the first send), so without the

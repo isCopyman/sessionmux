@@ -17,7 +17,7 @@
 | [#457 Codex 未读取真实会话名称](https://github.com/xintaofei/codeg/issues/457) | Open | Codex `session_index.jsonl` 标题 | 主 RFC `SYNC-001` |
 | [#458 自动同步已导入的本地会话](https://github.com/xintaofei/codeg/issues/458) | Open | 文件监听、增量刷新 | 主 RFC `SYNC-002..005` |
 | [#459 Collection / 主题树](https://github.com/xintaofei/codeg/issues/459) | Open | 语义分类；本地设计采用唯一主要归属 | 主 RFC `COL-001..004` |
-| [#460 多套命名工作台](https://github.com/xintaofei/codeg/issues/460) | Open | Workbench 保存、切换和恢复 | 主 RFC `WIN-001..005` |
+| [#460 多套命名工作台](https://github.com/xintaofei/codeg/issues/460) | Open；本地分支已完成命名、恢复、顶部切换、复制与排序基础 | Workbench 保存、切换和恢复 | 主 RFC `WIN-001..005` |
 | [#461 持久 Session Team/Chatroom](https://github.com/xintaofei/codeg/issues/461) | Open | 后置：先做多选发送/转发/比较；再做以 Session 为成员的独立群聊面板，不先增加 Team | 群聊 RFC、AgentBus RFC、主 RFC 协作章节 |
 | [#464 LaTeX `.tex` 高亮与编译/PDF 预览](https://github.com/xintaofei/codeg/issues/464) | Closed | 已由需求提出者关闭，不列入当前路线 | 外部编辑器边界 |
 | [#465 独立 Mermaid 文件预览](https://github.com/xintaofei/codeg/issues/465) | Closed | 已由需求提出者关闭，不列入当前路线 | 外部编辑器边界 |

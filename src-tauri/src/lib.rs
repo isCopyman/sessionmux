@@ -1307,6 +1307,8 @@ mod tauri_app {
                 workbenches::list_workbenches,
                 workbenches::create_workbench,
                 workbenches::rename_workbench,
+                workbenches::duplicate_workbench,
+                workbenches::reorder_workbenches,
                 workbenches::delete_workbench,
                 automation_commands::automation_list,
                 automation_commands::automation_get,

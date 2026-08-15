@@ -1866,6 +1866,22 @@ export async function renameWorkbench(
   return getTransport().call("rename_workbench", { id, name })
 }
 
+export async function duplicateWorkbench(
+  sourceId: number,
+  name?: string
+): Promise<WorkbenchInfo> {
+  return getTransport().call("duplicate_workbench", {
+    sourceId,
+    name: name ?? null,
+  })
+}
+
+export async function reorderWorkbenches(
+  orderedIds: number[]
+): Promise<WorkbenchInfo[]> {
+  return getTransport().call("reorder_workbenches", { orderedIds })
+}
+
 export async function deleteWorkbench(id: number): Promise<void> {
   return getTransport().call("delete_workbench", { id })
 }

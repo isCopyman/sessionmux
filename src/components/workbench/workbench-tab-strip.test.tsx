@@ -7,6 +7,9 @@ import { WorkbenchTabStrip } from "./workbench-tab-strip"
 const mocks = vi.hoisted(() => ({
   hydrate: vi.fn(async () => {}),
   createAndSwitch: vi.fn(async () => ({})),
+  duplicateAndSwitch: vi.fn(async () => ({})),
+  previewOrder: vi.fn(),
+  persistOrder: vi.fn(async () => {}),
   switchWorkbench: vi.fn(async () => {}),
   items: [
     {
@@ -36,6 +39,9 @@ vi.mock("@/stores/workbench-store", () => ({
       loading: false,
       hydrate: mocks.hydrate,
       createAndSwitch: mocks.createAndSwitch,
+      duplicateAndSwitch: mocks.duplicateAndSwitch,
+      previewOrder: mocks.previewOrder,
+      persistOrder: mocks.persistOrder,
     }),
 }))
 
@@ -60,6 +66,9 @@ describe("WorkbenchTabStrip", () => {
   beforeEach(() => {
     mocks.hydrate.mockClear()
     mocks.createAndSwitch.mockClear()
+    mocks.duplicateAndSwitch.mockClear()
+    mocks.previewOrder.mockClear()
+    mocks.persistOrder.mockClear()
     mocks.switchWorkbench.mockClear()
     mocks.activeWorkbenchId = 1
     mocks.switchingWorkbenchId = null
@@ -90,5 +99,31 @@ describe("WorkbenchTabStrip", () => {
     renderStrip()
     expect(screen.getByRole("tab", { name: "Review" })).toBeDisabled()
     expect(screen.getByRole("tab", { name: "Main" })).toBeDisabled()
+  })
+
+  it("duplicates a workbench from its context menu", async () => {
+    renderStrip()
+    fireEvent.contextMenu(screen.getByRole("tab", { name: "Review" }))
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole("menuitem", { name: "Duplicate workbench" })
+      )
+    })
+    expect(mocks.duplicateAndSwitch).toHaveBeenCalledWith(2, "Review Copy")
+  })
+
+  it("supports keyboard reordering with Alt+Arrow", async () => {
+    renderStrip()
+    await act(async () => {
+      fireEvent.keyDown(screen.getByRole("tab", { name: "Main" }), {
+        key: "ArrowRight",
+        altKey: true,
+      })
+    })
+    expect(mocks.previewOrder).toHaveBeenCalledWith([
+      mocks.items[1],
+      mocks.items[0],
+    ])
+    expect(mocks.persistOrder).toHaveBeenCalledTimes(1)
   })
 })
