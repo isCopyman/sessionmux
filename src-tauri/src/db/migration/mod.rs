@@ -40,6 +40,8 @@ mod m20260808_000001_custom_agent_supports_mcp;
 mod m20260815_000001_workbench;
 mod m20260815_000002_conversation_archived_at;
 mod m20260815_000003_collection;
+mod m20260815_000004_collection_root_folder;
+mod m20260815_000005_workbench_pinned;
 pub struct Migrator;
 
 #[async_trait::async_trait]
@@ -86,6 +88,8 @@ impl MigratorTrait for Migrator {
             Box::new(m20260815_000001_workbench::Migration),
             Box::new(m20260815_000002_conversation_archived_at::Migration),
             Box::new(m20260815_000003_collection::Migration),
+            Box::new(m20260815_000004_collection_root_folder::Migration),
+            Box::new(m20260815_000005_workbench_pinned::Migration),
         ]
     }
 }

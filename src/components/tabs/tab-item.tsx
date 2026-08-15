@@ -59,8 +59,8 @@ interface TabItemProps {
    *  affordances are hidden — the group-management items stay. */
   canMoveToGroup: boolean
   moveTargets: TabMoveTarget[]
-  /** Pane drag/drop: tracks foreign groups and edge-split targets. Undefined
-   *  for drafts, which remain bound to the pane that owns their composer. */
+  /** Pane drag/drop: tracks foreign groups and edge-split targets. Drafts use
+   *  the same path: their composer state is keyed by tab id and moves safely. */
   onTabDrag?: (
     tab: TabItemData,
     event: MouseEvent | TouchEvent | PointerEvent,

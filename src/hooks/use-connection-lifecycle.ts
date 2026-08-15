@@ -98,6 +98,37 @@ export function shouldDisconnectOnUnmount(args: {
   return !isConnectionBusy(args)
 }
 
+// React development StrictMode intentionally runs a mount effect's cleanup and
+// setup back-to-back. Reparenting a tab also unmounts one pane and mounts the
+// same contextKey in another pane during one commit. Disconnecting immediately
+// in either cleanup races the replacement consumer and restarts the CLI. A
+// one-task grace period lets the replacement setup cancel teardown; a genuine
+// tab close still disconnects on the next task.
+const deferredUnmountDisconnects = new Map<
+  string,
+  ReturnType<typeof setTimeout>
+>()
+
+export function cancelDeferredUnmountDisconnect(contextKey: string): void {
+  const pending = deferredUnmountDisconnects.get(contextKey)
+  if (pending == null) return
+  clearTimeout(pending)
+  deferredUnmountDisconnects.delete(contextKey)
+}
+
+export function scheduleDeferredUnmountDisconnect(
+  contextKey: string,
+  disconnect: () => Promise<void>
+): void {
+  cancelDeferredUnmountDisconnect(contextKey)
+  const pending = setTimeout(() => {
+    if (deferredUnmountDisconnects.get(contextKey) !== pending) return
+    deferredUnmountDisconnects.delete(contextKey)
+    disconnect().catch(() => {})
+  }, 0)
+  deferredUnmountDisconnects.set(contextKey, pending)
+}
+
 function normalizeErrorMessage(error: unknown): string {
   if (error instanceof Error) return error.message
   return String(error)
@@ -341,6 +372,7 @@ export function useConnectionLifecycle({
   // keep it alive so it can finish in the background — the idle sweep
   // will clean it up once it transitions back to "connected".
   useEffect(() => {
+    cancelDeferredUnmountDisconnect(contextKey)
     return () => {
       // Owners keep a prompting agent alive in the background to finish the
       // turn (the idle sweep reclaims it once it returns to "connected"), and
@@ -362,7 +394,10 @@ export function useConnectionLifecycle({
           transientUnmount: isTransientUnmountRef.current?.() === true,
         })
       ) {
-        connDisconnectRef.current().catch(() => {})
+        scheduleDeferredUnmountDisconnect(
+          contextKey,
+          connDisconnectRef.current
+        )
       }
       // Task cleanup stays unconditional even on transient unmounts — the
       // remounted instance mints fresh task ids, so stale ones would orphan.
@@ -371,7 +406,7 @@ export function useConnectionLifecycle({
       }
       clearSelectorTask()
     }
-  }, [removeTask, clearSelectorTask])
+  }, [contextKey, removeTask, clearSelectorTask])
 
   const handleFocus = useCallback(() => {
     // Respect the caller's readiness gate — e.g. historical conversations

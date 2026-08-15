@@ -69,7 +69,10 @@ Session 是系统的核心事实，也是最原始的知识资产。
 
 Execution Context 是 Session 的运行边界，第一版不要求创建同名数据库表。
 
-在 Codeg 中，它主要由现有的 `folderId`、`workingDir`、Folder、Harness 设置和可能的 worktree 共同表达。用户界面不必频繁暴露“Workspace”概念，但后端仍利用它处理：
+在 Codeg 中，它主要由现有的 `folderId`、`workingDir`、Folder、Harness 设置和可能的 worktree
+共同表达。第一阶段一个 Session 必须且只能解析到一个主 Folder/cwd；不新增 `root_paths`、
+`additional_directories` 或多根 Project。用户界面不必频繁暴露“Workspace”概念，但后端仍利用
+这个唯一执行位置处理：
 
 - cwd 和文件访问范围；
 - Git、终端和 Diff 上下文；
@@ -99,10 +102,10 @@ Collection 负责回答“这个 Session 或 Workbench 属于什么主题”，�
 Session 和 Workbench 各自最多有一个主要 Collection；Workbench 的位置不约束其中 Session 的
 Collection、Folder 或 Harness。
 
-侧栏保留轻量的当前/最近 Workbench 快捷区，下面的日常浏览在 `Collections` 与
-`Execution Locations` 间直接切换。前者是唯一语义归属树，可同时容纳 Session 与 Workbench；
-后者沿用 Codeg 原 Folder/cwd、Git 仓库和 worktree 树，并保留从节点新建、导入和设置默认 Agent
-的能力。不得删除路径树，也不得让 Collection 操作修改 `folder_id`。路径树可选按 Harness 增加
+侧栏保留轻量的当前/最近 Workbench 快捷区，下面的日常浏览默认使用 `Execution Locations`；
+`Collections` 通过视图菜单或 Session Center 进入。前者是唯一语义归属树，可同时容纳 Session
+与 Workbench；后者沿用 Codeg 原 Folder/cwd、Git 仓库和 worktree 树，并保留从节点新建、导入
+和设置默认 Agent 的能力。不得删除路径树，也不得让 Collection 操作修改 `folder_id`。路径树可选按 Harness 增加
 一个纯展示层：`Folder → Harness → Session`；它不是新的实体或归属关系。两种视图只是对同一
 `conversation` 集合的不同查询，不新增重复 Session。
 
@@ -408,13 +411,18 @@ Conversation、Collection 或 Workbench 表，也不跨设备覆盖。命名 Sav
 固定以下不变量：默认打开属于当前 Workbench；已打开则聚焦；未打开则新增固定 Content Tab；
 不得用普通点击替换非空固定 Tab。
 
-#### VIEW-007 Collection 与 Execution Location 双视图
+#### VIEW-007 单 cwd、Collection 与 Execution Location
 
-侧栏必须直接显示 `按分类 / 按运行位置` 切换，不能把路径入口藏在通用筛选菜单中。Execution
-Location 视图继续支持多 Folder、远端、本地仓库、分支/worktree、Folder 别名、默认 Harness、
+侧栏默认显示 Execution Location，不为 `按分类 / 按运行位置` 永久占用第二行主标签。Collection
+作为可记忆的组织模式放在视图菜单，并继续由 Session Center 提供显式筛选和批量整理。Execution
+Location 视图继续支持多个已登记 Folder、远端、本地仓库、分支/worktree、Folder 别名、默认 Harness、
 从节点新建 Session 和原生 Session 导入。新会话草稿在发送前可以切换 Folder；已开始的原生
 Session 保持自己的 cwd。全局新建默认继承活动 Session 的 Folder；没有活动 Session 时使用当前
 Workbench 最近创建所用的 Folder，再允许用户修改。
+
+“多个已登记 Folder”只表示应用能管理许多单 cwd Session，不表示一个 Session 同时运行在多个
+Folder。Workbench 可以混放这些 Session，但切换 Workbench 或 Collection 不得扩展任何 Session
+的文件权限范围。
 
 路径视图可选 `Folder → Harness → Session` 显示分组。Collection 内如需按路径或 Harness 查看，
 使用筛选/分组，不把 Execution Location 嵌入 Collection 的所有权模型。
@@ -484,9 +492,15 @@ Workbench 切换必须是应用内状态切换，不允许通过整页导航重�
 中央              → 加入现有 Pane
 ```
 
+命中几何采用 Paseo 式中央安全区：Pane 中央 `40% × 40%` 为“加入”，其余区域按归一化距离选择
+最近的分屏方向。不能只在最外侧设置细窄边带；窄 Pane 和大屏高分辨率下都应能轻松命中。边缘
+预览进入后需向中央再移动约 4% 才退出，避免指针在 30%/70% 边界附近抖动。
+
 #### LAYOUT-002 吸附预览
 
-悬停边缘投放区时显示半透明预览，明确松手后的新 Pane 位置和尺寸。
+悬停边缘投放区时显示半透明预览，明确松手后的新 Pane 位置和尺寸。拖动期间只维护瞬态预览，
+不改正式 Tab 顺序、活动 Session 或布局树；放下时以一个 Store action 提交。组内视觉换序不得
+搬动已挂载的会话正文 DOM，Tile 模式使用 CSS 顺序表达展示位置。
 
 #### LAYOUT-003 保持现有能力
 
@@ -500,12 +514,16 @@ Workbench 切换必须是应用内状态切换，不允许通过整页导航重�
 - 拖入既有 Pane 中央且搬空源 Pane 时，源 Pane 折叠；
 - 唯一持久 Session 拖边新建 Pane 时，原 Pane 留下同上下文的新会话草稿，否则新建的分屏会因
   源 Pane 为空而立即折叠；
-- 草稿 Tab 的归属规则；
+- 草稿 Tab 与持久 Session 使用相同的跨 Pane 拖放规则；草稿内容按稳定 Tab ID 跟随；
 - 嵌套布局；
 - 投放到当前 Pane；
 - 超出窗口范围；
 - 触摸或指针取消；
 - 运行中 Session 移动时流式输出不中断。
+
+跨 Pane 移动属于 View reparent：旧 Pane 卸载不得清除 Session runtime 缓存或断开 ACP 连接。
+连接清理需给同一 `contextKey` 的替代挂载一个事件循环的接管窗口，以兼容 React StrictMode 的
+模拟清理；明确关闭 Tab 时仍在下一任务正常断开。
 
 ### 7.5 Session 资源页
 
@@ -864,9 +882,10 @@ Collection 范围行只在用户选中目录时出现；筛选行只在快捷视
 - [x] 增加五区投放检测和吸附预览；
 - [x] 中央投放复用 `moveTabToGroup`，四边投放在指定目标 Pane 旁建立新叶节点；
 - [x] 左/上投放显式固化旧的“首叶默认归属”，避免插入新首叶时其他 Tab 静默换组；
-- [x] 唯一持久 Session 拖边时为原 Pane 留下同上下文草稿；草稿本身仍禁止跨 Pane 拖动；
+- [x] 唯一持久 Session 拖边时为原 Pane 留下同上下文草稿；草稿可带着未发送内容跨 Pane 移动；
 - [x] 覆盖四边检测、嵌套目标、草稿和单 Tab 源 Pane 的单元测试；
 - [x] 在真实 Tauri WebView2 中完成桌面端指针手势、吸附预览、松手分屏与控制台回归；
+- [x] 在真实 Tauri WebView2 中移动已连接 Codex Session，验证连接 ID 不变且无 disconnect/spawn；
 - [ ] 用正在流式输出的 Session 验证重挂载期间连接不中断。
 
 该阶段的代码路径已经可用；完成最后一项真实运行态验收后即可视为交付。
@@ -880,6 +899,7 @@ Collection 范围行只在用户选中目录时出现；筛选行只在快捷视
 - [x] 让“当前 Workbench”属于物理窗口的会话状态，避免多个窗口共享焦点；
 - [x] 增加一个 App Window 内的顶部 Workbench 标签栏，并显示正在恢复的目标；
 - [x] 增加 Workbench 复制和持久化排序；复制 Session 引用与布局，不复制设备本地草稿；
+- [x] 增加 Workbench 置顶；置顶区和普通区分别排序；
 - [ ] 增加归档和最近关闭恢复；
 - [ ] 增加 Workbench 元数据跨窗口事件及系统窗口 mount。
 

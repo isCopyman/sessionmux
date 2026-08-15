@@ -14,20 +14,16 @@ const tabItem = readFileSync(
 /**
  * Wiring the store's guarantees cannot enforce on its own.
  *
- * `moveTabToGroup` / `splitTab` reject a draft's cross-group move (unit-tested
- * in tab-context.test.tsx), but a rejected drop still looks broken — the tab
- * lifts, the ghost appears, and nothing happens. The strip must not offer the
- * affordance in the first place.
+ * Draft composer state is keyed by stable tab id, so a new-conversation tab can
+ * use the same pane move/split affordances as a persisted Session.
  */
 describe("tab strip draft gating", () => {
-  it("keeps drafts out of every cross-group affordance", () => {
-    expect(tabBar).toContain("const isDraft = tab.conversationId == null")
-    expect(tabBar).toContain("canSplitMove={!isDraft}")
-    expect(tabBar).toContain("canMoveToGroup={!isDraft}")
-    // Both drag callbacks are withheld for drafts, so a draft drag can never
-    // register a drop target (no ghost, no highlight, no move).
-    expect(tabBar).toContain("onTabDrag={!isDraft ? handleTabDrag : undefined}")
-    expect(tabBar).toMatch(/onTabDragEnd=\{\s*!isDraft/)
+  it("offers every cross-group affordance to drafts", () => {
+    expect(tabBar).not.toContain("const isDraft = tab.conversationId == null")
+    expect(tabBar).toContain("canSplitMove")
+    expect(tabBar).toContain("canMoveToGroup")
+    expect(tabBar).toContain("onTabDrag={handleTabDrag}")
+    expect(tabBar).toContain("onTabDragEnd={handleTabDragEnd}")
   })
 
   it("gates only the move items, so a draft keeps the group-management menu", () => {
@@ -35,6 +31,16 @@ describe("tab strip draft gating", () => {
     // `moveTargets` still drives the Unsplit All gate — passing an empty array
     // for drafts (instead of this flag) would have hidden that item too.
     expect(tabItem).toContain("{moveTargets.length >= 2 && (")
+  })
+})
+
+describe("tab reorder transaction wiring", () => {
+  it("keeps midpoint previews local and commits only on drag end", () => {
+    expect(tabBar).toContain("const [previewOrderIds, setPreviewOrderIds]")
+    expect(tabBar).toContain("previewOrderIdsRef.current = nextIds")
+    expect(tabBar).toMatch(
+      /if \(groupId == null\) reorderTabs\(ordered\)[\s\S]{0,80}else reorderGroupTabs\(groupId, ordered\)/
+    )
   })
 })
 

@@ -30,19 +30,21 @@ Collection 的第一批可用闭环也已落地：侧栏显示可嵌套分类树
 分类。每个 Session 最多一个主要分类；删除分类只让其中 Session 回到“未分类”，子分类上移
 一级，不修改 cwd、Folder、worktree、Workbench 标签或运行状态。左栏现在把全部命名 Workbench
 显示成可展开树，当前工作台默认展开并高亮，每个工作台下面直接列出其中 Session；Collection
-展开后也直接显示成员 Session。原来的 Folder 会话树**没有删除**，而是保留为可切换的“按运行
-位置”视图；它继续承担按 cwd、仓库、分支和 worktree 浏览及创建 Session 的入口。当前切换入口
-藏在漏斗菜单里，容易让人误以为路径视图已经消失，目标交互要把“分类 / 运行位置”提升为列表
-上方直接可见的切换项。
-持久 Session 标签拖到当前或其他 Pane 的左、右、上、下边缘时会显示半屏吸附预览，松手即建立
-对应分屏，拖到其他 Pane 中央则加入其标签组。ctx 不可用时自动退化为元数据搜索。
+展开后也可直接显示成员 Session。原来的 Folder 会话树**没有删除**，并重新作为默认 Session 树；
+它继续承担按唯一 cwd、仓库、分支和 worktree 浏览及创建 Session 的入口。Collection 是可从视图
+菜单切入的语义整理方式，也可在会话中心筛选和批量维护；侧栏不再为两种组织方式永久占用一行
+平级标签。
+Session 标签（包括尚未发送的新会话草稿）可拖到当前或其他 Pane：中央约 40% × 40% 的区域表示
+加入该标签组，中央以外按最近方向显示半屏吸附预览，松手即建立左、右、上或下分屏。投放预览
+带边界迟滞，拖动过程中只更新视觉预览，放下时才提交一次布局；组内换序和跨 Pane 移动不会重启
+Harness 或清空已加载的消息。ctx 不可用时自动退化为元数据搜索。
 
 窗口顶部现已显示 Workbench 标签，Session 标签位于其下；点击工作台会恢复整套 Session 和分屏，
-恢复目标显示加载状态，`+` 可立即创建一套工作台。工作台可用拖拽、右键菜单或键盘调整顺序，
-并可复制为新的独立工作台；复制会保留已打开 Session 的引用和分屏布局，但不会复制设备本地的
+恢复目标显示加载状态，`+` 可立即创建一套工作台。工作台可置顶，也可用拖拽、右键菜单或键盘
+调整同一区段内的顺序，并可复制为新的独立工作台；复制会保留已打开 Session 的引用和分屏布局，但不会复制设备本地的
 未发送草稿。仍在开发的关键体验包括：Workbench 归档和最近关闭；Collection 拖放、手工排序
-和更多快捷视图；Workbench 在语义树中的归档；路径视图的可见切换和可选 Harness 分组；Session
-的更多显式打开位置；真正的系统多窗口；文件/网页资源跟随；Session 间通信与可选群聊。现有
+和更多快捷视图；Workbench 在语义树中的归档；路径视图的可选 Harness 分组；Session 的更多
+显式打开位置；可选系统多窗口；文件/网页资源跟随；Session 间通信与可选群聊。现有
 `completed` 仍然只是工作进度，归档已经作为独立状态实现。
 因此下面描述的是目标产品，不能把尚未完成的部分当作当前版本说明。
 
@@ -55,7 +57,9 @@ Session 是最核心的资产。它保留原 Harness 的身份、历史和 Resum
 
 一个 Session 还可以有 Codeg 显示名、收藏和归档状态，但修改显示方式不应破坏原生会话。
 创建或继续 Session 时，模型、思考强度、权限和 cwd 都按该 Harness 的真实能力保存；Workbench
-不会强迫其中所有 Session 使用同一种配置，也不显示无法生效的统一选项。
+不会强迫其中所有 Session 使用同一种配置，也不显示无法生效的统一选项。第一阶段每个 Session
+只有一个主 Folder/cwd，不提供多根 Workspace 或额外目录列表；需要在不同路径工作的 Session
+分别创建，再按需放入同一 Workbench。
 
 ### 2.2 Collection：长期放在哪里
 
@@ -76,15 +80,16 @@ Collection 或路径。最近、收藏和搜索结果只是引用，不会制造
 Collection 不改变 Session 的 cwd、Folder、worktree、模型或权限。移动 Collection 只是整理，
 不是迁移代码或重启 Agent。
 
-左栏保留一个很轻的“当前打开 / 最近 Workbench”快捷区；完整归档在下面的树中完成。普通浏览
-提供两个直接可见、互相平行的视图：
+左栏保留一个很轻的“当前打开 / 最近 Workbench”快捷区。普通浏览默认沿用 Folder/cwd 树，保证
+从路径创建、导入、分支和 worktree 等高频入口不消失；需要按主题整理时，从视图菜单切到
+Collection 树，或进入会话中心批量维护：
 
 ```text
 [按分类]  [按运行位置]
 ```
 
 “按分类”显示可嵌套 Collection，里面可以放 Session 和 Workbench；“按运行位置”沿用原来的
-Folder/cwd、仓库和 worktree 树。路径下 Session 很多时，可以再选择仅用于显示的
+Folder/cwd、仓库和 worktree 树，并作为默认视图。路径下 Session 很多时，可以再选择仅用于显示的
 `路径 → Harness → Session` 分组。两种视图引用同一批 Session，不复制历史，也不改变归属；
 把 Session 拖进 Collection 只改变语义归档，绝不改变它的 cwd。
 
@@ -106,7 +111,8 @@ Workbench 中被引用，底层仍是同一段对话。Workbench 自己可以像
 ### 2.4 其他名词都不应成为负担
 
 - **系统窗口**只是普通 Windows/macOS/Linux 窗口；一个窗口可打开多套 Workbench。
-- **cwd / Execution Context**是 Session 属性，不做成用户必须先选择的 Workspace 层级。
+- **cwd / Execution Context**是 Session 的唯一运行位置，不做成用户必须先选择的 Workspace
+  层级，也不在第一阶段扩展为多路径 Project。
 - **搜索范围、筛选和排序**只是找东西的方式，不生成新的产品对象。
 - **Room**只在用户显式建立共享讨论时出现；**Team、Issue、Task**都不是日常 Session 管理的
   必建容器。
@@ -399,14 +405,17 @@ Enter 才打开。IDE 式“一次性预览标签”可以保留为偏好设置�
 
 ### 5.3 浏览、搜索和筛选
 
-侧栏的组织入口直接可见，不藏在筛选菜单里：
+侧栏默认显示按运行位置组织的 Session；低频的语义树切换进入视图菜单，不再永久增加一行主标签：
 
 ```text
-[按分类] [按运行位置]       [当前工作台] [全部]
+[工作台] [新建] [搜索] [会话中心]       [视图：按运行位置 / 按分类]
 ```
 
-- “按分类”用于主题、子项目和长期归档；“按运行位置”用于 Folder/cwd、仓库、分支和 worktree；
-  两者是同一批 Session 的不同视图，不是二选一的数据模型。
+- “按运行位置”用于唯一 Folder/cwd、仓库、分支和 worktree，是默认且由 Execution Context
+  派生的系统视图；“按分类”用于主题、子项目和长期归档。两者引用同一批 Session，不是两套
+  Session，也不会相互改写。
+- Collection 拖放通过会话中心、Session 菜单或未来的轻量投放目标完成；反向投放绝不用于改变
+  cwd，避免把分类操作误解成移动项目文件或重写原生 Session 的执行上下文。
 - “按运行位置”默认 `路径 → Session`；同一路径混有大量 Harness 时可切换为
   `路径 → Harness → Session`。Harness 层只是显示分组，不创建目录或复制 Session。
 - 点击 Collection 树后，列表进入该 Collection 及其子目录，并显示可清除的 `Collection: 名称`
@@ -426,11 +435,13 @@ Enter 才打开。IDE 式“一次性预览标签”可以保留为偏好设置�
 
 ### 5.4 分屏和 Workbench
 
-- Tab 拖到 Pane 左、右、上、下边缘时显示吸附预览并建立分屏；
-- 拖到中央加入目标标签组；
+- Pane 中央约 40% × 40% 是加入目标标签组的安全区；安全区以外按最近方向显示左、右、上、下
+  吸附预览并建立分屏，不要求鼠标贴住细窄边缘；
+- 吸附区切换带轻微迟滞，拖动预览不写入正式布局，松手时才提交一次；
+- 组内换序不移动已挂载的会话正文 DOM；跨 Pane 重挂不清消息缓存、不重启原 Harness；
 - 同一个 Session 在同一 Workbench 中默认只显示一次，再次打开会聚焦；
 - Workbench 顶部标签用于切换当前窗口已打开的工作台，侧栏用于管理全部已保存工作台；
-- Workbench 可以创建、重命名、复制、排序、关闭和删除，也可以选择一个主要 Collection 作为
+- Workbench 可以创建、重命名、复制、置顶、排序、关闭和删除，也可以选择一个主要 Collection 作为
   文件树中的归档位置；
 - 切换、关闭或删除 Workbench 不自动停止其中的 Session；
 - “放大当前 Session”临时隐藏其他 Pane，退出后原样恢复，不新增所谓 Focus Workbench 模式。
@@ -592,7 +603,7 @@ Session 本身先作为最原始、可追溯的知识资产。自动提炼共识
 2. 当前工作台/全部范围、Collection 范围标签和轻量筛选；
 3. 可命名、可切换、可恢复的 Workbench；
 4. 拖边吸附分屏和布局持久化；
-5. “按分类 / 按运行位置”直接切换，路径树保留新建、导入、Folder、分支和 worktree 操作；
+5. 默认路径树保留新建、导入、Folder、分支和 worktree 操作，并可从视图菜单进入 Collection；
 6. 重启后恢复上次工作现场。
 
 P0 + P1 完成后，Codeg 就应能承担“多 Harness + Session 分组管理 + 分屏 GUI”的核心需求。
@@ -622,6 +633,7 @@ Codeg 承担日常多 Harness Session 工作台。
 
 - 不强迫每次讨论创建 Issue、Task、Team、Room 或 worktree；
 - 不把物理 Folder/cwd 当成人类主题分类；
+- 不为一个 Session 增加多个 cwd、Project roots 或额外可写目录；
 - 不要求每个 Session 单独拥有一套 Workbench；
 - 不重新实现一套阉割版 Harness，也不伪装所有 Harness 能力完全相同；
 - 不复制原生会话历史作为第二事实源；

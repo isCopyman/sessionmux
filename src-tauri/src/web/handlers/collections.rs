@@ -19,6 +19,7 @@ pub struct ConversationIdsParams {
 pub struct CreateCollectionParams {
     pub name: String,
     pub parent_id: Option<i32>,
+    pub root_folder_id: Option<i32>,
 }
 
 #[derive(Deserialize)]
@@ -74,7 +75,13 @@ pub async fn create_collection(
     Json(params): Json<CreateCollectionParams>,
 ) -> Result<Json<CollectionInfo>, AppCommandError> {
     Ok(Json(
-        collections::create_collection_core(&state.db.conn, params.name, params.parent_id).await?,
+        collections::create_collection_core(
+            &state.db.conn,
+            params.name,
+            params.parent_id,
+            params.root_folder_id,
+        )
+        .await?,
     ))
 }
 

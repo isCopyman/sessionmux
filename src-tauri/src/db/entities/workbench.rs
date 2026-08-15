@@ -7,6 +7,7 @@ pub struct Model {
     pub id: i32,
     pub name: String,
     pub position: i32,
+    pub is_pinned: bool,
     pub created_at: DateTimeUtc,
     pub updated_at: DateTimeUtc,
 }

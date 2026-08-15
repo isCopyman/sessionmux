@@ -9,6 +9,8 @@ import {
   MoreHorizontal,
   PanelsTopLeft,
   Pencil,
+  Pin,
+  PinOff,
   Plus,
   Trash2,
 } from "lucide-react"
@@ -70,6 +72,8 @@ interface TreeSession {
   title: string
   status?: ConversationStatus
   liveTabId?: string
+  updatedAt: string | null
+  tabOrder: number
 }
 
 async function fetchWorkbenchTabs(workbenchId: number) {
@@ -81,19 +85,42 @@ function persistedSessions(
   conversations: Map<number, DbConversationSummary>,
   untitled: string
 ): TreeSession[] {
-  return tabs.flatMap((tab) => {
-    if (tab.conversation_id == null) return []
-    const conversation = conversations.get(tab.conversation_id)
-    return [
-      {
-        key: `conversation:${tab.conversation_id}`,
-        conversationId: tab.conversation_id,
-        folderId: conversation?.folder_id ?? tab.folder_id,
-        agentType: conversation?.agent_type ?? tab.agent_type,
-        title: formatConversationTitle(conversation?.title ?? null) || untitled,
-        status: conversation?.status as ConversationStatus | undefined,
-      },
-    ]
+  return sortTreeSessions(
+    tabs.flatMap((tab, tabOrder) => {
+      if (tab.conversation_id == null) return []
+      const conversation = conversations.get(tab.conversation_id)
+      return [
+        {
+          key: `conversation:${tab.conversation_id}`,
+          conversationId: tab.conversation_id,
+          folderId: conversation?.folder_id ?? tab.folder_id,
+          agentType: conversation?.agent_type ?? tab.agent_type,
+          title:
+            formatConversationTitle(conversation?.title ?? null) || untitled,
+          status: conversation?.status as ConversationStatus | undefined,
+          updatedAt: conversation?.updated_at ?? null,
+          tabOrder,
+        },
+      ]
+    })
+  )
+}
+
+/**
+ * The Workbench tree is navigation, not a mirror of the pane strip. Dragging a
+ * tab changes its visual slot only; the tree remains a useful activity list.
+ * Drafts stay first, then persisted Sessions sort by newest update with the
+ * saved tab position as a stable fallback when a summary is not loaded.
+ */
+export function sortTreeSessions(sessions: TreeSession[]): TreeSession[] {
+  return [...sessions].sort((left, right) => {
+    const leftDraft = left.conversationId == null
+    const rightDraft = right.conversationId == null
+    if (leftDraft !== rightDraft) return leftDraft ? -1 : 1
+    const updatedDiff =
+      Date.parse(right.updatedAt ?? "") - Date.parse(left.updatedAt ?? "")
+    if (Number.isFinite(updatedDiff) && updatedDiff !== 0) return updatedDiff
+    return left.tabOrder - right.tabOrder || left.key.localeCompare(right.key)
   })
 }
 
@@ -105,6 +132,7 @@ function persistedSessions(
  */
 export function WorkbenchTree() {
   const t = useTranslations("Folder.workbench")
+  const tConversation = useTranslations("Folder.conversationCard")
   const items = useWorkbenchStore((state) => state.items)
   const hydrated = useWorkbenchStore((state) => state.hydrated)
   const loading = useWorkbenchStore((state) => state.loading)
@@ -114,6 +142,7 @@ export function WorkbenchTree() {
     (state) => state.duplicateAndSwitch
   )
   const rename = useWorkbenchStore((state) => state.rename)
+  const setPinned = useWorkbenchStore((state) => state.setPinned)
   const remove = useWorkbenchStore((state) => state.remove)
 
   const activeWorkbenchId = useTabStore((state) => state.activeWorkbenchId)
@@ -192,15 +221,25 @@ export function WorkbenchTree() {
 
   const sessionsFor = (workbenchId: number): TreeSession[] => {
     if (workbenchId === activeWorkbenchId) {
-      return liveTabs.map((tab) => ({
-        key: tab.id,
-        conversationId: tab.conversationId,
-        folderId: tab.folderId,
-        agentType: tab.agentType,
-        title: formatConversationTitle(tab.title) || t("draftSession"),
-        status: tab.status,
-        liveTabId: tab.id,
-      }))
+      return sortTreeSessions(
+        liveTabs.map((tab, tabOrder) => {
+          const conversation =
+            tab.conversationId == null
+              ? undefined
+              : conversationById.get(tab.conversationId)
+          return {
+            key: tab.id,
+            conversationId: tab.conversationId,
+            folderId: tab.folderId,
+            agentType: tab.agentType,
+            title: formatConversationTitle(tab.title) || t("draftSession"),
+            status: tab.status,
+            liveTabId: tab.id,
+            updatedAt: conversation?.updated_at ?? null,
+            tabOrder,
+          }
+        })
+      )
     }
     return persistedSessions(
       snapshots.get(workbenchId) ?? [],
@@ -250,6 +289,14 @@ export function WorkbenchTree() {
       toast.error(t("deleteFailed", { message: toErrorMessage(error) }))
     } finally {
       setPending(false)
+    }
+  }
+
+  const togglePinned = async (item: WorkbenchInfo) => {
+    try {
+      await setPinned(item.id, !item.is_pinned)
+    } catch (error) {
+      toast.error(t("saveFailed", { message: toErrorMessage(error) }))
     }
   }
 
@@ -358,6 +405,12 @@ export function WorkbenchTree() {
                       />
                     )}
                     <span className="truncate">{item.name}</span>
+                    {item.is_pinned ? (
+                      <Pin
+                        aria-hidden
+                        className="h-3 w-3 shrink-0 text-primary/75"
+                      />
+                    ) : null}
                     <span className="ms-auto shrink-0 text-[10px] text-muted-foreground">
                       {sessions.length}
                     </span>
@@ -374,6 +427,18 @@ export function WorkbenchTree() {
                       </Button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end">
+                      <DropdownMenuItem
+                        onSelect={() => void togglePinned(item)}
+                      >
+                        {item.is_pinned ? (
+                          <PinOff className="h-4 w-4" />
+                        ) : (
+                          <Pin className="h-4 w-4" />
+                        )}
+                        {item.is_pinned
+                          ? tConversation("unpin")
+                          : tConversation("pin")}
+                      </DropdownMenuItem>
                       <DropdownMenuItem
                         onSelect={() => openEditor({ mode: "duplicate", item })}
                       >
@@ -408,6 +473,7 @@ export function WorkbenchTree() {
                           key={session.key}
                           type="button"
                           data-workbench-id={item.id}
+                          data-workbench-session
                           data-conversation-id={
                             session.conversationId ?? undefined
                           }

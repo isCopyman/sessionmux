@@ -387,12 +387,15 @@ export interface WorkbenchInfo {
   id: number
   name: string
   position: number
+  is_pinned: boolean
   created_at: string
   updated_at: string
 }
 
 export interface CollectionInfo {
   id: number
+  /** Canonical root Folder. null is accepted for pre-path legacy rows. */
+  root_folder_id?: number | null
   parent_id: number | null
   name: string
   position: number

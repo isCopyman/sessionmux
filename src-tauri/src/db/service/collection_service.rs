@@ -2,17 +2,18 @@ use chrono::Utc;
 use sea_orm::sea_query::Expr;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::NotSet, ColumnTrait, ConnectionTrait, DatabaseConnection,
-    EntityTrait, IntoActiveModel, PaginatorTrait, QueryFilter, QueryOrder, Set, TransactionTrait,
+    EntityTrait, IntoActiveModel, QueryFilter, QueryOrder, Set, TransactionTrait,
 };
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
-use crate::db::entities::{collection, collection_conversation, conversation};
+use crate::db::entities::{collection, collection_conversation, conversation, folder};
 use crate::db::error::DbError;
 use crate::models::{CollectionInfo, ConversationCollectionRef};
 
 fn to_info(model: collection::Model) -> CollectionInfo {
     CollectionInfo {
         id: model.id,
+        root_folder_id: model.root_folder_id,
         parent_id: model.parent_id,
         name: model.name,
         position: model.position,
@@ -36,25 +37,49 @@ fn normalize_name(name: &str) -> Result<String, DbError> {
     Ok(name.to_string())
 }
 
-async fn require_collection<C: ConnectionTrait>(conn: &C, id: i32) -> Result<(), DbError> {
-    if collection::Entity::find_by_id(id)
+async fn get_collection<C: ConnectionTrait>(
+    conn: &C,
+    id: i32,
+) -> Result<collection::Model, DbError> {
+    collection::Entity::find_by_id(id)
         .one(conn)
         .await?
-        .is_none()
-    {
-        return Err(DbError::NotFound(format!("Collection {id}")));
+        .ok_or_else(|| DbError::NotFound(format!("Collection {id}")))
+}
+
+async fn canonical_root_folder<C: ConnectionTrait>(
+    conn: &C,
+    folder_id: i32,
+) -> Result<i32, DbError> {
+    let row = folder::Entity::find_by_id(folder_id)
+        .one(conn)
+        .await?
+        .ok_or_else(|| DbError::NotFound(format!("Folder {folder_id}")))?;
+    if row.kind == folder::FolderKind::Chat {
+        return Err(DbError::Validation(
+            "Chat scratch folders cannot own Collections".into(),
+        ));
     }
-    Ok(())
+    // folder.parent_id is deliberately flattened by the Folder service: every
+    // worktree points straight at the repository root.
+    Ok(row.parent_id.unwrap_or(row.id))
 }
 
 async fn next_position<C: ConnectionTrait>(
     conn: &C,
     parent_id: Option<i32>,
+    root_folder_id: Option<i32>,
 ) -> Result<i32, DbError> {
     let mut query = collection::Entity::find().order_by_desc(collection::Column::Position);
     query = match parent_id {
         Some(id) => query.filter(collection::Column::ParentId.eq(id)),
-        None => query.filter(collection::Column::ParentId.is_null()),
+        None => {
+            let query = query.filter(collection::Column::ParentId.is_null());
+            match root_folder_id {
+                Some(id) => query.filter(collection::Column::RootFolderId.eq(id)),
+                None => query.filter(collection::Column::RootFolderId.is_null()),
+            }
+        }
     };
     Ok(query
         .one(conn)
@@ -65,6 +90,7 @@ async fn next_position<C: ConnectionTrait>(
 
 pub async fn list(conn: &DatabaseConnection) -> Result<Vec<CollectionInfo>, DbError> {
     let rows = collection::Entity::find()
+        .order_by_asc(collection::Column::RootFolderId)
         .order_by_asc(collection::Column::ParentId)
         .order_by_asc(collection::Column::Position)
         .order_by_asc(collection::Column::Id)
@@ -77,17 +103,35 @@ pub async fn create(
     conn: &DatabaseConnection,
     name: String,
     parent_id: Option<i32>,
+    requested_root_folder_id: Option<i32>,
 ) -> Result<CollectionInfo, DbError> {
     let name = normalize_name(&name)?;
-    if let Some(id) = parent_id {
-        require_collection(conn, id).await?;
-    }
+    let root_folder_id = if let Some(id) = parent_id {
+        let parent = get_collection(conn, id).await?;
+        if let Some(requested) = requested_root_folder_id {
+            let requested = canonical_root_folder(conn, requested).await?;
+            if parent.root_folder_id != Some(requested) {
+                return Err(DbError::Validation(
+                    "A child Collection must use its parent's Path".into(),
+                ));
+            }
+        }
+        parent.root_folder_id
+    } else {
+        match requested_root_folder_id {
+            Some(id) => Some(canonical_root_folder(conn, id).await?),
+            // Compatibility lane for pre-path clients. The current Codeg UI
+            // always sends a root; NULL rows are shown as legacy/unplaced.
+            None => None,
+        }
+    };
     let now = Utc::now();
     let model = collection::ActiveModel {
         id: NotSet,
+        root_folder_id: Set(root_folder_id),
         parent_id: Set(parent_id),
         name: Set(name),
-        position: Set(next_position(conn, parent_id).await?),
+        position: Set(next_position(conn, parent_id, root_folder_id).await?),
         created_at: Set(now),
         updated_at: Set(now),
     }
@@ -102,10 +146,7 @@ pub async fn rename(
     name: String,
 ) -> Result<CollectionInfo, DbError> {
     let name = normalize_name(&name)?;
-    let row = collection::Entity::find_by_id(id)
-        .one(conn)
-        .await?
-        .ok_or_else(|| DbError::NotFound(format!("Collection {id}")))?;
+    let row = get_collection(conn, id).await?;
     let mut active = row.into_active_model();
     active.name = Set(name);
     active.updated_at = Set(Utc::now());
@@ -122,10 +163,7 @@ pub async fn move_to(
             "A Collection cannot contain itself".into(),
         ));
     }
-    let row = collection::Entity::find_by_id(id)
-        .one(conn)
-        .await?
-        .ok_or_else(|| DbError::NotFound(format!("Collection {id}")))?;
+    let row = get_collection(conn, id).await?;
     if row.parent_id == parent_id {
         return Ok(to_info(row));
     }
@@ -139,14 +177,16 @@ pub async fn move_to(
                 "A Collection cannot be moved into its descendant".into(),
             ));
         }
-        let parent = collection::Entity::find_by_id(candidate)
-            .one(conn)
-            .await?
-            .ok_or_else(|| DbError::NotFound(format!("Collection {candidate}")))?;
+        let parent = get_collection(conn, candidate).await?;
+        if parent.root_folder_id != row.root_folder_id {
+            return Err(DbError::Validation(
+                "Collections cannot be nested across Paths".into(),
+            ));
+        }
         cursor = parent.parent_id;
     }
 
-    let position = next_position(conn, parent_id).await?;
+    let position = next_position(conn, parent_id, row.root_folder_id).await?;
     let mut active = row.into_active_model();
     active.parent_id = Set(parent_id);
     active.position = Set(position);
@@ -222,25 +262,47 @@ pub async fn assign_conversations(
     }
 
     let txn = conn.begin().await?;
-    if let Some(id) = collection_id {
-        require_collection(&txn, id).await?;
-    }
-    let live_count = conversation::Entity::find()
+    let target = match collection_id {
+        Some(id) => Some(get_collection(&txn, id).await?),
+        None => None,
+    };
+    let conversations = conversation::Entity::find()
         .filter(conversation::Column::Id.is_in(ids.clone()))
         .filter(conversation::Column::DeletedAt.is_null())
-        .count(&txn)
+        .all(&txn)
         .await?;
-    if live_count != ids.len() as u64 {
+    if conversations.len() != ids.len() {
         return Err(DbError::Validation(
             "Every selected Session must still exist".into(),
         ));
+    }
+
+    if let Some(root_folder_id) = target.as_ref().and_then(|row| row.root_folder_id) {
+        let folder_ids: HashSet<i32> = conversations.iter().map(|row| row.folder_id).collect();
+        let folders = folder::Entity::find()
+            .filter(folder::Column::Id.is_in(folder_ids))
+            .all(&txn)
+            .await?;
+        let by_id: HashMap<i32, folder::Model> =
+            folders.into_iter().map(|row| (row.id, row)).collect();
+        for session in &conversations {
+            let execution_folder = by_id.get(&session.folder_id).ok_or_else(|| {
+                DbError::Validation(format!("Session {} has no execution Folder", session.id))
+            })?;
+            let session_root = execution_folder.parent_id.unwrap_or(execution_folder.id);
+            if session_root != root_folder_id {
+                return Err(DbError::Validation(
+                    "A Session can only be placed in a Collection under its own Path".into(),
+                ));
+            }
+        }
     }
 
     collection_conversation::Entity::delete_many()
         .filter(collection_conversation::Column::ConversationId.is_in(ids.clone()))
         .exec(&txn)
         .await?;
-    if let Some(collection_id) = collection_id {
+    if let Some(collection_id) = target.map(|row| row.id) {
         let now = Utc::now();
         for conversation_id in ids.iter().copied() {
             collection_conversation::ActiveModel {

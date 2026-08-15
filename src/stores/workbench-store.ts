@@ -6,6 +6,7 @@ import {
   listWorkbenches,
   reorderWorkbenches as reorderWorkbenchesApi,
   renameWorkbench as renameWorkbenchApi,
+  setWorkbenchPinned as setWorkbenchPinnedApi,
 } from "@/lib/api"
 import type { WorkbenchInfo } from "@/lib/types"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
@@ -19,13 +20,19 @@ interface WorkbenchStoreState {
   createAndSwitch: (name: string) => Promise<WorkbenchInfo>
   duplicateAndSwitch: (id: number, name: string) => Promise<WorkbenchInfo>
   rename: (id: number, name: string) => Promise<void>
+  setPinned: (id: number, isPinned: boolean) => Promise<void>
   previewOrder: (items: WorkbenchInfo[]) => void
   persistOrder: () => Promise<void>
   remove: (id: number) => Promise<void>
 }
 
 function ordered(items: WorkbenchInfo[]) {
-  return [...items].sort((a, b) => a.position - b.position || a.id - b.id)
+  return [...items].sort(
+    (a, b) =>
+      Number(b.is_pinned) - Number(a.is_pinned) ||
+      a.position - b.position ||
+      a.id - b.id
+  )
 }
 
 function seedDraftIfEmpty() {
@@ -86,9 +93,22 @@ export const useWorkbenchStore = create<WorkbenchStoreState>()((set, get) => ({
     })
   },
 
-  previewOrder: (items) => {
+  setPinned: async (id, isPinned) => {
+    const updated = await setWorkbenchPinnedApi(id, isPinned)
     set({
-      items: items.map((item, position) => ({ ...item, position })),
+      items: ordered(
+        get().items.map((item) => (item.id === updated.id ? updated : item))
+      ),
+    })
+  },
+
+  previewOrder: (items) => {
+    const normalized = [
+      ...items.filter((item) => item.is_pinned),
+      ...items.filter((item) => !item.is_pinned),
+    ]
+    set({
+      items: normalized.map((item, position) => ({ ...item, position })),
     })
   },
 

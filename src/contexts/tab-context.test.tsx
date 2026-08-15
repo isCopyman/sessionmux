@@ -2725,11 +2725,7 @@ describe("TabProvider tab groups", () => {
       expect(saveOpenedTabsMock).toHaveBeenCalled()
     })
 
-    // A draft is its group's own scratch slot (own composer text, own folder /
-    // agent context), and every group can spawn one from its own strip — so it
-    // never changes groups. All three routes must agree, or the UI and the store
-    // disagree about where a group's draft lives.
-    it("refuses to move a draft between groups (drag, menu, and split-and-move)", async () => {
+    it("moves a draft between groups and collapses its emptied source pane", async () => {
       await renderWithTabs([tabItem(1, 1, true), tabItem(1, 2)])
       const home = leaves()[0]
       act(() => {
@@ -2741,24 +2737,31 @@ describe("TabProvider tab groups", () => {
       )!
       expect(g1Draft).toBeTruthy()
 
-      // Drag drop (with index) and menu move (no index) are both rejected.
       act(() => {
         store().moveTabToGroup(g1Draft.id, home, { index: 0 })
       })
-      expect(groupOfId(g1Draft.id)).toBe(g1)
-      act(() => {
-        store().moveTabToGroup(g1Draft.id, home)
-      })
-      expect(groupOfId(g1Draft.id)).toBe(g1)
+      expect(groupOfId(g1Draft.id)).toBe(home)
+      expect(leaves()).toEqual([home])
+      expect(store().activeTabId).toBe(g1Draft.id)
+      expect(store().rawTabs.some((tab) => tab.id === g1Draft.id)).toBe(true)
+    })
 
-      // Split-and-move on a draft is a no-op too (plain split still seeds a
-      // fresh draft in the new group — covered above).
-      const leavesBefore = leaves().length
+    it("split-and-move carries a draft and its stable composer key to a new pane", async () => {
+      await renderWithTabs([tabItem(1, 1, true)])
+      const home = leaves()[0]
       act(() => {
-        store().splitTab(g1Draft.id, "down", { move: true })
+        store().openNewConversationTab(1, "/repo", { targetGroup: home })
       })
-      expect(leaves()).toHaveLength(leavesBefore)
-      expect(groupOfId(g1Draft.id)).toBe(g1)
+      const draft = store().rawTabs.find((tab) => tab.conversationId == null)!
+
+      act(() => {
+        store().splitTab(draft.id, "down", { move: true })
+      })
+
+      expect(leaves()).toHaveLength(2)
+      expect(groupOfId(draft.id)).toBe(newLeafBeside(home))
+      expect(store().rawTabs.some((tab) => tab.id === draft.id)).toBe(true)
+      expect(store().activeTabId).toBe(draft.id)
     })
 
     it("still reorders a draft WITHIN its own group", async () => {

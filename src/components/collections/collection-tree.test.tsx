@@ -55,6 +55,7 @@ const h = vi.hoisted(() => ({
   items: [
     {
       id: 10,
+      root_folder_id: 7,
       parent_id: null,
       name: "Research",
       position: 0,
@@ -63,6 +64,7 @@ const h = vi.hoisted(() => ({
     },
     {
       id: 11,
+      root_folder_id: 7,
       parent_id: 10,
       name: "Sources",
       position: 0,
@@ -92,7 +94,19 @@ vi.mock("@/stores/collection-store", () => ({
 
 vi.mock("@/stores/app-workspace-store", () => ({
   useAppWorkspaceStore: (selector: (state: unknown) => unknown) =>
-    selector({ conversations: h.conversations }),
+    selector({
+      conversations: h.conversations,
+      activeFolderId: 7,
+      allFolders: [
+        {
+          id: 7,
+          name: "project",
+          path: "/tmp/project",
+          parent_id: null,
+          kind: "regular",
+        },
+      ],
+    }),
 }))
 
 vi.mock("@/lib/api", () => ({
@@ -119,6 +133,7 @@ describe("CollectionTree", () => {
     vi.clearAllMocks()
     h.create.mockResolvedValue({
       id: 12,
+      root_folder_id: 7,
       parent_id: null,
       name: "Writing",
       position: 1,
@@ -142,7 +157,7 @@ describe("CollectionTree", () => {
     await user.type(screen.getByPlaceholderText("Collection name"), "Writing")
     await user.click(screen.getByRole("button", { name: "Confirm" }))
 
-    expect(h.create).toHaveBeenCalledWith("Writing", null)
+    expect(h.create).toHaveBeenCalledWith("Writing", null, 7)
     expect(onOpenScope).toHaveBeenCalledWith(12)
   })
 

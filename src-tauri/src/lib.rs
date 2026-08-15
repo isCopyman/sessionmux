@@ -1316,6 +1316,7 @@ mod tauri_app {
                 workbenches::list_conversation_workbench_refs,
                 workbenches::create_workbench,
                 workbenches::rename_workbench,
+                workbenches::set_workbench_pinned,
                 workbenches::duplicate_workbench,
                 workbenches::reorder_workbenches,
                 workbenches::delete_workbench,

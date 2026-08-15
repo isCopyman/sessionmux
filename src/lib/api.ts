@@ -1858,11 +1858,13 @@ export async function listConversationCollectionRefs(
 
 export async function createCollection(
   name: string,
-  parentId?: number | null
+  parentId?: number | null,
+  rootFolderId?: number | null
 ): Promise<CollectionInfo> {
   return getTransport().call("create_collection", {
     name,
     parentId: parentId ?? null,
+    rootFolderId: rootFolderId ?? null,
   })
 }
 
@@ -1932,6 +1934,13 @@ export async function renameWorkbench(
   name: string
 ): Promise<WorkbenchInfo> {
   return getTransport().call("rename_workbench", { id, name })
+}
+
+export async function setWorkbenchPinned(
+  id: number,
+  isPinned: boolean
+): Promise<WorkbenchInfo> {
+  return getTransport().call("set_workbench_pinned", { id, isPinned })
 }
 
 export async function duplicateWorkbench(

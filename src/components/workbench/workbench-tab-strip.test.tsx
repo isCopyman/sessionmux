@@ -10,12 +10,14 @@ const mocks = vi.hoisted(() => ({
   duplicateAndSwitch: vi.fn(async () => ({})),
   previewOrder: vi.fn(),
   persistOrder: vi.fn(async () => {}),
+  setPinned: vi.fn(async () => {}),
   switchWorkbench: vi.fn(async () => {}),
   items: [
     {
       id: 1,
       name: "Main",
       position: 0,
+      is_pinned: false,
       created_at: "2026-08-15T00:00:00Z",
       updated_at: "2026-08-15T00:00:00Z",
     },
@@ -23,6 +25,7 @@ const mocks = vi.hoisted(() => ({
       id: 2,
       name: "Review",
       position: 1,
+      is_pinned: false,
       created_at: "2026-08-15T00:00:00Z",
       updated_at: "2026-08-15T00:00:00Z",
     },
@@ -42,6 +45,7 @@ vi.mock("@/stores/workbench-store", () => ({
       duplicateAndSwitch: mocks.duplicateAndSwitch,
       previewOrder: mocks.previewOrder,
       persistOrder: mocks.persistOrder,
+      setPinned: mocks.setPinned,
     }),
 }))
 
@@ -69,6 +73,7 @@ describe("WorkbenchTabStrip", () => {
     mocks.duplicateAndSwitch.mockClear()
     mocks.previewOrder.mockClear()
     mocks.persistOrder.mockClear()
+    mocks.setPinned.mockClear()
     mocks.switchWorkbench.mockClear()
     mocks.activeWorkbenchId = 1
     mocks.switchingWorkbenchId = null
@@ -110,6 +115,15 @@ describe("WorkbenchTabStrip", () => {
       )
     })
     expect(mocks.duplicateAndSwitch).toHaveBeenCalledWith(2, "Review Copy")
+  })
+
+  it("pins a workbench from its context menu", async () => {
+    renderStrip()
+    fireEvent.contextMenu(screen.getByRole("tab", { name: "Review" }))
+    await act(async () => {
+      fireEvent.click(screen.getByRole("menuitem", { name: "Pin" }))
+    })
+    expect(mocks.setPinned).toHaveBeenCalledWith(2, true)
   })
 
   it("supports keyboard reordering with Alt+Arrow", async () => {

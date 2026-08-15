@@ -1,5 +1,13 @@
-import { describe, expect, it } from "vitest"
-import { shouldDisconnectOnUnmount } from "@/hooks/use-connection-lifecycle"
+import { afterEach, describe, expect, it, vi } from "vitest"
+import {
+  cancelDeferredUnmountDisconnect,
+  scheduleDeferredUnmountDisconnect,
+  shouldDisconnectOnUnmount,
+} from "@/hooks/use-connection-lifecycle"
+
+afterEach(() => {
+  vi.useRealTimers()
+})
 
 // Unmount cleanup (tab closed) must not kill an owner whose agent still has
 // work in flight: disconnecting kills the agent CLI, and any launched
@@ -82,5 +90,28 @@ describe("shouldDisconnectOnUnmount", () => {
         transientUnmount: false,
       })
     ).toBe(true)
+  })
+})
+
+describe("deferred unmount disconnect", () => {
+  it("lets a replacement pane cancel cleanup in the same commit", async () => {
+    vi.useFakeTimers()
+    const disconnect = vi.fn(async () => {})
+
+    scheduleDeferredUnmountDisconnect("tab-a", disconnect)
+    cancelDeferredUnmountDisconnect("tab-a")
+    await vi.runAllTimersAsync()
+
+    expect(disconnect).not.toHaveBeenCalled()
+  })
+
+  it("still disconnects a genuinely closed tab on the next task", async () => {
+    vi.useFakeTimers()
+    const disconnect = vi.fn(async () => {})
+
+    scheduleDeferredUnmountDisconnect("tab-b", disconnect)
+    await vi.runAllTimersAsync()
+
+    expect(disconnect).toHaveBeenCalledTimes(1)
   })
 })

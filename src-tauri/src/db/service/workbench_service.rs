@@ -14,6 +14,7 @@ fn to_info(model: workbench::Model) -> WorkbenchInfo {
         id: model.id,
         name: model.name,
         position: model.position,
+        is_pinned: model.is_pinned,
         created_at: model.created_at,
         updated_at: model.updated_at,
     }
@@ -34,6 +35,7 @@ fn normalize_name(name: &str) -> Result<String, DbError> {
 
 pub async fn list(conn: &DatabaseConnection) -> Result<Vec<WorkbenchInfo>, DbError> {
     let rows = workbench::Entity::find()
+        .order_by_desc(workbench::Column::IsPinned)
         .order_by_asc(workbench::Column::Position)
         .order_by_asc(workbench::Column::Id)
         .all(conn)
@@ -122,6 +124,7 @@ pub async fn create(
         id: NotSet,
         name: Set(name),
         position: Set(max_position + 1),
+        is_pinned: Set(false),
         created_at: Set(now),
         updated_at: Set(now),
     }
@@ -142,6 +145,24 @@ pub async fn rename(
         .ok_or_else(|| DbError::NotFound(format!("Workbench {id}")))?;
     let mut active = row.into_active_model();
     active.name = Set(name);
+    active.updated_at = Set(Utc::now());
+    Ok(to_info(active.update(conn).await?))
+}
+
+pub async fn set_pinned(
+    conn: &DatabaseConnection,
+    id: i32,
+    is_pinned: bool,
+) -> Result<WorkbenchInfo, DbError> {
+    let row = workbench::Entity::find_by_id(id)
+        .one(conn)
+        .await?
+        .ok_or_else(|| DbError::NotFound(format!("Workbench {id}")))?;
+    if row.is_pinned == is_pinned {
+        return Ok(to_info(row));
+    }
+    let mut active = row.into_active_model();
+    active.is_pinned = Set(is_pinned);
     active.updated_at = Set(Utc::now());
     Ok(to_info(active.update(conn).await?))
 }
@@ -169,6 +190,7 @@ pub async fn duplicate(
         id: NotSet,
         name: Set(name),
         position: Set(max_position + 1),
+        is_pinned: Set(false),
         created_at: Set(now),
         updated_at: Set(now),
     }

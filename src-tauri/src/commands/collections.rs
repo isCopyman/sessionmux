@@ -25,8 +25,9 @@ pub async fn create_collection_core(
     conn: &sea_orm::DatabaseConnection,
     name: String,
     parent_id: Option<i32>,
+    root_folder_id: Option<i32>,
 ) -> Result<CollectionInfo, AppCommandError> {
-    collection_service::create(conn, name, parent_id)
+    collection_service::create(conn, name, parent_id, root_folder_id)
         .await
         .map_err(AppCommandError::from)
 }
@@ -93,8 +94,9 @@ pub async fn create_collection(
     db: tauri::State<'_, AppDatabase>,
     name: String,
     parent_id: Option<i32>,
+    root_folder_id: Option<i32>,
 ) -> Result<CollectionInfo, AppCommandError> {
-    create_collection_core(&db.conn, name, parent_id).await
+    create_collection_core(&db.conn, name, parent_id, root_folder_id).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -146,15 +148,19 @@ mod tests {
     #[tokio::test]
     async fn collections_nest_but_cannot_form_cycles() {
         let db = fresh_in_memory_db().await;
-        let root = create_collection_core(&db.conn, "Research".into(), None)
+        let folder = seed_folder(&db, "/tmp/codeg-collection-tree").await;
+        let root = create_collection_core(&db.conn, "Research".into(), None, Some(folder))
             .await
             .expect("root");
-        let child = create_collection_core(&db.conn, "Sources".into(), Some(root.id))
+        let child = create_collection_core(&db.conn, "Sources".into(), Some(root.id), None)
             .await
             .expect("child");
-        let grandchild = create_collection_core(&db.conn, "Papers".into(), Some(child.id))
+        let grandchild = create_collection_core(&db.conn, "Papers".into(), Some(child.id), None)
             .await
             .expect("grandchild");
+
+        assert_eq!(root.root_folder_id, Some(folder));
+        assert_eq!(child.root_folder_id, Some(folder));
 
         assert!(move_collection_core(&db.conn, root.id, Some(grandchild.id))
             .await
@@ -175,10 +181,10 @@ mod tests {
         let db = fresh_in_memory_db().await;
         let folder = seed_folder(&db, "/tmp/codeg-collection-membership").await;
         let conversation = seed_conversation(&db, folder, AgentType::Codex).await;
-        let first = create_collection_core(&db.conn, "First".into(), None)
+        let first = create_collection_core(&db.conn, "First".into(), None, Some(folder))
             .await
             .expect("first");
-        let second = create_collection_core(&db.conn, "Second".into(), None)
+        let second = create_collection_core(&db.conn, "Second".into(), None, Some(folder))
             .await
             .expect("second");
 
@@ -204,5 +210,31 @@ mod tests {
         assert!(conversation_service::get_by_id(&db.conn, conversation)
             .await
             .is_ok());
+    }
+
+    #[tokio::test]
+    async fn rooted_collections_reject_sessions_and_children_from_other_paths() {
+        let db = fresh_in_memory_db().await;
+        let first_folder = seed_folder(&db, "/tmp/codeg-collection-root-a").await;
+        let second_folder = seed_folder(&db, "/tmp/codeg-collection-root-b").await;
+        let first = create_collection_core(&db.conn, "First path".into(), None, Some(first_folder))
+            .await
+            .expect("first collection");
+        let second =
+            create_collection_core(&db.conn, "Second path".into(), None, Some(second_folder))
+                .await
+                .expect("second collection");
+        let foreign_session = seed_conversation(&db, second_folder, AgentType::ClaudeCode).await;
+
+        assert!(assign_conversations_to_collection_core(
+            &db.conn,
+            vec![foreign_session],
+            Some(first.id),
+        )
+        .await
+        .is_err());
+        assert!(move_collection_core(&db.conn, second.id, Some(first.id))
+            .await
+            .is_err());
     }
 }

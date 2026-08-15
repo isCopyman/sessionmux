@@ -1269,6 +1269,10 @@ pub fn build_router(
             post(handlers::workbenches::rename_workbench),
         )
         .route(
+            "/set_workbench_pinned",
+            post(handlers::workbenches::set_workbench_pinned),
+        )
+        .route(
             "/duplicate_workbench",
             post(handlers::workbenches::duplicate_workbench),
         )

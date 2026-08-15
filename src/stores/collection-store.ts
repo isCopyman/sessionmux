@@ -13,7 +13,11 @@ interface CollectionStoreState {
   hydrated: boolean
   loading: boolean
   hydrate: (force?: boolean) => Promise<void>
-  create: (name: string, parentId?: number | null) => Promise<CollectionInfo>
+  create: (
+    name: string,
+    parentId?: number | null,
+    rootFolderId?: number | null
+  ) => Promise<CollectionInfo>
   rename: (id: number, name: string) => Promise<void>
   move: (id: number, parentId?: number | null) => Promise<void>
   remove: (id: number) => Promise<void>
@@ -22,6 +26,7 @@ interface CollectionStoreState {
 function ordered(items: CollectionInfo[]) {
   return [...items].sort(
     (a, b) =>
+      (a.root_folder_id ?? -1) - (b.root_folder_id ?? -1) ||
       (a.parent_id ?? -1) - (b.parent_id ?? -1) ||
       a.position - b.position ||
       a.id - b.id
@@ -44,8 +49,8 @@ export const useCollectionStore = create<CollectionStoreState>()(
       }
     },
 
-    create: async (name, parentId = null) => {
-      const created = await createCollectionApi(name, parentId)
+    create: async (name, parentId = null, rootFolderId = null) => {
+      const created = await createCollectionApi(name, parentId, rootFolderId)
       set({ items: ordered([...get().items, created]) })
       return created
     },

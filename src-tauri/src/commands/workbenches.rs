@@ -40,6 +40,16 @@ pub async fn rename_workbench_core(
         .map_err(AppCommandError::from)
 }
 
+pub async fn set_workbench_pinned_core(
+    conn: &sea_orm::DatabaseConnection,
+    id: i32,
+    is_pinned: bool,
+) -> Result<WorkbenchInfo, AppCommandError> {
+    workbench_service::set_pinned(conn, id, is_pinned)
+        .await
+        .map_err(AppCommandError::from)
+}
+
 pub async fn duplicate_workbench_core(
     conn: &sea_orm::DatabaseConnection,
     source_id: i32,
@@ -102,6 +112,16 @@ pub async fn rename_workbench(
     name: String,
 ) -> Result<WorkbenchInfo, AppCommandError> {
     rename_workbench_core(&db.conn, id, name).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn set_workbench_pinned(
+    db: tauri::State<'_, AppDatabase>,
+    id: i32,
+    is_pinned: bool,
+) -> Result<WorkbenchInfo, AppCommandError> {
+    set_workbench_pinned_core(&db.conn, id, is_pinned).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -313,6 +333,40 @@ mod tests {
                 .as_deref()
                 .is_some_and(|detail| detail.contains("exactly once")),
             "validation detail should explain the complete-order contract"
+        );
+    }
+
+    #[tokio::test]
+    async fn pinned_workbenches_sort_before_unpinned_without_losing_manual_order() {
+        let db = fresh_in_memory_db().await;
+        let review = create_workbench_core(&db.conn, Some("Review".into()))
+            .await
+            .expect("create review");
+        let experiments = create_workbench_core(&db.conn, Some("Experiments".into()))
+            .await
+            .expect("create experiments");
+
+        set_workbench_pinned_core(&db.conn, review.id, true)
+            .await
+            .expect("pin review");
+        let items = list_workbenches_core(&db.conn).await.expect("list");
+        assert_eq!(items[0].id, review.id);
+        assert!(items[0].is_pinned);
+        assert_eq!(items[1].id, 1);
+        assert_eq!(items[2].id, experiments.id);
+
+        let unpinned = set_workbench_pinned_core(&db.conn, review.id, false)
+            .await
+            .expect("unpin review");
+        assert!(!unpinned.is_pinned);
+        assert_eq!(
+            list_workbenches_core(&db.conn)
+                .await
+                .expect("list after unpin")
+                .iter()
+                .map(|item| item.id)
+                .collect::<Vec<_>>(),
+            vec![1, review.id, experiments.id]
         );
     }
 

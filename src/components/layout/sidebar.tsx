@@ -165,7 +165,7 @@ export function Sidebar() {
   const [showRecent, setShowRecent] = useState(true)
   const [sortMode, setSortMode] = useState<SidebarSortMode>("created")
   const [organizationMode, setOrganizationMode] =
-    useState<SidebarOrganizationMode>("collections")
+    useState<SidebarOrganizationMode>("locations")
   const [sectionOrder, setSectionOrder] = useState<SidebarSectionOrder>(
     DEFAULT_SECTION_ORDER
   )
@@ -499,36 +499,6 @@ export function Sidebar() {
           the list below. Each row is a `group` so its shortcut hint reveals on
           hover / keyboard focus. */}
       <div className="flex shrink-0 flex-col gap-0.5 px-1.5 pt-1.5">
-        <div
-          role="group"
-          aria-label={t("organizeBy")}
-          className="mb-1 grid grid-cols-2 gap-0.5 rounded-lg bg-sidebar-accent/60 p-0.5"
-        >
-          {(["collections", "locations"] as const).map((mode) => {
-            const active = organizationMode === mode
-            const label =
-              mode === "collections"
-                ? t("organizeByCollections")
-                : t("organizeByLocations")
-            return (
-              <button
-                key={mode}
-                type="button"
-                aria-pressed={active}
-                onClick={() => handleSetOrganizationMode(mode)}
-                className={cn(
-                  "h-7 min-w-0 truncate rounded-md px-2 text-[0.75rem] outline-none transition-colors",
-                  "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
-                  active
-                    ? "bg-background font-medium text-foreground shadow-sm"
-                    : "text-muted-foreground hover:bg-background/50 hover:text-foreground"
-                )}
-              >
-                {label}
-              </button>
-            )
-          })}
-        </div>
         <WorkbenchTree />
         <SidebarNavButton
           icon={SquarePen}

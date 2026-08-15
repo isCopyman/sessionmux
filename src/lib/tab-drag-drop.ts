@@ -36,17 +36,28 @@ export interface ClientRectLike {
   height: number
 }
 
+export interface SplitDropGeometry {
+  /** The centered rectangle that means "join this pane". */
+  centerRatio?: number
+  /** Once an edge is active, move this far into the center before leaving it. */
+  hysteresisRatio?: number
+  currentEdge?: SplitDropEdge | null
+}
+
 /**
- * Resolve the pane edge targeted by a tab drag. The edge band is proportional
- * to the pane, so the gesture remains usable on both a large single pane and a
- * narrow nested split. At corners the nearest normalized edge wins instead of
- * letting condition order make the result feel arbitrary.
+ * Resolve the pane edge targeted by a tab drag. Like Paseo's split container,
+ * the middle 40% x 40% is the only ordinary pane-join target; the surrounding
+ * area belongs to the nearest split direction. This is much easier to acquire
+ * than four thin edge strips, especially inside a narrow nested pane.
+ *
+ * A small hysteresis keeps an already-active edge selected until the pointer
+ * has moved clearly into the center, preventing preview flicker at 30%/70%.
  */
 export function splitDropEdgeFromPoint(
   clientX: number,
   clientY: number,
   rect: ClientRectLike,
-  edgeRatio = 0.22
+  geometry: SplitDropGeometry = {}
 ): SplitDropEdge | null {
   if (
     !Number.isFinite(rect.width) ||
@@ -60,14 +71,28 @@ export function splitDropEdgeFromPoint(
   const y = (clientY - rect.top) / rect.height
   if (x < 0 || x > 1 || y < 0 || y > 1) return null
 
-  const ratio = Math.min(Math.max(edgeRatio, 0), 0.5)
-  const candidates: Array<{ edge: SplitDropEdge; distance: number }> = []
-  if (x <= ratio) candidates.push({ edge: "left", distance: x })
-  if (1 - x <= ratio) candidates.push({ edge: "right", distance: 1 - x })
-  if (y <= ratio) candidates.push({ edge: "up", distance: y })
-  if (1 - y <= ratio) candidates.push({ edge: "down", distance: 1 - y })
+  const centerRatio = Math.min(Math.max(geometry.centerRatio ?? 0.4, 0), 1)
+  const hysteresis = geometry.currentEdge
+    ? Math.min(Math.max(geometry.hysteresisRatio ?? 0.04, 0), centerRatio / 2)
+    : 0
+  const centerInset = (1 - centerRatio) / 2 + hysteresis
+  if (
+    x >= centerInset &&
+    x <= 1 - centerInset &&
+    y >= centerInset &&
+    y <= 1 - centerInset
+  ) {
+    return null
+  }
+
+  const candidates: Array<{ edge: SplitDropEdge; distance: number }> = [
+    { edge: "left", distance: x },
+    { edge: "right", distance: 1 - x },
+    { edge: "up", distance: y },
+    { edge: "down", distance: 1 - y },
+  ]
   candidates.sort((a, b) => a.distance - b.distance)
-  return candidates[0]?.edge ?? null
+  return candidates[0]?.edge ?? geometry.currentEdge ?? null
 }
 
 /**

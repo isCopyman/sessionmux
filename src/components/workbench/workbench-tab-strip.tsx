@@ -8,6 +8,8 @@ import {
   Copy,
   Loader2,
   PanelsTopLeft,
+  Pin,
+  PinOff,
   Plus,
 } from "lucide-react"
 import { useTranslations } from "next-intl"
@@ -41,6 +43,7 @@ export function WorkbenchTabStrip({
   rightInset,
 }: WorkbenchTabStripProps) {
   const t = useTranslations("Folder.workbench")
+  const tConversation = useTranslations("Folder.conversationCard")
   const items = useWorkbenchStore((state) => state.items)
   const hydrated = useWorkbenchStore((state) => state.hydrated)
   const loading = useWorkbenchStore((state) => state.loading)
@@ -51,6 +54,7 @@ export function WorkbenchTabStrip({
   )
   const previewOrder = useWorkbenchStore((state) => state.previewOrder)
   const persistOrder = useWorkbenchStore((state) => state.persistOrder)
+  const setPinned = useWorkbenchStore((state) => state.setPinned)
   const activeWorkbenchId = useTabStore((state) => state.activeWorkbenchId)
   const switchingWorkbenchId = useTabStore(
     (state) => state.switchingWorkbenchId
@@ -59,10 +63,15 @@ export function WorkbenchTabStrip({
   const [creating, setCreating] = useState(false)
   const [copyingId, setCopyingId] = useState<number | null>(null)
   const [ordering, setOrdering] = useState(false)
+  const [pinningId, setPinningId] = useState<number | null>(null)
   const dragStartOrderRef = useRef<string | null>(null)
   const dragClickGuardRef = useRef<number | null>(null)
   const busy =
-    switchingWorkbenchId != null || creating || copyingId != null || ordering
+    switchingWorkbenchId != null ||
+    creating ||
+    copyingId != null ||
+    pinningId != null ||
+    ordering
 
   useEffect(() => {
     if (hydrated) return
@@ -112,12 +121,25 @@ export function WorkbenchTabStrip({
     const index = items.findIndex((candidate) => candidate.id === item.id)
     const target = index + delta
     if (index < 0 || target < 0 || target >= items.length) return
+    if (items[target].is_pinned !== item.is_pinned) return
     const next = [...items]
     const current = next[index]
     next[index] = next[target]
     next[target] = current
     previewOrder(next)
     void commitOrder()
+  }
+
+  const togglePinned = async (item: WorkbenchInfo) => {
+    if (busy) return
+    setPinningId(item.id)
+    try {
+      await setPinned(item.id, !item.is_pinned)
+    } catch (error) {
+      toast.error(t("saveFailed", { message: toErrorMessage(error) }))
+    } finally {
+      setPinningId(null)
+    }
   }
 
   return (
@@ -152,6 +174,11 @@ export function WorkbenchTabStrip({
         {items.map((item, index) => {
           const active = item.id === activeWorkbenchId
           const restoring = item.id === switchingWorkbenchId
+          const canMoveLeft =
+            index > 0 && items[index - 1].is_pinned === item.is_pinned
+          const canMoveRight =
+            index < items.length - 1 &&
+            items[index + 1].is_pinned === item.is_pinned
           return (
             <ContextMenu key={item.id}>
               <ContextMenuTrigger asChild>
@@ -221,7 +248,9 @@ export function WorkbenchTabStrip({
                     )}
                     title={item.name}
                   >
-                    {restoring || copyingId === item.id ? (
+                    {restoring ||
+                    copyingId === item.id ||
+                    pinningId === item.id ? (
                       <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-primary" />
                     ) : (
                       <PanelsTopLeft
@@ -231,11 +260,30 @@ export function WorkbenchTabStrip({
                         )}
                       />
                     )}
+                    {item.is_pinned ? (
+                      <Pin
+                        aria-hidden
+                        className="h-3 w-3 shrink-0 text-primary/75"
+                      />
+                    ) : null}
                     <span className="truncate">{item.name}</span>
                   </button>
                 </Reorder.Item>
               </ContextMenuTrigger>
               <ContextMenuContent>
+                <ContextMenuItem
+                  disabled={busy}
+                  onSelect={() => void togglePinned(item)}
+                >
+                  {item.is_pinned ? (
+                    <PinOff className="h-4 w-4" />
+                  ) : (
+                    <Pin className="h-4 w-4" />
+                  )}
+                  {item.is_pinned
+                    ? tConversation("unpin")
+                    : tConversation("pin")}
+                </ContextMenuItem>
                 <ContextMenuItem
                   disabled={busy}
                   onSelect={() => void duplicate(item)}
@@ -245,14 +293,14 @@ export function WorkbenchTabStrip({
                 </ContextMenuItem>
                 <ContextMenuSeparator />
                 <ContextMenuItem
-                  disabled={busy || index === 0}
+                  disabled={busy || !canMoveLeft}
                   onSelect={() => moveBy(item, -1)}
                 >
                   <ArrowLeft className="h-4 w-4" />
                   {t("moveLeft")}
                 </ContextMenuItem>
                 <ContextMenuItem
-                  disabled={busy || index === items.length - 1}
+                  disabled={busy || !canMoveRight}
                   onSelect={() => moveBy(item, 1)}
                 >
                   <ArrowRight className="h-4 w-4" />

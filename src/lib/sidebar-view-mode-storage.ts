@@ -255,19 +255,20 @@ export function saveSortMode(value: SidebarSortMode): void {
 }
 
 /**
- * The primary Session library view. Collections are the user-facing semantic
- * home; execution locations keep the legacy cwd/Git-oriented folder tree
- * available without making it compete with Collections by default.
+ * The primary Session library view. A Session has one execution Folder/cwd, so
+ * the established location tree remains the safest default and preserves the
+ * path-scoped create/import affordances. Collections are an optional semantic
+ * organization view selected from View options; changing it never mutates cwd.
  */
 export function loadOrganizationMode(): SidebarOrganizationMode {
-  if (typeof window === "undefined") return "collections"
+  if (typeof window === "undefined") return "locations"
   try {
     const raw = localStorage.getItem(ORGANIZATION_MODE_KEY)
     if (raw === "locations" || raw === "collections") return raw
   } catch {
     /* ignore */
   }
-  return "collections"
+  return "locations"
 }
 
 export function saveOrganizationMode(value: SidebarOrganizationMode): void {

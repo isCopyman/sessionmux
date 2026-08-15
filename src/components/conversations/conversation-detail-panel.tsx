@@ -893,6 +893,11 @@ const ConversationTabView = memo(function ConversationTabView({
     return () => {
       mountedRef.current = false
       syncCancelRef.current?.()
+      // Moving a tab between split groups reparents this view. The connection
+      // lifecycle already treats that as transient; keep the matching runtime
+      // detail/turn cache too, otherwise the newly mounted pane flashes a load
+      // state and loses its scroll anchor even though the Session stayed live.
+      if (isReparentUnmount(useTabStore.getState(), tabId, groupId)) return
       if (connStatusRef.current === "prompting" && !isViewerRef.current) {
         // Owner, agent still responding — keep the session for deferred cleanup
         // (the background turn_complete handler removes it once done).
@@ -906,7 +911,13 @@ const ConversationTabView = memo(function ConversationTabView({
         removeConversation(effectiveConversationId)
       }
     }
-  }, [effectiveConversationId, removeConversation, setPendingCleanup])
+  }, [
+    effectiveConversationId,
+    groupId,
+    removeConversation,
+    setPendingCleanup,
+    tabId,
+  ])
 
   const handleSend = useCallback(
     (
@@ -1916,18 +1927,18 @@ const ConversationTabView = memo(function ConversationTabView({
   )
 })
 
-function splitDropOverlayPosition(edge: SplitDropEdge | null): string {
+function splitDropOverlayClipPath(edge: SplitDropEdge | null): string {
   switch (edge) {
     case "left":
-      return "inset-y-0 left-0 w-1/2"
+      return "inset(0 50% 0 0 round 0.375rem)"
     case "right":
-      return "inset-y-0 right-0 w-1/2"
+      return "inset(0 0 0 50% round 0.375rem)"
     case "up":
-      return "inset-x-0 top-0 h-1/2"
+      return "inset(0 0 50% 0 round 0.375rem)"
     case "down":
-      return "inset-x-0 bottom-0 h-1/2"
+      return "inset(50% 0 0 0 round 0.375rem)"
     default:
-      return "inset-0"
+      return "inset(0 round 0.375rem)"
   }
 }
 
@@ -2373,6 +2384,7 @@ export function ConversationDetailPanel() {
               ? "h-full"
               : "conversation-tab-hidden absolute inset-0 invisible pointer-events-none"
         )}
+        style={canTileG ? { order: indexInGroup } : undefined}
         onPointerDownCapture={
           visible && !active ? () => switchTab(tab.id) : undefined
         }
@@ -2394,6 +2406,15 @@ export function ConversationDetailPanel() {
     const rect = groupRects.get(groupId)
     if (!rect) return null
     const groupTabs = tabsByGroup.get(groupId) ?? []
+    // Tab order is presentation state. Keep the mounted conversation DOM in a
+    // stable order so a strip reorder never moves the large live subtree; tile
+    // mode uses CSS `order` to reflect the strip order without a DOM reparent.
+    const displayIndexById = new Map(
+      groupTabs.map((tab, index) => [tab.id, index])
+    )
+    const mountedGroupTabs = [...groupTabs].sort((a, b) =>
+      a.id.localeCompare(b.id)
+    )
     const canTileG = !!tileByGroup[groupId] && groupTabs.length > 1
     // The group's SELECTED tab drives its header — each split group keeps the
     // full "tabs + conversation title bar" pairing of the unsplit layout.
@@ -2459,8 +2480,13 @@ export function ConversationDetailPanel() {
                 canTileG && "flex min-w-full flex-row"
               )}
             >
-              {groupTabs.map((tab, indexInGroup) =>
-                renderTabWrapper(tab, indexInGroup, groupId, canTileG)
+              {mountedGroupTabs.map((tab) =>
+                renderTabWrapper(
+                  tab,
+                  displayIndexById.get(tab.id) ?? 0,
+                  groupId,
+                  canTileG
+                )
               )}
             </div>
           </TileScrollContainer>
@@ -2469,10 +2495,15 @@ export function ConversationDetailPanel() {
             <div
               data-split-drop-edge={dragSplitEdge ?? undefined}
               className={cn(
-                "pointer-events-none absolute z-30 ring-2 ring-inset ring-primary/35 transition-[inset,width,height] duration-75",
-                dragSplitEdge ? "bg-primary/10" : "bg-primary/5",
-                splitDropOverlayPosition(dragSplitEdge)
+                "pointer-events-none absolute inset-1 z-30 rounded-md border border-primary/45 shadow-[inset_0_0_0_1px_color-mix(in_oklab,var(--primary),transparent_78%)]",
+                "animate-in fade-in-0 duration-100 transition-[clip-path,background-color] ease-out",
+                dragSplitEdge ? "bg-primary/12" : "bg-primary/7"
               )}
+              style={{
+                clipPath: splitDropOverlayClipPath(dragSplitEdge),
+                transitionDuration: "160ms",
+                willChange: "clip-path",
+              }}
             />
           )}
         </div>

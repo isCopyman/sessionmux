@@ -63,6 +63,23 @@ describe("splitDropEdgeFromPoint", () => {
     expect(splitDropEdgeFromPoint(300, 150, rect)).toBeNull()
   })
 
+  it("uses a centered 40% join zone and assigns the surrounding area to a split", () => {
+    // 28% from the left used to miss the old 22% edge strip. It is outside
+    // the centered 40% x 40% join zone, so the nearest split is now acquired.
+    expect(splitDropEdgeFromPoint(212, 150, rect)).toBe("left")
+    // 32% is inside the join zone when no edge is currently active.
+    expect(splitDropEdgeFromPoint(228, 150, rect)).toBeNull()
+  })
+
+  it("adds hysteresis when leaving an active edge preview", () => {
+    expect(
+      splitDropEdgeFromPoint(228, 150, rect, { currentEdge: "left" })
+    ).toBe("left")
+    expect(
+      splitDropEdgeFromPoint(244, 150, rect, { currentEdge: "left" })
+    ).toBeNull()
+  })
+
   it("chooses the nearest normalized edge at a corner", () => {
     // 5% from the left, 10% from the top.
     expect(splitDropEdgeFromPoint(120, 70, rect)).toBe("left")

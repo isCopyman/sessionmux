@@ -148,6 +148,8 @@ export function CollectionTree({
   const move = useCollectionStore((state) => state.move)
   const remove = useCollectionStore((state) => state.remove)
   const conversations = useAppWorkspaceStore((state) => state.conversations)
+  const allFolders = useAppWorkspaceStore((state) => state.allFolders)
+  const activeFolderId = useAppWorkspaceStore((state) => state.activeFolderId)
 
   const [expanded, setExpanded] = useState<Set<number>>(new Set())
   const [unclassifiedExpanded, setUnclassifiedExpanded] = useState(true)
@@ -159,6 +161,7 @@ export function CollectionTree({
   const [editor, setEditor] = useState<EditorState | null>(null)
   const [name, setName] = useState("")
   const [parentId, setParentId] = useState<number | null>(null)
+  const [rootFolderId, setRootFolderId] = useState<number | null>(null)
   const [pending, setPending] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<CollectionInfo | null>(null)
 
@@ -264,14 +267,32 @@ export function CollectionTree({
     [membershipByConversation, visibleConversations]
   )
 
+  const canonicalActiveRootId = useMemo(() => {
+    const active = allFolders.find((folder) => folder.id === activeFolderId)
+    return active ? (active.parent_id ?? active.id) : null
+  }, [activeFolderId, allFolders])
+
   const openEditor = (next: EditorState) => {
     setEditor(next)
     if (next.mode === "create") {
       setName("")
       setParentId(next.parentId)
+      const parent =
+        next.parentId == null
+          ? null
+          : items.find((item) => item.id === next.parentId)
+      setRootFolderId(
+        parent?.root_folder_id ??
+          canonicalActiveRootId ??
+          allFolders.find(
+            (folder) => folder.kind === "regular" && folder.parent_id == null
+          )?.id ??
+          null
+      )
     } else {
       setName(next.item.name)
       setParentId(next.item.parent_id)
+      setRootFolderId(next.item.root_folder_id ?? null)
     }
   }
 
@@ -282,7 +303,7 @@ export function CollectionTree({
     setPending(true)
     try {
       if (editor.mode === "create") {
-        const created = await create(normalizedName, parentId)
+        const created = await create(normalizedName, parentId, rootFolderId)
         if (parentId != null) {
           setExpanded((current) => new Set(current).add(parentId))
         }

@@ -29,6 +29,13 @@ pub struct RenameWorkbenchParams {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SetWorkbenchPinnedParams {
+    pub id: i32,
+    pub is_pinned: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DuplicateWorkbenchParams {
     pub source_id: i32,
     pub name: Option<String>,
@@ -79,6 +86,15 @@ pub async fn rename_workbench(
 ) -> Result<Json<WorkbenchInfo>, AppCommandError> {
     Ok(Json(
         workbenches::rename_workbench_core(&state.db.conn, params.id, params.name).await?,
+    ))
+}
+
+pub async fn set_workbench_pinned(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<SetWorkbenchPinnedParams>,
+) -> Result<Json<WorkbenchInfo>, AppCommandError> {
+    Ok(Json(
+        workbenches::set_workbench_pinned_core(&state.db.conn, params.id, params.is_pinned).await?,
     ))
 }
 

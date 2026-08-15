@@ -1556,9 +1556,6 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
     const sourceGroup = groupOfTab(st.groupOf, st.groupLayout, tabId)
 
     if (opts.move) {
-      // A draft belongs to the group that spawned it (see `moveTabToGroup`);
-      // plain split still seeds the new group with its own draft.
-      if (tab.conversationId == null) return
       const groupSize = st.rawTabs.filter(
         (t) => groupOfTab(st.groupOf, st.groupLayout, t.id) === sourceGroup
       ).length
@@ -1616,7 +1613,7 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
   snapTabToSplit: (tabId, targetGroupId, direction) => {
     const st = get()
     const tab = st.rawTabs.find((item) => item.id === tabId)
-    if (!tab || tab.conversationId == null) return
+    if (!tab) return
     if (!leafIds(st.groupLayout).includes(targetGroupId)) return
 
     const sourceGroup = groupOfTab(st.groupOf, st.groupLayout, tabId)
@@ -1654,13 +1651,10 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
     if (!moving) return
     if (!leafIds(st.groupLayout).includes(targetGroupId)) return
     if (groupOfTab(st.groupOf, st.groupLayout, tabId) === targetGroupId) return
-    // Drafts are group-bound: each group owns its unsent scratch conversation
-    // (its own composer text, its own folder/agent context), and every group can
-    // spawn one on demand from its own strip. Moving one would leave a group
-    // without its slot and hand another a second. Reordering WITHIN the group is
-    // unaffected (that path never reaches here). The UI hides both move
-    // affordances for drafts; this backstops the programmatic path.
-    if (moving.conversationId == null) return
+    // Draft composer state is keyed by tab id, so a draft is safe to reparent
+    // just like a persisted Session. An explicit drag may put two drafts in one
+    // pane; the normal New action still reuses the pane's existing draft, while
+    // this explicit move preserves both unsent inputs instead of discarding one.
 
     if (opts?.index == null) {
       // Menu move: only the assignment changes — the tab keeps its global

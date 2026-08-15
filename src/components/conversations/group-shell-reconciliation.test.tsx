@@ -154,4 +154,15 @@ describe("split group shell source shape", () => {
     // slots and remount the content subtree.
     expect(shellBody.slice(stripIdx, contentIdx)).not.toContain("<>")
   })
+
+  it("keeps runtime data and mounted DOM stable across pane and strip moves", () => {
+    expect(source).toContain(
+      "if (isReparentUnmount(useTabStore.getState(), tabId, groupId)) return"
+    )
+    expect(source).toContain("const mountedGroupTabs = [...groupTabs].sort")
+    expect(source).toContain(
+      "style={canTileG ? { order: indexInGroup } : undefined}"
+    )
+    expect(source).toContain("{mountedGroupTabs.map((tab) =>")
+  })
 })

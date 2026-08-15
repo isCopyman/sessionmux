@@ -41,6 +41,7 @@ pub struct WorkbenchInfo {
     pub id: i32,
     pub name: String,
     pub position: i32,
+    pub is_pinned: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -50,6 +51,9 @@ pub struct WorkbenchInfo {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CollectionInfo {
     pub id: i32,
+    /// Canonical root Folder for Path → Collection → Session organization.
+    /// NULL means a legacy Collection that has not been placed under a path.
+    pub root_folder_id: Option<i32>,
     pub parent_id: Option<i32>,
     pub name: String,
     pub position: i32,

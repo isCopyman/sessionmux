@@ -616,6 +616,13 @@ export async function renameWorkbench(
   return invoke("rename_workbench", { id, name })
 }
 
+export async function setWorkbenchPinned(
+  id: number,
+  isPinned: boolean
+): Promise<WorkbenchInfo> {
+  return invoke("set_workbench_pinned", { id, isPinned })
+}
+
 export async function deleteWorkbench(id: number): Promise<void> {
   return invoke("delete_workbench", { id })
 }
