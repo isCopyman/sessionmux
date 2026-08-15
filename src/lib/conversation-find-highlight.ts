@@ -111,9 +111,9 @@ export function applyConversationFindHighlights(
   root: Element,
   query: string,
   current: { threadIndex: number; occurrenceIndex: number } | null
-): void {
+): Range | null {
   clearConversationFindHighlights(root)
-  if (!query) return
+  if (!query) return null
 
   const allRanges: Range[] = []
   let currentRange: Range | null = null
@@ -131,18 +131,56 @@ export function applyConversationFindHighlights(
   }
 
   const api = highlightApi()
-  if (!api) return
-  ensureConversationFindStyles()
-  if (allRanges.length > 0) {
-    api.registry.set(
-      CONVERSATION_FIND_HIGHLIGHT,
-      new api.HighlightCtor(...allRanges)
-    )
+  if (api) {
+    ensureConversationFindStyles()
+    if (allRanges.length > 0) {
+      api.registry.set(
+        CONVERSATION_FIND_HIGHLIGHT,
+        new api.HighlightCtor(...allRanges)
+      )
+    }
+    if (currentRange) {
+      api.registry.set(
+        CONVERSATION_FIND_CURRENT_HIGHLIGHT,
+        new api.HighlightCtor(currentRange)
+      )
+    }
   }
-  if (currentRange) {
-    api.registry.set(
-      CONVERSATION_FIND_CURRENT_HIGHLIGHT,
-      new api.HighlightCtor(currentRange)
-    )
+
+  return currentRange
+}
+
+function getRangeRect(range: Range): DOMRect | null {
+  const rects = Array.from(range.getClientRects())
+  const visibleRect = rects.find((rect) => rect.width > 0 || rect.height > 0)
+  return visibleRect ?? range.getBoundingClientRect()
+}
+
+/** Center the exact rendered match, rather than only its virtualized row. */
+export function centerConversationFindRange(
+  root: Element,
+  range: Range
+): boolean {
+  const viewport = root.querySelector<HTMLElement>(".scrollbar-thin")
+  if (!viewport) return false
+
+  const rangeRect = getRangeRect(range)
+  const viewportRect = viewport.getBoundingClientRect()
+  if (
+    !rangeRect ||
+    !Number.isFinite(rangeRect.top) ||
+    !Number.isFinite(rangeRect.height) ||
+    !Number.isFinite(viewportRect.top) ||
+    !Number.isFinite(viewportRect.height)
+  ) {
+    return false
   }
+
+  const matchCenter = rangeRect.top + rangeRect.height / 2
+  const viewportCenter = viewportRect.top + viewportRect.height / 2
+  const delta = matchCenter - viewportCenter
+  if (Math.abs(delta) > 1) {
+    viewport.scrollTo({ top: viewport.scrollTop + delta, behavior: "auto" })
+  }
+  return true
 }

@@ -83,6 +83,7 @@ import {
 } from "@/lib/conversation-find"
 import {
   applyConversationFindHighlights,
+  centerConversationFindRange,
   clearConversationFindHighlights,
 } from "@/lib/conversation-find-highlight"
 
@@ -1000,6 +1001,7 @@ export function MessageListView({
   // the MessageScrollProvider subtree) can drive scrollToIndex.
   const scrollApiRef = useRef<MessageScrollContextValue | null>(null)
   const messageListRootRef = useRef<HTMLDivElement | null>(null)
+  const pendingFindScrollMatchIdRef = useRef<string | null>(null)
 
   // --- Find in this Session ---------------------------------------------------
   // Search semantic message text across the loaded transcript, then page older
@@ -1046,6 +1048,8 @@ export function MessageListView({
     currentFindMatchIndex >= 0
       ? findMatches[currentFindMatchIndex]
       : (findMatches[0] ?? null)
+  const selectedFindMatchId = activeFindMatch?.id ?? null
+  const selectedFindThreadIndex = activeFindMatch?.threadIndex ?? null
   const searchingOlderHistory =
     findOpen && findQuery.length > 0 && (hasOlderTurns || loadingOlderTurns)
 
@@ -1075,11 +1079,13 @@ export function MessageListView({
     setFindFocusToken((token) => token + 1)
   }, [])
   const closeFind = useCallback(() => {
+    pendingFindScrollMatchIdRef.current = null
     setFindOpen(false)
     setFindQuery("")
     setActiveFindMatchId(null)
   }, [])
   const handleFindQueryChange = useCallback((query: string) => {
+    pendingFindScrollMatchIdRef.current = null
     setFindQuery(query)
     setActiveFindMatchId(null)
   }, [])
@@ -1129,11 +1135,26 @@ export function MessageListView({
   }, [isActive, openFind, showMessageNav])
 
   useEffect(() => {
-    if (!findOpen || !activeFindMatch) return
-    scrollApiRef.current?.scrollToIndex(activeFindMatch.threadIndex, {
-      align: "center",
-    })
-  }, [activeFindMatch, findOpen])
+    if (
+      !findOpen ||
+      selectedFindMatchId === null ||
+      selectedFindThreadIndex === null
+    ) {
+      pendingFindScrollMatchIdRef.current = null
+      return
+    }
+    pendingFindScrollMatchIdRef.current = selectedFindMatchId
+    const targetRow = messageListRootRef.current?.querySelector(
+      `[data-virtual-item-index="${selectedFindThreadIndex}"]`
+    )
+    // Off-screen rows do not exist in the DOM yet. Mount the target row first;
+    // the highlight pass below then performs the precise text-level centering.
+    if (!targetRow) {
+      scrollApiRef.current?.scrollToIndex(selectedFindThreadIndex, {
+        align: "center",
+      })
+    }
+  }, [findOpen, selectedFindMatchId, selectedFindThreadIndex])
 
   useEffect(() => {
     const root = messageListRootRef.current
@@ -1144,7 +1165,19 @@ export function MessageListView({
     let rafId = 0
     const paint = () => {
       rafId = 0
-      applyConversationFindHighlights(root, findQuery, activeFindMatch)
+      const currentRange = applyConversationFindHighlights(
+        root,
+        findQuery,
+        activeFindMatch
+      )
+      if (
+        currentRange &&
+        activeFindMatch &&
+        pendingFindScrollMatchIdRef.current === activeFindMatch.id &&
+        centerConversationFindRange(root, currentRange)
+      ) {
+        pendingFindScrollMatchIdRef.current = null
+      }
     }
     const schedulePaint = () => {
       if (rafId) cancelAnimationFrame(rafId)

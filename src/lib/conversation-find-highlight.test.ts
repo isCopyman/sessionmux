@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest"
 import {
   applyConversationFindHighlights,
+  centerConversationFindRange,
   findTextRanges,
 } from "@/lib/conversation-find-highlight"
 
@@ -57,5 +58,49 @@ describe("conversation find DOM ranges", () => {
       "::highlight(codeg-conversation-find-match)"
     )
     expect(registry.set).toHaveBeenCalled()
+  })
+
+  it("returns the exact selected occurrence inside a long rendered row", () => {
+    const root = document.createElement("div")
+    root.innerHTML = `
+      <div data-virtual-item-index="7">
+        <div data-conversation-search-content>first word, second word</div>
+      </div>
+    `
+
+    const range = applyConversationFindHighlights(root, "word", {
+      threadIndex: 7,
+      occurrenceIndex: 1,
+    })
+
+    expect(range?.toString()).toBe("word")
+    expect(root.querySelector("[data-virtual-item-index='7']")).toHaveAttribute(
+      "data-conversation-find-current"
+    )
+  })
+
+  it("centers the selected text range in the transcript viewport", () => {
+    const root = document.createElement("div")
+    const viewport = document.createElement("div")
+    viewport.className = "scrollbar-thin"
+    viewport.scrollTop = 120
+    root.append(viewport)
+    const scrollTo = vi.fn()
+    viewport.scrollTo = scrollTo
+    vi.spyOn(viewport, "getBoundingClientRect").mockReturnValue({
+      top: 100,
+      height: 600,
+    } as DOMRect)
+    const range = document.createRange()
+    Object.defineProperty(range, "getClientRects", {
+      configurable: true,
+      value: () => [{ top: 730, height: 20, width: 35 }],
+    })
+
+    expect(centerConversationFindRange(root, range)).toBe(true)
+    expect(scrollTo).toHaveBeenCalledWith({
+      top: 460,
+      behavior: "auto",
+    })
   })
 })
