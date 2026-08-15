@@ -205,15 +205,25 @@ describe("Sidebar — fixed New chat / Search region", () => {
     const user = userEvent.setup()
     renderSidebar()
 
-    await user.click(screen.getByRole("button", { name: "View options" }))
     await user.click(
-      screen.getByRole("menuitemradio", { name: "By run location" })
+      screen.getByRole("button", { name: "By run location" })
     )
 
     expect(spies.listProps).not.toBeNull()
     expect(localStorage.getItem("workspace:sidebar-organization-mode")).toBe(
       "locations"
     )
+  })
+
+  it("keeps Collection and run-location organization directly visible", () => {
+    renderSidebar()
+
+    expect(
+      screen.getByRole("button", { name: "By Collection" })
+    ).toHaveAttribute("aria-pressed", "true")
+    expect(
+      screen.getByRole("button", { name: "By run location" })
+    ).toHaveAttribute("aria-pressed", "false")
   })
 
   it("falls back to chat mode (never disabled) when no folder is active", () => {
