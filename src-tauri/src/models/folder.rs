@@ -45,6 +45,26 @@ pub struct WorkbenchInfo {
     pub updated_at: DateTime<Utc>,
 }
 
+/// A semantic folder for long-lived Session organization. Collections never
+/// change a Session's execution folder, cwd, worktree, model or permissions.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CollectionInfo {
+    pub id: i32,
+    pub parent_id: Option<i32>,
+    pub name: String,
+    pub position: i32,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// The unique semantic home of one Session. Absence means "Unclassified";
+/// Workbench membership and shortcuts are deliberately not represented here.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ConversationCollectionRef {
+    pub conversation_id: i32,
+    pub collection_id: i32,
+}
+
 /// One saved workbench that currently references a conversation. A session is
 /// still a global record: these rows only describe where its tab is open, so
 /// Session Center can explain ownership without loading every workbench tab

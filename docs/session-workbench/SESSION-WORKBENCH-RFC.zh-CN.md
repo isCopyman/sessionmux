@@ -338,6 +338,10 @@ Fork 必须进一步区分当前末端 Fork、历史消息分叉和文件恢复�
 或带唯一约束的关联表表达，实施前由 schema RFC 根据当时 Codeg `main` 决定。不得仅为假想的
 未来需求提前开放多归属；以后若确有必要，应新增显式 Shortcut/Alias，并与主要位置分开。
 
+当前实现已经选择独立的 `collection_conversation` 关联表，并以 `conversation_id` 为主键保证唯一
+主要归属。这样没有修改现有 Conversation 字段和导入写路径，也不会把物理 Folder 误当成语义
+分类。Collection 删除由服务层在同一事务中解除成员关系并把直接子分类上移，不级联删除 Session。
+
 #### COL-003 系统视图
 
 提供最近使用、未分类、收藏、运行中和归档等系统视图。系统视图由查询生成，不创建重复 Session。
@@ -843,13 +847,19 @@ Collection 范围行只在用户选中目录时出现；筛选行只在快捷视
 
 ### Milestone 3：Collection
 
-- 新增层级 Collection 和唯一主要归属；
-- 左侧树、拖放、未分类，以及当前 Workbench/全部常驻 Scope 和 Collection 范围标签；
+- [x] 新增层级 Collection 和唯一主要归属；
+- [x] 增加左侧树、未分类，以及 Collection 本身和全部后代的会话中心 Scope；
+- [x] 增加创建、重命名、移动、非破坏性删除和 Session Center 批量移动；
+- [ ] 增加 Session/Collection 拖放、同层手工排序与更紧凑的范围标签；
 - 增加运行中、等待处理、收藏、最近、最近关闭快捷视图和轻量 Harness/状态筛选；
 - 复用现有管理弹窗 facet 与 Conversation 查询参数，保持主侧栏和管理页筛选语义一致；
 - 增加 Session Center；统一侧栏、Quick Open 和管理页的固定打开/聚焦行为；
 - ctx 全文搜索作为可选后续子阶段，失败不得影响 Codeg 元数据搜索；
 - 确认任何分类操作都不改变 Folder/cwd。
+
+当前实现已完成 Collection 的最小可用闭环，并通过真实 Tauri 数据库验证父子分类、唯一归属、
+按子树筛选及删除回到未分类。拖放、排序、颜色和 Collection 自身归档仍是后续增强，不阻塞普通
+Session 分类使用。
 
 ### Milestone 4：系统多窗口与资源作用域
 

@@ -8,6 +8,8 @@ pub use super::chat_channel::Entity as ChatChannel;
 pub use super::chat_channel_message_log::Entity as ChatChannelMessageLog;
 pub use super::chat_channel_sender_context::Entity as ChatChannelSenderContext;
 pub use super::chat_channel_thread_binding::Entity as ChatChannelThreadBinding;
+pub use super::collection::Entity as Collection;
+pub use super::collection_conversation::Entity as CollectionConversation;
 pub use super::conversation::Entity as Conversation;
 pub use super::custom_agent::Entity as CustomAgent;
 pub use super::folder::Entity as Folder;

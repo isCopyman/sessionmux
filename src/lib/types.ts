@@ -391,6 +391,20 @@ export interface WorkbenchInfo {
   updated_at: string
 }
 
+export interface CollectionInfo {
+  id: number
+  parent_id: number | null
+  name: string
+  position: number
+  created_at: string
+  updated_at: string
+}
+
+export interface ConversationCollectionRef {
+  conversation_id: number
+  collection_id: number
+}
+
 export interface ConversationWorkbenchRef {
   conversation_id: number
   workbench_id: number

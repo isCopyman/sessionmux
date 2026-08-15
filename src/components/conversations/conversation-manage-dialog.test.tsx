@@ -11,6 +11,8 @@ const h = vi.hoisted(() => ({
   listAll: vi.fn(),
   searchContent: vi.fn(),
   listWorkbenchRefs: vi.fn(),
+  listCollectionRefs: vi.fn(),
+  assignCollection: vi.fn(),
   getTurns: vi.fn(),
   deleteConv: vi.fn(),
   updateStatus: vi.fn(),
@@ -22,6 +24,25 @@ const h = vi.hoisted(() => ({
   activeWorkbenchId: 1,
   activeWorkbenchTabs: [] as Array<{ conversationId: number | null }>,
   hydrateWorkbenches: vi.fn(),
+  hydrateCollections: vi.fn(),
+  collections: [
+    {
+      id: 10,
+      parent_id: null,
+      name: "Research",
+      position: 0,
+      created_at: "2026-06-01T00:00:00.000Z",
+      updated_at: "2026-06-01T00:00:00.000Z",
+    },
+    {
+      id: 11,
+      parent_id: 10,
+      name: "Sources",
+      position: 0,
+      created_at: "2026-06-01T00:00:00.000Z",
+      updated_at: "2026-06-01T00:00:00.000Z",
+    },
+  ],
   workbenches: [
     {
       id: 1,
@@ -53,6 +74,8 @@ vi.mock("@/lib/api", () => ({
   listAllConversations: h.listAll,
   searchSessionContent: h.searchContent,
   listConversationWorkbenchRefs: h.listWorkbenchRefs,
+  listConversationCollectionRefs: h.listCollectionRefs,
+  assignConversationsToCollection: h.assignCollection,
   getFolderConversationTurns: h.getTurns,
   deleteConversation: h.deleteConv,
   updateConversationStatus: h.updateStatus,
@@ -85,6 +108,15 @@ vi.mock("@/stores/workbench-store", () => ({
       items: h.workbenches,
       hydrated: true,
       hydrate: h.hydrateWorkbenches,
+    }),
+}))
+
+vi.mock("@/stores/collection-store", () => ({
+  useCollectionStore: (selector: (s: unknown) => unknown) =>
+    selector({
+      items: h.collections,
+      hydrated: true,
+      hydrate: h.hydrateCollections,
     }),
 }))
 
@@ -171,6 +203,20 @@ function renderGlobalDialog() {
   )
 }
 
+function renderCollectionDialog(collection: number | "unclassified") {
+  render(
+    <NextIntlClientProvider locale="en" messages={enMessages}>
+      <ConversationManageDialog
+        open
+        onOpenChange={vi.fn()}
+        folderId={null}
+        initialCollection={collection}
+      />
+    </NextIntlClientProvider>
+  )
+  return userEvent.setup()
+}
+
 /** The last `list_all_conversations` request's folder scope. */
 function lastQueryFolderIds(): number[] | null | undefined {
   const calls = h.listAll.mock.calls
@@ -203,6 +249,8 @@ describe("ConversationManageDialog", () => {
     h.listAll.mockResolvedValue(ROWS)
     h.searchContent.mockResolvedValue({ available: true, results: [] })
     h.listWorkbenchRefs.mockResolvedValue([])
+    h.listCollectionRefs.mockResolvedValue([])
+    h.assignCollection.mockResolvedValue([])
     h.getTurns.mockResolvedValue({
       turns: [],
       turns_offset: 0,
@@ -661,6 +709,35 @@ describe("ConversationManageDialog", () => {
     expect(screen.queryByText("on feature")).toBeNull()
     expect(screen.queryByText("branchless")).toBeNull()
     expect(screen.getByText("1 matched")).toBeTruthy()
+  })
+
+  it("opens a Collection scope with all of its nested Collections", async () => {
+    h.listCollectionRefs.mockResolvedValue([
+      { conversation_id: 1, collection_id: 10 },
+      { conversation_id: 2, collection_id: 11 },
+    ])
+    renderCollectionDialog(10)
+
+    expect(await screen.findByText("on main")).toBeTruthy()
+    expect(screen.getByText("on feature")).toBeTruthy()
+    expect(screen.queryByText("branchless")).toBeNull()
+    expect(screen.getByText("2 matched")).toBeTruthy()
+  })
+
+  it("moves selected sessions into one unique Collection", async () => {
+    h.assignCollection.mockResolvedValue([
+      { conversation_id: 1, collection_id: 11 },
+    ])
+    const user = renderDialog()
+    await screen.findByText("on main")
+    await user.click(screen.getByRole("button", { name: "Select on main" }))
+    await user.click(screen.getByRole("button", { name: "Move to collection" }))
+    await user.click(screen.getByRole("menuitem", { name: /Sources/ }))
+
+    await waitFor(() =>
+      expect(h.assignCollection).toHaveBeenCalledWith([1], 11)
+    )
+    expect(screen.getByText("0 selected")).toBeTruthy()
   })
 
   it("includes the active workbench's unsaved in-memory tabs in ownership", async () => {

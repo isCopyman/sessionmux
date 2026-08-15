@@ -222,7 +222,7 @@ Session Center 的 Preview 是管理页自己的只读预览，不是 Workbench 
 1. 统一侧栏和 Quick Open 的默认打开动作为固定 Tab；
 2. 保留 `isPinned=false` preview 原语，但只给显式启用 Preview Mode 的用户使用；
 3. 继续复用已经落地的 Library Scope、只读预览、Workbench 条件筛选、批量加入、独立 Session
-   归档与 ctx Provider，后续补 Collection 移动和收藏；`completed` 仍只是进度状态；
+   归档、Collection 子树筛选/批量移动与 ctx Provider，后续补收藏；`completed` 仍只是进度状态；
 4. 视使用密度决定是否把当前全局 Dialog 提升为独立路由；名称和查询行为已经统一，不再保留第二套
    “管理会话”入口；
 5. 已导入结果现已展示“当前 Workbench”“其他 Workbench”“未在已保存 Workbench 打开”；后续补

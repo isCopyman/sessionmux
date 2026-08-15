@@ -1222,6 +1222,35 @@ pub fn build_router(
             "/quick_messages_reorder",
             post(handlers::quick_messages::quick_messages_reorder),
         )
+        // ─── Collections ───
+        .route(
+            "/list_collections",
+            post(handlers::collections::list_collections),
+        )
+        .route(
+            "/list_conversation_collection_refs",
+            post(handlers::collections::list_conversation_collection_refs),
+        )
+        .route(
+            "/create_collection",
+            post(handlers::collections::create_collection),
+        )
+        .route(
+            "/rename_collection",
+            post(handlers::collections::rename_collection),
+        )
+        .route(
+            "/move_collection",
+            post(handlers::collections::move_collection),
+        )
+        .route(
+            "/delete_collection",
+            post(handlers::collections::delete_collection),
+        )
+        .route(
+            "/assign_conversations_to_collection",
+            post(handlers::collections::assign_conversations_to_collection),
+        )
         // ─── Workbenches ───
         .route(
             "/list_workbenches",

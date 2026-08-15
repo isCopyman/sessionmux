@@ -23,6 +23,7 @@ const spies = vi.hoisted(() => ({
     sectionOrder?: readonly string[]
   } | null,
   sessionCenterOpen: false,
+  sessionCenterCollection: null as number | "unclassified" | null,
 }))
 const mockState = vi.hoisted(() => ({
   activeFolder: { id: 7, path: "/x" } as { id: number; path: string } | null,
@@ -44,9 +45,27 @@ vi.mock("@/components/conversations/sidebar-conversation-list", () => ({
 vi.mock("@/components/workbench/workbench-switcher", () => ({
   WorkbenchSwitcher: () => null,
 }))
+vi.mock("@/components/collections/collection-tree", () => ({
+  CollectionTree: ({
+    onOpenScope,
+  }: {
+    onOpenScope: (scope: number | "unclassified") => void
+  }) => (
+    <button type="button" onClick={() => onOpenScope(42)}>
+      Research collection
+    </button>
+  ),
+}))
 vi.mock("@/components/conversations/conversation-manage-dialog", () => ({
-  ConversationManageDialog: ({ open }: { open: boolean }) => {
+  ConversationManageDialog: ({
+    open,
+    initialCollection,
+  }: {
+    open: boolean
+    initialCollection?: number | "unclassified" | null
+  }) => {
     spies.sessionCenterOpen = open
+    spies.sessionCenterCollection = initialCollection ?? null
     return open ? <div>Session Center Dialog</div> : null
   },
 }))
@@ -114,6 +133,7 @@ describe("Sidebar — fixed New chat / Search region", () => {
     spies.setRoute.mockClear()
     spies.openConversations.mockClear()
     spies.sessionCenterOpen = false
+    spies.sessionCenterCollection = null
     mockState.activeFolder = { id: 7, path: "/x" }
   })
 
@@ -146,6 +166,13 @@ describe("Sidebar — fixed New chat / Search region", () => {
     fireEvent.click(getByText("Session Center"))
     expect(spies.sessionCenterOpen).toBe(true)
     expect(getByText("Session Center Dialog")).toBeTruthy()
+  })
+
+  it("opens Session Center scoped from the Collection tree", () => {
+    const { getByText } = renderSidebar()
+    fireEvent.click(getByText("Research collection"))
+    expect(spies.sessionCenterOpen).toBe(true)
+    expect(spies.sessionCenterCollection).toBe(42)
   })
 
   it("renders New chat and Search shortcut hints", () => {

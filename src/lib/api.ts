@@ -79,6 +79,8 @@ import type {
   OpenedTab,
   OpenedTabsSnapshot,
   WorkbenchInfo,
+  CollectionInfo,
+  ConversationCollectionRef,
   ConversationWorkbenchRef,
   SaveTabsOutcome,
   GitStatusEntry,
@@ -1840,6 +1842,59 @@ export async function listWorkbenchTabs(
   workbenchId: number
 ): Promise<OpenedTabsSnapshot> {
   return getTransport().call("list_workbench_tabs", { workbenchId })
+}
+
+export async function listCollections(): Promise<CollectionInfo[]> {
+  return getTransport().call("list_collections")
+}
+
+export async function listConversationCollectionRefs(
+  conversationIds: number[]
+): Promise<ConversationCollectionRef[]> {
+  return getTransport().call("list_conversation_collection_refs", {
+    conversationIds,
+  })
+}
+
+export async function createCollection(
+  name: string,
+  parentId?: number | null
+): Promise<CollectionInfo> {
+  return getTransport().call("create_collection", {
+    name,
+    parentId: parentId ?? null,
+  })
+}
+
+export async function renameCollection(
+  id: number,
+  name: string
+): Promise<CollectionInfo> {
+  return getTransport().call("rename_collection", { id, name })
+}
+
+export async function moveCollection(
+  id: number,
+  parentId?: number | null
+): Promise<CollectionInfo> {
+  return getTransport().call("move_collection", {
+    id,
+    parentId: parentId ?? null,
+  })
+}
+
+export async function deleteCollection(id: number): Promise<void> {
+  return getTransport().call("delete_collection", { id })
+}
+
+export async function assignConversationsToCollection(
+  conversationIds: number[],
+  collectionId?: number | null
+): Promise<ConversationCollectionRef[]> {
+  return getTransport().call("assign_conversations_to_collection", {
+    conversationIds,
+    collectionId: collectionId ?? null,
+  })
 }
 
 export async function saveWorkbenchTabs(

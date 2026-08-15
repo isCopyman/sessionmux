@@ -66,6 +66,7 @@ import { SidebarSectionOrderControl } from "./sidebar-section-order-control"
 import { cn } from "@/lib/utils"
 import { WorkbenchSwitcher } from "@/components/workbench/workbench-switcher"
 import { ConversationManageDialog } from "@/components/conversations/conversation-manage-dialog"
+import { CollectionTree } from "@/components/collections/collection-tree"
 
 // Keyboard-shortcut hint at the trailing edge of the New chat / Search rows.
 // Mirrors the folder count badge exactly — same chip (0.9375rem height,
@@ -164,6 +165,9 @@ export function Sidebar() {
   )
   const [allExpanded, setAllExpanded] = useState(true)
   const [sessionCenterOpen, setSessionCenterOpen] = useState(false)
+  const [sessionCenterCollection, setSessionCenterCollection] = useState<
+    number | "unclassified" | null
+  >(null)
   const searchShortcutLabel = formatShortcutLabel(
     shortcuts.toggle_search,
     isMac
@@ -463,7 +467,10 @@ export function Sidebar() {
         <SidebarNavButton
           icon={LibraryBig}
           label={t("sessionCenter")}
-          onClick={() => setSessionCenterOpen(true)}
+          onClick={() => {
+            setSessionCenterCollection(null)
+            setSessionCenterOpen(true)
+          }}
         />
         {/* Both route rows close the mobile Sheet on the way out, like tapping a
             conversation card (handled by the list wrapper below) — otherwise the
@@ -506,6 +513,13 @@ export function Sidebar() {
         />
       </div>
 
+      <CollectionTree
+        onOpenScope={(scope) => {
+          setSessionCenterCollection(scope)
+          setSessionCenterOpen(true)
+        }}
+      />
+
       {/* On mobile, clicking a conversation card auto-closes the Sheet */}
       <div
         className="flex flex-col flex-1 min-h-0 overflow-hidden pt-1.5"
@@ -534,6 +548,7 @@ export function Sidebar() {
           open
           onOpenChange={setSessionCenterOpen}
           folderId={null}
+          initialCollection={sessionCenterCollection}
         />
       )}
     </aside>

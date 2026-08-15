@@ -20,6 +20,7 @@ import {
   ChevronDown,
   ChevronRight,
   GitBranch,
+  FolderTree,
   ListChecks,
   Loader2,
   MessageSquareText,
@@ -91,12 +92,15 @@ import { FolderAliasLabel } from "@/components/conversations/folder-alias-label"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { useTabStore } from "@/stores/tab-store"
 import { useWorkbenchStore } from "@/stores/workbench-store"
+import { useCollectionStore } from "@/stores/collection-store"
 import { useTabActions } from "@/contexts/tab-context"
 import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
 import {
   deleteConversation,
+  assignConversationsToCollection,
   getFolderConversationTurns,
   listAllConversations,
+  listConversationCollectionRefs,
   listConversationWorkbenchRefs,
   searchSessionContent,
   updateConversationArchive,
@@ -104,6 +108,8 @@ import {
 } from "@/lib/api"
 import type {
   AgentType,
+  CollectionInfo,
+  ConversationCollectionRef,
   ConversationWorkbenchRef,
   ConversationStatus,
   DbConversationSummary,
@@ -121,6 +127,8 @@ import { formatConversationTitle } from "@/lib/conversation-title"
 import { toErrorMessage } from "@/lib/app-error"
 import { ConversationStatusDot } from "@/components/conversations/conversation-status-dot"
 
+export type CollectionFilter = "all" | "unclassified" | number
+
 interface ConversationManageDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -128,6 +136,8 @@ interface ConversationManageDialogProps {
    *  facet, which the user can then widen to the whole workspace or point at
    *  another folder. */
   folderId?: number | null
+  /** Optional semantic scope selected from the sidebar Collection tree. */
+  initialCollection?: number | "unclassified" | null
 }
 
 /**
@@ -150,6 +160,62 @@ type WorkbenchFilter = "all" | "unopened" | number
 type SessionSearchScope = "all" | "metadata" | "content"
 
 type SessionStatusFilter = ConversationStatus | "all" | "archived"
+
+interface CollectionOption {
+  item: CollectionInfo
+  depth: number
+  path: string
+}
+
+function flattenCollections(items: CollectionInfo[]): CollectionOption[] {
+  const byParent = new Map<number | null, CollectionInfo[]>()
+  for (const item of items) {
+    const siblings = byParent.get(item.parent_id) ?? []
+    siblings.push(item)
+    byParent.set(item.parent_id, siblings)
+  }
+  for (const siblings of byParent.values()) {
+    siblings.sort((a, b) => a.position - b.position || a.id - b.id)
+  }
+
+  const options: CollectionOption[] = []
+  const visited = new Set<number>()
+  const append = (item: CollectionInfo, depth: number, parents: string[]) => {
+    if (visited.has(item.id)) return
+    visited.add(item.id)
+    const path = [...parents, item.name]
+    options.push({ item, depth, path: path.join(" / ") })
+    for (const child of byParent.get(item.id) ?? []) {
+      append(child, depth + 1, path)
+    }
+  }
+  for (const root of byParent.get(null) ?? []) append(root, 0, [])
+  // Corrupt legacy rows with a missing parent stay manageable instead of
+  // disappearing from every selector.
+  for (const item of items) {
+    if (!visited.has(item.id)) append(item, 0, [])
+  }
+  return options
+}
+
+function collectionDescendants(items: CollectionInfo[], rootId: number) {
+  const result = new Set<number>([rootId])
+  let changed = true
+  while (changed) {
+    changed = false
+    for (const item of items) {
+      if (
+        item.parent_id != null &&
+        result.has(item.parent_id) &&
+        !result.has(item.id)
+      ) {
+        result.add(item.id)
+        changed = true
+      }
+    }
+  }
+  return result
+}
 
 /**
  * Shared metrics for the four facet controls, so the folder picker, the branch
@@ -548,6 +614,7 @@ export function ConversationManageDialog({
   open,
   onOpenChange,
   folderId,
+  initialCollection = null,
 }: ConversationManageDialogProps) {
   const t = useTranslations("Folder.sidebar.manageConversations")
   const tCommon = useTranslations("Folder.common")
@@ -565,6 +632,9 @@ export function ConversationManageDialog({
   const workbenches = useWorkbenchStore((s) => s.items)
   const workbenchesHydrated = useWorkbenchStore((s) => s.hydrated)
   const hydrateWorkbenches = useWorkbenchStore((s) => s.hydrate)
+  const collections = useCollectionStore((s) => s.items)
+  const collectionsHydrated = useCollectionStore((s) => s.hydrated)
+  const hydrateCollections = useCollectionStore((s) => s.hydrate)
 
   const [search, setSearch] = useState("")
   const [searchScope, setSearchScope] = useState<SessionSearchScope>("all")
@@ -574,6 +644,9 @@ export function ConversationManageDialog({
   )
   const [branchFilter, setBranchFilter] = useState<BranchFilter>(ALL_BRANCHES)
   const [workbenchFilter, setWorkbenchFilter] = useState<WorkbenchFilter>("all")
+  const [collectionFilter, setCollectionFilter] = useState<CollectionFilter>(
+    initialCollection ?? "all"
+  )
   const [agentFilter, setAgentFilter] = useState<AgentType | "all">("all")
   const [statusFilter, setStatusFilter] = useState<SessionStatusFilter>("all")
   const [rows, setRows] = useState<DbConversationSummary[]>([])
@@ -588,6 +661,12 @@ export function ConversationManageDialog({
   const [workbenchRefsUnavailable, setWorkbenchRefsUnavailable] =
     useState(false)
   const [workbenchRefsLoading, setWorkbenchRefsLoading] = useState(false)
+  const [collectionRefs, setCollectionRefs] = useState<
+    ConversationCollectionRef[]
+  >([])
+  const [collectionRefsUnavailable, setCollectionRefsUnavailable] =
+    useState(false)
+  const [collectionRefsLoading, setCollectionRefsLoading] = useState(false)
   const [previewConversation, setPreviewConversation] =
     useState<DbConversationSummary | null>(null)
   const [previewTurns, setPreviewTurns] = useState<MessageTurn[]>([])
@@ -670,6 +749,7 @@ export function ConversationManageDialog({
       setScopeFolderId(folderId ?? null)
       setBranchFilter(ALL_BRANCHES)
       setWorkbenchFilter("all")
+      setCollectionFilter(initialCollection ?? "all")
       setAgentFilter("all")
       setStatusFilter("all")
       setSelected(new Map())
@@ -680,6 +760,9 @@ export function ConversationManageDialog({
       setWorkbenchRefs([])
       setWorkbenchRefsUnavailable(false)
       setWorkbenchRefsLoading(false)
+      setCollectionRefs([])
+      setCollectionRefsUnavailable(false)
+      setCollectionRefsLoading(false)
       setPreviewConversation(null)
       setPreviewTurns([])
       setPreviewLoading(false)
@@ -687,7 +770,7 @@ export function ConversationManageDialog({
       setOpeningWorkbenchId(null)
       setBulkOpening(false)
     }
-  }, [open, folderId])
+  }, [open, folderId, initialCollection])
 
   useEffect(() => {
     if (!open || workbenchesHydrated) return
@@ -696,6 +779,14 @@ export function ConversationManageDialog({
       // list named workbenches; ownership already has its own graceful fallback.
     })
   }, [hydrateWorkbenches, open, workbenchesHydrated])
+
+  useEffect(() => {
+    if (!open || collectionsHydrated) return
+    void hydrateCollections().catch(() => {
+      // An older server may not know Collections yet. Session Center remains
+      // fully usable; its Collection facet will simply be disabled.
+    })
+  }, [collectionsHydrated, hydrateCollections, open])
 
   // Debounced data fetch. Each run owns a `cancelled` flag its cleanup trips, so
   // a reply that lands after the facets moved on is dropped rather than written
@@ -844,6 +935,54 @@ export function ConversationManageDialog({
     }
   }, [open, rows])
 
+  useEffect(() => {
+    if (!open || rows.length === 0) {
+      setCollectionRefs([])
+      setCollectionRefsUnavailable(false)
+      setCollectionRefsLoading(false)
+      return
+    }
+    let cancelled = false
+    setCollectionRefsLoading(true)
+    listConversationCollectionRefs(rows.map((row) => row.id))
+      .then((refs) => {
+        if (cancelled) return
+        setCollectionRefs(refs)
+        setCollectionRefsUnavailable(false)
+      })
+      .catch(() => {
+        if (cancelled) return
+        setCollectionRefs([])
+        setCollectionRefsUnavailable(true)
+      })
+      .finally(() => {
+        if (!cancelled) setCollectionRefsLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [open, rows])
+
+  const collectionOptions = useMemo(
+    () => flattenCollections(collections),
+    [collections]
+  )
+  const collectionById = useMemo(
+    () => new Map(collections.map((item) => [item.id, item])),
+    [collections]
+  )
+  const collectionRefByConversation = useMemo(
+    () => new Map(collectionRefs.map((ref) => [ref.conversation_id, ref])),
+    [collectionRefs]
+  )
+  const collectionScopeIds = useMemo(
+    () =>
+      typeof collectionFilter === "number"
+        ? collectionDescendants(collections, collectionFilter)
+        : null,
+    [collectionFilter, collections]
+  )
+
   const effectiveWorkbenchRefs = useMemo(() => {
     const refs = [...workbenchRefs]
     const seen = new Set(
@@ -961,16 +1100,37 @@ export function ConversationManageDialog({
         matched = rows.filter((r) => r.git_branch === branchFilter.name)
         break
     }
-    if (workbenchFilter === "all") return matched
     if (workbenchFilter === "unopened") {
-      return matched.filter((row) => !workbenchRefsByConversation.has(row.id))
+      matched = matched.filter(
+        (row) => !workbenchRefsByConversation.has(row.id)
+      )
+    } else if (typeof workbenchFilter === "number") {
+      matched = matched.filter((row) =>
+        workbenchRefsByConversation
+          .get(row.id)
+          ?.some((ref) => ref.workbench_id === workbenchFilter)
+      )
     }
-    return matched.filter((row) =>
-      workbenchRefsByConversation
-        .get(row.id)
-        ?.some((ref) => ref.workbench_id === workbenchFilter)
-    )
-  }, [branchFilter, rows, workbenchFilter, workbenchRefsByConversation])
+
+    if (collectionFilter === "unclassified") {
+      return matched.filter((row) => !collectionRefByConversation.has(row.id))
+    }
+    if (collectionScopeIds) {
+      return matched.filter((row) => {
+        const ref = collectionRefByConversation.get(row.id)
+        return ref ? collectionScopeIds.has(ref.collection_id) : false
+      })
+    }
+    return matched
+  }, [
+    branchFilter,
+    collectionFilter,
+    collectionRefByConversation,
+    collectionScopeIds,
+    rows,
+    workbenchFilter,
+    workbenchRefsByConversation,
+  ])
 
   useEffect(() => {
     if (
@@ -994,6 +1154,12 @@ export function ConversationManageDialog({
   const previewWorkbenchRefs = previewConversation
     ? (workbenchRefsByConversation.get(previewConversation.id) ?? [])
     : []
+  const previewCollection = previewConversation
+    ? collectionById.get(
+        collectionRefByConversation.get(previewConversation.id)
+          ?.collection_id ?? -1
+      )
+    : undefined
   const previewMessages = useMemo(
     () =>
       previewTurns
@@ -1190,9 +1356,37 @@ export function ConversationManageDialog({
     [afterBulkOp, selectedConversations, t]
   )
 
+  const handleBulkCollection = useCallback(
+    async (collectionId: number | null) => {
+      if (selectedConversations.length === 0) return
+      setPending(true)
+      try {
+        const movedIds = new Set(selectedConversations.map((item) => item.id))
+        const refs = await assignConversationsToCollection(
+          [...movedIds],
+          collectionId
+        )
+        setCollectionRefs((current) => [
+          ...current.filter((ref) => !movedIds.has(ref.conversation_id)),
+          ...refs,
+        ])
+        toast.success(
+          t("toastCollectionMoved", { count: selectedConversations.length })
+        )
+        setSelected(new Map())
+      } catch (e) {
+        toast.error(t("toastOpFailed", { message: toErrorMessage(e) }))
+      } finally {
+        setPending(false)
+      }
+    },
+    [selectedConversations, t]
+  )
+
   const anyFacetNarrows =
     search.trim() !== "" ||
     branchFilter.kind !== "all" ||
+    collectionFilter !== "all" ||
     workbenchFilter !== "all" ||
     agentFilter !== "all" ||
     statusFilter !== "all"
@@ -1253,7 +1447,7 @@ export function ConversationManageDialog({
                 {t("contentSearchUnavailable")}
               </p>
             )}
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
               <FolderSelect
                 folders={folderOptions}
                 value={scopeFolderId}
@@ -1263,6 +1457,62 @@ export function ConversationManageDialog({
                 variant="field"
                 className={FACET_TRIGGER_CLASS}
               />
+              <Select
+                value={
+                  typeof collectionFilter === "number"
+                    ? `collection:${collectionFilter}`
+                    : collectionFilter
+                }
+                disabled={collectionRefsLoading || collectionRefsUnavailable}
+                onValueChange={(value) => {
+                  if (value === "all" || value === "unclassified") {
+                    setCollectionFilter(value)
+                    return
+                  }
+                  setCollectionFilter(Number(value.slice("collection:".length)))
+                }}
+              >
+                <SelectTrigger
+                  className={FACET_SELECT_TRIGGER_CLASS}
+                  aria-label={t("collectionFilterLabel")}
+                  title={
+                    collectionRefsUnavailable
+                      ? t("collectionUnavailable")
+                      : undefined
+                  }
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">
+                    <span className="flex items-center gap-2">
+                      <FolderTree className="h-3.5 w-3.5 text-muted-foreground" />
+                      {t("collectionFilterAll")}
+                    </span>
+                  </SelectItem>
+                  <SelectItem value="unclassified">
+                    <span className="flex items-center gap-2">
+                      <FolderTree className="h-3.5 w-3.5 text-muted-foreground/50" />
+                      {t("collectionUnclassified")}
+                    </span>
+                  </SelectItem>
+                  {collectionOptions.map(({ item, depth, path }) => (
+                    <SelectItem
+                      key={item.id}
+                      value={`collection:${item.id}`}
+                      title={path}
+                    >
+                      <span className="flex min-w-0 items-center gap-2">
+                        <FolderTree className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                        <span className="truncate">
+                          {depth > 0 ? `${"· ".repeat(depth)}` : ""}
+                          {item.name}
+                        </span>
+                      </span>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
               <Select
                 value={
                   typeof workbenchFilter === "number"
@@ -1455,6 +1705,10 @@ export function ConversationManageDialog({
                       const folder = folderById.get(conv.folder_id)
                       const refs =
                         workbenchRefsByConversation.get(conv.id) ?? []
+                      const collection = collectionById.get(
+                        collectionRefByConversation.get(conv.id)
+                          ?.collection_id ?? -1
+                      )
                       return (
                         <div
                           key={conv.id}
@@ -1514,6 +1768,17 @@ export function ConversationManageDialog({
                               </span>
                             )}
                           </span>
+                          {collection ? (
+                            <span
+                              className="flex max-w-24 shrink-0 items-center gap-1 rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground"
+                              title={collection.name}
+                            >
+                              <FolderTree className="h-3 w-3 shrink-0" />
+                              <span className="truncate">
+                                {collection.name}
+                              </span>
+                            </span>
+                          ) : null}
                           {refs.length > 0 ? (
                             <span
                               className="flex shrink-0 items-center gap-1 rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground"
@@ -1666,6 +1931,14 @@ export function ConversationManageDialog({
                           ? formatFolderLabelWithAlias(previewFolder)
                           : `#${previewConversation.folder_id}`}
                       </span>
+                      {previewCollection ? (
+                        <span className="flex max-w-full items-center gap-1 rounded-full bg-muted px-2 py-0.5">
+                          <FolderTree className="h-3 w-3 shrink-0" />
+                          <span className="truncate">
+                            {previewCollection.name}
+                          </span>
+                        </span>
+                      ) : null}
                       {previewConversation.git_branch ? (
                         <span className="flex max-w-full items-center gap-1 rounded-full bg-muted px-2 py-0.5">
                           <GitBranch className="h-3 w-3 shrink-0" />
@@ -1850,6 +2123,53 @@ export function ConversationManageDialog({
                     >
                       <ConversationStatusDot status={s} />
                       {tStatus(s)}
+                    </DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={
+                      selectedCount === 0 ||
+                      pending ||
+                      collectionRefsUnavailable
+                    }
+                    title={
+                      collectionRefsUnavailable
+                        ? t("collectionUnavailable")
+                        : undefined
+                    }
+                  >
+                    <FolderTree className="mr-1 h-3.5 w-3.5" />
+                    {t("moveToCollection")}
+                    <ChevronDown className="ml-1 h-3 w-3 opacity-60" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent
+                  align="end"
+                  className="max-h-72 w-64 overflow-y-auto"
+                >
+                  <DropdownMenuItem
+                    onSelect={() => void handleBulkCollection(null)}
+                  >
+                    <FolderTree className="h-3.5 w-3.5 opacity-50" />
+                    {t("collectionUnclassified")}
+                  </DropdownMenuItem>
+                  {collectionOptions.map(({ item, depth, path }) => (
+                    <DropdownMenuItem
+                      key={item.id}
+                      title={path}
+                      onSelect={() => void handleBulkCollection(item.id)}
+                    >
+                      <FolderTree className="h-3.5 w-3.5" />
+                      <span className="truncate">
+                        {depth > 0 ? `${"· ".repeat(depth)}` : ""}
+                        {item.name}
+                      </span>
                     </DropdownMenuItem>
                   ))}
                 </DropdownMenuContent>
