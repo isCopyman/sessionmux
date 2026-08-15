@@ -14,6 +14,8 @@ import {
   Loader2,
   MoreHorizontal,
   Pencil,
+  PanelBottomOpen,
+  PanelRightOpen,
   Plus,
   SquarePen,
   Trash2,
@@ -43,6 +45,12 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu"
 import {
   Select,
   SelectContent,
@@ -85,6 +93,10 @@ interface CollectionTreeProps {
   sortMode?: SidebarSortMode
   refreshKey?: number
   onOpenSession?: (session: DbConversationSummary) => void
+  onOpenSessionInSplit?: (
+    session: DbConversationSummary,
+    direction: "right" | "down"
+  ) => void
   /** Start a Session in the chosen canonical Path. */
   onNewSession?: (rootFolderId: number) => void
 }
@@ -143,6 +155,7 @@ export function CollectionTree({
   sortMode = "created",
   refreshKey = 0,
   onOpenSession,
+  onOpenSessionInSplit,
   onNewSession,
 }: CollectionTreeProps) {
   const t = useTranslations("Folder.sidebar.collections")
@@ -418,7 +431,7 @@ export function CollectionTree({
     depth: number
   ) => {
     const selected = conversation.id === activeConversationId
-    return (
+    const row = (
       <button
         key={conversation.id}
         type="button"
@@ -450,6 +463,28 @@ export function CollectionTree({
             tConversation("untitledConversation")}
         </span>
       </button>
+    )
+    if (!onOpenSessionInSplit) {
+      return row
+    }
+    return (
+      <ContextMenu key={conversation.id}>
+        <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
+        <ContextMenuContent>
+          <ContextMenuItem
+            onSelect={() => onOpenSessionInSplit(conversation, "right")}
+          >
+            <PanelRightOpen className="h-4 w-4" />
+            {tConversation("openRight")}
+          </ContextMenuItem>
+          <ContextMenuItem
+            onSelect={() => onOpenSessionInSplit(conversation, "down")}
+          >
+            <PanelBottomOpen className="h-4 w-4" />
+            {tConversation("openDown")}
+          </ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
     )
   }
 

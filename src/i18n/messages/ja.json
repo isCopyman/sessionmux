@@ -1712,6 +1712,9 @@
         "deleteSelected": "削除",
         "openSelected": "開く",
         "openInCurrentWorkbench": "現在のワークベンチで開く",
+        "chooseOpenPosition": "開く位置を選択",
+        "openRight": "右側に開く",
+        "openDown": "下に開く",
         "selectConversation": "{title} を選択",
         "previewTitle": "セッションプレビュー",
         "previewEmpty": "セッションを選択してプレビューします。",
@@ -1835,6 +1838,8 @@
     "conversationCard": {
       "untitledConversation": "無題の会話",
       "newConversation": "新しい会話",
+      "openRight": "右側に開く",
+      "openDown": "下に開く",
       "rename": "名前を変更",
       "status": "ステータス",
       "delete": "削除",

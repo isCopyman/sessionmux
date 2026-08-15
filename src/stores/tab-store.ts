@@ -116,6 +116,15 @@ export interface TabItemInternal {
 
 export type TabItem = TabItemInternal
 
+/** Optional placement for a persisted Session opened from a navigation surface.
+ * `split` is deliberately limited to the two forward directions exposed by
+ * VS Code-style "Open to the Side" actions. Existing open Sessions are only
+ * focused: one Session remains one tab/runtime, never duplicated into a second
+ * pane just because the user chose a placement action again. */
+export interface OpenTabOptions {
+  split?: Extract<SplitDirection, "right" | "down">
+}
+
 interface DraftRetargetRequest {
   tabId: string
   expectedAgent: AgentType
@@ -197,7 +206,8 @@ export interface TabStoreState {
     conversationId: number,
     agentType: AgentType,
     pin?: boolean,
-    title?: string
+    title?: string,
+    options?: OpenTabOptions
   ) => void
   closeTab: (tabId: string) => void
   closeConversationTab: (
@@ -1656,7 +1666,14 @@ function initialTabState() {
 export const useTabStore = create<TabStoreState>()((set, get) => ({
   ...initialTabState(),
 
-  openTab: (folderId, conversationId, agentType, pin = true, title) => {
+  openTab: (
+    folderId,
+    conversationId,
+    agentType,
+    pin = true,
+    title,
+    options
+  ) => {
     const prevState = get()
     const existingIndex = findTabIndexForConversation(
       prevState.rawTabs,
@@ -1708,6 +1725,39 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
       agentType,
       title: resolvedTitle,
       isPinned: pin,
+    }
+
+    // An explicit placement creates the pane and inserts the Session in one
+    // store transaction. Calling openTab() and splitTab() in sequence would
+    // briefly mount the Session in the old pane, which is visible as a reload
+    // flash for long histories. Do not create an empty source pane: on a truly
+    // blank surface the first Session simply occupies the existing group.
+    if (
+      options?.split &&
+      prevState.rawTabs.some(
+        (tab) =>
+          groupOfTab(prevState.groupOf, prevState.groupLayout, tab.id) ===
+          targetGroup
+      )
+    ) {
+      const newGroupId = makeGroupId()
+      const nextLayout = splitGroup(
+        prevState.groupLayout,
+        targetGroup,
+        options.split,
+        newGroupId
+      )
+      if (nextLayout !== prevState.groupLayout) {
+        set({
+          rawTabs: [...prevState.rawTabs, newTab],
+          activeTabId: tabId,
+          groupLayout: nextLayout,
+          groupOf: { ...prevState.groupOf, [tabId]: newGroupId },
+        })
+        recomputeTabs()
+        runtime.activateConversationPane()
+        return
+      }
     }
 
     if (pin) {

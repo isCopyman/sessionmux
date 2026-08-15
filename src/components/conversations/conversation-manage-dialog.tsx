@@ -25,6 +25,8 @@ import {
   Loader2,
   MessageSquareText,
   PanelTopOpen,
+  PanelRightOpen,
+  PanelBottomOpen,
   PanelsTopLeft,
   Search,
   Square,
@@ -1225,7 +1227,8 @@ export function ConversationManageDialog({
   const openConversation = useCallback(
     async (
       conversation: DbConversationSummary,
-      targetWorkbenchId = activeWorkbenchId
+      targetWorkbenchId = activeWorkbenchId,
+      split?: "right" | "down"
     ) => {
       setOpeningWorkbenchId(targetWorkbenchId)
       try {
@@ -1233,13 +1236,25 @@ export function ConversationManageDialog({
           await switchWorkbench(targetWorkbenchId)
         }
         openConversations()
-        openTab(
-          conversation.folder_id,
-          conversation.id,
-          conversation.agent_type,
-          true,
-          formatConversationTitle(conversation.title)
-        )
+        const title = formatConversationTitle(conversation.title)
+        if (split) {
+          openTab(
+            conversation.folder_id,
+            conversation.id,
+            conversation.agent_type,
+            true,
+            title,
+            { split }
+          )
+        } else {
+          openTab(
+            conversation.folder_id,
+            conversation.id,
+            conversation.agent_type,
+            true,
+            title
+          )
+        }
         onOpenChange(false)
       } catch (error) {
         toast.error(t("toastOpFailed", { message: toErrorMessage(error) }))
@@ -2064,24 +2079,76 @@ export function ConversationManageDialog({
               {t("selectedCount", { count: selectedCount })}
             </span>
             <div className="grid w-full grid-cols-2 gap-2 md:flex md:w-auto md:flex-wrap md:items-center">
-              <Button
-                size="sm"
-                variant="default"
-                disabled={
-                  !previewConversation || pending || openingWorkbenchId !== null
-                }
-                onClick={() =>
-                  previewConversation &&
-                  void openConversation(previewConversation)
-                }
-              >
-                {openingWorkbenchId === activeWorkbenchId ? (
-                  <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <PanelTopOpen className="mr-1 h-3.5 w-3.5" />
-                )}
-                {t("openInCurrentWorkbench")}
-              </Button>
+              <div className="flex min-w-0">
+                <Button
+                  size="sm"
+                  variant="default"
+                  disabled={
+                    !previewConversation ||
+                    pending ||
+                    openingWorkbenchId !== null
+                  }
+                  className="min-w-0 flex-1 rounded-r-none"
+                  onClick={() =>
+                    previewConversation &&
+                    void openConversation(previewConversation)
+                  }
+                >
+                  {openingWorkbenchId === activeWorkbenchId ? (
+                    <Loader2 className="mr-1 h-3.5 w-3.5 shrink-0 animate-spin" />
+                  ) : (
+                    <PanelTopOpen className="mr-1 h-3.5 w-3.5 shrink-0" />
+                  )}
+                  <span className="truncate">
+                    {t("openInCurrentWorkbench")}
+                  </span>
+                </Button>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      size="sm"
+                      variant="default"
+                      disabled={
+                        !previewConversation ||
+                        pending ||
+                        openingWorkbenchId !== null
+                      }
+                      className="rounded-l-none border-l border-primary-foreground/25 px-2"
+                      aria-label={t("chooseOpenPosition")}
+                    >
+                      <ChevronDown className="h-3.5 w-3.5" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuItem
+                      onSelect={() =>
+                        previewConversation &&
+                        void openConversation(
+                          previewConversation,
+                          activeWorkbenchId,
+                          "right"
+                        )
+                      }
+                    >
+                      <PanelRightOpen className="h-4 w-4" />
+                      {t("openRight")}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onSelect={() =>
+                        previewConversation &&
+                        void openConversation(
+                          previewConversation,
+                          activeWorkbenchId,
+                          "down"
+                        )
+                      }
+                    >
+                      <PanelBottomOpen className="h-4 w-4" />
+                      {t("openDown")}
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
 
               <Button
                 size="sm"

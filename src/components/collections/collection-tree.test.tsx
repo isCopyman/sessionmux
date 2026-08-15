@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react"
+import { fireEvent, render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { NextIntlClientProvider } from "next-intl"
 import { beforeEach, describe, expect, it, vi } from "vitest"
@@ -171,6 +171,10 @@ function renderTree(
   options: {
     showSessions?: boolean
     onOpenSession?: (session: DbConversationSummary) => void
+    onOpenSessionInSplit?: (
+      session: DbConversationSummary,
+      direction: "right" | "down"
+    ) => void
     onNewSession?: (rootFolderId: number) => void
   } = {}
 ) {
@@ -239,6 +243,25 @@ describe("CollectionTree", () => {
 
     expect(onOpenSession).toHaveBeenCalledWith(
       expect.objectContaining({ id: 101, title: "Evidence review" })
+    )
+  })
+
+  it("opens an inline Collection Session directly in a chosen pane", async () => {
+    const onOpenSessionInSplit = vi.fn()
+    renderTree(vi.fn(), {
+      showSessions: true,
+      onOpenSessionInSplit,
+    })
+
+    const looseNotes = await screen.findByText("Loose notes")
+    fireEvent.contextMenu(looseNotes)
+    await userEvent.click(
+      screen.getByRole("menuitem", { name: "Open to the right" })
+    )
+
+    expect(onOpenSessionInSplit).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 102, title: "Loose notes" }),
+      "right"
     )
   })
 })

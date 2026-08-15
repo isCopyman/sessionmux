@@ -14,6 +14,8 @@ import {
   FolderX,
   Info,
   ChevronRight,
+  PanelRightOpen,
+  PanelBottomOpen,
 } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { useImeGuard } from "@/hooks/use-ime-guard"
@@ -109,6 +111,12 @@ interface SidebarConversationCardProps {
   timeLabel?: string
   onSelect: (id: number, agentType: string, folderId: number) => void
   onDoubleClick?: (id: number, agentType: string, folderId: number) => void
+  onOpenInSplit?: (
+    id: number,
+    agentType: string,
+    folderId: number,
+    direction: "right" | "down"
+  ) => void
   onRename: (id: number, newTitle: string) => Promise<void>
   onDelete: (id: number, agentType: string, folderId: number) => Promise<void>
   onStatusChange: (id: number, status: ConversationStatus) => Promise<void>
@@ -132,6 +140,7 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
   timeLabel,
   onSelect,
   onDoubleClick,
+  onOpenInSplit,
   onRename,
   onDelete,
   onStatusChange,
@@ -510,6 +519,37 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
           </div>
         </ContextMenuTrigger>
         <ContextMenuContent>
+          {onOpenInSplit && (
+            <>
+              <ContextMenuItem
+                onSelect={() =>
+                  onOpenInSplit(
+                    conversation.id,
+                    conversation.agent_type,
+                    conversation.folder_id,
+                    "right"
+                  )
+                }
+              >
+                <PanelRightOpen className="h-4 w-4" />
+                {t("openRight")}
+              </ContextMenuItem>
+              <ContextMenuItem
+                onSelect={() =>
+                  onOpenInSplit(
+                    conversation.id,
+                    conversation.agent_type,
+                    conversation.folder_id,
+                    "down"
+                  )
+                }
+              >
+                <PanelBottomOpen className="h-4 w-4" />
+                {t("openDown")}
+              </ContextMenuItem>
+              <ContextMenuSeparator />
+            </>
+          )}
           {onNewConversation && (
             <>
               <ContextMenuItem

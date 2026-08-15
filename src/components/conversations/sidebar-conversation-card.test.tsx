@@ -27,6 +27,7 @@ const NOW = 1_700_000_000_000
 // memoized callbacks down, so the test must too.
 const onSelect = vi.fn()
 const onDoubleClick = vi.fn()
+const onOpenInSplit = vi.fn()
 const onRename = vi.fn(async () => {})
 const onDelete = vi.fn(async () => {})
 const onStatusChange = vi.fn(async () => {})
@@ -198,6 +199,42 @@ describe("SidebarConversationCard pin action", () => {
     fireEvent.contextMenu(getByText("conv-2"))
     fireEvent.click(getByText("Unpin"))
     expect(onTogglePin).toHaveBeenCalledWith(2, false)
+  })
+})
+
+describe("SidebarConversationCard explicit pane placement", () => {
+  beforeEach(() => {
+    onOpenInSplit.mockClear()
+    onSelect.mockClear()
+  })
+
+  function renderCard() {
+    return renderWithIntl(
+      <SidebarConversationCard
+        conversation={conv(8)}
+        isSelected={false}
+        timeLabel=""
+        onSelect={onSelect}
+        onDoubleClick={onDoubleClick}
+        onOpenInSplit={onOpenInSplit}
+        onRename={onRename}
+        onDelete={onDelete}
+        onStatusChange={onStatusChange}
+      />
+    )
+  }
+
+  it("offers right and down placement without changing the normal click", () => {
+    const { getByText } = renderCard()
+
+    fireEvent.contextMenu(getByText("conv-8"))
+    fireEvent.click(getByText("Open to the right"))
+    expect(onOpenInSplit).toHaveBeenCalledWith(8, "claude_code", 1, "right")
+    expect(onSelect).not.toHaveBeenCalled()
+
+    fireEvent.contextMenu(getByText("conv-8"))
+    fireEvent.click(getByText("Open below"))
+    expect(onOpenInSplit).toHaveBeenLastCalledWith(8, "claude_code", 1, "down")
   })
 })
 

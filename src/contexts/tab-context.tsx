@@ -15,6 +15,7 @@ import {
   setSessionWarmCacheCapacity,
   touchActiveSessionWarmState,
   useTabStore,
+  type OpenTabOptions,
   type TabItem,
 } from "@/stores/tab-store"
 import {
@@ -231,7 +232,8 @@ export interface TabContextValue {
     conversationId: number,
     agentType: TabItem["agentType"],
     pin?: boolean,
-    title?: string
+    title?: string,
+    options?: OpenTabOptions
   ) => void
   closeTab: (tabId: string) => void
   closeConversationTab: (

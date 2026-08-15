@@ -2038,6 +2038,38 @@ describe("TabProvider tab groups", () => {
     expect(store().groupSelection[g1]).toBe("conv-1-codex-2")
   })
 
+  it("opens a new Session directly in a right-hand group without an intermediate draft", async () => {
+    await renderWithTabs([tabItem(1, 1, true)])
+    const home = leaves()[0]
+
+    act(() => {
+      store().openTab(1, 2, "codex", true, "Second", { split: "right" })
+    })
+
+    expect(leaves()).toHaveLength(2)
+    const openedTo = newLeafBeside(home)
+    expect(leaves()).toEqual([home, openedTo])
+    expect(groupOfId("conv-1-codex-1")).toBe(home)
+    expect(groupOfId("conv-1-codex-2")).toBe(openedTo)
+    expect(store().activeTabId).toBe("conv-1-codex-2")
+    expect(store().rawTabs.every((tab) => tab.conversationId != null)).toBe(
+      true
+    )
+  })
+
+  it("focuses an already-open Session instead of duplicating or moving it", async () => {
+    await renderWithTabs([tabItem(1, 1, true), tabItem(1, 2)])
+    const beforeLayout = store().groupLayout
+
+    act(() => {
+      store().openTab(1, 1, "codex", true, "First", { split: "down" })
+    })
+
+    expect(store().rawTabs).toHaveLength(2)
+    expect(store().groupLayout).toBe(beforeLayout)
+    expect(store().activeTabId).toBe("conv-1-codex-1")
+  })
+
   it("split-and-move leaves a draft when the tab is alone in its group", async () => {
     await renderWithTabs([tabItem(1, 1, true)])
     const home = leaves()[0]

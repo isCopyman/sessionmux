@@ -1712,6 +1712,9 @@
         "deleteSelected": "Supprimer",
         "openSelected": "Ouvrir",
         "openInCurrentWorkbench": "Ouvrir dans l’espace actuel",
+        "chooseOpenPosition": "Choisir où ouvrir",
+        "openRight": "Ouvrir à droite",
+        "openDown": "Ouvrir en dessous",
         "selectConversation": "Sélectionner {title}",
         "previewTitle": "Aperçu de la session",
         "previewEmpty": "Sélectionnez une session pour la prévisualiser.",
@@ -1835,6 +1838,8 @@
     "conversationCard": {
       "untitledConversation": "Conversation sans titre",
       "newConversation": "Nouvelle conversation",
+      "openRight": "Ouvrir à droite",
+      "openDown": "Ouvrir en dessous",
       "rename": "Renommer",
       "status": "Statut",
       "delete": "Supprimer",

@@ -296,6 +296,21 @@ export function Sidebar() {
     [openConversations, openTab]
   )
 
+  const handleOpenCollectionSessionInSplit = useCallback(
+    (session: DbConversationSummary, direction: "right" | "down") => {
+      openConversations()
+      openTab(
+        session.folder_id,
+        session.id,
+        session.agent_type,
+        true,
+        session.title ?? undefined,
+        { split: direction }
+      )
+    },
+    [openConversations, openTab]
+  )
+
   const handleNewSessionAtPath = useCallback(
     (rootFolderId: number) => {
       const root = allFolders.find((folder) => folder.id === rootFolderId)
@@ -590,6 +605,7 @@ export function Sidebar() {
           sortMode={sortMode}
           refreshKey={collectionRefreshKey}
           onOpenSession={handleOpenCollectionSession}
+          onOpenSessionInSplit={handleOpenCollectionSessionInSplit}
           onNewSession={handleNewSessionAtPath}
           onOpenScope={(scope) => {
             setSessionCenterCollection(scope)

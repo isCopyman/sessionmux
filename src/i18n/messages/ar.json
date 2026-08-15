@@ -1712,6 +1712,9 @@
         "deleteSelected": "حذف",
         "openSelected": "فتح",
         "openInCurrentWorkbench": "فتح في مساحة العمل الحالية",
+        "chooseOpenPosition": "اختيار موضع الفتح",
+        "openRight": "فتح إلى اليمين",
+        "openDown": "فتح في الأسفل",
         "selectConversation": "تحديد {title}",
         "previewTitle": "معاينة الجلسة",
         "previewEmpty": "حدد جلسة لمعاينتها.",
@@ -1835,6 +1838,8 @@
     "conversationCard": {
       "untitledConversation": "محادثة بدون عنوان",
       "newConversation": "محادثة جديدة",
+      "openRight": "فتح إلى اليمين",
+      "openDown": "فتح في الأسفل",
       "rename": "إعادة تسمية",
       "status": "الحالة",
       "delete": "حذف",

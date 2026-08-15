@@ -1712,6 +1712,9 @@
         "deleteSelected": "刪除",
         "openSelected": "開啟",
         "openInCurrentWorkbench": "在目前工作台開啟",
+        "chooseOpenPosition": "選擇開啟位置",
+        "openRight": "在右側開啟",
+        "openDown": "在下方開啟",
         "selectConversation": "選取 {title}",
         "previewTitle": "工作階段預覽",
         "previewEmpty": "選取一個工作階段以查看預覽。",
@@ -1835,6 +1838,8 @@
     "conversationCard": {
       "untitledConversation": "未命名會話",
       "newConversation": "新增會話",
+      "openRight": "在右側開啟",
+      "openDown": "在下方開啟",
       "rename": "重新命名",
       "status": "狀態",
       "delete": "刪除",

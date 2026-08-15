@@ -1712,6 +1712,9 @@
         "deleteSelected": "删除",
         "openSelected": "打开",
         "openInCurrentWorkbench": "在当前工作台打开",
+        "chooseOpenPosition": "选择打开位置",
+        "openRight": "在右侧打开",
+        "openDown": "在下方打开",
         "selectConversation": "选择 {title}",
         "previewTitle": "会话预览",
         "previewEmpty": "选择一个会话以查看预览。",
@@ -1835,6 +1838,8 @@
     "conversationCard": {
       "untitledConversation": "未命名会话",
       "newConversation": "新建会话",
+      "openRight": "在右侧打开",
+      "openDown": "在下方打开",
       "rename": "重命名",
       "status": "状态",
       "delete": "删除",

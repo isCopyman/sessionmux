@@ -1712,6 +1712,9 @@
         "deleteSelected": "Delete",
         "openSelected": "Open",
         "openInCurrentWorkbench": "Open in current workbench",
+        "chooseOpenPosition": "Choose where to open",
+        "openRight": "Open to the right",
+        "openDown": "Open below",
         "selectConversation": "Select {title}",
         "previewTitle": "Session preview",
         "previewEmpty": "Select a session to preview it.",
@@ -1835,6 +1838,8 @@
     "conversationCard": {
       "untitledConversation": "Untitled conversation",
       "newConversation": "New Conversation",
+      "openRight": "Open to the right",
+      "openDown": "Open below",
       "rename": "Rename",
       "status": "Status",
       "delete": "Delete",

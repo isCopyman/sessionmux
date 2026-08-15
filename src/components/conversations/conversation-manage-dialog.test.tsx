@@ -805,4 +805,27 @@ describe("ConversationManageDialog", () => {
     expect(h.openConversations).toHaveBeenCalledTimes(1)
     expect(h.openTab).toHaveBeenCalledWith(1, 1, "claude_code", true, "on main")
   })
+
+  it("opens the previewed session directly in a right-hand pane", async () => {
+    const user = renderDialog()
+    await screen.findByText("on main")
+
+    await user.click(screen.getByText("on main"))
+    await user.click(
+      screen.getByRole("button", { name: "Choose where to open" })
+    )
+    await user.click(
+      screen.getByRole("menuitem", { name: "Open to the right" })
+    )
+
+    expect(h.openConversations).toHaveBeenCalledTimes(1)
+    expect(h.openTab).toHaveBeenCalledWith(
+      1,
+      1,
+      "claude_code",
+      true,
+      "on main",
+      { split: "right" }
+    )
+  })
 })

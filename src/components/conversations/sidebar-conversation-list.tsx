@@ -1772,6 +1772,26 @@ export function SidebarConversationList({
     [openTab, openConversations]
   )
 
+  const handleOpenInSplit = useCallback(
+    (
+      id: number,
+      agentType: string,
+      folderId: number,
+      direction: "right" | "down"
+    ) => {
+      openConversations()
+      openTab(
+        folderId,
+        id,
+        agentType as Parameters<typeof openTab>[2],
+        true,
+        undefined,
+        { split: direction }
+      )
+    },
+    [openTab, openConversations]
+  )
+
   const handleRename = useCallback(
     async (id: number, newTitle: string) => {
       await updateConversationTitle(id, newTitle)
@@ -2438,6 +2458,7 @@ export function SidebarConversationList({
         )}
         onSelect={handleSelect}
         onDoubleClick={handleDoubleClick}
+        onOpenInSplit={handleOpenInSplit}
         onRename={handleRename}
         onDelete={handleDelete}
         onStatusChange={handleStatusChange}
