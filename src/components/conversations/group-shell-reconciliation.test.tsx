@@ -157,8 +157,15 @@ describe("split group shell source shape", () => {
 
   it("keeps runtime data and mounted DOM stable across pane and strip moves", () => {
     expect(source).toContain(
-      "if (isReparentUnmount(useTabStore.getState(), tabId, groupId)) return"
+      "isReparentUnmount(useTabStore.getState(), tabId, groupId) ||"
     )
+    expect(source).toContain(
+      "shouldRetainWorkbenchRuntimeOnUnmount(workbenchId, tabId)"
+    )
+    expect(source).toContain(
+      "shouldRetainWorkbenchConnectionOnUnmount(workbenchId, tabId)"
+    )
+    expect(source).toContain("scheduleDeferredRuntimeUnmountCleanup(")
     expect(source).toContain("const mountedGroupTabs = [...groupTabs].sort")
     expect(source).toContain(
       "style={canTileG ? { order: indexInGroup } : undefined}"

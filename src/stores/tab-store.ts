@@ -11,6 +11,8 @@ import {
 } from "@/lib/api"
 import { resolveDefaultAgent } from "@/lib/resolve-default-agent"
 import { formatConversationTitle } from "@/lib/conversation-title"
+import { RecentWorkbenchSnapshotCache } from "@/lib/workbench-snapshot-cache"
+import { useConversationRuntimeStore } from "@/stores/conversation-runtime-store"
 import {
   firstLeafId,
   isLayoutNode,
@@ -399,15 +401,230 @@ const childSeedBuffer = new Map<
 >()
 let seedEpoch = 0
 const previewReplacedCallbacks = new Set<(tabId: string) => void>()
+const workbenchCacheEvictedCallbacks = new Set<
+  (connectionContextKeys: readonly string[]) => void
+>()
 let correctionRan = false
 let recoveryRan = false
 let workbenchSwitchEpoch = 0
+const recentWorkbenchSnapshots = new RecentWorkbenchSnapshotCache(3)
+let workbenchRuntimeTransition: {
+  workbenchId: number
+  tabIds: Set<string>
+  connectionConsumed: Set<string>
+  runtimeConsumed: Set<string>
+} | null = null
 // Tracks the last `conversations` reference recomputeTabs derived against, so
 // the module-level app-workspace subscription recomputes only when it changes.
 let lastConversations = useAppWorkspaceStore.getState().conversations
 
 function fetchTabsForWorkbench(workbenchId: number) {
   return workbenchId === 1 ? listOpenedTabs() : listWorkbenchTabs(workbenchId)
+}
+
+function runtimeCacheTabKey(
+  folderId: number,
+  agentType: AgentType,
+  conversationId: number
+): string {
+  return `${folderId}:${agentType}:${conversationId}`
+}
+
+function runtimeConversationIdsByTab(
+  tabs: TabItemInternal[]
+): Record<string, number> {
+  const ids: Record<string, number> = {}
+  for (const tab of tabs) {
+    if (tab.conversationId == null) continue
+    ids[runtimeCacheTabKey(tab.folderId, tab.agentType, tab.conversationId)] =
+      tab.runtimeConversationId ?? tab.conversationId
+  }
+  return ids
+}
+
+function activeRuntimeConversationIds(): Set<number> {
+  const ids = new Set<number>()
+  for (const tab of useTabStore.getState().rawTabs) {
+    const id = tab.runtimeConversationId ?? tab.conversationId
+    if (id != null) ids.add(id)
+  }
+  return ids
+}
+
+function activeConnectionContextKeys(): Set<string> {
+  return new Set(useTabStore.getState().rawTabs.map((tab) => tab.id))
+}
+
+function cleanupEvictedWorkbenchRuntimes(
+  evicted: ReturnType<RecentWorkbenchSnapshotCache["clear"]>
+) {
+  if (evicted.length === 0) return
+  const retainedConnectionKeys =
+    recentWorkbenchSnapshots.retainedConnectionContextKeys()
+  for (const key of activeConnectionContextKeys()) {
+    retainedConnectionKeys.add(key)
+  }
+  const connectionCandidates = new Set<string>()
+  for (const entry of evicted) {
+    for (const key of entry.connectionContextKeys) {
+      if (!retainedConnectionKeys.has(key)) connectionCandidates.add(key)
+    }
+  }
+  if (connectionCandidates.size > 0) {
+    const keys = [...connectionCandidates]
+    for (const callback of workbenchCacheEvictedCallbacks) callback(keys)
+  }
+
+  const retained = recentWorkbenchSnapshots.retainedRuntimeConversationIds()
+  for (const id of activeRuntimeConversationIds()) retained.add(id)
+  const runtimeStore = useConversationRuntimeStore.getState()
+  const candidates = new Set<number>()
+  for (const entry of evicted) {
+    for (const item of entry.snapshot.items) {
+      if (item.conversation_id == null) continue
+      const key = runtimeCacheTabKey(
+        item.folder_id,
+        item.agent_type,
+        item.conversation_id
+      )
+      candidates.add(
+        entry.runtimeConversationIdByTab[key] ?? item.conversation_id
+      )
+    }
+  }
+  for (const conversationId of candidates) {
+    if (retained.has(conversationId)) continue
+    const session = runtimeStore.byConversationId.get(conversationId)
+    if (!session) continue
+    const hasUnsettledWork =
+      session.syncState === "awaiting_persist" ||
+      session.liveMessage != null ||
+      session.optimisticTurns.length > 0 ||
+      session.pendingBackgroundSettlements.length > 0
+    if (hasUnsettledWork) {
+      runtimeStore.actions.setPendingCleanup(conversationId, true)
+    } else {
+      runtimeStore.actions.removeConversation(conversationId)
+    }
+  }
+}
+
+function rememberWorkbenchSnapshot(
+  workbenchId: number,
+  snapshot: OpenedTabsSnapshot,
+  tabs?: TabItemInternal[]
+) {
+  const prior = recentWorkbenchSnapshots.peek(workbenchId)
+  const validKeys = new Set(
+    snapshot.items.flatMap((item) =>
+      item.conversation_id == null
+        ? []
+        : [
+            runtimeCacheTabKey(
+              item.folder_id,
+              item.agent_type,
+              item.conversation_id
+            ),
+          ]
+    )
+  )
+  const validConnectionKeys = new Set(
+    snapshot.items.flatMap((item) =>
+      item.conversation_id == null
+        ? []
+        : [
+            makeConversationTabId(
+              item.folder_id,
+              item.agent_type,
+              item.conversation_id
+            ),
+          ]
+    )
+  )
+  const priorRuntimeIds = Object.fromEntries(
+    Object.entries(prior?.runtimeConversationIdByTab ?? {}).filter(([key]) =>
+      validKeys.has(key)
+    )
+  )
+  const evicted = recentWorkbenchSnapshots.set({
+    workbenchId,
+    snapshot,
+    connectionContextKeys: tabs
+      ? tabs.map((tab) => tab.id)
+      : (prior?.connectionContextKeys ?? []).filter((key) =>
+          validConnectionKeys.has(key)
+        ),
+    runtimeConversationIdByTab: tabs
+      ? runtimeConversationIdsByTab(tabs)
+      : priorRuntimeIds,
+  })
+  cleanupEvictedWorkbenchRuntimes(evicted)
+}
+
+/**
+ * Subscribe to bounded-cache eviction. The ACP provider uses this to release
+ * idle connections for surfaces that are no longer active or warm-retained.
+ */
+export function onWorkbenchCacheEvicted(
+  callback: (connectionContextKeys: readonly string[]) => void
+): () => void {
+  workbenchCacheEvictedCallbacks.add(callback)
+  return () => workbenchCacheEvictedCallbacks.delete(callback)
+}
+
+function markWorkbenchRuntimeTransition(
+  workbenchId: number,
+  tabs: TabItemInternal[]
+) {
+  workbenchRuntimeTransition = {
+    workbenchId,
+    tabIds: new Set(tabs.map((tab) => tab.id)),
+    connectionConsumed: new Set(),
+    runtimeConsumed: new Set(),
+  }
+}
+
+function consumeWorkbenchTransitionUnmount(
+  workbenchId: number,
+  tabId: string,
+  consumer: "connection" | "runtime"
+): boolean {
+  const transition = workbenchRuntimeTransition
+  if (!transition || transition.workbenchId !== workbenchId) return false
+  if (!transition.tabIds.has(tabId)) return false
+  const consumed =
+    consumer === "connection"
+      ? transition.connectionConsumed
+      : transition.runtimeConsumed
+  consumed.add(tabId)
+  if (
+    transition.connectionConsumed.has(tabId) &&
+    transition.runtimeConsumed.has(tabId)
+  ) {
+    transition.tabIds.delete(tabId)
+    transition.connectionConsumed.delete(tabId)
+    transition.runtimeConsumed.delete(tabId)
+  }
+  if (transition.tabIds.size === 0) {
+    workbenchRuntimeTransition = null
+  }
+  return true
+}
+
+/** Keep the ACP connection warm while its cached workbench is parked. */
+export function shouldRetainWorkbenchConnectionOnUnmount(
+  workbenchId: number,
+  tabId: string
+): boolean {
+  return consumeWorkbenchTransitionUnmount(workbenchId, tabId, "connection")
+}
+
+/** Keep parsed Session history while its cached workbench is parked. */
+export function shouldRetainWorkbenchRuntimeOnUnmount(
+  workbenchId: number,
+  tabId: string
+): boolean {
+  return consumeWorkbenchTransitionUnmount(workbenchId, tabId, "runtime")
 }
 
 function persistTabsForWorkbench(
@@ -813,6 +1030,11 @@ async function flushMountedWorkbenchSnapshot(st: TabStoreState) {
   }
   const currentItems = buildPersistItems(st.rawTabs, st.activeTabId)
   const currentPayload = JSON.stringify(currentItems)
+  rememberWorkbenchSnapshot(
+    st.activeWorkbenchId,
+    { items: currentItems, version },
+    st.rawTabs
+  )
   if (currentPayload === lastSavedPayload) return
 
   let outcome = await persistTabsForWorkbench(
@@ -835,6 +1057,11 @@ async function flushMountedWorkbenchSnapshot(st: TabStoreState) {
   if (!outcome.accepted) {
     throw new Error("Workbench changed concurrently; please retry")
   }
+  rememberWorkbenchSnapshot(
+    st.activeWorkbenchId,
+    { items: currentItems, version: outcome.version },
+    st.rawTabs
+  )
   lastSavedPayload = currentPayload
 }
 
@@ -886,25 +1113,44 @@ function mergeRestoredDrafts(restored: TabItemInternal[]): {
 /** Install one workbench's authoritative persisted tab snapshot, then splice
  * its device-local draft/layout state back in. Shared by cold hydration and
  * named-workbench switching so both paths obey identical restore rules. */
-function installHydratedSnapshot(snap: OpenedTabsSnapshot) {
+function installHydratedSnapshot(
+  snap: OpenedTabsSnapshot,
+  runtimeIdByTab: Readonly<Record<string, number>> = {}
+) {
   tabsSnapshotLoaded = true
-  version = snap.version
+  version = Math.max(version, snap.version)
   serverKnownTabKeys = snapshotSyncKeys(snap.items)
-  const restored: TabItemInternal[] = snap.items.map((it) => ({
-    id:
-      it.conversation_id != null
-        ? makeConversationTabId(it.folder_id, it.agent_type, it.conversation_id)
-        : makeNewConversationTabId(),
-    kind: "conversation",
-    folderId: it.folder_id,
-    conversationId: it.conversation_id,
-    agentType: it.agent_type,
-    title:
-      it.conversation_id != null
-        ? runtime.labels.loadingConversation
-        : runtime.labels.newConversation,
-    isPinned: it.is_pinned,
-  }))
+  const restored: TabItemInternal[] = snap.items.map((it) => {
+    const runtimeConversationId =
+      it.conversation_id == null
+        ? undefined
+        : runtimeIdByTab[
+            runtimeCacheTabKey(it.folder_id, it.agent_type, it.conversation_id)
+          ]
+    return {
+      id:
+        it.conversation_id != null
+          ? makeConversationTabId(
+              it.folder_id,
+              it.agent_type,
+              it.conversation_id
+            )
+          : makeNewConversationTabId(),
+      kind: "conversation",
+      folderId: it.folder_id,
+      conversationId: it.conversation_id,
+      agentType: it.agent_type,
+      title:
+        it.conversation_id != null
+          ? runtime.labels.loadingConversation
+          : runtime.labels.newConversation,
+      isPinned: it.is_pinned,
+      ...(runtimeConversationId != null &&
+      runtimeConversationId !== it.conversation_id
+        ? { runtimeConversationId }
+        : {}),
+    }
+  })
   const activeItem = snap.items.find(
     (it) => it.is_active && it.conversation_id != null
   )
@@ -2143,45 +2389,96 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
       await flushMountedWorkbenchSnapshot(initial)
 
       if (epoch !== workbenchSwitchEpoch) return
-      // Fetch first so a disconnected backend or deleted workbench leaves the
-      // currently visible surface intact instead of replacing it with an empty
-      // half-switched state.
       const groupState = readPersistedGroupState(workbenchId)
+      const cached = recentWorkbenchSnapshots.get(workbenchId)
+
+      const mount = (
+        snap: OpenedTabsSnapshot,
+        runtimeIdByTab: Readonly<Record<string, number>> = {}
+      ) => {
+        const outgoing = get()
+        markWorkbenchRuntimeTransition(
+          outgoing.activeWorkbenchId,
+          outgoing.rawTabs
+        )
+        try {
+          sessionStorage.setItem(
+            ACTIVE_WORKBENCH_STORAGE_KEY,
+            String(workbenchId)
+          )
+        } catch {
+          /* ignore */
+        }
+        pendingRemote = null
+        applyingRemote = false
+        serverKnownTabKeys = new Set()
+        lastSavedPayload = null
+        lastGroupBlob = null
+        tabsSnapshotLoaded = false
+        set({
+          activeWorkbenchId: workbenchId,
+          switchingWorkbench: true,
+          tabsHydrated: false,
+          rawTabs: [],
+          activeTabId: null,
+          childSummaries: new Map(),
+          ...groupState,
+        })
+        recomputeTabs()
+
+        installHydratedSnapshot(snap, runtimeIdByTab)
+        set({
+          tabsHydrated: true,
+          switchingWorkbench: false,
+          switchingWorkbenchId: null,
+        })
+        applyGroupInvariants()
+        persistGroupState()
+        rememberWorkbenchSnapshot(workbenchId, snap, get().rawTabs)
+      }
+
+      if (cached) {
+        // Paint the recently-used surface immediately. Its Session runtimes
+        // remain in the global runtime store, so the remounted views reuse the
+        // already-parsed history instead of re-reading the transcript.
+        mount(cached.snapshot, cached.runtimeConversationIdByTab)
+
+        // Durable state remains authoritative. Revalidate without putting the
+        // visible workbench back into a loading state; a late response is
+        // cached but may only mutate the surface that initiated it.
+        void fetchTabsForWorkbench(workbenchId)
+          .then((fresh) => {
+            rememberWorkbenchSnapshot(workbenchId, fresh)
+            if (
+              epoch !== workbenchSwitchEpoch ||
+              get().activeWorkbenchId !== workbenchId
+            ) {
+              return
+            }
+            applyRemoteSnapshot({
+              workbench_id: workbenchId,
+              version: fresh.version,
+              origin: "server",
+              tabs: fresh.items,
+            })
+            applyGroupInvariants()
+            rememberWorkbenchSnapshot(workbenchId, fresh, get().rawTabs)
+          })
+          .catch((error) => {
+            console.warn(
+              "[TabStore] cached workbench revalidation failed:",
+              error
+            )
+          })
+        return
+      }
+
+      // A cold target has no safe surface to paint yet. Fetch first so a
+      // disconnected backend or deleted workbench leaves the currently visible
+      // surface intact instead of replacing it with an empty half-switch.
       const snap = await fetchTabsForWorkbench(workbenchId)
       if (epoch !== workbenchSwitchEpoch) return
-      try {
-        sessionStorage.setItem(
-          ACTIVE_WORKBENCH_STORAGE_KEY,
-          String(workbenchId)
-        )
-      } catch {
-        /* ignore */
-      }
-      pendingRemote = null
-      applyingRemote = false
-      serverKnownTabKeys = new Set()
-      lastSavedPayload = null
-      lastGroupBlob = null
-      tabsSnapshotLoaded = false
-      set({
-        activeWorkbenchId: workbenchId,
-        switchingWorkbench: true,
-        tabsHydrated: false,
-        rawTabs: [],
-        activeTabId: null,
-        childSummaries: new Map(),
-        ...groupState,
-      })
-      recomputeTabs()
-
-      installHydratedSnapshot(snap)
-      set({
-        tabsHydrated: true,
-        switchingWorkbench: false,
-        switchingWorkbenchId: null,
-      })
-      applyGroupInvariants()
-      persistGroupState()
+      mount(snap)
     } catch (error) {
       if (epoch === workbenchSwitchEpoch) {
         set({
@@ -2207,6 +2504,7 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
         if (cancelled) return
         snapshotLoaded = true
         installHydratedSnapshot(snap)
+        rememberWorkbenchSnapshot(get().activeWorkbenchId, snap, get().rawTabs)
       } catch (err) {
         console.error("[TabStore] listOpenedTabs failed:", err)
         if (!cancelled) {
@@ -2302,10 +2600,27 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
     if (saveTimer) clearTimeout(saveTimer)
     const expectedVersion = version
     const workbenchId = st.activeWorkbenchId
+    const runtimeIds = runtimeConversationIdsByTab(st.rawTabs)
+    const connectionContextKeys = st.rawTabs.map((tab) => tab.id)
     saveTimer = setTimeout(() => {
       saveTimer = null
       persistTabsForWorkbench(workbenchId, items, expectedVersion)
         .then((res) => {
+          const cached = recentWorkbenchSnapshots.peek(workbenchId)
+          cleanupEvictedWorkbenchRuntimes(
+            recentWorkbenchSnapshots.set({
+              workbenchId,
+              snapshot: {
+                items: res.accepted ? items : res.tabs,
+                version: res.version,
+              },
+              connectionContextKeys,
+              runtimeConversationIdByTab: {
+                ...(cached?.runtimeConversationIdByTab ?? {}),
+                ...runtimeIds,
+              },
+            })
+          )
           // A workbench switch can complete while this request is in flight.
           // Its result belongs to the old surface; only advance the shared clock.
           if (get().activeWorkbenchId !== workbenchId) {
@@ -2486,6 +2801,20 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
       change.workbench_id === undefined
         ? activeWorkbenchId
         : change.workbench_id
+    // A remote edit to a workbench the user has never visited must not consume
+    // an LRU slot and evict a genuinely warm surface. It may refresh an already
+    // cached workbench, but only foreground navigation creates a new entry.
+    if (
+      eventWorkbenchId != null &&
+      (eventWorkbenchId === activeWorkbenchId ||
+        recentWorkbenchSnapshots.peek(eventWorkbenchId) != null)
+    ) {
+      rememberWorkbenchSnapshot(
+        eventWorkbenchId,
+        { items: change.tabs, version: change.version },
+        eventWorkbenchId === activeWorkbenchId ? get().rawTabs : undefined
+      )
+    }
     if (change.origin === TAB_ORIGIN) {
       // Our own accepted save, echoed back: nothing to apply, but the snapshot
       // is authoritative — record it as the merge ancestor in case it beats the
@@ -2504,6 +2833,7 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
     // the clock and refetch the workbench this window actually displays.
     if (eventWorkbenchId === null) {
       version = change.version
+      cleanupEvictedWorkbenchRuntimes(recentWorkbenchSnapshots.clear())
       if (get().tabsHydrated) {
         tabsSnapshotLoaded = false
         void get().refetchTabs()
@@ -2529,6 +2859,7 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
     try {
       const workbenchId = get().activeWorkbenchId
       const snap = await fetchTabsForWorkbench(workbenchId)
+      rememberWorkbenchSnapshot(workbenchId, snap)
       const change: TabsChanged = {
         workbench_id: workbenchId,
         version: snap.version,
@@ -2553,6 +2884,7 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
       // clobbering (its own guard is a strict `<`).
       if (snap.version > version || !tabsSnapshotLoaded) {
         applyRemoteSnapshot(change)
+        rememberWorkbenchSnapshot(workbenchId, snap, get().rawTabs)
       } else {
         version = Math.max(version, snap.version)
       }
@@ -2870,6 +3202,8 @@ export function resetTabStore() {
     clearTimeout(groupPersistTimer)
     groupPersistTimer = null
   }
+  workbenchRuntimeTransition = null
+  recentWorkbenchSnapshots.clear()
   version = 0
   applyingRemote = false
   remoteActivationPending = false
@@ -2881,6 +3215,7 @@ export function resetTabStore() {
   childSeedBuffer.clear()
   seedEpoch = 0
   previewReplacedCallbacks.clear()
+  workbenchCacheEvictedCallbacks.clear()
   correctionRan = false
   recoveryRan = false
   workbenchSwitchEpoch = 0

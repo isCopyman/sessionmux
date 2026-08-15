@@ -35,7 +35,13 @@ import { useAcpAgents } from "@/hooks/use-acp-agents"
 import { useActiveFolder } from "@/contexts/active-folder-context"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { useTabActions, useTabStore } from "@/contexts/tab-context"
-import { groupOfTab, isReparentUnmount } from "@/stores/tab-store"
+import {
+  groupOfTab,
+  isReparentUnmount,
+  onWorkbenchCacheEvicted,
+  shouldRetainWorkbenchConnectionOnUnmount,
+  shouldRetainWorkbenchRuntimeOnUnmount,
+} from "@/stores/tab-store"
 import { computeRects, leafIds } from "@/lib/tab-group-layout"
 import type { SplitDropEdge } from "@/lib/tab-drag-drop"
 import { useTaskContext } from "@/contexts/task-context"
@@ -141,7 +147,9 @@ import { SessionDetailsDialog } from "./session-details-dialog"
 
 interface ConversationTabViewProps {
   tabId: string
+  workbenchId: number
   conversationId: number | null
+  runtimeConversationId?: number
   agentType: AgentType
   workingDir?: string
   isActive: boolean
@@ -218,9 +226,39 @@ function buildVirtualConversationId(seed: string): number {
   return -normalized
 }
 
+// React development StrictMode runs a mount effect's cleanup and setup again.
+// Defer an idle runtime removal by one task so that immediate remount can
+// cancel it. A genuine close has no replacement and still releases promptly.
+const deferredRuntimeUnmountCleanups = new Map<
+  number,
+  ReturnType<typeof setTimeout>
+>()
+
+function cancelDeferredRuntimeUnmountCleanup(conversationId: number) {
+  const pending = deferredRuntimeUnmountCleanups.get(conversationId)
+  if (pending == null) return
+  clearTimeout(pending)
+  deferredRuntimeUnmountCleanups.delete(conversationId)
+}
+
+function scheduleDeferredRuntimeUnmountCleanup(
+  conversationId: number,
+  cleanup: () => void
+) {
+  cancelDeferredRuntimeUnmountCleanup(conversationId)
+  const pending = setTimeout(() => {
+    if (deferredRuntimeUnmountCleanups.get(conversationId) !== pending) return
+    deferredRuntimeUnmountCleanups.delete(conversationId)
+    cleanup()
+  }, 0)
+  deferredRuntimeUnmountCleanups.set(conversationId, pending)
+}
+
 const ConversationTabView = memo(function ConversationTabView({
   tabId,
+  workbenchId,
   conversationId,
+  runtimeConversationId,
   agentType,
   workingDir,
   isActive,
@@ -289,7 +327,10 @@ const ConversationTabView = memo(function ConversationTabView({
   // For new conversations this is a virtual (negative) ID; for existing
   // conversations opened from the sidebar it equals the real DB ID.
   const [effectiveConversationId] = useState(
-    () => conversationId ?? buildVirtualConversationId(`draft-${tabId}`)
+    () =>
+      runtimeConversationId ??
+      conversationId ??
+      buildVirtualConversationId(`draft-${tabId}`)
   )
   const [createdConversationId, setCreatedConversationId] = useState<
     number | null
@@ -348,6 +389,7 @@ const ConversationTabView = memo(function ConversationTabView({
 
   // Clear pendingCleanup when tab is (re)opened
   useEffect(() => {
+    cancelDeferredRuntimeUnmountCleanup(effectiveConversationId)
     setPendingCleanup(effectiveConversationId, false)
   }, [effectiveConversationId, setPendingCleanup])
 
@@ -566,12 +608,14 @@ const ConversationTabView = memo(function ConversationTabView({
     // Drives cross-client viewer discovery: when another client is already
     // live on this conversation, attach to its connection instead of spawning.
     conversationId: dbConversationId ?? undefined,
-    // A cross-group move / unsplit reparents this view (React remounts it)
-    // while the tab stays open — that unmount must not tear the connection
-    // down. See `isReparentUnmount` for why "still open" alone is too broad.
+    // A cross-group move reparents this view; a named-workbench switch parks it
+    // in the bounded warm cache. Neither unmount should tear the connection
+    // down. See the two guards for why "still open" alone is too broad.
     isTransientUnmount: useCallback(
-      () => isReparentUnmount(useTabStore.getState(), tabId, groupId),
-      [tabId, groupId]
+      () =>
+        isReparentUnmount(useTabStore.getState(), tabId, groupId) ||
+        shouldRetainWorkbenchConnectionOnUnmount(workbenchId, tabId),
+      [tabId, groupId, workbenchId]
     ),
   })
   const { status: connStatus, sessionId: connSessionId } = conn
@@ -898,7 +942,12 @@ const ConversationTabView = memo(function ConversationTabView({
       // lifecycle already treats that as transient; keep the matching runtime
       // detail/turn cache too, otherwise the newly mounted pane flashes a load
       // state and loses its scroll anchor even though the Session stayed live.
-      if (isReparentUnmount(useTabStore.getState(), tabId, groupId)) return
+      if (
+        isReparentUnmount(useTabStore.getState(), tabId, groupId) ||
+        shouldRetainWorkbenchRuntimeOnUnmount(workbenchId, tabId)
+      ) {
+        return
+      }
       if (connStatusRef.current === "prompting" && !isViewerRef.current) {
         // Owner, agent still responding — keep the session for deferred cleanup
         // (the background turn_complete handler removes it once done).
@@ -909,7 +958,9 @@ const ConversationTabView = memo(function ConversationTabView({
         // arrive to resolve a deferred cleanup — deferring would leak the
         // runtime session (especially in web mode, which has no event firehose
         // after detach).
-        removeConversation(effectiveConversationId)
+        scheduleDeferredRuntimeUnmountCleanup(effectiveConversationId, () =>
+          removeConversation(effectiveConversationId)
+        )
       }
     }
   }, [
@@ -918,6 +969,7 @@ const ConversationTabView = memo(function ConversationTabView({
     removeConversation,
     setPendingCleanup,
     tabId,
+    workbenchId,
   ])
 
   const handleSend = useCallback(
@@ -1979,6 +2031,7 @@ export function ConversationDetailPanel() {
   const conversations = useAppWorkspaceStore((s) => s.conversations)
   const allFolders = useAppWorkspaceStore((s) => s.allFolders)
   const tabs = useTabStore((s) => s.tabs)
+  const activeWorkbenchId = useTabStore((s) => s.activeWorkbenchId)
   const activeTabId = useTabStore((s) => s.activeTabId)
   const groupLayout = useTabStore((s) => s.groupLayout)
   const groupOf = useTabStore((s) => s.groupOf)
@@ -2021,6 +2074,17 @@ export function ConversationDetailPanel() {
       disconnectIfIdle(replacedTabId).catch(() => {})
     })
   }, [onPreviewTabReplaced, disconnectIfIdle])
+
+  // A parked workbench keeps its connections hot like a browser tab. Once the
+  // bounded LRU evicts it, release only idle owners/viewers; busy turns remain
+  // protected by the ACP lifecycle and are reclaimed after they settle.
+  useEffect(() => {
+    return onWorkbenchCacheEvicted((connectionContextKeys) => {
+      for (const contextKey of connectionContextKeys) {
+        disconnectIfIdle(contextKey).catch(() => {})
+      }
+    })
+  }, [disconnectIfIdle])
 
   // Background turn_complete handler: for conversations not open in tabs.
   // Subscribes via the context's primary `acp://event` listener (single
@@ -2381,7 +2445,9 @@ export function ConversationDetailPanel() {
     const view = (
       <ConversationTabView
         tabId={tab.id}
+        workbenchId={activeWorkbenchId}
         conversationId={tab.conversationId}
+        runtimeConversationId={tab.runtimeConversationId}
         agentType={tab.agentType}
         workingDir={tab.workingDir ?? folderPath}
         isActive={active}

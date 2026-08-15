@@ -20,8 +20,11 @@ import {
   duplicateWorkbenchLocalState,
   groupOfTab,
   isReparentUnmount,
+  onWorkbenchCacheEvicted,
   resetTabStore,
   selectIsSplit,
+  shouldRetainWorkbenchConnectionOnUnmount,
+  shouldRetainWorkbenchRuntimeOnUnmount,
   useTabStore,
 } from "@/stores/tab-store"
 import { computeRects, leafIds } from "@/lib/tab-group-layout"
@@ -1933,6 +1936,86 @@ describe("TabProvider tab groups", () => {
     expect(store().activeWorkbenchId).toBe(2)
     expect(store().switchingWorkbench).toBe(false)
     expect(store().switchingWorkbenchId).toBeNull()
+  })
+
+  it("restores a recent workbench before background validation resolves", async () => {
+    const mainItems = [tabItem(1, 1, true)]
+    listOpenedTabsMock.mockResolvedValue({ items: mainItems, version: 1 })
+    listWorkbenchTabsMock.mockResolvedValue({
+      items: [tabItem(2, 3, true)],
+      version: 2,
+    })
+    await renderWithTabs(mainItems)
+
+    await act(async () => {
+      await store().switchWorkbench(2)
+    })
+    expect(
+      shouldRetainWorkbenchConnectionOnUnmount(1, "conv-1-codex-1"),
+      "the outgoing Session connection survives the workbench transition"
+    ).toBe(true)
+    expect(
+      shouldRetainWorkbenchRuntimeOnUnmount(1, "conv-1-codex-1"),
+      "the outgoing Session history cache survives the workbench transition"
+    ).toBe(true)
+    expect(shouldRetainWorkbenchRuntimeOnUnmount(1, "conv-1-codex-1")).toBe(
+      false
+    )
+
+    let resolveValidation!: (value: {
+      items: OpenedTab[]
+      version: number
+    }) => void
+    listOpenedTabsMock.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveValidation = resolve
+      })
+    )
+
+    await act(async () => {
+      await store().switchWorkbench(1)
+    })
+
+    // The backend validation is still pending, but the recent surface is
+    // already interactive and its previous Session is visible from memory.
+    expect(store().activeWorkbenchId).toBe(1)
+    expect(store().switchingWorkbench).toBe(false)
+    expect(store().switchingWorkbenchId).toBeNull()
+    expect(store().rawTabs.some((tab) => tab.conversationId === 1)).toBe(true)
+
+    await act(async () => {
+      resolveValidation({ items: mainItems, version: 3 })
+      await Promise.resolve()
+    })
+    expect(store().activeWorkbenchId).toBe(1)
+    expect(store().rawTabs.some((tab) => tab.conversationId === 1)).toBe(true)
+  })
+
+  it("releases connection surfaces when the workbench warm LRU evicts them", async () => {
+    const mainItems = [tabItem(1, 1, true)]
+    listOpenedTabsMock.mockResolvedValue({ items: mainItems, version: 1 })
+    listWorkbenchTabsMock.mockImplementation(async (workbenchId: number) => ({
+      items: [tabItem(workbenchId, workbenchId, true)],
+      version: workbenchId,
+    }))
+    await renderWithTabs(mainItems)
+
+    const evicted: string[] = []
+    const unsubscribe = onWorkbenchCacheEvicted((keys) => {
+      evicted.push(...keys)
+    })
+    try {
+      for (const workbenchId of [2, 3, 4]) {
+        await act(async () => {
+          await store().switchWorkbench(workbenchId)
+        })
+      }
+    } finally {
+      unsubscribe()
+    }
+
+    expect(evicted).toContain("conv-1-codex-1")
+    expect(evicted).not.toContain("conv-4-codex-4")
   })
 
   it("split-and-move creates a second group with the tab and focuses it", async () => {
