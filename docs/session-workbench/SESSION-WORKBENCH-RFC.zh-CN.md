@@ -95,13 +95,16 @@ Collection 是面向人的长期语义分类，类似文件系统目录，但不
 └── 结果解释
 ```
 
-Collection 负责回答“这个 Session 属于什么主题”，不负责回答“它在哪里运行”。
+Collection 负责回答“这个 Session 或 Workbench 属于什么主题”，不负责回答“它在哪里运行”。
+Session 和 Workbench 各自最多有一个主要 Collection；Workbench 的位置不约束其中 Session 的
+Collection、Folder 或 Harness。
 
-侧栏默认显示 Workbench 树和 Collection 树：前者的根节点是各套已保存工作现场，子节点是其中的
-Session 引用；后者保存唯一语义归属。不得再把 Collection 树和 Folder 树做成两套同时常驻、
-层级相同的 Session 目录。Folder 仅作为可切换的 Execution Location 视图，用于 cwd、Git、
-worktree、终端和文件范围相关操作。这些视图只是对同一 `conversation` 集合的不同查询，不新增
-重复 Session，也不允许 Collection 操作修改 `folder_id`。
+侧栏保留轻量的当前/最近 Workbench 快捷区，下面的日常浏览在 `Collections` 与
+`Execution Locations` 间直接切换。前者是唯一语义归属树，可同时容纳 Session 与 Workbench；
+后者沿用 Codeg 原 Folder/cwd、Git 仓库和 worktree 树，并保留从节点新建、导入和设置默认 Agent
+的能力。不得删除路径树，也不得让 Collection 操作修改 `folder_id`。路径树可选按 Harness 增加
+一个纯展示层：`Folder → Harness → Session`；它不是新的实体或归属关系。两种视图只是对同一
+`conversation` 集合的不同查询，不新增重复 Session。
 
 #### 3.3.1 Session Library View
 
@@ -126,6 +129,10 @@ Workbench 是一套可命名、可恢复、可快速切换的逻辑工作现场�
 - 后续可扩展的文件、Diff、终端和浏览器资源页。
 
 Workbench 可以混放不同 Folder、不同 cwd、不同 worktree 和不同 Harness 的 Session。
+Workbench 自己可选择一个主要 Collection 作为人类可读的归档位置。不要新增
+`Workbench.parent_workbench_id` 来复制 Collection 的树；所谓“树形工作台”在产品上表达为
+`Collection → 子 Collection → Workbench → Session references`。顶部 Workbench Tab 和快捷区
+仍按最近/打开状态展示，不代表第二份归属。
 
 ### 3.5 Pane 与 Tab
 
@@ -356,6 +363,12 @@ Fork 必须进一步区分当前末端 Fork、历史消息分叉和文件恢复�
 
 Collection 操作不得修改 `conversation.folder_id`、cwd、worktree、Git 分支或 Agent 设置。
 
+#### COL-005 Workbench 归档
+
+Workbench 可以拥有零或一个主要 Collection，使大量已保存工作台能按项目、主题和阶段形成树。
+该关系只决定导航位置；移动 Workbench 不移动其中 Session，也不改变布局、cwd 或运行状态。
+实现优先复用 Collection，不另建一棵可嵌套的 Workbench Folder 树。
+
 #### VIEW-001 一键范围切换
 
 Session Library 顶部只常驻“当前 Workbench”和“全部”两个高频 Scope。当前 Workbench Scope
@@ -395,12 +408,24 @@ Conversation、Collection 或 Workbench 表，也不跨设备覆盖。命名 Sav
 固定以下不变量：默认打开属于当前 Workbench；已打开则聚焦；未打开则新增固定 Content Tab；
 不得用普通点击替换非空固定 Tab。
 
+#### VIEW-007 Collection 与 Execution Location 双视图
+
+侧栏必须直接显示 `按分类 / 按运行位置` 切换，不能把路径入口藏在通用筛选菜单中。Execution
+Location 视图继续支持多 Folder、远端、本地仓库、分支/worktree、Folder 别名、默认 Harness、
+从节点新建 Session 和原生 Session 导入。新会话草稿在发送前可以切换 Folder；已开始的原生
+Session 保持自己的 cwd。全局新建默认继承活动 Session 的 Folder；没有活动 Session 时使用当前
+Workbench 最近创建所用的 Folder，再允许用户修改。
+
+路径视图可选 `Folder → Harness → Session` 显示分组。Collection 内如需按路径或 Harness 查看，
+使用筛选/分组，不把 Execution Location 嵌入 Collection 的所有权模型。
+
 ### 7.3 Workbench 与 App Window
 
 #### WIN-001 命名与切换
 
 支持创建、重命名、复制、删除、排序和快速切换 Workbench。侧栏显示全部已保存 Workbench，
-App Window 顶部显示当前打开的 Workbench Tab。删除 Workbench 不删除其中 Session。
+App Window 顶部显示当前打开的 Workbench Tab。Workbench 可以放入主要 Collection 形成树形
+归档；顶部仅显示打开的工作台。删除 Workbench 不删除其中 Session。
 
 #### WIN-002 跨上下文混放
 
@@ -430,6 +455,17 @@ Instance 订阅同一个 runtime，具体同步语义见 SYNC-006。
 
 切换 Workbench 只切换界面，不得自动中断其他 Workbench 中正在运行的 Session。资源回收需要
 独立策略，不与可见性直接绑定。
+
+#### WIN-005A 切换缓存与性能
+
+Workbench 切换必须是应用内状态切换，不允许通过整页导航重建侧栏和全部 Provider。切换前保存
+当前布局，目标 Workbench 的 Tab snapshot 与布局先从内存/本地缓存恢复，再按版本号后台校验；
+`tabs://changed` 或删除事件负责使缓存失效。Session 消息与 Runtime 状态继续由按
+`conversation_id` 的全局 Store 持有，不随 Workbench 隐藏而清空。
+
+第一阶段缓存最近使用的少量 Workbench snapshot 即可，不长期保活所有 React 子树、文件树、
+终端和 WebView。先测量切换耗时；只有组件重挂载仍是主要瓶颈时，再为最近 2–3 个 Workbench
+引入有上限的 keep-alive。索引/snapshot 缓存与完整聊天内容缓存必须分开。
 
 #### WIN-006 原生系统窗口
 
@@ -867,16 +903,19 @@ Collection 范围行只在用户选中目录时出现；筛选行只在快捷视
 按子树筛选及删除回到未分类。拖放、排序、颜色和 Collection 自身归档仍是后续增强，不阻塞普通
 Session 分类使用。
 
-### Milestone 4：系统多窗口与资源作用域
+### Milestone 4：多视图同步底座、资源作用域与可选系统窗口
 
-- Tauri 原生窗口拆出与重新吸附；
-- 保存每个 App Window 的 Workbench 挂载、顺序、焦点和几何；
 - 复用现有 viewer/snapshot/stream 底座，实现同一 Session 多 View Instance 实时同步；
 - 拆分全局 `opened_tabs`、`is_active` 与焦点，防止窗口互相覆盖；
 - Session 资源跟随和 Workbench 图钉固定；
 - 文件、Diff、预览与资源视图状态随所属对象恢复；
 - 增加文件/目录“在外部编辑器打开”，本地记住默认目标并对远程路径明确降级；
-- 处理多个系统窗口同时显示同一 Session 的输入并发。
+- 处理桌面/Web/未来系统窗口同时显示同一 Session 的输入并发；
+- 只有上述同步通过故障测试后，才把 Tauri 原生窗口、窗口几何和跨窗口拖放作为 Bonus 开放。
+
+单窗口多 Workbench 已经满足核心工作流。当前 Tauri 第二窗口与跨窗口标题刷新只作为可行性
+Spike 保留，不进入前三个 Milestone 的承诺，也不能挤占 Collection、路径视图、Session Center
+和布局可靠性的开发时间。
 
 ### Milestone 5：可选协作动作
 
@@ -954,7 +993,8 @@ Milestone 4 还必须满足：同一 Session 在两个 Workbench/窗口显示时
 4. 与物理路径解耦的 Collection 层级树和轻量搜索筛选。
 
 完成这四项后，用户已经可以在一个 GUI 中统一管理不同 Harness、长期分类 Session，并恢复多个
-复杂工作现场。同一 Session 多视图同步是系统多窗口的正确性前提，不是可选装饰。Codeg 内部
+复杂工作现场。同一 Session 多视图同步是 Web、移动端和未来系统多窗口共用的正确性底座；打开
+第二个物理窗口本身则是可后置的 Bonus。Codeg 内部
 协作先做无组织负担的多选发送、转发和比较；受管远端优先走 Codeg API，AgentBus 只作为未托管
 App、缺少 federation 的跨 Backend 和离线邮箱桥后置融入。群聊、项目记忆和自动编排继续建立在
 可靠 Session 管理之上，Team 只有在真实复用需求出现后再评估。

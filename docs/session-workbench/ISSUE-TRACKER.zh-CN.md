@@ -50,7 +50,10 @@
   不改变 Collection 归属、cwd、Workbench 或 Runtime。Issue 原提案中的多归属不作为第一版默认行为；
   当前裁决为唯一主要位置，未来若有真实需求再增加显式快捷方式。
 
-Collection 不得复用 Folder 或 Work Task，也不改变 cwd。
+Collection 不得复用 Folder 或 Work Task，也不改变 cwd。原 Folder/cwd 会话树必须继续作为
+“按运行位置”视图存在，并保留新建、导入、分支/worktree 与默认 Harness 操作；`按分类 / 按运行
+位置` 应直接可见，不能藏在通用筛选菜单。路径下可选增加 Harness 显示分组。Workbench 也可以
+拥有一个主要 Collection，以此形成树形归档，不另建重复的 Workbench Folder 树。
 
 ### D. 多 Agent 协作
 
@@ -93,10 +96,13 @@ Split docking (#456 部分) ── 可独立提前交付
 
 1. **P0 基线可靠性**：核实 #403/#404 修复，处理 #457，建立 #458 的增量同步基础；
 2. **P1 快速体验收益**：#456 的单窗口拖边吸附已在本地分支完成；继续验证后，不等待完整多窗口；
-3. **P2 逻辑 Workbench**：实现 #460，保存多套分屏与 Session 组合；
-4. **P3 Collection**：实现 #459；如果侧栏重构更适合提前，也可与 P2 并行；
-5. **P4 大量会话、物理多窗口与资源 Pane**：Session Center、可选全文检索、完成 #456 剩余部分，
-   实现 Session 跟随、Workbench 图钉固定和“在外部编辑器打开”；#464/#465 不再列入路线；
+3. **P2 逻辑 Workbench**：实现 #460，保存多套分屏与 Session 组合，并让 Workbench 可归档到
+   Collection；
+4. **P3 Collection**：实现 #459，同时保留直接可切换的原 Folder/cwd 视图；如果侧栏重构更适合
+   提前，也可与 P2 并行；
+5. **P4 大量会话、多视图同步与资源 Pane**：Session Center、可选全文检索、Session 跟随、
+   Workbench 图钉固定和“在外部编辑器打开”；#456 剩余的物理多窗口降级为 Bonus，只有共享
+   Runtime、事件补偿和布局所有权通过测试后再继续；#464/#465 不再列入路线；
 6. **C0-C3 可选协作轨道**：AgentBus 只读总览/消息 UI、Session 绑定、多选发送、转发、比较和
    受管投递，可在稳定 Session 映射后并行；
 7. **C4 持久群聊**：稳定 Session 投递和多视图同步后，实施 #461 的群聊面板、共享消息、显式

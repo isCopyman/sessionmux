@@ -87,15 +87,43 @@ WebSocket daemon 仍可作为交互和多客户端参考。
 
 ### 3.4 Codex Desktop Windows 包审计
 
-本地审计版本为 `OpenAI.Codex 26.803.10989.0`。解包后的 Electron main bundle 显示：
+2026-08-15 本地审计 Windows 包 `OpenAI.Codex 26.810.7004.0`，内部 Electron 应用版本为
+`26.810.52044`。这不是公开 API 契约，只用于验证可行边界；产品行为仍以实际测试为准。
 
-- Window manager 维护多个 `primaryWindows`，并能创建 fresh primary window；
-- 每个 renderer/webContents 有独立 app view 映射；
-- 后台共享服务把领域更新广播到多个 app view；
-- 窗口焦点和展示状态按物理窗口维护。
+解包后的 main/renderer bundle 显示：
 
-这里可借鉴的不是具体私有实现，而是边界：**共享 Session 服务 + 多个窗口视图 + 窗口局部
-展示状态**。Codeg 不需要复制 Codex Desktop，也不应从压缩 bundle 猜测未验证的产品语义。
+- Electron main 维护统一窗口注册表和 renderer/app-view 映射；每个窗口拥有自己的初始路由、
+  当前页面、焦点和展示状态；
+- 本地 Thread 目录使用 SQLite 保存，并带 `catalog_revision`。App Server 发出
+  `thread/name/updated` 后，后台更新统一目录，再向全部窗口广播查询缓存失效；
+- 因此，在另一个窗口重命名后延迟刷新并不是依赖定时扫描 JSONL。`@parcel/watcher` 虽然存在，
+  但标题同步的主链路是**领域通知 → 后台目录变更 → 多窗口失效/刷新**；Watcher 更适合作为
+  外部文件变化的补偿入口；
+- 同一 Thread 的实时运行采用 owner/follower 角色。一个窗口拥有 stream，其他窗口通过
+  `thread-follower-*` 协调开始 turn、加载完整历史、steer、interrupt、设置更新和审批，避免两个
+  CLI Runtime 同时写一个原生 Session；
+- 后台可以向全部窗口广播共享元数据和全局状态，但打开哪个 Thread、激活哪个页面仍属于物理
+  窗口，不会把所有窗口强制切到同一路由。
+
+这里可借鉴的是：**统一 Thread 目录 + 单一运行所有者 + 多个 follower 视图 + 窗口局部导航**。
+Codeg 不需要复制 Codex Desktop，也不应把压缩 bundle 中的内部方法名当成稳定接口。
+
+### 3.5 OpenChamber
+
+OpenChamber 当前公开产品同时支持 Desktop 多窗口、Web/PWA、VS Code 和移动端。其公开源码把
+浏览器 WebSocket 与上游 OpenCode SSE 分开：服务端只维护一套共享上游事件 Hub，再把事件扇出
+到客户端；短暂断线使用 `Last-Event-ID` 回放，缺口或上游重连后通过 authoritative snapshot
+校正状态。
+
+客户端进一步区分：
+
+- Session、消息、运行状态等目录级共享 Store；
+- 当前选择、草稿、滚动、弹窗等应用或窗口局部 Store；
+- snapshot generation、mutation revision、bounded cache 和 reconnect repair，防止旧快照覆盖
+  新事件。
+
+这说明桌面多窗口、Web 与移动端虽然外壳不同，正确性问题本质相同：客户端不是事实源，实时事件
+也不是最终事实源；**后端快照是权威，事件负责低延迟通知，序号/版本和重连用于修复遗漏**。
 
 ## 4. Codeg 当前事实
 
@@ -127,6 +155,31 @@ Codeg 0.25.0 当前代码已经区分 owner 与 viewer：
 Store 内仍是 canonical Tab ID；同步版本与 `tabs://changed` 还没有完全拆成 Session、Workbench
 和 App Window 三层事件；同一 Workbench 也尚无显式 mount 所有权。因此可以安全使用单窗口多
 Workbench，但不能只增加一个 Tauri Window 就宣称完成多窗口，否则仍可能出现布局双写和焦点覆盖。
+
+### 4.3 Workbench 切换与缓存边界
+
+本机 Claude Desktop 工作区补丁的历史调试说明了一个容易误判的性能问题：当主 Session 不同时，
+旧补丁用 `location.assign(...)` 做整页导航，侧栏和组件树全部销毁重建；Monet 同时拥有 Session
+摘要/索引缓存。实际结论是先消除整页重载，再讨论缓存，而不是把完整聊天内容常驻内存。
+来源：Codex ctx session `3aa9acb9-7628-7732-9bd3-e8555e87c071`，event
+`c87d807d-667e-7d68-819c-069b24b6061b`。
+
+Codeg 当前 `switchWorkbench` 已是应用内 Store 切换：先立即保存当前 Workbench，再获取目标的
+Tab snapshot，最后替换活动布局；页面、侧栏、Conversation Runtime Store 和后台 Agent 不会因
+此整体重载。分屏布局已经按 Workbench 保存在本地，真正还可优化的是目标 snapshot 获取和可见
+Session View 的重新挂载。
+
+因此采用分层缓存：
+
+1. Conversation 索引、标题、路径和状态由全局 Store 缓存并通过事件增量更新；
+2. 最近 Workbench 的 Tab snapshot + version 使用小型内存 LRU，切换时先显示缓存，再后台校验；
+3. Session Runtime 按 `conversation_id` 全局存在，隐藏 Workbench 不清空 stream/snapshot；
+4. Pane 焦点、滚动和布局属于 Workbench/View，按 Workbench 保存；
+5. 不默认 keep-alive 所有完整 React 树、文件树、终端或浏览器 WebView。只有性能测量证明重新
+   挂载是瓶颈时，才保活最近 2–3 个 Workbench，并设置内存上限。
+
+`tabs://changed` 需要携带 Workbench ID 和 version，以更新或失效相应缓存；删除 Workbench、
+关闭 Folder 或 Session 失效时不得从陈旧缓存恢复幽灵标签。
 
 ## 5. 身份与所有权模型
 
@@ -174,6 +227,17 @@ App Window Mount
 第一阶段不承诺跨设备同步未发送草稿、焦点和布局，但不能降低已发送消息与运行事件同步的
 正确性。Web 客户端和桌面窗口可以看到同一 Session，却不应被迫显示同一个活动 Pane。
 
+同步实现不采用“所有状态都塞进后台”的极端做法，而是遵守四条边界：
+
+1. 共享事实后端化：Session 身份、消息、标题、运行状态和队列只有一个权威来源；
+2. 视图状态窗口化：活动 Workbench、焦点、滚动、拖拽和弹窗不跨窗口镜像；
+3. Session Runtime 单实例化：第二个 View 只附着，不再次 Resume；
+4. 变化事件化：应用内部写入立即发领域事件，断线或序号缺口再拉 snapshot；文件 Watcher 只处理
+   Codeg 外部对原生会话文件的修改。
+
+最小事件信封应能表达 `entity_id`、`revision/sequence`、`event_id`、`origin_client_id` 和变化提示。
+事件可以丢失，数据库与快照不能因此失去权威性；发送命令另带幂等 `request_id`。
+
 ## 7. 输入并发规则
 
 同一 Session 多视图不能靠“最后写入者获胜”处理输入：
@@ -215,16 +279,23 @@ window://*     物理窗口焦点、挂载和几何，只在设备本地处理
 现有 `tabs://changed` 不能继续同时代表三层。`TAB_ORIGIN` 只用于页面实例回显抑制，不得复用为
 Workbench 或 App Window 身份。
 
-## 10. 实施顺序
+## 10. 实施顺序与启用门槛
 
 1. 给现有跨客户端 owner/viewer、snapshot、stream 和 send serialization 增加回归测试；
 2. 将 `view_instance_id` 与 `conversation_id` 分开，保持单 Workbench 内默认去重；
 3. 新增 Workbench 实体，把 `opened_tab`、布局键、CAS version 和事件按 Workbench 分区；
 4. 实现一个 App Window 内的顶部 Workbench 标签与侧栏 Saved Workbenches；
 5. 拆分共享 Session runtime state 与 View/Window local state；
-6. 实现 Tauri 多窗口 mount、移动、恢复和窗口几何；
-7. 增加同一 Session 双窗口 stream、问题/审批、取消、草稿接管和故障重连测试；
-8. 最后再评估跨设备 Workbench 布局同步。
+6. 到此先交付单窗口多 Workbench；物理多窗口不属于核心可用性的完成条件；
+7. 作为 Bonus Track，先只允许“在新窗口查看目标 Workbench/Session”，同一 Workbench 第二次
+   挂载默认只读或转移所有权，不允许两处并发修改布局；
+8. 通过同一 Session 双客户端 stream、问题/审批、取消、幂等发送和故障重连测试后，才开放
+   双窗口可写交互；
+9. 窗口几何、跨窗口拖放、恢复全部窗口和跨设备 Workbench 布局同步最后评估。
+
+因此，当前已经完成的 Tauri 第二窗口与标题同步验证只算技术 Spike，不算主线产品承诺。它证明
+Codeg 的事件底座可以跨 WebView 工作，但不能证明同一 Workbench 布局双写、输入并发和 Runtime
+所有权已经解决。
 
 ## 11. 必须通过的故障测试
 
@@ -243,5 +314,6 @@ Workbench 或 App Window 身份。
 
 需要引入顶层 Workbench Tab，但它不是再造一层复杂项目管理，而是让多个已保存布局能像浏览器
 标签一样同时打开。Collection 保持唯一文件夹归档，Workbench 允许 Session 多处出现，Runtime
-保证 Session 只有一份事实。Codeg 已有的 viewer 和流式广播使这条路线可行；主要工程风险在于
-把当前全局 Tab/焦点/布局状态正确分区，而不是重新实现 Harness。
+保证 Session 只有一份事实。单窗口多 Workbench 已经覆盖主要用户需求；物理多窗口保留为 Bonus，
+只有同步门槛通过后才继续。Codeg 已有的 viewer 和流式广播使路线可行，当前不值得让窗口几何、
+跨窗口拖放和布局并发拖慢 Session 管理主线。

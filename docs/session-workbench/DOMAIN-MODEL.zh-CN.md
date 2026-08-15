@@ -36,7 +36,7 @@ Session Workbench 不是另一个 Agent-first 或 Issue-first 的多智能体平
 | 概念 | 回答的问题 | 定位 |
 |---|---|---|
 | Session | 哪一段真实、可恢复的连续上下文？ | 第一等核心资产 |
-| Collection | 以后到哪里找到它？ | 可嵌套、唯一主要位置的人类分类目录 |
+| Collection | 以后到哪里找到它？ | 可嵌套、容纳 Session 与 Workbench 的人类分类目录 |
 | Workbench | 我现在把哪些内容怎样摆在一起？ | 可命名、可保存和切换的逻辑工作台 |
 
 实现仍需要若干支撑概念，但不把它们提升为用户必学层级：
@@ -87,12 +87,18 @@ Collection 回答“以后到哪里找到这段会话”，不决定 cwd、Git �
 原生历史，也不形成第二个 Collection 归属。拖到另一个 Collection 表示移动。若未来确有稳定
 需求，可增加显式“快捷方式”，但快捷方式必须与主要位置清楚区分。
 
+一个 Workbench 同样可以拥有零或一个主要 Collection，作为它在语义树中的唯一归档位置。
+Workbench 内的 Session 仍保持各自归属；把 Workbench 移入“主题 A / 写作”不会把所有成员
+Session 一起移动。这样用户能得到树形工作台，又不需要维护一套与 Collection 重复的
+`Workbench Folder` 层级。
+
 ### 4.3 文件系统隐喻
 
 ```text
 Project / Library  ≈ 磁盘或资料库
 Collection / Topic ≈ 文件夹
-Session            ≈ 文件
+Session            ≈ 对话文件
+Workbench          ≈ 可恢复的工作现场文件
 Quick Access / Workbench reference ≈ 快速访问或打开方式
 Group Conversation ≈ 群聊
 ```
@@ -174,9 +180,13 @@ Execution Context
 用户界面的工作现场称为 Workbench。理想关系是：
 
 ```text
-用户看到：Workbench → Session
+用户看到：Collection → Session / Workbench；Workbench → Session references
 后台保存：Session → Execution Context → cwd
 ```
+
+界面必须同时保留 `按分类` 和 `按运行位置` 两种导航。前者按 Collection 展示 Session 与
+Workbench；后者按 Execution Context 的 Folder/cwd、仓库、分支和 worktree 展示 Session，并可
+选择增加 Harness 分组。两者是同一对象的不同视图，不能用 Collection 替代或删除路径入口。
 
 把 Session 加入 Collection、Workbench 或群聊不得改变 Execution Context。
 
@@ -243,6 +253,10 @@ Pane 布局、焦点、滚动位置和选区属于各视图，不应互相覆盖
 一个 View Instance 持有输入编辑权，另一个视图可观察草稿或显式接管；后台对 send/cancel 使用
 同一 Session 队列和幂等请求 ID 串行化。跨设备草稿同步可以后置，但已发送消息和运行时事件的
 同步属于正确性要求。
+
+这些规则定义未来能力的安全边界，不表示物理多窗口属于第一阶段。单窗口可以打开和切换多个
+Workbench，已经覆盖主要场景；在 Session Runtime 单实例、事件补偿和布局所有权没有通过测试
+以前，第二个系统窗口只作为 Bonus 或只读/单一可写挂载。
 
 ### 7.5 资源作用域
 
@@ -515,7 +529,7 @@ Decision   ──derived from> Session / Artifact
 2. 一致且安全的打开、关闭、停止、归档与删除语义；
 3. 唯一主要位置的 Collection，以及范围清楚、操作轻量的 Session Library、搜索和筛选；
 4. 可命名、可切换、可恢复的 Workbench、顶层工作台标签和分屏布局；
-5. 大量会话管理、物理多窗口与同一 Session 多视图同步；
+5. 大量会话管理与同一 Session 多视图同步底座；物理多窗口作为可选 Bonus；
 6. Fork 谱系及其他 Session 历史关系；
 7. 多选发送、转发、比较和 AgentBus 投递，再增加可选群聊面板与受限的 Agent 间交接；
 8. Decision、项目记忆、Task 关联和自动路由；
