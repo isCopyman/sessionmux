@@ -36,6 +36,14 @@ const tabBarSource = readFileSync(
   resolve(process.cwd(), "src/components/tabs/tab-bar.tsx"),
   "utf8"
 )
+const fileTabBarSource = readFileSync(
+  resolve(process.cwd(), "src/components/files/file-workspace-tab-bar.tsx"),
+  "utf8"
+)
+const workbenchTabStripSource = readFileSync(
+  resolve(process.cwd(), "src/components/workbench/workbench-tab-strip.tsx"),
+  "utf8"
+)
 const messageListViewSource = readFileSync(
   resolve(process.cwd(), "src/components/message/message-list-view.tsx"),
   "utf8"
@@ -278,12 +286,17 @@ describe("ConversationDetailPanel split-group render model", () => {
     expect(shellBody).toContain("<TabBar groupId={groupId} />")
     expect(shellBody).not.toContain("SplitStripCornerReserve")
 
-    // Session strips retain a spare drag surface, but no longer own the fixed
-    // corner-control geometry.
+    // Only the shared top-level Workbench chrome may move the system window.
+    // Session/file pane strips keep neutral flex fillers: tab gestures in those
+    // rows must never restore and move a maximized Tauri window.
+    expect(workbenchTabStripSource).toContain("data-tauri-drag-region")
+    expect(workspaceLayoutSource).not.toContain("data-tauri-drag-region")
+    expect(tabBarSource).not.toContain("data-tauri-drag-region")
+    expect(fileTabBarSource).not.toContain("data-tauri-drag-region")
     expect(tabBarSource).toContain(
-      '<div data-tauri-drag-region className="h-full min-w-10 flex-1" />'
+      '<div data-pane-tab-strip-filler className="h-full min-w-10 flex-1" />'
     )
-    expect(tabBarSource).not.toContain("data-tauri-drag-region={groupId")
+    expect(fileTabBarSource).toContain("data-pane-tab-strip-filler")
   })
 })
 

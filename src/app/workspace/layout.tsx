@@ -346,29 +346,30 @@ function WorkspaceContent({ children }: { children: React.ReactNode }) {
                   hairline bottom border (ws-strip-line) runs under inactive
                   tabs while the active tab omits it and the border
                   arches over its top (the active browser-tab-item's `::after`)
-                  instead. While SPLIT this row disappears entirely (no blank
-                  drag strip above the shells): each group shell hosts its own
-                  strip whose tail spacer remains a window-drag region. */}
+                  instead. While SPLIT this row disappears entirely and each
+                  group shell hosts its own pane-local strip. System-window
+                  dragging remains exclusively on the Workbench row above. */}
                 {!isConvSplit && (
                   <div className="flex h-10 shrink-0 items-stretch bg-muted ws-transparent-bg">
                     <div className="flex min-w-0 flex-1 items-stretch">
                       {hasConvTabs ? (
                         <TabBar />
                       ) : (
-                        // No tabs → TabBar renders null; keep a drag region so
-                        // the title bar can still move the window.
+                        // No tabs → TabBar renders null; preserve the strip's
+                        // geometry without turning this pane row into a system
+                        // window drag surface.
                         <div
-                          data-tauri-drag-region
+                          data-pane-tab-strip-filler
                           className="h-full min-w-0 flex-1 ws-strip-line"
                         />
                       )}
                     </div>
                   </div>
                 )}
-                {/* Pane activation lives on the CONTENT, not the top bar: clicking
-                  edge chrome (terminal/settings/toggles) or grabbing a drag
-                  region stays pane-neutral so it never hijacks close-tab /
-                  next-tab routing. Tabs self-activate via switchTab. */}
+                {/* Pane activation lives on the CONTENT, not the top bar:
+                  clicking edge chrome (terminal/settings/toggles) stays
+                  pane-neutral so it never hijacks close-tab / next-tab routing.
+                  Tabs self-activate via switchTab. */}
                 <div
                   className="relative flex-1 min-h-0 overflow-hidden"
                   onPointerDownCapture={markConversationActive}
@@ -478,7 +479,10 @@ function WorkspaceContent({ children }: { children: React.ReactNode }) {
               )}
             >
               <WorkbenchRouteStrip />
-              <div data-tauri-drag-region className="h-full min-w-0 flex-1" />
+              <div
+                data-pane-tab-strip-filler
+                className="h-full min-w-0 flex-1"
+              />
             </div>
             <div className="min-h-0 flex-1">
               <WorkbenchRoutePage />

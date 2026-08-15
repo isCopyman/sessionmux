@@ -147,10 +147,10 @@ export function FileWorkspaceTabBar() {
         data-adjacent-active={lastTabActive ? "after" : undefined}
         className="relative flex h-full flex-1 items-stretch ws-strip-line"
       >
-        {/* Drag spacer, floored at `min-w-10` (40px): even when many tabs overflow
-            and squeeze this region, a grabbable window-drag gap always remains
-            between the last tab and the maximize button. */}
-        <div data-tauri-drag-region className="h-full min-w-10 flex-1" />
+        {/* Pane-local neutral spacer, floored at `min-w-10` (40px): even when
+            many tabs overflow it keeps the maximize button at the trailing
+            edge. The Workbench row above owns system-window dragging. */}
+        <div data-pane-tab-strip-filler className="h-full min-w-10 flex-1" />
         {mode === "fusion" && (
           <button
             type="button"

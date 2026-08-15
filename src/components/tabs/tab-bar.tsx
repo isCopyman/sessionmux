@@ -543,10 +543,10 @@ export function TabBar({ groupId }: TabBarProps) {
           />
         )
       })}
-      {/* The new-conversation button + drag spacer are the Reorder.Group's own
+      {/* The new-conversation button + neutral spacer are the Reorder.Group's own
           trailing children, so they share the tabs' flex line — the button hugs
-          the last tab and the spacer fills the leftover row as a window-drag
-          region. They are not Reorder.Items, so dragging a tab only ever permutes
+          the last tab and the spacer fills the leftover row without becoming a
+          system-window drag surface. They are not Reorder.Items, so dragging a tab only ever permutes
           the tabs. Wrapped in one `flex-1` `ws-strip-line` box so the
           workspace-bg bottom hairline runs unbroken under both — the short
           `self-start h-7` button can't carry the line itself. NO `min-w-0`: its
@@ -587,17 +587,13 @@ export function TabBar({ groupId }: TabBarProps) {
         >
           <SquarePen className="h-3.5 w-3.5" />
         </button>
-        {/* Drag spacer, floored at `min-w-10` (40px) instead of `min-w-0`: even
-            when many tabs overflow and squeeze this region, a grabbable
-            window-drag gap always remains to the RIGHT of the new-conversation
-            button, so the button never reaches the strip's right edge and the
-            packed strip stays draggable. Group strips keep the drag region too:
-            while split there is NO dedicated title-bar row above the shells
-            (the workspace layout drops it), so each strip's tail is that
-            group's slice of the window-drag surface — for the top row it IS
-            the title bar, and lower rows offer the same grab area, mirroring
-            the unsplit strip. */}
-        <div data-tauri-drag-region className="h-full min-w-10 flex-1" />
+        {/* Neutral spacer, floored at `min-w-10` (40px) instead of `min-w-0`:
+            even when many tabs overflow, the new-conversation button never
+            reaches the strip's right edge. Window dragging deliberately stays
+            on the Workbench chrome row above; marking this pane-local strip as
+            a Tauri drag region makes a tiny tab gesture restore and move a
+            maximized application window. */}
+        <div data-pane-tab-strip-filler className="h-full min-w-10 flex-1" />
       </div>
     </Reorder.Group>
   )
