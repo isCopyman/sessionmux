@@ -207,7 +207,10 @@ Session Center 的 Preview 是管理页自己的只读预览，不是 Workbench 
   `(agent_type, external_id)` 映射回可打开的 Codeg Session，同一 Session 只展示最佳命中；
 - 正文搜索设有输入防抖、查询竞态保护、15 秒超时和安全降级，不会因 ctx 缺失而破坏标题搜索；
 - `conversation-manage-dialog.tsx`：已经升级为侧栏可直接进入的全局 Session Center；支持标题/正文、
-  Folder、分支、Harness、状态筛选，批量状态/删除，以及把单个结果固定打开到当前 Workbench；
+  Folder、分支、Harness、状态筛选和批量状态/删除；单击只读预览最近历史，双击、Enter 或明确按钮
+  才把结果固定打开到当前 Workbench；
+- `list_conversation_workbench_refs`：批量返回 Session 当前出现在哪些已保存 Workbench；预览中的
+  归属标签可切到目标 Workbench 并聚焦同一 Session，查询失败只降级归属信息，不阻断会话列表；
 - `sidebar-conversation-list.tsx`：单击调用 `openTab(..., pin=false)`，双击传 `pin=true`；
 - `tab-store.ts`：未固定 Tab 是每个 Pane 的 preview，下一次单击会替换该 Pane 内的旧 preview；
 - Quick Open 选中结果时传 `pin=true`，行为与侧栏单击不一致。
@@ -216,10 +219,11 @@ Session Center 的 Preview 是管理页自己的只读预览，不是 Workbench 
 
 1. 统一侧栏和 Quick Open 的默认打开动作为固定 Tab；
 2. 保留 `isPinned=false` preview 原语，但只给显式启用 Preview Mode 的用户使用；
-3. 把已经落地的 Library Scope 与 ctx Provider 继续复用到 Session Center 的预览和批量整理；
+3. 继续复用已经落地的 Library Scope、只读预览与 ctx Provider，补 Workbench 条件筛选和批量整理；
 4. 视使用密度决定是否把当前全局 Dialog 提升为独立路由；名称和查询行为已经统一，不再保留第二套
    “管理会话”入口；
-5. 给每个结果展示“已在当前 Workbench”“另一个 Workbench 中”“尚未导入”等状态；
+5. 已导入结果现已展示“当前 Workbench”“其他 Workbench”“未在已保存 Workbench 打开”；后续补
+   “尚未导入”状态；
 6. 后续再支持 ctx 已索引但尚未导入 Codeg 的外部 Session；当前正文结果只返回能够安全 Resume 的
    已导入 Session。
 

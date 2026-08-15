@@ -21,6 +21,7 @@ import {
   Loader2,
   MessageSquareText,
   PanelTopOpen,
+  PanelsTopLeft,
   Search,
   Square,
   Trash2,
@@ -85,18 +86,23 @@ import {
 } from "@/components/shared/folder-select"
 import { FolderAliasLabel } from "@/components/conversations/folder-alias-label"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
+import { useTabStore } from "@/stores/tab-store"
 import { useTabActions } from "@/contexts/tab-context"
 import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
 import {
   deleteConversation,
+  getFolderConversationTurns,
   listAllConversations,
+  listConversationWorkbenchRefs,
   searchSessionContent,
   updateConversationStatus,
 } from "@/lib/api"
 import type {
   AgentType,
+  ConversationWorkbenchRef,
   ConversationStatus,
   DbConversationSummary,
+  MessageTurn,
 } from "@/lib/types"
 import { ALL_AGENT_TYPES, STATUS_ORDER } from "@/lib/types"
 import { getAgentLabel } from "@/lib/custom-agents"
@@ -196,6 +202,22 @@ function formatRelative(iso: string): string {
   if (mo < 12) return `${mo}mo`
   const y = Math.floor(mo / 12)
   return `${y}y`
+}
+
+/** Keep Session Center's preview intentionally light: it is for recognition,
+ * not a second transcript renderer. Tool payloads and reasoning stay out; the
+ * full, live UI only starts after the user explicitly opens the session. */
+function readableTurnText(turn: MessageTurn, imageLabel: string): string {
+  return turn.blocks
+    .flatMap((block) => {
+      if (block.type === "text") return [block.text.trim()]
+      if (block.type === "image" || block.type === "image_generation") {
+        return [imageLabel]
+      }
+      return []
+    })
+    .filter(Boolean)
+    .join("\n")
 }
 
 /**
@@ -526,6 +548,8 @@ export function ConversationManageDialog({
   const allFolders = useAppWorkspaceStore((s) => s.allFolders)
   const { closeConversationTab, openTab } = useTabActions()
   const { openConversations } = useWorkbenchRoute()
+  const activeWorkbenchId = useTabStore((s) => s.activeWorkbenchId)
+  const switchWorkbench = useTabStore((s) => s.switchWorkbench)
 
   const [search, setSearch] = useState("")
   /** The folder facet: a folder id, or `null` for the whole workspace. */
@@ -543,6 +567,16 @@ export function ConversationManageDialog({
   )
   const [contentSearchUnavailable, setContentSearchUnavailable] =
     useState(false)
+  const [workbenchRefs, setWorkbenchRefs] = useState<
+    ConversationWorkbenchRef[]
+  >([])
+  const [workbenchRefsUnavailable, setWorkbenchRefsUnavailable] =
+    useState(false)
+  const [previewConversation, setPreviewConversation] =
+    useState<DbConversationSummary | null>(null)
+  const [previewTurns, setPreviewTurns] = useState<MessageTurn[]>([])
+  const [previewLoading, setPreviewLoading] = useState(false)
+  const [previewError, setPreviewError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   // Keyed by id but holding the row, so a bulk op can still close the tabs of
@@ -552,6 +586,9 @@ export function ConversationManageDialog({
     new Map()
   )
   const [pending, setPending] = useState(false)
+  const [openingWorkbenchId, setOpeningWorkbenchId] = useState<number | null>(
+    null
+  )
   const [refreshKey, setRefreshKey] = useState(0)
   const [confirmDelete, setConfirmDelete] = useState(false)
 
@@ -621,6 +658,13 @@ export function ConversationManageDialog({
       setError(null)
       setContentSnippets(new Map())
       setContentSearchUnavailable(false)
+      setWorkbenchRefs([])
+      setWorkbenchRefsUnavailable(false)
+      setPreviewConversation(null)
+      setPreviewTurns([])
+      setPreviewLoading(false)
+      setPreviewError(null)
+      setOpeningWorkbenchId(null)
     }
   }, [open, folderId])
 
@@ -720,6 +764,72 @@ export function ConversationManageDialog({
     }
   }, [open, queryFolderIds, search, agentFilter, statusFilter, refreshKey])
 
+  // Workbench ownership is fetched in one batch and never blocks the session
+  // rows themselves. Older servers can lack the endpoint; that degrades to an
+  // explicit "unavailable" note rather than making Session Center unusable.
+  useEffect(() => {
+    if (!open || rows.length === 0) {
+      setWorkbenchRefs([])
+      setWorkbenchRefsUnavailable(false)
+      return
+    }
+    let cancelled = false
+    listConversationWorkbenchRefs(rows.map((row) => row.id))
+      .then((refs) => {
+        if (cancelled) return
+        setWorkbenchRefs(refs)
+        setWorkbenchRefsUnavailable(false)
+      })
+      .catch(() => {
+        if (cancelled) return
+        setWorkbenchRefs([])
+        setWorkbenchRefsUnavailable(true)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [open, rows])
+
+  const workbenchRefsByConversation = useMemo(() => {
+    const byConversation = new Map<number, ConversationWorkbenchRef[]>()
+    for (const ref of workbenchRefs) {
+      const refs = byConversation.get(ref.conversation_id) ?? []
+      refs.push(ref)
+      byConversation.set(ref.conversation_id, refs)
+    }
+    return byConversation
+  }, [workbenchRefs])
+
+  // Previewing parses a small tail of the saved transcript through the
+  // read-only history endpoint. It neither creates an ACP connection nor
+  // resumes the Harness. The cancellation guard prevents a slow first click
+  // from replacing the preview chosen by a later click.
+  useEffect(() => {
+    if (!open || !previewConversation) {
+      setPreviewTurns([])
+      setPreviewLoading(false)
+      setPreviewError(null)
+      return
+    }
+    let cancelled = false
+    setPreviewTurns([])
+    setPreviewLoading(true)
+    setPreviewError(null)
+    getFolderConversationTurns(previewConversation.id, 2_147_483_647, 12)
+      .then((page) => {
+        if (!cancelled) setPreviewTurns(page.turns)
+      })
+      .catch((error) => {
+        if (!cancelled) setPreviewError(toErrorMessage(error))
+      })
+      .finally(() => {
+        if (!cancelled) setPreviewLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [open, previewConversation])
+
   // Branch options are derived from the rows the other facets already matched,
   // so every branch listed is guaranteed to yield at least one conversation —
   // and the list can never disagree with what the filter then selects.
@@ -752,12 +862,38 @@ export function ConversationManageDialog({
     }
   }, [rows, branchFilter])
 
+  useEffect(() => {
+    if (
+      previewConversation &&
+      !visibleRows.some((row) => row.id === previewConversation.id)
+    ) {
+      setPreviewConversation(null)
+    }
+  }, [previewConversation, visibleRows])
+
   // Only worth a column when rows can come from more than one folder; inside a
   // single folder it would repeat the scope pill on every line.
   const showFolderColumn = scopeFolderId == null
   const folderById = useMemo(
     () => new Map(allFolders.map((f) => [f.id, f])),
     [allFolders]
+  )
+  const previewFolder = previewConversation
+    ? folderById.get(previewConversation.folder_id)
+    : undefined
+  const previewWorkbenchRefs = previewConversation
+    ? (workbenchRefsByConversation.get(previewConversation.id) ?? [])
+    : []
+  const previewMessages = useMemo(
+    () =>
+      previewTurns
+        .map((turn) => ({
+          turn,
+          text: readableTurnText(turn, t("imageAttachment")),
+        }))
+        .filter((item) => item.text)
+        .slice(-8),
+    [previewTurns, t]
   )
 
   const handleScopeChange = useCallback((next: number | null) => {
@@ -811,18 +947,38 @@ export function ConversationManageDialog({
   const selectedCount = selected.size
 
   const openConversation = useCallback(
-    (conversation: DbConversationSummary) => {
-      openConversations()
-      openTab(
-        conversation.folder_id,
-        conversation.id,
-        conversation.agent_type,
-        true,
-        formatConversationTitle(conversation.title)
-      )
-      onOpenChange(false)
+    async (
+      conversation: DbConversationSummary,
+      targetWorkbenchId = activeWorkbenchId
+    ) => {
+      setOpeningWorkbenchId(targetWorkbenchId)
+      try {
+        if (targetWorkbenchId !== activeWorkbenchId) {
+          await switchWorkbench(targetWorkbenchId)
+        }
+        openConversations()
+        openTab(
+          conversation.folder_id,
+          conversation.id,
+          conversation.agent_type,
+          true,
+          formatConversationTitle(conversation.title)
+        )
+        onOpenChange(false)
+      } catch (error) {
+        toast.error(t("toastOpFailed", { message: toErrorMessage(error) }))
+      } finally {
+        setOpeningWorkbenchId(null)
+      }
     },
-    [onOpenChange, openConversations, openTab]
+    [
+      activeWorkbenchId,
+      onOpenChange,
+      openConversations,
+      openTab,
+      switchWorkbench,
+      t,
+    ]
   )
 
   const handleBulkDelete = useCallback(async () => {
@@ -885,7 +1041,7 @@ export function ConversationManageDialog({
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="max-w-3xl">
+        <DialogContent className="max-w-6xl">
           <DialogHeader>
             {/* Which folder is in scope is the folder pill's job now, not the
                 title's — the pill names it alias-aware and can also read "all
@@ -991,160 +1147,371 @@ export function ConversationManageDialog({
             </div>
           </div>
 
-          {/* List container: select-all header + scrollable list */}
-          <div className="flex flex-col rounded-md border border-border/50 overflow-hidden">
-            <div className="flex items-center justify-between px-3 py-2 border-b border-border/50 bg-muted/20">
-              <button
-                type="button"
-                onClick={toggleSelectAll}
-                disabled={visibleRows.length === 0}
-                className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50"
-              >
-                <span className="flex h-5 w-5 items-center justify-center">
-                  {allVisibleSelected ? (
-                    <CheckSquare className="h-4 w-4 text-primary" />
-                  ) : (
-                    <Square className="h-4 w-4" />
-                  )}
+          <div className="grid min-h-0 gap-3 lg:grid-cols-[minmax(0,1.25fr)_minmax(20rem,0.75fr)]">
+            {/* List container: select-all header + scrollable list */}
+            <div className="flex min-w-0 flex-col overflow-hidden rounded-md border border-border/50">
+              <div className="flex items-center justify-between px-3 py-2 border-b border-border/50 bg-muted/20">
+                <button
+                  type="button"
+                  onClick={toggleSelectAll}
+                  disabled={visibleRows.length === 0}
+                  className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50"
+                >
+                  <span className="flex h-5 w-5 items-center justify-center">
+                    {allVisibleSelected ? (
+                      <CheckSquare className="h-4 w-4 text-primary" />
+                    ) : (
+                      <Square className="h-4 w-4" />
+                    )}
+                  </span>
+                  {allVisibleSelected
+                    ? t("deselectAll")
+                    : t("selectAllVisible")}
+                </button>
+                <span className="text-xs text-muted-foreground">
+                  {t("matchedCount", { count: visibleRows.length })}
                 </span>
-                {allVisibleSelected ? t("deselectAll") : t("selectAllVisible")}
-              </button>
-              <span className="text-xs text-muted-foreground">
-                {t("matchedCount", { count: visibleRows.length })}
-              </span>
-            </div>
-            <ScrollArea className="h-[26rem]">
-              <div className="flex flex-col gap-0.5 p-1">
-                {loading ? (
-                  Array.from({ length: 6 }).map((_, i) => (
-                    <Skeleton key={i} className="h-9 w-full rounded-md" />
-                  ))
-                ) : error ? (
-                  <p className="text-destructive text-sm px-3 py-6 text-center">
-                    {error}
-                  </p>
-                ) : visibleRows.length === 0 ? (
-                  <p className="text-muted-foreground text-sm px-3 py-6 text-center">
-                    {anyFacetNarrows
-                      ? t("noMatchingConversations")
-                      : scopeFolderId == null
-                        ? t("noConversationsWorkspace")
-                        : t("noConversations")}
-                  </p>
-                ) : (
-                  visibleRows.map((conv) => {
-                    const checked = selected.has(conv.id)
-                    const folder = folderById.get(conv.folder_id)
-                    return (
-                      <div
-                        key={conv.id}
-                        onClick={() => toggleOne(conv)}
-                        onDoubleClick={() => openConversation(conv)}
-                        className={cn(
-                          "flex items-center gap-2 rounded-md px-2 py-1.5 cursor-pointer border border-transparent",
-                          "hover:bg-accent/50",
-                          checked && "bg-accent/40 border-accent/60"
-                        )}
-                      >
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            toggleOne(conv)
-                          }}
-                          className="flex h-5 w-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:text-foreground"
-                          aria-pressed={checked}
-                        >
-                          {checked ? (
-                            <CheckSquare className="h-4 w-4 text-primary" />
-                          ) : (
-                            <Square className="h-4 w-4" />
-                          )}
-                        </button>
-                        <AgentIcon
-                          agentType={conv.agent_type}
-                          className="h-4 w-4 shrink-0"
-                        />
-                        <span className="flex min-w-0 flex-1 flex-col">
-                          <span className="truncate text-sm">
-                            {formatConversationTitle(conv.title) ||
-                              t("untitledConversation")}
-                          </span>
-                          {contentSnippets.has(conv.id) && (
-                            <span className="flex min-w-0 items-start gap-1 text-xs text-muted-foreground">
-                              <MessageSquareText className="mt-0.5 h-3 w-3 shrink-0" />
-                              <span className="line-clamp-2 whitespace-pre-line">
-                                {contentSnippets.get(conv.id)}
-                              </span>
-                            </span>
-                          )}
-                        </span>
-                        {showFolderColumn ? (
-                          // Workspace-wide scope only: with rows from every
-                          // folder the title alone doesn't say which project a
-                          // conversation belongs to.
-                          <span
-                            className="shrink-0 max-w-28 truncate text-xs text-muted-foreground"
-                            title={
-                              folder
-                                ? [
-                                    formatFolderLabelWithAlias(folder),
-                                    folder.path,
-                                  ]
-                                    .filter(Boolean)
-                                    .join(" · ")
-                                : `#${conv.folder_id}`
+              </div>
+              <ScrollArea className="h-[26rem]">
+                <div className="flex flex-col gap-0.5 p-1">
+                  {loading ? (
+                    Array.from({ length: 6 }).map((_, i) => (
+                      <Skeleton key={i} className="h-9 w-full rounded-md" />
+                    ))
+                  ) : error ? (
+                    <p className="text-destructive text-sm px-3 py-6 text-center">
+                      {error}
+                    </p>
+                  ) : visibleRows.length === 0 ? (
+                    <p className="text-muted-foreground text-sm px-3 py-6 text-center">
+                      {anyFacetNarrows
+                        ? t("noMatchingConversations")
+                        : scopeFolderId == null
+                          ? t("noConversationsWorkspace")
+                          : t("noConversations")}
+                    </p>
+                  ) : (
+                    visibleRows.map((conv) => {
+                      const checked = selected.has(conv.id)
+                      const focused = previewConversation?.id === conv.id
+                      const folder = folderById.get(conv.folder_id)
+                      const refs =
+                        workbenchRefsByConversation.get(conv.id) ?? []
+                      return (
+                        <div
+                          key={conv.id}
+                          role="option"
+                          tabIndex={0}
+                          aria-selected={focused}
+                          onClick={() => setPreviewConversation(conv)}
+                          onDoubleClick={() => void openConversation(conv)}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter") {
+                              event.preventDefault()
+                              void openConversation(conv)
                             }
+                          }}
+                          className={cn(
+                            "flex items-center gap-2 rounded-md px-2 py-1.5 cursor-pointer border border-transparent",
+                            "hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                            checked && "border-accent/60",
+                            focused && "bg-accent/50 border-primary/30"
+                          )}
+                        >
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              toggleOne(conv)
+                            }}
+                            className="flex h-5 w-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:text-foreground"
+                            aria-pressed={checked}
+                            aria-label={t("selectConversation", {
+                              title:
+                                formatConversationTitle(conv.title) ||
+                                t("untitledConversation"),
+                            })}
                           >
-                            {folder ? (
-                              <FolderAliasLabel
-                                name={folder.name}
-                                alias={folder.alias}
-                              />
+                            {checked ? (
+                              <CheckSquare className="h-4 w-4 text-primary" />
                             ) : (
-                              `#${conv.folder_id}`
+                              <Square className="h-4 w-4" />
+                            )}
+                          </button>
+                          <AgentIcon
+                            agentType={conv.agent_type}
+                            className="h-4 w-4 shrink-0"
+                          />
+                          <span className="flex min-w-0 flex-1 flex-col">
+                            <span className="truncate text-sm">
+                              {formatConversationTitle(conv.title) ||
+                                t("untitledConversation")}
+                            </span>
+                            {contentSnippets.has(conv.id) && (
+                              <span className="flex min-w-0 items-start gap-1 text-xs text-muted-foreground">
+                                <MessageSquareText className="mt-0.5 h-3 w-3 shrink-0" />
+                                <span className="line-clamp-2 whitespace-pre-line">
+                                  {contentSnippets.get(conv.id)}
+                                </span>
+                              </span>
                             )}
                           </span>
-                        ) : null}
-                        {/* The branch the conversation was started on — what
+                          {refs.length > 0 ? (
+                            <span
+                              className="flex shrink-0 items-center gap-1 rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground"
+                              title={refs
+                                .map((ref) => ref.workbench_name)
+                                .join(", ")}
+                            >
+                              <PanelsTopLeft className="h-3 w-3" />
+                              {refs.length}
+                            </span>
+                          ) : null}
+                          {showFolderColumn ? (
+                            // Workspace-wide scope only: with rows from every
+                            // folder the title alone doesn't say which project a
+                            // conversation belongs to.
+                            <span
+                              className="shrink-0 max-w-28 truncate text-xs text-muted-foreground"
+                              title={
+                                folder
+                                  ? [
+                                      formatFolderLabelWithAlias(folder),
+                                      folder.path,
+                                    ]
+                                      .filter(Boolean)
+                                      .join(" · ")
+                                  : `#${conv.folder_id}`
+                              }
+                            >
+                              {folder ? (
+                                <FolderAliasLabel
+                                  name={folder.name}
+                                  alias={folder.alias}
+                                />
+                              ) : (
+                                `#${conv.folder_id}`
+                              )}
+                            </span>
+                          ) : null}
+                          {/* The branch the conversation was started on — what
                             tells two runs of the same project apart. */}
-                        <span
-                          className="flex w-28 shrink-0 items-center justify-end gap-1 text-xs text-muted-foreground"
-                          title={conv.git_branch ?? t("branchNone")}
-                        >
-                          {conv.git_branch ? (
-                            <>
-                              <GitBranch
-                                className="h-3 w-3 shrink-0"
-                                aria-hidden="true"
-                              />
-                              <span dir="ltr" className="truncate">
-                                {conv.git_branch}
+                          <span
+                            className="flex w-28 shrink-0 items-center justify-end gap-1 text-xs text-muted-foreground"
+                            title={conv.git_branch ?? t("branchNone")}
+                          >
+                            {conv.git_branch ? (
+                              <>
+                                <GitBranch
+                                  className="h-3 w-3 shrink-0"
+                                  aria-hidden="true"
+                                />
+                                <span dir="ltr" className="truncate">
+                                  {conv.git_branch}
+                                </span>
+                              </>
+                            ) : (
+                              <span className="text-muted-foreground/60">
+                                —
                               </span>
-                            </>
-                          ) : (
-                            <span className="text-muted-foreground/60">—</span>
-                          )}
-                        </span>
-                        <span className="shrink-0 text-xs text-muted-foreground w-10 text-right">
-                          {formatRelative(conv.created_at)}
-                        </span>
-                        <ConversationStatusDot
-                          status={conv.status as ConversationStatus}
-                          title={
-                            STATUS_ORDER.includes(
-                              conv.status as ConversationStatus
-                            )
-                              ? tStatus(conv.status as ConversationStatus)
-                              : conv.status
-                          }
-                        />
+                            )}
+                          </span>
+                          <span className="shrink-0 text-xs text-muted-foreground w-10 text-right">
+                            {formatRelative(conv.created_at)}
+                          </span>
+                          <ConversationStatusDot
+                            status={conv.status as ConversationStatus}
+                            title={
+                              STATUS_ORDER.includes(
+                                conv.status as ConversationStatus
+                              )
+                                ? tStatus(conv.status as ConversationStatus)
+                                : conv.status
+                            }
+                          />
+                        </div>
+                      )
+                    })
+                  )}
+                </div>
+              </ScrollArea>
+            </div>
+
+            {/* A management preview, deliberately separate from the live
+                conversation runtime. Selecting a row cannot start an agent or
+                mutate the current layout. */}
+            <section
+              aria-label={t("previewTitle")}
+              className="flex h-[29rem] min-w-0 flex-col overflow-hidden rounded-md border border-border/50 bg-muted/10"
+            >
+              {!previewConversation ? (
+                <div className="flex flex-1 flex-col items-center justify-center gap-2 px-6 text-center text-sm text-muted-foreground">
+                  <MessageSquareText className="h-7 w-7 opacity-40" />
+                  <p>{t("previewEmpty")}</p>
+                  <p className="text-xs opacity-75">{t("previewReadOnly")}</p>
+                </div>
+              ) : (
+                <>
+                  <div className="space-y-2 border-b border-border/50 p-3">
+                    <div className="flex min-w-0 items-start gap-2">
+                      <AgentIcon
+                        agentType={previewConversation.agent_type}
+                        className="mt-0.5 h-5 w-5 shrink-0"
+                      />
+                      <div className="min-w-0 flex-1">
+                        <h3 className="truncate text-sm font-medium">
+                          {formatConversationTitle(previewConversation.title) ||
+                            t("untitledConversation")}
+                        </h3>
+                        <p className="truncate text-xs text-muted-foreground">
+                          {getAgentLabel(previewConversation.agent_type)}
+                          {previewConversation.model
+                            ? ` · ${previewConversation.model}`
+                            : ""}
+                        </p>
                       </div>
-                    )
-                  })
-                )}
-              </div>
-            </ScrollArea>
+                      <ConversationStatusDot
+                        status={
+                          previewConversation.status as ConversationStatus
+                        }
+                        title={
+                          STATUS_ORDER.includes(
+                            previewConversation.status as ConversationStatus
+                          )
+                            ? tStatus(
+                                previewConversation.status as ConversationStatus
+                              )
+                            : previewConversation.status
+                        }
+                      />
+                    </div>
+
+                    <div className="flex flex-wrap gap-1.5 text-xs text-muted-foreground">
+                      <span
+                        className="max-w-full truncate rounded-full bg-muted px-2 py-0.5"
+                        title={previewFolder?.path ?? undefined}
+                      >
+                        {previewFolder
+                          ? formatFolderLabelWithAlias(previewFolder)
+                          : `#${previewConversation.folder_id}`}
+                      </span>
+                      {previewConversation.git_branch ? (
+                        <span className="flex max-w-full items-center gap-1 rounded-full bg-muted px-2 py-0.5">
+                          <GitBranch className="h-3 w-3 shrink-0" />
+                          <span dir="ltr" className="truncate">
+                            {previewConversation.git_branch}
+                          </span>
+                        </span>
+                      ) : null}
+                      <span className="rounded-full bg-muted px-2 py-0.5">
+                        {t("messageCount", {
+                          count: previewConversation.message_count,
+                        })}
+                      </span>
+                    </div>
+
+                    <div className="space-y-1">
+                      <p className="text-xs font-medium">
+                        {t("openedInWorkbenches")}
+                      </p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {workbenchRefsUnavailable ? (
+                          <span className="text-xs text-muted-foreground">
+                            {t("workbenchOwnershipUnavailable")}
+                          </span>
+                        ) : previewWorkbenchRefs.length === 0 ? (
+                          <span className="text-xs text-muted-foreground">
+                            {t("notOpenInWorkbench")}
+                          </span>
+                        ) : (
+                          previewWorkbenchRefs.map((ref) => (
+                            <Button
+                              key={ref.workbench_id}
+                              type="button"
+                              size="sm"
+                              variant={
+                                ref.workbench_id === activeWorkbenchId
+                                  ? "secondary"
+                                  : "outline"
+                              }
+                              disabled={openingWorkbenchId !== null}
+                              className="h-7 max-w-full gap-1 px-2 text-xs"
+                              onClick={() =>
+                                void openConversation(
+                                  previewConversation,
+                                  ref.workbench_id
+                                )
+                              }
+                            >
+                              {openingWorkbenchId === ref.workbench_id ? (
+                                <Loader2 className="h-3 w-3 animate-spin" />
+                              ) : (
+                                <PanelsTopLeft className="h-3 w-3" />
+                              )}
+                              <span className="truncate">
+                                {ref.workbench_name}
+                              </span>
+                              {ref.workbench_id === activeWorkbenchId ? (
+                                <span className="opacity-60">
+                                  · {t("currentWorkbench")}
+                                </span>
+                              ) : null}
+                            </Button>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex min-h-0 flex-1 flex-col">
+                    <p className="border-b border-border/40 px-3 py-2 text-xs font-medium">
+                      {t("recentMessages")}
+                    </p>
+                    <ScrollArea className="min-h-0 flex-1">
+                      <div className="space-y-2 p-3">
+                        {previewLoading ? (
+                          Array.from({ length: 4 }).map((_, index) => (
+                            <Skeleton
+                              key={index}
+                              className="h-12 w-full rounded-md"
+                            />
+                          ))
+                        ) : previewError ? (
+                          <p className="px-2 py-4 text-center text-xs text-destructive">
+                            {t("previewFailed", { message: previewError })}
+                          </p>
+                        ) : previewMessages.length === 0 ? (
+                          <p className="px-2 py-4 text-center text-xs text-muted-foreground">
+                            {t("noReadableMessages")}
+                          </p>
+                        ) : (
+                          previewMessages.map(({ turn, text }) => (
+                            <article
+                              key={turn.id}
+                              className="rounded-md border border-border/40 bg-background/70 p-2"
+                            >
+                              <header className="mb-1 flex items-center justify-between gap-2 text-[10px] text-muted-foreground">
+                                <span className="font-medium uppercase tracking-wide">
+                                  {turn.role === "user"
+                                    ? t("roleUser")
+                                    : turn.role === "assistant"
+                                      ? t("roleAssistant")
+                                      : t("roleSystem")}
+                                </span>
+                                <span>{formatRelative(turn.timestamp)}</span>
+                              </header>
+                              <p className="line-clamp-4 whitespace-pre-wrap break-words text-xs leading-relaxed">
+                                {text}
+                              </p>
+                            </article>
+                          ))
+                        )}
+                      </div>
+                    </ScrollArea>
+                  </div>
+                </>
+              )}
+            </section>
           </div>
 
           {/* Footer: bulk actions */}
@@ -1156,14 +1523,20 @@ export function ConversationManageDialog({
               <Button
                 size="sm"
                 variant="default"
-                disabled={selectedCount !== 1 || pending}
-                onClick={() => {
-                  const [conversation] = selectedConversations
-                  if (conversation) openConversation(conversation)
-                }}
+                disabled={
+                  !previewConversation || pending || openingWorkbenchId !== null
+                }
+                onClick={() =>
+                  previewConversation &&
+                  void openConversation(previewConversation)
+                }
               >
-                <PanelTopOpen className="mr-1 h-3.5 w-3.5" />
-                {t("openSelected")}
+                {openingWorkbenchId === activeWorkbenchId ? (
+                  <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <PanelTopOpen className="mr-1 h-3.5 w-3.5" />
+                )}
+                {t("openInCurrentWorkbench")}
               </Button>
 
               {/* Set status */}

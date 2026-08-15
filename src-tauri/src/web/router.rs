@@ -1224,6 +1224,10 @@ pub fn build_router(
             post(handlers::workbenches::list_workbenches),
         )
         .route(
+            "/list_conversation_workbench_refs",
+            post(handlers::workbenches::list_conversation_workbench_refs),
+        )
+        .route(
             "/create_workbench",
             post(handlers::workbenches::create_workbench),
         )

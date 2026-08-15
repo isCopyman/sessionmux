@@ -391,6 +391,13 @@ export interface WorkbenchInfo {
   updated_at: string
 }
 
+export interface ConversationWorkbenchRef {
+  conversation_id: number
+  workbench_id: number
+  workbench_name: string
+  workbench_position: number
+}
+
 export interface DbConversationSummary {
   id: number
   folder_id: number

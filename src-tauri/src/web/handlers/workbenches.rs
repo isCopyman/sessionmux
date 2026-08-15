@@ -6,7 +6,13 @@ use serde::Deserialize;
 use crate::app_error::AppCommandError;
 use crate::app_state::AppState;
 use crate::commands::workbenches;
-use crate::models::WorkbenchInfo;
+use crate::models::{ConversationWorkbenchRef, WorkbenchInfo};
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListConversationWorkbenchRefsParams {
+    pub conversation_ids: Vec<i32>,
+}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -45,6 +51,16 @@ pub async fn list_workbenches(
 ) -> Result<Json<Vec<WorkbenchInfo>>, AppCommandError> {
     Ok(Json(
         workbenches::list_workbenches_core(&state.db.conn).await?,
+    ))
+}
+
+pub async fn list_conversation_workbench_refs(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<ListConversationWorkbenchRefsParams>,
+) -> Result<Json<Vec<ConversationWorkbenchRef>>, AppCommandError> {
+    Ok(Json(
+        workbenches::list_conversation_workbench_refs_core(&state.db.conn, params.conversation_ids)
+            .await?,
     ))
 }
 

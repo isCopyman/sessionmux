@@ -28,8 +28,8 @@ pub use conversation::{
     SessionStats, SidebarData,
 };
 pub use folder::{
-    FolderCommandInfo, FolderDetail, FolderHistoryEntry, OpenedTab, OpenedTabsSnapshot,
-    SaveTabsOutcome, WorkbenchInfo,
+    ConversationWorkbenchRef, FolderCommandInfo, FolderDetail, FolderHistoryEntry, OpenedTab,
+    OpenedTabsSnapshot, SaveTabsOutcome, WorkbenchInfo,
 };
 pub use message::{
     AgentExecutionStats, AgentToolCall, ContentBlock, ImageData, MessageRole, MessageTurn,

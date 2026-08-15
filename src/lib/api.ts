@@ -79,6 +79,7 @@ import type {
   OpenedTab,
   OpenedTabsSnapshot,
   WorkbenchInfo,
+  ConversationWorkbenchRef,
   SaveTabsOutcome,
   GitStatusEntry,
   GitBranchList,
@@ -1853,6 +1854,14 @@ export async function saveWorkbenchTabs(
 
 export async function listWorkbenches(): Promise<WorkbenchInfo[]> {
   return getTransport().call("list_workbenches")
+}
+
+export async function listConversationWorkbenchRefs(
+  conversationIds: number[]
+): Promise<ConversationWorkbenchRef[]> {
+  return getTransport().call("list_conversation_workbench_refs", {
+    conversationIds,
+  })
 }
 
 export async function createWorkbench(name?: string): Promise<WorkbenchInfo> {

@@ -2,12 +2,21 @@ use crate::app_error::AppCommandError;
 use crate::db::service::workbench_service;
 #[cfg(feature = "tauri-runtime")]
 use crate::db::AppDatabase;
-use crate::models::WorkbenchInfo;
+use crate::models::{ConversationWorkbenchRef, WorkbenchInfo};
 
 pub async fn list_workbenches_core(
     conn: &sea_orm::DatabaseConnection,
 ) -> Result<Vec<WorkbenchInfo>, AppCommandError> {
     workbench_service::list(conn)
+        .await
+        .map_err(AppCommandError::from)
+}
+
+pub async fn list_conversation_workbench_refs_core(
+    conn: &sea_orm::DatabaseConnection,
+    conversation_ids: Vec<i32>,
+) -> Result<Vec<ConversationWorkbenchRef>, AppCommandError> {
+    workbench_service::list_conversation_refs(conn, conversation_ids)
         .await
         .map_err(AppCommandError::from)
 }
@@ -65,6 +74,15 @@ pub async fn list_workbenches(
     db: tauri::State<'_, AppDatabase>,
 ) -> Result<Vec<WorkbenchInfo>, AppCommandError> {
     list_workbenches_core(&db.conn).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn list_conversation_workbench_refs(
+    db: tauri::State<'_, AppDatabase>,
+    conversation_ids: Vec<i32>,
+) -> Result<Vec<ConversationWorkbenchRef>, AppCommandError> {
+    list_conversation_workbench_refs_core(&db.conn, conversation_ids).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -213,6 +231,52 @@ mod tests {
                 .await
                 .expect("same session remains authoritative");
         assert_eq!(session.id, conversation_id);
+    }
+
+    #[tokio::test]
+    async fn conversation_refs_report_each_saved_workbench_once() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/codeg-workbench-memberships").await;
+        let conversation_id = seed_conversation(&db, folder_id, AgentType::Codex).await;
+        let second = create_workbench_core(&db.conn, Some("Review".into()))
+            .await
+            .expect("create review");
+
+        let main = save_workbench_tabs_core(
+            &db.conn,
+            &EventEmitter::Noop,
+            1,
+            vec![tab(folder_id, conversation_id)],
+            0,
+            "test".into(),
+        )
+        .await
+        .expect("save main");
+        save_workbench_tabs_core(
+            &db.conn,
+            &EventEmitter::Noop,
+            second.id,
+            vec![tab(folder_id, conversation_id)],
+            main.version,
+            "test".into(),
+        )
+        .await
+        .expect("save review");
+
+        let refs =
+            list_conversation_workbench_refs_core(&db.conn, vec![conversation_id, conversation_id])
+                .await
+                .expect("list refs");
+        assert_eq!(refs.len(), 2);
+        assert_eq!(refs[0].conversation_id, conversation_id);
+        assert_eq!(refs[0].workbench_name, "Main");
+        assert_eq!(refs[1].workbench_id, second.id);
+        assert_eq!(refs[1].workbench_name, "Review");
+
+        assert!(list_conversation_workbench_refs_core(&db.conn, Vec::new())
+            .await
+            .expect("empty query")
+            .is_empty());
     }
 
     #[tokio::test]

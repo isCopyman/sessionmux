@@ -3,11 +3,11 @@ use sea_orm::{
     ActiveModelTrait, ActiveValue::NotSet, ColumnTrait, DatabaseConnection, EntityTrait,
     IntoActiveModel, PaginatorTrait, QueryFilter, QueryOrder, Set, TransactionTrait,
 };
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::db::entities::{opened_tab, workbench};
 use crate::db::error::DbError;
-use crate::models::WorkbenchInfo;
+use crate::models::{ConversationWorkbenchRef, WorkbenchInfo};
 
 fn to_info(model: workbench::Model) -> WorkbenchInfo {
     WorkbenchInfo {
@@ -39,6 +39,70 @@ pub async fn list(conn: &DatabaseConnection) -> Result<Vec<WorkbenchInfo>, DbErr
         .all(conn)
         .await?;
     Ok(rows.into_iter().map(to_info).collect())
+}
+
+pub async fn list_conversation_refs(
+    conn: &DatabaseConnection,
+    conversation_ids: Vec<i32>,
+) -> Result<Vec<ConversationWorkbenchRef>, DbError> {
+    let conversation_ids: HashSet<i32> = conversation_ids.into_iter().collect();
+    if conversation_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    if conversation_ids.len() > 2_000 {
+        return Err(DbError::Validation(
+            "At most 2000 conversation ids can be queried at once".into(),
+        ));
+    }
+
+    let tabs = opened_tab::Entity::find()
+        .filter(opened_tab::Column::ConversationId.is_in(conversation_ids))
+        .all(conn)
+        .await?;
+    if tabs.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let workbench_ids: HashSet<i32> = tabs.iter().map(|tab| tab.workbench_id).collect();
+    let workbenches = workbench::Entity::find()
+        .filter(workbench::Column::Id.is_in(workbench_ids))
+        .all(conn)
+        .await?;
+    let workbench_by_id: HashMap<i32, workbench::Model> = workbenches
+        .into_iter()
+        .map(|item| (item.id, item))
+        .collect();
+
+    // Defensive de-duplication: a corrupt or legacy snapshot may contain the
+    // same conversation twice, but Session Center should still show one badge
+    // per workbench.
+    let mut seen = HashSet::new();
+    let mut refs = Vec::new();
+    for tab in tabs {
+        let Some(conversation_id) = tab.conversation_id else {
+            continue;
+        };
+        if !seen.insert((conversation_id, tab.workbench_id)) {
+            continue;
+        }
+        let Some(workbench) = workbench_by_id.get(&tab.workbench_id) else {
+            continue;
+        };
+        refs.push(ConversationWorkbenchRef {
+            conversation_id,
+            workbench_id: workbench.id,
+            workbench_name: workbench.name.clone(),
+            workbench_position: workbench.position,
+        });
+    }
+    refs.sort_by_key(|item| {
+        (
+            item.conversation_id,
+            item.workbench_position,
+            item.workbench_id,
+        )
+    });
+    Ok(refs)
 }
 
 pub async fn create(

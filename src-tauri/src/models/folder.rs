@@ -45,6 +45,18 @@ pub struct WorkbenchInfo {
     pub updated_at: DateTime<Utc>,
 }
 
+/// One saved workbench that currently references a conversation. A session is
+/// still a global record: these rows only describe where its tab is open, so
+/// Session Center can explain ownership without loading every workbench tab
+/// snapshot on the client.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ConversationWorkbenchRef {
+    pub conversation_id: i32,
+    pub workbench_id: i32,
+    pub workbench_name: String,
+    pub workbench_position: i32,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OpenedTab {
     pub id: i32,

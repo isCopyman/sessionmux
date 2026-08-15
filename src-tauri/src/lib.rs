@@ -1305,6 +1305,7 @@ mod tauri_app {
                 quick_messages_commands::quick_messages_delete,
                 quick_messages_commands::quick_messages_reorder,
                 workbenches::list_workbenches,
+                workbenches::list_conversation_workbench_refs,
                 workbenches::create_workbench,
                 workbenches::rename_workbench,
                 workbenches::duplicate_workbench,

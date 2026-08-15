@@ -10,11 +10,15 @@ import type { DbConversationSummary, FolderDetail } from "@/lib/types"
 const h = vi.hoisted(() => ({
   listAll: vi.fn(),
   searchContent: vi.fn(),
+  listWorkbenchRefs: vi.fn(),
+  getTurns: vi.fn(),
   deleteConv: vi.fn(),
   updateStatus: vi.fn(),
   closeConversationTab: vi.fn(),
   openTab: vi.fn(),
   openConversations: vi.fn(),
+  switchWorkbench: vi.fn(),
+  activeWorkbenchId: 1,
   refreshConversations: vi.fn(),
   folders: [] as FolderDetail[],
 }))
@@ -29,6 +33,8 @@ vi.mock("sonner", () => ({
 vi.mock("@/lib/api", () => ({
   listAllConversations: h.listAll,
   searchSessionContent: h.searchContent,
+  listConversationWorkbenchRefs: h.listWorkbenchRefs,
+  getFolderConversationTurns: h.getTurns,
   deleteConversation: h.deleteConv,
   updateConversationStatus: h.updateStatus,
 }))
@@ -42,6 +48,14 @@ vi.mock("@/contexts/tab-context", () => ({
 
 vi.mock("@/contexts/workbench-route-context", () => ({
   useWorkbenchRoute: () => ({ openConversations: h.openConversations }),
+}))
+
+vi.mock("@/stores/tab-store", () => ({
+  useTabStore: (selector: (s: unknown) => unknown) =>
+    selector({
+      activeWorkbenchId: h.activeWorkbenchId,
+      switchWorkbench: h.switchWorkbench,
+    }),
 }))
 
 vi.mock("@/stores/app-workspace-store", () => ({
@@ -158,6 +172,17 @@ describe("ConversationManageDialog", () => {
     h.folders = FOLDERS
     h.listAll.mockResolvedValue(ROWS)
     h.searchContent.mockResolvedValue({ available: true, results: [] })
+    h.listWorkbenchRefs.mockResolvedValue([])
+    h.getTurns.mockResolvedValue({
+      turns: [],
+      turns_offset: 0,
+      turns_total: 0,
+      assistant_turns_before_offset: 0,
+      prefix_hash: "0",
+      prefix_hash_before_index: "0",
+    })
+    h.switchWorkbench.mockResolvedValue(undefined)
+    h.activeWorkbenchId = 1
   })
 
   it("shows each conversation's branch in place of its message count", async () => {
@@ -399,7 +424,7 @@ describe("ConversationManageDialog", () => {
     const user = renderDialog()
     await screen.findByText("on main")
 
-    await user.click(screen.getByText("on main"))
+    await user.click(screen.getByRole("button", { name: "Select on main" }))
     await user.click(screen.getByRole("button", { name: /All branches/ }))
     await user.click(paletteRow("feature/x"))
     // Out of view, still selected — and still what Delete acts on.
@@ -444,12 +469,76 @@ describe("ConversationManageDialog", () => {
     )
   })
 
-  it("opens the selected session in the current workbench", async () => {
+  it("previews recent saved messages without opening or resuming the session", async () => {
+    h.getTurns.mockResolvedValue({
+      turns: [
+        {
+          id: "u1",
+          role: "user",
+          blocks: [{ type: "text", text: "the preview-only question" }],
+          timestamp: "2026-06-10T10:00:00.000Z",
+        },
+        {
+          id: "a1",
+          role: "assistant",
+          blocks: [{ type: "text", text: "the saved answer" }],
+          timestamp: "2026-06-10T10:01:00.000Z",
+        },
+      ],
+      turns_offset: 0,
+      turns_total: 2,
+      assistant_turns_before_offset: 0,
+      prefix_hash: "0",
+      prefix_hash_before_index: "0",
+    })
     const user = renderDialog()
     await screen.findByText("on main")
 
     await user.click(screen.getByText("on main"))
-    await user.click(screen.getByRole("button", { name: "Open" }))
+
+    expect(await screen.findByText("the preview-only question")).toBeTruthy()
+    expect(screen.getByText("the saved answer")).toBeTruthy()
+    expect(h.getTurns).toHaveBeenCalledWith(1, 2_147_483_647, 12)
+    expect(h.openConversations).not.toHaveBeenCalled()
+    expect(h.openTab).not.toHaveBeenCalled()
+  })
+
+  it("shows saved workbench locations and can switch to one before focusing", async () => {
+    h.listWorkbenchRefs.mockResolvedValue([
+      {
+        conversation_id: 1,
+        workbench_id: 1,
+        workbench_name: "Main",
+        workbench_position: 0,
+      },
+      {
+        conversation_id: 1,
+        workbench_id: 2,
+        workbench_name: "Review",
+        workbench_position: 1,
+      },
+    ])
+    const user = renderDialog()
+    await screen.findByText("on main")
+    await waitFor(() => expect(h.listWorkbenchRefs).toHaveBeenCalled())
+
+    await user.click(screen.getByText("on main"))
+    expect(screen.getByRole("button", { name: /Main.*current/ })).toBeTruthy()
+
+    await user.click(screen.getByRole("button", { name: "Review" }))
+
+    await waitFor(() => expect(h.switchWorkbench).toHaveBeenCalledWith(2))
+    expect(h.openTab).toHaveBeenCalledWith(1, 1, "claude_code", true, "on main")
+  })
+
+  it("opens the previewed session in the current workbench", async () => {
+    const user = renderDialog()
+    await screen.findByText("on main")
+
+    await user.click(screen.getByText("on main"))
+    await user.click(
+      screen.getByRole("button", { name: "Open in current workbench" })
+    )
 
     expect(h.openConversations).toHaveBeenCalledTimes(1)
     expect(h.openTab).toHaveBeenCalledWith(1, 1, "claude_code", true, "on main")
