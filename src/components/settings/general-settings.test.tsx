@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { NextIntlClientProvider } from "next-intl"
-import { describe, expect, it, vi } from "vitest"
+import { beforeEach, describe, expect, it, vi } from "vitest"
 
 vi.mock("@/lib/api", () => ({
   getSystemTerminalSettings: vi.fn(async () => ({ default_shell: null })),
@@ -68,6 +68,7 @@ vi.mock("@/hooks/use-feedback-enabled", () => ({
 
 import { GeneralSettings } from "./general-settings"
 import enMessages from "@/i18n/messages/en.json"
+import { SESSION_WARM_CACHE_LIMIT_STORAGE_KEY } from "@/lib/session-warm-cache-settings"
 
 /**
  * The page is a stack of sections rendered through the shared
@@ -77,6 +78,8 @@ import enMessages from "@/i18n/messages/en.json"
  * right and silently loses the association), and each section actually mounts.
  */
 describe("GeneralSettings", () => {
+  beforeEach(() => localStorage.clear())
+
   it("mounts every section and wires each row's label to its control", async () => {
     render(
       <NextIntlClientProvider locale="en" messages={enMessages}>
@@ -98,11 +101,20 @@ describe("GeneralSettings", () => {
       expect(hwAccel).toHaveAttribute("data-state", "checked")
     )
 
+    const sessionCache = screen.getByLabelText("Warm Session cache")
+    expect(sessionCache).toHaveValue(8)
+    fireEvent.change(sessionCache, { target: { value: "12" } })
+    fireEvent.blur(sessionCache)
+    expect(localStorage.getItem(SESSION_WARM_CACHE_LIMIT_STORAGE_KEY)).toBe(
+      "12"
+    )
+
     // Every child section mounted. A section that is one option is titled by
     // that option, so these double as the labels asserted above.
     for (const heading of [
       "Default Terminal",
       "Disable hardware acceleration",
+      "Warm Session cache",
       "Notification sounds",
       "Multi-Agent Collaboration",
       "In-conversation tools",

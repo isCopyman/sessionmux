@@ -12,6 +12,8 @@ import {
   pruneOrphanDraftsOnce,
   runCorrectionOnce,
   runRecoveryOnce,
+  setSessionWarmCacheCapacity,
+  touchActiveSessionWarmState,
   useTabStore,
   type TabItem,
 } from "@/stores/tab-store"
@@ -21,6 +23,7 @@ import {
   type ConversationChange,
   type TabsChanged,
 } from "@/lib/types"
+import { subscribeSessionWarmCacheLimit } from "@/lib/session-warm-cache-settings"
 
 export type { TabItem }
 export { useTabStore, useTabActions } from "@/stores/tab-store"
@@ -94,10 +97,22 @@ export function TabProvider({ children }: TabProviderProps) {
       .setAgentAvailability(sortedAvailableAgents, agentsFresh)
   }, [sortedAvailableAgents, agentsFresh])
 
+  useEffect(
+    () => subscribeSessionWarmCacheLimit(setSessionWarmCacheCapacity),
+    []
+  )
+
   // Sync the active tab's folderId up to the app-workspace store so derived
   // consumers (useActiveFolder, branch polling) reflect the focused folder.
   useEffect(() => {
     useTabStore.getState().syncActiveFolderId()
+  }, [rawTabs, activeTabId])
+
+  // Session recency is independent of Workbench membership. Any path that
+  // focuses a tab (sidebar, split pane, restore, keyboard) refreshes the same
+  // bounded heavyweight cache here.
+  useEffect(() => {
+    touchActiveSessionWarmState()
   }, [rawTabs, activeTabId])
 
   // Fire the preview-replacement callbacks and trim the consumed queue.

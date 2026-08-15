@@ -1412,6 +1412,8 @@
     "terminalCurrentShell": "現在使用中: {path}",
     "terminalAgentShellHint": "「システムデフォルト」のままなら、エージェントのコマンドラインはプラットフォームシェル（/bin/sh、Windows では cmd）で実行されます。特定のシェルを選ぶとエージェントにも適用されます。エージェントは POSIX 構文を送るため、fish、nushell、Windows PowerShell 5.1（&& 演算子なし）では実行できないことがあります。",
     "renderingDescription": "アプリで黒画面や描画不具合が発生する場合（一部の AMD GPU や Intel 内蔵 GPU で報告あり）、ハードウェアアクセラレーションを無効化してください。Windows デスクトップ版のみ有効です。",
+    "sessionCacheTitle": "ウォームキャッシュするセッション数",
+    "sessionCacheDescription": "Workbench を切り替えた後も、読み込み済み履歴、閲覧位置、アイドル中の Agent 接続を保持するセッションの最大数です。実行中のセッションは中断されません。0 で無効になります。",
     "disableHardwareAcceleration": "ハードウェアアクセラレーションを無効化",
     "renderingSaveFailed": "レンダリング設定の保存に失敗しました: {message}",
     "restartRequired": "保存しました。再起動後に反映されます。",

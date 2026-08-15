@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react"
 import {
   Cpu,
   FolderCog,
+  Gauge,
   Loader2,
   RefreshCw,
   SquareTerminal,
@@ -44,6 +45,11 @@ import { toErrorMessage } from "@/lib/app-error"
 import { NotificationSoundSettingsSection } from "@/components/settings/notification-sound-settings"
 import { DelegationSettingsSection } from "@/components/settings/delegation-settings"
 import { AgentToolsSettingsSection } from "@/components/settings/agent-tools-settings"
+import {
+  readSessionWarmCacheLimit,
+  subscribeSessionWarmCacheLimit,
+  writeSessionWarmCacheLimit,
+} from "@/lib/session-warm-cache-settings"
 
 const TERMINAL_SHELL_OPTION_SYSTEM = "system"
 const TERMINAL_SHELL_OPTION_CUSTOM = "custom"
@@ -104,6 +110,26 @@ export function GeneralSettings() {
   )
   const renderingDirty =
     processStartLoaded && persistedDisableHwAccel !== processStartDisableHwAccel
+  const [sessionWarmCacheLimitInput, setSessionWarmCacheLimitInput] = useState(
+    () => String(readSessionWarmCacheLimit())
+  )
+
+  useEffect(
+    () =>
+      subscribeSessionWarmCacheLimit((limit) =>
+        setSessionWarmCacheLimitInput(String(limit))
+      ),
+    []
+  )
+
+  const commitSessionWarmCacheLimit = useCallback(() => {
+    if (sessionWarmCacheLimitInput.trim() === "") {
+      setSessionWarmCacheLimitInput(String(readSessionWarmCacheLimit()))
+      return
+    }
+    const saved = writeSessionWarmCacheLimit(sessionWarmCacheLimitInput)
+    setSessionWarmCacheLimitInput(String(saved))
+  }, [sessionWarmCacheLimitInput])
 
   const loadSettings = useCallback(async () => {
     setLoading(true)
@@ -406,6 +432,33 @@ export function GeneralSettings() {
             )}
           </SettingsSection>
         )}
+
+        <SettingsSection
+          icon={Gauge}
+          title={t("sessionCacheTitle")}
+          description={t("sessionCacheDescription")}
+          htmlFor="session-warm-cache-limit"
+          control={
+            <Input
+              id="session-warm-cache-limit"
+              type="number"
+              min={0}
+              max={50}
+              step={1}
+              inputMode="numeric"
+              value={sessionWarmCacheLimitInput}
+              onChange={(event) =>
+                setSessionWarmCacheLimitInput(event.target.value)
+              }
+              onBlur={commitSessionWarmCacheLimit}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") event.currentTarget.blur()
+              }}
+              aria-label={t("sessionCacheTitle")}
+              className="h-8 w-20 bg-background text-right text-xs tabular-nums"
+            />
+          }
+        />
 
         <NotificationSoundSettingsSection />
 

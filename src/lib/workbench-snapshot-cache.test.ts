@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import type { OpenedTabsSnapshot } from "@/lib/types"
-import { RecentWorkbenchSnapshotCache } from "@/lib/workbench-snapshot-cache"
+import { WorkbenchSnapshotStore } from "@/lib/workbench-snapshot-cache"
 
 function snapshot(version: number, conversationId: number): OpenedTabsSnapshot {
   return {
@@ -19,9 +19,9 @@ function snapshot(version: number, conversationId: number): OpenedTabsSnapshot {
   }
 }
 
-describe("RecentWorkbenchSnapshotCache", () => {
-  it("evicts the least recently used workbench", () => {
-    const cache = new RecentWorkbenchSnapshotCache(2)
+describe("WorkbenchSnapshotStore", () => {
+  it("keeps lightweight snapshots for every visited workbench", () => {
+    const cache = new WorkbenchSnapshotStore()
     cache.set({
       workbenchId: 1,
       snapshot: snapshot(1, 11),
@@ -35,21 +35,20 @@ describe("RecentWorkbenchSnapshotCache", () => {
       runtimeConversationIdByTab: {},
     })
 
-    expect(cache.get(1)?.snapshot.items[0].conversation_id).toBe(11)
-    const evicted = cache.set({
+    cache.set({
       workbenchId: 3,
       snapshot: snapshot(3, 33),
       connectionContextKeys: ["tab-3"],
       runtimeConversationIdByTab: {},
     })
 
-    expect(evicted.map((entry) => entry.workbenchId)).toEqual([2])
     expect(cache.peek(1)).not.toBeNull()
-    expect(cache.peek(2)).toBeNull()
+    expect(cache.peek(2)).not.toBeNull()
+    expect(cache.peek(3)).not.toBeNull()
   })
 
   it("does not replace a newer entry with a late older response", () => {
-    const cache = new RecentWorkbenchSnapshotCache()
+    const cache = new WorkbenchSnapshotStore()
     cache.set({
       workbenchId: 1,
       snapshot: snapshot(5, 55),
@@ -67,7 +66,7 @@ describe("RecentWorkbenchSnapshotCache", () => {
   })
 
   it("tracks virtual runtime ids and returns defensive copies", () => {
-    const cache = new RecentWorkbenchSnapshotCache()
+    const cache = new WorkbenchSnapshotStore()
     cache.set({
       workbenchId: 1,
       snapshot: snapshot(1, 11),
@@ -79,31 +78,12 @@ describe("RecentWorkbenchSnapshotCache", () => {
     read.snapshot.items[0].conversation_id = 99
 
     expect(cache.peek(1)?.snapshot.items[0].conversation_id).toBe(11)
-    expect([...cache.retainedRuntimeConversationIds()]).toEqual([-7])
-    expect([...cache.retainedConnectionContextKeys()]).toEqual(["tab-1"])
+    cache.deleteRuntimeConversationIds(new Set([-7]))
+    expect(cache.peek(1)?.runtimeConversationIdByTab).toEqual({})
   })
 
-  it("can shrink the warm set and evicts least-recently-used entries", () => {
-    const cache = new RecentWorkbenchSnapshotCache(3)
-    for (const id of [1, 2, 3]) {
-      cache.set({
-        workbenchId: id,
-        snapshot: snapshot(id, id * 10),
-        connectionContextKeys: [`tab-${id}`],
-        runtimeConversationIdByTab: {},
-      })
-    }
-
-    cache.get(1)
-    const evicted = cache.setCapacity(1)
-
-    expect(evicted.map((entry) => entry.workbenchId)).toEqual([2, 3])
-    expect(cache.peek(1)?.workbenchId).toBe(1)
-    expect([...cache.retainedConnectionContextKeys()]).toEqual(["tab-1"])
-  })
-
-  it("keeps per-session reading positions inside the same bounded entry", () => {
-    const cache = new RecentWorkbenchSnapshotCache(1)
+  it("keeps reading positions until the Session warm cache evicts them", () => {
+    const cache = new WorkbenchSnapshotStore()
     cache.set({
       workbenchId: 1,
       snapshot: snapshot(1, 11),
@@ -140,6 +120,8 @@ describe("RecentWorkbenchSnapshotCache", () => {
       connectionContextKeys: ["tab-2"],
       runtimeConversationIdByTab: {},
     })
+    expect(cache.getSessionViewState(1, "tab-1")).not.toBeNull()
+    cache.deleteSessionViewStates(new Set(["tab-1"]))
     expect(cache.getSessionViewState(1, "tab-1")).toBeNull()
   })
 })

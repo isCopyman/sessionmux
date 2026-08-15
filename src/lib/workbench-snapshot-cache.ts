@@ -4,9 +4,9 @@ import type { CacheSnapshot } from "virtua"
 /**
  * Ephemeral browser-tab-like view state for one Session surface. The virtua
  * cache keeps measured row heights while `scrollOffset` restores the exact
- * reading position. It deliberately lives only in the bounded warm cache —
- * durable Workbench layout remains backend-owned, while stale scroll geometry
- * disappears with the cached surface that produced it.
+ * reading position. It is stored beside lightweight Workbench metadata, but is
+ * pruned whenever the independent bounded Session cache lets that surface go.
+ * Durable Workbench layout remains backend-owned.
  */
 export interface WorkbenchSessionViewState {
   scrollOffset: number
@@ -18,7 +18,7 @@ export interface WorkbenchSessionViewState {
 export interface WorkbenchSnapshotCacheEntry {
   workbenchId: number
   snapshot: OpenedTabsSnapshot
-  /** ACP connection keys owned by the parked workbench's tab surfaces. */
+  /** Stable tab surface keys captured with this Workbench snapshot. */
   connectionContextKeys: readonly string[]
   /**
    * A freshly-created conversation can keep a virtual runtime id after it is
@@ -66,48 +66,17 @@ function cloneEntry(
 }
 
 /**
- * Small in-memory LRU for named workbench surfaces. Durable truth still lives
- * in the backend; this cache only lets a recently-used surface paint before
- * its background validation round-trip completes.
+ * Lightweight in-memory index of visited Workbench surfaces. Durable truth
+ * still lives in the backend; keeping these small tab-reference snapshots lets
+ * every visited Workbench paint before background validation. Heavy Session
+ * state is bounded independently by RecentSessionWarmCache.
  */
-export class RecentWorkbenchSnapshotCache {
+export class WorkbenchSnapshotStore {
   private readonly entries = new Map<number, WorkbenchSnapshotCacheEntry>()
-
-  constructor(private capacity = 3) {
-    this.assertCapacity(capacity)
-  }
-
-  private assertCapacity(capacity: number): void {
-    if (!Number.isInteger(capacity) || capacity < 1) {
-      throw new Error("Workbench snapshot cache capacity must be positive")
-    }
-  }
-
-  private trim(): WorkbenchSnapshotCacheEntry[] {
-    const evicted: WorkbenchSnapshotCacheEntry[] = []
-    while (this.entries.size > this.capacity) {
-      const oldestId = this.entries.keys().next().value as number | undefined
-      if (oldestId == null) break
-      const oldest = this.entries.get(oldestId)
-      this.entries.delete(oldestId)
-      if (oldest) evicted.push(cloneEntry(oldest))
-    }
-    return evicted
-  }
-
-  /** Resize the browser-like warm set without disturbing the retained order. */
-  setCapacity(capacity: number): WorkbenchSnapshotCacheEntry[] {
-    this.assertCapacity(capacity)
-    this.capacity = capacity
-    return this.trim()
-  }
 
   get(workbenchId: number): WorkbenchSnapshotCacheEntry | null {
     const entry = this.entries.get(workbenchId)
-    if (!entry) return null
-    this.entries.delete(workbenchId)
-    this.entries.set(workbenchId, entry)
-    return cloneEntry(entry)
+    return entry ? cloneEntry(entry) : null
   }
 
   peek(workbenchId: number): WorkbenchSnapshotCacheEntry | null {
@@ -123,7 +92,7 @@ export class RecentWorkbenchSnapshotCache {
     return state ? cloneViewState(state) : null
   }
 
-  /** Update a mounted tab's view state without changing Workbench LRU order. */
+  /** Update a mounted tab's ephemeral view state. */
   setSessionViewState(
     workbenchId: number,
     tabId: string,
@@ -138,18 +107,55 @@ export class RecentWorkbenchSnapshotCache {
     return true
   }
 
-  set(entry: WorkbenchSnapshotCacheEntry): WorkbenchSnapshotCacheEntry[] {
+  set(entry: WorkbenchSnapshotCacheEntry): void {
     const previous = this.entries.get(entry.workbenchId)
     // The backend version is a monotonic workspace-wide clock. A late request
     // must never walk a workbench cache entry back to an older snapshot.
     if (previous && previous.snapshot.version > entry.snapshot.version) {
-      return []
+      return
     }
 
-    this.entries.delete(entry.workbenchId)
     this.entries.set(entry.workbenchId, cloneEntry(entry))
+  }
 
-    return this.trim()
+  /** Drop heavy virtualizer geometry when the corresponding Session goes cold. */
+  deleteSessionViewStates(connectionContextKeys: ReadonlySet<string>): void {
+    if (connectionContextKeys.size === 0) return
+    for (const entry of this.entries.values()) {
+      const current = entry.sessionViewStateByTab
+      if (!current) continue
+      const next = Object.fromEntries(
+        Object.entries(current).filter(
+          ([tabId]) => !connectionContextKeys.has(tabId)
+        )
+      )
+      if (Object.keys(next).length !== Object.keys(current).length) {
+        entry.sessionViewStateByTab = next
+      }
+    }
+  }
+
+  /**
+   * A bound draft may use a negative runtime id while it is warm. Once that
+   * runtime goes cold, future Workbench mounts must fall back to the durable
+   * conversation id instead of pointing at a runtime store entry that no
+   * longer exists.
+   */
+  deleteRuntimeConversationIds(
+    runtimeConversationIds: ReadonlySet<number>
+  ): void {
+    if (runtimeConversationIds.size === 0) return
+    for (const entry of this.entries.values()) {
+      const current = entry.runtimeConversationIdByTab
+      const next = Object.fromEntries(
+        Object.entries(current).filter(
+          ([, runtimeId]) => !runtimeConversationIds.has(runtimeId)
+        )
+      )
+      if (Object.keys(next).length !== Object.keys(current).length) {
+        entry.runtimeConversationIdByTab = next
+      }
+    }
   }
 
   delete(workbenchId: number): WorkbenchSnapshotCacheEntry | null {
@@ -163,27 +169,5 @@ export class RecentWorkbenchSnapshotCache {
     const entries = [...this.entries.values()].map(cloneEntry)
     this.entries.clear()
     return entries
-  }
-
-  retainedRuntimeConversationIds(): Set<number> {
-    const ids = new Set<number>()
-    for (const entry of this.entries.values()) {
-      for (const item of entry.snapshot.items) {
-        if (item.conversation_id == null) continue
-        const tabKey = `${item.folder_id}:${item.agent_type}:${item.conversation_id}`
-        ids.add(
-          entry.runtimeConversationIdByTab[tabKey] ?? item.conversation_id
-        )
-      }
-    }
-    return ids
-  }
-
-  retainedConnectionContextKeys(): Set<string> {
-    const keys = new Set<string>()
-    for (const entry of this.entries.values()) {
-      for (const key of entry.connectionContextKeys) keys.add(key)
-    }
-    return keys
   }
 }

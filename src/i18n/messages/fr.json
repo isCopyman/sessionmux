@@ -1412,6 +1412,8 @@
     "terminalCurrentShell": "Actuellement utilisé : {path}",
     "terminalAgentShellHint": "Avec « Valeur système par défaut », les lignes de commande des agents passent par le shell de la plateforme (/bin/sh, ou cmd sous Windows). Choisir un shell précis s'applique aussi aux agents : ils émettent de la syntaxe POSIX, que fish, nushell et Windows PowerShell 5.1 (sans opérateur &&) peuvent rejeter.",
     "renderingDescription": "Désactivez l’accélération matérielle si l’application affiche un écran noir ou des défauts de rendu (fréquent sur certaines GPU AMD ou GPU Intel intégrées). N’a d’effet que sur la version Windows de bureau.",
+    "sessionCacheTitle": "Sessions gardées en mémoire",
+    "sessionCacheDescription": "Nombre maximal de sessions dont l’historique chargé, la position de lecture et la connexion d’agent inactive restent disponibles après un changement de Workbench. Les sessions en cours ne sont jamais interrompues. 0 désactive le cache.",
     "disableHardwareAcceleration": "Désactiver l’accélération matérielle",
     "renderingSaveFailed": "Échec de l’enregistrement des paramètres de rendu : {message}",
     "restartRequired": "Enregistré. Redémarrez l’application pour appliquer la modification.",

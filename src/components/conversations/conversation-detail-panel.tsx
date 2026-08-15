@@ -39,7 +39,7 @@ import {
   groupOfTab,
   getWorkbenchSessionViewState,
   isReparentUnmount,
-  onWorkbenchCacheEvicted,
+  onSessionWarmCacheEvicted,
   setWorkbenchSessionViewState,
   shouldRetainWorkbenchConnectionOnUnmount,
   shouldRetainWorkbenchRuntimeOnUnmount,
@@ -621,9 +621,9 @@ const ConversationTabView = memo(function ConversationTabView({
     // Drives cross-client viewer discovery: when another client is already
     // live on this conversation, attach to its connection instead of spawning.
     conversationId: dbConversationId ?? undefined,
-    // A cross-group move reparents this view; a named-workbench switch parks it
-    // in the bounded warm cache. Neither unmount should tear the connection
-    // down. See the two guards for why "still open" alone is too broad.
+    // A cross-group move reparents this view; a Workbench switch may park this
+    // Session in the bounded warm LRU. Neither transient unmount should tear
+    // the connection down. See the guards for why "still open" is too broad.
     isTransientUnmount: useCallback(
       () =>
         isReparentUnmount(useTabStore.getState(), tabId, groupId) ||
@@ -2090,11 +2090,11 @@ export function ConversationDetailPanel() {
     })
   }, [onPreviewTabReplaced, disconnectIfIdle])
 
-  // A parked workbench keeps its connections hot like a browser tab. Once the
-  // bounded LRU evicts it, release only idle owners/viewers; busy turns remain
-  // protected by the ACP lifecycle and are reclaimed after they settle.
+  // A recently-used Session keeps its connection hot like a browser tab. Once
+  // the bounded Session LRU evicts it, release only idle owners/viewers; busy
+  // turns remain protected by the ACP lifecycle and settle normally.
   useEffect(() => {
-    return onWorkbenchCacheEvicted((connectionContextKeys) => {
+    return onSessionWarmCacheEvicted((connectionContextKeys) => {
       for (const contextKey of connectionContextKeys) {
         disconnectIfIdle(contextKey).catch(() => {})
       }

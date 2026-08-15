@@ -1412,6 +1412,8 @@
     "terminalCurrentShell": "目前使用：{path}",
     "terminalAgentShellHint": "保持「系統預設」時，代理的命令列會走平台 Shell（/bin/sh，Windows 上為 cmd）。指定特定 Shell 會同時作用於代理——它們送出的是 POSIX 語法，fish、nushell 與 Windows PowerShell 5.1（不支援 && 運算子）可能無法執行。",
     "renderingDescription": "若應用出現黑屏或渲染異常（常見於 AMD 顯示卡或部分 Intel 內顯），可關閉硬體加速。僅 Windows 桌面端生效。",
+    "sessionCacheTitle": "熱快取工作階段數量",
+    "sessionCacheDescription": "切換工作台後，最多保留多少個工作階段的已載入歷史、閱讀位置和閒置 Agent 連線。執行中的工作階段不會因此中斷；設為 0 可停用。",
     "disableHardwareAcceleration": "停用硬體加速",
     "renderingSaveFailed": "渲染設定儲存失敗：{message}",
     "restartRequired": "已儲存，需重新啟動應用程式才會生效。",

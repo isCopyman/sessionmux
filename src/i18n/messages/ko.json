@@ -1412,6 +1412,8 @@
     "terminalCurrentShell": "현재 사용 중: {path}",
     "terminalAgentShellHint": "'시스템 기본값'으로 두면 에이전트의 명령줄은 플랫폼 셸(/bin/sh, Windows에서는 cmd)에서 실행됩니다. 특정 셸을 선택하면 에이전트에도 적용됩니다. 에이전트는 POSIX 구문을 보내므로 fish, nushell, Windows PowerShell 5.1(&& 연산자 없음)에서는 거부될 수 있습니다.",
     "renderingDescription": "앱이 검은 화면이 되거나 렌더링 문제가 발생하면(일부 AMD GPU 또는 Intel 내장 GPU에서 보고됨) 하드웨어 가속을 끄세요. Windows 데스크톱에서만 적용됩니다.",
+    "sessionCacheTitle": "웜 캐시 세션 수",
+    "sessionCacheDescription": "Workbench를 전환한 뒤에도 불러온 기록, 읽던 위치, 유휴 Agent 연결을 유지할 세션의 최대 수입니다. 실행 중인 세션은 중단되지 않습니다. 0으로 설정하면 비활성화됩니다.",
     "disableHardwareAcceleration": "하드웨어 가속 비활성화",
     "renderingSaveFailed": "렌더링 설정 저장 실패: {message}",
     "restartRequired": "저장되었습니다. 변경 사항을 적용하려면 앱을 다시 시작하세요.",

@@ -1412,6 +1412,8 @@
     "terminalCurrentShell": "Aktuell verwendet: {path}",
     "terminalAgentShellHint": "Bei „Systemstandard“ laufen Befehlszeilen von Agenten über die Plattform-Shell (/bin/sh bzw. cmd unter Windows). Eine bestimmte Shell gilt auch für Agenten – diese senden POSIX-Syntax, die fish, nushell und Windows PowerShell 5.1 (ohne &&-Operator) ablehnen können.",
     "renderingDescription": "Deaktivieren Sie die Hardwarebeschleunigung, wenn die App einen schwarzen Bildschirm oder Render-Fehler zeigt (häufig bei bestimmten AMD-GPUs oder integrierten Intel-GPUs). Wirkt sich nur auf die Windows-Desktop-Version aus.",
+    "sessionCacheTitle": "Warmgehaltene Sitzungen",
+    "sessionCacheDescription": "Maximale Anzahl von Sitzungen, deren geladener Verlauf, Leseposition und inaktive Agent-Verbindung nach einem Workbench-Wechsel warm bleiben. Laufende Sitzungen werden nie unterbrochen. 0 deaktiviert den Cache.",
     "disableHardwareAcceleration": "Hardwarebeschleunigung deaktivieren",
     "renderingSaveFailed": "Render-Einstellungen konnten nicht gespeichert werden: {message}",
     "restartRequired": "Gespeichert. Starten Sie die App neu, damit die Änderung wirksam wird.",

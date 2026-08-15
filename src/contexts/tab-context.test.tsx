@@ -20,7 +20,7 @@ import {
   duplicateWorkbenchLocalState,
   groupOfTab,
   isReparentUnmount,
-  onWorkbenchCacheEvicted,
+  onSessionWarmCacheEvicted,
   resetTabStore,
   selectIsSplit,
   shouldRetainWorkbenchConnectionOnUnmount,
@@ -33,6 +33,7 @@ import {
   loadMessageInputDraftV2,
   saveMessageInputDraftV2,
 } from "@/lib/message-input-draft"
+import { writeSessionWarmCacheLimit } from "@/lib/session-warm-cache-settings"
 
 const listOpenedTabsMock = vi.fn()
 const saveOpenedTabsMock = vi.fn()
@@ -1991,7 +1992,7 @@ describe("TabProvider tab groups", () => {
     expect(store().rawTabs.some((tab) => tab.conversationId === 1)).toBe(true)
   })
 
-  it("releases connection surfaces when the workbench warm LRU evicts them", async () => {
+  it("releases connection surfaces when the Session warm LRU evicts them", async () => {
     const mainItems = [tabItem(1, 1, true)]
     listOpenedTabsMock.mockResolvedValue({ items: mainItems, version: 1 })
     listWorkbenchTabsMock.mockImplementation(async (workbenchId: number) => ({
@@ -1999,13 +2000,14 @@ describe("TabProvider tab groups", () => {
       version: workbenchId,
     }))
     await renderWithTabs(mainItems)
+    writeSessionWarmCacheLimit(2)
 
     const evicted: string[] = []
-    const unsubscribe = onWorkbenchCacheEvicted((keys) => {
+    const unsubscribe = onSessionWarmCacheEvicted((keys) => {
       evicted.push(...keys)
     })
     try {
-      for (const workbenchId of [2, 3, 4]) {
+      for (const workbenchId of [2, 3]) {
         await act(async () => {
           await store().switchWorkbench(workbenchId)
         })
@@ -2015,7 +2017,7 @@ describe("TabProvider tab groups", () => {
     }
 
     expect(evicted).toContain("conv-1-codex-1")
-    expect(evicted).not.toContain("conv-4-codex-4")
+    expect(evicted).not.toContain("conv-3-codex-3")
   })
 
   it("split-and-move creates a second group with the tab and focuses it", async () => {

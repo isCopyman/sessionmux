@@ -1412,6 +1412,8 @@
     "terminalCurrentShell": "当前使用：{path}",
     "terminalAgentShellHint": "保持「系统默认」时，智能体的命令行走平台 Shell（/bin/sh，Windows 上为 cmd）。指定具体 Shell 会同时作用于智能体——它们发出的是 POSIX 语法，fish、nushell 和 Windows PowerShell 5.1（不支持 && 运算符）可能无法执行。",
     "renderingDescription": "如果应用出现黑屏或渲染异常（常见于 AMD 显卡或部分 Intel 集成显卡），可关闭硬件加速。仅 Windows 桌面端生效。",
+    "sessionCacheTitle": "热缓存会话数量",
+    "sessionCacheDescription": "切换工作台后，最多保留多少个会话的已加载历史、阅读位置和空闲 Agent 连接。正在运行的会话不会因此中断；设为 0 可关闭保温。",
     "disableHardwareAcceleration": "禁用硬件加速",
     "renderingSaveFailed": "渲染设置保存失败：{message}",
     "restartRequired": "已保存，重启应用后生效。",

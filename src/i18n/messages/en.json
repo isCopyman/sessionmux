@@ -1412,6 +1412,8 @@
     "terminalCurrentShell": "Currently using: {path}",
     "terminalAgentShellHint": "On System default, agent command lines run through the platform shell (/bin/sh, or cmd on Windows). Picking a specific shell applies it to agents too — they emit POSIX syntax, which fish, nushell, and Windows PowerShell 5.1 (no && operator) may reject.",
     "renderingDescription": "Disable hardware acceleration if the app shows a black screen or rendering glitches (common on certain AMD GPUs or Intel integrated GPUs). Only takes effect on the Windows desktop build.",
+    "sessionCacheTitle": "Warm Session cache",
+    "sessionCacheDescription": "Maximum number of Sessions whose loaded history, reading position, and idle agent connection stay warm after switching Workbench. Running Sessions are never interrupted. Set to 0 to disable.",
     "disableHardwareAcceleration": "Disable hardware acceleration",
     "renderingSaveFailed": "Failed to save rendering settings: {message}",
     "restartRequired": "Saved. Restart the app for the change to take effect.",
