@@ -19,6 +19,24 @@ const h = vi.hoisted(() => ({
   openConversations: vi.fn(),
   switchWorkbench: vi.fn(),
   activeWorkbenchId: 1,
+  activeWorkbenchTabs: [] as Array<{ conversationId: number | null }>,
+  hydrateWorkbenches: vi.fn(),
+  workbenches: [
+    {
+      id: 1,
+      name: "Main",
+      position: 0,
+      created_at: "2026-06-01T00:00:00.000Z",
+      updated_at: "2026-06-01T00:00:00.000Z",
+    },
+    {
+      id: 2,
+      name: "Review",
+      position: 1,
+      created_at: "2026-06-01T00:00:00.000Z",
+      updated_at: "2026-06-01T00:00:00.000Z",
+    },
+  ],
   refreshConversations: vi.fn(),
   folders: [] as FolderDetail[],
 }))
@@ -54,7 +72,17 @@ vi.mock("@/stores/tab-store", () => ({
   useTabStore: (selector: (s: unknown) => unknown) =>
     selector({
       activeWorkbenchId: h.activeWorkbenchId,
+      rawTabs: h.activeWorkbenchTabs,
       switchWorkbench: h.switchWorkbench,
+    }),
+}))
+
+vi.mock("@/stores/workbench-store", () => ({
+  useWorkbenchStore: (selector: (s: unknown) => unknown) =>
+    selector({
+      items: h.workbenches,
+      hydrated: true,
+      hydrate: h.hydrateWorkbenches,
     }),
 }))
 
@@ -183,6 +211,7 @@ describe("ConversationManageDialog", () => {
     })
     h.switchWorkbench.mockResolvedValue(undefined)
     h.activeWorkbenchId = 1
+    h.activeWorkbenchTabs = []
   })
 
   it("shows each conversation's branch in place of its message count", async () => {
@@ -529,6 +558,89 @@ describe("ConversationManageDialog", () => {
 
     await waitFor(() => expect(h.switchWorkbench).toHaveBeenCalledWith(2))
     expect(h.openTab).toHaveBeenCalledWith(1, 1, "claude_code", true, "on main")
+  })
+
+  it("filters sessions by saved workbench membership", async () => {
+    h.listWorkbenchRefs.mockResolvedValue([
+      {
+        conversation_id: 1,
+        workbench_id: 1,
+        workbench_name: "Main",
+        workbench_position: 0,
+      },
+      {
+        conversation_id: 2,
+        workbench_id: 2,
+        workbench_name: "Review",
+        workbench_position: 1,
+      },
+    ])
+    const user = renderDialog()
+    await screen.findByText("on main")
+    await waitFor(() => expect(h.listWorkbenchRefs).toHaveBeenCalled())
+
+    await user.click(
+      screen.getByRole("combobox", { name: "Filter by workbench" })
+    )
+    await user.click(screen.getByRole("option", { name: /Main.*current.*1/i }))
+
+    expect(screen.getByText("on main")).toBeTruthy()
+    expect(screen.queryByText("on feature")).toBeNull()
+    expect(screen.queryByText("branchless")).toBeNull()
+    expect(screen.getByText("1 matched")).toBeTruthy()
+  })
+
+  it("includes the active workbench's unsaved in-memory tabs in ownership", async () => {
+    h.activeWorkbenchTabs = [{ conversationId: 1 }]
+    const user = renderDialog()
+    await screen.findByText("on main")
+
+    await user.click(screen.getByText("on main"))
+
+    expect(
+      await screen.findByRole("button", { name: /Main.*current/ })
+    ).toBeTruthy()
+  })
+
+  it("adds every checked session to the current workbench", async () => {
+    const user = renderDialog()
+    await screen.findByText("on main")
+
+    await user.click(screen.getByRole("button", { name: "Select on main" }))
+    await user.click(screen.getByRole("button", { name: "Select on feature" }))
+    await user.click(screen.getByRole("button", { name: "Add selected (2)" }))
+
+    expect(h.openConversations).toHaveBeenCalledTimes(1)
+    expect(h.openTab).toHaveBeenNthCalledWith(
+      1,
+      1,
+      1,
+      "claude_code",
+      true,
+      "on main"
+    )
+    expect(h.openTab).toHaveBeenNthCalledWith(
+      2,
+      1,
+      2,
+      "claude_code",
+      true,
+      "on feature"
+    )
+  })
+
+  it("offers a compact-screen path back from preview to the list", async () => {
+    const user = renderDialog()
+    await screen.findByText("on main")
+    await user.click(screen.getByText("on main"))
+
+    const back = screen.getByRole("button", { name: "Back to session list" })
+    await user.click(back)
+
+    expect(
+      screen.queryByRole("button", { name: "Back to session list" })
+    ).toBeNull()
+    expect(h.openConversations).not.toHaveBeenCalled()
   })
 
   it("opens the previewed session in the current workbench", async () => {

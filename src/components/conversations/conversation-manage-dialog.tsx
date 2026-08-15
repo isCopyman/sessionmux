@@ -11,6 +11,7 @@ import {
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 import {
+  ArrowLeft,
   Bot,
   Check,
   CheckSquare,
@@ -87,6 +88,7 @@ import {
 import { FolderAliasLabel } from "@/components/conversations/folder-alias-label"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { useTabStore } from "@/stores/tab-store"
+import { useWorkbenchStore } from "@/stores/workbench-store"
 import { useTabActions } from "@/contexts/tab-context"
 import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
 import {
@@ -139,6 +141,8 @@ type BranchFilter =
   | { kind: "branch"; name: string }
 
 const ALL_BRANCHES: BranchFilter = { kind: "all" }
+
+type WorkbenchFilter = "all" | "unopened" | number
 
 /**
  * Shared metrics for the four facet controls, so the folder picker, the branch
@@ -549,7 +553,11 @@ export function ConversationManageDialog({
   const { closeConversationTab, openTab } = useTabActions()
   const { openConversations } = useWorkbenchRoute()
   const activeWorkbenchId = useTabStore((s) => s.activeWorkbenchId)
+  const activeWorkbenchTabs = useTabStore((s) => s.rawTabs)
   const switchWorkbench = useTabStore((s) => s.switchWorkbench)
+  const workbenches = useWorkbenchStore((s) => s.items)
+  const workbenchesHydrated = useWorkbenchStore((s) => s.hydrated)
+  const hydrateWorkbenches = useWorkbenchStore((s) => s.hydrate)
 
   const [search, setSearch] = useState("")
   /** The folder facet: a folder id, or `null` for the whole workspace. */
@@ -557,6 +565,7 @@ export function ConversationManageDialog({
     folderId ?? null
   )
   const [branchFilter, setBranchFilter] = useState<BranchFilter>(ALL_BRANCHES)
+  const [workbenchFilter, setWorkbenchFilter] = useState<WorkbenchFilter>("all")
   const [agentFilter, setAgentFilter] = useState<AgentType | "all">("all")
   const [statusFilter, setStatusFilter] = useState<ConversationStatus | "all">(
     "all"
@@ -572,6 +581,7 @@ export function ConversationManageDialog({
   >([])
   const [workbenchRefsUnavailable, setWorkbenchRefsUnavailable] =
     useState(false)
+  const [workbenchRefsLoading, setWorkbenchRefsLoading] = useState(false)
   const [previewConversation, setPreviewConversation] =
     useState<DbConversationSummary | null>(null)
   const [previewTurns, setPreviewTurns] = useState<MessageTurn[]>([])
@@ -586,6 +596,7 @@ export function ConversationManageDialog({
     new Map()
   )
   const [pending, setPending] = useState(false)
+  const [bulkOpening, setBulkOpening] = useState(false)
   const [openingWorkbenchId, setOpeningWorkbenchId] = useState<number | null>(
     null
   )
@@ -651,6 +662,7 @@ export function ConversationManageDialog({
       setSearch("")
       setScopeFolderId(folderId ?? null)
       setBranchFilter(ALL_BRANCHES)
+      setWorkbenchFilter("all")
       setAgentFilter("all")
       setStatusFilter("all")
       setSelected(new Map())
@@ -660,13 +672,23 @@ export function ConversationManageDialog({
       setContentSearchUnavailable(false)
       setWorkbenchRefs([])
       setWorkbenchRefsUnavailable(false)
+      setWorkbenchRefsLoading(false)
       setPreviewConversation(null)
       setPreviewTurns([])
       setPreviewLoading(false)
       setPreviewError(null)
       setOpeningWorkbenchId(null)
+      setBulkOpening(false)
     }
   }, [open, folderId])
+
+  useEffect(() => {
+    if (!open || workbenchesHydrated) return
+    void hydrateWorkbenches().catch(() => {
+      // Session rows and previews remain useful when an older server cannot
+      // list named workbenches; ownership already has its own graceful fallback.
+    })
+  }, [hydrateWorkbenches, open, workbenchesHydrated])
 
   // Debounced data fetch. Each run owns a `cancelled` flag its cleanup trips, so
   // a reply that lands after the facets moved on is dropped rather than written
@@ -771,9 +793,11 @@ export function ConversationManageDialog({
     if (!open || rows.length === 0) {
       setWorkbenchRefs([])
       setWorkbenchRefsUnavailable(false)
+      setWorkbenchRefsLoading(false)
       return
     }
     let cancelled = false
+    setWorkbenchRefsLoading(true)
     listConversationWorkbenchRefs(rows.map((row) => row.id))
       .then((refs) => {
         if (cancelled) return
@@ -785,20 +809,53 @@ export function ConversationManageDialog({
         setWorkbenchRefs([])
         setWorkbenchRefsUnavailable(true)
       })
+      .finally(() => {
+        if (!cancelled) setWorkbenchRefsLoading(false)
+      })
     return () => {
       cancelled = true
     }
   }, [open, rows])
 
+  const effectiveWorkbenchRefs = useMemo(() => {
+    const refs = [...workbenchRefs]
+    const seen = new Set(
+      refs.map((ref) => `${ref.conversation_id}:${ref.workbench_id}`)
+    )
+    const activeWorkbench = workbenches.find(
+      (workbench) => workbench.id === activeWorkbenchId
+    )
+    if (activeWorkbench) {
+      for (const tab of activeWorkbenchTabs) {
+        if (tab.conversationId == null) continue
+        const key = `${tab.conversationId}:${activeWorkbench.id}`
+        if (seen.has(key)) continue
+        seen.add(key)
+        refs.push({
+          conversation_id: tab.conversationId,
+          workbench_id: activeWorkbench.id,
+          workbench_name: activeWorkbench.name,
+          workbench_position: activeWorkbench.position,
+        })
+      }
+    }
+    return refs.sort(
+      (a, b) =>
+        a.conversation_id - b.conversation_id ||
+        a.workbench_position - b.workbench_position ||
+        a.workbench_id - b.workbench_id
+    )
+  }, [activeWorkbenchId, activeWorkbenchTabs, workbenchRefs, workbenches])
+
   const workbenchRefsByConversation = useMemo(() => {
     const byConversation = new Map<number, ConversationWorkbenchRef[]>()
-    for (const ref of workbenchRefs) {
+    for (const ref of effectiveWorkbenchRefs) {
       const refs = byConversation.get(ref.conversation_id) ?? []
       refs.push(ref)
       byConversation.set(ref.conversation_id, refs)
     }
     return byConversation
-  }, [workbenchRefs])
+  }, [effectiveWorkbenchRefs])
 
   // Previewing parses a small tail of the saved transcript through the
   // read-only history endpoint. It neither creates an ACP connection nor
@@ -849,18 +906,44 @@ export function ConversationManageDialog({
     }
   }, [rows])
 
+  const { workbenchCounts, unopenedCount } = useMemo(() => {
+    const counts = new Map<number, number>()
+    let unopened = 0
+    for (const row of rows) {
+      const refs = workbenchRefsByConversation.get(row.id) ?? []
+      if (refs.length === 0) unopened++
+      for (const ref of refs) {
+        counts.set(ref.workbench_id, (counts.get(ref.workbench_id) ?? 0) + 1)
+      }
+    }
+    return { workbenchCounts: counts, unopenedCount: unopened }
+  }, [rows, workbenchRefsByConversation])
+
   // Branch is the one facet applied client-side: it shares its source of truth
   // with the option list above, and the rows are already in memory.
   const visibleRows = useMemo(() => {
+    let matched: DbConversationSummary[]
     switch (branchFilter.kind) {
       case "all":
-        return rows
+        matched = rows
+        break
       case "none":
-        return rows.filter((r) => !r.git_branch)
+        matched = rows.filter((r) => !r.git_branch)
+        break
       case "branch":
-        return rows.filter((r) => r.git_branch === branchFilter.name)
+        matched = rows.filter((r) => r.git_branch === branchFilter.name)
+        break
     }
-  }, [rows, branchFilter])
+    if (workbenchFilter === "all") return matched
+    if (workbenchFilter === "unopened") {
+      return matched.filter((row) => !workbenchRefsByConversation.has(row.id))
+    }
+    return matched.filter((row) =>
+      workbenchRefsByConversation
+        .get(row.id)
+        ?.some((ref) => ref.workbench_id === workbenchFilter)
+    )
+  }, [branchFilter, rows, workbenchFilter, workbenchRefsByConversation])
 
   useEffect(() => {
     if (
@@ -981,6 +1064,29 @@ export function ConversationManageDialog({
     ]
   )
 
+  const handleBulkOpen = useCallback(() => {
+    if (selectedConversations.length === 0) return
+    setBulkOpening(true)
+    try {
+      openConversations()
+      for (const conversation of selectedConversations) {
+        openTab(
+          conversation.folder_id,
+          conversation.id,
+          conversation.agent_type,
+          true,
+          formatConversationTitle(conversation.title)
+        )
+      }
+      toast.success(t("toastOpened", { count: selectedConversations.length }))
+      onOpenChange(false)
+    } catch (error) {
+      toast.error(t("toastOpFailed", { message: toErrorMessage(error) }))
+    } finally {
+      setBulkOpening(false)
+    }
+  }, [onOpenChange, openConversations, openTab, selectedConversations, t])
+
   const handleBulkDelete = useCallback(async () => {
     if (selectedConversations.length === 0) return
     setPending(true)
@@ -1035,13 +1141,14 @@ export function ConversationManageDialog({
   const anyFacetNarrows =
     search.trim() !== "" ||
     branchFilter.kind !== "all" ||
+    workbenchFilter !== "all" ||
     agentFilter !== "all" ||
     statusFilter !== "all"
 
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="max-w-6xl">
+        <DialogContent className="flex h-[min(46rem,calc(100dvh-2rem))] w-[calc(100vw-2rem)] max-w-6xl flex-col overflow-hidden">
           <DialogHeader>
             {/* Which folder is in scope is the folder pill's job now, not the
                 title's — the pill names it alias-aware and can also read "all
@@ -1070,9 +1177,7 @@ export function ConversationManageDialog({
                 {t("contentSearchUnavailable")}
               </p>
             )}
-            {/* Four across once the dialog is at its `max-w-3xl` width, 2x2
-                below that. */}
-            <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
               <FolderSelect
                 folders={folderOptions}
                 value={scopeFolderId}
@@ -1082,6 +1187,71 @@ export function ConversationManageDialog({
                 variant="field"
                 className={FACET_TRIGGER_CLASS}
               />
+              <Select
+                value={
+                  typeof workbenchFilter === "number"
+                    ? `workbench:${workbenchFilter}`
+                    : workbenchFilter
+                }
+                disabled={workbenchRefsLoading || workbenchRefsUnavailable}
+                onValueChange={(value) => {
+                  if (value === "all" || value === "unopened") {
+                    setWorkbenchFilter(value)
+                    return
+                  }
+                  setWorkbenchFilter(Number(value.slice("workbench:".length)))
+                }}
+              >
+                <SelectTrigger
+                  className={FACET_SELECT_TRIGGER_CLASS}
+                  aria-label={t("workbenchFilterLabel")}
+                  title={
+                    workbenchRefsUnavailable
+                      ? t("workbenchOwnershipUnavailable")
+                      : undefined
+                  }
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">
+                    <span className="flex items-center gap-2">
+                      <PanelsTopLeft className="h-3.5 w-3.5 text-muted-foreground" />
+                      {t("workbenchFilterAll")}
+                    </span>
+                  </SelectItem>
+                  <SelectItem value="unopened">
+                    <span className="flex min-w-0 items-center gap-2">
+                      <PanelsTopLeft className="h-3.5 w-3.5 text-muted-foreground/50" />
+                      <span className="min-w-0 flex-1 truncate">
+                        {t("workbenchFilterUnopened")}
+                      </span>
+                      <span className="text-xs text-muted-foreground tabular-nums">
+                        {unopenedCount}
+                      </span>
+                    </span>
+                  </SelectItem>
+                  {workbenches.map((workbench) => (
+                    <SelectItem
+                      key={workbench.id}
+                      value={`workbench:${workbench.id}`}
+                    >
+                      <span className="flex min-w-0 items-center gap-2">
+                        <PanelsTopLeft className="h-3.5 w-3.5 text-muted-foreground" />
+                        <span className="min-w-0 flex-1 truncate">
+                          {workbench.name}
+                          {workbench.id === activeWorkbenchId
+                            ? ` · ${t("currentWorkbench")}`
+                            : ""}
+                        </span>
+                        <span className="text-xs text-muted-foreground tabular-nums">
+                          {workbenchCounts.get(workbench.id) ?? 0}
+                        </span>
+                      </span>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
               <BranchFilterSelect
                 value={branchFilter}
                 onChange={setBranchFilter}
@@ -1147,9 +1317,14 @@ export function ConversationManageDialog({
             </div>
           </div>
 
-          <div className="grid min-h-0 gap-3 lg:grid-cols-[minmax(0,1.25fr)_minmax(20rem,0.75fr)]">
+          <div className="grid min-h-0 flex-1 gap-3 md:grid-cols-[minmax(0,1.15fr)_minmax(18rem,0.85fr)]">
             {/* List container: select-all header + scrollable list */}
-            <div className="flex min-w-0 flex-col overflow-hidden rounded-md border border-border/50">
+            <div
+              className={cn(
+                "min-h-0 min-w-0 flex-col overflow-hidden rounded-md border border-border/50",
+                previewConversation ? "hidden md:flex" : "flex"
+              )}
+            >
               <div className="flex items-center justify-between px-3 py-2 border-b border-border/50 bg-muted/20">
                 <button
                   type="button"
@@ -1172,7 +1347,7 @@ export function ConversationManageDialog({
                   {t("matchedCount", { count: visibleRows.length })}
                 </span>
               </div>
-              <ScrollArea className="h-[26rem]">
+              <ScrollArea className="min-h-0 flex-1">
                 <div className="flex flex-col gap-0.5 p-1">
                   {loading ? (
                     Array.from({ length: 6 }).map((_, i) => (
@@ -1342,7 +1517,10 @@ export function ConversationManageDialog({
                 mutate the current layout. */}
             <section
               aria-label={t("previewTitle")}
-              className="flex h-[29rem] min-w-0 flex-col overflow-hidden rounded-md border border-border/50 bg-muted/10"
+              className={cn(
+                "min-h-0 min-w-0 flex-col overflow-hidden rounded-md border border-border/50 bg-muted/10",
+                previewConversation ? "flex" : "hidden md:flex"
+              )}
             >
               {!previewConversation ? (
                 <div className="flex flex-1 flex-col items-center justify-center gap-2 px-6 text-center text-sm text-muted-foreground">
@@ -1354,6 +1532,16 @@ export function ConversationManageDialog({
                 <>
                   <div className="space-y-2 border-b border-border/50 p-3">
                     <div className="flex min-w-0 items-start gap-2">
+                      <Button
+                        type="button"
+                        size="icon-sm"
+                        variant="ghost"
+                        className="-ms-1 shrink-0 md:hidden"
+                        aria-label={t("backToSessionList")}
+                        onClick={() => setPreviewConversation(null)}
+                      >
+                        <ArrowLeft className="h-4 w-4 rtl:rotate-180" />
+                      </Button>
                       <AgentIcon
                         agentType={previewConversation.agent_type}
                         className="mt-0.5 h-5 w-5 shrink-0"
@@ -1415,15 +1603,7 @@ export function ConversationManageDialog({
                         {t("openedInWorkbenches")}
                       </p>
                       <div className="flex flex-wrap gap-1.5">
-                        {workbenchRefsUnavailable ? (
-                          <span className="text-xs text-muted-foreground">
-                            {t("workbenchOwnershipUnavailable")}
-                          </span>
-                        ) : previewWorkbenchRefs.length === 0 ? (
-                          <span className="text-xs text-muted-foreground">
-                            {t("notOpenInWorkbench")}
-                          </span>
-                        ) : (
+                        {previewWorkbenchRefs.length > 0 ? (
                           previewWorkbenchRefs.map((ref) => (
                             <Button
                               key={ref.workbench_id}
@@ -1458,6 +1638,14 @@ export function ConversationManageDialog({
                               ) : null}
                             </Button>
                           ))
+                        ) : workbenchRefsUnavailable ? (
+                          <span className="text-xs text-muted-foreground">
+                            {t("workbenchOwnershipUnavailable")}
+                          </span>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">
+                            {t("notOpenInWorkbench")}
+                          </span>
                         )}
                       </div>
                     </div>
@@ -1515,11 +1703,11 @@ export function ConversationManageDialog({
           </div>
 
           {/* Footer: bulk actions */}
-          <DialogFooter className="flex items-center justify-between gap-2 sm:justify-between">
-            <span className="text-xs text-muted-foreground">
+          <DialogFooter className="flex shrink-0 flex-col items-stretch justify-start gap-2 sm:flex-col sm:items-stretch sm:justify-start md:flex-row md:items-center md:justify-between">
+            <span className="w-full text-xs text-muted-foreground md:w-auto">
               {t("selectedCount", { count: selectedCount })}
             </span>
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="grid w-full grid-cols-2 gap-2 md:flex md:w-auto md:flex-wrap md:items-center">
               <Button
                 size="sm"
                 variant="default"
@@ -1537,6 +1725,25 @@ export function ConversationManageDialog({
                   <PanelTopOpen className="mr-1 h-3.5 w-3.5" />
                 )}
                 {t("openInCurrentWorkbench")}
+              </Button>
+
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={
+                  selectedCount === 0 ||
+                  pending ||
+                  bulkOpening ||
+                  openingWorkbenchId !== null
+                }
+                onClick={handleBulkOpen}
+              >
+                {bulkOpening ? (
+                  <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <PanelsTopLeft className="mr-1 h-3.5 w-3.5" />
+                )}
+                {t("addSelectedToWorkbench", { count: selectedCount })}
               </Button>
 
               {/* Set status */}
@@ -1583,6 +1790,7 @@ export function ConversationManageDialog({
               <Button
                 size="sm"
                 variant="outline"
+                className="hidden md:inline-flex"
                 onClick={() => onOpenChange(false)}
               >
                 {tCommon("close")}
