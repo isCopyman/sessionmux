@@ -1,0 +1,878 @@
+use std::collections::{BTreeSet, HashSet};
+
+use chrono::{DateTime, Utc};
+use sea_orm::{
+    ConnectionTrait, DatabaseConnection, DatabaseTransaction, DbBackend, QueryResult, Statement,
+    TransactionTrait,
+};
+
+use crate::db::error::DbError;
+use crate::models::{
+    CollaborationDeliveryHint, CollaborationDeliveryState, CollaborationDeliveryView,
+    CollaborationFeed, CollaborationInvocationPolicy, CollaborationSendResult,
+    CollaborationSessionSnapshot, CollaborationUrgency, SendCollaborationMessageInput,
+};
+
+const MAX_BODY_BYTES: usize = 1_000_000;
+const MAX_TARGETS: usize = 16;
+const MAX_DEDUPE_ID_BYTES: usize = 200;
+const DEFAULT_FEED_LIMIT: u32 = 100;
+const MAX_FEED_LIMIT: u32 = 500;
+
+fn statement(sql: &str, values: Vec<sea_orm::Value>) -> Statement {
+    Statement::from_sql_and_values(DbBackend::Sqlite, sql, values)
+}
+
+fn validation(message: impl Into<String>) -> DbError {
+    DbError::Validation(message.into())
+}
+
+fn parse_timestamp(row: &QueryResult, column: &str) -> Result<DateTime<Utc>, DbError> {
+    row.try_get("", column).map_err(DbError::from)
+}
+
+fn parse_optional_timestamp(
+    row: &QueryResult,
+    column: &str,
+) -> Result<Option<DateTime<Utc>>, DbError> {
+    row.try_get("", column).map_err(DbError::from)
+}
+
+#[derive(Debug, Clone)]
+struct LiveSession {
+    id: i32,
+    title: Option<String>,
+    agent_type: String,
+    folder_path: Option<String>,
+}
+
+impl LiveSession {
+    fn snapshot(&self) -> CollaborationSessionSnapshot {
+        CollaborationSessionSnapshot {
+            conversation_id: self.id,
+            title: self.title.clone(),
+            agent_type: Some(self.agent_type.clone()),
+            folder_path: self.folder_path.clone(),
+            backend: "current".to_string(),
+        }
+    }
+}
+
+async fn live_session<C: ConnectionTrait>(
+    conn: &C,
+    conversation_id: i32,
+) -> Result<Option<LiveSession>, DbError> {
+    let row = conn
+        .query_one(statement(
+            "SELECT c.id, c.title, c.agent_type, f.path AS folder_path \
+             FROM conversation c LEFT JOIN folder f ON f.id = c.folder_id \
+             WHERE c.id = ? AND c.deleted_at IS NULL",
+            vec![conversation_id.into()],
+        ))
+        .await?;
+    row.map(|row| {
+        Ok(LiveSession {
+            id: row.try_get("", "id")?,
+            title: row.try_get("", "title")?,
+            agent_type: row.try_get("", "agent_type")?,
+            folder_path: row.try_get("", "folder_path")?,
+        })
+    })
+    .transpose()
+}
+
+async fn require_live_session<C: ConnectionTrait>(
+    conn: &C,
+    conversation_id: i32,
+) -> Result<LiveSession, DbError> {
+    live_session(conn, conversation_id)
+        .await?
+        .ok_or_else(|| DbError::NotFound(format!("Conversation {conversation_id}")))
+}
+
+async fn ensure_state(txn: &DatabaseTransaction, conversation_id: i32) -> Result<(), DbError> {
+    txn.execute(statement(
+        "INSERT OR IGNORE INTO conversation_collaboration_state \
+         (conversation_id, revision, updated_at) VALUES (?, 0, CURRENT_TIMESTAMP)",
+        vec![conversation_id.into()],
+    ))
+    .await?;
+    Ok(())
+}
+
+async fn ensure_state_if_live(
+    txn: &DatabaseTransaction,
+    conversation_id: i32,
+) -> Result<bool, DbError> {
+    if live_session(txn, conversation_id).await?.is_none() {
+        return Ok(false);
+    }
+    ensure_state(txn, conversation_id).await?;
+    Ok(true)
+}
+
+async fn bump_revision(txn: &DatabaseTransaction, conversation_id: i32) -> Result<(), DbError> {
+    txn.execute(statement(
+        "UPDATE conversation_collaboration_state \
+         SET revision = revision + 1, updated_at = CURRENT_TIMESTAMP \
+         WHERE conversation_id = ?",
+        vec![conversation_id.into()],
+    ))
+    .await?;
+    Ok(())
+}
+
+async fn revision<C: ConnectionTrait>(conn: &C, conversation_id: i32) -> Result<i64, DbError> {
+    let row = conn
+        .query_one(statement(
+            "SELECT revision FROM conversation_collaboration_state WHERE conversation_id = ?",
+            vec![conversation_id.into()],
+        ))
+        .await?;
+    Ok(match row {
+        Some(row) => row.try_get("", "revision")?,
+        None => 0,
+    })
+}
+
+const DELIVERY_SELECT: &str = "SELECT d.id, d.event_id, d.target_conversation_id, \
+            d.target_title_snapshot, d.target_agent_type_snapshot, \
+            d.target_folder_path_snapshot, d.invocation_policy, d.delivery_hint, \
+            d.state, d.ui_seen_at, d.embedded_turn_ref, d.attempts, d.error, \
+            d.created_at, d.updated_at, e.source_conversation_id, \
+            e.source_title_snapshot, e.source_agent_type_snapshot, \
+            e.source_folder_path_snapshot, e.source_backend_snapshot, e.body, \
+            e.reply_to_event_id, e.expects_reply, e.urgency \
+     FROM collaboration_delivery d \
+     JOIN collaboration_event e ON e.id = d.event_id ";
+
+fn parse_delivery(row: &QueryResult) -> Result<CollaborationDeliveryView, DbError> {
+    let invocation_raw: String = row.try_get("", "invocation_policy")?;
+    let invocation_policy = CollaborationInvocationPolicy::parse(&invocation_raw)
+        .ok_or_else(|| validation(format!("Unknown invocation policy: {invocation_raw}")))?;
+    let hint_raw: String = row.try_get("", "delivery_hint")?;
+    let delivery_hint = CollaborationDeliveryHint::parse(&hint_raw)
+        .ok_or_else(|| validation(format!("Unknown delivery hint: {hint_raw}")))?;
+    let state_raw: String = row.try_get("", "state")?;
+    let state = CollaborationDeliveryState::parse(&state_raw)
+        .ok_or_else(|| validation(format!("Unknown delivery state: {state_raw}")))?;
+    let urgency_raw: String = row.try_get("", "urgency")?;
+    let urgency = CollaborationUrgency::parse(&urgency_raw)
+        .ok_or_else(|| validation(format!("Unknown urgency: {urgency_raw}")))?;
+    let expects_reply: i64 = row.try_get("", "expects_reply")?;
+
+    Ok(CollaborationDeliveryView {
+        id: row.try_get("", "id")?,
+        event_id: row.try_get("", "event_id")?,
+        source: CollaborationSessionSnapshot {
+            conversation_id: row.try_get("", "source_conversation_id")?,
+            title: row.try_get("", "source_title_snapshot")?,
+            agent_type: Some(row.try_get("", "source_agent_type_snapshot")?),
+            folder_path: row.try_get("", "source_folder_path_snapshot")?,
+            backend: row.try_get("", "source_backend_snapshot")?,
+        },
+        target: CollaborationSessionSnapshot {
+            conversation_id: row.try_get("", "target_conversation_id")?,
+            title: row.try_get("", "target_title_snapshot")?,
+            agent_type: row.try_get("", "target_agent_type_snapshot")?,
+            folder_path: row.try_get("", "target_folder_path_snapshot")?,
+            backend: "current".to_string(),
+        },
+        body: row.try_get("", "body")?,
+        reply_to_event_id: row.try_get("", "reply_to_event_id")?,
+        expects_reply: expects_reply != 0,
+        urgency,
+        invocation_policy,
+        delivery_hint,
+        state,
+        ui_seen_at: parse_optional_timestamp(row, "ui_seen_at")?,
+        embedded_turn_ref: row.try_get("", "embedded_turn_ref")?,
+        attempts: row.try_get("", "attempts")?,
+        error: row.try_get("", "error")?,
+        created_at: parse_timestamp(row, "created_at")?,
+        updated_at: parse_timestamp(row, "updated_at")?,
+    })
+}
+
+async fn deliveries_for_event<C: ConnectionTrait>(
+    conn: &C,
+    event_id: &str,
+) -> Result<Vec<CollaborationDeliveryView>, DbError> {
+    let rows = conn
+        .query_all(statement(
+            &format!(
+                "{DELIVERY_SELECT} WHERE d.event_id = ? \
+                 ORDER BY d.target_conversation_id ASC, d.id ASC"
+            ),
+            vec![event_id.into()],
+        ))
+        .await?;
+    rows.iter().map(parse_delivery).collect()
+}
+
+async fn event_id_for_dedupe<C: ConnectionTrait>(
+    conn: &C,
+    source_conversation_id: i32,
+    client_dedupe_id: &str,
+) -> Result<Option<String>, DbError> {
+    let row = conn
+        .query_one(statement(
+            "SELECT id FROM collaboration_event \
+             WHERE source_conversation_id = ? AND client_dedupe_id = ?",
+            vec![source_conversation_id.into(), client_dedupe_id.into()],
+        ))
+        .await?;
+    row.map(|row| row.try_get("", "id").map_err(DbError::from))
+        .transpose()
+}
+
+async fn validate_dedupe_payload<C: ConnectionTrait>(
+    conn: &C,
+    event_id: &str,
+    input: &SendCollaborationMessageInput,
+) -> Result<(), DbError> {
+    let row = conn
+        .query_one(statement(
+            "SELECT body, reply_to_event_id, expects_reply, urgency \
+             FROM collaboration_event WHERE id = ?",
+            vec![event_id.into()],
+        ))
+        .await?
+        .ok_or_else(|| DbError::NotFound(format!("Collaboration event {event_id}")))?;
+    let body: String = row.try_get("", "body")?;
+    let reply_to: Option<String> = row.try_get("", "reply_to_event_id")?;
+    let expects_reply: i64 = row.try_get("", "expects_reply")?;
+    let urgency: String = row.try_get("", "urgency")?;
+    if body != input.body
+        || reply_to != input.reply_to_event_id
+        || (expects_reply != 0) != input.expects_reply
+        || urgency != input.urgency.as_str()
+    {
+        return Err(validation(
+            "Collaboration dedupe id was reused with a different message payload",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_input(input: &SendCollaborationMessageInput) -> Result<Vec<i32>, DbError> {
+    if input.body.trim().is_empty() {
+        return Err(validation("Collaboration message body cannot be empty"));
+    }
+    if input.body.len() > MAX_BODY_BYTES {
+        return Err(validation("Collaboration message body is too large"));
+    }
+    let dedupe_id = input.client_dedupe_id.trim();
+    if dedupe_id.is_empty() || dedupe_id.len() > MAX_DEDUPE_ID_BYTES {
+        return Err(validation(format!(
+            "client_dedupe_id must contain between 1 and {MAX_DEDUPE_ID_BYTES} bytes"
+        )));
+    }
+    if input.invocation_policy != CollaborationInvocationPolicy::StoreOnly {
+        return Err(validation(
+            "invoke_when_idle is not available in the store-only collaboration slice",
+        ));
+    }
+    if input.delivery_hint != CollaborationDeliveryHint::Default {
+        return Err(validation(
+            "steer_if_supported is not available in the store-only collaboration slice",
+        ));
+    }
+
+    let targets: BTreeSet<i32> = input.target_conversation_ids.iter().copied().collect();
+    if targets.is_empty() {
+        return Err(validation(
+            "A collaboration message requires at least one target Session",
+        ));
+    }
+    if targets.len() > MAX_TARGETS {
+        return Err(validation(format!(
+            "A collaboration message supports at most {MAX_TARGETS} targets"
+        )));
+    }
+    if targets.contains(&input.source_conversation_id) {
+        return Err(validation("A Session cannot send a message to itself"));
+    }
+    Ok(targets.into_iter().collect())
+}
+
+/// Persist one immutable event and all per-target deliveries atomically.
+///
+/// A retry with the same `(source_conversation_id, client_dedupe_id)` returns
+/// the original event and original delivery set. In particular, adding targets
+/// to a retry never silently expands fan-out. A changed body or metadata is a
+/// caller error because it would make the idempotency key ambiguous.
+pub async fn send(
+    conn: &DatabaseConnection,
+    input: SendCollaborationMessageInput,
+) -> Result<CollaborationSendResult, DbError> {
+    let target_ids = validate_input(&input)?;
+    let txn = conn.begin().await?;
+    let source = require_live_session(&txn, input.source_conversation_id).await?;
+
+    if let Some(reply_to) = input.reply_to_event_id.as_deref() {
+        let exists = txn
+            .query_one(statement(
+                "SELECT id FROM collaboration_event WHERE id = ?",
+                vec![reply_to.into()],
+            ))
+            .await?
+            .is_some();
+        if !exists {
+            return Err(DbError::NotFound(format!("Collaboration event {reply_to}")));
+        }
+    }
+
+    if let Some(event_id) =
+        event_id_for_dedupe(&txn, input.source_conversation_id, &input.client_dedupe_id).await?
+    {
+        validate_dedupe_payload(&txn, &event_id, &input).await?;
+        let deliveries = deliveries_for_event(&txn, &event_id).await?;
+        let mut affected = BTreeSet::from([input.source_conversation_id]);
+        affected.extend(deliveries.iter().map(|item| item.target.conversation_id));
+        txn.commit().await?;
+        return Ok(CollaborationSendResult {
+            event_id,
+            deliveries,
+            affected_conversation_ids: affected.into_iter().collect(),
+            deduplicated: true,
+        });
+    }
+
+    let event_id = uuid::Uuid::new_v4().to_string();
+    let inserted = txn
+        .execute(statement(
+            "INSERT OR IGNORE INTO collaboration_event \
+         (id, source_conversation_id, source_title_snapshot, source_agent_type_snapshot, \
+          source_folder_path_snapshot, source_backend_snapshot, body, reply_to_event_id, \
+          expects_reply, urgency, client_dedupe_id, created_at) \
+         VALUES (?, ?, ?, ?, ?, 'current', ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
+            vec![
+                event_id.clone().into(),
+                source.id.into(),
+                source.title.clone().into(),
+                source.agent_type.clone().into(),
+                source.folder_path.clone().into(),
+                input.body.clone().into(),
+                input.reply_to_event_id.clone().into(),
+                (input.expects_reply as i32).into(),
+                input.urgency.as_str().into(),
+                input.client_dedupe_id.clone().into(),
+            ],
+        ))
+        .await?;
+    // Close the double-click / two-window race between the optimistic dedupe
+    // lookup above and the write. The unique key is the arbiter; a loser reads
+    // and returns the already-committed fan-out instead of creating a second
+    // event or silently appending its possibly different target list.
+    if inserted.rows_affected() == 0 {
+        let existing_id =
+            event_id_for_dedupe(&txn, input.source_conversation_id, &input.client_dedupe_id)
+                .await?
+                .ok_or_else(|| {
+                    validation("Collaboration dedupe race did not resolve to an event")
+                })?;
+        validate_dedupe_payload(&txn, &existing_id, &input).await?;
+        let deliveries = deliveries_for_event(&txn, &existing_id).await?;
+        let mut affected = BTreeSet::from([input.source_conversation_id]);
+        affected.extend(deliveries.iter().map(|item| item.target.conversation_id));
+        txn.commit().await?;
+        return Ok(CollaborationSendResult {
+            event_id: existing_id,
+            deliveries,
+            affected_conversation_ids: affected.into_iter().collect(),
+            deduplicated: true,
+        });
+    }
+
+    let mut affected = BTreeSet::from([source.id]);
+    ensure_state(&txn, source.id).await?;
+    bump_revision(&txn, source.id).await?;
+
+    for target_id in target_ids {
+        let target = live_session(&txn, target_id).await?;
+        let (snapshot, state, error) = match target.as_ref() {
+            Some(target) => (target.snapshot(), "pending", None),
+            None => (
+                CollaborationSessionSnapshot {
+                    conversation_id: target_id,
+                    title: None,
+                    agent_type: None,
+                    folder_path: None,
+                    backend: "current".to_string(),
+                },
+                "failed",
+                Some("target_not_found".to_string()),
+            ),
+        };
+        let delivery_id = uuid::Uuid::new_v4().to_string();
+        txn.execute(statement(
+            "INSERT INTO collaboration_delivery \
+             (id, event_id, target_conversation_id, target_title_snapshot, \
+              target_agent_type_snapshot, target_folder_path_snapshot, invocation_policy, \
+              delivery_hint, state, attempts, error, created_at, updated_at) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+            vec![
+                delivery_id.into(),
+                event_id.clone().into(),
+                target_id.into(),
+                snapshot.title.into(),
+                snapshot.agent_type.into(),
+                snapshot.folder_path.into(),
+                input.invocation_policy.as_str().into(),
+                input.delivery_hint.as_str().into(),
+                state.into(),
+                error.into(),
+            ],
+        ))
+        .await?;
+        if target.is_some() {
+            ensure_state(&txn, target_id).await?;
+            bump_revision(&txn, target_id).await?;
+            affected.insert(target_id);
+        }
+    }
+
+    let deliveries = deliveries_for_event(&txn, &event_id).await?;
+    txn.commit().await?;
+    Ok(CollaborationSendResult {
+        event_id,
+        deliveries,
+        affected_conversation_ids: affected.into_iter().collect(),
+        deduplicated: false,
+    })
+}
+
+async fn feed_on<C: ConnectionTrait>(
+    conn: &C,
+    conversation_id: i32,
+    limit: u32,
+) -> Result<CollaborationFeed, DbError> {
+    require_live_session(conn, conversation_id).await?;
+    let limit = limit.clamp(1, MAX_FEED_LIMIT) as i64;
+    let inbound_rows = conn
+        .query_all(statement(
+            &format!(
+                "{DELIVERY_SELECT} WHERE d.target_conversation_id = ? \
+                 ORDER BY d.created_at DESC, d.id DESC LIMIT ?"
+            ),
+            vec![conversation_id.into(), limit.into()],
+        ))
+        .await?;
+    let outbound_rows = conn
+        .query_all(statement(
+            &format!(
+                "{DELIVERY_SELECT} WHERE e.source_conversation_id = ? \
+                 ORDER BY d.created_at DESC, d.id DESC LIMIT ?"
+            ),
+            vec![conversation_id.into(), limit.into()],
+        ))
+        .await?;
+    let count_row = conn
+        .query_one(statement(
+            "SELECT COUNT(*) AS count FROM collaboration_delivery \
+             WHERE target_conversation_id = ? AND ui_seen_at IS NULL \
+               AND state <> 'dismissed'",
+            vec![conversation_id.into()],
+        ))
+        .await?
+        .expect("COUNT always returns a row");
+    let unread_count: i64 = count_row.try_get("", "count")?;
+    Ok(CollaborationFeed {
+        conversation_id,
+        revision: revision(conn, conversation_id).await?,
+        unread_count: unread_count.max(0) as u32,
+        inbound: inbound_rows
+            .iter()
+            .map(parse_delivery)
+            .collect::<Result<Vec<_>, _>>()?,
+        outbound: outbound_rows
+            .iter()
+            .map(parse_delivery)
+            .collect::<Result<Vec<_>, _>>()?,
+    })
+}
+
+pub async fn feed(
+    conn: &DatabaseConnection,
+    conversation_id: i32,
+    limit: Option<u32>,
+) -> Result<CollaborationFeed, DbError> {
+    feed_on(conn, conversation_id, limit.unwrap_or(DEFAULT_FEED_LIMIT)).await
+}
+
+pub struct CollaborationMutationResult {
+    pub feed: CollaborationFeed,
+    pub affected_conversation_ids: Vec<i32>,
+}
+
+async fn delivery_participants(
+    txn: &DatabaseTransaction,
+    delivery_id: &str,
+    target_conversation_id: i32,
+) -> Result<(i32, i32), DbError> {
+    let row = txn
+        .query_one(statement(
+            "SELECT e.source_conversation_id, d.target_conversation_id \
+             FROM collaboration_delivery d \
+             JOIN collaboration_event e ON e.id = d.event_id \
+             WHERE d.id = ?",
+            vec![delivery_id.into()],
+        ))
+        .await?
+        .ok_or_else(|| DbError::NotFound(format!("Collaboration delivery {delivery_id}")))?;
+    let source_id: i32 = row.try_get("", "source_conversation_id")?;
+    let target_id: i32 = row.try_get("", "target_conversation_id")?;
+    if target_id != target_conversation_id {
+        return Err(DbError::NotFound(format!(
+            "Collaboration delivery {delivery_id} for Session {target_conversation_id}"
+        )));
+    }
+    Ok((source_id, target_id))
+}
+
+async fn bump_live_participants(
+    txn: &DatabaseTransaction,
+    participants: impl IntoIterator<Item = i32>,
+) -> Result<Vec<i32>, DbError> {
+    let mut affected = BTreeSet::new();
+    for conversation_id in participants {
+        if ensure_state_if_live(txn, conversation_id).await? {
+            bump_revision(txn, conversation_id).await?;
+            affected.insert(conversation_id);
+        }
+    }
+    Ok(affected.into_iter().collect())
+}
+
+pub async fn mark_seen(
+    conn: &DatabaseConnection,
+    conversation_id: i32,
+    delivery_ids: Vec<String>,
+) -> Result<CollaborationMutationResult, DbError> {
+    require_live_session(conn, conversation_id).await?;
+    let ids: BTreeSet<String> = delivery_ids
+        .into_iter()
+        .filter(|id| !id.trim().is_empty())
+        .collect();
+    if ids.is_empty() {
+        return Ok(CollaborationMutationResult {
+            feed: feed(conn, conversation_id, None).await?,
+            affected_conversation_ids: vec![],
+        });
+    }
+
+    let txn = conn.begin().await?;
+    let mut participants = HashSet::from([conversation_id]);
+    let mut changed = false;
+    for delivery_id in ids {
+        let (source_id, _) = delivery_participants(&txn, &delivery_id, conversation_id).await?;
+        participants.insert(source_id);
+        let result = txn
+            .execute(statement(
+                "UPDATE collaboration_delivery \
+                 SET ui_seen_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP \
+                 WHERE id = ? AND target_conversation_id = ? AND ui_seen_at IS NULL",
+                vec![delivery_id.into(), conversation_id.into()],
+            ))
+            .await?;
+        changed |= result.rows_affected() > 0;
+    }
+    let affected = if changed {
+        bump_live_participants(&txn, participants).await?
+    } else {
+        vec![]
+    };
+    txn.commit().await?;
+    Ok(CollaborationMutationResult {
+        feed: feed(conn, conversation_id, None).await?,
+        affected_conversation_ids: affected,
+    })
+}
+
+pub async fn dismiss(
+    conn: &DatabaseConnection,
+    conversation_id: i32,
+    delivery_id: &str,
+) -> Result<CollaborationMutationResult, DbError> {
+    require_live_session(conn, conversation_id).await?;
+    let txn = conn.begin().await?;
+    let (source_id, _) = delivery_participants(&txn, delivery_id, conversation_id).await?;
+    let result = txn
+        .execute(statement(
+            "UPDATE collaboration_delivery \
+             SET state = 'dismissed', ui_seen_at = COALESCE(ui_seen_at, CURRENT_TIMESTAMP), \
+                 updated_at = CURRENT_TIMESTAMP \
+             WHERE id = ? AND target_conversation_id = ? AND state = 'pending'",
+            vec![delivery_id.into(), conversation_id.into()],
+        ))
+        .await?;
+    let affected = if result.rows_affected() > 0 {
+        bump_live_participants(&txn, [source_id, conversation_id]).await?
+    } else {
+        vec![]
+    };
+    txn.commit().await?;
+    Ok(CollaborationMutationResult {
+        feed: feed(conn, conversation_id, None).await?,
+        affected_conversation_ids: affected,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::test_helpers::{
+        fresh_disk_db, fresh_in_memory_db, seed_conversation, seed_folder,
+    };
+    use crate::models::AgentType;
+    use sea_orm::{ConnectionTrait, DbBackend, Statement};
+
+    fn input(
+        source: i32,
+        targets: Vec<i32>,
+        dedupe: &str,
+        body: &str,
+    ) -> SendCollaborationMessageInput {
+        SendCollaborationMessageInput {
+            source_conversation_id: source,
+            target_conversation_ids: targets,
+            body: body.to_string(),
+            client_dedupe_id: dedupe.to_string(),
+            invocation_policy: CollaborationInvocationPolicy::StoreOnly,
+            delivery_hint: CollaborationDeliveryHint::Default,
+            expects_reply: false,
+            urgency: CollaborationUrgency::Normal,
+            reply_to_event_id: None,
+        }
+    }
+
+    async fn seeded_memory() -> (crate::db::AppDatabase, i32, i32, i32) {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/codeg-collaboration").await;
+        let source = seed_conversation(&db, folder_id, AgentType::Codex).await;
+        let target_a = seed_conversation(&db, folder_id, AgentType::ClaudeCode).await;
+        let target_b = seed_conversation(&db, folder_id, AgentType::Gemini).await;
+        (db, source, target_a, target_b)
+    }
+
+    #[tokio::test]
+    async fn one_event_fans_out_atomically_and_never_enters_prompt_queue() {
+        let (db, source, target_a, target_b) = seeded_memory().await;
+        let sent = send(
+            &db.conn,
+            input(source, vec![target_a, target_b], "fanout-1", "review this"),
+        )
+        .await
+        .expect("send");
+        assert_eq!(sent.deliveries.len(), 2);
+        assert!(sent
+            .deliveries
+            .iter()
+            .all(|item| item.state == CollaborationDeliveryState::Pending));
+        assert_eq!(
+            feed(&db.conn, target_a, None).await.unwrap().unread_count,
+            1
+        );
+        assert_eq!(
+            feed(&db.conn, target_b, None).await.unwrap().unread_count,
+            1
+        );
+        let queued: i64 = db
+            .conn
+            .query_one(Statement::from_string(
+                DbBackend::Sqlite,
+                "SELECT COUNT(*) AS count FROM conversation_prompt_queue_item",
+            ))
+            .await
+            .unwrap()
+            .unwrap()
+            .try_get("", "count")
+            .unwrap();
+        assert_eq!(queued, 0, "store_only must not wake or enqueue the Harness");
+    }
+
+    #[tokio::test]
+    async fn dedupe_returns_original_delivery_set_without_expanding_targets() {
+        let (db, source, target_a, target_b) = seeded_memory().await;
+        let first = send(&db.conn, input(source, vec![target_a], "same", "unchanged"))
+            .await
+            .unwrap();
+        let retry = send(
+            &db.conn,
+            input(source, vec![target_a, target_b], "same", "unchanged"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(retry.event_id, first.event_id);
+        assert_eq!(retry.deliveries.len(), 1);
+        assert_eq!(retry.deliveries[0].target.conversation_id, target_a);
+        assert!(send(
+            &db.conn,
+            input(source, vec![target_a], "same", "changed body"),
+        )
+        .await
+        .is_err());
+    }
+
+    #[tokio::test]
+    async fn concurrent_dedupe_race_creates_one_event_and_one_fanout() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let db = fresh_disk_db(dir.path()).await;
+        let folder_id = seed_folder(&db, "/tmp/codeg-collaboration-race").await;
+        let source = seed_conversation(&db, folder_id, AgentType::Codex).await;
+        let target = seed_conversation(&db, folder_id, AgentType::ClaudeCode).await;
+        let request = input(source, vec![target], "double-click", "only once");
+
+        let (first, second) =
+            tokio::join!(send(&db.conn, request.clone()), send(&db.conn, request));
+        let first = first.expect("first send");
+        let second = second.expect("deduplicated concurrent send");
+        assert_eq!(first.event_id, second.event_id);
+        assert_eq!(first.deliveries.len(), 1);
+        assert_eq!(second.deliveries.len(), 1);
+
+        let count: i64 = db
+            .conn
+            .query_one(Statement::from_string(
+                DbBackend::Sqlite,
+                "SELECT COUNT(*) AS count FROM collaboration_event",
+            ))
+            .await
+            .unwrap()
+            .unwrap()
+            .try_get("", "count")
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[tokio::test]
+    async fn missing_target_is_a_failed_delivery_without_harming_live_targets() {
+        let (db, source, target_a, _) = seeded_memory().await;
+        let sent = send(
+            &db.conn,
+            input(source, vec![target_a, 999_999], "partial", "hello"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(sent.deliveries.len(), 2);
+        let live = sent
+            .deliveries
+            .iter()
+            .find(|item| item.target.conversation_id == target_a)
+            .unwrap();
+        let missing = sent
+            .deliveries
+            .iter()
+            .find(|item| item.target.conversation_id == 999_999)
+            .unwrap();
+        assert_eq!(live.state, CollaborationDeliveryState::Pending);
+        assert_eq!(missing.state, CollaborationDeliveryState::Failed);
+        assert_eq!(missing.error.as_deref(), Some("target_not_found"));
+    }
+
+    #[tokio::test]
+    async fn read_is_monotonic_and_separate_from_delivery_state() {
+        let (db, source, target, _) = seeded_memory().await;
+        let sent = send(&db.conn, input(source, vec![target], "read", "hello"))
+            .await
+            .unwrap();
+        let delivery_id = sent.deliveries[0].id.clone();
+        let before = feed(&db.conn, target, None).await.unwrap();
+        let marked = mark_seen(&db.conn, target, vec![delivery_id.clone()])
+            .await
+            .unwrap();
+        assert_eq!(marked.feed.unread_count, 0);
+        assert_eq!(
+            marked.feed.inbound[0].state,
+            CollaborationDeliveryState::Pending
+        );
+        assert!(marked.feed.inbound[0].ui_seen_at.is_some());
+        let repeated = mark_seen(&db.conn, target, vec![delivery_id])
+            .await
+            .unwrap();
+        assert_eq!(repeated.feed.revision, marked.feed.revision);
+        assert!(marked.feed.revision > before.revision);
+    }
+
+    #[tokio::test]
+    async fn dismiss_updates_sender_and_target_views_without_deleting_event() {
+        let (db, source, target, _) = seeded_memory().await;
+        let sent = send(&db.conn, input(source, vec![target], "dismiss", "hello"))
+            .await
+            .unwrap();
+        let result = dismiss(&db.conn, target, &sent.deliveries[0].id)
+            .await
+            .unwrap();
+        assert_eq!(result.feed.unread_count, 0);
+        assert_eq!(
+            result.feed.inbound[0].state,
+            CollaborationDeliveryState::Dismissed
+        );
+        let source_feed = feed(&db.conn, source, None).await.unwrap();
+        assert_eq!(
+            source_feed.outbound[0].state,
+            CollaborationDeliveryState::Dismissed
+        );
+    }
+
+    #[tokio::test]
+    async fn deleting_author_does_not_erase_received_mail_or_frozen_identity() {
+        let (db, source, target, _) = seeded_memory().await;
+        db.conn
+            .execute(Statement::from_sql_and_values(
+                DbBackend::Sqlite,
+                "UPDATE conversation SET title = 'Original author' WHERE id = ?",
+                vec![source.into()],
+            ))
+            .await
+            .unwrap();
+        send(&db.conn, input(source, vec![target], "durable", "keep me"))
+            .await
+            .unwrap();
+        db.conn
+            .execute(Statement::from_sql_and_values(
+                DbBackend::Sqlite,
+                "DELETE FROM conversation WHERE id = ?",
+                vec![source.into()],
+            ))
+            .await
+            .expect("hard delete source");
+        let target_feed = feed(&db.conn, target, None).await.unwrap();
+        assert_eq!(target_feed.inbound.len(), 1);
+        assert_eq!(
+            target_feed.inbound[0].source.title.as_deref(),
+            Some("Original author")
+        );
+        assert_eq!(target_feed.inbound[0].source.conversation_id, source);
+    }
+
+    #[tokio::test]
+    async fn event_and_unread_survive_database_reopen() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let db = fresh_disk_db(dir.path()).await;
+        let folder_id = seed_folder(&db, "/tmp/codeg-collaboration-disk").await;
+        let source = seed_conversation(&db, folder_id, AgentType::Codex).await;
+        let target = seed_conversation(&db, folder_id, AgentType::ClaudeCode).await;
+        send(&db.conn, input(source, vec![target], "disk", "persist me"))
+            .await
+            .unwrap();
+        drop(db);
+
+        let reopened = fresh_disk_db(dir.path()).await;
+        let restored = feed(&reopened.conn, target, None).await.unwrap();
+        assert_eq!(restored.unread_count, 1);
+        assert_eq!(restored.inbound[0].body, "persist me");
+    }
+
+    #[tokio::test]
+    async fn rejects_self_send_and_unimplemented_activation_modes() {
+        let (db, source, target, _) = seeded_memory().await;
+        assert!(send(&db.conn, input(source, vec![source], "self", "no"))
+            .await
+            .is_err());
+        let mut invoke = input(source, vec![target], "invoke", "later");
+        invoke.invocation_policy = CollaborationInvocationPolicy::InvokeWhenIdle;
+        assert!(send(&db.conn, invoke).await.is_err());
+    }
+}

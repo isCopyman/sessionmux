@@ -1,0 +1,187 @@
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CollaborationInvocationPolicy {
+    StoreOnly,
+    InvokeWhenIdle,
+}
+
+impl CollaborationInvocationPolicy {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::StoreOnly => "store_only",
+            Self::InvokeWhenIdle => "invoke_when_idle",
+        }
+    }
+
+    pub(crate) fn parse(value: &str) -> Option<Self> {
+        match value {
+            "store_only" => Some(Self::StoreOnly),
+            "invoke_when_idle" => Some(Self::InvokeWhenIdle),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CollaborationDeliveryHint {
+    Default,
+    SteerIfSupported,
+}
+
+impl CollaborationDeliveryHint {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::SteerIfSupported => "steer_if_supported",
+        }
+    }
+
+    pub(crate) fn parse(value: &str) -> Option<Self> {
+        match value {
+            "default" => Some(Self::Default),
+            "steer_if_supported" => Some(Self::SteerIfSupported),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CollaborationUrgency {
+    Normal,
+    Urgent,
+}
+
+impl CollaborationUrgency {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::Urgent => "urgent",
+        }
+    }
+
+    pub(crate) fn parse(value: &str) -> Option<Self> {
+        match value {
+            "normal" => Some(Self::Normal),
+            "urgent" => Some(Self::Urgent),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CollaborationDeliveryState {
+    Pending,
+    Queued,
+    Embedding,
+    Embedded,
+    Dismissed,
+    Failed,
+}
+
+impl CollaborationDeliveryState {
+    pub(crate) fn parse(value: &str) -> Option<Self> {
+        match value {
+            "pending" => Some(Self::Pending),
+            "queued" => Some(Self::Queued),
+            "embedding" => Some(Self::Embedding),
+            "embedded" => Some(Self::Embedded),
+            "dismissed" => Some(Self::Dismissed),
+            "failed" => Some(Self::Failed),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CollaborationSessionSnapshot {
+    pub conversation_id: i32,
+    pub title: Option<String>,
+    pub agent_type: Option<String>,
+    pub folder_path: Option<String>,
+    pub backend: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CollaborationDeliveryView {
+    pub id: String,
+    pub event_id: String,
+    pub source: CollaborationSessionSnapshot,
+    pub target: CollaborationSessionSnapshot,
+    pub body: String,
+    pub reply_to_event_id: Option<String>,
+    pub expects_reply: bool,
+    pub urgency: CollaborationUrgency,
+    pub invocation_policy: CollaborationInvocationPolicy,
+    pub delivery_hint: CollaborationDeliveryHint,
+    pub state: CollaborationDeliveryState,
+    pub ui_seen_at: Option<DateTime<Utc>>,
+    pub embedded_turn_ref: Option<String>,
+    pub attempts: i32,
+    pub error: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CollaborationFeed {
+    pub conversation_id: i32,
+    pub revision: i64,
+    pub unread_count: u32,
+    pub inbound: Vec<CollaborationDeliveryView>,
+    pub outbound: Vec<CollaborationDeliveryView>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SendCollaborationMessageInput {
+    pub source_conversation_id: i32,
+    pub target_conversation_ids: Vec<i32>,
+    pub body: String,
+    pub client_dedupe_id: String,
+    #[serde(default = "default_invocation_policy")]
+    pub invocation_policy: CollaborationInvocationPolicy,
+    #[serde(default = "default_delivery_hint")]
+    pub delivery_hint: CollaborationDeliveryHint,
+    #[serde(default)]
+    pub expects_reply: bool,
+    #[serde(default = "default_urgency")]
+    pub urgency: CollaborationUrgency,
+    #[serde(default)]
+    pub reply_to_event_id: Option<String>,
+}
+
+fn default_invocation_policy() -> CollaborationInvocationPolicy {
+    CollaborationInvocationPolicy::StoreOnly
+}
+
+fn default_delivery_hint() -> CollaborationDeliveryHint {
+    CollaborationDeliveryHint::Default
+}
+
+fn default_urgency() -> CollaborationUrgency {
+    CollaborationUrgency::Normal
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CollaborationSendResult {
+    pub event_id: String,
+    pub deliveries: Vec<CollaborationDeliveryView>,
+    pub affected_conversation_ids: Vec<i32>,
+    pub deduplicated: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CollaborationChanged {
+    pub conversation_ids: Vec<i32>,
+}

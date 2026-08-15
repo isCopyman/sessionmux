@@ -2,6 +2,7 @@ pub mod agent;
 pub mod automation;
 pub mod background;
 pub mod chat_channel;
+pub mod collaboration;
 pub mod conversation;
 pub mod folder;
 pub mod message;
@@ -21,6 +22,12 @@ pub use automation::{
 };
 #[allow(unused_imports)]
 pub use chat_channel::{ChannelStatusInfo, ChatChannelInfo, ChatChannelMessageLogInfo};
+pub use collaboration::{
+    CollaborationChanged, CollaborationDeliveryHint, CollaborationDeliveryState,
+    CollaborationDeliveryView, CollaborationFeed, CollaborationInvocationPolicy,
+    CollaborationSendResult, CollaborationSessionSnapshot, CollaborationUrgency,
+    SendCollaborationMessageInput,
+};
 pub use conversation::{
     AgentConversationCount, AgentStats, ConversationDetail, ConversationSummary,
     ConversationTurnsPage, DbConversationDetail, DbConversationSummary, FolderInfo,

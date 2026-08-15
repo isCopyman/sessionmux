@@ -9,6 +9,7 @@ import {
   Pencil,
   Pin,
   PinOff,
+  Send,
   SquarePen,
   Trash2,
 } from "lucide-react"
@@ -62,6 +63,7 @@ import {
   type ActiveSessionDetails,
 } from "./active-session-details"
 import { SessionDetailsDialog } from "./session-details-dialog"
+import { SessionMessageComposerDialog } from "@/components/collaboration/session-message-composer-dialog"
 
 interface ConversationDetailHeaderProps {
   tabId: string
@@ -105,6 +107,7 @@ export const ConversationDetailHeader = memo(function ConversationDetailHeader({
   const tConv = useTranslations("Folder.conversation")
   const tStatus = useTranslations("Folder.statusLabels")
   const tDetails = useTranslations("Folder.sessionDetails")
+  const tCollaboration = useTranslations("Collaboration")
   const { closeTab, openNewConversationTab } = useTabActions()
   const updateConversationLocal = useAppWorkspaceStore(
     (s) => s.updateConversationLocal
@@ -128,6 +131,7 @@ export const ConversationDetailHeader = memo(function ConversationDetailHeader({
   )
 
   const [details, setDetails] = useState<ActiveSessionDetails | null>(null)
+  const [messageComposerOpen, setMessageComposerOpen] = useState(false)
   // Snapshot the action target when a dialog OPENS. The header is a SINGLE
   // instance reused across active tabs (see conversation-detail-panel), and the
   // global tab-switch / close-tab shortcuts still fire while a dialog is open —
@@ -299,6 +303,13 @@ export const ConversationDetailHeader = memo(function ConversationDetailHeader({
               <Info className="h-4 w-4" />
               {tDetails("menuLabel")}
             </DropdownMenuItem>
+            <DropdownMenuItem
+              disabled={!persisted}
+              onSelect={() => setMessageComposerOpen(true)}
+            >
+              <Send className="h-4 w-4" />
+              {tCollaboration("sendMenu")}
+            </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuSub>
               <DropdownMenuSubTrigger disabled={!persisted}>
@@ -394,6 +405,13 @@ export const ConversationDetailHeader = memo(function ConversationDetailHeader({
           model={details.model}
         />
       )}
+      {messageComposerOpen ? (
+        <SessionMessageComposerDialog
+          sourceConversationId={conversationId}
+          open
+          onOpenChange={setMessageComposerOpen}
+        />
+      ) : null}
     </div>
   )
 })

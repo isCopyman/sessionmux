@@ -1311,6 +1311,22 @@ pub fn build_router(
             "/prompt_queue_retry",
             post(handlers::prompt_queue::retry),
         )
+        .route(
+            "/collaboration_send",
+            post(handlers::collaboration::send),
+        )
+        .route(
+            "/collaboration_feed",
+            post(handlers::collaboration::feed),
+        )
+        .route(
+            "/collaboration_mark_seen",
+            post(handlers::collaboration::mark_seen),
+        )
+        .route(
+            "/collaboration_dismiss",
+            post(handlers::collaboration::dismiss),
+        )
         // ─── Automations ───
         .route(
             "/automation_list",

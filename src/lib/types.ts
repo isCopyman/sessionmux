@@ -1167,6 +1167,76 @@ export interface PromptQueueSnapshot {
   items: PromptQueueItem[]
 }
 
+export type CollaborationInvocationPolicy = "store_only" | "invoke_when_idle"
+export type CollaborationDeliveryHint = "default" | "steer_if_supported"
+export type CollaborationUrgency = "normal" | "urgent"
+export type CollaborationDeliveryState =
+  | "pending"
+  | "queued"
+  | "embedding"
+  | "embedded"
+  | "dismissed"
+  | "failed"
+
+export interface CollaborationSessionSnapshot {
+  conversationId: number
+  title?: string | null
+  agentType?: string | null
+  folderPath?: string | null
+  backend: string
+}
+
+export interface CollaborationDelivery {
+  id: string
+  eventId: string
+  source: CollaborationSessionSnapshot
+  target: CollaborationSessionSnapshot
+  body: string
+  replyToEventId?: string | null
+  expectsReply: boolean
+  urgency: CollaborationUrgency
+  invocationPolicy: CollaborationInvocationPolicy
+  deliveryHint: CollaborationDeliveryHint
+  state: CollaborationDeliveryState
+  uiSeenAt?: string | null
+  embeddedTurnRef?: string | null
+  attempts: number
+  error?: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export interface CollaborationFeed {
+  conversationId: number
+  revision: number
+  unreadCount: number
+  inbound: CollaborationDelivery[]
+  outbound: CollaborationDelivery[]
+}
+
+export interface SendCollaborationMessageInput {
+  sourceConversationId: number
+  targetConversationIds: number[]
+  body: string
+  clientDedupeId: string
+  invocationPolicy?: CollaborationInvocationPolicy
+  deliveryHint?: CollaborationDeliveryHint
+  expectsReply?: boolean
+  urgency?: CollaborationUrgency
+  replyToEventId?: string | null
+}
+
+export interface CollaborationSendResult {
+  eventId: string
+  deliveries: CollaborationDelivery[]
+  affectedConversationIds: number[]
+  deduplicated: boolean
+}
+
+export interface CollaborationChanged {
+  conversationIds: number[]
+}
+
 // Permission option info from agent
 export interface PermissionOptionInfo {
   option_id: string

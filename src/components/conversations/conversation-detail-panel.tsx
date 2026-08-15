@@ -56,6 +56,7 @@ import {
   type GoalControlValue,
 } from "@/components/message/goal-control-context"
 import { ConversationShell } from "@/components/chat/conversation-shell"
+import { SessionCommunicationBanner } from "@/components/collaboration/session-communication-banner"
 import { SessionConfigStaleBanner } from "@/components/chat/session-config-stale-banner"
 import { PiProjectTrustBanner } from "@/components/chat/pi-project-trust-banner"
 import { BackgroundTasksChip } from "@/components/chat/background-tasks-chip"
@@ -1678,6 +1679,7 @@ const ConversationTabView = memo(function ConversationTabView({
             workingDir={workingDirForConnection}
           />
           <BackgroundTasksChip contextKey={tabId} />
+          <SessionCommunicationBanner conversationId={dbConversationId} />
         </>
       }
       status={connStatus}

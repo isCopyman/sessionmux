@@ -102,6 +102,9 @@ import type {
   PromptInputBlock,
   PromptDraft,
   PromptQueueSnapshot,
+  CollaborationFeed,
+  CollaborationSendResult,
+  SendCollaborationMessageInput,
   FileTreeNode,
   WorkspaceFileEntry,
   DirectoryEntry,
@@ -2050,6 +2053,42 @@ export async function retryPromptQueueItem(
     conversationId,
     id,
     expectedRevision,
+  })
+}
+
+export async function sendCollaborationMessage(
+  input: SendCollaborationMessageInput
+): Promise<CollaborationSendResult> {
+  return getTransport().call("collaboration_send", { input })
+}
+
+export async function getCollaborationFeed(
+  conversationId: number,
+  limit?: number
+): Promise<CollaborationFeed> {
+  return getTransport().call("collaboration_feed", {
+    conversationId,
+    limit: limit ?? null,
+  })
+}
+
+export async function markCollaborationSeen(
+  conversationId: number,
+  deliveryIds: string[]
+): Promise<CollaborationFeed> {
+  return getTransport().call("collaboration_mark_seen", {
+    conversationId,
+    deliveryIds,
+  })
+}
+
+export async function dismissCollaborationDelivery(
+  conversationId: number,
+  deliveryId: string
+): Promise<CollaborationFeed> {
+  return getTransport().call("collaboration_dismiss", {
+    conversationId,
+    deliveryId,
   })
 }
 

@@ -292,6 +292,8 @@ pub const TABS_CHANGED_EVENT: &str = "tabs://changed";
 /// payload after a mutation. Reconnects still fetch a fresh snapshot; this
 /// event is the low-latency convergence path, not a durable event log.
 pub const PROMPT_QUEUE_CHANGED_EVENT: &str = "prompt-queue://changed";
+/// Cross-client invalidation for persistent Session-to-Session communication.
+pub const COLLABORATION_CHANGED_EVENT: &str = "collaboration://changed";
 
 /// Payload for the [`TABS_CHANGED_EVENT`] side-channel. Carries the full
 /// conversation-bound tab set (a snapshot, not a delta) so every client
