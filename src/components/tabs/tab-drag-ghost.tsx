@@ -4,11 +4,11 @@ import { createPortal } from "react-dom"
 import { useTabStore } from "@/contexts/tab-context"
 
 /**
- * Floating chip that follows the pointer while a conversation tab has a live
- * pane drop target. The dragged tab itself is axis-locked inside its own strip
- * (Reorder `drag="x"` + overflow clipping), so this ghost is the only visual
- * that crosses pane boundaries. It appears for both an existing-pane move and
- * an edge-split target, including an edge of the source pane.
+ * Floating chip that follows the pointer for the whole conversation-tab drag.
+ * The source tab remains in its original slot as a dimmed placeholder; this
+ * duplicate is the only visual that moves, matching VS Code and Paseo. It is
+ * therefore visible before a pane target is acquired as well as over join and
+ * edge-split targets.
  *
  * Portal to <body>: ancestors animate with transforms, which would re-anchor
  * `position: fixed` to themselves instead of the viewport.
@@ -19,10 +19,11 @@ import { useTabStore } from "@/contexts/tab-context"
  */
 export function TabDragGhost() {
   const drag = useTabStore((s) => s.tabDrag)
-  if (!drag || drag.overGroupId == null) return null
+  if (!drag) return null
   return createPortal(
     <div
       aria-hidden
+      data-tab-drag-ghost
       className="pointer-events-none fixed z-[100] flex max-w-56 items-center rounded-md border border-border bg-background/95 px-2.5 py-1 text-xs text-foreground shadow-md"
       style={{ left: drag.x + 10, top: drag.y + 12 }}
     >

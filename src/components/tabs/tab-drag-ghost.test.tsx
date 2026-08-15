@@ -30,13 +30,14 @@ describe("TabDragGhost", () => {
     release()
   })
 
-  it("shows the floating chip only while a pane drop target is live", () => {
+  it("shows the floating duplicate for the whole drag", () => {
     render(<TabDragGhost />)
     expect(screen.queryByText("Refactor the parser")).toBeNull()
 
-    // Dragging over the tab's own strip: no chip (the real tab is visible).
+    // The source tab stays in place as a dim placeholder while the duplicate
+    // follows the cursor, even before a pane target is acquired.
     dragTo(null)
-    expect(screen.queryByText("Refactor the parser")).toBeNull()
+    expect(screen.getByText("Refactor the parser")).toBeTruthy()
 
     dragTo("g-2")
     expect(screen.getByText("Refactor the parser")).toBeTruthy()
@@ -46,6 +47,9 @@ describe("TabDragGhost", () => {
     expect(screen.getByText("Refactor the parser")).toBeTruthy()
 
     dragTo(null)
+    expect(screen.getByText("Refactor the parser")).toBeTruthy()
+
+    release()
     expect(screen.queryByText("Refactor the parser")).toBeNull()
   })
 

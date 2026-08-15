@@ -19,7 +19,9 @@ import {
 import {
   clientPointFromDrag,
   dropIndexFromMidpoints,
+  moveIdToDropIndex,
   splitDropEdgeFromPoint,
+  type DragClientPoint,
   type SplitDropEdge,
 } from "@/lib/tab-drag-drop"
 import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
@@ -31,6 +33,16 @@ interface TabBarProps {
    *  selected tab, and target new tabs/reorders at the group. Omitted = the
    *  single title-bar strip shown while unsplit. */
   groupId?: string
+}
+
+interface PaneDropTarget {
+  gid: string
+  el: Element
+  strip: boolean
+  splitEdge: SplitDropEdge | null
+  /** The source pane's center is still a visible Paseo-style target, but
+   * releasing there must not reorder, move, or split the tab. */
+  noOp: boolean
 }
 
 // Rendered inside the desktop conversation-column title strip while unsplit,
@@ -83,22 +95,10 @@ export function TabBar({ groupId }: TabBarProps) {
           ),
     [tabs, groupId, groupOf, groupLayout]
   )
-  // Reorder is a drag PREVIEW, not authoritative layout state. Motion calls
-  // `onReorder` repeatedly while the pointer crosses tab midpoints; writing
-  // every preview into the global tab store makes the whole conversation
-  // surface re-derive before the user has chosen a drop target. Keep the
-  // preview local to this strip and commit exactly once on drag end.
-  const [previewOrderIds, setPreviewOrderIds] = useState<string[] | null>(null)
-  const previewOrderIdsRef = useRef<string[] | null>(null)
-  const displayedGroupTabs = useMemo(() => {
-    if (!previewOrderIds) return groupTabs
-    const byId = new Map(groupTabs.map((tab) => [tab.id, tab]))
-    const ordered = previewOrderIds.flatMap((id) => {
-      const tab = byId.get(id)
-      return tab ? [tab] : []
-    })
-    return ordered.length === groupTabs.length ? ordered : groupTabs
-  }, [groupTabs, previewOrderIds])
+  // Unlike Motion's default live reorder, conversation tabs keep their source
+  // slot while a floating duplicate moves. A source-strip drop computes and
+  // commits the final order once; pane-body drops belong solely to layout.
+  const displayedGroupTabs = groupTabs
   const displayActiveId =
     groupId == null ? activeTabId : (groupSelection[groupId] ?? null)
   const isTileMode = !!tileByGroup[stripGroupId]
@@ -150,20 +150,22 @@ export function TabBar({ groupId }: TabBarProps) {
   const resolveDropTarget = useCallback(
     (
       clientX: number,
-      clientY: number
-    ): {
-      gid: string
-      el: Element
-      strip: boolean
-      splitEdge: SplitDropEdge | null
-    } | null => {
+      clientY: number,
+      translatedCenter: DragClientPoint | null
+    ): PaneDropTarget | null => {
       const el = document.elementFromPoint(clientX, clientY)
       if (!el) return null
       const strip = el.closest("[data-conv-group-strip]")
       if (strip) {
         const gid = strip.getAttribute("data-conv-group-strip")
-        return gid && gid !== stripGroupId
-          ? { gid, el: strip, strip: true, splitEdge: null }
+        return gid
+          ? {
+              gid,
+              el: strip,
+              strip: true,
+              splitEdge: null,
+              noOp: false,
+            }
           : null
       }
       const shell = el.closest("[data-conv-group-shell]")
@@ -172,8 +174,8 @@ export function TabBar({ groupId }: TabBarProps) {
         if (!gid) return null
         const dragState = useTabStore.getState().tabDrag
         const splitEdge = splitDropEdgeFromPoint(
-          clientX,
-          clientY,
+          translatedCenter?.x ?? clientX,
+          translatedCenter?.y ?? clientY,
           shell.getBoundingClientRect(),
           {
             currentEdge:
@@ -182,8 +184,13 @@ export function TabBar({ groupId }: TabBarProps) {
                 : null,
           }
         )
-        if (gid === stripGroupId && splitEdge == null) return null
-        return { gid, el: shell, strip: false, splitEdge }
+        return {
+          gid,
+          el: shell,
+          strip: false,
+          splitEdge,
+          noOp: gid === stripGroupId && splitEdge == null,
+        }
       }
       return null
     },
@@ -193,36 +200,48 @@ export function TabBar({ groupId }: TabBarProps) {
     (
       tab: TabItemData,
       event: MouseEvent | TouchEvent | PointerEvent,
-      info: PanInfo
+      info: PanInfo,
+      translatedCenter: DragClientPoint | null
     ) => {
       const { x, y } = clientPointFromDrag(event, info)
-      const target = resolveDropTarget(x, y)
+      const target = resolveDropTarget(x, y, translatedCenter)
       updateTabDrag({
         tabId: tab.id,
         title: tab.title,
         x,
         y,
-        overGroupId: target?.gid ?? null,
+        overGroupId:
+          target?.strip && target.gid === stripGroupId
+            ? null
+            : (target?.gid ?? null),
         splitEdge: target?.splitEdge ?? null,
       })
     },
-    [resolveDropTarget, updateTabDrag]
+    [resolveDropTarget, stripGroupId, updateTabDrag]
+  )
+  const handleTabDragStart = useCallback(
+    (
+      tab: TabItemData,
+      event: MouseEvent | TouchEvent | PointerEvent,
+      info: PanInfo,
+      translatedCenter: DragClientPoint | null
+    ) => {
+      handleTabDrag(tab, event, info, translatedCenter)
+    },
+    [handleTabDrag]
   )
   const handleTabDragEnd = useCallback(
     (
       tab: TabItemData,
       event: MouseEvent | TouchEvent | PointerEvent,
-      info: PanInfo
+      info: PanInfo,
+      translatedCenter: DragClientPoint | null
     ) => {
       const { x, y } = clientPointFromDrag(event, info)
-      const target = resolveDropTarget(x, y)
+      const target = resolveDropTarget(x, y, translatedCenter)
       endTabDrag()
-      if (!target) {
-        const orderedIds = previewOrderIdsRef.current
-        previewOrderIdsRef.current = null
-        setPreviewOrderIds(null)
-        if (!orderedIds) return
-
+      if (!target) return
+      if (target.strip && target.gid === stripGroupId) {
         const state = useTabStore.getState()
         const currentGroupTabs =
           groupId == null
@@ -232,21 +251,31 @@ export function TabBar({ groupId }: TabBarProps) {
                   groupOfTab(state.groupOf, state.groupLayout, item.id) ===
                   groupId
               )
+        const dropIndex = dropIndexFromMidpoints(
+          x,
+          Array.from(target.el.querySelectorAll("[data-tab-id]")).map(
+            (tabEl) => {
+              const rect = tabEl.getBoundingClientRect()
+              return rect.left + rect.width / 2
+            }
+          )
+        )
+        const orderedIds = moveIdToDropIndex(
+          currentGroupTabs.map((item) => item.id),
+          tab.id,
+          dropIndex
+        )
         const byId = new Map(currentGroupTabs.map((item) => [item.id, item]))
         const ordered = orderedIds.flatMap((id) => {
           const item = byId.get(id)
           return item ? [item] : []
         })
-        if (ordered.length !== currentGroupTabs.length) return
         if (groupId == null) reorderTabs(ordered)
         else reorderGroupTabs(groupId, ordered)
         return
       }
 
-      // A pane move/split wins over the within-strip preview. The target
-      // operation below is the only authoritative write for this drag.
-      previewOrderIdsRef.current = null
-      setPreviewOrderIds(null)
+      if (target.noOp) return
       if (target.splitEdge) {
         snapTabToSplit(tab.id, target.gid, target.splitEdge)
         return
@@ -274,6 +303,7 @@ export function TabBar({ groupId }: TabBarProps) {
       reorderGroupTabs,
       reorderTabs,
       snapTabToSplit,
+      stripGroupId,
     ]
   )
 
@@ -343,15 +373,9 @@ export function TabBar({ groupId }: TabBarProps) {
     el?.scrollIntoView({ block: "nearest", inline: "nearest" })
   }, [displayActiveId])
 
-  const handleReorder = useCallback(
-    (nextTabs: TabItemData[]) => {
-      if (isCoarsePointer && !touchSortingTabId) return
-      const nextIds = nextTabs.map((tab) => tab.id)
-      previewOrderIdsRef.current = nextIds
-      setPreviewOrderIds(nextIds)
-    },
-    [isCoarsePointer, touchSortingTabId]
-  )
+  // Reorder.Item still supplies robust pointer/touch drag controls, but its
+  // repeated midpoint previews are deliberately ignored. See drag-end commit.
+  const handleReorder = useCallback(() => {}, [])
 
   const handleTouchSortingEnd = useCallback(
     () => setTouchSortingTabId(null),
@@ -379,7 +403,7 @@ export function TabBar({ groupId }: TabBarProps) {
       onReorder={handleReorder}
       // Pane drop target: strips advertise their group id for center moves;
       // shells advertise the larger area and edge-split zones.
-      data-conv-group-strip={groupId ?? undefined}
+      data-conv-group-strip={stripGroupId}
       // Fills the title-bar strip and shrinks browser-style to share the row (see
       // TabItem): flush (`gap-0`) so hairline separators read as dividers, no
       // scrollbar (`overflow-hidden` still scrolls programmatically), and no
@@ -415,6 +439,7 @@ export function TabBar({ groupId }: TabBarProps) {
             key={tab.id}
             tab={tab}
             isActive={tab.id === displayActiveId}
+            isFocused={tab.id === activeTabId}
             isTileMode={isTileMode}
             embedded
             adjacentActive={adjacentActive}
@@ -425,6 +450,7 @@ export function TabBar({ groupId }: TabBarProps) {
             canMoveToGroup
             moveTargets={moveTargets}
             onTabDrag={handleTabDrag}
+            onTabDragStart={handleTabDragStart}
             onTabDragEnd={handleTabDragEnd}
             onSwitch={switchTab}
             onClose={closeTab}

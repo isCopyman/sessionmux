@@ -215,6 +215,9 @@ describe("WorkbenchTree", () => {
       "Fresh result",
       "Evidence review",
     ])
+    expect(
+      container.querySelector('[data-focused-session="true"]')?.textContent
+    ).toContain("Evidence review")
   })
 
   it("switches Workbench before focusing one of its Sessions", async () => {

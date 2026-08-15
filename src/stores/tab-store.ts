@@ -1276,7 +1276,7 @@ function initialTabState() {
 export const useTabStore = create<TabStoreState>()((set, get) => ({
   ...initialTabState(),
 
-  openTab: (folderId, conversationId, agentType, pin = false, title) => {
+  openTab: (folderId, conversationId, agentType, pin = true, title) => {
     const prevState = get()
     const existingIndex = findTabIndexForConversation(
       prevState.rawTabs,
@@ -1341,8 +1341,9 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
       return
     }
 
-    // Preview replacement stays within the focused group — a preview parked in
-    // another group is left alone (the new tab appends instead).
+    // Preview replacement is an explicit quick-preview mode. Ordinary Session
+    // opens are pinned by default, so navigating the sidebar never silently
+    // replaces another Session tab.
     const previewIndex = prevState.rawTabs.findIndex(
       (t) =>
         !t.isPinned &&

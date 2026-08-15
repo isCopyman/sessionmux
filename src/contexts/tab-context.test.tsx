@@ -614,6 +614,19 @@ describe("TabProvider tab state transitions", () => {
     expect(screen.getByTestId("active")).toHaveTextContent("conv-1-codex-2")
     expect(replacedTabIds).toEqual([])
   })
+
+  it("keeps ordinary Session opens as separate tabs by default", () => {
+    renderTabs()
+
+    act(() => {
+      latestContext?.openTab(1, 1, "codex", undefined, "First")
+      latestContext?.openTab(1, 2, "codex", undefined, "Second")
+    })
+
+    expect(screen.getByTestId("tabs")).toHaveTextContent("conv-1-codex-1")
+    expect(screen.getByTestId("tabs")).toHaveTextContent("conv-1-codex-2")
+    expect(screen.getByTestId("active")).toHaveTextContent("conv-1-codex-2")
+  })
 })
 
 function tabItem(

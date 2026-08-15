@@ -287,7 +287,7 @@ export function Sidebar() {
         session.folder_id,
         session.id,
         session.agent_type,
-        false,
+        true,
         session.title ?? undefined
       )
     },

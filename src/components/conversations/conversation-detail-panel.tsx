@@ -7,6 +7,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type PointerEvent as ReactPointerEvent,
 } from "react"
 import {
@@ -1017,7 +1018,7 @@ const ConversationTabView = memo(function ConversationTabView({
         removeOptimisticTurn(effectiveConversationId, optimisticTurn.id)
       }
 
-      // Pin the tab if it was a temporary preview (single-click opened)
+      // Pin the tab if it came from an explicit quick-preview action.
       if (ownTab && !ownTab.isPinned) {
         pinTab(tabId)
       }
@@ -1927,18 +1928,43 @@ const ConversationTabView = memo(function ConversationTabView({
   )
 })
 
-function splitDropOverlayClipPath(edge: SplitDropEdge | null): string {
+function splitDropOverlayStyle(edge: SplitDropEdge | null): CSSProperties {
   switch (edge) {
     case "left":
-      return "inset(0 50% 0 0 round 0.375rem)"
+      return {
+        left: "0.25rem",
+        top: "0.25rem",
+        width: "calc(50% - 0.25rem)",
+        height: "calc(100% - 0.5rem)",
+      }
     case "right":
-      return "inset(0 0 0 50% round 0.375rem)"
+      return {
+        left: "50%",
+        top: "0.25rem",
+        width: "calc(50% - 0.25rem)",
+        height: "calc(100% - 0.5rem)",
+      }
     case "up":
-      return "inset(0 0 50% 0 round 0.375rem)"
+      return {
+        left: "0.25rem",
+        top: "0.25rem",
+        width: "calc(100% - 0.5rem)",
+        height: "calc(50% - 0.25rem)",
+      }
     case "down":
-      return "inset(50% 0 0 0 round 0.375rem)"
+      return {
+        left: "0.25rem",
+        top: "50%",
+        width: "calc(100% - 0.5rem)",
+        height: "calc(50% - 0.25rem)",
+      }
     default:
-      return "inset(0 round 0.375rem)"
+      return {
+        left: "0.25rem",
+        top: "0.25rem",
+        width: "calc(100% - 0.5rem)",
+        height: "calc(100% - 0.5rem)",
+      }
   }
 }
 
@@ -1983,8 +2009,8 @@ export function ConversationDetailPanel() {
 
   const exportLabels = useExportLabels()
 
-  // Release the old connection as soon as a preview tab is replaced (the next
-  // single-click in the sidebar takes its slot) instead of waiting for a sweep.
+  // Release the old connection as soon as an explicit quick-preview tab is
+  // replaced instead of waiting for a sweep.
   // Idle-gated on purpose: the replaced tab may hold a session that is still
   // working — often one the user only clicked in to watch — and disconnecting
   // an owner mid-turn kills the agent CLI, which lands in the transcript as an
@@ -2495,15 +2521,11 @@ export function ConversationDetailPanel() {
             <div
               data-split-drop-edge={dragSplitEdge ?? undefined}
               className={cn(
-                "pointer-events-none absolute inset-1 z-30 rounded-md border border-primary/45 shadow-[inset_0_0_0_1px_color-mix(in_oklab,var(--primary),transparent_78%)]",
-                "animate-in fade-in-0 duration-100 transition-[clip-path,background-color] ease-out",
+                "pointer-events-none absolute z-30 rounded-md border border-primary/45 shadow-[inset_0_0_0_1px_color-mix(in_oklab,var(--primary),transparent_78%)]",
+                "animate-in fade-in-0 transition-[left,top,width,height,background-color] duration-[70ms] ease-out",
                 dragSplitEdge ? "bg-primary/12" : "bg-primary/7"
               )}
-              style={{
-                clipPath: splitDropOverlayClipPath(dragSplitEdge),
-                transitionDuration: "160ms",
-                willChange: "clip-path",
-              }}
+              style={splitDropOverlayStyle(dragSplitEdge)}
             />
           )}
         </div>

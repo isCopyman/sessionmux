@@ -1,6 +1,6 @@
 "use client"
 
-import { memo, useCallback, useEffect, useMemo, useRef } from "react"
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Reorder } from "motion/react"
 import type { PanInfo } from "motion/react"
 import { X } from "lucide-react"
@@ -25,6 +25,11 @@ import {
 import { useLongPressDrag } from "@/hooks/use-long-press-drag"
 import type { TabItem as TabItemData } from "@/contexts/tab-context"
 import type { SplitDirection } from "@/lib/tab-group-layout"
+import {
+  translatedRectCenter,
+  type ClientRectLike,
+  type DragClientPoint,
+} from "@/lib/tab-drag-drop"
 
 /** A group this tab could move to (every group EXCEPT the tab's own), labeled
  *  by its traversal-order number and its selected tab's title. */
@@ -37,6 +42,9 @@ export interface TabMoveTarget {
 interface TabItemProps {
   tab: TabItemData
   isActive: boolean
+  /** The selected tab in the globally focused pane. Other panes retain their
+   * selected tab, but only this one receives the strong focus marker. */
+  isFocused: boolean
   isTileMode: boolean
   /** Browser-style shrink: fill/shrink to share the row width instead of a
    *  fixed intrinsic size (title-bar embedded strips). Off = mobile scroll row. */
@@ -64,12 +72,20 @@ interface TabItemProps {
   onTabDrag?: (
     tab: TabItemData,
     event: MouseEvent | TouchEvent | PointerEvent,
-    info: PanInfo
+    info: PanInfo,
+    translatedCenter: DragClientPoint | null
+  ) => void
+  onTabDragStart?: (
+    tab: TabItemData,
+    event: MouseEvent | TouchEvent | PointerEvent,
+    info: PanInfo,
+    translatedCenter: DragClientPoint | null
   ) => void
   onTabDragEnd?: (
     tab: TabItemData,
     event: MouseEvent | TouchEvent | PointerEvent,
-    info: PanInfo
+    info: PanInfo,
+    translatedCenter: DragClientPoint | null
   ) => void
   onSwitch: (tabId: string) => void
   onClose: (tabId: string) => void
@@ -91,6 +107,7 @@ interface TabItemProps {
 export const TabItem = memo(function TabItem({
   tab,
   isActive,
+  isFocused,
   isTileMode,
   embedded = false,
   adjacentActive,
@@ -101,6 +118,7 @@ export const TabItem = memo(function TabItem({
   canMoveToGroup,
   moveTargets,
   onTabDrag,
+  onTabDragStart,
   onTabDragEnd,
   onSwitch,
   onClose,
@@ -120,6 +138,8 @@ export const TabItem = memo(function TabItem({
 }: TabItemProps) {
   const t = useTranslations("Folder.tabs")
   const itemRef = useRef<HTMLDivElement>(null)
+  const dragOriginRectRef = useRef<ClientRectLike | null>(null)
+  const [isDragging, setIsDragging] = useState(false)
 
   const resolvedFolderName = folderName ?? String(tab.folderId)
   const tooltip = folderBranch
@@ -171,25 +191,54 @@ export const TabItem = memo(function TabItem({
   }, [])
   useEffect(() => releaseGuard, [releaseGuard])
 
-  const handleDragStart = useCallback(() => {
-    acquireGuard()
-    longPressDragStart()
-  }, [acquireGuard, longPressDragStart])
+  const translatedCenter = useCallback((info: PanInfo) => {
+    const origin = dragOriginRectRef.current
+    return origin
+      ? translatedRectCenter(origin, {
+          x: info.offset.x,
+          y: info.offset.y,
+        })
+      : null
+  }, [])
+
+  const handleDragStart = useCallback(
+    (event: MouseEvent | TouchEvent | PointerEvent, info: PanInfo) => {
+      const rect = itemRef.current?.getBoundingClientRect()
+      dragOriginRectRef.current = rect
+        ? {
+            left: rect.left,
+            top: rect.top,
+            width: rect.width,
+            height: rect.height,
+          }
+        : null
+      setIsDragging(true)
+      acquireGuard()
+      longPressDragStart()
+      onTabDragStart?.(tab, event, info, translatedCenter(info))
+    },
+    [acquireGuard, longPressDragStart, onTabDragStart, tab, translatedCenter]
+  )
 
   const handleDragMove = useCallback(
     (event: MouseEvent | TouchEvent | PointerEvent, info: PanInfo) => {
-      onTabDrag?.(tab, event, info)
+      onTabDrag?.(tab, event, info, translatedCenter(info))
     },
-    [onTabDrag, tab]
+    [onTabDrag, tab, translatedCenter]
   )
 
   const handleDragEnd = useCallback(
     (event: MouseEvent | TouchEvent | PointerEvent, info: PanInfo) => {
+      const center = translatedCenter(info)
       releaseGuard()
       longPressDragEnd()
-      onTabDragEnd?.(tab, event, info)
+      dragOriginRectRef.current = null
+      setIsDragging(false)
+      // The drop may move this tab to another pane and unmount this component,
+      // so clear local drag state before committing the authoritative move.
+      onTabDragEnd?.(tab, event, info, center)
     },
-    [releaseGuard, longPressDragEnd, onTabDragEnd, tab]
+    [releaseGuard, longPressDragEnd, onTabDragEnd, tab, translatedCenter]
   )
 
   const handleClick = useCallback(() => {
@@ -243,6 +292,7 @@ export const TabItem = memo(function TabItem({
       dragControls={dragControls}
       dragListener={!isCoarsePointer}
       whileDrag={whileDrag}
+      transformTemplate={isDragging ? () => "none" : undefined}
       {...restGestureHandlers}
       onDragStart={handleDragStart}
       onDrag={onTabDrag ? handleDragMove : undefined}
@@ -250,6 +300,8 @@ export const TabItem = memo(function TabItem({
       onLayoutAnimationComplete={clearResidualStyles}
       data-tab-item
       data-active={embedded && isActive ? "true" : undefined}
+      data-focused={embedded && isFocused ? "true" : undefined}
+      data-dragging={isDragging ? "true" : undefined}
       data-adjacent-active={embedded ? adjacentActive : undefined}
       className={cn(
         "cursor-grab active:cursor-grabbing",
@@ -272,9 +324,20 @@ export const TabItem = memo(function TabItem({
           (embedded
             ? "active:z-50"
             : "active:opacity-90 active:shadow-md active:z-50"),
-        isTouchSorting && "z-50 opacity-90 shadow-md ring-1 ring-primary/25"
+        isDragging && "conversation-tab-drag-source z-50 opacity-55",
+        isTouchSorting && "z-50 ring-1 ring-primary/25"
       )}
     >
+      {embedded && isActive ? (
+        <span
+          aria-hidden
+          data-tab-focus-indicator
+          className={cn(
+            "pointer-events-none absolute inset-x-1 top-0 z-30 h-0.5 rounded-b-full",
+            isFocused ? "bg-primary" : "bg-border"
+          )}
+        />
+      ) : null}
       {/* Reverse (concave) bottom corners — the browser-tab seat (globals.css).
           Absolute + decorative, so it never affects layout. Rendered for every
           embedded tab; CSS reveals it when the tab is active or hovered. */}

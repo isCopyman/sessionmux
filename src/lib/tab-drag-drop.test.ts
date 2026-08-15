@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest"
 import {
   clientPointFromDrag,
   dropIndexFromMidpoints,
+  moveIdToDropIndex,
   splitDropEdgeFromPoint,
+  translatedRectCenter,
 } from "./tab-drag-drop"
 
 describe("dropIndexFromMidpoints", () => {
@@ -26,6 +28,23 @@ describe("dropIndexFromMidpoints", () => {
   })
 })
 
+describe("moveIdToDropIndex", () => {
+  const ids = ["a", "b", "c"]
+
+  it("commits a rightward move after discounting the source slot", () => {
+    expect(moveIdToDropIndex(ids, "a", 3)).toEqual(["b", "c", "a"])
+  })
+
+  it("commits a leftward move at the requested insertion", () => {
+    expect(moveIdToDropIndex(ids, "c", 0)).toEqual(["c", "a", "b"])
+  })
+
+  it("preserves identity and order for a same-slot or unknown drag", () => {
+    expect(moveIdToDropIndex(ids, "b", 2)).toEqual(ids)
+    expect(moveIdToDropIndex(ids, "missing", 1)).toBe(ids)
+  })
+})
+
 describe("clientPointFromDrag", () => {
   it("prefers the event's own client coordinates", () => {
     expect(
@@ -46,6 +65,17 @@ describe("clientPointFromDrag", () => {
       x: 7,
       y: 8,
     })
+  })
+})
+
+describe("translatedRectCenter", () => {
+  it("tracks the dragged item's center instead of the grab point", () => {
+    expect(
+      translatedRectCenter(
+        { left: 100, top: 50, width: 200, height: 40 },
+        { x: 35, y: 90 }
+      )
+    ).toEqual({ x: 235, y: 160 })
   })
 })
 

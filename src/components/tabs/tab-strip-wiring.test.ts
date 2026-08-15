@@ -35,12 +35,21 @@ describe("tab strip draft gating", () => {
 })
 
 describe("tab reorder transaction wiring", () => {
-  it("keeps midpoint previews local and commits only on drag end", () => {
-    expect(tabBar).toContain("const [previewOrderIds, setPreviewOrderIds]")
-    expect(tabBar).toContain("previewOrderIdsRef.current = nextIds")
+  it("keeps the source order fixed and commits only on source-strip drop", () => {
+    expect(tabBar).not.toContain("previewOrderIds")
+    expect(tabBar).toContain("const displayedGroupTabs = groupTabs")
+    expect(tabBar).toContain("moveIdToDropIndex(")
+    expect(tabBar).toContain("const handleReorder = useCallback(() => {}, [])")
     expect(tabBar).toMatch(
       /if \(groupId == null\) reorderTabs\(ordered\)[\s\S]{0,80}else reorderGroupTabs\(groupId, ordered\)/
     )
+  })
+
+  it("uses a floating duplicate and marks only the globally focused tab", () => {
+    expect(tabBar).toContain("onTabDragStart={handleTabDragStart}")
+    expect(tabBar).toContain("isFocused={tab.id === activeTabId}")
+    expect(tabItem).toContain("conversation-tab-drag-source")
+    expect(tabItem).toContain("data-tab-focus-indicator")
   })
 })
 
@@ -58,8 +67,8 @@ describe("tab drag selection guard wiring", () => {
     expect(tabItem).toContain("onDragStart: longPressDragStart")
     expect(tabItem).toContain("onDragEnd: longPressDragEnd")
     expect(tabItem).toMatch(
-      /handleDragStart[\s\S]{0,160}longPressDragStart\(\)/
+      /handleDragStart[\s\S]{0,600}longPressDragStart\(\)/
     )
-    expect(tabItem).toMatch(/handleDragEnd[\s\S]{0,200}longPressDragEnd\(\)/)
+    expect(tabItem).toMatch(/handleDragEnd[\s\S]{0,400}longPressDragEnd\(\)/)
   })
 })

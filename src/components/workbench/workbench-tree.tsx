@@ -474,6 +474,7 @@ export function WorkbenchTree() {
                           type="button"
                           data-workbench-id={item.id}
                           data-workbench-session
+                          data-focused-session={selected ? "true" : undefined}
                           data-conversation-id={
                             session.conversationId ?? undefined
                           }
@@ -482,7 +483,8 @@ export function WorkbenchTree() {
                           className={cn(
                             "flex h-7 w-full min-w-0 items-center gap-1.5 rounded-md pe-2 ps-8 text-start text-xs",
                             "hover:bg-sidebar-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
-                            selected && "text-primary"
+                            selected &&
+                              "bg-primary/8 text-primary ring-1 ring-inset ring-primary/30"
                           )}
                           onClick={() => void focusSession(item.id, session)}
                         >

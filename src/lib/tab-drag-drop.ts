@@ -22,9 +22,50 @@ export function dropIndexFromMidpoints(
   return index
 }
 
+/**
+ * Apply a tab-strip insertion only when the drag is released. The DOM drop
+ * index still counts the dragged tab's original slot, so moving right must
+ * discount that slot after removing the tab. Keeping this calculation pure
+ * lets the strip retain its original order while a floating drag ghost moves,
+ * then commit one authoritative order at drop time (VS Code/Paseo behavior).
+ */
+export function moveIdToDropIndex(
+  ids: string[],
+  draggedId: string,
+  dropIndex: number
+): string[] {
+  const sourceIndex = ids.indexOf(draggedId)
+  if (sourceIndex < 0) return ids
+  const without = ids.filter((id) => id !== draggedId)
+  const adjustedIndex = sourceIndex < dropIndex ? dropIndex - 1 : dropIndex
+  const insertionIndex = Math.max(0, Math.min(adjustedIndex, without.length))
+  return [
+    ...without.slice(0, insertionIndex),
+    draggedId,
+    ...without.slice(insertionIndex),
+  ]
+}
+
 export interface DragClientPoint {
   x: number
   y: number
+}
+
+/**
+ * Center of a drag item's translated rectangle. Motion exposes the pointer's
+ * displacement from drag start, while dnd-kit (and Paseo) resolves pane drops
+ * from the translated item's center. Keeping that geometry here makes the two
+ * drag implementations equivalent without coupling the tab bar to either
+ * library's rectangle types.
+ */
+export function translatedRectCenter(
+  rect: ClientRectLike,
+  offset: DragClientPoint
+): DragClientPoint {
+  return {
+    x: rect.left + rect.width / 2 + offset.x,
+    y: rect.top + rect.height / 2 + offset.y,
+  }
 }
 
 export type SplitDropEdge = "left" | "right" | "up" | "down"
