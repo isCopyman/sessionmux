@@ -45,26 +45,30 @@ import { useShortcutSettings } from "@/hooks/use-shortcut-settings"
 import { formatShortcutLabel } from "@/lib/keyboard-shortcuts"
 import { isDesktop } from "@/lib/platform"
 import { leftChromeReserve } from "@/lib/window-chrome"
+import type { DbConversationSummary } from "@/lib/types"
 import {
   loadShowCompleted,
   loadShowRecent,
   loadShowWorktrees,
+  loadOrganizationMode,
   loadSortMode,
   loadSectionOrder,
   moveSectionInOrder,
   saveShowCompleted,
   saveShowRecent,
   saveShowWorktrees,
+  saveOrganizationMode,
   saveSortMode,
   saveSectionOrder,
   DEFAULT_SECTION_ORDER,
   type SidebarSectionId,
+  type SidebarOrganizationMode,
   type SidebarSortMode,
   type SidebarSectionOrder,
 } from "@/lib/sidebar-view-mode-storage"
 import { SidebarSectionOrderControl } from "./sidebar-section-order-control"
 import { cn } from "@/lib/utils"
-import { WorkbenchSwitcher } from "@/components/workbench/workbench-switcher"
+import { WorkbenchTree } from "@/components/workbench/workbench-tree"
 import { ConversationManageDialog } from "@/components/conversations/conversation-manage-dialog"
 import { CollectionTree } from "@/components/collections/collection-tree"
 
@@ -135,7 +139,7 @@ export function Sidebar() {
   const t = useTranslations("Folder.sidebar")
   const { isOpen, toggle } = useSidebarContext()
   const { activeFolder } = useActiveFolder()
-  const { openNewConversationTab, openChatModeTab } = useTabActions()
+  const { openNewConversationTab, openChatModeTab, openTab } = useTabActions()
   const { setOpen: setSearchOpen } = useSearchDialog()
   const { unseenFailures } = useAutomationsView()
   const { attentionCount } = useTasksView()
@@ -160,6 +164,8 @@ export function Sidebar() {
   const [showWorktrees, setShowWorktrees] = useState(true)
   const [showRecent, setShowRecent] = useState(true)
   const [sortMode, setSortMode] = useState<SidebarSortMode>("created")
+  const [organizationMode, setOrganizationMode] =
+    useState<SidebarOrganizationMode>("collections")
   const [sectionOrder, setSectionOrder] = useState<SidebarSectionOrder>(
     DEFAULT_SECTION_ORDER
   )
@@ -168,6 +174,7 @@ export function Sidebar() {
   const [sessionCenterCollection, setSessionCenterCollection] = useState<
     number | "unclassified" | null
   >(null)
+  const [collectionRefreshKey, setCollectionRefreshKey] = useState(0)
   const searchShortcutLabel = formatShortcutLabel(
     shortcuts.toggle_search,
     isMac
@@ -191,8 +198,16 @@ export function Sidebar() {
     setShowCompleted(loadShowCompleted())
     setShowWorktrees(loadShowWorktrees())
     setShowRecent(loadShowRecent())
+    setOrganizationMode(loadOrganizationMode())
     setSortMode(loadSortMode())
     setSectionOrder(loadSectionOrder())
+  }, [])
+
+  const handleSetOrganizationMode = useCallback((value: string) => {
+    const mode: SidebarOrganizationMode =
+      value === "locations" ? "locations" : "collections"
+    setOrganizationMode(mode)
+    saveOrganizationMode(mode)
   }, [])
 
   const handleSetShowCompleted = useCallback((value: boolean) => {
@@ -265,6 +280,20 @@ export function Sidebar() {
     toggle,
   ])
 
+  const handleOpenCollectionSession = useCallback(
+    (session: DbConversationSummary) => {
+      openConversations()
+      openTab(
+        session.folder_id,
+        session.id,
+        session.agent_type,
+        false,
+        session.title ?? undefined
+      )
+    },
+    [openConversations, openTab]
+  )
+
   if (!isOpen) return null
 
   return (
@@ -309,19 +338,21 @@ export function Sidebar() {
               the conversation detail header). Always shown, sitting just before
               the view-options funnel. The sidebar is unmounted while collapsed,
               so `listRef` is live whenever this button is visible. */}
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-6 w-6 shrink-0 text-muted-foreground"
-            onClick={() => listRef.current?.scrollToActive()}
-            title={t("locateActiveConversation")}
-            aria-label={t("locateActiveConversation")}
-          >
-            <Crosshair aria-hidden="true" className="h-3.5 w-3.5" />
-          </Button>
+          {organizationMode === "locations" ? (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6 shrink-0 text-muted-foreground"
+              onClick={() => listRef.current?.scrollToActive()}
+              title={t("locateActiveConversation")}
+              aria-label={t("locateActiveConversation")}
+            >
+              <Crosshair aria-hidden="true" className="h-3.5 w-3.5" />
+            </Button>
+          ) : null}
           {/* Expand/collapse-all keeps a standalone header button on mobile; on
               desktop it's folded into the view-options menu below. */}
-          {isMobile && (
+          {isMobile && organizationMode === "locations" && (
             <Button
               variant="ghost"
               size="icon"
@@ -362,7 +393,7 @@ export function Sidebar() {
             <DropdownMenuContent align="end" className="min-w-56">
               {/* Desktop only: expand/collapse lives in this menu (it kept its
                   standalone header button on mobile). */}
-              {!isMobile && (
+              {!isMobile && organizationMode === "locations" && (
                 <>
                   <DropdownMenuItem onSelect={handleToggleExpandAll}>
                     {allExpanded ? (
@@ -380,6 +411,25 @@ export function Sidebar() {
                   list, and flipping two of them used to cost two round trips
                   through the trigger. The expand/collapse-all entry above is
                   the one real action here, so it still closes. */}
+              <DropdownMenuLabel>{t("organizeBy")}</DropdownMenuLabel>
+              <DropdownMenuRadioGroup
+                value={organizationMode}
+                onValueChange={handleSetOrganizationMode}
+              >
+                <DropdownMenuRadioItem
+                  value="collections"
+                  onSelect={(event) => event.preventDefault()}
+                >
+                  {t("organizeByCollections")}
+                </DropdownMenuRadioItem>
+                <DropdownMenuRadioItem
+                  value="locations"
+                  onSelect={(event) => event.preventDefault()}
+                >
+                  {t("organizeByLocations")}
+                </DropdownMenuRadioItem>
+              </DropdownMenuRadioGroup>
+              <DropdownMenuSeparator />
               <DropdownMenuCheckboxItem
                 checked={showCompleted}
                 onCheckedChange={handleSetShowCompleted}
@@ -387,20 +437,24 @@ export function Sidebar() {
               >
                 {t("showCompleted")}
               </DropdownMenuCheckboxItem>
-              <DropdownMenuCheckboxItem
-                checked={showWorktrees}
-                onCheckedChange={handleSetShowWorktrees}
-                onSelect={(event) => event.preventDefault()}
-              >
-                {t("showWorktrees")}
-              </DropdownMenuCheckboxItem>
-              <DropdownMenuCheckboxItem
-                checked={showRecent}
-                onCheckedChange={handleSetShowRecent}
-                onSelect={(event) => event.preventDefault()}
-              >
-                {t("showRecent")}
-              </DropdownMenuCheckboxItem>
+              {organizationMode === "locations" ? (
+                <>
+                  <DropdownMenuCheckboxItem
+                    checked={showWorktrees}
+                    onCheckedChange={handleSetShowWorktrees}
+                    onSelect={(event) => event.preventDefault()}
+                  >
+                    {t("showWorktrees")}
+                  </DropdownMenuCheckboxItem>
+                  <DropdownMenuCheckboxItem
+                    checked={showRecent}
+                    onCheckedChange={handleSetShowRecent}
+                    onSelect={(event) => event.preventDefault()}
+                  >
+                    {t("showRecent")}
+                  </DropdownMenuCheckboxItem>
+                </>
+              ) : null}
               <DropdownMenuSeparator />
               <DropdownMenuLabel>{t("sortBy")}</DropdownMenuLabel>
               <DropdownMenuRadioGroup
@@ -420,13 +474,17 @@ export function Sidebar() {
                   {t("sortByUpdatedAt")}
                 </DropdownMenuRadioItem>
               </DropdownMenuRadioGroup>
-              <DropdownMenuSeparator />
-              <DropdownMenuLabel>{t("sectionOrder")}</DropdownMenuLabel>
-              <SidebarSectionOrderControl
-                order={sectionOrder}
-                onMove={handleMoveSection}
-                hiddenSections={hiddenSections}
-              />
+              {organizationMode === "locations" ? (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuLabel>{t("sectionOrder")}</DropdownMenuLabel>
+                  <SidebarSectionOrderControl
+                    order={sectionOrder}
+                    onMove={handleMoveSection}
+                    hiddenSections={hiddenSections}
+                  />
+                </>
+              ) : null}
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
@@ -441,7 +499,7 @@ export function Sidebar() {
           the list below. Each row is a `group` so its shortcut hint reveals on
           hover / keyboard focus. */}
       <div className="flex shrink-0 flex-col gap-0.5 px-1.5 pt-1.5">
-        <WorkbenchSwitcher />
+        <WorkbenchTree />
         <SidebarNavButton
           icon={SquarePen}
           label={t("newChat")}
@@ -513,40 +571,52 @@ export function Sidebar() {
         />
       </div>
 
-      <CollectionTree
-        onOpenScope={(scope) => {
-          setSessionCenterCollection(scope)
-          setSessionCenterOpen(true)
-        }}
-      />
-
-      {/* On mobile, clicking a conversation card auto-closes the Sheet */}
-      <div
-        className="flex flex-col flex-1 min-h-0 overflow-hidden pt-1.5"
-        onClick={
-          isMobile
-            ? (e) => {
-                const target = e.target as HTMLElement
-                if (target.closest("[data-conversation-id]")) {
-                  toggle()
-                }
-              }
-            : undefined
-        }
-      >
-        <SidebarConversationList
-          ref={listRef}
+      {organizationMode === "collections" ? (
+        <CollectionTree
+          showSessions
           showCompleted={showCompleted}
-          showWorktrees={showWorktrees}
-          showRecent={showRecent}
           sortMode={sortMode}
-          sectionOrder={sectionOrder}
+          refreshKey={collectionRefreshKey}
+          onOpenSession={handleOpenCollectionSession}
+          onOpenScope={(scope) => {
+            setSessionCenterCollection(scope)
+            setSessionCenterOpen(true)
+          }}
         />
-      </div>
+      ) : (
+        /* On mobile, clicking a conversation card auto-closes the Sheet */
+        <div
+          className="flex flex-col flex-1 min-h-0 overflow-hidden pt-1.5"
+          onClick={
+            isMobile
+              ? (e) => {
+                  const target = e.target as HTMLElement
+                  if (target.closest("[data-conversation-id]")) {
+                    toggle()
+                  }
+                }
+              : undefined
+          }
+        >
+          <SidebarConversationList
+            ref={listRef}
+            showCompleted={showCompleted}
+            showWorktrees={showWorktrees}
+            showRecent={showRecent}
+            sortMode={sortMode}
+            sectionOrder={sectionOrder}
+          />
+        </div>
+      )}
       {sessionCenterOpen && (
         <ConversationManageDialog
           open
-          onOpenChange={setSessionCenterOpen}
+          onOpenChange={(open) => {
+            setSessionCenterOpen(open)
+            if (!open) {
+              setCollectionRefreshKey((current) => current + 1)
+            }
+          }}
           folderId={null}
           initialCollection={sessionCenterCollection}
         />

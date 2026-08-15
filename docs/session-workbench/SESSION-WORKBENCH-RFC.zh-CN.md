@@ -97,6 +97,12 @@ Collection 是面向人的长期语义分类，类似文件系统目录，但不
 
 Collection 负责回答“这个 Session 属于什么主题”，不负责回答“它在哪里运行”。
 
+侧栏默认显示 Workbench 树和 Collection 树：前者的根节点是各套已保存工作现场，子节点是其中的
+Session 引用；后者保存唯一语义归属。不得再把 Collection 树和 Folder 树做成两套同时常驻、
+层级相同的 Session 目录。Folder 仅作为可切换的 Execution Location 视图，用于 cwd、Git、
+worktree、终端和文件范围相关操作。这些视图只是对同一 `conversation` 集合的不同查询，不新增
+重复 Session，也不允许 Collection 操作修改 `folder_id`。
+
 #### 3.3.1 Session Library View
 
 Library View 是 Session Library 的查询与呈现状态，回答“这一刻侧栏要显示哪些 Session”。它由

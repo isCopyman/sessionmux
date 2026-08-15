@@ -49,10 +49,20 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import type { CollectionInfo } from "@/lib/types"
+import { AgentIcon } from "@/components/agent-icon"
+import { ConversationStatusDot } from "@/components/conversations/conversation-status-dot"
+import { listConversationCollectionRefs } from "@/lib/api"
+import { formatConversationTitle } from "@/lib/conversation-title"
+import type {
+  CollectionInfo,
+  ConversationStatus,
+  DbConversationSummary,
+} from "@/lib/types"
 import { toErrorMessage } from "@/lib/app-error"
 import { cn } from "@/lib/utils"
+import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { useCollectionStore } from "@/stores/collection-store"
+import type { SidebarSortMode } from "@/lib/sidebar-view-mode-storage"
 
 type OpenScope = number | "unclassified"
 type EditorState =
@@ -62,6 +72,13 @@ type EditorState =
 
 interface CollectionTreeProps {
   onOpenScope: (scope: OpenScope) => void
+  /** Render each Collection's Sessions inline instead of acting as a compact
+   * Session Center shortcut tree. */
+  showSessions?: boolean
+  showCompleted?: boolean
+  sortMode?: SidebarSortMode
+  refreshKey?: number
+  onOpenSession?: (session: DbConversationSummary) => void
 }
 
 function descendants(items: CollectionInfo[], id: number) {
@@ -111,9 +128,17 @@ function flatOptions(items: CollectionInfo[]) {
   return result
 }
 
-export function CollectionTree({ onOpenScope }: CollectionTreeProps) {
+export function CollectionTree({
+  onOpenScope,
+  showSessions = false,
+  showCompleted = false,
+  sortMode = "created",
+  refreshKey = 0,
+  onOpenSession,
+}: CollectionTreeProps) {
   const t = useTranslations("Folder.sidebar.collections")
   const tCommon = useTranslations("Folder.common")
+  const tConversation = useTranslations("Folder.conversationCard")
   const items = useCollectionStore((state) => state.items)
   const hydrated = useCollectionStore((state) => state.hydrated)
   const loading = useCollectionStore((state) => state.loading)
@@ -122,8 +147,15 @@ export function CollectionTree({ onOpenScope }: CollectionTreeProps) {
   const rename = useCollectionStore((state) => state.rename)
   const move = useCollectionStore((state) => state.move)
   const remove = useCollectionStore((state) => state.remove)
+  const conversations = useAppWorkspaceStore((state) => state.conversations)
 
   const [expanded, setExpanded] = useState<Set<number>>(new Set())
+  const [unclassifiedExpanded, setUnclassifiedExpanded] = useState(true)
+  const [membershipByConversation, setMembershipByConversation] = useState<
+    Map<number, number>
+  >(new Map())
+  const [membershipsHydrated, setMembershipsHydrated] = useState(false)
+  const [membershipsLoading, setMembershipsLoading] = useState(false)
   const [editor, setEditor] = useState<EditorState | null>(null)
   const [name, setName] = useState("")
   const [parentId, setParentId] = useState<number | null>(null)
@@ -138,6 +170,49 @@ export function CollectionTree({ onOpenScope }: CollectionTreeProps) {
     }
   }, [hydrate, hydrated, t])
 
+  const conversationIdsKey = useMemo(
+    () =>
+      conversations
+        .filter((conversation) => conversation.archived_at == null)
+        .map((conversation) => conversation.id)
+        .sort((a, b) => a - b)
+        .join(","),
+    [conversations]
+  )
+
+  useEffect(() => {
+    if (!showSessions) return
+    const conversationIds = conversationIdsKey
+      ? conversationIdsKey.split(",").map(Number)
+      : []
+    if (conversationIds.length === 0) {
+      setMembershipByConversation(new Map())
+      setMembershipsHydrated(true)
+      return
+    }
+    let cancelled = false
+    setMembershipsLoading(true)
+    listConversationCollectionRefs(conversationIds)
+      .then((refs) => {
+        if (cancelled) return
+        setMembershipByConversation(
+          new Map(refs.map((ref) => [ref.conversation_id, ref.collection_id]))
+        )
+        setMembershipsHydrated(true)
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          toast.error(t("operationFailed", { message: toErrorMessage(error) }))
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setMembershipsLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [conversationIdsKey, refreshKey, showSessions, t])
+
   const children = useMemo(() => orderedChildren(items), [items])
   const options = useMemo(() => flatOptions(items), [items])
   const invalidMoveParents = useMemo(
@@ -146,6 +221,47 @@ export function CollectionTree({ onOpenScope }: CollectionTreeProps) {
         ? descendants(items, editor.item.id)
         : new Set<number>(),
     [editor, items]
+  )
+  const visibleConversations = useMemo(() => {
+    if (showSessions && !membershipsHydrated) return []
+    const next = conversations.filter(
+      (conversation) =>
+        conversation.archived_at == null &&
+        (showCompleted || conversation.status !== "completed")
+    )
+    return next.sort((a, b) => {
+      const aTime = Date.parse(
+        sortMode === "updated" ? a.updated_at : a.created_at
+      )
+      const bTime = Date.parse(
+        sortMode === "updated" ? b.updated_at : b.created_at
+      )
+      return bTime - aTime || b.id - a.id
+    })
+  }, [
+    conversations,
+    membershipsHydrated,
+    showCompleted,
+    showSessions,
+    sortMode,
+  ])
+  const conversationsByCollection = useMemo(() => {
+    const grouped = new Map<number, DbConversationSummary[]>()
+    for (const conversation of visibleConversations) {
+      const collectionId = membershipByConversation.get(conversation.id)
+      if (collectionId == null) continue
+      const group = grouped.get(collectionId) ?? []
+      group.push(conversation)
+      grouped.set(collectionId, group)
+    }
+    return grouped
+  }, [membershipByConversation, visibleConversations])
+  const unclassified = useMemo(
+    () =>
+      visibleConversations.filter(
+        (conversation) => !membershipByConversation.has(conversation.id)
+      ),
+    [membershipByConversation, visibleConversations]
   )
 
   const openEditor = (next: EditorState) => {
@@ -170,7 +286,7 @@ export function CollectionTree({ onOpenScope }: CollectionTreeProps) {
         if (parentId != null) {
           setExpanded((current) => new Set(current).add(parentId))
         }
-        onOpenScope(created.id)
+        if (!showSessions) onOpenScope(created.id)
       } else if (editor.mode === "rename") {
         await rename(editor.item.id, normalizedName)
       } else {
@@ -200,9 +316,44 @@ export function CollectionTree({ onOpenScope }: CollectionTreeProps) {
     }
   }
 
+  const renderSession = (
+    conversation: DbConversationSummary,
+    depth: number
+  ) => (
+    <button
+      key={conversation.id}
+      type="button"
+      data-conversation-id={conversation.id}
+      title={formatConversationTitle(conversation.title)}
+      className="flex h-7 w-full min-w-0 items-center gap-1.5 rounded-md pe-2 text-start text-xs hover:bg-sidebar-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+      style={{ paddingInlineStart: `${1.75 + depth * 0.75}rem` }}
+      onClick={() => onOpenSession?.(conversation)}
+    >
+      <span
+        aria-hidden
+        className="relative flex h-3.5 w-3.5 shrink-0 items-center justify-center"
+      >
+        <AgentIcon agentType={conversation.agent_type} className="h-3 w-3" />
+        <ConversationStatusDot
+          status={conversation.status as ConversationStatus}
+          size="sm"
+          className="absolute -bottom-0.5 -right-0.5 ring-1 ring-sidebar"
+        />
+      </span>
+      <span className="truncate">
+        {formatConversationTitle(conversation.title) ||
+          tConversation("untitledConversation")}
+      </span>
+    </button>
+  )
+
   const renderItems = (parent: number | null, depth = 0): ReactNode =>
     (children.get(parent) ?? []).map((item) => {
       const childItems = children.get(item.id) ?? []
+      const memberSessions = showSessions
+        ? (conversationsByCollection.get(item.id) ?? [])
+        : []
+      const expandable = childItems.length > 0 || memberSessions.length > 0
       const isExpanded = expanded.has(item.id)
       return (
         <div key={item.id}>
@@ -214,7 +365,7 @@ export function CollectionTree({ onOpenScope }: CollectionTreeProps) {
               type="button"
               className={cn(
                 "flex h-6 w-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground",
-                childItems.length === 0 && "pointer-events-none opacity-0"
+                !expandable && "pointer-events-none opacity-0"
               )}
               aria-label={isExpanded ? t("collapse") : t("expand")}
               onClick={() =>
@@ -236,7 +387,19 @@ export function CollectionTree({ onOpenScope }: CollectionTreeProps) {
               type="button"
               className="flex h-full min-w-0 flex-1 items-center gap-1.5 text-start text-xs"
               title={item.name}
-              onClick={() => onOpenScope(item.id)}
+              aria-label={item.name}
+              onClick={() => {
+                if (!showSessions) {
+                  onOpenScope(item.id)
+                  return
+                }
+                setExpanded((current) => {
+                  const next = new Set(current)
+                  if (next.has(item.id)) next.delete(item.id)
+                  else next.add(item.id)
+                  return next
+                })
+              }}
             >
               {isExpanded ? (
                 <FolderOpen className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
@@ -244,6 +407,11 @@ export function CollectionTree({ onOpenScope }: CollectionTreeProps) {
                 <Folder className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
               )}
               <span className="truncate">{item.name}</span>
+              {showSessions && memberSessions.length > 0 ? (
+                <span className="ms-auto shrink-0 text-[10px] text-muted-foreground">
+                  {memberSessions.length}
+                </span>
+              ) : null}
             </button>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -257,6 +425,10 @@ export function CollectionTree({ onOpenScope }: CollectionTreeProps) {
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
+                <DropdownMenuItem onSelect={() => onOpenScope(item.id)}>
+                  <FolderOpen className="h-4 w-4" />
+                  {t("openInSessionCenter")}
+                </DropdownMenuItem>
                 <DropdownMenuItem
                   onSelect={() =>
                     openEditor({ mode: "create", parentId: item.id })
@@ -287,13 +459,25 @@ export function CollectionTree({ onOpenScope }: CollectionTreeProps) {
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
-          {isExpanded ? renderItems(item.id, depth + 1) : null}
+          {isExpanded ? (
+            <>
+              {memberSessions.map((session) =>
+                renderSession(session, depth + 1)
+              )}
+              {renderItems(item.id, depth + 1)}
+            </>
+          ) : null}
         </div>
       )
     })
 
   return (
-    <section className="shrink-0 border-b border-border/40 px-1.5 pb-1.5">
+    <section
+      className={cn(
+        "border-b border-border/40 px-1.5 pb-1.5",
+        showSessions && "flex min-h-0 flex-1 flex-col"
+      )}
+    >
       <div className="flex h-7 items-center px-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
         <span className="min-w-0 flex-1 truncate">{t("title")}</span>
         <Button
@@ -306,15 +490,70 @@ export function CollectionTree({ onOpenScope }: CollectionTreeProps) {
           <Plus className="h-3.5 w-3.5" />
         </Button>
       </div>
-      <div className="max-h-40 overflow-y-auto">
-        <button
-          type="button"
-          className="flex h-7 w-full items-center gap-1.5 rounded-md px-2 text-start text-xs hover:bg-sidebar-accent"
-          onClick={() => onOpenScope("unclassified")}
-        >
-          <Inbox className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-          <span className="truncate">{t("unclassified")}</span>
-        </button>
+      <div
+        className={cn(
+          "overflow-y-auto",
+          showSessions ? "min-h-0 flex-1" : "max-h-40"
+        )}
+      >
+        <div className="group flex h-7 min-w-0 items-center rounded-md pe-1 hover:bg-sidebar-accent">
+          {showSessions ? (
+            <button
+              type="button"
+              className={cn(
+                "flex h-6 w-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground",
+                unclassified.length === 0 && "pointer-events-none opacity-0"
+              )}
+              aria-label={unclassifiedExpanded ? t("collapse") : t("expand")}
+              onClick={() => setUnclassifiedExpanded((current) => !current)}
+            >
+              {unclassifiedExpanded ? (
+                <ChevronDown className="h-3.5 w-3.5" />
+              ) : (
+                <ChevronRight className="h-3.5 w-3.5 rtl:rotate-180" />
+              )}
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className={cn(
+              "flex h-full min-w-0 flex-1 items-center gap-1.5 text-start text-xs",
+              !showSessions && "px-2"
+            )}
+            aria-label={t("unclassified")}
+            onClick={() => {
+              if (showSessions) setUnclassifiedExpanded((current) => !current)
+              else onOpenScope("unclassified")
+            }}
+          >
+            <Inbox className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            <span className="truncate">{t("unclassified")}</span>
+            {showSessions && unclassified.length > 0 ? (
+              <span className="ms-auto shrink-0 text-[10px] text-muted-foreground">
+                {unclassified.length}
+              </span>
+            ) : null}
+          </button>
+          {showSessions ? (
+            <Button
+              size="icon-sm"
+              variant="ghost"
+              className="h-6 w-6 shrink-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+              aria-label={t("openInSessionCenter")}
+              onClick={() => onOpenScope("unclassified")}
+            >
+              <MoreHorizontal className="h-3.5 w-3.5" />
+            </Button>
+          ) : null}
+        </div>
+        {showSessions && unclassifiedExpanded
+          ? unclassified.map((session) => renderSession(session, 0))
+          : null}
+        {showSessions && membershipsLoading && conversationIdsKey !== "" ? (
+          <div className="flex h-7 items-center justify-center text-muted-foreground">
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          </div>
+        ) : null}
         {loading && items.length === 0 ? (
           <div className="flex h-8 items-center justify-center text-muted-foreground">
             <Loader2 className="h-3.5 w-3.5 animate-spin" />

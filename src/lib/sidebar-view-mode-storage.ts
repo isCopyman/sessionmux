@@ -8,8 +8,10 @@ const SORT_MODE_KEY = "workspace:sidebar-sort-mode"
 const SECTION_ORDER_KEY = "workspace:sidebar-section-order"
 const SECTION_COLLAPSED_KEY = "workspace:sidebar-section-collapsed"
 const CONVERSATION_EXPANDED_KEY = "workspace:sidebar-conversation-expanded"
+const ORGANIZATION_MODE_KEY = "workspace:sidebar-organization-mode"
 
 export type SidebarSortMode = "created" | "updated"
+export type SidebarOrganizationMode = "collections" | "locations"
 
 /** The reorderable top-level sidebar sections. "Pinned" is deliberately absent:
  *  it is a transient override bucket and always stays on top. */
@@ -247,6 +249,31 @@ export function saveSortMode(value: SidebarSortMode): void {
   if (typeof window === "undefined") return
   try {
     localStorage.setItem(SORT_MODE_KEY, value)
+  } catch {
+    /* ignore */
+  }
+}
+
+/**
+ * The primary Session library view. Collections are the user-facing semantic
+ * home; execution locations keep the legacy cwd/Git-oriented folder tree
+ * available without making it compete with Collections by default.
+ */
+export function loadOrganizationMode(): SidebarOrganizationMode {
+  if (typeof window === "undefined") return "collections"
+  try {
+    const raw = localStorage.getItem(ORGANIZATION_MODE_KEY)
+    if (raw === "locations" || raw === "collections") return raw
+  } catch {
+    /* ignore */
+  }
+  return "collections"
+}
+
+export function saveOrganizationMode(value: SidebarOrganizationMode): void {
+  if (typeof window === "undefined") return
+  try {
+    localStorage.setItem(ORGANIZATION_MODE_KEY, value)
   } catch {
     /* ignore */
   }

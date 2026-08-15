@@ -1532,6 +1532,11 @@
       "push": "Pushen..."
     },
     "workbench": {
+      "treeTitle": "Workbenches",
+      "actions": "Actions for {name}",
+      "expand": "Expand workbench",
+      "collapse": "Collapse workbench",
+      "untitledSession": "Untitled session",
       "switchTitle": "Arbeitsbereich wechseln",
       "loading": "Arbeitsbereiche werden geladen…",
       "defaultName": "Arbeitsbereich {number}",
@@ -1553,7 +1558,11 @@
       "loadFailed": "Arbeitsbereiche konnten nicht geladen werden: {message}",
       "saveFailed": "Arbeitsbereich konnte nicht gespeichert werden: {message}",
       "switchFailed": "Arbeitsbereich konnte nicht gewechselt werden: {message}",
-      "deleteFailed": "Arbeitsbereich konnte nicht gelöscht werden: {message}"
+      "deleteFailed": "Arbeitsbereich konnte nicht gelöscht werden: {message}",
+      "currentSessions": "Sessions in this workbench",
+      "sessionCount": "{count} sessions",
+      "emptySessions": "No open sessions",
+      "draftSession": "New session"
     },
     "statusLabels": {
       "in_progress": "In Bearbeitung",
@@ -1601,6 +1610,9 @@
       "openFolder": "Ordner öffnen",
       "searchPlaceholder": "Konversationen suchen...",
       "viewOptions": "Anzeigeoptionen",
+      "organizeBy": "Organize sessions",
+      "organizeByCollections": "By Collection",
+      "organizeByLocations": "By run location",
       "showCompleted": "Abgeschlossene Konversationen anzeigen",
       "showWorktrees": "Worktree-Ordner anzeigen",
       "showRecent": "Gruppe „Zuletzt“ anzeigen",
@@ -1656,6 +1668,7 @@
         "namePlaceholder": "Collection name",
         "parentLabel": "Parent collection",
         "root": "Top level",
+        "openInSessionCenter": "Open in Session Center",
         "deleteTitle": "Delete this collection?",
         "deleteDescription": "Sessions in “{name}” become Unclassified and nested collections move up one level. No session or running agent is deleted.",
         "operationFailed": "Collection operation failed: {message}"

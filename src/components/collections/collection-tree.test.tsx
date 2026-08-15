@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { CollectionTree } from "./collection-tree"
 import enMessages from "@/i18n/messages/en.json"
+import type { DbConversationSummary } from "@/lib/types"
 
 const h = vi.hoisted(() => ({
   create: vi.fn(),
@@ -12,6 +13,45 @@ const h = vi.hoisted(() => ({
   move: vi.fn(),
   remove: vi.fn(),
   hydrate: vi.fn(),
+  listRefs: vi.fn(),
+  conversations: [
+    {
+      id: 101,
+      folder_id: 7,
+      title: "Evidence review",
+      title_locked: true,
+      agent_type: "codex",
+      status: "in_progress",
+      kind: "regular",
+      model: null,
+      git_branch: null,
+      external_id: "session-101",
+      message_count: 3,
+      child_count: 0,
+      created_at: "2026-06-03T00:00:00.000Z",
+      updated_at: "2026-06-03T00:00:00.000Z",
+      archived_at: null,
+      pinned_at: null,
+    },
+    {
+      id: 102,
+      folder_id: 7,
+      title: "Loose notes",
+      title_locked: true,
+      agent_type: "claude",
+      status: "in_progress",
+      kind: "regular",
+      model: null,
+      git_branch: null,
+      external_id: "session-102",
+      message_count: 2,
+      child_count: 0,
+      created_at: "2026-06-02T00:00:00.000Z",
+      updated_at: "2026-06-02T00:00:00.000Z",
+      archived_at: null,
+      pinned_at: null,
+    },
+  ],
   items: [
     {
       id: 10,
@@ -50,10 +90,25 @@ vi.mock("@/stores/collection-store", () => ({
     }),
 }))
 
-function renderTree(onOpenScope = vi.fn()) {
+vi.mock("@/stores/app-workspace-store", () => ({
+  useAppWorkspaceStore: (selector: (state: unknown) => unknown) =>
+    selector({ conversations: h.conversations }),
+}))
+
+vi.mock("@/lib/api", () => ({
+  listConversationCollectionRefs: h.listRefs,
+}))
+
+function renderTree(
+  onOpenScope = vi.fn(),
+  options: {
+    showSessions?: boolean
+    onOpenSession?: (session: DbConversationSummary) => void
+  } = {}
+) {
   render(
     <NextIntlClientProvider locale="en" messages={enMessages}>
-      <CollectionTree onOpenScope={onOpenScope} />
+      <CollectionTree onOpenScope={onOpenScope} {...options} />
     </NextIntlClientProvider>
   )
   return { user: userEvent.setup(), onOpenScope }
@@ -70,12 +125,13 @@ describe("CollectionTree", () => {
       created_at: "2026-06-01T00:00:00.000Z",
       updated_at: "2026-06-01T00:00:00.000Z",
     })
+    h.listRefs.mockResolvedValue([{ conversation_id: 101, collection_id: 11 }])
   })
 
   it("opens nested Collections as Session Center scopes", async () => {
     const { user, onOpenScope } = renderTree()
     await user.click(screen.getByRole("button", { name: "Expand collection" }))
-    await user.click(screen.getByRole("button", { name: "Sources" }))
+    await user.click(screen.getByTitle("Sources"))
 
     expect(onOpenScope).toHaveBeenCalledWith(11)
   })
@@ -88,5 +144,22 @@ describe("CollectionTree", () => {
 
     expect(h.create).toHaveBeenCalledWith("Writing", null)
     expect(onOpenScope).toHaveBeenCalledWith(12)
+  })
+
+  it("expands Collections into inline Sessions and keeps Unclassified visible", async () => {
+    const onOpenSession = vi.fn()
+    const { user } = renderTree(vi.fn(), {
+      showSessions: true,
+      onOpenSession,
+    })
+
+    expect(await screen.findByText("Loose notes")).toBeTruthy()
+    await user.click(screen.getByRole("button", { name: "Research" }))
+    await user.click(screen.getByTitle("Sources"))
+    await user.click(await screen.findByText("Evidence review"))
+
+    expect(onOpenSession).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 101, title: "Evidence review" })
+    )
   })
 })

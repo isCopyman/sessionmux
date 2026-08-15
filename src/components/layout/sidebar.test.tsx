@@ -11,6 +11,7 @@ import enMessages from "@/i18n/messages/en.json"
 const spies = vi.hoisted(() => ({
   openNewConversationTab: vi.fn(),
   openChatModeTab: vi.fn(),
+  openTab: vi.fn(),
   setSearchOpen: vi.fn(),
   setRoute: vi.fn(),
   openConversations: vi.fn(),
@@ -24,6 +25,7 @@ const spies = vi.hoisted(() => ({
   } | null,
   sessionCenterOpen: false,
   sessionCenterCollection: null as number | "unclassified" | null,
+  collectionShowsSessions: false,
 }))
 const mockState = vi.hoisted(() => ({
   activeFolder: { id: 7, path: "/x" } as { id: number; path: string } | null,
@@ -42,19 +44,24 @@ vi.mock("@/components/conversations/sidebar-conversation-list", () => ({
     return null
   },
 }))
-vi.mock("@/components/workbench/workbench-switcher", () => ({
-  WorkbenchSwitcher: () => null,
+vi.mock("@/components/workbench/workbench-tree", () => ({
+  WorkbenchTree: () => <div>Workbench tree</div>,
 }))
 vi.mock("@/components/collections/collection-tree", () => ({
   CollectionTree: ({
     onOpenScope,
+    showSessions,
   }: {
     onOpenScope: (scope: number | "unclassified") => void
-  }) => (
-    <button type="button" onClick={() => onOpenScope(42)}>
-      Research collection
-    </button>
-  ),
+    showSessions?: boolean
+  }) => {
+    spies.collectionShowsSessions = showSessions === true
+    return (
+      <button type="button" onClick={() => onOpenScope(42)}>
+        Research collection
+      </button>
+    )
+  },
 }))
 vi.mock("@/components/conversations/conversation-manage-dialog", () => ({
   ConversationManageDialog: ({
@@ -79,6 +86,7 @@ vi.mock("@/contexts/tab-context", () => ({
   useTabActions: () => ({
     openNewConversationTab: spies.openNewConversationTab,
     openChatModeTab: spies.openChatModeTab,
+    openTab: spies.openTab,
   }),
 }))
 vi.mock("@/contexts/search-dialog-context", () => ({
@@ -127,6 +135,7 @@ function renderSidebar() {
 
 describe("Sidebar — fixed New chat / Search region", () => {
   beforeEach(() => {
+    localStorage.clear()
     spies.openNewConversationTab.mockClear()
     spies.openChatModeTab.mockClear()
     spies.setSearchOpen.mockClear()
@@ -134,6 +143,8 @@ describe("Sidebar — fixed New chat / Search region", () => {
     spies.openConversations.mockClear()
     spies.sessionCenterOpen = false
     spies.sessionCenterCollection = null
+    spies.collectionShowsSessions = false
+    spies.listProps = null
     mockState.activeFolder = { id: 7, path: "/x" }
   })
 
@@ -183,6 +194,28 @@ describe("Sidebar — fixed New chat / Search region", () => {
     expect(getByText("Ctrl+K")).toBeTruthy()
   })
 
+  it("defaults to Workbench + Collection organization", () => {
+    renderSidebar()
+    expect(screen.getByText("Workbench tree")).toBeTruthy()
+    expect(spies.collectionShowsSessions).toBe(true)
+    expect(spies.listProps).toBeNull()
+  })
+
+  it("can switch back to the execution-location tree", async () => {
+    const user = userEvent.setup()
+    renderSidebar()
+
+    await user.click(screen.getByRole("button", { name: "View options" }))
+    await user.click(
+      screen.getByRole("menuitemradio", { name: "By run location" })
+    )
+
+    expect(spies.listProps).not.toBeNull()
+    expect(localStorage.getItem("workspace:sidebar-organization-mode")).toBe(
+      "locations"
+    )
+  })
+
   it("falls back to chat mode (never disabled) when no folder is active", () => {
     mockState.activeFolder = null
     const { getByText } = renderSidebar()
@@ -199,6 +232,7 @@ describe("Sidebar — fixed New chat / Search region", () => {
 describe("Sidebar — Show worktree folders toggle", () => {
   beforeEach(() => {
     localStorage.clear()
+    localStorage.setItem("workspace:sidebar-organization-mode", "locations")
     spies.listProps = null
     mockState.activeFolder = { id: 7, path: "/x" }
   })
@@ -237,6 +271,7 @@ describe("Sidebar — Show worktree folders toggle", () => {
 describe("Sidebar — Show completed default", () => {
   beforeEach(() => {
     localStorage.clear()
+    localStorage.setItem("workspace:sidebar-organization-mode", "locations")
     spies.listProps = null
     mockState.activeFolder = { id: 7, path: "/x" }
   })
@@ -256,6 +291,7 @@ describe("Sidebar — Show completed default", () => {
 describe("Sidebar — Show Recent group toggle", () => {
   beforeEach(() => {
     localStorage.clear()
+    localStorage.setItem("workspace:sidebar-organization-mode", "locations")
     spies.listProps = null
     mockState.activeFolder = { id: 7, path: "/x" }
   })
@@ -293,6 +329,7 @@ describe("Sidebar — Show Recent group toggle", () => {
 describe("Sidebar — Section order control", () => {
   beforeEach(() => {
     localStorage.clear()
+    localStorage.setItem("workspace:sidebar-organization-mode", "locations")
     spies.listProps = null
     mockState.activeFolder = { id: 7, path: "/x" }
   })

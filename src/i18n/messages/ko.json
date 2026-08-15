@@ -1532,6 +1532,11 @@
       "push": "푸시..."
     },
     "workbench": {
+      "treeTitle": "Workbenches",
+      "actions": "Actions for {name}",
+      "expand": "Expand workbench",
+      "collapse": "Collapse workbench",
+      "untitledSession": "Untitled session",
       "switchTitle": "워크벤치 전환",
       "loading": "워크벤치 불러오는 중…",
       "defaultName": "워크벤치 {number}",
@@ -1553,7 +1558,11 @@
       "loadFailed": "워크벤치를 불러오지 못했습니다: {message}",
       "saveFailed": "워크벤치를 저장하지 못했습니다: {message}",
       "switchFailed": "워크벤치를 전환하지 못했습니다: {message}",
-      "deleteFailed": "워크벤치를 삭제하지 못했습니다: {message}"
+      "deleteFailed": "워크벤치를 삭제하지 못했습니다: {message}",
+      "currentSessions": "Sessions in this workbench",
+      "sessionCount": "{count} sessions",
+      "emptySessions": "No open sessions",
+      "draftSession": "New session"
     },
     "statusLabels": {
       "in_progress": "진행 중",
@@ -1601,6 +1610,9 @@
       "openFolder": "폴더 열기",
       "searchPlaceholder": "대화 검색...",
       "viewOptions": "보기 옵션",
+      "organizeBy": "Organize sessions",
+      "organizeByCollections": "By Collection",
+      "organizeByLocations": "By run location",
       "showCompleted": "완료된 대화 표시",
       "showWorktrees": "워크트리 폴더 표시",
       "showRecent": "'최근' 그룹 표시",
@@ -1656,6 +1668,7 @@
         "namePlaceholder": "Collection name",
         "parentLabel": "Parent collection",
         "root": "Top level",
+        "openInSessionCenter": "Open in Session Center",
         "deleteTitle": "Delete this collection?",
         "deleteDescription": "Sessions in “{name}” become Unclassified and nested collections move up one level. No session or running agent is deleted.",
         "operationFailed": "Collection operation failed: {message}"

@@ -1532,6 +1532,11 @@
       "push": "プッシュ..."
     },
     "workbench": {
+      "treeTitle": "Workbenches",
+      "actions": "Actions for {name}",
+      "expand": "Expand workbench",
+      "collapse": "Collapse workbench",
+      "untitledSession": "Untitled session",
       "switchTitle": "ワークベンチを切り替え",
       "loading": "ワークベンチを読み込み中…",
       "defaultName": "ワークベンチ {number}",
@@ -1553,7 +1558,11 @@
       "loadFailed": "ワークベンチの読み込みに失敗しました：{message}",
       "saveFailed": "ワークベンチの保存に失敗しました：{message}",
       "switchFailed": "ワークベンチの切り替えに失敗しました：{message}",
-      "deleteFailed": "ワークベンチの削除に失敗しました：{message}"
+      "deleteFailed": "ワークベンチの削除に失敗しました：{message}",
+      "currentSessions": "Sessions in this workbench",
+      "sessionCount": "{count} sessions",
+      "emptySessions": "No open sessions",
+      "draftSession": "New session"
     },
     "statusLabels": {
       "in_progress": "進行中",
@@ -1601,6 +1610,9 @@
       "openFolder": "フォルダを開く",
       "searchPlaceholder": "会話を検索...",
       "viewOptions": "表示オプション",
+      "organizeBy": "Organize sessions",
+      "organizeByCollections": "By Collection",
+      "organizeByLocations": "By run location",
       "showCompleted": "完了した会話を表示",
       "showWorktrees": "ワークツリーフォルダを表示",
       "showRecent": "「最近」グループを表示",
@@ -1656,6 +1668,7 @@
         "namePlaceholder": "Collection name",
         "parentLabel": "Parent collection",
         "root": "Top level",
+        "openInSessionCenter": "Open in Session Center",
         "deleteTitle": "Delete this collection?",
         "deleteDescription": "Sessions in “{name}” become Unclassified and nested collections move up one level. No session or running agent is deleted.",
         "operationFailed": "Collection operation failed: {message}"

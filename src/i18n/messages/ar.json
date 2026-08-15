@@ -1532,6 +1532,11 @@
       "push": "دفع..."
     },
     "workbench": {
+      "treeTitle": "Workbenches",
+      "actions": "Actions for {name}",
+      "expand": "Expand workbench",
+      "collapse": "Collapse workbench",
+      "untitledSession": "Untitled session",
       "switchTitle": "تبديل مساحة العمل",
       "loading": "جارٍ تحميل مساحات العمل…",
       "defaultName": "مساحة العمل {number}",
@@ -1553,7 +1558,11 @@
       "loadFailed": "تعذر تحميل مساحات العمل: {message}",
       "saveFailed": "تعذر حفظ مساحة العمل: {message}",
       "switchFailed": "تعذر تبديل مساحة العمل: {message}",
-      "deleteFailed": "تعذر حذف مساحة العمل: {message}"
+      "deleteFailed": "تعذر حذف مساحة العمل: {message}",
+      "currentSessions": "Sessions in this workbench",
+      "sessionCount": "{count} sessions",
+      "emptySessions": "No open sessions",
+      "draftSession": "New session"
     },
     "statusLabels": {
       "in_progress": "قيد التنفيذ",
@@ -1601,6 +1610,9 @@
       "openFolder": "فتح مجلد",
       "searchPlaceholder": "بحث عن محادثات...",
       "viewOptions": "خيارات العرض",
+      "organizeBy": "Organize sessions",
+      "organizeByCollections": "By Collection",
+      "organizeByLocations": "By run location",
       "showCompleted": "عرض المحادثات المكتملة",
       "showWorktrees": "عرض مجلدات worktree",
       "showRecent": "عرض مجموعة الأحدث",
@@ -1656,6 +1668,7 @@
         "namePlaceholder": "Collection name",
         "parentLabel": "Parent collection",
         "root": "Top level",
+        "openInSessionCenter": "Open in Session Center",
         "deleteTitle": "Delete this collection?",
         "deleteDescription": "Sessions in “{name}” become Unclassified and nested collections move up one level. No session or running agent is deleted.",
         "operationFailed": "Collection operation failed: {message}"

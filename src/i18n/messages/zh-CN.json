@@ -1532,6 +1532,11 @@
       "push": "推送..."
     },
     "workbench": {
+      "treeTitle": "工作台",
+      "actions": "{name} 的操作",
+      "expand": "展开工作台",
+      "collapse": "折叠工作台",
+      "untitledSession": "未命名会话",
       "switchTitle": "切换工作台",
       "loading": "正在加载工作台…",
       "defaultName": "工作台 {number}",
@@ -1553,7 +1558,11 @@
       "loadFailed": "加载工作台失败：{message}",
       "saveFailed": "保存工作台失败：{message}",
       "switchFailed": "切换工作台失败：{message}",
-      "deleteFailed": "删除工作台失败：{message}"
+      "deleteFailed": "删除工作台失败：{message}",
+      "currentSessions": "当前工作台中的会话",
+      "sessionCount": "{count} 个会话",
+      "emptySessions": "尚未打开会话",
+      "draftSession": "新会话"
     },
     "statusLabels": {
       "in_progress": "进行中",
@@ -1601,6 +1610,9 @@
       "openFolder": "打开文件夹",
       "searchPlaceholder": "搜索会话...",
       "viewOptions": "显示选项",
+      "organizeBy": "会话组织方式",
+      "organizeByCollections": "按分类",
+      "organizeByLocations": "按运行位置",
       "showCompleted": "显示已完成会话",
       "showWorktrees": "显示工作树文件夹",
       "showRecent": "显示「最近」分组",
@@ -1656,6 +1668,7 @@
         "namePlaceholder": "分类名称",
         "parentLabel": "上级分类",
         "root": "顶层",
+        "openInSessionCenter": "在会话中心打开",
         "deleteTitle": "删除这个分类？",
         "deleteDescription": "“{name}”中的会话将变为未分类，子分类上移一级。不会删除任何会话或运行中的智能体。",
         "operationFailed": "分类操作失败：{message}"

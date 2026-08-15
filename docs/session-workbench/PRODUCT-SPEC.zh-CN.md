@@ -28,7 +28,10 @@ Session 现有独立归档状态：可在会话中心批量归档、切到归档
 Collection 的第一批可用闭环也已落地：侧栏显示可嵌套分类树和“未分类”，可创建、重命名、
 移动或删除分类；会话中心可按某个分类及全部子分类筛选，也可把多条 Session 批量移入同一个
 分类。每个 Session 最多一个主要分类；删除分类只让其中 Session 回到“未分类”，子分类上移
-一级，不修改 cwd、Folder、worktree、Workbench 标签或运行状态。
+一级，不修改 cwd、Folder、worktree、Workbench 标签或运行状态。左栏现在把全部命名 Workbench
+显示成可展开树，当前工作台默认展开并高亮，每个工作台下面直接列出其中 Session；Collection
+展开后也直接显示成员 Session。原来的 Folder 会话树保留为可切换的“按运行位置”视图，不再与
+Collection 同时占据两个平级主目录。
 持久 Session 标签拖到当前或其他 Pane 的左、右、上、下边缘时会显示半屏吸附预览，松手即建立
 对应分屏，拖到其他 Pane 中央则加入其标签组。ctx 不可用时自动退化为元数据搜索。
 
@@ -70,6 +73,11 @@ Project、Theme、Chapter、Subproject 都不必成为新对象；用户给某�
 Collection 不改变 Session 的 cwd、Folder、worktree、模型或权限。移动 Collection 只是整理，
 不是迁移代码或重启 Agent。
 
+左栏默认呈现两棵职责不同的树：Workbench 树列出各套工作现场及其打开项，Collection 树给出
+唯一的长期语义归属。磁盘 Folder 不再作为第三棵同等重要的目录与 Collection 并排；需要按
+cwd、Git 仓库或 worktree 排查时，用户从显示选项切换到“按运行位置”。这些视图引用同一批
+Session，不复制历史，也不改变归属。
+
 ### 2.3 Workbench：现在怎样摆着工作
 
 Workbench 是一套可命名、可恢复的工作现场，保存：
@@ -95,14 +103,14 @@ Workbench 中被引用，底层仍是同一段对话。
 
 ```text
 ┌──────────────────┬──────────────────────────────────┬─────────────────┐
-│ Session Library  │ [方案讨论] [结果审查] [+工作台]   │ Context         │
-│                  │                                  │                 │
-│ 搜索 / 快速筛选   │ ┌────────────┬─────────────────┐ │ 当前 Session    │
-│ 收藏 / 最近       │ │ Claude     │ Codex           │ │ 属性 / 文件     │
-│ Collections      │ │ Session A  │ Session B       │ │ 网页 / Diff     │
-│ 未分类 / 归档     │ ├────────────┴─────────────────┤ │                 │
-│                  │ │ Gemini Session C              │ │                 │
-│ Workbenches      │ └──────────────────────────────┘ │                 │
+│ Workbenches      │ [方案讨论] [结果审查] [+工作台]   │ Context         │
+│ ├ 方案讨论（当前） │                                  │                 │
+│ │ ├ Claude       │ ┌────────────┬─────────────────┐ │ 当前 Session    │
+│ │ └ Codex        │ │ Claude     │ Codex           │ │ 属性 / 文件     │
+│ └ 结果审查        │ │ Session A  │ Session B       │ │ 网页 / Diff     │
+│ Collections      │ ├────────────┴─────────────────┤ │                 │
+│ ├ 资料调查        │ │ Gemini Session C              │ │                 │
+│ └ 未分类          │ └──────────────────────────────┘ │                 │
 └──────────────────┴──────────────────────────────────┴─────────────────┘
 ```
 

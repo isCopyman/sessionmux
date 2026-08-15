@@ -1532,6 +1532,11 @@
       "push": "Enviar..."
     },
     "workbench": {
+      "treeTitle": "Workbenches",
+      "actions": "Actions for {name}",
+      "expand": "Expand workbench",
+      "collapse": "Collapse workbench",
+      "untitledSession": "Untitled session",
       "switchTitle": "Trocar área de trabalho",
       "loading": "Carregando áreas de trabalho…",
       "defaultName": "Área de trabalho {number}",
@@ -1553,7 +1558,11 @@
       "loadFailed": "Falha ao carregar áreas de trabalho: {message}",
       "saveFailed": "Falha ao salvar a área de trabalho: {message}",
       "switchFailed": "Falha ao trocar de área de trabalho: {message}",
-      "deleteFailed": "Falha ao excluir a área de trabalho: {message}"
+      "deleteFailed": "Falha ao excluir a área de trabalho: {message}",
+      "currentSessions": "Sessions in this workbench",
+      "sessionCount": "{count} sessions",
+      "emptySessions": "No open sessions",
+      "draftSession": "New session"
     },
     "statusLabels": {
       "in_progress": "Em andamento",
@@ -1601,6 +1610,9 @@
       "openFolder": "Abrir pasta",
       "searchPlaceholder": "Buscar conversas...",
       "viewOptions": "Opções de exibição",
+      "organizeBy": "Organize sessions",
+      "organizeByCollections": "By Collection",
+      "organizeByLocations": "By run location",
       "showCompleted": "Mostrar conversas concluídas",
       "showWorktrees": "Mostrar pastas de worktree",
       "showRecent": "Mostrar grupo Recentes",
@@ -1656,6 +1668,7 @@
         "namePlaceholder": "Collection name",
         "parentLabel": "Parent collection",
         "root": "Top level",
+        "openInSessionCenter": "Open in Session Center",
         "deleteTitle": "Delete this collection?",
         "deleteDescription": "Sessions in “{name}” become Unclassified and nested collections move up one level. No session or running agent is deleted.",
         "operationFailed": "Collection operation failed: {message}"

@@ -2,12 +2,14 @@ import { beforeEach, describe, expect, it } from "vitest"
 
 import {
   DEFAULT_SECTION_ORDER,
+  loadOrganizationMode,
   loadSectionCollapsed,
   loadSectionOrder,
   loadShowRecent,
   moveSectionInOrder,
   normalizeSectionOrder,
   saveSectionOrder,
+  saveOrganizationMode,
   saveShowRecent,
 } from "./sidebar-view-mode-storage"
 
@@ -129,6 +131,21 @@ describe("loadShowRecent", () => {
     expect(loadShowRecent()).toBe(false)
     saveShowRecent(true)
     expect(loadShowRecent()).toBe(true)
+  })
+})
+
+describe("organization mode", () => {
+  beforeEach(() => localStorage.clear())
+
+  it("defaults to semantic Collections and persists the location fallback", () => {
+    expect(loadOrganizationMode()).toBe("collections")
+    saveOrganizationMode("locations")
+    expect(loadOrganizationMode()).toBe("locations")
+  })
+
+  it("ignores an unknown stored mode", () => {
+    localStorage.setItem("workspace:sidebar-organization-mode", "folders-v0")
+    expect(loadOrganizationMode()).toBe("collections")
   })
 })
 

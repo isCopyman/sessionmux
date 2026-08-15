@@ -1532,6 +1532,11 @@
       "push": "Push..."
     },
     "workbench": {
+      "treeTitle": "Workbenches",
+      "actions": "Actions for {name}",
+      "expand": "Expand workbench",
+      "collapse": "Collapse workbench",
+      "untitledSession": "Untitled session",
       "switchTitle": "Switch workbench",
       "loading": "Loading workbenches…",
       "defaultName": "Workbench {number}",
@@ -1553,7 +1558,11 @@
       "loadFailed": "Failed to load workbenches: {message}",
       "saveFailed": "Failed to save workbench: {message}",
       "switchFailed": "Failed to switch workbench: {message}",
-      "deleteFailed": "Failed to delete workbench: {message}"
+      "deleteFailed": "Failed to delete workbench: {message}",
+      "currentSessions": "Sessions in this workbench",
+      "sessionCount": "{count, plural, one {# session} other {# sessions}}",
+      "emptySessions": "No open sessions",
+      "draftSession": "New session"
     },
     "statusLabels": {
       "in_progress": "In Progress",
@@ -1601,6 +1610,9 @@
       "openFolder": "Open Folder",
       "searchPlaceholder": "Search conversations...",
       "viewOptions": "View options",
+      "organizeBy": "Organize sessions",
+      "organizeByCollections": "By Collection",
+      "organizeByLocations": "By run location",
       "showCompleted": "Show completed conversations",
       "showWorktrees": "Show worktree folders",
       "showRecent": "Show Recent group",
@@ -1656,6 +1668,7 @@
         "namePlaceholder": "Collection name",
         "parentLabel": "Parent collection",
         "root": "Top level",
+        "openInSessionCenter": "Open in Session Center",
         "deleteTitle": "Delete this collection?",
         "deleteDescription": "Sessions in “{name}” become Unclassified and nested collections move up one level. No session or running agent is deleted.",
         "operationFailed": "Collection operation failed: {message}"
