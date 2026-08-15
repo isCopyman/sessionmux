@@ -1531,6 +1531,26 @@
       "viewDiff": "查看差異",
       "push": "推送..."
     },
+    "workbench": {
+      "switchTitle": "切換工作台",
+      "loading": "正在載入工作台…",
+      "defaultName": "工作台 {number}",
+      "create": "新增工作台",
+      "rename": "重新命名目前工作台",
+      "delete": "刪除目前工作台",
+      "createTitle": "新增工作台",
+      "renameTitle": "重新命名工作台",
+      "namePlaceholder": "工作台名稱",
+      "cancel": "取消",
+      "save": "儲存",
+      "createAndSwitch": "建立並切換",
+      "deleteTitle": "刪除這個工作台？",
+      "deleteDescription": "將刪除「{name}」儲存的分頁和版面配置，但不會刪除其中的對話。",
+      "loadFailed": "載入工作台失敗：{message}",
+      "saveFailed": "儲存工作台失敗：{message}",
+      "switchFailed": "切換工作台失敗：{message}",
+      "deleteFailed": "刪除工作台失敗：{message}"
+    },
     "statusLabels": {
       "in_progress": "進行中",
       "pending_review": "待複查",

@@ -28,7 +28,7 @@ pub use conversation::{
 };
 pub use folder::{
     FolderCommandInfo, FolderDetail, FolderHistoryEntry, OpenedTab, OpenedTabsSnapshot,
-    SaveTabsOutcome,
+    SaveTabsOutcome, WorkbenchInfo,
 };
 pub use message::{
     AgentExecutionStats, AgentToolCall, ContentBlock, ImageData, MessageRole, MessageTurn,

@@ -1531,6 +1531,26 @@
       "viewDiff": "Voir le Diff",
       "push": "Pousser..."
     },
+    "workbench": {
+      "switchTitle": "Changer d’espace de travail",
+      "loading": "Chargement des espaces…",
+      "defaultName": "Espace {number}",
+      "create": "Nouvel espace",
+      "rename": "Renommer l’espace actuel",
+      "delete": "Supprimer l’espace actuel",
+      "createTitle": "Nouvel espace",
+      "renameTitle": "Renommer l’espace",
+      "namePlaceholder": "Nom de l’espace",
+      "cancel": "Annuler",
+      "save": "Enregistrer",
+      "createAndSwitch": "Créer et ouvrir",
+      "deleteTitle": "Supprimer cet espace ?",
+      "deleteDescription": "Les onglets et la disposition de « {name} » seront supprimés, mais pas les conversations.",
+      "loadFailed": "Échec du chargement des espaces : {message}",
+      "saveFailed": "Échec de l’enregistrement : {message}",
+      "switchFailed": "Échec du changement d’espace : {message}",
+      "deleteFailed": "Échec de la suppression : {message}"
+    },
     "statusLabels": {
       "in_progress": "En cours",
       "pending_review": "Revue",

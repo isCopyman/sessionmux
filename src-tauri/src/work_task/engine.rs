@@ -3298,6 +3298,7 @@ async fn converge_worktree_removal(
                     emitter,
                     crate::web::event_bridge::TABS_CHANGED_EVENT,
                     crate::web::event_bridge::TabsChanged {
+                        workbench_id: None,
                         version: inv.version,
                         origin: "server".to_string(),
                         tabs,

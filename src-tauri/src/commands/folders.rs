@@ -866,6 +866,7 @@ pub async fn remove_folder_from_workspace_core(
             emitter,
             crate::web::event_bridge::TABS_CHANGED_EVENT,
             crate::web::event_bridge::TabsChanged {
+                workbench_id: None,
                 version: inv.version,
                 origin: "server".to_string(),
                 tabs,
@@ -3147,6 +3148,7 @@ async fn converge_removed_worktree_folder(
                     emitter,
                     crate::web::event_bridge::TABS_CHANGED_EVENT,
                     crate::web::event_bridge::TabsChanged {
+                        workbench_id: None,
                         version: inv.version,
                         origin: "server".to_string(),
                         tabs,

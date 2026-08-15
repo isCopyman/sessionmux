@@ -25,6 +25,7 @@ import type {
   ImportResult,
   OpenedTab,
   OpenedTabsSnapshot,
+  WorkbenchInfo,
   SaveTabsOutcome,
   GitStatusEntry,
   GitBranchList,
@@ -563,6 +564,47 @@ export async function saveOpenedTabs(
   origin: string
 ): Promise<SaveTabsOutcome> {
   return invoke("save_opened_tabs", { items, expectedVersion, origin })
+}
+
+export async function listWorkbenchTabs(
+  workbenchId: number
+): Promise<OpenedTabsSnapshot> {
+  return invoke("list_workbench_tabs", { workbenchId })
+}
+
+export async function saveWorkbenchTabs(
+  workbenchId: number,
+  items: OpenedTab[],
+  expectedVersion: number,
+  origin: string
+): Promise<SaveTabsOutcome> {
+  return invoke("save_workbench_tabs", {
+    workbenchId,
+    items,
+    expectedVersion,
+    origin,
+  })
+}
+
+export async function listWorkbenches(): Promise<WorkbenchInfo[]> {
+  return invoke("list_workbenches")
+}
+
+export async function createWorkbench(
+  name?: string
+): Promise<WorkbenchInfo> {
+  return invoke("create_workbench", { name: name ?? null })
+}
+
+export async function renameWorkbench(
+  id: number,
+  name: string
+): Promise<WorkbenchInfo> {
+  return invoke("rename_workbench", { id, name })
+}
+
+export async function deleteWorkbench(id: number): Promise<void> {
+  return invoke("delete_workbench", { id })
 }
 
 export async function listOpenFolderDetails(): Promise<FolderDetail[]> {

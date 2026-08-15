@@ -77,6 +77,7 @@ import type {
   SelectedSessionKey,
   OpenedTab,
   OpenedTabsSnapshot,
+  WorkbenchInfo,
   SaveTabsOutcome,
   GitStatusEntry,
   GitBranchList,
@@ -1813,6 +1814,47 @@ export async function saveOpenedTabs(
     expectedVersion,
     origin,
   })
+}
+
+export async function listWorkbenchTabs(
+  workbenchId: number
+): Promise<OpenedTabsSnapshot> {
+  return getTransport().call("list_workbench_tabs", { workbenchId })
+}
+
+export async function saveWorkbenchTabs(
+  workbenchId: number,
+  items: OpenedTab[],
+  expectedVersion: number,
+  origin: string
+): Promise<SaveTabsOutcome> {
+  return getTransport().call("save_workbench_tabs", {
+    workbenchId,
+    items,
+    expectedVersion,
+    origin,
+  })
+}
+
+export async function listWorkbenches(): Promise<WorkbenchInfo[]> {
+  return getTransport().call("list_workbenches")
+}
+
+export async function createWorkbench(
+  name?: string
+): Promise<WorkbenchInfo> {
+  return getTransport().call("create_workbench", { name: name ?? null })
+}
+
+export async function renameWorkbench(
+  id: number,
+  name: string
+): Promise<WorkbenchInfo> {
+  return getTransport().call("rename_workbench", { id, name })
+}
+
+export async function deleteWorkbench(id: number): Promise<void> {
+  return getTransport().call("delete_workbench", { id })
 }
 
 export async function listOpenFolderDetails(): Promise<FolderDetail[]> {

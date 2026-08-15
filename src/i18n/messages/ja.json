@@ -1531,6 +1531,26 @@
       "viewDiff": "差分を見る",
       "push": "プッシュ..."
     },
+    "workbench": {
+      "switchTitle": "ワークベンチを切り替え",
+      "loading": "ワークベンチを読み込み中…",
+      "defaultName": "ワークベンチ {number}",
+      "create": "新しいワークベンチ",
+      "rename": "現在のワークベンチ名を変更",
+      "delete": "現在のワークベンチを削除",
+      "createTitle": "新しいワークベンチ",
+      "renameTitle": "ワークベンチ名を変更",
+      "namePlaceholder": "ワークベンチ名",
+      "cancel": "キャンセル",
+      "save": "保存",
+      "createAndSwitch": "作成して切り替え",
+      "deleteTitle": "このワークベンチを削除しますか？",
+      "deleteDescription": "「{name}」に保存されたタブとレイアウトを削除します。会話自体は削除されません。",
+      "loadFailed": "ワークベンチの読み込みに失敗しました：{message}",
+      "saveFailed": "ワークベンチの保存に失敗しました：{message}",
+      "switchFailed": "ワークベンチの切り替えに失敗しました：{message}",
+      "deleteFailed": "ワークベンチの削除に失敗しました：{message}"
+    },
     "statusLabels": {
       "in_progress": "進行中",
       "pending_review": "レビュー",

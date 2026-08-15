@@ -6,7 +6,7 @@ use sea_orm::{
 use std::sync::OnceLock;
 use tokio::sync::Mutex;
 
-use crate::db::entities::opened_tab;
+use crate::db::entities::{opened_tab, workbench};
 use crate::db::error::DbError;
 use crate::db::service::app_metadata_service;
 use crate::models::agent::AgentType;
@@ -51,7 +51,16 @@ pub async fn get_tabs_version<C: ConnectionTrait>(conn: &C) -> Result<i64, DbErr
 }
 
 pub async fn list_all_tabs<C: ConnectionTrait>(conn: &C) -> Result<Vec<OpenedTab>, DbError> {
+    list_tabs_for_workbench(conn, 1).await
+}
+
+/// List the persisted conversation tabs belonging to one logical workbench.
+pub async fn list_tabs_for_workbench<C: ConnectionTrait>(
+    conn: &C,
+    workbench_id: i32,
+) -> Result<Vec<OpenedTab>, DbError> {
     let rows = opened_tab::Entity::find()
+        .filter(opened_tab::Column::WorkbenchId.eq(workbench_id))
         .order_by_asc(opened_tab::Column::Position)
         .all(conn)
         .await?;
@@ -78,8 +87,16 @@ pub async fn list_all_tabs<C: ConnectionTrait>(conn: &C) -> Result<Vec<OpenedTab
 /// which a client could then CAS-save as if it were current, dropping the
 /// concurrent change.
 pub async fn snapshot_tabs(conn: &DatabaseConnection) -> Result<(Vec<OpenedTab>, i64), DbError> {
+    snapshot_tabs_for_workbench(conn, 1).await
+}
+
+pub async fn snapshot_tabs_for_workbench(
+    conn: &DatabaseConnection,
+    workbench_id: i32,
+) -> Result<(Vec<OpenedTab>, i64), DbError> {
     let txn = conn.begin().await?;
-    let tabs = list_all_tabs(&txn).await?;
+    ensure_workbench_exists(&txn, workbench_id).await?;
+    let tabs = list_tabs_for_workbench(&txn, workbench_id).await?;
     let version = get_tabs_version(&txn).await?;
     txn.commit().await?;
     Ok((tabs, version))
@@ -99,7 +116,18 @@ pub async fn save_all_tabs<C: ConnectionTrait>(
     conn: &C,
     items: Vec<OpenedTab>,
 ) -> Result<(), DbError> {
-    opened_tab::Entity::delete_many().exec(conn).await?;
+    save_tabs_for_workbench(conn, 1, items).await
+}
+
+pub async fn save_tabs_for_workbench<C: ConnectionTrait>(
+    conn: &C,
+    workbench_id: i32,
+    items: Vec<OpenedTab>,
+) -> Result<(), DbError> {
+    opened_tab::Entity::delete_many()
+        .filter(opened_tab::Column::WorkbenchId.eq(workbench_id))
+        .exec(conn)
+        .await?;
 
     let now = Utc::now();
     let mut active_seen = false;
@@ -124,6 +152,7 @@ pub async fn save_all_tabs<C: ConnectionTrait>(
 
         let active = opened_tab::ActiveModel {
             id: NotSet,
+            workbench_id: Set(workbench_id),
             folder_id: Set(item.folder_id),
             conversation_id: Set(item.conversation_id),
             agent_type: Set(agent_str),
@@ -149,12 +178,22 @@ pub async fn save_all_tabs_cas(
     items: Vec<OpenedTab>,
     expected_version: i64,
 ) -> Result<CasOutcome, DbError> {
+    save_tabs_cas_for_workbench(conn, 1, items, expected_version).await
+}
+
+pub async fn save_tabs_cas_for_workbench(
+    conn: &DatabaseConnection,
+    workbench_id: i32,
+    items: Vec<OpenedTab>,
+    expected_version: i64,
+) -> Result<CasOutcome, DbError> {
     let _guard = version_lock().lock().await;
     let txn = conn.begin().await?;
+    ensure_workbench_exists(&txn, workbench_id).await?;
 
     let current = get_tabs_version(&txn).await?;
     if current != expected_version {
-        let tabs = list_all_tabs(&txn).await?;
+        let tabs = list_tabs_for_workbench(&txn, workbench_id).await?;
         txn.commit().await?;
         return Ok(CasOutcome {
             accepted: false,
@@ -163,10 +202,10 @@ pub async fn save_all_tabs_cas(
         });
     }
 
-    save_all_tabs(&txn, items).await?;
+    save_tabs_for_workbench(&txn, workbench_id, items).await?;
     let next = current + 1;
     app_metadata_service::upsert_value(&txn, OPENED_TABS_VERSION_KEY, &next.to_string()).await?;
-    let tabs = list_all_tabs(&txn).await?;
+    let tabs = list_tabs_for_workbench(&txn, workbench_id).await?;
     txn.commit().await?;
 
     Ok(CasOutcome {
@@ -174,6 +213,21 @@ pub async fn save_all_tabs_cas(
         version: next,
         tabs,
     })
+}
+
+async fn ensure_workbench_exists<C: ConnectionTrait>(
+    conn: &C,
+    workbench_id: i32,
+) -> Result<(), DbError> {
+    if workbench::Entity::find_by_id(workbench_id)
+        .one(conn)
+        .await?
+        .is_some()
+    {
+        Ok(())
+    } else {
+        Err(DbError::NotFound(format!("Workbench {workbench_id}")))
+    }
 }
 
 /// Outcome of a server-side tab invalidation (conversation/folder deletion).

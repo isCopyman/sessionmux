@@ -104,12 +104,31 @@ pub async fn list_opened_tabs_core(
     Ok(OpenedTabsSnapshot { items, version })
 }
 
+pub async fn list_workbench_tabs_core(
+    conn: &sea_orm::DatabaseConnection,
+    workbench_id: i32,
+) -> Result<OpenedTabsSnapshot, AppCommandError> {
+    let (items, version) = tab_service::snapshot_tabs_for_workbench(conn, workbench_id)
+        .await
+        .map_err(AppCommandError::from)?;
+    Ok(OpenedTabsSnapshot { items, version })
+}
+
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn list_opened_tabs(
     db: tauri::State<'_, AppDatabase>,
 ) -> Result<OpenedTabsSnapshot, AppCommandError> {
     list_opened_tabs_core(&db.conn).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn list_workbench_tabs(
+    db: tauri::State<'_, AppDatabase>,
+    workbench_id: i32,
+) -> Result<OpenedTabsSnapshot, AppCommandError> {
+    list_workbench_tabs_core(&db.conn, workbench_id).await
 }
 
 /// Persist the open-tab set with compare-and-set on the workspace tab version,
@@ -139,6 +158,40 @@ pub async fn save_opened_tabs_core(
     })
 }
 
+pub async fn save_workbench_tabs_core(
+    conn: &sea_orm::DatabaseConnection,
+    emitter: &EventEmitter,
+    workbench_id: i32,
+    items: Vec<OpenedTab>,
+    expected_version: i64,
+    origin: String,
+) -> Result<SaveTabsOutcome, AppCommandError> {
+    let outcome = tab_service::save_tabs_cas_for_workbench(
+        conn,
+        workbench_id,
+        items,
+        expected_version,
+    )
+    .await
+    .map_err(AppCommandError::from)?;
+
+    if outcome.accepted {
+        emit_workbench_tabs_changed(
+            emitter,
+            workbench_id,
+            outcome.version,
+            outcome.tabs.clone(),
+            origin,
+        );
+    }
+
+    Ok(SaveTabsOutcome {
+        accepted: outcome.accepted,
+        version: outcome.version,
+        tabs: outcome.tabs,
+    })
+}
+
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn save_opened_tabs(
@@ -151,6 +204,27 @@ pub async fn save_opened_tabs(
     save_opened_tabs_core(
         &db.conn,
         &EventEmitter::Tauri(app),
+        items,
+        expected_version,
+        origin,
+    )
+    .await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn save_workbench_tabs(
+    app: tauri::AppHandle,
+    db: tauri::State<'_, AppDatabase>,
+    workbench_id: i32,
+    items: Vec<OpenedTab>,
+    expected_version: i64,
+    origin: String,
+) -> Result<SaveTabsOutcome, AppCommandError> {
+    save_workbench_tabs_core(
+        &db.conn,
+        &EventEmitter::Tauri(app),
+        workbench_id,
         items,
         expected_version,
         origin,
@@ -1533,8 +1607,45 @@ pub(crate) fn emit_tabs_changed(
         emitter,
         TABS_CHANGED_EVENT,
         TabsChanged {
+            workbench_id: Some(1),
             version,
             origin,
+            tabs,
+        },
+    );
+}
+
+pub(crate) fn emit_workbench_tabs_changed(
+    emitter: &EventEmitter,
+    workbench_id: i32,
+    version: i64,
+    tabs: Vec<OpenedTab>,
+    origin: String,
+) {
+    emit_event(
+        emitter,
+        TABS_CHANGED_EVENT,
+        TabsChanged {
+            workbench_id: Some(workbench_id),
+            version,
+            origin,
+            tabs,
+        },
+    );
+}
+
+pub(crate) fn emit_tabs_invalidated(
+    emitter: &EventEmitter,
+    version: i64,
+    tabs: Vec<OpenedTab>,
+) {
+    emit_event(
+        emitter,
+        TABS_CHANGED_EVENT,
+        TabsChanged {
+            workbench_id: None,
+            version,
+            origin: "server".to_string(),
             tabs,
         },
     );
@@ -1556,7 +1667,7 @@ pub(crate) async fn cleanup_tabs_for_deleted_conversation(
     match tab_service::delete_conversation_tabs_and_bump(conn, conversation_id).await {
         Ok(inv) => {
             if let Some(tabs) = inv.emit {
-                emit_tabs_changed(emitter, inv.version, tabs, "server".to_string());
+                emit_tabs_invalidated(emitter, inv.version, tabs);
             }
         }
         Err(e) => tracing::error!(

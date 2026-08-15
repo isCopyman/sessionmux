@@ -32,6 +32,8 @@ import {
 
 const listOpenedTabsMock = vi.fn()
 const saveOpenedTabsMock = vi.fn()
+const listWorkbenchTabsMock = vi.fn()
+const saveWorkbenchTabsMock = vi.fn()
 const getFolderConversationMock = vi.fn()
 const setActiveFolderIdMock = vi.fn()
 const activateConversationPaneMock = vi.fn()
@@ -59,6 +61,8 @@ vi.mock("next-intl", () => {
 vi.mock("@/lib/api", () => ({
   listOpenedTabs: (...args: unknown[]) => listOpenedTabsMock(...args),
   saveOpenedTabs: (...args: unknown[]) => saveOpenedTabsMock(...args),
+  listWorkbenchTabs: (...args: unknown[]) => listWorkbenchTabsMock(...args),
+  saveWorkbenchTabs: (...args: unknown[]) => saveWorkbenchTabsMock(...args),
   getFolderConversation: (...args: unknown[]) =>
     getFolderConversationMock(...args),
 }))
@@ -199,6 +203,7 @@ function seedWorkspaceStore() {
   // `persistGroupState` writes localStorage during hydrated tests and would
   // otherwise leak split layouts across tests.
   localStorage.clear()
+  sessionStorage.clear()
   // The tab store is a module-level singleton: reset it (state + coordination
   // vars + injected runtime + one-shot correction/recovery flags) after seeding
   // the workspace store so `lastConversations` aligns with the seeded list.
@@ -1813,6 +1818,12 @@ describe("TabProvider tab groups", () => {
       version: 2,
       tabs: [],
     })
+    listWorkbenchTabsMock.mockResolvedValue({ items: [], version: 2 })
+    saveWorkbenchTabsMock.mockResolvedValue({
+      accepted: true,
+      version: 3,
+      tabs: [],
+    })
     getFolderConversationMock.mockReset()
     getFolderConversationMock.mockReturnValue(new Promise(() => {}))
     tabsChangedHandler = null
@@ -1849,6 +1860,39 @@ describe("TabProvider tab groups", () => {
     expect(other).toHaveLength(1)
     return other[0]
   }
+
+  it("switches named workbenches without losing the previous split layout", async () => {
+    const mainItems = [tabItem(1, 1, true)]
+    listOpenedTabsMock.mockResolvedValue({ items: mainItems, version: 1 })
+    listWorkbenchTabsMock.mockResolvedValue({
+      items: [tabItem(2, 3, true)],
+      version: 2,
+    })
+    await renderWithTabs(mainItems)
+
+    act(() => {
+      store().splitTab("conv-1-codex-1", "right", { move: false })
+    })
+    expect(leaves()).toHaveLength(2)
+
+    await act(async () => {
+      await store().switchWorkbench(2)
+    })
+    expect(store().activeWorkbenchId).toBe(2)
+    expect(store().rawTabs.map((tab) => tab.conversationId)).toEqual([3])
+    expect(sessionStorage.getItem("workspace:active-workbench-id:v1")).toBe("2")
+
+    await act(async () => {
+      await store().switchWorkbench(1)
+    })
+    expect(store().activeWorkbenchId).toBe(1)
+    expect(store().rawTabs.some((tab) => tab.conversationId === 1)).toBe(true)
+    expect(
+      store().rawTabs.some((tab) => tab.conversationId == null),
+      "the device-local draft in the second split is restored"
+    ).toBe(true)
+    expect(leaves()).toHaveLength(2)
+  })
 
   it("split-and-move creates a second group with the tab and focuses it", async () => {
     await renderWithTabs([tabItem(1, 1, true), tabItem(1, 2)])

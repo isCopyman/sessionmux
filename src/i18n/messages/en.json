@@ -1531,6 +1531,26 @@
       "viewDiff": "View Diff",
       "push": "Push..."
     },
+    "workbench": {
+      "switchTitle": "Switch workbench",
+      "loading": "Loading workbenches…",
+      "defaultName": "Workbench {number}",
+      "create": "New workbench",
+      "rename": "Rename current workbench",
+      "delete": "Delete current workbench",
+      "createTitle": "New workbench",
+      "renameTitle": "Rename workbench",
+      "namePlaceholder": "Workbench name",
+      "cancel": "Cancel",
+      "save": "Save",
+      "createAndSwitch": "Create and switch",
+      "deleteTitle": "Delete this workbench?",
+      "deleteDescription": "This removes the saved tabs and layout for “{name}”, but does not delete its conversations.",
+      "loadFailed": "Failed to load workbenches: {message}",
+      "saveFailed": "Failed to save workbench: {message}",
+      "switchFailed": "Failed to switch workbench: {message}",
+      "deleteFailed": "Failed to delete workbench: {message}"
+    },
     "statusLabels": {
       "in_progress": "In Progress",
       "pending_review": "Review",

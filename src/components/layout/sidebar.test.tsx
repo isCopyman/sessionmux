@@ -40,6 +40,9 @@ vi.mock("@/components/conversations/sidebar-conversation-list", () => ({
     return null
   },
 }))
+vi.mock("@/components/workbench/workbench-switcher", () => ({
+  WorkbenchSwitcher: () => null,
+}))
 vi.mock("@/contexts/sidebar-context", () => ({
   useSidebarContext: () => ({ isOpen: true, toggle: vi.fn() }),
 }))

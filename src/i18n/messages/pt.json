@@ -1531,6 +1531,26 @@
       "viewDiff": "Ver Diff",
       "push": "Enviar..."
     },
+    "workbench": {
+      "switchTitle": "Trocar área de trabalho",
+      "loading": "Carregando áreas de trabalho…",
+      "defaultName": "Área de trabalho {number}",
+      "create": "Nova área de trabalho",
+      "rename": "Renomear a área de trabalho atual",
+      "delete": "Excluir a área de trabalho atual",
+      "createTitle": "Nova área de trabalho",
+      "renameTitle": "Renomear área de trabalho",
+      "namePlaceholder": "Nome da área de trabalho",
+      "cancel": "Cancelar",
+      "save": "Salvar",
+      "createAndSwitch": "Criar e trocar",
+      "deleteTitle": "Excluir esta área de trabalho?",
+      "deleteDescription": "Isso remove as abas e o layout salvos de “{name}”, mas não exclui suas conversas.",
+      "loadFailed": "Falha ao carregar áreas de trabalho: {message}",
+      "saveFailed": "Falha ao salvar a área de trabalho: {message}",
+      "switchFailed": "Falha ao trocar de área de trabalho: {message}",
+      "deleteFailed": "Falha ao excluir a área de trabalho: {message}"
+    },
     "statusLabels": {
       "in_progress": "Em andamento",
       "pending_review": "Revisão",

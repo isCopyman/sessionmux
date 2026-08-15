@@ -1531,6 +1531,26 @@
       "viewDiff": "Ver Diff",
       "push": "Enviar..."
     },
+    "workbench": {
+      "switchTitle": "Cambiar espacio de trabajo",
+      "loading": "Cargando espacios de trabajo…",
+      "defaultName": "Espacio de trabajo {number}",
+      "create": "Nuevo espacio de trabajo",
+      "rename": "Renombrar el espacio de trabajo actual",
+      "delete": "Eliminar el espacio de trabajo actual",
+      "createTitle": "Nuevo espacio de trabajo",
+      "renameTitle": "Renombrar espacio de trabajo",
+      "namePlaceholder": "Nombre del espacio de trabajo",
+      "cancel": "Cancelar",
+      "save": "Guardar",
+      "createAndSwitch": "Crear y cambiar",
+      "deleteTitle": "¿Eliminar este espacio de trabajo?",
+      "deleteDescription": "Esto elimina las pestañas y el diseño guardados de «{name}», pero no borra sus conversaciones.",
+      "loadFailed": "No se pudieron cargar los espacios de trabajo: {message}",
+      "saveFailed": "No se pudo guardar el espacio de trabajo: {message}",
+      "switchFailed": "No se pudo cambiar de espacio de trabajo: {message}",
+      "deleteFailed": "No se pudo eliminar el espacio de trabajo: {message}"
+    },
     "statusLabels": {
       "in_progress": "En progreso",
       "pending_review": "Revisión",

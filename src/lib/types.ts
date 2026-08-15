@@ -383,6 +383,14 @@ export interface OpenedTab {
   is_pinned: boolean
 }
 
+export interface WorkbenchInfo {
+  id: number
+  name: string
+  position: number
+  created_at: string
+  updated_at: string
+}
+
 export interface DbConversationSummary {
   id: number
   folder_id: number
@@ -465,6 +473,9 @@ export const FEEDBACK_SETTINGS_CHANGED_EVENT = "feedback-settings://changed"
  *  own broadcast; the sentinel `"server"` marks cascade changes every client
  *  applies. */
 export interface TabsChanged {
+  /** `null` means a server-side invalidation may have affected several
+   * workbenches; missing is accepted for compatibility with older backends. */
+  workbench_id?: number | null
   version: number
   origin: string
   tabs: OpenedTab[]

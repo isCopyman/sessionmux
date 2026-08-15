@@ -4,7 +4,9 @@ import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { registerBackendScopedStoreReset } from "@/stores/backend-scoped-store-reset"
 import {
   getFolderConversation,
+  listWorkbenchTabs,
   listOpenedTabs,
+  saveWorkbenchTabs,
   saveOpenedTabs,
 } from "@/lib/api"
 import { resolveDefaultAgent } from "@/lib/resolve-default-agent"
@@ -41,6 +43,7 @@ import type {
   ConversationStatus,
   DbConversationSummary,
   OpenedTab,
+  OpenedTabsSnapshot,
   TabsChanged,
 } from "@/lib/types"
 
@@ -170,6 +173,10 @@ export interface TabStoreState {
   /** Bumped from a save's resolution to re-run the save effect when the local
    *  set moved while the save was in flight. */
   saveReconcileTick: number
+  /** Device-local selection of the named workbench whose tab snapshot and
+   * split layout are currently mounted. */
+  activeWorkbenchId: number
+  switchingWorkbench: boolean
 
   // ── Mutations ──────────────────────────────────────────────────────────────
   openTab: (
@@ -245,6 +252,7 @@ export interface TabStoreState {
   reorderTabs: (reorderedTabs: TabItem[]) => void
   consumeRemoteActivation: () => boolean
   onPreviewTabReplaced: (callback: (tabId: string) => void) => () => void
+  switchWorkbench: (workbenchId: number) => Promise<void>
 
   // ── Orchestration (driven by TabRuntimeEffects) ──────────────────────────────
   hydrate: () => () => void
@@ -276,6 +284,23 @@ const TILE_MODE_STORAGE_KEY = "workspace:tile-mode"
 /** Device-local split-group state (layout tree, assignments, selection, tile
  *  flags), keyed by canonical tab ids. See `persistGroupState`. */
 const TAB_GROUPS_STORAGE_KEY = "workspace:tab-groups:v1"
+const ACTIVE_WORKBENCH_STORAGE_KEY = "workspace:active-workbench-id:v1"
+
+function readActiveWorkbenchId(): number {
+  if (typeof window === "undefined") return 1
+  // Selection/focus belongs to the physical browser/Tauri window. A shared
+  // localStorage key would make two windows overwrite each other's workbench.
+  const parsed = Number(sessionStorage.getItem(ACTIVE_WORKBENCH_STORAGE_KEY))
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : 1
+}
+
+function groupStorageKey(workbenchId: number): string {
+  // Preserve the legacy key for the migrated Main workbench so existing users
+  // keep their split layout and the old test contract stays valid.
+  return workbenchId === 1
+    ? TAB_GROUPS_STORAGE_KEY
+    : `workspace:workbench:${workbenchId}:tab-groups:v1`
+}
 
 /** Per-window/session identity stamped on every tab save and echoed back on
  *  `tabs://changed`, so this client ignores its own broadcast (echo
@@ -363,9 +388,24 @@ let seedEpoch = 0
 const previewReplacedCallbacks = new Set<(tabId: string) => void>()
 let correctionRan = false
 let recoveryRan = false
+let workbenchSwitchEpoch = 0
 // Tracks the last `conversations` reference recomputeTabs derived against, so
 // the module-level app-workspace subscription recomputes only when it changes.
 let lastConversations = useAppWorkspaceStore.getState().conversations
+
+function fetchTabsForWorkbench(workbenchId: number) {
+  return workbenchId === 1 ? listOpenedTabs() : listWorkbenchTabs(workbenchId)
+}
+
+function persistTabsForWorkbench(
+  workbenchId: number,
+  items: OpenedTab[],
+  expectedVersion: number
+) {
+  return workbenchId === 1
+    ? saveOpenedTabs(items, expectedVersion, TAB_ORIGIN)
+    : saveWorkbenchTabs(workbenchId, items, expectedVersion, TAB_ORIGIN)
+}
 
 function makeConversationTabId(
   folderId: number,
@@ -591,7 +631,7 @@ function sanitizeDrafts(value: unknown): PersistedDraft[] {
  *  defers pruning until then). Falls back to a single group, seeding its tile
  *  flag from the legacy pre-groups key. The blob's draft entries are parked in
  *  module scope (not store state) for `hydrate` to splice back in. */
-function readPersistedGroupState(): {
+function readPersistedGroupState(workbenchId = readActiveWorkbenchId()): {
   groupLayout: LayoutNode
   groupOf: Record<string, string>
   groupSelection: Record<string, string>
@@ -607,7 +647,7 @@ function readPersistedGroupState(): {
   })
   if (typeof window === "undefined") return fallback()
   try {
-    const raw = localStorage.getItem(TAB_GROUPS_STORAGE_KEY)
+    const raw = localStorage.getItem(groupStorageKey(workbenchId))
     if (raw) {
       const parsed = JSON.parse(raw) as Record<string, unknown>
       if (parsed && isLayoutNode(parsed.layout)) {
@@ -693,7 +733,7 @@ function persistGroupState() {
   if (blob === lastGroupBlob) return
   lastGroupBlob = blob
   try {
-    localStorage.setItem(TAB_GROUPS_STORAGE_KEY, blob)
+    localStorage.setItem(groupStorageKey(st.activeWorkbenchId), blob)
   } catch {
     /* ignore */
   }
@@ -742,6 +782,64 @@ function mergeRestoredDrafts(restored: TabItemInternal[]): {
     groupOf[draft.id] = draft.group
   }
   return { tabs, groupOf }
+}
+
+/** Install one workbench's authoritative persisted tab snapshot, then splice
+ * its device-local draft/layout state back in. Shared by cold hydration and
+ * named-workbench switching so both paths obey identical restore rules. */
+function installHydratedSnapshot(snap: OpenedTabsSnapshot) {
+  tabsSnapshotLoaded = true
+  version = snap.version
+  serverKnownTabKeys = snapshotSyncKeys(snap.items)
+  const restored: TabItemInternal[] = snap.items.map((it) => ({
+    id:
+      it.conversation_id != null
+        ? makeConversationTabId(it.folder_id, it.agent_type, it.conversation_id)
+        : makeNewConversationTabId(),
+    kind: "conversation",
+    folderId: it.folder_id,
+    conversationId: it.conversation_id,
+    agentType: it.agent_type,
+    title:
+      it.conversation_id != null
+        ? runtime.labels.loadingConversation
+        : runtime.labels.newConversation,
+    isPinned: it.is_pinned,
+  }))
+  const activeItem = snap.items.find(
+    (it) => it.is_active && it.conversation_id != null
+  )
+  let restoredActive: string | null = activeItem
+    ? makeConversationTabId(
+        activeItem.folder_id,
+        activeItem.agent_type,
+        activeItem.conversation_id as number
+      )
+    : null
+  const { tabs: withDrafts, groupOf: draftGroups } =
+    mergeRestoredDrafts(restored)
+  if (
+    pendingRestoreActiveDraft != null &&
+    withDrafts.some((tab) => tab.id === pendingRestoreActiveDraft)
+  ) {
+    restoredActive = pendingRestoreActiveDraft
+  }
+  pendingRestoreActiveDraft = null
+  if (!restoredActive && withDrafts.length > 0) {
+    restoredActive = withDrafts[0].id
+  }
+  const current = useTabStore.getState()
+  useTabStore.setState({
+    rawTabs: withDrafts,
+    activeTabId: restoredActive,
+    ...(Object.keys(draftGroups).length > 0
+      ? { groupOf: { ...current.groupOf, ...draftGroups } }
+      : {}),
+  })
+  recomputeTabs()
+  lastSavedPayload = JSON.stringify(
+    buildPersistItems(withDrafts, restoredActive)
+  )
 }
 
 /** Trailing-debounced persist for divider drags (per-frame ratio writes). */
@@ -1008,18 +1106,21 @@ function makeReplacementDraftTab(preferred?: TabItemInternal): TabItemInternal {
 }
 
 function initialTabState() {
+  const activeWorkbenchId = readActiveWorkbenchId()
   return {
     rawTabs: [] as TabItemInternal[],
     activeTabId: null as string | null,
     previewReplacedTabIds: [] as string[],
     draftRetargetRequests: [] as DraftRetargetRequest[],
     tabsHydrated: false,
-    ...readPersistedGroupState(),
+    ...readPersistedGroupState(activeWorkbenchId),
     tabDrag: null as TabStoreState["tabDrag"],
     childSummaries: new Map<number, DbConversationSummary>(),
     tabs: [] as TabItemInternal[],
     reseedTick: 0,
     saveReconcileTick: 0,
+    activeWorkbenchId,
+    switchingWorkbench: false,
   }
 }
 
@@ -1871,75 +1972,112 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
     }
   },
 
+  switchWorkbench: async (workbenchId) => {
+    const initial = get()
+    if (
+      !Number.isInteger(workbenchId) ||
+      workbenchId <= 0 ||
+      workbenchId === initial.activeWorkbenchId ||
+      initial.switchingWorkbench
+    ) {
+      return
+    }
+
+    const epoch = ++workbenchSwitchEpoch
+    set({ switchingWorkbench: true })
+
+    // Commit the current workbench before replacing the mounted tab set. This
+    // bypasses the ordinary 500ms debounce so a quick switch cannot strand the
+    // user's last open/close/focus operation in memory.
+    if (groupPersistTimer) {
+      clearTimeout(groupPersistTimer)
+      groupPersistTimer = null
+    }
+    persistGroupState()
+    if (saveTimer) {
+      clearTimeout(saveTimer)
+      saveTimer = null
+    }
+    const currentItems = buildPersistItems(initial.rawTabs, initial.activeTabId)
+    const currentPayload = JSON.stringify(currentItems)
+    try {
+      if (currentPayload !== lastSavedPayload) {
+        let outcome = await persistTabsForWorkbench(
+          initial.activeWorkbenchId,
+          currentItems,
+          version
+        )
+        version = Math.max(version, outcome.version)
+        // The version is global across workbenches. A simultaneous write to a
+        // different workbench can reject this save even though our own snapshot
+        // did not conflict; retry once against the newly observed clock.
+        if (!outcome.accepted) {
+          outcome = await persistTabsForWorkbench(
+            initial.activeWorkbenchId,
+            currentItems,
+            version
+          )
+          version = Math.max(version, outcome.version)
+        }
+        if (!outcome.accepted) {
+          throw new Error("Workbench changed concurrently; please retry")
+        }
+        lastSavedPayload = currentPayload
+      }
+
+      if (epoch !== workbenchSwitchEpoch) return
+      // Fetch first so a disconnected backend or deleted workbench leaves the
+      // currently visible surface intact instead of replacing it with an empty
+      // half-switched state.
+      const groupState = readPersistedGroupState(workbenchId)
+      const snap = await fetchTabsForWorkbench(workbenchId)
+      if (epoch !== workbenchSwitchEpoch) return
+      try {
+        sessionStorage.setItem(
+          ACTIVE_WORKBENCH_STORAGE_KEY,
+          String(workbenchId)
+        )
+      } catch {
+        /* ignore */
+      }
+      pendingRemote = null
+      applyingRemote = false
+      serverKnownTabKeys = new Set()
+      lastSavedPayload = null
+      lastGroupBlob = null
+      tabsSnapshotLoaded = false
+      set({
+        activeWorkbenchId: workbenchId,
+        switchingWorkbench: true,
+        tabsHydrated: false,
+        rawTabs: [],
+        activeTabId: null,
+        childSummaries: new Map(),
+        ...groupState,
+      })
+      recomputeTabs()
+
+      installHydratedSnapshot(snap)
+      set({ tabsHydrated: true, switchingWorkbench: false })
+      applyGroupInvariants()
+      persistGroupState()
+    } catch (error) {
+      if (epoch === workbenchSwitchEpoch) {
+        set({ switchingWorkbench: false, tabsHydrated: true })
+      }
+      throw error
+    }
+  },
+
   hydrate: () => {
     let cancelled = false
     void (async () => {
       let snapshotLoaded = false
       try {
-        const snap = await listOpenedTabs()
+        const snap = await fetchTabsForWorkbench(get().activeWorkbenchId)
         if (cancelled) return
         snapshotLoaded = true
-        tabsSnapshotLoaded = true
-        version = snap.version
-        serverKnownTabKeys = snapshotSyncKeys(snap.items)
-        const restored: TabItemInternal[] = snap.items.map((it) => ({
-          id:
-            it.conversation_id != null
-              ? makeConversationTabId(
-                  it.folder_id,
-                  it.agent_type,
-                  it.conversation_id
-                )
-              : makeNewConversationTabId(),
-          kind: "conversation",
-          folderId: it.folder_id,
-          conversationId: it.conversation_id,
-          agentType: it.agent_type,
-          title:
-            it.conversation_id != null
-              ? runtime.labels.loadingConversation
-              : runtime.labels.newConversation,
-          isPinned: it.is_pinned,
-        }))
-        const activeItem = snap.items.find(
-          (it) => it.is_active && it.conversation_id != null
-        )
-        let restoredActive: string | null = activeItem
-          ? makeConversationTabId(
-              activeItem.folder_id,
-              activeItem.agent_type,
-              activeItem.conversation_id as number
-            )
-          : null
-        // Splice the device-local drafts back in (same frame as the conversation
-        // tabs, so the first invariant pass sees complete groups and can't
-        // collapse a draft-only one).
-        const { tabs: withDrafts, groupOf: draftGroups } =
-          mergeRestoredDrafts(restored)
-        if (
-          pendingRestoreActiveDraft != null &&
-          withDrafts.some((tab) => tab.id === pendingRestoreActiveDraft)
-        ) {
-          restoredActive = pendingRestoreActiveDraft
-        }
-        if (!restoredActive && withDrafts.length > 0) {
-          restoredActive = withDrafts[0].id
-        }
-        set({
-          rawTabs: withDrafts,
-          activeTabId: restoredActive,
-          ...(Object.keys(draftGroups).length > 0
-            ? { groupOf: { ...get().groupOf, ...draftGroups } }
-            : {}),
-        })
-        recomputeTabs()
-        // Baseline from the POST-restore state: drafts never enter the payload,
-        // so restoring focus onto a draft simply means no tab carries
-        // `is_active`. Seeding that as the baseline keeps the restore free of a
-        // CAS save (and of the focus broadcast that would follow it).
-        lastSavedPayload = JSON.stringify(
-          buildPersistItems(withDrafts, restoredActive)
-        )
+        installHydratedSnapshot(snap)
       } catch (err) {
         console.error("[TabStore] listOpenedTabs failed:", err)
         if (!cancelled) {
@@ -2012,7 +2150,7 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
 
   runSaveEffect: () => {
     const st = get()
-    if (!st.tabsHydrated) return
+    if (!st.tabsHydrated || st.switchingWorkbench) return
 
     // A remote snapshot just mutated rawTabs/focus — consume the one-shot guard
     // so we don't echo it back (which would re-broadcast and ping-pong).
@@ -2034,10 +2172,17 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
 
     if (saveTimer) clearTimeout(saveTimer)
     const expectedVersion = version
+    const workbenchId = st.activeWorkbenchId
     saveTimer = setTimeout(() => {
       saveTimer = null
-      saveOpenedTabs(items, expectedVersion, TAB_ORIGIN)
+      persistTabsForWorkbench(workbenchId, items, expectedVersion)
         .then((res) => {
+          // A workbench switch can complete while this request is in flight.
+          // Its result belongs to the old surface; only advance the shared clock.
+          if (get().activeWorkbenchId !== workbenchId) {
+            version = Math.max(version, res.version)
+            return
+          }
           version = Math.max(version, res.version)
           if (!res.accepted) {
             // Rejected (another client committed first) → adopt server truth.
@@ -2047,6 +2192,7 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
             // snapshot and leave the stale local set in place. applyRemoteSnapshot
             // reconciles on equal version (its guard is strict `<`).
             applyRemoteSnapshot({
+              workbench_id: workbenchId,
               version: res.version,
               origin: "server",
               tabs: res.tabs,
@@ -2201,17 +2347,45 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
   },
 
   handleTabsChanged: (change) => {
+    const activeWorkbenchId = get().activeWorkbenchId
+    // Older desktop/server builds and a few extension clients predate the
+    // workbench field. Their snapshots always described the view currently
+    // open in the receiving window, so keep that compatibility contract.
+    // `null` is deliberately different: the new backend uses it to say that a
+    // cross-workbench mutation occurred and the active workbench must refetch.
+    const eventWorkbenchId =
+      change.workbench_id === undefined
+        ? activeWorkbenchId
+        : change.workbench_id
     if (change.origin === TAB_ORIGIN) {
       // Our own accepted save, echoed back: nothing to apply, but the snapshot
       // is authoritative — record it as the merge ancestor in case it beats the
       // save's own resolution (see `runSaveEffect`).
       if (change.version > version) {
         version = change.version
-        serverKnownTabKeys = snapshotSyncKeys(change.tabs)
+        if (eventWorkbenchId === activeWorkbenchId) {
+          serverKnownTabKeys = snapshotSyncKeys(change.tabs)
+        }
       }
       return
     }
     if (change.version <= version) return
+    // A cascade deletion can touch tabs in several workbenches. The event does
+    // not pretend its one compatibility snapshot represents all of them: learn
+    // the clock and refetch the workbench this window actually displays.
+    if (eventWorkbenchId === null) {
+      version = change.version
+      if (get().tabsHydrated) {
+        tabsSnapshotLoaded = false
+        void get().refetchTabs()
+      }
+      return
+    }
+    // The logical clock is shared, but another workbench's tab snapshot is not.
+    if (eventWorkbenchId !== activeWorkbenchId) {
+      version = change.version
+      return
+    }
     if (!get().tabsHydrated) {
       const pending = pendingRemote
       if (!pending || change.version >= pending.version) {
@@ -2224,8 +2398,10 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
 
   refetchTabs: async () => {
     try {
-      const snap = await listOpenedTabs()
+      const workbenchId = get().activeWorkbenchId
+      const snap = await fetchTabsForWorkbench(workbenchId)
       const change: TabsChanged = {
+        workbench_id: workbenchId,
         version: snap.version,
         origin: "server",
         tabs: snap.items,
@@ -2543,6 +2719,7 @@ export function useTabActions() {
       reorderTabs: s.reorderTabs,
       consumeRemoteActivation: s.consumeRemoteActivation,
       onPreviewTabReplaced: s.onPreviewTabReplaced,
+      switchWorkbench: s.switchWorkbench,
     }))
   )
 }
@@ -2576,6 +2753,7 @@ export function resetTabStore() {
   previewReplacedCallbacks.clear()
   correctionRan = false
   recoveryRan = false
+  workbenchSwitchEpoch = 0
   orphanDraftPruneRan = false
   tabsSnapshotLoaded = false
   runtime = defaultRuntime()
@@ -2596,6 +2774,14 @@ registerBackendScopedStoreReset(resetTabStore)
  * `applyRemoteSnapshot` callback).
  */
 function applyRemoteSnapshot(change: TabsChanged) {
+  const activeWorkbenchId = useTabStore.getState().activeWorkbenchId
+  if (
+    change.workbench_id != null &&
+    change.workbench_id !== activeWorkbenchId
+  ) {
+    version = Math.max(version, change.version)
+    return
+  }
   // Stale-safe: a snapshot older than what we've applied must not move the UI or
   // version backwards. Equal versions still reconcile.
   if (change.version < version) return

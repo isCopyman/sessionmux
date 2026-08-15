@@ -1531,6 +1531,26 @@
       "viewDiff": "عرض Diff",
       "push": "دفع..."
     },
+    "workbench": {
+      "switchTitle": "تبديل مساحة العمل",
+      "loading": "جارٍ تحميل مساحات العمل…",
+      "defaultName": "مساحة العمل {number}",
+      "create": "مساحة عمل جديدة",
+      "rename": "إعادة تسمية مساحة العمل الحالية",
+      "delete": "حذف مساحة العمل الحالية",
+      "createTitle": "مساحة عمل جديدة",
+      "renameTitle": "إعادة تسمية مساحة العمل",
+      "namePlaceholder": "اسم مساحة العمل",
+      "cancel": "إلغاء",
+      "save": "حفظ",
+      "createAndSwitch": "إنشاء وتبديل",
+      "deleteTitle": "حذف مساحة العمل هذه؟",
+      "deleteDescription": "سيؤدي هذا إلى إزالة علامات التبويب والتخطيط المحفوظين لـ «{name}»، دون حذف محادثاتها.",
+      "loadFailed": "تعذر تحميل مساحات العمل: {message}",
+      "saveFailed": "تعذر حفظ مساحة العمل: {message}",
+      "switchFailed": "تعذر تبديل مساحة العمل: {message}",
+      "deleteFailed": "تعذر حذف مساحة العمل: {message}"
+    },
     "statusLabels": {
       "in_progress": "قيد التنفيذ",
       "pending_review": "مراجعة",

@@ -1531,6 +1531,26 @@
       "viewDiff": "Diff anzeigen",
       "push": "Pushen..."
     },
+    "workbench": {
+      "switchTitle": "Arbeitsbereich wechseln",
+      "loading": "Arbeitsbereiche werden geladen…",
+      "defaultName": "Arbeitsbereich {number}",
+      "create": "Neuer Arbeitsbereich",
+      "rename": "Aktuellen Arbeitsbereich umbenennen",
+      "delete": "Aktuellen Arbeitsbereich löschen",
+      "createTitle": "Neuer Arbeitsbereich",
+      "renameTitle": "Arbeitsbereich umbenennen",
+      "namePlaceholder": "Name des Arbeitsbereichs",
+      "cancel": "Abbrechen",
+      "save": "Speichern",
+      "createAndSwitch": "Erstellen und wechseln",
+      "deleteTitle": "Diesen Arbeitsbereich löschen?",
+      "deleteDescription": "Dadurch werden die gespeicherten Tabs und das Layout von „{name}“ entfernt, aber keine Unterhaltungen gelöscht.",
+      "loadFailed": "Arbeitsbereiche konnten nicht geladen werden: {message}",
+      "saveFailed": "Arbeitsbereich konnte nicht gespeichert werden: {message}",
+      "switchFailed": "Arbeitsbereich konnte nicht gewechselt werden: {message}",
+      "deleteFailed": "Arbeitsbereich konnte nicht gelöscht werden: {message}"
+    },
     "statusLabels": {
       "in_progress": "In Bearbeitung",
       "pending_review": "Prüfung",

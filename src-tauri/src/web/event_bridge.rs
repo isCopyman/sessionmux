@@ -300,6 +300,10 @@ pub const TABS_CHANGED_EVENT: &str = "tabs://changed";
 ///   which is mirrored across clients.
 #[derive(Debug, Clone, Serialize)]
 pub struct TabsChanged {
+    /// The workbench whose complete tab snapshot is carried. `None` means a
+    /// server-side invalidation touched an unknown number of workbenches and
+    /// clients should refetch whichever one they currently display.
+    pub workbench_id: Option<i32>,
     pub version: i64,
     pub origin: String,
     pub tabs: Vec<crate::models::OpenedTab>,
@@ -596,6 +600,7 @@ mod tests {
             &emitter,
             TABS_CHANGED_EVENT,
             TabsChanged {
+                workbench_id: Some(1),
                 version: 6,
                 origin: "win-abc".to_string(),
                 tabs: vec![],

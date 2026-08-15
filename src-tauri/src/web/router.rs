@@ -118,6 +118,14 @@ pub fn build_router(
             post(handlers::conversations::save_opened_tabs),
         )
         .route(
+            "/list_workbench_tabs",
+            post(handlers::conversations::list_workbench_tabs),
+        )
+        .route(
+            "/save_workbench_tabs",
+            post(handlers::conversations::save_workbench_tabs),
+        )
+        .route(
             "/import_local_conversations",
             post(handlers::conversations::import_local_conversations),
         )
@@ -1205,6 +1213,23 @@ pub fn build_router(
         .route(
             "/quick_messages_reorder",
             post(handlers::quick_messages::quick_messages_reorder),
+        )
+        // ─── Workbenches ───
+        .route(
+            "/list_workbenches",
+            post(handlers::workbenches::list_workbenches),
+        )
+        .route(
+            "/create_workbench",
+            post(handlers::workbenches::create_workbench),
+        )
+        .route(
+            "/rename_workbench",
+            post(handlers::workbenches::rename_workbench),
+        )
+        .route(
+            "/delete_workbench",
+            post(handlers::workbenches::delete_workbench),
         )
         // ─── Automations ───
         .route(

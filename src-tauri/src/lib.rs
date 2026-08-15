@@ -76,7 +76,7 @@ mod tauri_app {
         session_info as session_info_commands,
         system_settings, terminal as terminal_commands,
         token_usage as token_usage_commands,
-        version_control, windows, work_task as work_task_commands,
+        version_control, windows, workbenches, work_task as work_task_commands,
         workspace_state as workspace_state_commands,
     };
     use crate::terminal::manager::TerminalManager;
@@ -974,6 +974,8 @@ mod tauri_app {
                 conversations::list_child_conversations,
                 conversations::list_opened_tabs,
                 conversations::save_opened_tabs,
+                conversations::list_workbench_tabs,
+                conversations::save_workbench_tabs,
                 conversations::import_local_conversations,
                 conversations::scan_importable_sessions,
                 conversations::import_selected_sessions,
@@ -1301,6 +1303,10 @@ mod tauri_app {
                 quick_messages_commands::quick_messages_update,
                 quick_messages_commands::quick_messages_delete,
                 quick_messages_commands::quick_messages_reorder,
+                workbenches::list_workbenches,
+                workbenches::create_workbench,
+                workbenches::rename_workbench,
+                workbenches::delete_workbench,
                 automation_commands::automation_list,
                 automation_commands::automation_get,
                 automation_commands::automation_runs,

@@ -1531,6 +1531,26 @@
       "viewDiff": "Diff 보기",
       "push": "푸시..."
     },
+    "workbench": {
+      "switchTitle": "워크벤치 전환",
+      "loading": "워크벤치 불러오는 중…",
+      "defaultName": "워크벤치 {number}",
+      "create": "새 워크벤치",
+      "rename": "현재 워크벤치 이름 바꾸기",
+      "delete": "현재 워크벤치 삭제",
+      "createTitle": "새 워크벤치",
+      "renameTitle": "워크벤치 이름 바꾸기",
+      "namePlaceholder": "워크벤치 이름",
+      "cancel": "취소",
+      "save": "저장",
+      "createAndSwitch": "만들고 전환",
+      "deleteTitle": "이 워크벤치를 삭제할까요?",
+      "deleteDescription": "‘{name}’에 저장된 탭과 레이아웃을 제거하지만 대화는 삭제하지 않습니다.",
+      "loadFailed": "워크벤치를 불러오지 못했습니다: {message}",
+      "saveFailed": "워크벤치를 저장하지 못했습니다: {message}",
+      "switchFailed": "워크벤치를 전환하지 못했습니다: {message}",
+      "deleteFailed": "워크벤치를 삭제하지 못했습니다: {message}"
+    },
     "statusLabels": {
       "in_progress": "진행 중",
       "pending_review": "검토",

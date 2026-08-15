@@ -63,6 +63,7 @@ import {
 } from "@/lib/sidebar-view-mode-storage"
 import { SidebarSectionOrderControl } from "./sidebar-section-order-control"
 import { cn } from "@/lib/utils"
+import { WorkbenchSwitcher } from "@/components/workbench/workbench-switcher"
 
 // Keyboard-shortcut hint at the trailing edge of the New chat / Search rows.
 // Mirrors the folder count badge exactly — same chip (0.9375rem height,
@@ -433,6 +434,7 @@ export function Sidebar() {
           the list below. Each row is a `group` so its shortcut hint reveals on
           hover / keyboard focus. */}
       <div className="flex shrink-0 flex-col gap-0.5 px-1.5 pt-1.5">
+        <WorkbenchSwitcher />
         <SidebarNavButton
           icon={SquarePen}
           label={t("newChat")}

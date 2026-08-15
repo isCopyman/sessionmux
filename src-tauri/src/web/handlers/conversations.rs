@@ -63,7 +63,31 @@ pub async fn list_opened_tabs(
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ListWorkbenchTabsParams {
+    pub workbench_id: i32,
+}
+
+pub async fn list_workbench_tabs(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<ListWorkbenchTabsParams>,
+) -> Result<Json<OpenedTabsSnapshot>, AppCommandError> {
+    Ok(Json(
+        conv_commands::list_workbench_tabs_core(&state.db.conn, params.workbench_id).await?,
+    ))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SaveOpenedTabsParams {
+    pub items: Vec<OpenedTab>,
+    pub expected_version: i64,
+    pub origin: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveWorkbenchTabsParams {
+    pub workbench_id: i32,
     pub items: Vec<OpenedTab>,
     pub expected_version: i64,
     pub origin: String,
@@ -77,6 +101,23 @@ pub async fn save_opened_tabs(
         conv_commands::save_opened_tabs_core(
             &state.db.conn,
             &state.emitter,
+            params.items,
+            params.expected_version,
+            params.origin,
+        )
+        .await?,
+    ))
+}
+
+pub async fn save_workbench_tabs(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<SaveWorkbenchTabsParams>,
+) -> Result<Json<SaveTabsOutcome>, AppCommandError> {
+    Ok(Json(
+        conv_commands::save_workbench_tabs_core(
+            &state.db.conn,
+            &state.emitter,
+            params.workbench_id,
             params.items,
             params.expected_version,
             params.origin,

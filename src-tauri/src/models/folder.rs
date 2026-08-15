@@ -34,6 +34,17 @@ pub struct FolderDetail {
     pub alias: Option<String>,
 }
 
+/// A named, user-visible arrangement of conversation tabs. Sessions themselves
+/// remain global records; a workbench only owns references, focus and layout.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkbenchInfo {
+    pub id: i32,
+    pub name: String,
+    pub position: i32,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OpenedTab {
     pub id: i32,
