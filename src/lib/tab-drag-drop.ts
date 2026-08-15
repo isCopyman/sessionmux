@@ -37,13 +37,33 @@ export function moveIdToDropIndex(
   const sourceIndex = ids.indexOf(draggedId)
   if (sourceIndex < 0) return ids
   const without = ids.filter((id) => id !== draggedId)
-  const adjustedIndex = sourceIndex < dropIndex ? dropIndex - 1 : dropIndex
-  const insertionIndex = Math.max(0, Math.min(adjustedIndex, without.length))
+  const insertionIndex = insertionIndexAfterRemovingSource(
+    ids,
+    draggedId,
+    dropIndex
+  )
   return [
     ...without.slice(0, insertionIndex),
     draggedId,
     ...without.slice(insertionIndex),
   ]
+}
+
+/**
+ * Normalize a DOM drop index (which still counts the stationary source tab) to
+ * an insertion boundary in the remaining tabs. The tab strip uses this same
+ * value for its visual placeholder and the final commit, so the marker cannot
+ * promise one slot and then land in another.
+ */
+export function insertionIndexAfterRemovingSource(
+  ids: string[],
+  draggedId: string,
+  dropIndex: number
+): number {
+  const sourceIndex = ids.indexOf(draggedId)
+  if (sourceIndex < 0) return -1
+  const adjustedIndex = sourceIndex < dropIndex ? dropIndex - 1 : dropIndex
+  return Math.max(0, Math.min(adjustedIndex, ids.length - 1))
 }
 
 export interface DragClientPoint {

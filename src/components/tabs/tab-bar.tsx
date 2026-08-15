@@ -19,6 +19,7 @@ import {
 import {
   clientPointFromDrag,
   dropIndexFromMidpoints,
+  insertionIndexAfterRemovingSource,
   moveIdToDropIndex,
   splitDropEdgeFromPoint,
   type DragClientPoint,
@@ -43,6 +44,12 @@ interface PaneDropTarget {
   /** The source pane's center is still a visible Paseo-style target, but
    * releasing there must not reorder, move, or split the tab. */
   noOp: boolean
+}
+
+interface SortIndicator {
+  tabId: string
+  /** Horizontal position inside the (possibly scrolled) source strip. */
+  x: number
 }
 
 // Rendered inside the desktop conversation-column title strip while unsplit,
@@ -147,6 +154,56 @@ export function TabBar({ groupId }: TabBarProps) {
       s.tabDrag?.overGroupId === groupId &&
       s.tabDrag?.splitEdge == null
   )
+  const draggingTabId = useTabStore((s) => s.tabDrag?.tabId ?? null)
+  const [sortIndicator, setSortIndicator] = useState<SortIndicator | null>(null)
+
+  const updateSortIndicator = useCallback(
+    (draggedId: string, strip: Element, clientX: number) => {
+      if (!(strip instanceof HTMLElement)) {
+        setSortIndicator(null)
+        return
+      }
+      const nodes = Array.from(
+        strip.querySelectorAll<HTMLElement>(":scope > [data-tab-id]")
+      )
+      const ids = nodes.flatMap((node) => {
+        const id = node.getAttribute("data-tab-id")
+        return id ? [id] : []
+      })
+      const dropIndex = dropIndexFromMidpoints(
+        clientX,
+        nodes.map((node) => {
+          const rect = node.getBoundingClientRect()
+          return rect.left + rect.width / 2
+        })
+      )
+      const insertionIndex = insertionIndexAfterRemovingSource(
+        ids,
+        draggedId,
+        dropIndex
+      )
+      const remaining = nodes.filter(
+        (node) => node.getAttribute("data-tab-id") !== draggedId
+      )
+      if (insertionIndex < 0 || remaining.length === 0) {
+        setSortIndicator(null)
+        return
+      }
+
+      const anchor =
+        insertionIndex < remaining.length
+          ? remaining[insertionIndex].getBoundingClientRect().left
+          : remaining[remaining.length - 1].getBoundingClientRect().right
+      const stripRect = strip.getBoundingClientRect()
+      const x = Math.round((anchor - stripRect.left + strip.scrollLeft) * 2) / 2
+      setSortIndicator((current) =>
+        current?.tabId === draggedId && current.x === x
+          ? current
+          : { tabId: draggedId, x }
+      )
+    },
+    []
+  )
   const resolveDropTarget = useCallback(
     (
       clientX: number,
@@ -205,6 +262,11 @@ export function TabBar({ groupId }: TabBarProps) {
     ) => {
       const { x, y } = clientPointFromDrag(event, info)
       const target = resolveDropTarget(x, y, translatedCenter)
+      if (target?.strip && target.gid === stripGroupId) {
+        updateSortIndicator(tab.id, target.el, x)
+      } else {
+        setSortIndicator(null)
+      }
       updateTabDrag({
         tabId: tab.id,
         title: tab.title,
@@ -217,7 +279,7 @@ export function TabBar({ groupId }: TabBarProps) {
         splitEdge: target?.splitEdge ?? null,
       })
     },
-    [resolveDropTarget, stripGroupId, updateTabDrag]
+    [resolveDropTarget, stripGroupId, updateSortIndicator, updateTabDrag]
   )
   const handleTabDragStart = useCallback(
     (
@@ -239,6 +301,7 @@ export function TabBar({ groupId }: TabBarProps) {
     ) => {
       const { x, y } = clientPointFromDrag(event, info)
       const target = resolveDropTarget(x, y, translatedCenter)
+      setSortIndicator(null)
       endTabDrag()
       if (!target) return
       if (target.strip && target.gid === stripGroupId) {
@@ -417,10 +480,20 @@ export function TabBar({ groupId }: TabBarProps) {
       // `ws-strip-line` reaches the group's right edge and the bottom hairline
       // stays continuous into the right reserve.
       className={cn(
-        "pt-1.5 flex h-full min-w-0 flex-1 items-stretch gap-0 overflow-hidden pl-2",
+        "relative pt-1.5 flex h-full min-w-0 flex-1 items-stretch gap-0 overflow-hidden pl-2",
         isDropTarget && "bg-primary/8"
       )}
     >
+      {sortIndicator && sortIndicator.tabId === draggingTabId ? (
+        <span
+          aria-hidden
+          data-tab-sort-indicator
+          className="pointer-events-none absolute bottom-0 top-1 z-[70] w-0.5 rounded-full bg-primary shadow-[0_0_0_1px_color-mix(in_oklab,var(--background),transparent_25%)]"
+          style={{ left: sortIndicator.x }}
+        >
+          <span className="absolute -left-[3px] top-0 h-0 w-0 border-x-[4px] border-t-[5px] border-x-transparent border-t-primary" />
+        </span>
+      ) : null}
       {displayedGroupTabs.map((tab, index) => {
         const folderInfo = folderIndex.get(tab.folderId)
         // Neighbours of the active tab inset their workspace-bg baseline so the

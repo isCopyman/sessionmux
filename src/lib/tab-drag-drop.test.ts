@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import {
   clientPointFromDrag,
   dropIndexFromMidpoints,
+  insertionIndexAfterRemovingSource,
   moveIdToDropIndex,
   splitDropEdgeFromPoint,
   translatedRectCenter,
@@ -42,6 +43,22 @@ describe("moveIdToDropIndex", () => {
   it("preserves identity and order for a same-slot or unknown drag", () => {
     expect(moveIdToDropIndex(ids, "b", 2)).toEqual(ids)
     expect(moveIdToDropIndex(ids, "missing", 1)).toBe(ids)
+  })
+})
+
+describe("insertionIndexAfterRemovingSource", () => {
+  const ids = ["a", "b", "c"]
+
+  it("maps the stationary source slot to the same boundary used at commit", () => {
+    expect(insertionIndexAfterRemovingSource(ids, "a", 3)).toBe(2)
+    expect(insertionIndexAfterRemovingSource(ids, "c", 0)).toBe(0)
+    expect(insertionIndexAfterRemovingSource(ids, "b", 2)).toBe(1)
+  })
+
+  it("clamps extreme indices and rejects an unknown source", () => {
+    expect(insertionIndexAfterRemovingSource(ids, "a", 99)).toBe(2)
+    expect(insertionIndexAfterRemovingSource(ids, "c", -5)).toBe(0)
+    expect(insertionIndexAfterRemovingSource(ids, "missing", 1)).toBe(-1)
   })
 })
 

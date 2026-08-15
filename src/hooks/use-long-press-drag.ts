@@ -31,7 +31,14 @@ export function useLongPressDrag({
   const dragSettleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const touchStartRef = useRef<{ x: number; y: number } | null>(null)
   const longPressActiveRef = useRef(false)
-  const isDraggingRef = useRef(false)
+  const dragActiveRef = useRef(false)
+  // Do not make click recovery depend on the settle timer. A tab can move to a
+  // different React slot while that timer is pending; if the timer is cancelled
+  // during reconciliation, a boolean that is only cleared from its callback can
+  // strand the tab in a permanently unclickable state. The drag itself ends
+  // synchronously, while this timestamp only swallows the browser's immediate
+  // post-drag synthetic click.
+  const suppressDragClickUntilRef = useRef(0)
   const removeNativeTouchMoveGuardRef = useRef<(() => void) | null>(null)
   // Every pointerdown opens a new interaction; suppressedInteractionRef pins
   // which interaction's synthetic click should be swallowed. Advancing the id
@@ -183,19 +190,21 @@ export function useLongPressDrag({
   )
 
   const onDragStart = useCallback(() => {
-    isDraggingRef.current = true
+    dragActiveRef.current = true
+    suppressDragClickUntilRef.current = Number.POSITIVE_INFINITY
     clearDragSettleTimer()
   }, [clearDragSettleTimer])
 
   const onDragEnd = useCallback(() => {
     releaseGesture()
+    dragActiveRef.current = false
+    suppressDragClickUntilRef.current = Date.now() + dragSettleMs
     // The synthetic click after a drag fires almost immediately on
-    // descendants; the settle delay keeps isDragging true long enough that
-    // onClickCapture also swallows the post-drag click (e.g. close button).
+    // descendants. Keep the visual cleanup delay, but click recovery no longer
+    // waits for this timer to fire.
     clearDragSettleTimer()
     dragSettleTimerRef.current = setTimeout(() => {
       dragSettleTimerRef.current = null
-      isDraggingRef.current = false
       onDragSettle?.()
     }, dragSettleMs)
   }, [clearDragSettleTimer, dragSettleMs, onDragSettle, releaseGesture])
@@ -213,7 +222,9 @@ export function useLongPressDrag({
     (event: ReactMouseEvent<HTMLElement>) => {
       const fromLongPress =
         suppressedInteractionRef.current === interactionIdRef.current
-      if (!fromLongPress && !isDraggingRef.current) return
+      const fromDrag =
+        dragActiveRef.current || Date.now() < suppressDragClickUntilRef.current
+      if (!fromLongPress && !fromDrag) return
       if (fromLongPress) suppressedInteractionRef.current = null
       event.stopPropagation()
       event.preventDefault()

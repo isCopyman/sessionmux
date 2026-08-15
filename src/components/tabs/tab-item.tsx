@@ -1,6 +1,6 @@
 "use client"
 
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { memo, useCallback, useEffect, useRef, useState } from "react"
 import { Reorder } from "motion/react"
 import type { PanInfo } from "motion/react"
 import { X } from "lucide-react"
@@ -280,8 +280,9 @@ export const TabItem = memo(function TabItem({
     if (target) onMoveToGroup(tab.id, target.groupId)
   }, [moveTargets, onMoveToGroup, tab.id])
 
-  const whileDrag = useMemo(() => ({ scale: 1.03 }), [])
-
+  // The source tab is a stationary placeholder while the global floating ghost
+  // follows the pointer. Scaling the source here can leave Motion's transform
+  // behind after a state-driven reorder and overlap its neighbor.
   return (
     <Reorder.Item
       ref={itemRef}
@@ -291,7 +292,6 @@ export const TabItem = memo(function TabItem({
       drag="x"
       dragControls={dragControls}
       dragListener={!isCoarsePointer}
-      whileDrag={whileDrag}
       transformTemplate={isDragging ? () => "none" : undefined}
       {...restGestureHandlers}
       onDragStart={handleDragStart}
