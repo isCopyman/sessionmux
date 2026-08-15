@@ -413,6 +413,7 @@ function VirtualizedMessageThreadImpl<T>({
             {items.map((item, index) => (
               <div
                 key={getItemKey(item, index)}
+                data-virtual-item-index={index}
                 style={itemStyle(index, items.length)}
               >
                 <div className={cn("mx-auto max-w-3xl px-4", className)}>

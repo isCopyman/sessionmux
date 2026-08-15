@@ -75,6 +75,16 @@ import type { MessageScrollContextValue } from "@/components/message/message-scr
 import { extractSessionFilesGrouped } from "@/lib/session-files"
 import { unescapeComposerText } from "@/lib/composer-copy-text"
 import { useStickToBottomContext } from "use-stick-to-bottom"
+import { ConversationFindBar } from "@/components/message/conversation-find-bar"
+import {
+  findConversationMatches,
+  nextConversationMatchIndex,
+  type ConversationFindEntry,
+} from "@/lib/conversation-find"
+import {
+  applyConversationFindHighlights,
+  clearConversationFindHighlights,
+} from "@/lib/conversation-find-highlight"
 
 interface MessageListViewProps {
   conversationId: number
@@ -594,12 +604,12 @@ const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
           <div className="group/user-msg flex w-fit ml-auto max-w-full items-start gap-1">
             <UserMessageTaskButton parts={group.parts} />
             <UserMessageCopyButton parts={group.parts} />
-            <MessageContent>
+            <MessageContent data-conversation-search-content>
               <CollapsibleUserMessage parts={group.parts} />
             </MessageContent>
           </div>
         ) : (
-          <MessageContent>
+          <MessageContent data-conversation-search-content>
             <ContentPartsRenderer parts={group.parts} role={group.role} />
           </MessageContent>
         )}
@@ -989,6 +999,170 @@ export function MessageListView({
   // Lifted scroll handle so the panel (which lives in the overlay stack, outside
   // the MessageScrollProvider subtree) can drive scrollToIndex.
   const scrollApiRef = useRef<MessageScrollContextValue | null>(null)
+  const messageListRootRef = useRef<HTMLDivElement | null>(null)
+
+  // --- Find in this Session ---------------------------------------------------
+  // Search semantic message text across the loaded transcript, then page older
+  // history while a non-empty query is active so the final count covers the
+  // complete native Session rather than only the initial tail window.
+  const findEntries = useMemo<ConversationFindEntry[]>(() => {
+    const entries: ConversationFindEntry[] = []
+    for (let threadIndex = 0; threadIndex < threadItems.length; threadIndex++) {
+      const item = threadItems[threadIndex]
+      if (
+        item.kind !== "turn" ||
+        (item.group.role !== "user" && item.group.role !== "assistant")
+      ) {
+        continue
+      }
+      const rawText = extractTextFromParts(item.group.parts)
+      const text =
+        item.group.role === "user" ? unescapeComposerText(rawText) : rawText
+      if (!text) continue
+      entries.push({ itemKey: item.key, threadIndex, text })
+    }
+    return entries
+  }, [threadItems])
+  const [findOpen, setFindOpen] = useState(false)
+  const [findQuery, setFindQuery] = useState("")
+  const [findFocusToken, setFindFocusToken] = useState(0)
+  const [activeFindMatchId, setActiveFindMatchId] = useState<string | null>(
+    null
+  )
+  const findMatches = useMemo(
+    () => (findOpen ? findConversationMatches(findEntries, findQuery) : []),
+    [findEntries, findOpen, findQuery]
+  )
+  const activeFindMatchIndex = activeFindMatchId
+    ? findMatches.findIndex((match) => match.id === activeFindMatchId)
+    : -1
+  const currentFindMatchIndex =
+    activeFindMatchIndex >= 0
+      ? activeFindMatchIndex
+      : findMatches.length > 0
+        ? 0
+        : -1
+  const activeFindMatch =
+    currentFindMatchIndex >= 0
+      ? findMatches[currentFindMatchIndex]
+      : (findMatches[0] ?? null)
+  const searchingOlderHistory =
+    findOpen && findQuery.length > 0 && (hasOlderTurns || loadingOlderTurns)
+
+  useEffect(() => {
+    if (
+      !isActive ||
+      !findOpen ||
+      findQuery.length === 0 ||
+      !hasOlderTurns ||
+      loadingOlderTurns
+    ) {
+      return
+    }
+    loadOlderTurns(conversationId)
+  }, [
+    conversationId,
+    findOpen,
+    findQuery,
+    hasOlderTurns,
+    isActive,
+    loadOlderTurns,
+    loadingOlderTurns,
+  ])
+
+  const openFind = useCallback(() => {
+    setFindOpen(true)
+    setFindFocusToken((token) => token + 1)
+  }, [])
+  const closeFind = useCallback(() => {
+    setFindOpen(false)
+    setFindQuery("")
+    setActiveFindMatchId(null)
+  }, [])
+  const handleFindQueryChange = useCallback((query: string) => {
+    setFindQuery(query)
+    setActiveFindMatchId(null)
+  }, [])
+  const moveFindMatch = useCallback(
+    (direction: 1 | -1) => {
+      const nextIndex = nextConversationMatchIndex(
+        currentFindMatchIndex,
+        findMatches.length,
+        direction
+      )
+      if (nextIndex >= 0) setActiveFindMatchId(findMatches[nextIndex].id)
+    },
+    [currentFindMatchIndex, findMatches]
+  )
+  const handleNextFindMatch = useCallback(
+    () => moveFindMatch(1),
+    [moveFindMatch]
+  )
+  const handlePreviousFindMatch = useCallback(
+    () => moveFindMatch(-1),
+    [moveFindMatch]
+  )
+
+  useEffect(() => {
+    if (!isActive || !showMessageNav) return
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (
+        event.altKey ||
+        (!event.ctrlKey && !event.metaKey) ||
+        event.key.toLocaleLowerCase() !== "f"
+      ) {
+        return
+      }
+      const target = event.target as HTMLElement | null
+      // Preserve native find inside an embedded code editor/browser. The
+      // composer is intentionally not excluded: Ctrl/Cmd+F there means
+      // "find in the active Session", matching chat/workbench applications.
+      if (target?.closest(".monaco-editor, iframe, [data-native-find-scope]")) {
+        return
+      }
+      event.preventDefault()
+      event.stopPropagation()
+      openFind()
+    }
+    window.addEventListener("keydown", handleKeyDown, true)
+    return () => window.removeEventListener("keydown", handleKeyDown, true)
+  }, [isActive, openFind, showMessageNav])
+
+  useEffect(() => {
+    if (!findOpen || !activeFindMatch) return
+    scrollApiRef.current?.scrollToIndex(activeFindMatch.threadIndex, {
+      align: "center",
+    })
+  }, [activeFindMatch, findOpen])
+
+  useEffect(() => {
+    const root = messageListRootRef.current
+    if (!root || !isActive || !findOpen || findQuery.length === 0) {
+      clearConversationFindHighlights(root)
+      return
+    }
+    let rafId = 0
+    const paint = () => {
+      rafId = 0
+      applyConversationFindHighlights(root, findQuery, activeFindMatch)
+    }
+    const schedulePaint = () => {
+      if (rafId) cancelAnimationFrame(rafId)
+      rafId = requestAnimationFrame(paint)
+    }
+    schedulePaint()
+    const observer = new MutationObserver(schedulePaint)
+    observer.observe(root, { childList: true, subtree: true })
+    const viewport = root.querySelector<HTMLElement>(".scrollbar-thin")
+    viewport?.addEventListener("scroll", schedulePaint, { passive: true })
+    return () => {
+      if (rafId) cancelAnimationFrame(rafId)
+      observer.disconnect()
+      viewport?.removeEventListener("scroll", schedulePaint)
+      clearConversationFindHighlights(root)
+    }
+  }, [activeFindMatch, findOpen, findQuery, isActive, threadItems])
+
   // Collapse state is owned here (not in the panel) so the expensive per-file
   // `navEntries` is computed only while the panel is open.
   const [navExpanded, setNavExpanded] = useState(false)
@@ -1124,7 +1298,23 @@ export function MessageListView({
   }
 
   return (
-    <div className="relative flex h-full min-h-0 flex-col">
+    <div
+      ref={messageListRootRef}
+      className="relative flex h-full min-h-0 flex-col"
+    >
+      {findOpen && (
+        <ConversationFindBar
+          query={findQuery}
+          current={activeFindMatch ? currentFindMatchIndex + 1 : 0}
+          total={findMatches.length}
+          searching={searchingOlderHistory}
+          focusToken={findFocusToken}
+          onQueryChange={handleFindQueryChange}
+          onNext={handleNextFindMatch}
+          onPrevious={handlePreviousFindMatch}
+          onClose={closeFind}
+        />
+      )}
       <MessageThread
         className="flex-1 min-h-0"
         initial={initialViewState?.atBottom === false ? false : "instant"}
