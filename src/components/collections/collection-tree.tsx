@@ -1,6 +1,13 @@
 "use client"
 
-import { useEffect, useMemo, useState, type ReactNode } from "react"
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type DragEvent,
+  type ReactNode,
+} from "react"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 import {
@@ -60,7 +67,10 @@ import {
 } from "@/components/ui/select"
 import { AgentIcon } from "@/components/agent-icon"
 import { ConversationStatusDot } from "@/components/conversations/conversation-status-dot"
-import { listConversationCollectionRefs } from "@/lib/api"
+import {
+  assignConversationsToCollection,
+  listConversationCollectionRefs,
+} from "@/lib/api"
 import { formatConversationTitle } from "@/lib/conversation-title"
 import type {
   CollectionInfo,
@@ -75,6 +85,13 @@ import type { SidebarSortMode } from "@/lib/sidebar-view-mode-storage"
 import { useTabStore } from "@/contexts/tab-context"
 
 type OpenScope = number | "unclassified"
+type SessionDragPayload = {
+  conversationId: number
+  rootFolderId: number
+}
+
+const SESSION_TREE_DRAG_MIME = "application/x-codeg-session-tree"
+
 type EditorState =
   | {
       mode: "create"
@@ -193,6 +210,14 @@ export function CollectionTree({
   const [rootFolderId, setRootFolderId] = useState<number | null>(null)
   const [pending, setPending] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<CollectionInfo | null>(null)
+  const sessionDragRef = useRef<SessionDragPayload | null>(null)
+  const [draggingConversationId, setDraggingConversationId] = useState<
+    number | null
+  >(null)
+  const [dropTarget, setDropTarget] = useState<string | null>(null)
+  const [movingConversationId, setMovingConversationId] = useState<
+    number | null
+  >(null)
 
   const activeConversationId = useMemo(
     () => tabs.find((tab) => tab.id === activeTabId)?.conversationId ?? null,
@@ -360,6 +385,116 @@ export function CollectionTree({
     return active ? (active.parent_id ?? active.id) : null
   }, [activeFolderId, allFolders])
 
+  const sessionRootId = (conversation: DbConversationSummary) => {
+    const folder = folderById.get(conversation.folder_id)
+    return folder ? (folder.parent_id ?? folder.id) : null
+  }
+
+  const dragTargetKey = (rootId: number, collectionId: number | null) =>
+    `${rootId}:${collectionId ?? "unclassified"}`
+
+  const canDropSession = (rootId: number, collectionId: number | null) => {
+    const payload = sessionDragRef.current
+    if (!payload || movingConversationId != null) return false
+    if (payload.rootFolderId !== rootId) return false
+    return (
+      (membershipByConversation.get(payload.conversationId) ?? null) !==
+      collectionId
+    )
+  }
+
+  const beginSessionDrag = (
+    event: DragEvent<HTMLButtonElement>,
+    conversation: DbConversationSummary
+  ) => {
+    const rootId = sessionRootId(conversation)
+    if (rootId == null || movingConversationId != null) {
+      event.preventDefault()
+      return
+    }
+    const payload = {
+      conversationId: conversation.id,
+      rootFolderId: rootId,
+    }
+    sessionDragRef.current = payload
+    setDraggingConversationId(conversation.id)
+    event.dataTransfer.effectAllowed = "move"
+    event.dataTransfer.setData(SESSION_TREE_DRAG_MIME, JSON.stringify(payload))
+    event.dataTransfer.setData(
+      "text/plain",
+      formatConversationTitle(conversation.title) ||
+        tConversation("untitledConversation")
+    )
+    event.dataTransfer.setDragImage?.(event.currentTarget, 18, 14)
+  }
+
+  const finishSessionDrag = () => {
+    sessionDragRef.current = null
+    setDraggingConversationId(null)
+    setDropTarget(null)
+  }
+
+  const handleSessionDragOver = (
+    event: DragEvent<HTMLElement>,
+    rootId: number,
+    collectionId: number | null
+  ) => {
+    if (!canDropSession(rootId, collectionId)) {
+      event.dataTransfer.dropEffect = "none"
+      setDropTarget(null)
+      return
+    }
+    event.preventDefault()
+    event.dataTransfer.dropEffect = "move"
+    setDropTarget(dragTargetKey(rootId, collectionId))
+  }
+
+  const handleSessionDragLeave = (event: DragEvent<HTMLElement>) => {
+    const related = event.relatedTarget
+    if (related instanceof Node && event.currentTarget.contains(related)) return
+    setDropTarget(null)
+  }
+
+  const handleSessionDrop = async (
+    event: DragEvent<HTMLElement>,
+    rootId: number,
+    collectionId: number | null
+  ) => {
+    if (!canDropSession(rootId, collectionId)) return
+    event.preventDefault()
+    const payload = sessionDragRef.current
+    if (!payload) return
+
+    setDropTarget(null)
+    setMovingConversationId(payload.conversationId)
+    try {
+      await assignConversationsToCollection(
+        [payload.conversationId],
+        collectionId
+      )
+      setMembershipByConversation((current) => {
+        const next = new Map(current)
+        if (collectionId == null) next.delete(payload.conversationId)
+        else next.set(payload.conversationId, collectionId)
+        return next
+      })
+      if (collectionId == null) {
+        setCollapsedUnclassified((current) => {
+          const next = new Set(current)
+          next.delete(rootId)
+          return next
+        })
+      } else {
+        setExpanded((current) => new Set(current).add(collectionId))
+      }
+    } catch (error) {
+      toast.error(t("operationFailed", { message: toErrorMessage(error) }))
+    } finally {
+      setMovingConversationId(null)
+      finishSessionDrag()
+    }
+  }
+
   const openEditor = (next: EditorState) => {
     setEditor(next)
     if (next.mode === "create") {
@@ -435,17 +570,26 @@ export function CollectionTree({
       <button
         key={conversation.id}
         type="button"
+        draggable={showSessions && movingConversationId == null}
         data-conversation-id={conversation.id}
         data-focused-session={selected ? "true" : undefined}
+        data-session-dragging={
+          draggingConversationId === conversation.id ? "true" : undefined
+        }
         aria-current={selected ? "page" : undefined}
         title={formatConversationTitle(conversation.title)}
         className={cn(
-          "flex h-7 w-full min-w-0 items-center gap-1.5 rounded-md pe-2 text-start text-xs hover:bg-sidebar-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
+          "flex h-7 w-full min-w-0 cursor-grab items-center gap-1.5 rounded-md pe-2 text-start text-xs hover:bg-sidebar-accent active:cursor-grabbing focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
           selected &&
-            "bg-primary/8 text-primary ring-1 ring-inset ring-primary/30"
+            "bg-primary/8 text-primary ring-1 ring-inset ring-primary/30",
+          draggingConversationId === conversation.id && "opacity-45",
+          movingConversationId === conversation.id &&
+            "pointer-events-none opacity-55"
         )}
         style={{ paddingInlineStart: `${1.75 + depth * 0.75}rem` }}
         onClick={() => onOpenSession?.(conversation)}
+        onDragStart={(event) => beginSessionDrag(event, conversation)}
+        onDragEnd={finishSessionDrag}
       >
         <span
           aria-hidden
@@ -509,8 +653,31 @@ export function CollectionTree({
         return (
           <div key={item.id}>
             <div
-              className="group flex h-7 min-w-0 items-center rounded-md pe-1 hover:bg-sidebar-accent"
+              data-collection-id={item.id}
+              data-collection-root-id={item.root_folder_id ?? undefined}
+              data-session-drop-target={
+                dropTarget === dragTargetKey(item.root_folder_id ?? -1, item.id)
+                  ? "true"
+                  : undefined
+              }
+              className={cn(
+                "group flex h-7 min-w-0 items-center rounded-md pe-1 hover:bg-sidebar-accent",
+                dropTarget ===
+                  dragTargetKey(item.root_folder_id ?? -1, item.id) &&
+                  "bg-primary/10 ring-1 ring-inset ring-primary/45"
+              )}
               style={{ paddingInlineStart: `${0.25 + depth * 0.75}rem` }}
+              onDragOver={(event) =>
+                handleSessionDragOver(event, item.root_folder_id ?? -1, item.id)
+              }
+              onDragLeave={handleSessionDragLeave}
+              onDrop={(event) =>
+                void handleSessionDrop(
+                  event,
+                  item.root_folder_id ?? -1,
+                  item.id
+                )
+              }
             >
               <button
                 type="button"
@@ -629,7 +796,24 @@ export function CollectionTree({
     const isExpanded = !collapsedUnclassified.has(rootFolderId)
     return (
       <div key={`unclassified:${rootFolderId}`}>
-        <div className="group flex h-7 min-w-0 items-center rounded-md pe-1 ps-4 hover:bg-sidebar-accent">
+        <div
+          data-unclassified-root-id={rootFolderId}
+          data-session-drop-target={
+            dropTarget === dragTargetKey(rootFolderId, null)
+              ? "true"
+              : undefined
+          }
+          className={cn(
+            "group flex h-7 min-w-0 items-center rounded-md pe-1 ps-4 hover:bg-sidebar-accent",
+            dropTarget === dragTargetKey(rootFolderId, null) &&
+              "bg-primary/10 ring-1 ring-inset ring-primary/45"
+          )}
+          onDragOver={(event) =>
+            handleSessionDragOver(event, rootFolderId, null)
+          }
+          onDragLeave={handleSessionDragLeave}
+          onDrop={(event) => void handleSessionDrop(event, rootFolderId, null)}
+        >
           <button
             type="button"
             className={cn(

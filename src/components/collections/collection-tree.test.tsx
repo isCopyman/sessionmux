@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { NextIntlClientProvider } from "next-intl"
 import { beforeEach, describe, expect, it, vi } from "vitest"
@@ -14,6 +14,7 @@ const h = vi.hoisted(() => ({
   remove: vi.fn(),
   hydrate: vi.fn(),
   listRefs: vi.fn(),
+  assignCollection: vi.fn(),
   conversations: [
     {
       id: 101,
@@ -69,6 +70,24 @@ const h = vi.hoisted(() => ({
       archived_at: null,
       pinned_at: null,
     },
+    {
+      id: 104,
+      folder_id: 9,
+      title: "Other project notes",
+      title_locked: true,
+      agent_type: "gemini",
+      status: "in_progress",
+      kind: "regular",
+      model: null,
+      git_branch: null,
+      external_id: "session-104",
+      message_count: 1,
+      child_count: 0,
+      created_at: "2026-05-31T00:00:00.000Z",
+      updated_at: "2026-05-31T00:00:00.000Z",
+      archived_at: null,
+      pinned_at: null,
+    },
   ],
   items: [
     {
@@ -85,6 +104,15 @@ const h = vi.hoisted(() => ({
       root_folder_id: 7,
       parent_id: 10,
       name: "Sources",
+      position: 0,
+      created_at: "2026-06-01T00:00:00.000Z",
+      updated_at: "2026-06-01T00:00:00.000Z",
+    },
+    {
+      id: 12,
+      root_folder_id: 9,
+      parent_id: null,
+      name: "Other research",
       position: 0,
       created_at: "2026-06-01T00:00:00.000Z",
       updated_at: "2026-06-01T00:00:00.000Z",
@@ -132,6 +160,14 @@ vi.mock("@/stores/app-workspace-store", () => ({
           parent_id: 7,
           kind: "worktree",
         },
+        {
+          id: 9,
+          name: "other-project",
+          alias: null,
+          path: "/tmp/other-project",
+          parent_id: null,
+          kind: "regular",
+        },
       ],
       allFolders: [
         {
@@ -150,6 +186,14 @@ vi.mock("@/stores/app-workspace-store", () => ({
           parent_id: 7,
           kind: "worktree",
         },
+        {
+          id: 9,
+          name: "other-project",
+          alias: null,
+          path: "/tmp/other-project",
+          parent_id: null,
+          kind: "regular",
+        },
       ],
     }),
 }))
@@ -164,7 +208,30 @@ vi.mock("@/contexts/tab-context", () => ({
 
 vi.mock("@/lib/api", () => ({
   listConversationCollectionRefs: h.listRefs,
+  assignConversationsToCollection: h.assignCollection,
 }))
+
+function createDataTransfer() {
+  const values = new Map<string, string>()
+  const types: string[] = []
+  return {
+    dropEffect: "none",
+    effectAllowed: "none",
+    files: [],
+    items: [],
+    types,
+    clearData: vi.fn((type?: string) => {
+      if (type) values.delete(type)
+      else values.clear()
+    }),
+    getData: vi.fn((type: string) => values.get(type) ?? ""),
+    setData: vi.fn((type: string, value: string) => {
+      values.set(type, value)
+      if (!types.includes(type)) types.push(type)
+    }),
+    setDragImage: vi.fn(),
+  } as unknown as DataTransfer
+}
 
 function renderTree(
   onOpenScope = vi.fn(),
@@ -199,11 +266,21 @@ describe("CollectionTree", () => {
       updated_at: "2026-06-01T00:00:00.000Z",
     })
     h.listRefs.mockResolvedValue([{ conversation_id: 101, collection_id: 11 }])
+    h.assignCollection.mockImplementation(
+      async (conversationIds: number[], collectionId: number | null) =>
+        collectionId == null
+          ? []
+          : conversationIds.map((conversationId) => ({
+              conversation_id: conversationId,
+              collection_id: collectionId,
+            }))
+    )
   })
 
   it("opens nested Collections as Session Center scopes", async () => {
     const { user, onOpenScope } = renderTree()
-    await user.click(screen.getByRole("button", { name: "Expand collection" }))
+    const research = screen.getByRole("button", { name: "Research" })
+    await user.click(research.previousElementSibling as HTMLElement)
     await user.click(screen.getByTitle("Sources"))
 
     expect(onOpenScope).toHaveBeenCalledWith(11)
@@ -234,7 +311,7 @@ describe("CollectionTree", () => {
     expect(
       document.querySelector('[data-focused-session="true"]')?.textContent
     ).toContain("Loose notes")
-    expect(document.querySelectorAll("[data-collection-path]")).toHaveLength(1)
+    expect(document.querySelectorAll("[data-collection-path]")).toHaveLength(2)
     await user.click(screen.getByRole("button", { name: "New chat · project" }))
     expect(onNewSession).toHaveBeenCalledWith(7)
     await user.click(screen.getByRole("button", { name: "Research" }))
@@ -263,5 +340,82 @@ describe("CollectionTree", () => {
       expect.objectContaining({ id: 102, title: "Loose notes" }),
       "right"
     )
+  })
+
+  it("moves a Session into a Collection without changing its Path", async () => {
+    renderTree(vi.fn(), { showSessions: true })
+    const source = (await screen.findByText("Loose notes")).closest("button")!
+    const target = document.querySelector('[data-collection-id="10"]')!
+    const dataTransfer = createDataTransfer()
+
+    fireEvent.dragStart(source, { dataTransfer })
+    fireEvent.dragOver(target, { dataTransfer })
+    expect(target.getAttribute("data-session-drop-target")).toBe("true")
+    fireEvent.drop(target, { dataTransfer })
+
+    await waitFor(() =>
+      expect(h.assignCollection).toHaveBeenCalledWith([102], 10)
+    )
+    await waitFor(() =>
+      expect(
+        document.querySelector('[data-collection-id="10"]')?.parentElement
+          ?.textContent
+      ).toContain("Loose notes")
+    )
+  })
+
+  it("moves a classified Session back to Unclassified", async () => {
+    const { user } = renderTree(vi.fn(), { showSessions: true })
+    await user.click(screen.getByRole("button", { name: "Research" }))
+    await user.click(screen.getByRole("button", { name: "Sources" }))
+    const source = (await screen.findByText("Evidence review")).closest(
+      "button"
+    )!
+    const target = document.querySelector('[data-unclassified-root-id="7"]')!
+    const dataTransfer = createDataTransfer()
+
+    fireEvent.dragStart(source, { dataTransfer })
+    fireEvent.dragOver(target, { dataTransfer })
+    fireEvent.drop(target, { dataTransfer })
+
+    await waitFor(() =>
+      expect(h.assignCollection).toHaveBeenCalledWith([101], null)
+    )
+    await waitFor(() =>
+      expect(target.parentElement?.textContent).toContain("Evidence review")
+    )
+  })
+
+  it("does not move a Session to its current Collection", async () => {
+    const { user } = renderTree(vi.fn(), { showSessions: true })
+    await user.click(screen.getByRole("button", { name: "Research" }))
+    await user.click(screen.getByRole("button", { name: "Sources" }))
+    const source = (await screen.findByText("Evidence review")).closest(
+      "button"
+    )!
+    const target = document.querySelector('[data-collection-id="11"]')!
+    const dataTransfer = createDataTransfer()
+
+    fireEvent.dragStart(source, { dataTransfer })
+    fireEvent.dragOver(target, { dataTransfer })
+    fireEvent.drop(target, { dataTransfer })
+
+    expect(h.assignCollection).not.toHaveBeenCalled()
+    expect(target.getAttribute("data-session-drop-target")).toBeNull()
+  })
+
+  it("rejects Collection drops across canonical Paths", async () => {
+    renderTree(vi.fn(), { showSessions: true })
+    const source = (await screen.findByText("Loose notes")).closest("button")!
+    const target = document.querySelector('[data-collection-id="12"]')!
+    const dataTransfer = createDataTransfer()
+
+    fireEvent.dragStart(source, { dataTransfer })
+    fireEvent.dragOver(target, { dataTransfer })
+    fireEvent.drop(target, { dataTransfer })
+
+    expect(dataTransfer.dropEffect).toBe("none")
+    expect(h.assignCollection).not.toHaveBeenCalled()
+    expect(target.getAttribute("data-session-drop-target")).toBeNull()
   })
 })
