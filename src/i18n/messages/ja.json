@@ -1566,6 +1566,7 @@
       "newConversationShort": "新規",
       "newChat": "新しい会話",
       "search": "検索",
+      "sessionCenter": "セッションセンター",
       "noConversationsFound": "会話が見つかりません。",
       "importLocalSessions": "ローカルセッションをインポート",
       "importing": "インポート中...",
@@ -1634,8 +1635,9 @@
         "removeFromWorkspace": "ワークスペースから削除"
       },
       "manageConversations": {
-        "title": "会話の管理",
-        "searchPlaceholder": "タイトルで検索…",
+        "title": "セッションセンター",
+        "searchPlaceholder": "タイトルまたは会話内容を検索…",
+        "contentSearchUnavailable": "会話内容の検索は利用できません。タイトル検索は引き続き利用できます。",
         "agentFilterAll": "すべてのエージェント",
         "statusFilterAll": "すべてのステータス",
         "folderFilterAll": "すべてのフォルダ",
@@ -1650,6 +1652,7 @@
         "untitledConversation": "無題の会話",
         "setStatus": "ステータスを変更…",
         "deleteSelected": "削除",
+        "openSelected": "開く",
         "noConversations": "このフォルダには会話がありません。",
         "noConversationsWorkspace": "ワークスペースに会話がありません。",
         "noMatchingConversations": "条件に一致する会話がありません。",

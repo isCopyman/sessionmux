@@ -1566,6 +1566,7 @@
       "newConversationShort": "Nueva",
       "newChat": "Nueva conversación",
       "search": "Buscar",
+      "sessionCenter": "Centro de sesiones",
       "noConversationsFound": "No se encontraron conversaciones.",
       "importLocalSessions": "Importar sesiones locales",
       "importing": "Importando...",
@@ -1634,8 +1635,9 @@
         "removeFromWorkspace": "Quitar del espacio de trabajo"
       },
       "manageConversations": {
-        "title": "Gestionar conversaciones",
-        "searchPlaceholder": "Buscar por título…",
+        "title": "Centro de sesiones",
+        "searchPlaceholder": "Buscar en títulos o contenido…",
+        "contentSearchUnavailable": "La búsqueda en el contenido no está disponible; la búsqueda por título sigue funcionando.",
         "agentFilterAll": "Todos los agentes",
         "statusFilterAll": "Todos los estados",
         "folderFilterAll": "Todas las carpetas",
@@ -1650,6 +1652,7 @@
         "untitledConversation": "Conversación sin título",
         "setStatus": "Cambiar estado…",
         "deleteSelected": "Eliminar",
+        "openSelected": "Abrir",
         "noConversations": "No hay conversaciones en esta carpeta.",
         "noConversationsWorkspace": "No hay conversaciones en el espacio de trabajo.",
         "noMatchingConversations": "Ninguna conversación coincide con los filtros.",

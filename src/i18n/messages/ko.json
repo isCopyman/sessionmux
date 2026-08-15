@@ -1566,6 +1566,7 @@
       "newConversationShort": "새로 만들기",
       "newChat": "새 대화",
       "search": "검색",
+      "sessionCenter": "세션 센터",
       "noConversationsFound": "대화를 찾을 수 없습니다.",
       "importLocalSessions": "로컬 세션 가져오기",
       "importing": "가져오는 중...",
@@ -1634,8 +1635,9 @@
         "removeFromWorkspace": "워크스페이스에서 제거"
       },
       "manageConversations": {
-        "title": "대화 관리",
-        "searchPlaceholder": "제목으로 검색…",
+        "title": "세션 센터",
+        "searchPlaceholder": "제목 또는 대화 내용 검색…",
+        "contentSearchUnavailable": "대화 내용 검색을 사용할 수 없습니다. 제목 검색은 계속 사용할 수 있습니다.",
         "agentFilterAll": "모든 에이전트",
         "statusFilterAll": "모든 상태",
         "folderFilterAll": "모든 폴더",
@@ -1650,6 +1652,7 @@
         "untitledConversation": "제목 없는 대화",
         "setStatus": "상태 변경…",
         "deleteSelected": "삭제",
+        "openSelected": "열기",
         "noConversations": "이 폴더에 대화가 없습니다.",
         "noConversationsWorkspace": "작업 공간에 대화가 없습니다.",
         "noMatchingConversations": "필터에 일치하는 대화가 없습니다.",

@@ -9,9 +9,12 @@ import type { DbConversationSummary, FolderDetail } from "@/lib/types"
 
 const h = vi.hoisted(() => ({
   listAll: vi.fn(),
+  searchContent: vi.fn(),
   deleteConv: vi.fn(),
   updateStatus: vi.fn(),
   closeConversationTab: vi.fn(),
+  openTab: vi.fn(),
+  openConversations: vi.fn(),
   refreshConversations: vi.fn(),
   folders: [] as FolderDetail[],
 }))
@@ -25,12 +28,20 @@ vi.mock("sonner", () => ({
 
 vi.mock("@/lib/api", () => ({
   listAllConversations: h.listAll,
+  searchSessionContent: h.searchContent,
   deleteConversation: h.deleteConv,
   updateConversationStatus: h.updateStatus,
 }))
 
 vi.mock("@/contexts/tab-context", () => ({
-  useTabActions: () => ({ closeConversationTab: h.closeConversationTab }),
+  useTabActions: () => ({
+    closeConversationTab: h.closeConversationTab,
+    openTab: h.openTab,
+  }),
+}))
+
+vi.mock("@/contexts/workbench-route-context", () => ({
+  useWorkbenchRoute: () => ({ openConversations: h.openConversations }),
 }))
 
 vi.mock("@/stores/app-workspace-store", () => ({
@@ -108,6 +119,14 @@ function renderDialog() {
   return userEvent.setup()
 }
 
+function renderGlobalDialog() {
+  render(
+    <NextIntlClientProvider locale="en" messages={enMessages}>
+      <ConversationManageDialog open onOpenChange={vi.fn()} folderId={null} />
+    </NextIntlClientProvider>
+  )
+}
+
 /** The last `list_all_conversations` request's folder scope. */
 function lastQueryFolderIds(): number[] | null | undefined {
   const calls = h.listAll.mock.calls
@@ -138,6 +157,7 @@ describe("ConversationManageDialog", () => {
     vi.clearAllMocks()
     h.folders = FOLDERS
     h.listAll.mockResolvedValue(ROWS)
+    h.searchContent.mockResolvedValue({ available: true, results: [] })
   })
 
   it("shows each conversation's branch in place of its message count", async () => {
@@ -178,6 +198,14 @@ describe("ConversationManageDialog", () => {
     await user.click(paletteRow("All folders"))
 
     await waitFor(() => expect(lastQueryFolderIds()).toEqual([1, 2, 3]))
+  })
+
+  it("opens the global Session Center across every user-facing folder", async () => {
+    renderGlobalDialog()
+    await screen.findByText("on main")
+
+    expect(lastQueryFolderIds()).toEqual([1, 2, 3])
+    expect(screen.getByRole("button", { name: /All folders/ })).toBeTruthy()
   })
 
   it("drops a reply that lands after its folder scope moved on", async () => {
@@ -382,5 +410,48 @@ describe("ConversationManageDialog", () => {
 
     await waitFor(() => expect(h.deleteConv).toHaveBeenCalledWith(1))
     expect(h.closeConversationTab).toHaveBeenCalledWith(1, 1, "claude_code")
+  })
+
+  it("finds an imported session from conversation content and shows its snippet", async () => {
+    h.listAll.mockResolvedValue([])
+    h.searchContent.mockResolvedValue({
+      available: true,
+      results: [
+        {
+          conversation: conversation({ id: 8, title: "remembered session" }),
+          snippet: "the distinctive sentence from the old discussion",
+          matched_at: "2026-06-10T10:00:00.000Z",
+          more_matches: 0,
+        },
+      ],
+    })
+    const user = renderDialog()
+    await user.type(
+      screen.getByPlaceholderText(/titles or conversation content/i),
+      "distinctive sentence"
+    )
+
+    expect(await screen.findByText("remembered session")).toBeTruthy()
+    expect(
+      screen.getByText("the distinctive sentence from the old discussion")
+    ).toBeTruthy()
+    expect(h.searchContent).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        query: "distinctive sentence",
+        folder_ids: [1, 2],
+        agent_type: null,
+      })
+    )
+  })
+
+  it("opens the selected session in the current workbench", async () => {
+    const user = renderDialog()
+    await screen.findByText("on main")
+
+    await user.click(screen.getByText("on main"))
+    await user.click(screen.getByRole("button", { name: "Open" }))
+
+    expect(h.openConversations).toHaveBeenCalledTimes(1)
+    expect(h.openTab).toHaveBeenCalledWith(1, 1, "claude_code", true, "on main")
   })
 })

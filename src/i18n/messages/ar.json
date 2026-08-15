@@ -1566,6 +1566,7 @@
       "newConversationShort": "جديدة",
       "newChat": "محادثة جديدة",
       "search": "بحث",
+      "sessionCenter": "مركز الجلسات",
       "noConversationsFound": "لم يتم العثور على محادثات.",
       "importLocalSessions": "استيراد الجلسات المحلية",
       "importing": "جارٍ الاستيراد...",
@@ -1634,8 +1635,9 @@
         "removeFromWorkspace": "إزالة من مساحة العمل"
       },
       "manageConversations": {
-        "title": "إدارة المحادثات",
-        "searchPlaceholder": "البحث بالعنوان…",
+        "title": "مركز الجلسات",
+        "searchPlaceholder": "البحث في العناوين أو محتوى المحادثات…",
+        "contentSearchUnavailable": "البحث في محتوى المحادثات غير متاح؛ لا يزال البحث في العناوين يعمل.",
         "agentFilterAll": "جميع الوكلاء",
         "statusFilterAll": "جميع الحالات",
         "folderFilterAll": "كل المجلدات",
@@ -1650,6 +1652,7 @@
         "untitledConversation": "محادثة بدون عنوان",
         "setStatus": "تعيين الحالة…",
         "deleteSelected": "حذف",
+        "openSelected": "فتح",
         "noConversations": "لا توجد محادثات في هذا المجلد.",
         "noConversationsWorkspace": "لا توجد محادثات في مساحة العمل.",
         "noMatchingConversations": "لا توجد محادثات مطابقة للفلاتر.",

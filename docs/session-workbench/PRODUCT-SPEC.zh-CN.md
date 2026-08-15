@@ -17,9 +17,12 @@ Harness。多 Agent 协作可以以后叠加，但不应成为使用普通 Sessi
 已经落地的基础包括：Codex Desktop 人工会话名优先显示；数据库中的命名 Workbench；侧栏创建、
 重命名、删除和切换；不同 Workbench 的 Session 标签、分屏树、活动项及未发送草稿分别恢复；
 旧用户的原布局自动进入 `Main` Workbench；桌面与 Web 共用同一套接口；`Ctrl/Cmd+K` 默认搜索
-全部 Folder，并能把标题/属性命中与可选 ctx 正文命中分区展示，ctx 不可用时自动退化为元数据搜索。
+全部 Folder，并能把标题/属性命中与可选 ctx 正文命中分区展示；侧栏已有全局“会话中心”入口，
+可以按 Folder、分支、Harness、状态和正文筛选，批量更新或删除，并把选中 Session 打开到当前
+Workbench。ctx 不可用时自动退化为元数据搜索。
 
-仍在开发的关键体验包括：顶部工作台标签和复制/排序；完整 Session Center 与复杂筛选；
+仍在开发的关键体验包括：顶部工作台标签和复制/排序；Session Center 的只读预览、Workbench
+归属和批量归档等完整能力；
 Collection 层级树；拖边吸附；真正的系统多窗口；文件/网页资源跟随；Session 间通信与可选群聊。
 因此下面描述的是目标产品，不能把尚未完成的部分当作当前版本说明。
 

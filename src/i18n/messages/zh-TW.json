@@ -1566,6 +1566,7 @@
       "newConversationShort": "新增",
       "newChat": "新增會話",
       "search": "搜尋",
+      "sessionCenter": "會話中心",
       "noConversationsFound": "找不到會話。",
       "importLocalSessions": "匯入本地會話",
       "importing": "匯入中...",
@@ -1634,8 +1635,9 @@
         "removeFromWorkspace": "從工作區移除"
       },
       "manageConversations": {
-        "title": "會話管理",
-        "searchPlaceholder": "依標題搜尋…",
+        "title": "會話中心",
+        "searchPlaceholder": "搜尋標題或會話內容…",
+        "contentSearchUnavailable": "暫時無法搜尋會話內容，標題搜尋仍可使用。",
         "agentFilterAll": "全部智能體",
         "statusFilterAll": "全部狀態",
         "folderFilterAll": "全部資料夾",
@@ -1650,6 +1652,7 @@
         "untitledConversation": "未命名會話",
         "setStatus": "設為狀態…",
         "deleteSelected": "刪除",
+        "openSelected": "開啟",
         "noConversations": "此資料夾暫無會話。",
         "noConversationsWorkspace": "工作區暫無會話。",
         "noMatchingConversations": "沒有符合過濾條件的會話。",

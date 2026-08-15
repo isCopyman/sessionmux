@@ -22,6 +22,7 @@ const spies = vi.hoisted(() => ({
     showRecent?: boolean
     sectionOrder?: readonly string[]
   } | null,
+  sessionCenterOpen: false,
 }))
 const mockState = vi.hoisted(() => ({
   activeFolder: { id: 7, path: "/x" } as { id: number; path: string } | null,
@@ -42,6 +43,12 @@ vi.mock("@/components/conversations/sidebar-conversation-list", () => ({
 }))
 vi.mock("@/components/workbench/workbench-switcher", () => ({
   WorkbenchSwitcher: () => null,
+}))
+vi.mock("@/components/conversations/conversation-manage-dialog", () => ({
+  ConversationManageDialog: ({ open }: { open: boolean }) => {
+    spies.sessionCenterOpen = open
+    return open ? <div>Session Center Dialog</div> : null
+  },
 }))
 vi.mock("@/contexts/sidebar-context", () => ({
   useSidebarContext: () => ({ isOpen: true, toggle: vi.fn() }),
@@ -106,6 +113,7 @@ describe("Sidebar — fixed New chat / Search region", () => {
     spies.setSearchOpen.mockClear()
     spies.setRoute.mockClear()
     spies.openConversations.mockClear()
+    spies.sessionCenterOpen = false
     mockState.activeFolder = { id: 7, path: "/x" }
   })
 
@@ -131,6 +139,13 @@ describe("Sidebar — fixed New chat / Search region", () => {
     const { getByText } = renderSidebar()
     fireEvent.click(getByText("Search"))
     expect(spies.setSearchOpen).toHaveBeenCalledWith(true)
+  })
+
+  it("Session Center opens the global conversation manager", () => {
+    const { getByText } = renderSidebar()
+    fireEvent.click(getByText("Session Center"))
+    expect(spies.sessionCenterOpen).toBe(true)
+    expect(getByText("Session Center Dialog")).toBeTruthy()
   })
 
   it("renders New chat and Search shortcut hints", () => {

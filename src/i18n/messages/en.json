@@ -1566,6 +1566,7 @@
       "newConversationShort": "New",
       "newChat": "New chat",
       "search": "Search",
+      "sessionCenter": "Session Center",
       "noConversationsFound": "No conversations found.",
       "importLocalSessions": "Import local sessions",
       "importing": "Importing...",
@@ -1634,8 +1635,9 @@
         "removeFromWorkspace": "Remove from workspace"
       },
       "manageConversations": {
-        "title": "Manage conversations",
-        "searchPlaceholder": "Search by title…",
+        "title": "Session Center",
+        "searchPlaceholder": "Search titles or conversation content…",
+        "contentSearchUnavailable": "Conversation content search is unavailable; title search still works.",
         "agentFilterAll": "All agents",
         "statusFilterAll": "All statuses",
         "folderFilterAll": "All folders",
@@ -1650,6 +1652,7 @@
         "untitledConversation": "Untitled conversation",
         "setStatus": "Set status…",
         "deleteSelected": "Delete",
+        "openSelected": "Open",
         "noConversations": "No conversations in this folder.",
         "noConversationsWorkspace": "No conversations in the workspace.",
         "noMatchingConversations": "No conversations match the filters.",

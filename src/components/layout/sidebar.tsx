@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import {
   Crosshair,
   Funnel,
+  LibraryBig,
   ListChevronsDownUp,
   ListChevronsUpDown,
   Search,
@@ -64,6 +65,7 @@ import {
 import { SidebarSectionOrderControl } from "./sidebar-section-order-control"
 import { cn } from "@/lib/utils"
 import { WorkbenchSwitcher } from "@/components/workbench/workbench-switcher"
+import { ConversationManageDialog } from "@/components/conversations/conversation-manage-dialog"
 
 // Keyboard-shortcut hint at the trailing edge of the New chat / Search rows.
 // Mirrors the folder count badge exactly — same chip (0.9375rem height,
@@ -161,6 +163,7 @@ export function Sidebar() {
     DEFAULT_SECTION_ORDER
   )
   const [allExpanded, setAllExpanded] = useState(true)
+  const [sessionCenterOpen, setSessionCenterOpen] = useState(false)
   const searchShortcutLabel = formatShortcutLabel(
     shortcuts.toggle_search,
     isMac
@@ -457,6 +460,11 @@ export function Sidebar() {
             ) : null
           }
         />
+        <SidebarNavButton
+          icon={LibraryBig}
+          label={t("sessionCenter")}
+          onClick={() => setSessionCenterOpen(true)}
+        />
         {/* Both route rows close the mobile Sheet on the way out, like tapping a
             conversation card (handled by the list wrapper below) — otherwise the
             page they just opened stays hidden behind the sidebar. "Search" above
@@ -521,6 +529,13 @@ export function Sidebar() {
           sectionOrder={sectionOrder}
         />
       </div>
+      {sessionCenterOpen && (
+        <ConversationManageDialog
+          open
+          onOpenChange={setSessionCenterOpen}
+          folderId={null}
+        />
+      )}
     </aside>
   )
 }

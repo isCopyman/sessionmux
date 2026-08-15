@@ -19,6 +19,8 @@ import {
   GitBranch,
   ListChecks,
   Loader2,
+  MessageSquareText,
+  PanelTopOpen,
   Search,
   Square,
   Trash2,
@@ -84,9 +86,11 @@ import {
 import { FolderAliasLabel } from "@/components/conversations/folder-alias-label"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { useTabActions } from "@/contexts/tab-context"
+import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
 import {
   deleteConversation,
   listAllConversations,
+  searchSessionContent,
   updateConversationStatus,
 } from "@/lib/api"
 import type {
@@ -112,7 +116,7 @@ interface ConversationManageDialogProps {
   /** The folder the dialog was opened on — the initial value of the folder
    *  facet, which the user can then widen to the whole workspace or point at
    *  another folder. */
-  folderId: number
+  folderId?: number | null
 }
 
 /**
@@ -520,17 +524,25 @@ export function ConversationManageDialog({
     (s) => s.refreshConversations
   )
   const allFolders = useAppWorkspaceStore((s) => s.allFolders)
-  const { closeConversationTab } = useTabActions()
+  const { closeConversationTab, openTab } = useTabActions()
+  const { openConversations } = useWorkbenchRoute()
 
   const [search, setSearch] = useState("")
   /** The folder facet: a folder id, or `null` for the whole workspace. */
-  const [scopeFolderId, setScopeFolderId] = useState<number | null>(folderId)
+  const [scopeFolderId, setScopeFolderId] = useState<number | null>(
+    folderId ?? null
+  )
   const [branchFilter, setBranchFilter] = useState<BranchFilter>(ALL_BRANCHES)
   const [agentFilter, setAgentFilter] = useState<AgentType | "all">("all")
   const [statusFilter, setStatusFilter] = useState<ConversationStatus | "all">(
     "all"
   )
   const [rows, setRows] = useState<DbConversationSummary[]>([])
+  const [contentSnippets, setContentSnippets] = useState<Map<number, string>>(
+    new Map()
+  )
+  const [contentSearchUnavailable, setContentSearchUnavailable] =
+    useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   // Keyed by id but holding the row, so a bulk op can still close the tabs of
@@ -561,7 +573,7 @@ export function ConversationManageDialog({
     // with "Show worktrees" on, each worktree draws its own header and so its
     // own menu entry, and the scope would otherwise be a folder the picker can
     // name only as `#<id>` and can never return to once the scope moves.
-    if (!options.has(folderId)) {
+    if (folderId != null && !options.has(folderId)) {
       const own = allFolders.find((f) => f.id === folderId)
       options.set(folderId, {
         id: folderId,
@@ -600,13 +612,15 @@ export function ConversationManageDialog({
   useEffect(() => {
     if (!open) {
       setSearch("")
-      setScopeFolderId(folderId)
+      setScopeFolderId(folderId ?? null)
       setBranchFilter(ALL_BRANCHES)
       setAgentFilter("all")
       setStatusFilter("all")
       setSelected(new Map())
       setConfirmDelete(false)
       setError(null)
+      setContentSnippets(new Map())
+      setContentSearchUnavailable(false)
     }
   }, [open, folderId])
 
@@ -627,26 +641,72 @@ export function ConversationManageDialog({
       // dialog excludes.
       if (queryFolderIds.length === 0) {
         setRows([])
+        setContentSnippets(new Map())
+        setContentSearchUnavailable(false)
         setError(null)
         setLoading(false)
         return
       }
       setLoading(true)
       try {
-        const data = await listAllConversations({
-          folder_ids: queryFolderIds,
-          search: search.trim() || null,
-          agent_type: agentFilter === "all" ? null : agentFilter,
-          status: statusFilter === "all" ? null : statusFilter,
-        })
+        const normalizedSearch = search.trim()
+        const [metadataResult, contentResult] = await Promise.allSettled([
+          listAllConversations({
+            folder_ids: queryFolderIds,
+            search: normalizedSearch || null,
+            agent_type: agentFilter === "all" ? null : agentFilter,
+            status: statusFilter === "all" ? null : statusFilter,
+          }),
+          normalizedSearch.length >= 2
+            ? searchSessionContent({
+                query: normalizedSearch,
+                folder_ids: queryFolderIds,
+                agent_type: agentFilter === "all" ? null : agentFilter,
+                limit: 50,
+              })
+            : Promise.resolve(null),
+        ])
         if (cancelled) return
-        const sorted = [...data].sort(
+        if (metadataResult.status === "rejected") {
+          throw metadataResult.reason
+        }
+        const snippets = new Map<number, string>()
+        const merged = new Map(
+          metadataResult.value.map((conversation) => [
+            conversation.id,
+            conversation,
+          ])
+        )
+        if (
+          contentResult.status === "fulfilled" &&
+          contentResult.value?.available
+        ) {
+          for (const hit of contentResult.value.results) {
+            if (
+              statusFilter !== "all" &&
+              hit.conversation.status !== statusFilter
+            ) {
+              continue
+            }
+            merged.set(hit.conversation.id, hit.conversation)
+            snippets.set(hit.conversation.id, hit.snippet)
+          }
+        }
+        setContentSnippets(snippets)
+        setContentSearchUnavailable(
+          normalizedSearch.length >= 2 &&
+            (contentResult.status === "rejected" ||
+              contentResult.value?.available === false)
+        )
+        const sorted = [...merged.values()].sort(
           (a, b) => parseTimestamp(b.created_at) - parseTimestamp(a.created_at)
         )
         setRows(sorted)
         setError(null)
       } catch (e) {
         if (cancelled) return
+        setContentSnippets(new Map())
+        setContentSearchUnavailable(false)
         setError(toErrorMessage(e))
       } finally {
         // A superseded run must leave the flag alone: its successor is in
@@ -750,6 +810,21 @@ export function ConversationManageDialog({
   )
   const selectedCount = selected.size
 
+  const openConversation = useCallback(
+    (conversation: DbConversationSummary) => {
+      openConversations()
+      openTab(
+        conversation.folder_id,
+        conversation.id,
+        conversation.agent_type,
+        true,
+        formatConversationTitle(conversation.title)
+      )
+      onOpenChange(false)
+    },
+    [onOpenChange, openConversations, openTab]
+  )
+
   const handleBulkDelete = useCallback(async () => {
     if (selectedConversations.length === 0) return
     setPending(true)
@@ -834,6 +909,11 @@ export function ConversationManageDialog({
                 className="h-9 ps-9"
               />
             </div>
+            {contentSearchUnavailable && (
+              <p className="px-1 text-xs text-muted-foreground">
+                {t("contentSearchUnavailable")}
+              </p>
+            )}
             {/* Four across once the dialog is at its `max-w-3xl` width, 2x2
                 below that. */}
             <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
@@ -959,6 +1039,7 @@ export function ConversationManageDialog({
                       <div
                         key={conv.id}
                         onClick={() => toggleOne(conv)}
+                        onDoubleClick={() => openConversation(conv)}
                         className={cn(
                           "flex items-center gap-2 rounded-md px-2 py-1.5 cursor-pointer border border-transparent",
                           "hover:bg-accent/50",
@@ -984,9 +1065,19 @@ export function ConversationManageDialog({
                           agentType={conv.agent_type}
                           className="h-4 w-4 shrink-0"
                         />
-                        <span className="flex-1 min-w-0 truncate text-sm">
-                          {formatConversationTitle(conv.title) ||
-                            t("untitledConversation")}
+                        <span className="flex min-w-0 flex-1 flex-col">
+                          <span className="truncate text-sm">
+                            {formatConversationTitle(conv.title) ||
+                              t("untitledConversation")}
+                          </span>
+                          {contentSnippets.has(conv.id) && (
+                            <span className="flex min-w-0 items-start gap-1 text-xs text-muted-foreground">
+                              <MessageSquareText className="mt-0.5 h-3 w-3 shrink-0" />
+                              <span className="line-clamp-2 whitespace-pre-line">
+                                {contentSnippets.get(conv.id)}
+                              </span>
+                            </span>
+                          )}
                         </span>
                         {showFolderColumn ? (
                           // Workspace-wide scope only: with rows from every
@@ -1062,6 +1153,19 @@ export function ConversationManageDialog({
               {t("selectedCount", { count: selectedCount })}
             </span>
             <div className="flex flex-wrap items-center gap-2">
+              <Button
+                size="sm"
+                variant="default"
+                disabled={selectedCount !== 1 || pending}
+                onClick={() => {
+                  const [conversation] = selectedConversations
+                  if (conversation) openConversation(conversation)
+                }}
+              >
+                <PanelTopOpen className="mr-1 h-3.5 w-3.5" />
+                {t("openSelected")}
+              </Button>
+
               {/* Set status */}
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
