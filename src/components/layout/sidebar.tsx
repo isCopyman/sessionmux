@@ -71,6 +71,7 @@ import { cn } from "@/lib/utils"
 import { WorkbenchTree } from "@/components/workbench/workbench-tree"
 import { ConversationManageDialog } from "@/components/conversations/conversation-manage-dialog"
 import { CollectionTree } from "@/components/collections/collection-tree"
+import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 
 // Keyboard-shortcut hint at the trailing edge of the New chat / Search rows.
 // Mirrors the folder count badge exactly — same chip (0.9375rem height,
@@ -139,6 +140,7 @@ export function Sidebar() {
   const t = useTranslations("Folder.sidebar")
   const { isOpen, toggle } = useSidebarContext()
   const { activeFolder } = useActiveFolder()
+  const allFolders = useAppWorkspaceStore((state) => state.allFolders)
   const { openNewConversationTab, openChatModeTab, openTab } = useTabActions()
   const { setOpen: setSearchOpen } = useSearchDialog()
   const { unseenFailures } = useAutomationsView()
@@ -292,6 +294,16 @@ export function Sidebar() {
       )
     },
     [openConversations, openTab]
+  )
+
+  const handleNewSessionAtPath = useCallback(
+    (rootFolderId: number) => {
+      const root = allFolders.find((folder) => folder.id === rootFolderId)
+      if (!root) return
+      openConversations()
+      openNewConversationTab(root.id, root.path)
+    },
+    [allFolders, openConversations, openNewConversationTab]
   )
 
   if (!isOpen) return null
@@ -578,6 +590,7 @@ export function Sidebar() {
           sortMode={sortMode}
           refreshKey={collectionRefreshKey}
           onOpenSession={handleOpenCollectionSession}
+          onNewSession={handleNewSessionAtPath}
           onOpenScope={(scope) => {
             setSessionCenterCollection(scope)
             setSessionCenterOpen(true)

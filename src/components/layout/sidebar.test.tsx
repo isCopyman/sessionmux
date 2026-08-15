@@ -29,6 +29,7 @@ const spies = vi.hoisted(() => ({
 }))
 const mockState = vi.hoisted(() => ({
   activeFolder: { id: 7, path: "/x" } as { id: number; path: string } | null,
+  allFolders: [{ id: 7, path: "/x" }],
 }))
 
 // The conversation list is irrelevant here — stub it so the test exercises only
@@ -50,16 +51,23 @@ vi.mock("@/components/workbench/workbench-tree", () => ({
 vi.mock("@/components/collections/collection-tree", () => ({
   CollectionTree: ({
     onOpenScope,
+    onNewSession,
     showSessions,
   }: {
     onOpenScope: (scope: number | "unclassified") => void
+    onNewSession?: (rootFolderId: number) => void
     showSessions?: boolean
   }) => {
     spies.collectionShowsSessions = showSessions === true
     return (
-      <button type="button" onClick={() => onOpenScope(42)}>
-        Research collection
-      </button>
+      <>
+        <button type="button" onClick={() => onOpenScope(42)}>
+          Research collection
+        </button>
+        <button type="button" onClick={() => onNewSession?.(7)}>
+          New session at path
+        </button>
+      </>
     )
   },
 }))
@@ -81,6 +89,10 @@ vi.mock("@/contexts/sidebar-context", () => ({
 }))
 vi.mock("@/contexts/active-folder-context", () => ({
   useActiveFolder: () => ({ activeFolder: mockState.activeFolder }),
+}))
+vi.mock("@/stores/app-workspace-store", () => ({
+  useAppWorkspaceStore: (selector: (state: unknown) => unknown) =>
+    selector({ allFolders: mockState.allFolders }),
 }))
 vi.mock("@/contexts/tab-context", () => ({
   useTabActions: () => ({
@@ -222,6 +234,12 @@ describe("Sidebar — fixed New chat / Search region", () => {
     expect(localStorage.getItem("workspace:sidebar-organization-mode")).toBe(
       "collections"
     )
+
+    await user.keyboard("{Escape}")
+    await user.click(
+      screen.getByRole("button", { name: "New session at path" })
+    )
+    expect(spies.openNewConversationTab).toHaveBeenCalledWith(7, "/x")
   })
 
   it("keeps organization choice in View options instead of a second tab row", async () => {

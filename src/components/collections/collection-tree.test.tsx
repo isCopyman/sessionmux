@@ -51,6 +51,24 @@ const h = vi.hoisted(() => ({
       archived_at: null,
       pinned_at: null,
     },
+    {
+      id: 103,
+      folder_id: 8,
+      title: "Worktree experiment",
+      title_locked: true,
+      agent_type: "codex",
+      status: "in_progress",
+      kind: "regular",
+      model: null,
+      git_branch: "experiment",
+      external_id: "session-103",
+      message_count: 1,
+      child_count: 0,
+      created_at: "2026-06-01T00:00:00.000Z",
+      updated_at: "2026-06-01T00:00:00.000Z",
+      archived_at: null,
+      pinned_at: null,
+    },
   ],
   items: [
     {
@@ -97,15 +115,50 @@ vi.mock("@/stores/app-workspace-store", () => ({
     selector({
       conversations: h.conversations,
       activeFolderId: 7,
-      allFolders: [
+      folders: [
         {
           id: 7,
           name: "project",
+          alias: null,
           path: "/tmp/project",
           parent_id: null,
           kind: "regular",
         },
+        {
+          id: 8,
+          name: "experiment",
+          alias: null,
+          path: "/tmp/project-worktrees/experiment",
+          parent_id: 7,
+          kind: "worktree",
+        },
       ],
+      allFolders: [
+        {
+          id: 7,
+          name: "project",
+          alias: null,
+          path: "/tmp/project",
+          parent_id: null,
+          kind: "regular",
+        },
+        {
+          id: 8,
+          name: "experiment",
+          alias: null,
+          path: "/tmp/project-worktrees/experiment",
+          parent_id: 7,
+          kind: "worktree",
+        },
+      ],
+    }),
+}))
+
+vi.mock("@/contexts/tab-context", () => ({
+  useTabStore: (selector: (state: unknown) => unknown) =>
+    selector({
+      activeTabId: "conv-102",
+      tabs: [{ id: "conv-102", conversationId: 102 }],
     }),
 }))
 
@@ -118,6 +171,7 @@ function renderTree(
   options: {
     showSessions?: boolean
     onOpenSession?: (session: DbConversationSummary) => void
+    onNewSession?: (rootFolderId: number) => void
   } = {}
 ) {
   render(
@@ -163,12 +217,22 @@ describe("CollectionTree", () => {
 
   it("expands Collections into inline Sessions and keeps Unclassified visible", async () => {
     const onOpenSession = vi.fn()
+    const onNewSession = vi.fn()
     const { user } = renderTree(vi.fn(), {
       showSessions: true,
       onOpenSession,
+      onNewSession,
     })
 
+    expect(await screen.findByText("project")).toBeTruthy()
     expect(await screen.findByText("Loose notes")).toBeTruthy()
+    expect(await screen.findByText("Worktree experiment")).toBeTruthy()
+    expect(
+      document.querySelector('[data-focused-session="true"]')?.textContent
+    ).toContain("Loose notes")
+    expect(document.querySelectorAll("[data-collection-path]")).toHaveLength(1)
+    await user.click(screen.getByRole("button", { name: "New chat · project" }))
+    expect(onNewSession).toHaveBeenCalledWith(7)
     await user.click(screen.getByRole("button", { name: "Research" }))
     await user.click(screen.getByTitle("Sources"))
     await user.click(await screen.findByText("Evidence review"))

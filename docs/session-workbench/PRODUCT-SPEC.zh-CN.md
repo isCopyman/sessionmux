@@ -12,7 +12,7 @@
 它首先是一个 **Session 管理器和工作台**，不是 Issue 系统、Agent 团队平台，也不是新的
 Harness。多 Agent 协作可以以后叠加，但不应成为使用普通 Session 的前置步骤。
 
-### 当前开发进度（2026-08-15）
+### 当前开发进度（2026-08-16）
 
 已经落地的基础包括：Codex Desktop 人工会话名优先显示；数据库中的命名 Workbench；侧栏创建、
 重命名、删除和切换；不同 Workbench 的 Session 标签、分屏树、活动项及未发送草稿分别恢复；
@@ -25,19 +25,23 @@ Enter 或明确按钮才把 Session 加入或聚焦当前 Workbench。每条结�
 搜索仍只有一个输入框，旁边可明确限制为“标题与元数据”或“会话正文”，默认同时搜索两者。
 Session 现有独立归档状态：可在会话中心批量归档、切到归档视图并恢复；归档不会改变进度状态、
 关闭 Workbench 标签、停止运行或删除原生历史。
-Collection 的第一批可用闭环也已落地：侧栏显示可嵌套分类树和“未分类”，可创建、重命名、
+Collection 的第一批可用闭环也已落地：按分类视图采用 `Path → Collection → Session`，每个
+canonical Path 下显示可嵌套分类树和自己的“未分类”，可创建、重命名、
 移动或删除分类；会话中心可按某个分类及全部子分类筛选，也可把多条 Session 批量移入同一个
 分类。每个 Session 最多一个主要分类；删除分类只让其中 Session 回到“未分类”，子分类上移
 一级，不修改 cwd、Folder、worktree、Workbench 标签或运行状态。左栏现在把全部命名 Workbench
 显示成可展开树，当前工作台默认展开并高亮，每个工作台下面直接列出其中 Session；Collection
-展开后也可直接显示成员 Session。原来的 Folder 会话树**没有删除**，并重新作为默认 Session 树；
+展开后也可直接显示成员 Session，worktree Session 仍按真实 cwd 运行，但整理时归入它的 canonical
+Path。原来的 Folder 会话树**没有删除**，并重新作为默认 Session 树；
 它继续承担按唯一 cwd、仓库、分支和 worktree 浏览及创建 Session 的入口。Collection 是可从视图
 菜单切入的语义整理方式，也可在会话中心筛选和批量维护；侧栏不再为两种组织方式永久占用一行
 平级标签。
 Session 标签（包括尚未发送的新会话草稿）可拖到当前或其他 Pane：中央约 40% × 40% 的区域表示
 加入该标签组，中央以外按最近方向显示半屏吸附预览，松手即建立左、右、上或下分屏。投放预览
-带边界迟滞，拖动过程中只更新视觉预览，放下时才提交一次布局；组内换序和跨 Pane 移动不会重启
-Harness 或清空已加载的消息。ctx 不可用时自动退化为元数据搜索。
+带边界迟滞。拖起后原 Tab 留在原位并降权显示，鼠标下只移动浮动副本；回到原 Tab 条松手才一次
+提交排序，进入 Pane 内容区后只计算布局，不再让排序和吸附互相抢写。左侧 Workbench Session 与
+顶部 Tab 使用同一焦点状态做轻量标记。组内换序和跨 Pane 移动不会重启 Harness 或清空已加载的
+消息。ctx 不可用时自动退化为元数据搜索。
 
 窗口顶部现已显示 Workbench 标签，Session 标签位于其下；点击工作台会恢复整套 Session 和分屏，
 恢复目标显示加载状态，`+` 可立即创建一套工作台。工作台可置顶，也可用拖拽、右键菜单或键盘
@@ -63,16 +67,20 @@ Session 是最核心的资产。它保留原 Harness 的身份、历史和 Resum
 
 ### 2.2 Collection：长期放在哪里
 
-Collection 类似文件夹，回答“以后去哪里找到这段对话或工作现场”。它可以任意嵌套：
+Collection 类似某个项目路径下的文件夹，回答“以后去哪里找到这段对话或工作现场”。它可以在
+自己的 canonical Path 下任意嵌套：
 
 ```text
-项目 A
+Path：项目 A
 ├── 资料调查
 ├── 方案设计
-└── 结果审查
+└── 未分类
 ```
 
-Project、Theme、Chapter、Subproject 都不必成为新对象；用户给某层 Collection 起相应名字即可。
+Theme、Chapter、Subproject 都不必成为新对象；用户给某层 Collection 起相应名字即可。Path 是
+真实 cwd/worktree 的执行边界，不需要用户把它再手工复制成一层 Collection；第一版一个 Collection
+只属于一个 canonical Path，不能把多个 Path 的 Session 混装进同一 Collection。跨 Path 的临时
+组合由 Workbench 完成。
 一个 Session 第一版只有一个主要位置，也可以暂时处于“未分类”。一个 Workbench 同样可以选择
 一个主要 Collection 作为它在树中的位置；这只负责找回工作台，不限制其中 Session 来自哪些
 Collection 或路径。最近、收藏和搜索结果只是引用，不会制造多份归属。
@@ -82,14 +90,14 @@ Collection 不改变 Session 的 cwd、Folder、worktree、模型或权限。移
 
 左栏保留一个很轻的“当前打开 / 最近 Workbench”快捷区。普通浏览默认沿用 Folder/cwd 树，保证
 从路径创建、导入、分支和 worktree 等高频入口不消失；需要按主题整理时，从视图菜单切到
-Collection 树，或进入会话中心批量维护：
+以 Path 为根的 Collection 树，或进入会话中心批量维护：
 
 ```text
 [按分类]  [按运行位置]
 ```
 
-“按分类”显示可嵌套 Collection，里面可以放 Session 和 Workbench；“按运行位置”沿用原来的
-Folder/cwd、仓库和 worktree 树，并作为默认视图。路径下 Session 很多时，可以再选择仅用于显示的
+“按分类”显示 `Path → Collection → Session`，每个 Path 内可嵌套 Collection；“按运行位置”沿用
+原来的 Folder/cwd、仓库和 worktree 树，并作为默认视图。路径下 Session 很多时，可以再选择仅用于显示的
 `路径 → Harness → Session` 分组。两种视图引用同一批 Session，不复制历史，也不改变归属；
 把 Session 拖进 Collection 只改变语义归档，绝不改变它的 cwd。
 
@@ -126,9 +134,9 @@ Workbench 中被引用，底层仍是同一段对话。Workbench 自己可以像
 │ │ ├ Claude       │ ┌────────────┬─────────────────┐ │ 当前 Session    │
 │ │ └ Codex        │ │ Claude     │ Codex           │ │ 属性 / 文件     │
 │ [按分类][按位置]   │ │ Session A  │ Session B       │ │ 网页 / Diff     │
-│ 主题 A            │ ├────────────┴─────────────────┤ │                 │
+│ Path：项目 A      │ ├────────────┴─────────────────┤ │                 │
 │ ├ 资料调查        │ │ Gemini Session C              │ │                 │
-│ └ ▣ 方案讨论      │ └──────────────────────────────┘ │                 │
+│ └ 未分类          │ └──────────────────────────────┘ │                 │
 └──────────────────┴──────────────────────────────────┴─────────────────┘
 ```
 
@@ -185,7 +193,8 @@ Workbench 中被引用，底层仍是同一段对话。Workbench 自己可以像
 3. 全局“新建会话”默认沿用当前活动 Session 的执行位置；没有活动 Session 时使用该 Workbench
    最近一次创建会话所用的位置，仍允许发送前修改；
 4. “打开文件夹”会把新路径加入可复用的位置列表并持久保存，以后不必重新输入；
-5. 从某个 Collection 新建时，Collection 只作为语义归档目标，执行路径仍由上面的选择器决定；
+5. 从某个 Path 或其 Collection 新建时，默认使用该 canonical Path；发送前仍可明确改选另一个
+   Path，改选后不能继续自动归入原 Collection；
 6. 导入原生 Session 时按它真实记录的 cwd 放入运行位置视图，并可在同一步选择 Collection。
 
 因此可以同时做到“按项目路径开始工作”和“按人类主题整理历史”。把 Session 拖入 Collection
@@ -412,14 +421,14 @@ Enter 才打开。IDE 式“一次性预览标签”可以保留为偏好设置�
 ```
 
 - “按运行位置”用于唯一 Folder/cwd、仓库、分支和 worktree，是默认且由 Execution Context
-  派生的系统视图；“按分类”用于主题、子项目和长期归档。两者引用同一批 Session，不是两套
-  Session，也不会相互改写。
+  派生的系统视图；“按分类”仍以 canonical Path 为根，再在其下显示主题、子项目和长期归档。
+  两者引用同一批 Session，不是两套 Session，也不会相互改写。
 - Collection 拖放通过会话中心、Session 菜单或未来的轻量投放目标完成；反向投放绝不用于改变
   cwd，避免把分类操作误解成移动项目文件或重写原生 Session 的执行上下文。
 - “按运行位置”默认 `路径 → Session`；同一路径混有大量 Harness 时可切换为
   `路径 → Harness → Session`。Harness 层只是显示分组，不创建目录或复制 Session。
-- 点击 Collection 树后，列表进入该 Collection 及其子目录，并显示可清除的 `Collection: 名称`
-  范围标签；不再额外提供含义模糊的“当前 Collection”按钮。
+- Collection 在所属 Path 下直接展开；需要跨目录筛选和批量整理时，再进入会话中心并显示可清除的
+  `Collection: 名称`范围标签，不额外提供含义模糊的“当前 Collection”按钮。
 - 运行中、等待处理、收藏、最近、未分类和归档是快捷视图或筛选标签，不是新层级。
 - Harness、状态、cwd 和活动时间放进轻量筛选弹层。
 - 搜索默认作用于当前范围，并始终提供“在全部 Session 中搜索”。
@@ -603,7 +612,8 @@ Session 本身先作为最原始、可追溯的知识资产。自动提炼共识
 2. 当前工作台/全部范围、Collection 范围标签和轻量筛选；
 3. 可命名、可切换、可恢复的 Workbench；
 4. 拖边吸附分屏和布局持久化；
-5. 默认路径树保留新建、导入、Folder、分支和 worktree 操作，并可从视图菜单进入 Collection；
+5. 默认位置树保留新建、导入、Folder、分支和 worktree 操作；分类视图采用
+   `Path → Collection → Session`，并保留按 Path 新建 Session 的入口；
 6. 重启后恢复上次工作现场。
 
 P0 + P1 完成后，Codeg 就应能承担“多 Harness + Session 分组管理 + 分屏 GUI”的核心需求。
