@@ -1894,6 +1894,33 @@ describe("TabProvider tab groups", () => {
     expect(leaves()).toHaveLength(2)
   })
 
+  it("exposes the workbench being restored until its snapshot is mounted", async () => {
+    const mainItems = [tabItem(1, 1, true)]
+    let resolveTarget!: (value: { items: OpenedTab[]; version: number }) => void
+    listWorkbenchTabsMock.mockReturnValue(
+      new Promise((resolve) => {
+        resolveTarget = resolve
+      })
+    )
+    await renderWithTabs(mainItems)
+
+    let pending!: Promise<void>
+    act(() => {
+      pending = store().switchWorkbench(2)
+    })
+    expect(store().activeWorkbenchId).toBe(1)
+    expect(store().switchingWorkbench).toBe(true)
+    expect(store().switchingWorkbenchId).toBe(2)
+
+    await act(async () => {
+      resolveTarget({ items: [tabItem(2, 3, true)], version: 2 })
+      await pending
+    })
+    expect(store().activeWorkbenchId).toBe(2)
+    expect(store().switchingWorkbench).toBe(false)
+    expect(store().switchingWorkbenchId).toBeNull()
+  })
+
   it("split-and-move creates a second group with the tab and focuses it", async () => {
     await renderWithTabs([tabItem(1, 1, true), tabItem(1, 2)])
     const home = leaves()[0]

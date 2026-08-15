@@ -832,12 +832,13 @@ Collection 范围行只在用户选中目录时出现；筛选行只在快捷视
 - [x] 增加创建、命名、切换、删除和基础恢复；
 - [x] 完成默认 Workbench 迁移，并保留旧 API 与默认布局键兼容；
 - [x] 让“当前 Workbench”属于物理窗口的会话状态，避免多个窗口共享焦点；
+- [x] 增加一个 App Window 内的顶部 Workbench 标签栏，并显示正在恢复的目标；
 - [ ] 增加复制、排序、归档和最近关闭恢复；
-- [ ] 增加一个 App Window 内的顶部 Workbench 标签栏；
 - [ ] 增加 Workbench 元数据跨窗口事件及系统窗口 mount。
 
 当前实现是 Milestone 2 的可用基础，不代表 Milestone 已完成。侧栏切换器已能恢复不同 Session
-组合和分屏布局；顶部工作台标签、物理多窗口和同一 Session 多视图同步仍属于后续子阶段。
+组合和分屏布局，顶部标签提供当前窗口的快速切换；复制/排序、物理多窗口和同一 Session 多视图
+同步仍属于后续子阶段。
 
 ### Milestone 3：Collection
 

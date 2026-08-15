@@ -179,6 +179,9 @@ export interface TabStoreState {
    * split layout are currently mounted. */
   activeWorkbenchId: number
   switchingWorkbench: boolean
+  /** Target being restored while activeWorkbenchId still names the mounted
+   * surface. Null when no switch is in flight. */
+  switchingWorkbenchId: number | null
 
   // ── Mutations ──────────────────────────────────────────────────────────────
   openTab: (
@@ -1191,6 +1194,7 @@ function initialTabState() {
     saveReconcileTick: 0,
     activeWorkbenchId,
     switchingWorkbench: false,
+    switchingWorkbenchId: null,
   }
 }
 
@@ -2060,7 +2064,7 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
     }
 
     const epoch = ++workbenchSwitchEpoch
-    set({ switchingWorkbench: true })
+    set({ switchingWorkbench: true, switchingWorkbenchId: workbenchId })
 
     // Commit the current workbench before replacing the mounted tab set. This
     // bypasses the ordinary 500ms debounce so a quick switch cannot strand the
@@ -2134,12 +2138,20 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
       recomputeTabs()
 
       installHydratedSnapshot(snap)
-      set({ tabsHydrated: true, switchingWorkbench: false })
+      set({
+        tabsHydrated: true,
+        switchingWorkbench: false,
+        switchingWorkbenchId: null,
+      })
       applyGroupInvariants()
       persistGroupState()
     } catch (error) {
       if (epoch === workbenchSwitchEpoch) {
-        set({ switchingWorkbench: false, tabsHydrated: true })
+        set({
+          switchingWorkbench: false,
+          switchingWorkbenchId: null,
+          tabsHydrated: true,
+        })
       }
       throw error
     }

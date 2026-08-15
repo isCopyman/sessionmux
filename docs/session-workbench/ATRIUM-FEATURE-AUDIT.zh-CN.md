@@ -149,7 +149,7 @@ Atrium 的 Wing/Room 可以作为侧栏、拖拽和恢复交互的参考，但�
 | 拖 Pane 到边缘创建 split | 已支持标签拖到四边新建 Pane、中央加入既有 Pane，并显示吸附预览 | ✅ | 已完成 #456 的单窗口吸附部分；物理窗口仍后置 |
 | Pane 最大化、交换、等分、锁比例 | 部分布局操作，未形成 Atrium 完整交互 | ◐ | 最大化/等分优先，其他按反馈补 |
 | Popout overlay、Resident dock | 无等价完整机制 | ❌ | 可后置，不是核心 |
-| 水平 Room Tab / 垂直 Room Sidebar | 只有 Folder/Session 侧栏和主 Tab | ◐ | Workbench 切换器 + Session Library 优先 |
+| 水平 Room Tab / 垂直 Room Sidebar | 已有顶部 Workbench 标签和侧栏管理入口；尚缺打开/关闭挂载及跨窗口拖动 | ◐ | 先补复制、排序和挂载状态，再做物理多窗口 |
 | Favorites、settled/hidden、运行状态徽标 | 有 pinned/opened/status 的部分基础 | ◐ | 纳入 Quick Access |
 | Library：保存 Room/Pane 模板 | 无正式 Library | ❌ | 先做“保存/复制 Workbench” |
 | 最近关闭 Room/Pane 并完整恢复 | 关闭 Tab 不删 Session，但无完整状态历史 | ◐ | P1：最近关闭与撤销 |

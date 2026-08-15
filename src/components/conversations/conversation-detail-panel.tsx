@@ -65,14 +65,6 @@ import { GroupSplitHandle } from "@/components/conversations/group-split-handle"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { TabBar } from "@/components/tabs/tab-bar"
 import { TabDragGhost } from "@/components/tabs/tab-drag-ghost"
-import { useSidebarContext } from "@/contexts/sidebar-context"
-import { useAuxPanelContext } from "@/contexts/aux-panel-context"
-import { useWorkspaceView } from "@/contexts/workspace-context"
-import { useIsMobile } from "@/hooks/use-mobile"
-import { usePlatform } from "@/hooks/use-platform"
-import { useZoomLevel } from "@/hooks/use-appearance"
-import { isDesktop } from "@/lib/platform"
-import { leftChromeReserve, rightChromeReserve } from "@/lib/window-chrome"
 import {
   acpFork,
   createChatConversation,
@@ -1924,10 +1916,6 @@ const ConversationTabView = memo(function ConversationTabView({
   )
 })
 
-// A group rect (percentages) counts as touching a container edge within this
-// tolerance — ratio math can land a hair off exact 0 / 100.
-const GROUP_EDGE_EPSILON = 0.1
-
 function splitDropOverlayPosition(edge: SplitDropEdge | null): string {
   switch (edge) {
     case "left":
@@ -1941,44 +1929,6 @@ function splitDropOverlayPosition(edge: SplitDropEdge | null): string {
     default:
       return "inset-0"
   }
-}
-
-/**
- * Corner reserve for a TOP-EDGE split-group strip. While split there is no
- * dedicated title-bar row above the shells (the workspace layout drops it
- * entirely instead of leaving a blank drag strip), so the strips along the
- * window's top edge must reserve the fixed corner overlays' width themselves —
- * exactly what the unsplit strip row does: left for LeftEdgeChrome while the
- * sidebar is collapsed (the conversation column then owns the window's left
- * edge), right for RightEdgeChrome while the column owns the right edge (aux
- * panel closed + conversation mode). Mobile shows the full-width
- * FolderTitleBar instead of corner overlays — no reserve. Self-subscribed so
- * sidebar/aux/zoom toggles re-render these slivers, not the whole panel.
- */
-function SplitStripCornerReserve({ side }: { side: "left" | "right" }) {
-  const isMobile = useIsMobile()
-  const { isOpen: sidebarOpen } = useSidebarContext()
-  const { isOpen: auxOpen } = useAuxPanelContext()
-  const { mode } = useWorkspaceView()
-  const { isMac, isWindows, isLinux } = usePlatform()
-  const { zoomLevel } = useZoomLevel()
-  if (isMobile) return null
-  const width =
-    side === "left"
-      ? sidebarOpen
-        ? 0
-        : leftChromeReserve(isMac && isDesktop(), zoomLevel)
-      : !auxOpen && mode === "conversation"
-        ? rightChromeReserve(isDesktop() && (isWindows || isLinux), zoomLevel)
-        : 0
-  if (width <= 0) return null
-  return (
-    <div
-      data-tauri-drag-region
-      className="h-full shrink-0 ws-strip-line"
-      style={{ width }}
-    />
-  )
 }
 
 export function ConversationDetailPanel() {
@@ -2445,13 +2395,6 @@ export function ConversationDetailPanel() {
     if (!rect) return null
     const groupTabs = tabsByGroup.get(groupId) ?? []
     const canTileG = !!tileByGroup[groupId] && groupTabs.length > 1
-    // Only the TOP-edge strips sit under the fixed corner overlays (the split
-    // layout has no title-bar row above them) — the leftmost/rightmost of that
-    // row carry the corner reserves the unsplit strip row normally provides.
-    const touchesTop = rect.y <= GROUP_EDGE_EPSILON
-    const touchesLeft = touchesTop && rect.x <= GROUP_EDGE_EPSILON
-    const touchesRight =
-      touchesTop && rect.x + rect.w >= 100 - GROUP_EDGE_EPSILON
     // The group's SELECTED tab drives its header — each split group keeps the
     // full "tabs + conversation title bar" pairing of the unsplit layout.
     const selTab =
@@ -2477,14 +2420,11 @@ export function ConversationDetailPanel() {
           height: `${rect.h}%`,
         }}
       >
-        {/* While split, each group owns its own strip (the workspace layout's
-            title-bar row is gone entirely), and the TOP-edge strips add the
-            corner reserves that row normally carries. */}
+        {/* While split, each group owns its own Session strip below the shared
+            window-level Workbench strip. */}
         {isSplit && (
           <div className="flex h-10 shrink-0 items-stretch bg-muted ws-transparent-bg">
-            {touchesLeft && <SplitStripCornerReserve side="left" />}
             <TabBar groupId={groupId} />
-            {touchesRight && <SplitStripCornerReserve side="right" />}
           </div>
         )}
         {isSplit && selTab && (

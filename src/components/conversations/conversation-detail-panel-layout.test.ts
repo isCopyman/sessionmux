@@ -262,29 +262,24 @@ describe("ConversationDetailPanel split-group render model", () => {
     expect(source).toContain("{!isSplit && activeTab && (")
   })
 
-  // While split the workspace layout drops its title-bar strip row ENTIRELY —
-  // no blank drag row above the shells. The window-drag surface moves into the
-  // group strips instead: every strip's tail spacer is a drag region, and the
-  // TOP-edge strips re-create the corner reserves (traffic lights / caption
-  // buttons / chrome clusters) the unsplit row normally provides.
-  it("replaces the unsplit title-bar row with in-strip drag surfaces while split", () => {
+  // Workbench tabs now own the window-level chrome row. Session strips sit one
+  // level below it, so split-group strips no longer duplicate corner reserves.
+  it("keeps one shared workbench chrome row above split session strips", () => {
     // Layout: the whole h-10 conversation top bar is gated on !isConvSplit;
     // the old always-rendered row with a split drag-region branch is gone.
     expect(workspaceLayoutSource).toContain("{!isConvSplit && (")
     expect(workspaceLayoutSource).not.toContain("hasConvTabs && !isConvSplit")
+    expect(workspaceLayoutSource).toContain("<WorkbenchTabStrip")
 
-    // Panel: TOP-edge group strips carry the corner reserves themselves.
+    // Panel: every split group has a Session strip, but fixed window controls
+    // are reserved only once by the Workbench strip above the panel tree.
     const shellStart = source.indexOf("const renderGroupShell = (groupId")
     const shellBody = source.slice(shellStart, shellStart + 6000)
-    expect(shellBody).toContain(
-      '{touchesLeft && <SplitStripCornerReserve side="left" />}'
-    )
-    expect(shellBody).toContain(
-      '{touchesRight && <SplitStripCornerReserve side="right" />}'
-    )
+    expect(shellBody).toContain("<TabBar groupId={groupId} />")
+    expect(shellBody).not.toContain("SplitStripCornerReserve")
 
-    // Tab bar: the tail spacer is a window-drag region on EVERY strip (group
-    // strips are the window's top edge while split), not just the unsplit one.
+    // Session strips retain a spare drag surface, but no longer own the fixed
+    // corner-control geometry.
     expect(tabBarSource).toContain(
       '<div data-tauri-drag-region className="h-full min-w-10 flex-1" />'
     )
