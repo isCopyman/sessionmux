@@ -62,6 +62,9 @@ pub struct Model {
     pub created_at: DateTimeUtc,
     pub updated_at: DateTimeUtc,
     pub deleted_at: Option<DateTimeUtc>,
+    /// User-controlled library state. Archived conversations stay resumable and
+    /// may remain open in workbenches, but are hidden from ordinary lists.
+    pub archived_at: Option<DateTimeUtc>,
     /// When the user pinned this conversation; `None` means not pinned. Drives
     /// the sidebar's "Pinned" section (sorted by this timestamp descending).
     /// Pinning never bumps `updated_at` — it is a view preference, not activity.

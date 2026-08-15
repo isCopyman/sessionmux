@@ -137,6 +137,7 @@ pub async fn search_session_content_core(
     query: String,
     folder_ids: Option<Vec<i32>>,
     agent_type: Option<AgentType>,
+    archived: bool,
     requested_limit: Option<usize>,
 ) -> Result<SessionContentSearchResponse, AppCommandError> {
     let query = query.trim();
@@ -215,10 +216,18 @@ pub async fn search_session_content_core(
             })
         }
     };
-    let conversations =
-        conversation_service::list_all(conn, folder_ids, agent_type, None, None, None, false)
-            .await
-            .map_err(AppCommandError::from)?;
+    let conversations = conversation_service::list_all(
+        conn,
+        folder_ids,
+        agent_type,
+        None,
+        None,
+        None,
+        archived,
+        false,
+    )
+    .await
+    .map_err(AppCommandError::from)?;
 
     Ok(SessionContentSearchResponse {
         available: true,
@@ -234,9 +243,18 @@ pub async fn search_session_content(
     query: String,
     folder_ids: Option<Vec<i32>>,
     agent_type: Option<AgentType>,
+    archived: Option<bool>,
     limit: Option<usize>,
 ) -> Result<SessionContentSearchResponse, AppCommandError> {
-    search_session_content_core(&db.conn, query, folder_ids, agent_type, limit).await
+    search_session_content_core(
+        &db.conn,
+        query,
+        folder_ids,
+        agent_type,
+        archived.unwrap_or(false),
+        limit,
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -260,6 +278,7 @@ mod tests {
             child_count: 0,
             created_at: Utc::now(),
             updated_at: Utc::now(),
+            archived_at: None,
             pinned_at: None,
             parent_id: None,
             parent_tool_use_id: None,

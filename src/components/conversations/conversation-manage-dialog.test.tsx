@@ -14,6 +14,7 @@ const h = vi.hoisted(() => ({
   getTurns: vi.fn(),
   deleteConv: vi.fn(),
   updateStatus: vi.fn(),
+  updateArchive: vi.fn(),
   closeConversationTab: vi.fn(),
   openTab: vi.fn(),
   openConversations: vi.fn(),
@@ -55,6 +56,7 @@ vi.mock("@/lib/api", () => ({
   getFolderConversationTurns: h.getTurns,
   deleteConversation: h.deleteConv,
   updateConversationStatus: h.updateStatus,
+  updateConversationArchive: h.updateArchive,
 }))
 
 vi.mock("@/contexts/tab-context", () => ({
@@ -496,6 +498,77 @@ describe("ConversationManageDialog", () => {
         agent_type: null,
       })
     )
+  })
+
+  it("can search titles without invoking transcript search", async () => {
+    const user = renderDialog()
+    await screen.findByText("on main")
+
+    await user.click(
+      screen.getByRole("combobox", { name: "Search in sessions" })
+    )
+    await user.click(screen.getByRole("option", { name: "Titles & metadata" }))
+    await user.type(
+      screen.getByPlaceholderText(/titles or conversation content/i),
+      "feature"
+    )
+
+    await waitFor(() =>
+      expect(h.listAll).toHaveBeenLastCalledWith(
+        expect.objectContaining({ search: "feature" })
+      )
+    )
+    expect(h.searchContent).not.toHaveBeenCalled()
+  })
+
+  it("can restrict a search to transcript content", async () => {
+    h.searchContent.mockResolvedValue({
+      available: true,
+      results: [
+        {
+          conversation: conversation({ id: 8, title: "content result" }),
+          snippet: "only in the transcript",
+          more_matches: 0,
+        },
+      ],
+    })
+    const user = renderDialog()
+    await screen.findByText("on main")
+    h.listAll.mockClear()
+
+    await user.click(
+      screen.getByRole("combobox", { name: "Search in sessions" })
+    )
+    await user.click(
+      screen.getByRole("option", { name: "Conversation content" })
+    )
+    await user.type(
+      screen.getByPlaceholderText(/titles or conversation content/i),
+      "transcript phrase"
+    )
+
+    expect(await screen.findByText("content result")).toBeTruthy()
+    expect(h.listAll).not.toHaveBeenCalled()
+    expect(h.searchContent).toHaveBeenLastCalledWith(
+      expect.objectContaining({ query: "transcript phrase" })
+    )
+  })
+
+  it("archives without closing the session and offers restore in the archive view", async () => {
+    const user = renderDialog()
+    await screen.findByText("on main")
+
+    await user.click(screen.getByRole("button", { name: "Select on main" }))
+    await user.click(screen.getByRole("button", { name: "Archive" }))
+    await waitFor(() => expect(h.updateArchive).toHaveBeenCalledWith(1, true))
+    expect(h.closeConversationTab).not.toHaveBeenCalled()
+
+    await user.click(screen.getByRole("combobox", { name: "Filter by status" }))
+    await user.click(screen.getByRole("option", { name: "Archived" }))
+    await screen.findByText("on main")
+    await user.click(screen.getByRole("button", { name: "Select on main" }))
+    await user.click(screen.getByRole("button", { name: "Restore" }))
+    await waitFor(() => expect(h.updateArchive).toHaveBeenCalledWith(1, false))
   })
 
   it("previews recent saved messages without opening or resuming the session", async () => {

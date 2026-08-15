@@ -113,6 +113,7 @@ async fn create_inner(
         created_at: Set(now),
         updated_at: Set(now),
         deleted_at: Set(None),
+        archived_at: Set(None),
         pinned_at: Set(None),
         origin_cwd: Set(None),
     };
@@ -283,6 +284,24 @@ pub async fn update_pin(
     Ok(())
 }
 
+/// Archive or restore a conversation without changing its progress status,
+/// activity timestamp, open workbench references, or underlying transcript.
+pub async fn update_archive(
+    conn: &DatabaseConnection,
+    conversation_id: i32,
+    archived: bool,
+) -> Result<(), DbError> {
+    let conv = conversation::Entity::find_by_id(conversation_id)
+        .filter(conversation::Column::DeletedAt.is_null())
+        .one(conn)
+        .await?
+        .ok_or_else(|| DbError::Migration(format!("Conversation not found: {conversation_id}")))?;
+    let mut active: conversation::ActiveModel = conv.into();
+    active.archived_at = Set(archived.then(Utc::now));
+    active.update(conn).await?;
+    Ok(())
+}
+
 /// Persist the agent session id (`external_id`) for a conversation as a single
 /// conditional UPDATE guarded on `deleted_at IS NULL`. A soft-deleted (or
 /// missing) row matches nothing and the call is a silent no-op — it returns Ok
@@ -389,6 +408,7 @@ fn conv_to_summary(r: conversation::Model) -> DbConversationSummary {
         child_count: 0,
         created_at: r.created_at,
         updated_at: r.updated_at,
+        archived_at: r.archived_at,
         pinned_at: r.pinned_at,
         parent_id: r.parent_id,
         parent_tool_use_id: r.parent_tool_use_id,
@@ -534,9 +554,16 @@ pub async fn list_all(
     search: Option<String>,
     sort_by: Option<String>,
     status: Option<String>,
+    archived: bool,
     include_children: bool,
 ) -> Result<Vec<DbConversationSummary>, DbError> {
     let mut query = conversation::Entity::find().filter(conversation::Column::DeletedAt.is_null());
+
+    query = if archived {
+        query.filter(conversation::Column::ArchivedAt.is_not_null())
+    } else {
+        query.filter(conversation::Column::ArchivedAt.is_null())
+    };
 
     // Loop-engineering runs never surface in the workspace conversation list —
     // their entry point is the loops workbench.
@@ -666,7 +693,7 @@ mod tests {
         let folder = seed_folder(&db, "/tmp/codeg-list-children-default").await;
         let (parent, _child) = seed_parent_with_child(&db.conn, folder).await;
 
-        let rows = list_all(&db.conn, None, None, None, None, None, false)
+        let rows = list_all(&db.conn, None, None, None, None, None, false, false)
             .await
             .expect("list");
         let ids: Vec<i32> = rows.iter().map(|r| r.id).collect();
@@ -685,7 +712,7 @@ mod tests {
         let folder = seed_folder(&db, "/tmp/codeg-list-children-on").await;
         let (parent, child) = seed_parent_with_child(&db.conn, folder).await;
 
-        let rows = list_all(&db.conn, None, None, None, None, None, true)
+        let rows = list_all(&db.conn, None, None, None, None, None, false, true)
             .await
             .expect("list");
         let ids: Vec<i32> = rows.iter().map(|r| r.id).collect();
@@ -693,6 +720,47 @@ mod tests {
             ids.contains(&parent) && ids.contains(&child),
             "both parent + child must appear when include_children=true, got: {ids:?}",
         );
+    }
+
+    #[tokio::test]
+    async fn archive_is_independent_and_listable_for_restore() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-archive-session").await;
+        let row = create(
+            &db.conn,
+            folder,
+            AgentType::Codex,
+            Some("archive me".into()),
+            None,
+        )
+        .await
+        .expect("create");
+
+        update_archive(&db.conn, row.id, true)
+            .await
+            .expect("archive");
+        let active = list_all(&db.conn, None, None, None, None, None, false, false)
+            .await
+            .expect("active");
+        assert!(active.iter().all(|item| item.id != row.id));
+
+        let archived = list_all(&db.conn, None, None, None, None, None, true, false)
+            .await
+            .expect("archived");
+        let archived_row = archived
+            .iter()
+            .find(|item| item.id == row.id)
+            .expect("row");
+        assert!(archived_row.archived_at.is_some());
+        assert_eq!(archived_row.status, "in_progress");
+
+        update_archive(&db.conn, row.id, false)
+            .await
+            .expect("restore");
+        let restored = list_all(&db.conn, None, None, None, None, None, false, false)
+            .await
+            .expect("restored");
+        assert!(restored.iter().any(|item| item.id == row.id));
     }
 
     #[tokio::test]
@@ -769,7 +837,7 @@ mod tests {
 
         // The root listing carries the parent's direct-child count so the
         // sidebar knows to show a chevron; the leaf child carries 0.
-        let roots = list_all(&db.conn, None, None, None, None, None, false)
+        let roots = list_all(&db.conn, None, None, None, None, None, false, false)
             .await
             .expect("list");
         let parent_row = roots.iter().find(|r| r.id == parent).expect("parent row");
@@ -822,7 +890,7 @@ mod tests {
 
         // A removed sub-session must not keep the parent's chevron alive: the
         // aggregate filters deleted_at IS NULL, matching list_children.
-        let roots = list_all(&db.conn, None, None, None, None, None, false)
+        let roots = list_all(&db.conn, None, None, None, None, None, false, false)
             .await
             .expect("list");
         let parent_row = roots.iter().find(|r| r.id == parent).expect("parent row");
@@ -1243,7 +1311,7 @@ mod tests {
         active.kind = Set(ConversationKind::Loop);
         active.update(&db.conn).await.expect("flip kind");
 
-        let rows = list_all(&db.conn, None, None, None, None, None, false)
+        let rows = list_all(&db.conn, None, None, None, None, None, false, false)
             .await
             .expect("list");
         assert!(rows.iter().any(|r| r.id == keep.id), "regular row stays");

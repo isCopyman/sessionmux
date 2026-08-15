@@ -14,6 +14,7 @@ pub struct SearchSessionContentParams {
     pub query: String,
     pub folder_ids: Option<Vec<i32>>,
     pub agent_type: Option<AgentType>,
+    pub archived: Option<bool>,
     pub limit: Option<usize>,
 }
 
@@ -27,6 +28,7 @@ pub async fn search_session_content(
             params.query,
             params.folder_ids,
             params.agent_type,
+            params.archived.unwrap_or(false),
             params.limit,
         )
         .await?,

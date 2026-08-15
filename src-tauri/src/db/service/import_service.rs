@@ -439,6 +439,7 @@ async fn import_one(
         created_at: Set(created_at),
         updated_at: Set(updated_at),
         deleted_at: Set(None),
+        archived_at: Set(None),
         pinned_at: Set(None),
         origin_cwd: Set(None),
     };
@@ -998,6 +999,7 @@ mod tests {
             created_at: Set(now),
             updated_at: Set(now),
             deleted_at: Set(None),
+            archived_at: Set(None),
             pinned_at: Set(None),
             origin_cwd: Set(None),
         }

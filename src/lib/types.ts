@@ -419,6 +419,9 @@ export interface DbConversationSummary {
   child_count: number
   created_at: string
   updated_at: string
+  /** Library archive state. Archived sessions remain resumable and can stay
+   *  open in workbenches, but ordinary session lists hide them. */
+  archived_at?: string | null
   /** When the user pinned this conversation (ISO string), or null if not pinned.
    *  Drives the sidebar's "Pinned" section (sorted by this descending); a pinned
    *  conversation is shown there instead of in its folder group. */

@@ -37,6 +37,7 @@ pub async fn list_all_conversations_core(
     search: Option<String>,
     sort_by: Option<String>,
     status: Option<String>,
+    archived: bool,
     include_children: bool,
 ) -> Result<Vec<DbConversationSummary>, AppCommandError> {
     conversation_service::list_all(
@@ -46,6 +47,7 @@ pub async fn list_all_conversations_core(
         search,
         sort_by,
         status,
+        archived,
         include_children,
     )
     .await
@@ -61,6 +63,7 @@ pub async fn list_all_conversations(
     search: Option<String>,
     sort_by: Option<String>,
     status: Option<String>,
+    archived: Option<bool>,
     include_children: Option<bool>,
 ) -> Result<Vec<DbConversationSummary>, AppCommandError> {
     list_all_conversations_core(
@@ -70,6 +73,7 @@ pub async fn list_all_conversations(
         search,
         sort_by,
         status,
+        archived.unwrap_or(false),
         include_children.unwrap_or(false),
     )
     .await
@@ -2041,6 +2045,29 @@ pub async fn update_conversation_status(
     Ok(())
 }
 
+pub async fn update_conversation_archive_core(
+    conn: &sea_orm::DatabaseConnection,
+    conversation_id: i32,
+    archived: bool,
+) -> Result<(), AppCommandError> {
+    conversation_service::update_archive(conn, conversation_id, archived)
+        .await
+        .map_err(AppCommandError::from)
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn update_conversation_archive(
+    app: tauri::AppHandle,
+    db: tauri::State<'_, AppDatabase>,
+    conversation_id: i32,
+    archived: bool,
+) -> Result<(), AppCommandError> {
+    update_conversation_archive_core(&db.conn, conversation_id, archived).await?;
+    emit_conversation_upsert(&EventEmitter::Tauri(app), &db.conn, conversation_id).await;
+    Ok(())
+}
+
 pub async fn update_conversation_title_core(
     conn: &sea_orm::DatabaseConnection,
     conversation_id: i32,
@@ -2273,6 +2300,7 @@ mod tests {
             child_count: 0,
             created_at: now,
             updated_at: now,
+            archived_at: None,
             pinned_at: None,
             parent_id: Some(1),
             parent_tool_use_id: Some(parent_tool_use_id.into()),
@@ -2942,7 +2970,7 @@ mod tests {
 
         // It surfaces in the default sidebar query (active-folder scope).
         let rows =
-            list_all_conversations_core(&db.conn, None, None, None, None, None, false)
+            list_all_conversations_core(&db.conn, None, None, None, None, None, false, false)
                 .await
                 .expect("list");
         assert!(rows.iter().any(|c| c.id == result.conversation_id));
@@ -3332,9 +3360,10 @@ mod tests {
     #[tokio::test]
     async fn list_all_conversations_core_empty_db_returns_empty() {
         let db = fresh_in_memory_db().await;
-        let rows = list_all_conversations_core(&db.conn, None, None, None, None, None, false)
-            .await
-            .expect("list");
+        let rows =
+            list_all_conversations_core(&db.conn, None, None, None, None, None, false, false)
+                .await
+                .expect("list");
         assert!(rows.is_empty(), "fresh db must have zero conversations");
     }
 
@@ -3758,9 +3787,10 @@ mod tests {
             .await
             .expect("delete");
         // After soft delete the row should no longer show up in list_all.
-        let remaining = list_all_conversations_core(&db.conn, None, None, None, None, None, false)
-            .await
-            .expect("list");
+        let remaining =
+            list_all_conversations_core(&db.conn, None, None, None, None, None, false, false)
+                .await
+                .expect("list");
         assert!(
             remaining.iter().all(|c| c.id != conv_id),
             "soft-deleted conversation must not appear in list_all"
@@ -4600,6 +4630,7 @@ mod tests {
                 child_count: 0,
                 created_at: at(-100),
                 updated_at: at(0),
+                archived_at: None,
                 pinned_at: None,
                 parent_id: None,
                 parent_tool_use_id: None,

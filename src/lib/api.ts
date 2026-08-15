@@ -1782,6 +1782,7 @@ export async function listAllConversations(params?: {
   search?: string | null
   sort_by?: string | null
   status?: string | null
+  archived?: boolean | null
   include_children?: boolean | null
 }): Promise<DbConversationSummary[]> {
   return getTransport().call("list_all_conversations", {
@@ -1790,6 +1791,7 @@ export async function listAllConversations(params?: {
     search: params?.search ?? null,
     sortBy: params?.sort_by ?? null,
     status: params?.status ?? null,
+    archived: params?.archived ?? null,
     includeChildren: params?.include_children ?? null,
   })
 }
@@ -1798,12 +1800,14 @@ export async function searchSessionContent(params: {
   query: string
   folder_ids?: number[] | null
   agent_type?: AgentType | null
+  archived?: boolean | null
   limit?: number | null
 }): Promise<SessionContentSearchResponse> {
   return getTransport().call("search_session_content", {
     query: params.query,
     folderIds: params.folder_ids ?? null,
     agentType: params.agent_type ?? null,
+    archived: params.archived ?? null,
     limit: params.limit ?? null,
   })
 }
@@ -2893,6 +2897,16 @@ export async function updateConversationStatus(
   return getTransport().call("update_conversation_status", {
     conversationId,
     status,
+  })
+}
+
+export async function updateConversationArchive(
+  conversationId: number,
+  archived: boolean
+): Promise<void> {
+  return getTransport().call("update_conversation_archive", {
+    conversationId,
+    archived,
   })
 }
 

@@ -16,6 +16,7 @@ pub struct ListAllConversationsParams {
     pub search: Option<String>,
     pub sort_by: Option<String>,
     pub status: Option<String>,
+    pub archived: Option<bool>,
     pub include_children: Option<bool>,
 }
 
@@ -31,6 +32,7 @@ pub async fn list_all_conversations(
             params.search,
             params.sort_by,
             params.status,
+            params.archived.unwrap_or(false),
             params.include_children.unwrap_or(false),
         )
         .await?,
@@ -353,6 +355,28 @@ pub async fn update_conversation_status(
         &state.db.conn,
         params.conversation_id,
         params.status,
+    )
+    .await?;
+    conv_commands::emit_conversation_upsert(&state.emitter, &state.db.conn, params.conversation_id)
+        .await;
+    Ok(Json(()))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateConversationArchiveParams {
+    pub conversation_id: i32,
+    pub archived: bool,
+}
+
+pub async fn update_conversation_archive(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<UpdateConversationArchiveParams>,
+) -> Result<Json<()>, AppCommandError> {
+    conv_commands::update_conversation_archive_core(
+        &state.db.conn,
+        params.conversation_id,
+        params.archived,
     )
     .await?;
     conv_commands::emit_conversation_upsert(&state.emitter, &state.db.conn, params.conversation_id)

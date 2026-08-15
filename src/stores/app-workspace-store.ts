@@ -298,6 +298,16 @@ export const useAppWorkspaceStore = create<AppWorkspaceStoreState>()(
       if (deletedIds.has(summary.id)) return
       const prev = get().conversations
       const idx = prev.findIndex((c) => c.id === summary.id)
+      // Archive is a library visibility flag, not deletion. Remove the row
+      // from ordinary sidebar data without tombstoning its id, so a later
+      // restore upsert can insert it again. Open workbench tabs are untouched.
+      if (summary.archived_at != null) {
+        if (idx < 0) return
+        const next = prev.slice()
+        next.splice(idx, 1)
+        set(withConversations(next))
+        return
+      }
       if (idx < 0) {
         set(withConversations([summary, ...prev]))
         return

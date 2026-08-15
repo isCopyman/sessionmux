@@ -118,6 +118,22 @@ describe("updateConversationLocal — stats reference stability", () => {
 
     expect(useAppWorkspaceStore.getState().stats?.total_messages).toBe(14)
   })
+
+  it("hides an archived upsert without blocking a later restore", () => {
+    const store = useAppWorkspaceStore.getState()
+    store.applyConversationUpsert(makeSummary({ id: 7 }))
+    expect(useAppWorkspaceStore.getState().conversations).toHaveLength(1)
+
+    store.applyConversationUpsert(
+      makeSummary({ id: 7, archived_at: "2026-08-15T12:00:00.000Z" })
+    )
+    expect(useAppWorkspaceStore.getState().conversations).toHaveLength(0)
+
+    store.applyConversationUpsert(makeSummary({ id: 7, archived_at: null }))
+    expect(
+      useAppWorkspaceStore.getState().conversations.map((row) => row.id)
+    ).toEqual([7])
+  })
 })
 
 function makeFolder(

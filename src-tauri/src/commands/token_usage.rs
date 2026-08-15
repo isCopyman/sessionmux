@@ -1332,6 +1332,7 @@ mod tests {
                 child_count: 0,
                 created_at: ts("2026-08-01T09:00:00Z"),
                 updated_at: ts("2026-08-01T12:00:00Z"),
+                archived_at: None,
                 pinned_at: None,
                 parent_id: None,
                 parent_tool_use_id: None,

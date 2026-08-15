@@ -164,6 +164,10 @@ pub fn build_router(
             post(handlers::conversations::update_conversation_status),
         )
         .route(
+            "/update_conversation_archive",
+            post(handlers::conversations::update_conversation_archive),
+        )
+        .route(
             "/update_conversation_title",
             post(handlers::conversations::update_conversation_title),
         )

@@ -12,6 +12,8 @@ import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 import {
   ArrowLeft,
+  Archive,
+  ArchiveRestore,
   Bot,
   Check,
   CheckSquare,
@@ -97,6 +99,7 @@ import {
   listAllConversations,
   listConversationWorkbenchRefs,
   searchSessionContent,
+  updateConversationArchive,
   updateConversationStatus,
 } from "@/lib/api"
 import type {
@@ -143,6 +146,10 @@ type BranchFilter =
 const ALL_BRANCHES: BranchFilter = { kind: "all" }
 
 type WorkbenchFilter = "all" | "unopened" | number
+
+type SessionSearchScope = "all" | "metadata" | "content"
+
+type SessionStatusFilter = ConversationStatus | "all" | "archived"
 
 /**
  * Shared metrics for the four facet controls, so the folder picker, the branch
@@ -560,6 +567,7 @@ export function ConversationManageDialog({
   const hydrateWorkbenches = useWorkbenchStore((s) => s.hydrate)
 
   const [search, setSearch] = useState("")
+  const [searchScope, setSearchScope] = useState<SessionSearchScope>("all")
   /** The folder facet: a folder id, or `null` for the whole workspace. */
   const [scopeFolderId, setScopeFolderId] = useState<number | null>(
     folderId ?? null
@@ -567,9 +575,7 @@ export function ConversationManageDialog({
   const [branchFilter, setBranchFilter] = useState<BranchFilter>(ALL_BRANCHES)
   const [workbenchFilter, setWorkbenchFilter] = useState<WorkbenchFilter>("all")
   const [agentFilter, setAgentFilter] = useState<AgentType | "all">("all")
-  const [statusFilter, setStatusFilter] = useState<ConversationStatus | "all">(
-    "all"
-  )
+  const [statusFilter, setStatusFilter] = useState<SessionStatusFilter>("all")
   const [rows, setRows] = useState<DbConversationSummary[]>([])
   const [contentSnippets, setContentSnippets] = useState<Map<number, string>>(
     new Map()
@@ -660,6 +666,7 @@ export function ConversationManageDialog({
   useEffect(() => {
     if (!open) {
       setSearch("")
+      setSearchScope("all")
       setScopeFolderId(folderId ?? null)
       setBranchFilter(ALL_BRANCHES)
       setWorkbenchFilter("all")
@@ -716,18 +723,29 @@ export function ConversationManageDialog({
       setLoading(true)
       try {
         const normalizedSearch = search.trim()
+        const metadataSearchEnabled =
+          normalizedSearch === "" || searchScope !== "content"
+        const contentSearchEnabled =
+          normalizedSearch.length >= 2 && searchScope !== "metadata"
         const [metadataResult, contentResult] = await Promise.allSettled([
-          listAllConversations({
-            folder_ids: queryFolderIds,
-            search: normalizedSearch || null,
-            agent_type: agentFilter === "all" ? null : agentFilter,
-            status: statusFilter === "all" ? null : statusFilter,
-          }),
-          normalizedSearch.length >= 2
+          metadataSearchEnabled
+            ? listAllConversations({
+                folder_ids: queryFolderIds,
+                search: normalizedSearch || null,
+                agent_type: agentFilter === "all" ? null : agentFilter,
+                status:
+                  statusFilter === "all" || statusFilter === "archived"
+                    ? null
+                    : statusFilter,
+                archived: statusFilter === "archived",
+              })
+            : Promise.resolve([] as DbConversationSummary[]),
+          contentSearchEnabled
             ? searchSessionContent({
                 query: normalizedSearch,
                 folder_ids: queryFolderIds,
                 agent_type: agentFilter === "all" ? null : agentFilter,
+                archived: statusFilter === "archived",
                 limit: 50,
               })
             : Promise.resolve(null),
@@ -750,6 +768,7 @@ export function ConversationManageDialog({
           for (const hit of contentResult.value.results) {
             if (
               statusFilter !== "all" &&
+              statusFilter !== "archived" &&
               hit.conversation.status !== statusFilter
             ) {
               continue
@@ -760,7 +779,7 @@ export function ConversationManageDialog({
         }
         setContentSnippets(snippets)
         setContentSearchUnavailable(
-          normalizedSearch.length >= 2 &&
+          contentSearchEnabled &&
             (contentResult.status === "rejected" ||
               contentResult.value?.available === false)
         )
@@ -784,7 +803,15 @@ export function ConversationManageDialog({
       cancelled = true
       clearTimeout(timer)
     }
-  }, [open, queryFolderIds, search, agentFilter, statusFilter, refreshKey])
+  }, [
+    open,
+    queryFolderIds,
+    search,
+    searchScope,
+    agentFilter,
+    statusFilter,
+    refreshKey,
+  ])
 
   // Workbench ownership is fetched in one batch and never blocks the session
   // rows themselves. Older servers can lack the endpoint; that degrades to an
@@ -1138,6 +1165,31 @@ export function ConversationManageDialog({
     [selectedConversations, t, afterBulkOp]
   )
 
+  const handleBulkArchive = useCallback(
+    async (archived: boolean) => {
+      if (selectedConversations.length === 0) return
+      setPending(true)
+      try {
+        await Promise.all(
+          selectedConversations.map((conv) =>
+            updateConversationArchive(conv.id, archived)
+          )
+        )
+        toast.success(
+          archived
+            ? t("toastArchived", { count: selectedConversations.length })
+            : t("toastRestored", { count: selectedConversations.length })
+        )
+        afterBulkOp()
+      } catch (e) {
+        toast.error(t("toastOpFailed", { message: toErrorMessage(e) }))
+      } finally {
+        setPending(false)
+      }
+    },
+    [afterBulkOp, selectedConversations, t]
+  )
+
   const anyFacetNarrows =
     search.trim() !== "" ||
     branchFilter.kind !== "all" ||
@@ -1160,17 +1212,41 @@ export function ConversationManageDialog({
               every pixel — and the four narrowing controls line up as equal
               columns beneath it, ordered coarse to fine. */}
           <div className="flex flex-col gap-2">
-            <div className="relative">
-              <Search
-                className="pointer-events-none absolute start-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
-                aria-hidden="true"
-              />
-              <Input
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder={t("searchPlaceholder")}
-                className="h-9 ps-9"
-              />
+            <div className="flex min-w-0 gap-2">
+              <div className="relative min-w-0 flex-1">
+                <Search
+                  className="pointer-events-none absolute start-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground"
+                  aria-hidden="true"
+                />
+                <Input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder={t("searchPlaceholder")}
+                  className="h-9 ps-9"
+                />
+              </div>
+              <Select
+                value={searchScope}
+                onValueChange={(value) =>
+                  setSearchScope(value as SessionSearchScope)
+                }
+              >
+                <SelectTrigger
+                  className="h-9 w-[8.75rem] shrink-0 sm:w-[10.5rem]"
+                  aria-label={t("searchScopeLabel")}
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent align="end">
+                  <SelectItem value="all">{t("searchScopeAll")}</SelectItem>
+                  <SelectItem value="metadata">
+                    {t("searchScopeMetadata")}
+                  </SelectItem>
+                  <SelectItem value="content">
+                    {t("searchScopeContent")}
+                  </SelectItem>
+                </SelectContent>
+              </Select>
             </div>
             {contentSearchUnavailable && (
               <p className="px-1 text-xs text-muted-foreground">
@@ -1288,11 +1364,12 @@ export function ConversationManageDialog({
               </Select>
               <Select
                 value={statusFilter}
-                onValueChange={(v) =>
-                  setStatusFilter(v as ConversationStatus | "all")
-                }
+                onValueChange={(v) => setStatusFilter(v as SessionStatusFilter)}
               >
-                <SelectTrigger className={FACET_SELECT_TRIGGER_CLASS}>
+                <SelectTrigger
+                  className={FACET_SELECT_TRIGGER_CLASS}
+                  aria-label={t("statusFilterLabel")}
+                >
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -1312,6 +1389,12 @@ export function ConversationManageDialog({
                       </span>
                     </SelectItem>
                   ))}
+                  <SelectItem value="archived">
+                    <span className="flex items-center gap-2">
+                      <Archive className="h-3.5 w-3.5 text-muted-foreground" />
+                      {t("archiveFilter")}
+                    </span>
+                  </SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -1771,6 +1854,24 @@ export function ConversationManageDialog({
                   ))}
                 </DropdownMenuContent>
               </DropdownMenu>
+
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={selectedCount === 0 || pending}
+                onClick={() =>
+                  void handleBulkArchive(statusFilter !== "archived")
+                }
+              >
+                {statusFilter === "archived" ? (
+                  <ArchiveRestore className="mr-1 h-3.5 w-3.5" />
+                ) : (
+                  <Archive className="mr-1 h-3.5 w-3.5" />
+                )}
+                {statusFilter === "archived"
+                  ? t("restoreSelected")
+                  : t("archiveSelected")}
+              </Button>
 
               {/* Delete */}
               <Button

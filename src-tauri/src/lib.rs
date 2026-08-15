@@ -989,6 +989,7 @@ mod tauri_app {
                 conversations::create_chat_conversation,
                 conversations::create_chat_dir,
                 conversations::update_conversation_status,
+                conversations::update_conversation_archive,
                 conversations::update_conversation_title,
                 conversations::update_conversation_pinned,
                 conversations::delete_conversation,

@@ -52,6 +52,9 @@ pub struct DbConversationSummary {
     pub child_count: u32,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// When the user archived this session. Archiving is independent of status,
+    /// deletion, runtime activity, and workbench membership.
+    pub archived_at: Option<DateTime<Utc>>,
     /// Mirror of `conversation.pinned_at`: when set, the sidebar shows this row in
     /// its "Pinned" section (sorted by this timestamp descending) instead of its
     /// folder group. Serialized as `null` when absent so the frontend's

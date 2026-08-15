@@ -36,6 +36,7 @@ async fn delegation_columns_round_trip() {
         created_at: Set(now),
         updated_at: Set(now),
         deleted_at: Set(None),
+        archived_at: Set(None),
         pinned_at: Set(None),
         origin_cwd: Set(None),
     };
