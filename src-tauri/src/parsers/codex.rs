@@ -268,6 +268,55 @@ impl CodexParser {
             delegation_call_id: None,
         }))
     }
+
+    /// Titles maintained by Codex Desktop live outside individual rollout
+    /// files. Keep this overlay out of `summary_cache`: the cache is keyed by a
+    /// rollout's metadata, while `session_index.jsonl` can change independently
+    /// when the user renames a thread in another Codex client.
+    fn session_index_titles(&self) -> HashMap<String, String> {
+        self.base_dir
+            .parent()
+            .map(|home| read_codex_session_index_titles(&home.join("session_index.jsonl")))
+            .unwrap_or_default()
+    }
+}
+
+/// Read Codex's append-style session title index. The same session id may occur
+/// more than once; the newest non-empty `thread_name` wins. Malformed and
+/// partial lines are ignored because Codex may be appending while codeg scans.
+fn read_codex_session_index_titles(path: &std::path::Path) -> HashMap<String, String> {
+    let Ok(file) = fs::File::open(path) else {
+        return HashMap::new();
+    };
+
+    let mut titles = HashMap::new();
+    for line in BufReader::new(file).lines() {
+        let Ok(line) = line else { continue };
+        if line.trim().is_empty() {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue;
+        };
+        let Some(id) = value
+            .get("id")
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+        else {
+            continue;
+        };
+        let Some(title) = value
+            .get("thread_name")
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|title| !title.is_empty())
+        else {
+            continue;
+        };
+        titles.insert(id.to_string(), truncate_str(title, 100));
+    }
+    titles
 }
 
 pub(crate) fn resolve_codex_home_dir() -> PathBuf {
@@ -292,6 +341,8 @@ impl AgentParser for CodexParser {
             return Ok(conversations);
         }
 
+        let session_index_titles = self.session_index_titles();
+
         for entry in WalkDir::new(&self.base_dir)
             .into_iter()
             .filter_map(|e| e.ok())
@@ -308,7 +359,12 @@ impl AgentParser for CodexParser {
             match super::summary_cache::get_or_parse(AgentType::Codex, &path, || {
                 self.parse_jsonl_summary(&path)
             }) {
-                Ok(Some(summary)) => conversations.push(summary),
+                Ok(Some(mut summary)) => {
+                    if let Some(title) = session_index_titles.get(&summary.id) {
+                        summary.title = Some(title.clone());
+                    }
+                    conversations.push(summary);
+                }
                 _ => continue,
             }
         }
@@ -335,7 +391,11 @@ impl AgentParser for CodexParser {
             }
             let fname = path.file_name().unwrap_or_default().to_string_lossy();
             if fname.contains(conversation_id) {
-                return self.parse_conversation_detail(&path, conversation_id);
+                let mut detail = self.parse_conversation_detail(&path, conversation_id)?;
+                if let Some(title) = self.session_index_titles().get(conversation_id) {
+                    detail.summary.title = Some(title.clone());
+                }
+                return Ok(detail);
             }
         }
 
@@ -3952,6 +4012,7 @@ mod tests {
     use crate::models::{
         ContentBlock, MessageRole, MessageTurn, SessionStats, TurnRole, TurnUsage, UnifiedMessage,
     };
+    use crate::parsers::AgentParser;
     use chrono::{DateTime, Duration, Utc};
     use std::env;
     use std::fs;
@@ -5243,6 +5304,65 @@ mod tests {
             .expect("present");
         assert_eq!(summary_b.title.as_deref(), Some("Fresh active"));
         let _ = fs::remove_file(&path_b);
+    }
+
+    #[test]
+    fn session_index_title_overrides_rollout_title_in_list_and_detail() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time ok")
+            .as_nanos();
+        let codex_home =
+            env::temp_dir().join(format!("codeg-codex-session-index-{nanos}"));
+        let sessions_dir = codex_home
+            .join("sessions")
+            .join("2026")
+            .join("08")
+            .join("15");
+        fs::create_dir_all(&sessions_dir).expect("create sessions directory");
+
+        let conversation_id = "index-title-1";
+        let rollout_path = sessions_dir.join(format!(
+            "rollout-2026-08-15T00-00-00-{conversation_id}.jsonl"
+        ));
+        fs::write(
+            &rollout_path,
+            concat!(
+                "{\"timestamp\":\"2026-08-15T00:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"index-title-1\",\"cwd\":\"/tmp/demo\"}}\n",
+                "{\"timestamp\":\"2026-08-15T00:00:01Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"user_message\",\"message\":\"Fallback prompt title\"}}\n",
+                "{\"timestamp\":\"2026-08-15T00:00:02Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"thread_name_updated\",\"thread_name\":\"Rollout title\"}}\n"
+            ),
+        )
+        .expect("write rollout");
+        fs::write(
+            codex_home.join("session_index.jsonl"),
+            concat!(
+                "{\"id\":\"index-title-1\",\"thread_name\":\"Older desktop title\"}\n",
+                "not valid json\n",
+                "{\"id\":\"another-session\",\"thread_name\":\"Unrelated title\"}\n",
+                "{\"id\":\"index-title-1\",\"thread_name\":\"\"}\n",
+                "{\"id\":\"index-title-1\",\"thread_name\":\"Latest desktop title\"}\n"
+            ),
+        )
+        .expect("write session index");
+
+        let parser = CodexParser::with_base_dir(codex_home.join("sessions"));
+        let conversations = parser.list_conversations().expect("list conversations");
+        let summary = conversations
+            .iter()
+            .find(|summary| summary.id == conversation_id)
+            .expect("indexed conversation present");
+        assert_eq!(summary.title.as_deref(), Some("Latest desktop title"));
+
+        let detail = parser
+            .get_conversation(conversation_id)
+            .expect("get conversation");
+        assert_eq!(
+            detail.summary.title.as_deref(),
+            Some("Latest desktop title")
+        );
+
+        let _ = fs::remove_dir_all(codex_home);
     }
 
     #[test]
