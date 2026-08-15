@@ -4,7 +4,9 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import {
   dismissCollaborationDelivery,
   getCollaborationFeed,
+  getPromptQueue,
   markCollaborationSeen,
+  retryPromptQueueItem,
 } from "@/lib/api"
 import { onTransportReconnect, subscribe } from "@/lib/platform"
 import type { CollaborationChanged, CollaborationFeed } from "@/lib/types"
@@ -26,6 +28,7 @@ export interface UseCollaborationFeedReturn {
   reload: () => Promise<void>
   markSeen: (deliveryIds: string[]) => Promise<void>
   dismiss: (deliveryId: string) => Promise<void>
+  retry: (deliveryId: string) => Promise<void>
 }
 
 export function useCollaborationFeed(
@@ -70,13 +73,11 @@ export function useCollaborationFeed(
     generationRef.current += 1
     const generation = generationRef.current
     revisionRef.current = 0
-    /* eslint-disable react-hooks/set-state-in-effect -- Session identity owns this external subscription */
     setFeed(
       conversationId == null ? EMPTY_FEED : { ...EMPTY_FEED, conversationId }
     )
     setError(null)
     setHydrated(conversationId == null)
-    /* eslint-enable react-hooks/set-state-in-effect */
     if (conversationId == null) return
     void reload()
 
@@ -137,5 +138,27 @@ export function useCollaborationFeed(
     [applyFeed, reload]
   )
 
-  return { feed, hydrated, error, reload, markSeen, dismiss }
+  const retry = useCallback(
+    async (deliveryId: string) => {
+      const id = conversationIdRef.current
+      if (id == null) return
+      try {
+        const queue = await getPromptQueue(id)
+        if (!queue.items.some((item) => item.id === deliveryId)) {
+          throw new Error(
+            "The failed delivery is no longer in the Session queue"
+          )
+        }
+        await retryPromptQueueItem(id, deliveryId, queue.revision)
+        await reload()
+      } catch (nextError) {
+        console.error("[collaboration] retry:", nextError)
+        setError(nextError)
+        await reload()
+      }
+    },
+    [reload]
+  )
+
+  return { feed, hydrated, error, reload, markSeen, dismiss, retry }
 }

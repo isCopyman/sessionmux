@@ -1,10 +1,14 @@
 use crate::app_error::AppCommandError;
-use crate::db::service::prompt_queue_service;
+use crate::db::service::{collaboration_service, prompt_queue_service};
 #[cfg(feature = "tauri-runtime")]
 use crate::db::AppDatabase;
-use crate::models::{EnqueuePromptQueueItem, PromptQueueDraft, PromptQueueSnapshot};
+use crate::models::{
+    CollaborationChanged, EnqueuePromptQueueItem, PromptQueueDraft, PromptQueueSnapshot,
+};
 use crate::prompt_queue::PromptQueueHandle;
-use crate::web::event_bridge::{emit_event, EventEmitter, PROMPT_QUEUE_CHANGED_EVENT};
+use crate::web::event_bridge::{
+    emit_event, EventEmitter, COLLABORATION_CHANGED_EVENT, PROMPT_QUEUE_CHANGED_EVENT,
+};
 
 fn publish(emitter: &EventEmitter, snapshot: &PromptQueueSnapshot) {
     emit_event(emitter, PROMPT_QUEUE_CHANGED_EVENT, snapshot);
@@ -98,6 +102,22 @@ pub async fn prompt_queue_retry_core(
     let snapshot =
         prompt_queue_service::retry_item(conn, conversation_id, &id, expected_revision).await?;
     publish(emitter, &snapshot);
+    if let Some(event_id) = snapshot
+        .items
+        .iter()
+        .find(|item| item.id == id)
+        .and_then(|item| item.origin_event_id.as_deref())
+    {
+        let conversation_ids =
+            collaboration_service::origin_participants(conn, conversation_id, event_id).await?;
+        if !conversation_ids.is_empty() {
+            emit_event(
+                emitter,
+                COLLABORATION_CHANGED_EVENT,
+                CollaborationChanged { conversation_ids },
+            );
+        }
+    }
     runtime.wake(conversation_id);
     Ok(snapshot)
 }

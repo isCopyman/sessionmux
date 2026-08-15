@@ -39,8 +39,13 @@ pub async fn send(
     Json(params): Json<SendParams>,
 ) -> Result<Json<CollaborationSendResult>, AppCommandError> {
     Ok(Json(
-        collaboration::collaboration_send_core(&state.db.conn, &state.emitter, params.input)
-            .await?,
+        collaboration::collaboration_send_core(
+            &state.db.conn,
+            &state.emitter,
+            &state.prompt_queue,
+            params.input,
+        )
+        .await?,
     ))
 }
 

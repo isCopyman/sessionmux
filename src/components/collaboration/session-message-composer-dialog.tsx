@@ -22,6 +22,7 @@ import { formatConversationTitle } from "@/lib/conversation-title"
 import { getAgentLabel } from "@/lib/custom-agents"
 import { randomUUID } from "@/lib/utils"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
+import type { CollaborationInvocationPolicy } from "@/lib/types"
 
 const MAX_BODY_BYTES = 1_000_000
 
@@ -42,6 +43,8 @@ export function SessionMessageComposerDialog({
   const [query, setQuery] = useState("")
   const [selected, setSelected] = useState<Set<number>>(new Set())
   const [body, setBody] = useState("")
+  const [invocationPolicy, setInvocationPolicy] =
+    useState<CollaborationInvocationPolicy>("store_only")
   const [sending, setSending] = useState(false)
 
   const folderById = useMemo(
@@ -86,6 +89,7 @@ export function SessionMessageComposerDialog({
     setQuery("")
     setSelected(new Set())
     setBody("")
+    setInvocationPolicy("store_only")
   }
 
   const setOpen = (next: boolean) => {
@@ -111,7 +115,7 @@ export function SessionMessageComposerDialog({
         targetConversationIds: [...selected],
         body,
         clientDedupeId: randomUUID(),
-        invocationPolicy: "store_only",
+        invocationPolicy,
         deliveryHint: "default",
         expectsReply: false,
         urgency: "normal",
@@ -144,8 +148,41 @@ export function SessionMessageComposerDialog({
       <DialogContent className="flex max-h-[min(42rem,85vh)] max-w-xl flex-col overflow-hidden">
         <DialogHeader>
           <DialogTitle>{t("sendTitle")}</DialogTitle>
-          <DialogDescription>{t("storeOnlyDescription")}</DialogDescription>
+          <DialogDescription>
+            {invocationPolicy === "store_only"
+              ? t("storeOnlyDescription")
+              : t("invokeWhenIdleDescription")}
+          </DialogDescription>
         </DialogHeader>
+
+        <div
+          role="radiogroup"
+          aria-label={t("deliveryMode")}
+          className="grid grid-cols-2 gap-1 rounded-lg bg-muted p-1"
+        >
+          <Button
+            type="button"
+            role="radio"
+            aria-checked={invocationPolicy === "store_only"}
+            variant={invocationPolicy === "store_only" ? "secondary" : "ghost"}
+            size="sm"
+            onClick={() => setInvocationPolicy("store_only")}
+          >
+            {t("deliverOnly")}
+          </Button>
+          <Button
+            type="button"
+            role="radio"
+            aria-checked={invocationPolicy === "invoke_when_idle"}
+            variant={
+              invocationPolicy === "invoke_when_idle" ? "secondary" : "ghost"
+            }
+            size="sm"
+            onClick={() => setInvocationPolicy("invoke_when_idle")}
+          >
+            {t("invokeWhenIdle")}
+          </Button>
+        </div>
 
         <div className="relative">
           <Search

@@ -10,12 +10,16 @@ const api = vi.hoisted(() => ({
   get: vi.fn(),
   markSeen: vi.fn(),
   dismiss: vi.fn(),
+  getQueue: vi.fn(),
+  retryQueueItem: vi.fn(),
 }))
 
 vi.mock("@/lib/api", () => ({
   getCollaborationFeed: api.get,
   markCollaborationSeen: api.markSeen,
   dismissCollaborationDelivery: api.dismiss,
+  getPromptQueue: api.getQueue,
+  retryPromptQueueItem: api.retryQueueItem,
 }))
 
 const handlers = new Set<(change: CollaborationChanged) => void>()
@@ -87,6 +91,18 @@ beforeEach(() => {
   vi.clearAllMocks()
   handlers.clear()
   api.get.mockImplementation((id: number) => Promise.resolve(feed(id, 0)))
+  api.getQueue.mockResolvedValue({
+    conversationId: 7,
+    revision: 4,
+    pausedReason: "dispatch_outcome_unknown",
+    items: [{ id: "mail", originEventId: "event-mail", state: "paused" }],
+  })
+  api.retryQueueItem.mockResolvedValue({
+    conversationId: 7,
+    revision: 5,
+    pausedReason: null,
+    items: [{ id: "mail", originEventId: "event-mail", state: "queued" }],
+  })
 })
 
 describe("useCollaborationFeed", () => {
@@ -168,5 +184,25 @@ describe("useCollaborationFeed", () => {
     await act(async () => resolveOld(feed(7, 9, [delivery("old")])))
     expect(result.current.feed.conversationId).toBe(8)
     expect(result.current.feed.inbound[0].id).toBe("new")
+  })
+
+  it("retries a failed invocation through the authoritative Session queue", async () => {
+    api.get
+      .mockResolvedValueOnce(feed(7, 1, [delivery("mail")]))
+      .mockResolvedValueOnce(
+        feed(7, 2, [
+          {
+            ...delivery("mail"),
+            invocationPolicy: "invoke_when_idle",
+            state: "queued",
+          },
+        ])
+      )
+    const { result } = renderHook(() => useCollaborationFeed(7))
+    await waitFor(() => expect(result.current.hydrated).toBe(true))
+
+    await act(async () => result.current.retry("mail"))
+    expect(api.retryQueueItem).toHaveBeenCalledWith(7, "mail", 4)
+    expect(result.current.feed.inbound[0].state).toBe("queued")
   })
 })

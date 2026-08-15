@@ -84,6 +84,9 @@ pub(crate) struct ClaimedPromptQueueItem {
     pub id: String,
     pub conversation_id: i32,
     pub draft: PromptQueueDraft,
+    /// Cross-Session collaboration event materialized into this execution
+    /// queue item. `None` keeps ordinary same-Session follow-ups unchanged.
+    pub origin_event_id: Option<String>,
     pub mode_id: Option<String>,
     pub claimed_by: String,
 }

@@ -19,11 +19,13 @@ use crate::acp::manager::ConnectionManager;
 use crate::acp::types::{AcpEvent, ConnectionStatus};
 use crate::acp::InternalEventBus;
 use crate::db::entities::{conversation, folder};
-use crate::db::service::prompt_queue_service;
+use crate::db::service::{collaboration_service, prompt_queue_service};
 use crate::db::AppDatabase;
-use crate::models::{AgentType, PromptQueueSnapshot};
+use crate::models::{AgentType, CollaborationChanged, PromptQueueSnapshot};
 use crate::parsers::path_eq_for_matching;
-use crate::web::event_bridge::{emit_event, EventEmitter, PROMPT_QUEUE_CHANGED_EVENT};
+use crate::web::event_bridge::{
+    emit_event, EventEmitter, COLLABORATION_CHANGED_EVENT, PROMPT_QUEUE_CHANGED_EVENT,
+};
 
 const CLAIM_LEASE_SECS: i64 = 30;
 const DISPATCH_LEASE_SECS: i64 = 300;
@@ -88,6 +90,29 @@ struct PromptQueueRuntime {
 }
 
 impl PromptQueueRuntime {
+    async fn emit_origin_change(&self, item: &crate::models::prompt_queue::ClaimedPromptQueueItem) {
+        let Some(event_id) = item.origin_event_id.as_deref() else {
+            return;
+        };
+        match collaboration_service::origin_participants(
+            &self.db.conn,
+            item.conversation_id,
+            event_id,
+        )
+        .await
+        {
+            Ok(conversation_ids) if !conversation_ids.is_empty() => emit_event(
+                &self.emitter,
+                COLLABORATION_CHANGED_EVENT,
+                CollaborationChanged { conversation_ids },
+            ),
+            Ok(_) => {}
+            Err(err) => tracing::error!(
+                "[prompt-queue] collaboration invalidation failed for {event_id}: {err}"
+            ),
+        }
+    }
+
     async fn run(mut self) {
         self.recover_and_scan().await;
         let mut sweep = tokio::time::interval(StdDuration::from_secs(LEASE_SWEEP_SECS));
@@ -117,6 +142,30 @@ impl PromptQueueRuntime {
         match prompt_queue_service::recover_expired_claims(&self.db.conn).await {
             Ok(snapshots) => {
                 for snapshot in snapshots {
+                    let recovered_origins = snapshot
+                        .items
+                        .iter()
+                        .filter_map(|item| item.origin_event_id.as_deref())
+                        .collect::<Vec<_>>();
+                    for event_id in recovered_origins {
+                        match collaboration_service::origin_participants(
+                            &self.db.conn,
+                            snapshot.conversation_id,
+                            event_id,
+                        )
+                        .await
+                        {
+                            Ok(conversation_ids) if !conversation_ids.is_empty() => emit_event(
+                                &self.emitter,
+                                COLLABORATION_CHANGED_EVENT,
+                                CollaborationChanged { conversation_ids },
+                            ),
+                            Ok(_) => {}
+                            Err(err) => tracing::error!(
+                                "[prompt-queue] recovery invalidation failed for {event_id}: {err}"
+                            ),
+                        }
+                    }
                     emit_snapshot(&self.emitter, snapshot);
                 }
             }
@@ -299,7 +348,7 @@ impl PromptQueueRuntime {
         )
         .await
         {
-            Ok(true) => {}
+            Ok(true) => self.emit_origin_change(&claimed).await,
             Ok(false) => {
                 tracing::warn!(
                     "[prompt-queue] claim {} expired before dispatch; prompt was not sent",
@@ -346,6 +395,7 @@ impl PromptQueueRuntime {
             match prompt_queue_service::accept_claim(&self.db.conn, item).await {
                 Ok(snapshot) => {
                     emit_snapshot(&self.emitter, snapshot);
+                    self.emit_origin_change(item).await;
                     return;
                 }
                 Err(err) => {
@@ -363,7 +413,10 @@ impl PromptQueueRuntime {
                 .unwrap_or_else(|| "unknown database error".to_string())
         );
         match prompt_queue_service::pause_dispatch_unknown(&self.db.conn, item).await {
-            Ok(snapshot) => emit_snapshot(&self.emitter, snapshot),
+            Ok(snapshot) => {
+                emit_snapshot(&self.emitter, snapshot);
+                self.emit_origin_change(item).await;
+            }
             Err(err) => tracing::error!(
                 "[prompt-queue] could not persist unknown dispatch state for {}: {err}",
                 item.id
@@ -373,14 +426,20 @@ impl PromptQueueRuntime {
 
     async fn release_busy(&self, item: &crate::models::prompt_queue::ClaimedPromptQueueItem) {
         match prompt_queue_service::release_claim_busy(&self.db.conn, item).await {
-            Ok(snapshot) => emit_snapshot(&self.emitter, snapshot),
+            Ok(snapshot) => {
+                emit_snapshot(&self.emitter, snapshot);
+                self.emit_origin_change(item).await;
+            }
             Err(err) => tracing::error!("[prompt-queue] busy release failed: {err}"),
         }
     }
 
     async fn fail(&self, item: &crate::models::prompt_queue::ClaimedPromptQueueItem, reason: &str) {
         match prompt_queue_service::fail_claim(&self.db.conn, item, reason).await {
-            Ok(snapshot) => emit_snapshot(&self.emitter, snapshot),
+            Ok(snapshot) => {
+                emit_snapshot(&self.emitter, snapshot);
+                self.emit_origin_change(item).await;
+            }
             Err(err) => tracing::error!("[prompt-queue] pause failed: {err}"),
         }
     }
@@ -392,9 +451,13 @@ mod tests {
     use crate::acp::connection::ConnectionCommand;
     use crate::acp::internal_bus::EventBusMetrics;
     use crate::acp::types::{EventEnvelope, PromptInputBlock};
-    use crate::db::service::prompt_queue_service;
+    use crate::db::service::{collaboration_service, prompt_queue_service};
     use crate::db::test_helpers::{fresh_in_memory_db, seed_conversation, seed_folder};
-    use crate::models::{EnqueuePromptQueueItem, PromptQueueDraft, PromptQueueItemState};
+    use crate::models::{
+        CollaborationDeliveryHint, CollaborationDeliveryState, CollaborationInvocationPolicy,
+        CollaborationUrgency, EnqueuePromptQueueItem, PromptQueueDraft, PromptQueueItemState,
+        SendCollaborationMessageInput,
+    };
     use std::path::PathBuf;
 
     fn input(conversation_id: i32, id: &str, text: &str) -> EnqueuePromptQueueItem {
@@ -409,6 +472,25 @@ mod tests {
                 display_text: text.to_string(),
             },
             mode_id: None,
+        }
+    }
+
+    fn collaboration_input(
+        source_conversation_id: i32,
+        target_conversation_id: i32,
+        dedupe: &str,
+        body: &str,
+    ) -> SendCollaborationMessageInput {
+        SendCollaborationMessageInput {
+            source_conversation_id,
+            target_conversation_ids: vec![target_conversation_id],
+            body: body.to_string(),
+            client_dedupe_id: dedupe.to_string(),
+            invocation_policy: CollaborationInvocationPolicy::InvokeWhenIdle,
+            delivery_hint: CollaborationDeliveryHint::Default,
+            expects_reply: false,
+            urgency: CollaborationUrgency::Normal,
+            reply_to_event_id: None,
         }
     }
 
@@ -536,6 +618,120 @@ mod tests {
             commands.try_recv().is_err(),
             "the accepted item must not replay"
         );
+        worker.abort();
+    }
+
+    #[tokio::test]
+    async fn invoke_when_idle_enters_the_native_transcript_once_and_reaches_embedded() {
+        let path = "/tmp/codeg-collaboration-invoke-active";
+        let (db, folder_id, target, manager, bus) = setup(path).await;
+        let source = seed_conversation(&db, folder_id, AgentType::ClaudeCode).await;
+        let mut commands = bind_live_connection(&manager, "active", path, folder_id, target).await;
+        let sent = collaboration_service::send(
+            &db.conn,
+            collaboration_input(source, target, "invoke-once", "review this claim"),
+        )
+        .await
+        .expect("collaboration send");
+        let (_handle, task) =
+            build_prompt_queue_runtime(db.conn.clone(), manager, EventEmitter::Noop, bus);
+        let worker = tokio::spawn(task);
+
+        let command = tokio::time::timeout(StdDuration::from_secs(2), commands.recv())
+            .await
+            .expect("prompt timeout")
+            .expect("prompt command");
+        let ConnectionCommand::Prompt {
+            blocks,
+            user_message,
+        } = command
+        else {
+            panic!("expected prompt command");
+        };
+        let PromptInputBlock::Text { text } = &blocks[0] else {
+            panic!("expected stable text envelope");
+        };
+        assert!(text.contains("external collaboration content"));
+        assert!(text.contains("--- message ---\nreview this claim\n"));
+        assert_eq!(
+            user_message.as_ref().map(|(id, _)| id.as_str()),
+            Some(sent.deliveries[0].id.as_str())
+        );
+
+        wait_until(|| async {
+            collaboration_service::feed(&db.conn, target, None)
+                .await
+                .is_ok_and(|feed| {
+                    feed.inbound[0].state == CollaborationDeliveryState::Embedded
+                        && feed.inbound[0].attempts == 1
+                })
+        })
+        .await;
+        assert!(prompt_queue_service::snapshot(&db.conn, target)
+            .await
+            .unwrap()
+            .items
+            .is_empty());
+        assert!(commands.try_recv().is_err(), "delivery must not replay");
+        worker.abort();
+    }
+
+    #[tokio::test]
+    async fn invoke_when_idle_waits_while_busy_then_runs_on_turn_complete() {
+        let path = "/tmp/codeg-collaboration-invoke-busy";
+        let (db, folder_id, target, manager, bus) = setup(path).await;
+        let source = seed_conversation(&db, folder_id, AgentType::ClaudeCode).await;
+        let mut commands = bind_live_connection(&manager, "active", path, folder_id, target).await;
+        let state = manager.get_state("active").await.expect("state");
+        state.write().await.turn_in_flight = true;
+        collaboration_service::send(
+            &db.conn,
+            collaboration_input(source, target, "invoke-busy", "wait for idle"),
+        )
+        .await
+        .expect("collaboration send");
+        let (_handle, task) = build_prompt_queue_runtime(
+            db.conn.clone(),
+            manager.clone_ref(),
+            EventEmitter::Noop,
+            bus.clone(),
+        );
+        let worker = tokio::spawn(task);
+
+        tokio::time::sleep(StdDuration::from_millis(80)).await;
+        assert!(
+            commands.try_recv().is_err(),
+            "busy target must not be interrupted"
+        );
+        assert_eq!(
+            collaboration_service::feed(&db.conn, target, None)
+                .await
+                .unwrap()
+                .inbound[0]
+                .state,
+            CollaborationDeliveryState::Queued
+        );
+
+        state.write().await.turn_in_flight = false;
+        bus.send(Arc::new(EventEnvelope {
+            seq: 1,
+            connection_id: "active".into(),
+            payload: AcpEvent::TurnComplete {
+                session_id: "native-session".into(),
+                stop_reason: "end_turn".into(),
+                agent_type: "codex".into(),
+            },
+        }));
+        tokio::time::timeout(StdDuration::from_secs(2), commands.recv())
+            .await
+            .expect("queued prompt timeout")
+            .expect("queued prompt");
+        wait_until(|| async {
+            collaboration_service::feed(&db.conn, target, None)
+                .await
+                .is_ok_and(|feed| feed.inbound[0].state == CollaborationDeliveryState::Embedded)
+        })
+        .await;
         worker.abort();
     }
 

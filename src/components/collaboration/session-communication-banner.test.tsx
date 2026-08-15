@@ -5,6 +5,7 @@ import type { CollaborationDelivery } from "@/lib/types"
 const hook = vi.hoisted(() => ({
   markSeen: vi.fn(),
   dismiss: vi.fn(),
+  retry: vi.fn(),
   feed: null as unknown,
 }))
 
@@ -20,6 +21,7 @@ vi.mock("@/hooks/use-collaboration-feed", () => ({
     reload: vi.fn(),
     markSeen: hook.markSeen,
     dismiss: hook.dismiss,
+    retry: hook.retry,
   }),
 }))
 
@@ -96,5 +98,25 @@ describe("SessionCommunicationBanner", () => {
     fireEvent.click(screen.getByRole("button", { name: /panelTitle/ }))
     fireEvent.click(screen.getByRole("button", { name: "dismiss" }))
     expect(hook.dismiss).toHaveBeenCalledWith("delivery-1")
+  })
+
+  it("offers an explicit retry when agent invocation failed", () => {
+    hook.feed = {
+      conversationId: 2,
+      revision: 2,
+      unreadCount: 1,
+      inbound: [
+        delivery({
+          invocationPolicy: "invoke_when_idle",
+          state: "failed",
+          error: "dispatch_outcome_unknown",
+        }),
+      ],
+      outbound: [],
+    }
+    render(<SessionCommunicationBanner conversationId={2} />)
+    fireEvent.click(screen.getByRole("button", { name: /panelTitle/ }))
+    fireEvent.click(screen.getByRole("button", { name: "retry" }))
+    expect(hook.retry).toHaveBeenCalledWith("delivery-1")
   })
 })

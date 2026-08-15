@@ -6,6 +6,7 @@ import {
   ChevronUp,
   Inbox,
   MessageSquareMore,
+  RotateCcw,
   X,
 } from "lucide-react"
 import { useTranslations } from "next-intl"
@@ -31,10 +32,27 @@ export function SessionCommunicationBanner({
 }: SessionCommunicationBannerProps) {
   const t = useTranslations("Collaboration")
   const [expanded, setExpanded] = useState(false)
-  const { feed, hydrated, markSeen, dismiss } =
+  const { feed, hydrated, markSeen, dismiss, retry } =
     useCollaborationFeed(conversationId)
   const total = feed.inbound.length + feed.outbound.length
   if (!hydrated || total === 0) return null
+
+  const invocationState = (delivery: CollaborationDelivery) => {
+    switch (delivery.state) {
+      case "queued":
+        return t("stateQueued")
+      case "embedding":
+        return t("stateEmbedding")
+      case "embedded":
+        return t("stateEmbedded")
+      case "failed":
+        return t("stateFailed")
+      case "dismissed":
+        return t("stateDismissed")
+      case "pending":
+        return t("stateStoreOnly")
+    }
+  }
 
   const unreadIds = feed.inbound
     .filter(
@@ -118,24 +136,43 @@ export function SessionCommunicationBanner({
                           {delivery.body}
                         </p>
                         <p className="mt-1 text-[11px] text-muted-foreground">
-                          {delivery.state === "dismissed"
-                            ? t("stateDismissed")
-                            : t("stateStoreOnly")}
+                          {invocationState(delivery)}
                         </p>
+                        {delivery.error ? (
+                          <p className="mt-1 break-words text-[11px] text-destructive">
+                            {delivery.error}
+                          </p>
+                        ) : null}
                       </div>
-                      {delivery.state === "pending" ? (
-                        <Button
-                          type="button"
-                          size="icon"
-                          variant="ghost"
-                          className="h-7 w-7 shrink-0"
-                          title={t("dismiss")}
-                          aria-label={t("dismiss")}
-                          onClick={() => void dismiss(delivery.id)}
-                        >
-                          <X className="h-3.5 w-3.5" />
-                        </Button>
-                      ) : null}
+                      <div className="flex shrink-0 items-center">
+                        {delivery.state === "failed" &&
+                        delivery.invocationPolicy === "invoke_when_idle" ? (
+                          <Button
+                            type="button"
+                            size="icon"
+                            variant="ghost"
+                            className="h-7 w-7"
+                            title={t("retry")}
+                            aria-label={t("retry")}
+                            onClick={() => void retry(delivery.id)}
+                          >
+                            <RotateCcw className="h-3.5 w-3.5" />
+                          </Button>
+                        ) : null}
+                        {delivery.state === "pending" ? (
+                          <Button
+                            type="button"
+                            size="icon"
+                            variant="ghost"
+                            className="h-7 w-7"
+                            title={t("dismiss")}
+                            aria-label={t("dismiss")}
+                            onClick={() => void dismiss(delivery.id)}
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </Button>
+                        ) : null}
+                      </div>
                     </div>
                   </article>
                 ))}
@@ -161,18 +198,27 @@ export function SessionCommunicationBanner({
                         })}
                       </span>
                       <span className="text-muted-foreground">
-                        {delivery.state === "failed"
-                          ? t("stateFailed")
-                          : delivery.state === "dismissed"
-                            ? t("stateDismissedByTarget")
-                            : delivery.uiSeenAt
-                              ? t("stateSeen")
-                              : t("stateDelivered")}
+                        {delivery.state === "queued" ||
+                        delivery.state === "embedding" ||
+                        delivery.state === "embedded"
+                          ? invocationState(delivery)
+                          : delivery.state === "failed"
+                            ? t("stateFailed")
+                            : delivery.state === "dismissed"
+                              ? t("stateDismissedByTarget")
+                              : delivery.uiSeenAt
+                                ? t("stateSeen")
+                                : t("stateDelivered")}
                       </span>
                     </div>
                     <p className="mt-1 whitespace-pre-wrap break-words leading-relaxed">
                       {delivery.body}
                     </p>
+                    {delivery.error ? (
+                      <p className="mt-1 break-words text-[11px] text-destructive">
+                        {delivery.error}
+                      </p>
+                    ) : null}
                   </article>
                 ))}
               </div>

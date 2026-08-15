@@ -1,11 +1,15 @@
 use crate::app_error::AppCommandError;
-use crate::db::service::collaboration_service;
+use crate::db::service::{collaboration_service, prompt_queue_service};
 #[cfg(feature = "tauri-runtime")]
 use crate::db::AppDatabase;
 use crate::models::{
-    CollaborationChanged, CollaborationFeed, CollaborationSendResult, SendCollaborationMessageInput,
+    CollaborationChanged, CollaborationDeliveryState, CollaborationFeed,
+    CollaborationInvocationPolicy, CollaborationSendResult, SendCollaborationMessageInput,
 };
-use crate::web::event_bridge::{emit_event, EventEmitter, COLLABORATION_CHANGED_EVENT};
+use crate::prompt_queue::PromptQueueHandle;
+use crate::web::event_bridge::{
+    emit_event, EventEmitter, COLLABORATION_CHANGED_EVENT, PROMPT_QUEUE_CHANGED_EVENT,
+};
 
 fn publish(emitter: &EventEmitter, conversation_ids: Vec<i32>) {
     if conversation_ids.is_empty() {
@@ -21,11 +25,23 @@ fn publish(emitter: &EventEmitter, conversation_ids: Vec<i32>) {
 pub async fn collaboration_send_core(
     conn: &sea_orm::DatabaseConnection,
     emitter: &EventEmitter,
+    prompt_queue: &PromptQueueHandle,
     input: SendCollaborationMessageInput,
 ) -> Result<CollaborationSendResult, AppCommandError> {
     let result = collaboration_service::send(conn, input).await?;
     if !result.deduplicated {
         publish(emitter, result.affected_conversation_ids.clone());
+    }
+    for delivery in result.deliveries.iter().filter(|delivery| {
+        delivery.invocation_policy == CollaborationInvocationPolicy::InvokeWhenIdle
+            && delivery.state == CollaborationDeliveryState::Queued
+    }) {
+        let conversation_id = delivery.target.conversation_id;
+        let snapshot = prompt_queue_service::snapshot(conn, conversation_id).await?;
+        emit_event(emitter, PROMPT_QUEUE_CHANGED_EVENT, snapshot);
+        // Waking is intentionally best effort. A closed Session retains the
+        // durable item and a later SessionStarted event wakes it again.
+        prompt_queue.wake(conversation_id);
     }
     Ok(result)
 }
@@ -67,9 +83,10 @@ pub async fn collaboration_dismiss_core(
 pub async fn collaboration_send(
     input: SendCollaborationMessageInput,
     db: tauri::State<'_, AppDatabase>,
+    prompt_queue: tauri::State<'_, PromptQueueHandle>,
     app: tauri::AppHandle,
 ) -> Result<CollaborationSendResult, AppCommandError> {
-    collaboration_send_core(&db.conn, &EventEmitter::Tauri(app), input).await
+    collaboration_send_core(&db.conn, &EventEmitter::Tauri(app), &prompt_queue, input).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -139,6 +156,7 @@ mod tests {
         let result = collaboration_send_core(
             &db.conn,
             &emitter,
+            &PromptQueueHandle::disconnected_for_test(),
             SendCollaborationMessageInput {
                 source_conversation_id: source,
                 target_conversation_ids: vec![target],
@@ -166,6 +184,7 @@ mod tests {
         let replay = collaboration_send_core(
             &db.conn,
             &emitter,
+            &PromptQueueHandle::disconnected_for_test(),
             SendCollaborationMessageInput {
                 source_conversation_id: source,
                 target_conversation_ids: vec![target],

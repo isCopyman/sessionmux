@@ -125,4 +125,25 @@ describe("SessionMessageComposerDialog", () => {
     expect(screen.queryByText("Reviewer")).not.toBeInTheDocument()
     expect(screen.getByRole("button", { name: /^send$/ })).toBeDisabled()
   })
+
+  it("can queue the message for the target agent without interrupting its turn", async () => {
+    render(
+      <SessionMessageComposerDialog
+        sourceConversationId={1}
+        open
+        onOpenChange={onOpenChange}
+      />
+    )
+    fireEvent.click(screen.getByRole("radio", { name: "invokeWhenIdle" }))
+    fireEvent.click(screen.getByRole("button", { name: /Reviewer/ }))
+    fireEvent.change(screen.getByPlaceholderText("bodyPlaceholder"), {
+      target: { value: "Read this after the current turn" },
+    })
+    fireEvent.click(screen.getByRole("button", { name: /^send$/ }))
+
+    await waitFor(() => expect(api.send).toHaveBeenCalledTimes(1))
+    expect(api.send).toHaveBeenCalledWith(
+      expect.objectContaining({ invocationPolicy: "invoke_when_idle" })
+    )
+  })
 })

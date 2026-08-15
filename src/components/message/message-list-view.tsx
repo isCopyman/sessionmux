@@ -86,6 +86,8 @@ import {
   revealConversationFindRange,
   clearConversationFindHighlights,
 } from "@/lib/conversation-find-highlight"
+import { CollaborationMessageCard } from "./collaboration-message-card"
+import { parseCollaborationMessageEnvelope } from "./collaboration-message-envelope"
 
 interface MessageListViewProps {
   conversationId: number
@@ -593,6 +595,23 @@ const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
 }) {
   if (group.role === "system") {
     return <CollapsibleSystemMessage group={group} />
+  }
+
+  const collaborationEnvelope =
+    group.role === "user" &&
+    group.images.length === 0 &&
+    group.resources.length === 0
+      ? parseCollaborationMessageEnvelope(extractTextFromParts(group.parts))
+      : null
+
+  if (collaborationEnvelope) {
+    return (
+      <div className={dimmed ? "opacity-70" : undefined}>
+        <Message from="assistant">
+          <CollaborationMessageCard envelope={collaborationEnvelope} />
+        </Message>
+      </div>
+    )
   }
 
   return (

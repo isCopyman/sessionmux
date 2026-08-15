@@ -283,6 +283,76 @@ pub async fn enqueue(
     snapshot_on(conn, input.conversation_id).await
 }
 
+/// Materialize one cross-Session delivery into the same durable FIFO used by
+/// ordinary follow-ups. The row stores only an immutable event reference; its
+/// transcript envelope is resolved at claim time. The caller owns `txn`, so
+/// event, delivery, and queue admission either all commit or none do.
+pub(crate) async fn enqueue_origin_in_transaction(
+    txn: &DatabaseTransaction,
+    conversation_id: i32,
+    item_id: &str,
+    origin_event_id: &str,
+    client_dedupe_id: &str,
+) -> Result<bool, DbError> {
+    validate_id("Queue item id", item_id)?;
+    validate_id("Queue origin event id", origin_event_id)?;
+    validate_id("Queue dedupe id", client_dedupe_id)?;
+    ensure_conversation(txn, conversation_id).await?;
+    ensure_state(txn, conversation_id).await?;
+
+    let duplicate = txn
+        .query_one(statement(
+            "SELECT id FROM conversation_prompt_queue_item \
+             WHERE conversation_id = ? AND client_dedupe_id = ?",
+            vec![conversation_id.into(), client_dedupe_id.into()],
+        ))
+        .await?;
+    if duplicate.is_some() {
+        return Ok(false);
+    }
+
+    let count: i64 = txn
+        .query_one(statement(
+            "SELECT COUNT(*) AS count FROM conversation_prompt_queue_item \
+             WHERE conversation_id = ?",
+            vec![conversation_id.into()],
+        ))
+        .await?
+        .expect("COUNT always returns one row")
+        .try_get("", "count")?;
+    if count >= MAX_QUEUE_ITEMS as i64 {
+        return Err(validation(format!(
+            "A Session queue can contain at most {MAX_QUEUE_ITEMS} items"
+        )));
+    }
+
+    bump_revision(txn, conversation_id).await?;
+    let position: i32 = txn
+        .query_one(statement(
+            "SELECT COALESCE(MAX(position), -1) + 1 AS next_position \
+             FROM conversation_prompt_queue_item WHERE conversation_id = ?",
+            vec![conversation_id.into()],
+        ))
+        .await?
+        .expect("aggregate always returns one row")
+        .try_get("", "next_position")?;
+    txn.execute(statement(
+        "INSERT INTO conversation_prompt_queue_item \
+         (id, conversation_id, position, draft_json, origin_event_id, mode_id, state, \
+          client_dedupe_id, attempts, created_at, updated_at) \
+         VALUES (?, ?, ?, NULL, ?, NULL, 'queued', ?, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+        vec![
+            item_id.into(),
+            conversation_id.into(),
+            position.into(),
+            origin_event_id.into(),
+            client_dedupe_id.into(),
+        ],
+    ))
+    .await?;
+    Ok(true)
+}
+
 pub async fn edit(
     conn: &DatabaseConnection,
     conversation_id: i32,
@@ -300,7 +370,8 @@ pub async fn edit(
         .execute(statement(
             "UPDATE conversation_prompt_queue_item \
              SET draft_json = ?, updated_at = CURRENT_TIMESTAMP \
-             WHERE id = ? AND conversation_id = ? AND state <> 'claimed'",
+             WHERE id = ? AND conversation_id = ? AND state <> 'claimed' \
+               AND draft_json IS NOT NULL",
             vec![draft_json.into(), id.into(), conversation_id.into()],
         ))
         .await?;
@@ -326,7 +397,8 @@ pub async fn delete(
     let result = txn
         .execute(statement(
             "DELETE FROM conversation_prompt_queue_item \
-             WHERE id = ? AND conversation_id = ? AND state <> 'claimed'",
+             WHERE id = ? AND conversation_id = ? AND state <> 'claimed' \
+               AND draft_json IS NOT NULL",
             vec![id.into(), conversation_id.into()],
         ))
         .await?;
@@ -351,15 +423,28 @@ pub async fn reorder(
     verify_revision(&txn, conversation_id, expected_revision).await?;
     let rows = txn
         .query_all(statement(
-            "SELECT id, state FROM conversation_prompt_queue_item \
+            "SELECT id, state, draft_json, position FROM conversation_prompt_queue_item \
              WHERE conversation_id = ? ORDER BY position ASC, created_at ASC, id ASC",
             vec![conversation_id.into()],
         ))
         .await?;
     let existing = rows
         .iter()
+        .filter(|row| {
+            row.try_get::<Option<String>>("", "draft_json")
+                .is_ok_and(|draft| draft.is_some())
+        })
         .map(|row| row.try_get::<String>("", "id"))
         .collect::<Result<Vec<_>, _>>()?;
+    let ordinary_positions = rows
+        .iter()
+        .filter_map(|row| {
+            row.try_get::<Option<String>>("", "draft_json")
+                .ok()
+                .flatten()
+                .and_then(|_| row.try_get::<i32>("", "position").ok())
+        })
+        .collect::<Vec<_>>();
     if rows.iter().any(|row| {
         row.try_get::<String>("", "state")
             .is_ok_and(|state| state == "claimed")
@@ -378,11 +463,11 @@ pub async fn reorder(
             "Queue order must contain every queued prompt exactly once",
         ));
     }
-    for (position, id) in ordered_ids.iter().enumerate() {
+    for (position, id) in ordinary_positions.into_iter().zip(ordered_ids.iter()) {
         txn.execute(statement(
             "UPDATE conversation_prompt_queue_item SET position = ?, updated_at = CURRENT_TIMESTAMP \
-             WHERE id = ? AND conversation_id = ?",
-            vec![(position as i32).into(), id.clone().into(), conversation_id.into()],
+             WHERE id = ? AND conversation_id = ? AND draft_json IS NOT NULL",
+            vec![position.into(), id.clone().into(), conversation_id.into()],
         ))
         .await?;
     }
@@ -482,18 +567,31 @@ pub async fn retry_item(
     let txn = conn.begin().await?;
     ensure_state(&txn, conversation_id).await?;
     verify_revision(&txn, conversation_id, expected_revision).await?;
-    let result = txn
-        .execute(statement(
+    let row = txn
+        .query_one(statement(
             "UPDATE conversation_prompt_queue_item \
              SET state = 'queued', paused_reason = NULL, claimed_by = NULL, \
                  claim_expires_at = NULL, dispatch_started_at = NULL, \
                  updated_at = CURRENT_TIMESTAMP \
-             WHERE id = ? AND conversation_id = ? AND state = 'paused'",
+             WHERE id = ? AND conversation_id = ? AND state = 'paused' \
+             RETURNING origin_event_id",
             vec![id.into(), conversation_id.into()],
         ))
         .await?;
-    if result.rows_affected() != 1 {
+    let Some(row) = row else {
         return Err(validation("Queued prompt is not paused"));
+    };
+    let origin_event_id: Option<String> = row.try_get("", "origin_event_id")?;
+    if let Some(event_id) = origin_event_id.as_deref() {
+        let changed = crate::db::service::collaboration_service::retry_origin(
+            &txn,
+            conversation_id,
+            event_id,
+        )
+        .await?;
+        if !changed {
+            return Err(validation("Collaboration delivery is not retryable"));
+        }
     }
     txn.execute(statement(
         "UPDATE conversation_prompt_queue_state \
@@ -536,7 +634,7 @@ pub(crate) async fn claim_head(
                  WHERE conversation_id = ? AND state = 'queued' \
                  ORDER BY position ASC, created_at ASC, id ASC LIMIT 1 \
              ) AND conversation_id = ? AND state = 'queued' \
-             RETURNING id, conversation_id, draft_json, mode_id",
+             RETURNING id, conversation_id, draft_json, origin_event_id, mode_id",
             vec![
                 worker_id.into(),
                 expires_at.into(),
@@ -550,14 +648,31 @@ pub(crate) async fn claim_head(
         return Ok(None);
     };
     let id: String = row.try_get("", "id")?;
-    let draft_json: String = row.try_get("", "draft_json")?;
-    let draft: PromptQueueDraft = serde_json::from_str(&draft_json)
-        .map_err(|err| validation(format!("Invalid queued prompt payload: {err}")))?;
+    let draft_json: Option<String> = row.try_get("", "draft_json")?;
+    let origin_event_id: Option<String> = row.try_get("", "origin_event_id")?;
+    let draft = match (draft_json, origin_event_id.as_deref()) {
+        (Some(draft_json), None) => serde_json::from_str(&draft_json)
+            .map_err(|err| validation(format!("Invalid queued prompt payload: {err}")))?,
+        (None, Some(event_id)) => {
+            crate::db::service::collaboration_service::prompt_draft_for_origin(
+                &txn,
+                conversation_id,
+                event_id,
+            )
+            .await?
+        }
+        _ => {
+            return Err(validation(
+                "Queued prompt must contain exactly one of draft_json or origin_event_id",
+            ))
+        }
+    };
     bump_revision(&txn, conversation_id).await?;
     let claimed = ClaimedPromptQueueItem {
         id,
         conversation_id,
         draft,
+        origin_event_id,
         mode_id: row.try_get("", "mode_id")?,
         claimed_by: worker_id.to_string(),
     };
@@ -601,27 +716,24 @@ pub(crate) async fn mark_dispatch_started(
         ))
         .await?;
     if result.rows_affected() == 1 {
+        if let Some(event_id) = item.origin_event_id.as_deref() {
+            let changed = crate::db::service::collaboration_service::mark_origin_embedding(
+                &txn,
+                item.conversation_id,
+                event_id,
+                &item.id,
+            )
+            .await?;
+            if !changed {
+                return Err(validation(
+                    "Collaboration delivery is no longer eligible for dispatch",
+                ));
+            }
+        }
         bump_revision(&txn, item.conversation_id).await?;
     }
     txn.commit().await?;
     Ok(result.rows_affected() == 1)
-}
-
-async fn finish_claim(
-    conn: &DatabaseConnection,
-    item: &ClaimedPromptQueueItem,
-    action_sql: &str,
-    values: Vec<sea_orm::Value>,
-) -> Result<PromptQueueSnapshot, DbError> {
-    let txn = conn.begin().await?;
-    ensure_state(&txn, item.conversation_id).await?;
-    let result = txn.execute(statement(action_sql, values)).await?;
-    if result.rows_affected() != 1 {
-        return Err(validation("Prompt queue claim is no longer owned"));
-    }
-    bump_revision(&txn, item.conversation_id).await?;
-    txn.commit().await?;
-    snapshot_on(conn, item.conversation_id).await
 }
 
 pub(crate) async fn accept_claim(
@@ -659,6 +771,20 @@ pub(crate) async fn accept_claim(
         txn.commit().await?;
         return snapshot_on(conn, item.conversation_id).await;
     }
+    if let Some(event_id) = item.origin_event_id.as_deref() {
+        let changed = crate::db::service::collaboration_service::mark_origin_embedded(
+            &txn,
+            item.conversation_id,
+            event_id,
+            &item.id,
+        )
+        .await?;
+        if !changed {
+            return Err(validation(
+                "Collaboration delivery is no longer being embedded",
+            ));
+        }
+    }
     bump_revision(&txn, item.conversation_id).await?;
     txn.commit().await?;
     snapshot_on(conn, item.conversation_id).await
@@ -668,20 +794,42 @@ pub(crate) async fn release_claim_busy(
     conn: &DatabaseConnection,
     item: &ClaimedPromptQueueItem,
 ) -> Result<PromptQueueSnapshot, DbError> {
-    finish_claim(
-        conn,
-        item,
-        "UPDATE conversation_prompt_queue_item \
+    let txn = conn.begin().await?;
+    ensure_state(&txn, item.conversation_id).await?;
+    let result = txn
+        .execute(statement(
+            "UPDATE conversation_prompt_queue_item \
          SET state = 'queued', claimed_by = NULL, claim_expires_at = NULL, \
              dispatch_started_at = NULL, updated_at = CURRENT_TIMESTAMP \
          WHERE id = ? AND conversation_id = ? AND state = 'claimed' AND claimed_by = ?",
-        vec![
-            item.id.clone().into(),
-            item.conversation_id.into(),
-            item.claimed_by.clone().into(),
-        ],
-    )
-    .await
+            vec![
+                item.id.clone().into(),
+                item.conversation_id.into(),
+                item.claimed_by.clone().into(),
+            ],
+        ))
+        .await?;
+    if result.rows_affected() != 1 {
+        return Err(validation("Prompt queue claim is no longer owned"));
+    }
+    if let Some(event_id) = item.origin_event_id.as_deref() {
+        // A busy rejection happens before the Harness accepts a prompt, so an
+        // embedding reservation is safe to return to the delivery queue.
+        let changed = crate::db::service::collaboration_service::mark_origin_queued(
+            &txn,
+            item.conversation_id,
+            event_id,
+        )
+        .await?;
+        if !changed {
+            return Err(validation(
+                "Collaboration delivery is no longer being embedded",
+            ));
+        }
+    }
+    bump_revision(&txn, item.conversation_id).await?;
+    txn.commit().await?;
+    snapshot_on(conn, item.conversation_id).await
 }
 
 /// The Harness accepted the send, but Codeg could not durably acknowledge the
@@ -707,6 +855,15 @@ pub(crate) async fn pause_dispatch_unknown(
         ))
         .await?;
     if result.rows_affected() > 0 {
+        if let Some(event_id) = item.origin_event_id.as_deref() {
+            crate::db::service::collaboration_service::mark_origin_failed(
+                &txn,
+                item.conversation_id,
+                event_id,
+                UNKNOWN_DISPATCH_REASON,
+            )
+            .await?;
+        }
         txn.execute(statement(
             "UPDATE conversation_prompt_queue_state \
              SET paused_reason = ?, updated_at = CURRENT_TIMESTAMP WHERE conversation_id = ?",
@@ -744,6 +901,15 @@ pub(crate) async fn fail_claim(
     if result.rows_affected() != 1 {
         return Err(validation("Prompt queue claim is no longer owned"));
     }
+    if let Some(event_id) = item.origin_event_id.as_deref() {
+        crate::db::service::collaboration_service::mark_origin_failed(
+            &txn,
+            item.conversation_id,
+            event_id,
+            reason,
+        )
+        .await?;
+    }
     txn.execute(statement(
         "UPDATE conversation_prompt_queue_state \
          SET paused_reason = ?, updated_at = CURRENT_TIMESTAMP WHERE conversation_id = ?",
@@ -773,6 +939,19 @@ pub(crate) async fn recover_expired_claims(
     for conversation_id in conversation_ids {
         let txn = conn.begin().await?;
         ensure_state(&txn, conversation_id).await?;
+        let now = Utc::now();
+        let uncertain_origins = txn
+            .query_all(statement(
+                "SELECT origin_event_id FROM conversation_prompt_queue_item \
+                 WHERE conversation_id = ? AND state = 'claimed' \
+                   AND claim_expires_at <= ? AND dispatch_started_at IS NOT NULL \
+                   AND origin_event_id IS NOT NULL",
+                vec![conversation_id.into(), now.into()],
+            ))
+            .await?
+            .into_iter()
+            .map(|row| row.try_get::<String>("", "origin_event_id"))
+            .collect::<Result<Vec<_>, _>>()?;
         let safe_to_retry = txn
             .execute(statement(
                 "UPDATE conversation_prompt_queue_item \
@@ -780,7 +959,7 @@ pub(crate) async fn recover_expired_claims(
                      updated_at = CURRENT_TIMESTAMP \
                  WHERE conversation_id = ? AND state = 'claimed' \
                    AND claim_expires_at <= ? AND dispatch_started_at IS NULL",
-                vec![conversation_id.into(), Utc::now().into()],
+                vec![conversation_id.into(), now.into()],
             ))
             .await?;
         let uncertain = txn
@@ -793,10 +972,19 @@ pub(crate) async fn recover_expired_claims(
                 vec![
                     UNKNOWN_DISPATCH_REASON.into(),
                     conversation_id.into(),
-                    Utc::now().into(),
+                    now.into(),
                 ],
             ))
             .await?;
+        for event_id in &uncertain_origins {
+            crate::db::service::collaboration_service::mark_origin_failed(
+                &txn,
+                conversation_id,
+                event_id,
+                UNKNOWN_DISPATCH_REASON,
+            )
+            .await?;
+        }
         if uncertain.rows_affected() > 0 {
             txn.execute(statement(
                 "UPDATE conversation_prompt_queue_state \
@@ -842,10 +1030,14 @@ pub(crate) async fn pending_conversation_ids(
 mod tests {
     use super::*;
     use crate::acp::types::PromptInputBlock;
+    use crate::db::service::collaboration_service;
     use crate::db::test_helpers::{
         fresh_disk_db, fresh_in_memory_db, seed_conversation, seed_folder,
     };
-    use crate::models::AgentType;
+    use crate::models::{
+        AgentType, CollaborationDeliveryHint, CollaborationDeliveryState,
+        CollaborationInvocationPolicy, CollaborationUrgency, SendCollaborationMessageInput,
+    };
 
     fn draft(text: &str) -> PromptQueueDraft {
         PromptQueueDraft {
@@ -956,6 +1148,63 @@ mod tests {
             .expect("delete");
         assert_eq!(deleted.items.len(), 1);
         assert_eq!(deleted.items[0].id, "one");
+    }
+
+    #[tokio::test]
+    async fn ordinary_queue_controls_cannot_mutate_hidden_collaboration_items() {
+        let (db, target) = seeded_memory().await;
+        let target_row = conversation::Entity::find_by_id(target)
+            .one(&db.conn)
+            .await
+            .unwrap()
+            .unwrap();
+        let source = seed_conversation(&db, target_row.folder_id, AgentType::ClaudeCode).await;
+        let sent = collaboration_service::send(
+            &db.conn,
+            SendCollaborationMessageInput {
+                source_conversation_id: source,
+                target_conversation_ids: vec![target],
+                body: "immutable external input".to_string(),
+                client_dedupe_id: "protected-origin".to_string(),
+                invocation_policy: CollaborationInvocationPolicy::InvokeWhenIdle,
+                delivery_hint: CollaborationDeliveryHint::Default,
+                expects_reply: false,
+                urgency: CollaborationUrgency::Normal,
+                reply_to_event_id: None,
+            },
+        )
+        .await
+        .expect("send collaboration");
+        let origin_id = sent.deliveries[0].id.clone();
+        let mixed = enqueue(&db.conn, input(target, "ordinary", "editable"))
+            .await
+            .expect("ordinary enqueue");
+
+        assert!(edit(
+            &db.conn,
+            target,
+            &origin_id,
+            draft("tampered"),
+            mixed.revision
+        )
+        .await
+        .is_err());
+        let current = snapshot(&db.conn, target).await.unwrap();
+        assert!(delete(&db.conn, target, &origin_id, current.revision)
+            .await
+            .is_err());
+        let current = snapshot(&db.conn, target).await.unwrap();
+        let reordered = reorder(
+            &db.conn,
+            target,
+            vec!["ordinary".to_string()],
+            current.revision,
+        )
+        .await
+        .expect("reorder visible drafts only");
+        assert_eq!(reordered.items.len(), 2);
+        assert_eq!(reordered.items[0].id, origin_id);
+        assert_eq!(reordered.items[1].id, "ordinary");
     }
 
     #[tokio::test]
@@ -1132,6 +1381,62 @@ mod tests {
             .expect("claim after recovery")
             .is_none(),
             "an unknown dispatch must never replay automatically"
+        );
+    }
+
+    #[tokio::test]
+    async fn expired_collaboration_dispatch_marks_delivery_failed_without_replay() {
+        let (db, target) = seeded_memory().await;
+        let target_row = conversation::Entity::find_by_id(target)
+            .one(&db.conn)
+            .await
+            .unwrap()
+            .unwrap();
+        let source = seed_conversation(&db, target_row.folder_id, AgentType::ClaudeCode).await;
+        let sent = collaboration_service::send(
+            &db.conn,
+            SendCollaborationMessageInput {
+                source_conversation_id: source,
+                target_conversation_ids: vec![target],
+                body: "possibly accepted".to_string(),
+                client_dedupe_id: "unknown-collaboration-dispatch".to_string(),
+                invocation_policy: CollaborationInvocationPolicy::InvokeWhenIdle,
+                delivery_hint: CollaborationDeliveryHint::Default,
+                expects_reply: false,
+                urgency: CollaborationUrgency::Normal,
+                reply_to_event_id: None,
+            },
+        )
+        .await
+        .expect("send collaboration");
+        let (claim, _) = claim_head(&db.conn, target, "dead-worker", Duration::seconds(30))
+            .await
+            .expect("claim")
+            .expect("head");
+        assert_eq!(
+            claim.origin_event_id.as_deref(),
+            Some(sent.event_id.as_str())
+        );
+        assert!(
+            mark_dispatch_started(&db.conn, &claim, Duration::seconds(-1))
+                .await
+                .expect("mark dispatch")
+        );
+
+        let recovered = recover_expired_claims(&db.conn).await.expect("recover");
+        assert_eq!(recovered[0].items[0].state, PromptQueueItemState::Paused);
+        let delivery = &collaboration_service::feed(&db.conn, target, None)
+            .await
+            .unwrap()
+            .inbound[0];
+        assert_eq!(delivery.state, CollaborationDeliveryState::Failed);
+        assert_eq!(delivery.error.as_deref(), Some(UNKNOWN_DISPATCH_REASON));
+        assert!(
+            claim_head(&db.conn, target, "new-worker", Duration::seconds(30))
+                .await
+                .expect("claim after recovery")
+                .is_none(),
+            "an unknown cross-Session dispatch must never replay automatically"
         );
     }
 
