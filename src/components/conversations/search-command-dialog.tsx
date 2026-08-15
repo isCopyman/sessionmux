@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react"
 import { formatDistanceToNow } from "date-fns"
 import { enUS, zhCN, zhTW } from "date-fns/locale"
-import { File, Folder } from "lucide-react"
+import { File, Folder, MessageSquareText } from "lucide-react"
 import { useLocale, useTranslations } from "next-intl"
 import { useAuxPanelContext } from "@/contexts/aux-panel-context"
 import { useActiveFolder } from "@/contexts/active-folder-context"
@@ -11,11 +11,12 @@ import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { useTabActions } from "@/contexts/tab-context"
 import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
 import { useWorkspaceActions } from "@/contexts/workspace-context"
-import { listAllConversations } from "@/lib/api"
+import { listAllConversations, searchSessionContent } from "@/lib/api"
 import type {
   AgentType,
   ConversationStatus,
   DbConversationSummary,
+  SessionContentSearchResponse,
 } from "@/lib/types"
 import { useFileTree, type FlatFileEntry } from "@/hooks/use-file-tree"
 import { rankFileMatches } from "@/lib/file-search-match"
@@ -35,6 +36,7 @@ import { cn } from "@/lib/utils"
 import { formatConversationTitle } from "@/lib/conversation-title"
 
 type SearchTab = "conversations" | "files"
+type ConversationScope = "all" | "folder"
 
 interface SearchCommandDialogProps {
   open: boolean
@@ -51,6 +53,7 @@ export function SearchCommandDialog({
     locale === "zh-CN" ? zhCN : locale === "zh-TW" ? zhTW : enUS
   const { activeFolder: folder, activeFolderId } = useActiveFolder()
   const allConversations = useAppWorkspaceStore((s) => s.conversations)
+  const allFolders = useAppWorkspaceStore((s) => s.allFolders)
   const folderId = activeFolderId ?? 0
   const conversations = useMemo(
     () =>
@@ -65,11 +68,16 @@ export function SearchCommandDialog({
   const { revealInFileTree } = useAuxPanelContext()
 
   const [activeTab, setActiveTab] = useState<SearchTab>("conversations")
+  const [conversationScope, setConversationScope] =
+    useState<ConversationScope>("all")
   const [query, setQuery] = useState("")
   const [agentFilter, setAgentFilter] = useState<AgentType | null>(null)
   const [results, setResults] = useState<DbConversationSummary[]>([])
+  const [contentSearch, setContentSearch] =
+    useState<SessionContentSearchResponse | null>(null)
   const [searching, setSearching] = useState(false)
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined)
+  const requestEpochRef = useRef(0)
 
   const folderPath = folder?.path ?? ""
 
@@ -83,10 +91,19 @@ export function SearchCommandDialog({
     enabled: activeTab === "files",
   })
 
-  // Compute which agent types exist in current folder
+  const scopedConversations =
+    conversationScope === "folder" && activeFolderId != null
+      ? conversations
+      : allConversations
+
+  // Compute which agent types exist in the selected conversation scope.
   const availableAgents = Array.from(
-    new Set(conversations.map((c) => c.agent_type))
+    new Set(scopedConversations.map((c) => c.agent_type))
   ).sort(compareAgentType)
+  const folderNames = useMemo(
+    () => new Map(allFolders.map((item) => [item.id, item.name])),
+    [allFolders]
+  )
 
   // Rank files by relevance (name/path tiers + fuzzy subsequence), scanning the
   // full list so a deeply nested match isn't crowded out by shallower ones.
@@ -96,24 +113,46 @@ export function SearchCommandDialog({
   )
 
   const doSearch = useCallback(
-    async (q: string, agent: AgentType | null) => {
+    async (q: string, agent: AgentType | null, scope: ConversationScope) => {
+      const epoch = ++requestEpochRef.current
       if (!q.trim() && !agent) {
         setResults([])
+        setContentSearch(null)
         setSearching(false)
         return
       }
       setSearching(true)
+      const folderIds = scope === "folder" && folderId > 0 ? [folderId] : null
       try {
-        const data = await listAllConversations({
-          folder_ids: folderId > 0 ? [folderId] : null,
-          search: q.trim() || null,
-          agent_type: agent,
-        })
-        setResults(data)
+        const normalized = q.trim()
+        const [metadataResult, contentResult] = await Promise.allSettled([
+          listAllConversations({
+            folder_ids: folderIds,
+            search: normalized || null,
+            agent_type: agent,
+          }),
+          normalized.length >= 2
+            ? searchSessionContent({
+                query: normalized,
+                folder_ids: folderIds,
+                agent_type: agent,
+                limit: 30,
+              })
+            : Promise.resolve(null),
+        ])
+        if (epoch !== requestEpochRef.current) return
+        setResults(
+          metadataResult.status === "fulfilled" ? metadataResult.value : []
+        )
+        setContentSearch(
+          contentResult.status === "fulfilled" ? contentResult.value : null
+        )
       } catch {
+        if (epoch !== requestEpochRef.current) return
         setResults([])
+        setContentSearch(null)
       } finally {
-        setSearching(false)
+        if (epoch === requestEpochRef.current) setSearching(false)
       }
     },
     [folderId]
@@ -124,12 +163,12 @@ export function SearchCommandDialog({
     if (activeTab !== "conversations") return
     if (debounceRef.current) clearTimeout(debounceRef.current)
     debounceRef.current = setTimeout(() => {
-      doSearch(query, agentFilter)
+      doSearch(query, agentFilter, conversationScope)
     }, 300)
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current)
     }
-  }, [query, agentFilter, doSearch, activeTab])
+  }, [query, agentFilter, conversationScope, doSearch, activeTab])
 
   // Reset state when dialog closes
   useEffect(() => {
@@ -137,7 +176,10 @@ export function SearchCommandDialog({
       setQuery("")
       setAgentFilter(null)
       setResults([])
+      setContentSearch(null)
       setActiveTab("conversations")
+      setConversationScope("all")
+      requestEpochRef.current += 1
       resetFileTree()
     }
   }, [open, resetFileTree])
@@ -177,7 +219,7 @@ export function SearchCommandDialog({
   return (
     <CommandDialog
       title={
-        folder
+        folder && conversationScope === "folder"
           ? t("dialogTitleWithFolder", { name: folder.name })
           : t("dialogTitle")
       }
@@ -185,13 +227,35 @@ export function SearchCommandDialog({
       onOpenChange={onOpenChange}
       shouldFilter={activeTab === "conversations"}
     >
-      {/* Folder context header */}
-      {folder && (
+      {/* Search scope: global Session Library by default, with a one-click
+          current-folder view for users working inside a single project. */}
+      {activeTab === "conversations" && (
         <div className="flex items-center gap-2 border-b px-4 py-2.5">
           <Folder className="w-4 h-4 shrink-0 text-muted-foreground" />
-          <span className="text-sm font-medium truncate">
-            {t("dialogTitleWithFolder", { name: folder.name })}
-          </span>
+          <button
+            onClick={() => setConversationScope("all")}
+            className={cn(
+              "h-6 rounded-md px-2 text-xs transition-colors",
+              conversationScope === "all"
+                ? "bg-secondary text-secondary-foreground"
+                : "text-muted-foreground hover:text-foreground"
+            )}
+          >
+            {t("scopeAll")}
+          </button>
+          {folder && (
+            <button
+              onClick={() => setConversationScope("folder")}
+              className={cn(
+                "h-6 min-w-0 truncate rounded-md px-2 text-xs transition-colors",
+                conversationScope === "folder"
+                  ? "bg-secondary text-secondary-foreground"
+                  : "text-muted-foreground hover:text-foreground"
+              )}
+            >
+              {t("scopeFolder", { name: folder.name })}
+            </button>
+          )}
         </div>
       )}
 
@@ -277,7 +341,7 @@ export function SearchCommandDialog({
                   : t("noResults")}
             </CommandEmpty>
             {results.length > 0 && (
-              <CommandGroup>
+              <CommandGroup heading={t("metadataMatches")}>
                 {results.map((conv) => (
                   <CommandItem
                     key={conv.id}
@@ -302,6 +366,59 @@ export function SearchCommandDialog({
                     </span>
                   </CommandItem>
                 ))}
+              </CommandGroup>
+            )}
+            {contentSearch && !contentSearch.available && query.trim() && (
+              <div className="border-t px-4 py-2 text-xs text-muted-foreground">
+                {t("contentUnavailable")}
+              </div>
+            )}
+            {contentSearch?.available && contentSearch.results.length > 0 && (
+              <CommandGroup heading={t("contentMatches")}>
+                {contentSearch.results.map((hit) => {
+                  const conv = hit.conversation
+                  const matchedAt = hit.matched_at
+                    ? formatDistanceToNow(new Date(hit.matched_at), {
+                        addSuffix: true,
+                        locale: dateFnsLocale,
+                      })
+                    : null
+                  return (
+                    <CommandItem
+                      key={`content-${conv.id}`}
+                      value={`${conv.id}-${formatConversationTitle(conv.title)}-${hit.snippet}`}
+                      onSelect={() => handleSelectConversation(conv)}
+                      className="items-start py-2"
+                    >
+                      <MessageSquareText className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                      <span className="min-w-0 flex-1">
+                        <span className="flex items-center gap-2">
+                          <span className="truncate font-medium">
+                            {formatConversationTitle(conv.title) ||
+                              t("untitledConversation")}
+                          </span>
+                          <span className="shrink-0 text-xs text-muted-foreground">
+                            {getAgentLabel(conv.agent_type)}
+                          </span>
+                        </span>
+                        <span className="line-clamp-2 whitespace-pre-line text-xs text-muted-foreground">
+                          {hit.snippet}
+                        </span>
+                        <span className="flex gap-2 text-[0.6875rem] text-muted-foreground/80">
+                          <span>{folderNames.get(conv.folder_id) ?? ""}</span>
+                          {matchedAt && <span>{matchedAt}</span>}
+                          {hit.more_matches > 0 && (
+                            <span>
+                              {t("moreContentMatches", {
+                                count: hit.more_matches,
+                              })}
+                            </span>
+                          )}
+                        </span>
+                      </span>
+                    </CommandItem>
+                  )
+                })}
               </CommandGroup>
             )}
           </>

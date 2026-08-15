@@ -70,6 +70,28 @@ pub struct DbConversationSummary {
     pub origin_cwd: Option<String>,
 }
 
+/// One full-text hit from an optional local history index. The conversation
+/// remains Codeg's canonical/openable session; the external index contributes
+/// only the matching excerpt and rank order.
+#[derive(Debug, Clone, Serialize)]
+pub struct SessionContentSearchHit {
+    pub conversation: DbConversationSummary,
+    pub snippet: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub matched_at: Option<DateTime<Utc>>,
+    pub more_matches: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SessionContentSearchResponse {
+    /// False when the optional `ctx` executable is unavailable or unusable.
+    /// Metadata/title search remains available in that case.
+    pub available: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    pub results: Vec<SessionContentSearchHit>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionStats {
     pub total_usage: Option<TurnUsage>,

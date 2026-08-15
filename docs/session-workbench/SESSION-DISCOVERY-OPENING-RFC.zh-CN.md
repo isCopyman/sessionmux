@@ -201,7 +201,11 @@ Session Center 的 Preview 是管理页自己的只读预览，不是 Workbench 
 
 截至 2026-08-15，当前代码已有：
 
-- `search-command-dialog.tsx`：`Ctrl/Cmd+K` 搜索当前 active Folder，支持 Harness 过滤；
+- `search-command-dialog.tsx`：`Ctrl/Cmd+K` 默认搜索全部 Folder，可一键缩小到当前 Folder，并支持
+  Harness 过滤；
+- `session_search.rs`：通过 `ctx search --json --refresh off` 查询正文，按
+  `(agent_type, external_id)` 映射回可打开的 Codeg Session，同一 Session 只展示最佳命中；
+- 正文搜索设有输入防抖、查询竞态保护、15 秒超时和安全降级，不会因 ctx 缺失而破坏标题搜索；
 - `conversation-manage-dialog.tsx`：搜索、Folder、Harness、状态 facet；
 - `sidebar-conversation-list.tsx`：单击调用 `openTab(..., pin=false)`，双击传 `pin=true`；
 - `tab-store.ts`：未固定 Tab 是每个 Pane 的 preview，下一次单击会替换该 Pane 内的旧 preview；
@@ -211,9 +215,11 @@ Session Center 的 Preview 是管理页自己的只读预览，不是 Workbench 
 
 1. 统一侧栏和 Quick Open 的默认打开动作为固定 Tab；
 2. 保留 `isPinned=false` preview 原语，但只给显式启用 Preview Mode 的用户使用；
-3. 把当前 active Folder 搜索扩展为 Library Scope，并复用管理弹窗 facet；
-4. 新增 Session Center 路由和共享 Search Provider；
-5. 给每个结果展示“已在当前 Workbench”“另一个 Workbench 中”“尚未导入”等状态。
+3. 把已经落地的 Library Scope 与 ctx Provider 复用到完整 Session Center；
+4. 新增 Session Center 路由并合并现有管理弹窗 facet；
+5. 给每个结果展示“已在当前 Workbench”“另一个 Workbench 中”“尚未导入”等状态；
+6. 后续再支持 ctx 已索引但尚未导入 Codeg 的外部 Session；当前正文结果只返回能够安全 Resume 的
+   已导入 Session。
 
 ## 7. Active、Scope 与 Focus Session
 

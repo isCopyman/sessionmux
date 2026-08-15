@@ -22,6 +22,7 @@ import type {
   FolderLinkPlan,
   FolderLinkRequestItem,
   DbConversationSummary,
+  SessionContentSearchResponse,
   ImportResult,
   OpenedTab,
   OpenedTabsSnapshot,
@@ -546,6 +547,20 @@ export async function listAllConversations(params?: {
   })
 }
 
+export async function searchSessionContent(params: {
+  query: string
+  folder_ids?: number[] | null
+  agent_type?: AgentType | null
+  limit?: number | null
+}): Promise<SessionContentSearchResponse> {
+  return invoke("search_session_content", {
+    query: params.query,
+    folderIds: params.folder_ids ?? null,
+    agentType: params.agent_type ?? null,
+    limit: params.limit ?? null,
+  })
+}
+
 export async function listChildConversations(
   parentConversationId: number
 ): Promise<DbConversationSummary[]> {
@@ -590,9 +605,7 @@ export async function listWorkbenches(): Promise<WorkbenchInfo[]> {
   return invoke("list_workbenches")
 }
 
-export async function createWorkbench(
-  name?: string
-): Promise<WorkbenchInfo> {
+export async function createWorkbench(name?: string): Promise<WorkbenchInfo> {
   return invoke("create_workbench", { name: name ?? null })
 }
 

@@ -425,6 +425,19 @@ export interface DbConversationSummary {
   origin_cwd?: string | null
 }
 
+export interface SessionContentSearchHit {
+  conversation: DbConversationSummary
+  snippet: string
+  matched_at?: string | null
+  more_matches: number
+}
+
+export interface SessionContentSearchResponse {
+  available: boolean
+  reason?: string | null
+  results: SessionContentSearchHit[]
+}
+
 /** Payload for the global `conversation://changed` side-channel that keeps
  *  every client's sidebar list/status in sync across desktop + browsers.
  *  Mirrors the Rust `ConversationChange` enum (serde `tag = "kind"`). */

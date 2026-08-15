@@ -24,7 +24,8 @@ pub use conversation::{
     AgentConversationCount, AgentStats, ConversationDetail, ConversationSummary,
     ConversationTurnsPage, DbConversationDetail, DbConversationSummary, FolderInfo,
     ImportFolderOutcome, ImportResult, ImportSelectedResult, ScanFolder, ScanResult, ScanSession,
-    ScanSessionStatus, SelectedSessionKey, SessionStats, SidebarData,
+    ScanSessionStatus, SelectedSessionKey, SessionContentSearchHit, SessionContentSearchResponse,
+    SessionStats, SidebarData,
 };
 pub use folder::{
     FolderCommandInfo, FolderDetail, FolderHistoryEntry, OpenedTab, OpenedTabsSnapshot,
