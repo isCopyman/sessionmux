@@ -194,6 +194,120 @@ pub async fn move_to(
     Ok(to_info(active.update(conn).await?))
 }
 
+/// Place a Collection at an exact sibling index, optionally changing its
+/// parent. Unlike `move_to`, this normalizes both the source and destination
+/// sibling lists in one transaction and returns the authoritative full tree.
+/// `position` is the final index after removing the moving item.
+pub async fn place(
+    conn: &DatabaseConnection,
+    id: i32,
+    parent_id: Option<i32>,
+    position: i32,
+) -> Result<Vec<CollectionInfo>, DbError> {
+    if position < 0 {
+        return Err(DbError::Validation(
+            "Collection position cannot be negative".into(),
+        ));
+    }
+    if parent_id == Some(id) {
+        return Err(DbError::Validation(
+            "A Collection cannot contain itself".into(),
+        ));
+    }
+
+    let txn = conn.begin().await?;
+    let moving = get_collection(&txn, id).await?;
+
+    // Validate the requested parent and walk to the root before mutating any
+    // row. A parent from another Path or one below `id` would corrupt the
+    // visible Path -> Collection tree.
+    let mut cursor = parent_id;
+    while let Some(candidate) = cursor {
+        if candidate == id {
+            return Err(DbError::Validation(
+                "A Collection cannot be moved into its descendant".into(),
+            ));
+        }
+        let parent = get_collection(&txn, candidate).await?;
+        if parent.root_folder_id != moving.root_folder_id {
+            return Err(DbError::Validation(
+                "Collections cannot be nested across Paths".into(),
+            ));
+        }
+        cursor = parent.parent_id;
+    }
+
+    let rows = {
+        let query = collection::Entity::find();
+        let query = match moving.root_folder_id {
+            Some(root_id) => query.filter(collection::Column::RootFolderId.eq(root_id)),
+            None => query.filter(collection::Column::RootFolderId.is_null()),
+        };
+        query.all(&txn).await?
+    };
+    let by_id: HashMap<i32, &collection::Model> = rows.iter().map(|row| (row.id, row)).collect();
+    let sibling_ids = |parent: Option<i32>, exclude: Option<i32>| {
+        let mut siblings: Vec<&collection::Model> = rows
+            .iter()
+            .filter(|row| row.parent_id == parent && Some(row.id) != exclude)
+            .collect();
+        siblings.sort_by_key(|row| (row.position, row.id));
+        siblings.into_iter().map(|row| row.id).collect::<Vec<_>>()
+    };
+
+    let mut destination = sibling_ids(parent_id, Some(id));
+    let target_index = (position as usize).min(destination.len());
+    destination.insert(target_index, id);
+
+    let current = sibling_ids(moving.parent_id, None);
+    if moving.parent_id == parent_id && current == destination {
+        txn.commit().await?;
+        return list(conn).await;
+    }
+
+    let now = Utc::now();
+    if moving.parent_id != parent_id {
+        for (index, sibling_id) in sibling_ids(moving.parent_id, Some(id))
+            .into_iter()
+            .enumerate()
+        {
+            let Some(row) = by_id.get(&sibling_id) else {
+                continue;
+            };
+            if row.position == index as i32 {
+                continue;
+            }
+            collection::Entity::update_many()
+                .col_expr(collection::Column::Position, Expr::value(index as i32))
+                .col_expr(collection::Column::UpdatedAt, Expr::value(now))
+                .filter(collection::Column::Id.eq(sibling_id))
+                .exec(&txn)
+                .await?;
+        }
+    }
+
+    for (index, collection_id) in destination.into_iter().enumerate() {
+        let row = by_id
+            .get(&collection_id)
+            .ok_or_else(|| DbError::NotFound(format!("Collection {collection_id}")))?;
+        let parent_changed = collection_id == id && row.parent_id != parent_id;
+        if row.position == index as i32 && !parent_changed {
+            continue;
+        }
+        let mut update = collection::Entity::update_many()
+            .col_expr(collection::Column::Position, Expr::value(index as i32))
+            .col_expr(collection::Column::UpdatedAt, Expr::value(now))
+            .filter(collection::Column::Id.eq(collection_id));
+        if collection_id == id {
+            update = update.col_expr(collection::Column::ParentId, Expr::value(parent_id));
+        }
+        update.exec(&txn).await?;
+    }
+
+    txn.commit().await?;
+    list(conn).await
+}
+
 pub async fn delete(conn: &DatabaseConnection, id: i32) -> Result<(), DbError> {
     let txn = conn.begin().await?;
     let row = collection::Entity::find_by_id(id)

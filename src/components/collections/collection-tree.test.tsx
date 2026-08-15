@@ -11,6 +11,7 @@ const h = vi.hoisted(() => ({
   create: vi.fn(),
   rename: vi.fn(),
   move: vi.fn(),
+  place: vi.fn(),
   remove: vi.fn(),
   hydrate: vi.fn(),
   listRefs: vi.fn(),
@@ -117,6 +118,15 @@ const h = vi.hoisted(() => ({
       created_at: "2026-06-01T00:00:00.000Z",
       updated_at: "2026-06-01T00:00:00.000Z",
     },
+    {
+      id: 13,
+      root_folder_id: 7,
+      parent_id: null,
+      name: "Writing",
+      position: 1,
+      created_at: "2026-06-01T00:00:00.000Z",
+      updated_at: "2026-06-01T00:00:00.000Z",
+    },
   ],
 }))
 
@@ -134,6 +144,7 @@ vi.mock("@/stores/collection-store", () => ({
       create: h.create,
       rename: h.rename,
       move: h.move,
+      place: h.place,
       remove: h.remove,
     }),
 }))
@@ -233,6 +244,20 @@ function createDataTransfer() {
   } as unknown as DataTransfer
 }
 
+function fireDragAt(
+  target: Element,
+  type: "dragover" | "drop",
+  dataTransfer: DataTransfer,
+  clientY: number
+) {
+  const event = new Event(type, { bubbles: true, cancelable: true })
+  Object.defineProperties(event, {
+    dataTransfer: { value: dataTransfer },
+    clientY: { value: clientY },
+  })
+  fireEvent(target, event)
+}
+
 function renderTree(
   onOpenScope = vi.fn(),
   options: {
@@ -257,7 +282,7 @@ describe("CollectionTree", () => {
   beforeEach(() => {
     vi.clearAllMocks()
     h.create.mockResolvedValue({
-      id: 12,
+      id: 14,
       root_folder_id: 7,
       parent_id: null,
       name: "Writing",
@@ -275,6 +300,7 @@ describe("CollectionTree", () => {
               collection_id: collectionId,
             }))
     )
+    h.place.mockResolvedValue(undefined)
   })
 
   it("opens nested Collections as Session Center scopes", async () => {
@@ -293,7 +319,7 @@ describe("CollectionTree", () => {
     await user.click(screen.getByRole("button", { name: "Confirm" }))
 
     expect(h.create).toHaveBeenCalledWith("Writing", null, 7)
-    expect(onOpenScope).toHaveBeenCalledWith(12)
+    expect(onOpenScope).toHaveBeenCalledWith(14)
   })
 
   it("expands Collections into inline Sessions and keeps Unclassified visible", async () => {
@@ -417,5 +443,89 @@ describe("CollectionTree", () => {
     expect(dataTransfer.dropEffect).toBe("none")
     expect(h.assignCollection).not.toHaveBeenCalled()
     expect(target.getAttribute("data-session-drop-target")).toBeNull()
+  })
+
+  it("reorders Collections with an explicit before insertion line", async () => {
+    renderTree(vi.fn(), { showSessions: true })
+    const source = screen.getByRole("button", { name: "Writing" })
+    const target = document.querySelector('[data-collection-id="10"]')!
+    vi.spyOn(target, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 100,
+      top: 100,
+      left: 0,
+      right: 220,
+      bottom: 128,
+      width: 220,
+      height: 28,
+      toJSON: () => ({}),
+    })
+    const dataTransfer = createDataTransfer()
+
+    fireEvent.dragStart(source, { dataTransfer })
+    fireDragAt(target, "dragover", dataTransfer, 102)
+    expect(target.getAttribute("data-collection-drop-position")).toBe("before")
+    fireDragAt(target, "drop", dataTransfer, 102)
+
+    await waitFor(() => expect(h.place).toHaveBeenCalledWith(13, null, 0))
+  })
+
+  it("nests a Collection when dropped in the center of another row", async () => {
+    renderTree(vi.fn(), { showSessions: true })
+    const source = screen.getByRole("button", { name: "Writing" })
+    const target = document.querySelector('[data-collection-id="10"]')!
+    vi.spyOn(target, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 100,
+      top: 100,
+      left: 0,
+      right: 220,
+      bottom: 128,
+      width: 220,
+      height: 28,
+      toJSON: () => ({}),
+    })
+    const dataTransfer = createDataTransfer()
+
+    fireEvent.dragStart(source, { dataTransfer })
+    fireDragAt(target, "dragover", dataTransfer, 114)
+    expect(target.getAttribute("data-collection-drop-position")).toBe("inside")
+    fireDragAt(target, "drop", dataTransfer, 114)
+
+    await waitFor(() => expect(h.place).toHaveBeenCalledWith(13, 10, 1))
+  })
+
+  it("promotes a nested Collection by dropping it on the Path header", async () => {
+    const { user } = renderTree(vi.fn(), { showSessions: true })
+    await user.click(screen.getByRole("button", { name: "Research" }))
+    const source = screen.getByRole("button", { name: "Sources" })
+    const target = document.querySelector('[data-collection-path="7"] > div')!
+    const dataTransfer = createDataTransfer()
+
+    fireEvent.dragStart(source, { dataTransfer })
+    fireEvent.dragOver(target, { dataTransfer })
+    expect(target.getAttribute("data-collection-root-drop")).toBe("true")
+    fireEvent.drop(target, { dataTransfer })
+
+    await waitFor(() => expect(h.place).toHaveBeenCalledWith(11, null, 2))
+  })
+
+  it("rejects Collection cycles and cross-Path placement", async () => {
+    const { user } = renderTree(vi.fn(), { showSessions: true })
+    await user.click(screen.getByRole("button", { name: "Research" }))
+    const dataTransfer = createDataTransfer()
+    const research = screen.getByRole("button", { name: "Research" })
+    const sources = document.querySelector('[data-collection-id="11"]')!
+    const other = document.querySelector('[data-collection-id="12"]')!
+
+    fireEvent.dragStart(research, { dataTransfer })
+    fireEvent.dragOver(sources, { dataTransfer })
+    fireEvent.drop(sources, { dataTransfer })
+    fireEvent.dragOver(other, { dataTransfer })
+    fireEvent.drop(other, { dataTransfer })
+
+    expect(h.place).not.toHaveBeenCalled()
+    expect(sources.getAttribute("data-collection-drop-position")).toBeNull()
+    expect(other.getAttribute("data-collection-drop-position")).toBeNull()
   })
 })

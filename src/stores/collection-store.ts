@@ -4,6 +4,7 @@ import {
   deleteCollection as deleteCollectionApi,
   listCollections,
   moveCollection as moveCollectionApi,
+  placeCollection as placeCollectionApi,
   renameCollection as renameCollectionApi,
 } from "@/lib/api"
 import type { CollectionInfo } from "@/lib/types"
@@ -20,6 +21,11 @@ interface CollectionStoreState {
   ) => Promise<CollectionInfo>
   rename: (id: number, name: string) => Promise<void>
   move: (id: number, parentId?: number | null) => Promise<void>
+  place: (
+    id: number,
+    parentId: number | null,
+    position: number
+  ) => Promise<void>
   remove: (id: number) => Promise<void>
 }
 
@@ -71,6 +77,10 @@ export const useCollectionStore = create<CollectionStoreState>()(
           get().items.map((item) => (item.id === id ? updated : item))
         ),
       })
+    },
+
+    place: async (id, parentId, position) => {
+      set({ items: ordered(await placeCollectionApi(id, parentId, position)) })
     },
 
     remove: async (id) => {

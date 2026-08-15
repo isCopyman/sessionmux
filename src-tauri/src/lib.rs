@@ -1323,6 +1323,7 @@ mod tauri_app {
                 collections::create_collection,
                 collections::rename_collection,
                 collections::move_collection,
+                collections::place_collection,
                 collections::delete_collection,
                 collections::assign_conversations_to_collection,
                 workbenches::list_workbenches,

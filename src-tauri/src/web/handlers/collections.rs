@@ -38,6 +38,14 @@ pub struct MoveCollectionParams {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct PlaceCollectionParams {
+    pub id: i32,
+    pub parent_id: Option<i32>,
+    pub position: i32,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DeleteCollectionParams {
     pub id: i32,
 }
@@ -100,6 +108,21 @@ pub async fn move_collection(
 ) -> Result<Json<CollectionInfo>, AppCommandError> {
     Ok(Json(
         collections::move_collection_core(&state.db.conn, params.id, params.parent_id).await?,
+    ))
+}
+
+pub async fn place_collection(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<PlaceCollectionParams>,
+) -> Result<Json<Vec<CollectionInfo>>, AppCommandError> {
+    Ok(Json(
+        collections::place_collection_core(
+            &state.db.conn,
+            params.id,
+            params.parent_id,
+            params.position,
+        )
+        .await?,
     ))
 }
 

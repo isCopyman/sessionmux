@@ -1244,6 +1244,10 @@ pub fn build_router(
             post(handlers::collections::move_collection),
         )
         .route(
+            "/place_collection",
+            post(handlers::collections::place_collection),
+        )
+        .route(
             "/delete_collection",
             post(handlers::collections::delete_collection),
         )

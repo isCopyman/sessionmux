@@ -52,6 +52,17 @@ pub async fn move_collection_core(
         .map_err(AppCommandError::from)
 }
 
+pub async fn place_collection_core(
+    conn: &sea_orm::DatabaseConnection,
+    id: i32,
+    parent_id: Option<i32>,
+    position: i32,
+) -> Result<Vec<CollectionInfo>, AppCommandError> {
+    collection_service::place(conn, id, parent_id, position)
+        .await
+        .map_err(AppCommandError::from)
+}
+
 pub async fn delete_collection_core(
     conn: &sea_orm::DatabaseConnection,
     id: i32,
@@ -117,6 +128,17 @@ pub async fn move_collection(
     parent_id: Option<i32>,
 ) -> Result<CollectionInfo, AppCommandError> {
     move_collection_core(&db.conn, id, parent_id).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn place_collection(
+    db: tauri::State<'_, AppDatabase>,
+    id: i32,
+    parent_id: Option<i32>,
+    position: i32,
+) -> Result<Vec<CollectionInfo>, AppCommandError> {
+    place_collection_core(&db.conn, id, parent_id, position).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -236,5 +258,64 @@ mod tests {
         assert!(move_collection_core(&db.conn, second.id, Some(first.id))
             .await
             .is_err());
+        assert!(
+            place_collection_core(&db.conn, second.id, Some(first.id), 0)
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn exact_placement_reorders_and_reparents_atomically() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-collection-placement").await;
+        let first = create_collection_core(&db.conn, "First".into(), None, Some(folder))
+            .await
+            .expect("first");
+        let second = create_collection_core(&db.conn, "Second".into(), None, Some(folder))
+            .await
+            .expect("second");
+        let third = create_collection_core(&db.conn, "Third".into(), None, Some(folder))
+            .await
+            .expect("third");
+        let child = create_collection_core(&db.conn, "Child".into(), Some(first.id), None)
+            .await
+            .expect("child");
+
+        let reordered = place_collection_core(&db.conn, third.id, None, 0)
+            .await
+            .expect("reorder roots");
+        let roots: Vec<_> = reordered
+            .iter()
+            .filter(|item| item.root_folder_id == Some(folder) && item.parent_id.is_none())
+            .map(|item| (item.id, item.position))
+            .collect();
+        assert_eq!(roots, vec![(third.id, 0), (first.id, 1), (second.id, 2)]);
+
+        let nested = place_collection_core(&db.conn, second.id, Some(first.id), 0)
+            .await
+            .expect("nest at first child");
+        let roots: Vec<_> = nested
+            .iter()
+            .filter(|item| item.root_folder_id == Some(folder) && item.parent_id.is_none())
+            .map(|item| (item.id, item.position))
+            .collect();
+        let children: Vec<_> = nested
+            .iter()
+            .filter(|item| item.parent_id == Some(first.id))
+            .map(|item| (item.id, item.position))
+            .collect();
+        assert_eq!(roots, vec![(third.id, 0), (first.id, 1)]);
+        assert_eq!(children, vec![(second.id, 0), (child.id, 1)]);
+
+        assert!(place_collection_core(&db.conn, first.id, Some(child.id), 0)
+            .await
+            .is_err());
+        assert!(place_collection_core(&db.conn, first.id, None, -1)
+            .await
+            .is_err());
+
+        let after_rejections = list_collections_core(&db.conn).await.expect("list");
+        assert_eq!(after_rejections, nested, "failed placements must roll back");
     }
 }

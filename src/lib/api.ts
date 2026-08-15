@@ -1885,6 +1885,18 @@ export async function moveCollection(
   })
 }
 
+export async function placeCollection(
+  id: number,
+  parentId: number | null,
+  position: number
+): Promise<CollectionInfo[]> {
+  return getTransport().call("place_collection", {
+    id,
+    parentId,
+    position,
+  })
+}
+
 export async function deleteCollection(id: number): Promise<void> {
   return getTransport().call("delete_collection", { id })
 }

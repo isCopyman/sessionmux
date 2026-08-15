@@ -89,8 +89,20 @@ type SessionDragPayload = {
   conversationId: number
   rootFolderId: number
 }
+type CollectionDragPayload = {
+  collectionId: number
+  rootFolderId: number | null
+}
+type CollectionDropTarget = {
+  targetCollectionId: number | null
+  rootFolderId: number | null
+  parentId: number | null
+  index: number
+  position: "before" | "inside" | "after" | "root"
+}
 
 const SESSION_TREE_DRAG_MIME = "application/x-codeg-session-tree"
+const COLLECTION_TREE_DRAG_MIME = "application/x-codeg-collection-tree"
 
 type EditorState =
   | {
@@ -186,6 +198,7 @@ export function CollectionTree({
   const create = useCollectionStore((state) => state.create)
   const rename = useCollectionStore((state) => state.rename)
   const move = useCollectionStore((state) => state.move)
+  const place = useCollectionStore((state) => state.place)
   const remove = useCollectionStore((state) => state.remove)
   const conversations = useAppWorkspaceStore((state) => state.conversations)
   const folders = useAppWorkspaceStore((state) => state.folders)
@@ -218,6 +231,15 @@ export function CollectionTree({
   const [movingConversationId, setMovingConversationId] = useState<
     number | null
   >(null)
+  const collectionDragRef = useRef<CollectionDragPayload | null>(null)
+  const [draggingCollectionId, setDraggingCollectionId] = useState<
+    number | null
+  >(null)
+  const [collectionDropTarget, setCollectionDropTarget] =
+    useState<CollectionDropTarget | null>(null)
+  const [placingCollectionId, setPlacingCollectionId] = useState<number | null>(
+    null
+  )
 
   const activeConversationId = useMemo(
     () => tabs.find((tab) => tab.id === activeTabId)?.conversationId ?? null,
@@ -495,6 +517,222 @@ export function CollectionTree({
     }
   }
 
+  const beginCollectionDrag = (
+    event: DragEvent<HTMLButtonElement>,
+    item: CollectionInfo
+  ) => {
+    if (placingCollectionId != null) {
+      event.preventDefault()
+      return
+    }
+    const payload = {
+      collectionId: item.id,
+      rootFolderId: item.root_folder_id ?? null,
+    }
+    collectionDragRef.current = payload
+    setDraggingCollectionId(item.id)
+    event.dataTransfer.effectAllowed = "move"
+    event.dataTransfer.setData(
+      COLLECTION_TREE_DRAG_MIME,
+      JSON.stringify(payload)
+    )
+    event.dataTransfer.setData("text/plain", item.name)
+    event.dataTransfer.setDragImage?.(event.currentTarget, 18, 14)
+  }
+
+  const finishCollectionDrag = () => {
+    collectionDragRef.current = null
+    setDraggingCollectionId(null)
+    setCollectionDropTarget(null)
+  }
+
+  const collectionPlacementChanged = (
+    payload: CollectionDragPayload,
+    parent: number | null,
+    index: number
+  ) => {
+    const moving = collectionById.get(payload.collectionId)
+    if (!moving || moving.parent_id !== parent) return true
+    const currentIndex = (children.get(parent) ?? [])
+      .filter(
+        (candidate) =>
+          (candidate.root_folder_id ?? null) === payload.rootFolderId
+      )
+      .findIndex((candidate) => candidate.id === payload.collectionId)
+    return currentIndex !== index
+  }
+
+  const collectionRowPlacement = (
+    event: DragEvent<HTMLElement>,
+    target: CollectionInfo
+  ): CollectionDropTarget | null => {
+    const payload = collectionDragRef.current
+    if (
+      !payload ||
+      placingCollectionId != null ||
+      payload.rootFolderId !== (target.root_folder_id ?? null)
+    ) {
+      return null
+    }
+
+    const rect = event.currentTarget.getBoundingClientRect()
+    const ratio =
+      rect.height > 0 ? (event.clientY - rect.top) / rect.height : 0.5
+    const position = ratio < 0.25 ? "before" : ratio > 0.75 ? "after" : "inside"
+    const invalidParents = descendants(items, payload.collectionId)
+    if (target.id === payload.collectionId) return null
+
+    if (position === "inside") {
+      if (invalidParents.has(target.id)) return null
+      const index = (children.get(target.id) ?? []).filter(
+        (candidate) => candidate.id !== payload.collectionId
+      ).length
+      if (!collectionPlacementChanged(payload, target.id, index)) return null
+      return {
+        targetCollectionId: target.id,
+        rootFolderId: payload.rootFolderId,
+        parentId: target.id,
+        index,
+        position,
+      }
+    }
+
+    const parent = target.parent_id
+    if (parent != null && invalidParents.has(parent)) return null
+    const siblings = (children.get(parent) ?? []).filter(
+      (candidate) =>
+        candidate.id !== payload.collectionId &&
+        (candidate.root_folder_id ?? null) === payload.rootFolderId
+    )
+    const targetIndex = siblings.findIndex(
+      (candidate) => candidate.id === target.id
+    )
+    if (targetIndex < 0) return null
+    const index = targetIndex + (position === "after" ? 1 : 0)
+    if (!collectionPlacementChanged(payload, parent, index)) return null
+    return {
+      targetCollectionId: target.id,
+      rootFolderId: payload.rootFolderId,
+      parentId: parent,
+      index,
+      position,
+    }
+  }
+
+  const collectionRootPlacement = (
+    rootId: number | null
+  ): CollectionDropTarget | null => {
+    const payload = collectionDragRef.current
+    if (
+      !payload ||
+      placingCollectionId != null ||
+      payload.rootFolderId !== rootId
+    ) {
+      return null
+    }
+    const index = (children.get(null) ?? []).filter(
+      (candidate) =>
+        candidate.id !== payload.collectionId &&
+        (candidate.root_folder_id ?? null) === rootId
+    ).length
+    if (!collectionPlacementChanged(payload, null, index)) return null
+    return {
+      targetCollectionId: null,
+      rootFolderId: rootId,
+      parentId: null,
+      index,
+      position: "root",
+    }
+  }
+
+  const handleCollectionRowDragOver = (
+    event: DragEvent<HTMLElement>,
+    item: CollectionInfo
+  ) => {
+    if (!collectionDragRef.current) {
+      handleSessionDragOver(event, item.root_folder_id ?? -1, item.id)
+      return
+    }
+    const placement = collectionRowPlacement(event, item)
+    if (!placement) {
+      event.dataTransfer.dropEffect = "none"
+      setCollectionDropTarget(null)
+      return
+    }
+    event.preventDefault()
+    event.dataTransfer.dropEffect = "move"
+    setCollectionDropTarget(placement)
+  }
+
+  const handleCollectionDragLeave = (event: DragEvent<HTMLElement>) => {
+    const related = event.relatedTarget
+    if (related instanceof Node && event.currentTarget.contains(related)) return
+    if (collectionDragRef.current) setCollectionDropTarget(null)
+    else handleSessionDragLeave(event)
+  }
+
+  const commitCollectionPlacement = async (
+    event: DragEvent<HTMLElement>,
+    placement: CollectionDropTarget | null
+  ) => {
+    const payload = collectionDragRef.current
+    if (!payload || !placement) return
+    event.preventDefault()
+    setCollectionDropTarget(null)
+    setPlacingCollectionId(payload.collectionId)
+    try {
+      await place(payload.collectionId, placement.parentId, placement.index)
+      if (placement.parentId != null) {
+        setExpanded((current) => new Set(current).add(placement.parentId!))
+      }
+      if (typeof placement.rootFolderId === "number") {
+        setCollapsedPaths((current) => {
+          const next = new Set(current)
+          next.delete(placement.rootFolderId as number)
+          return next
+        })
+      }
+    } catch (error) {
+      toast.error(t("operationFailed", { message: toErrorMessage(error) }))
+    } finally {
+      setPlacingCollectionId(null)
+      finishCollectionDrag()
+    }
+  }
+
+  const handleCollectionRowDrop = (
+    event: DragEvent<HTMLElement>,
+    item: CollectionInfo
+  ) => {
+    if (!collectionDragRef.current) {
+      void handleSessionDrop(event, item.root_folder_id ?? -1, item.id)
+      return
+    }
+    void commitCollectionPlacement(event, collectionRowPlacement(event, item))
+  }
+
+  const handleCollectionRootDragOver = (
+    event: DragEvent<HTMLElement>,
+    rootId: number | null
+  ) => {
+    const placement = collectionRootPlacement(rootId)
+    if (!placement) {
+      event.dataTransfer.dropEffect = "none"
+      setCollectionDropTarget(null)
+      return
+    }
+    event.preventDefault()
+    event.dataTransfer.dropEffect = "move"
+    setCollectionDropTarget(placement)
+  }
+
+  const handleCollectionRootDrop = (
+    event: DragEvent<HTMLElement>,
+    rootId: number | null
+  ) => {
+    void commitCollectionPlacement(event, collectionRootPlacement(rootId))
+  }
+
   const openEditor = (next: EditorState) => {
     setEditor(next)
     if (next.mode === "create") {
@@ -655,30 +893,46 @@ export function CollectionTree({
             <div
               data-collection-id={item.id}
               data-collection-root-id={item.root_folder_id ?? undefined}
+              data-collection-drop-position={
+                collectionDropTarget?.targetCollectionId === item.id
+                  ? collectionDropTarget.position
+                  : undefined
+              }
               data-session-drop-target={
                 dropTarget === dragTargetKey(item.root_folder_id ?? -1, item.id)
                   ? "true"
                   : undefined
               }
               className={cn(
-                "group flex h-7 min-w-0 items-center rounded-md pe-1 hover:bg-sidebar-accent",
+                "group relative flex h-7 min-w-0 items-center rounded-md pe-1 hover:bg-sidebar-accent",
                 dropTarget ===
                   dragTargetKey(item.root_folder_id ?? -1, item.id) &&
-                  "bg-primary/10 ring-1 ring-inset ring-primary/45"
+                  "bg-primary/10 ring-1 ring-inset ring-primary/45",
+                collectionDropTarget?.targetCollectionId === item.id &&
+                  collectionDropTarget.position === "inside" &&
+                  "bg-primary/10 ring-1 ring-inset ring-primary/45",
+                draggingCollectionId === item.id && "opacity-45",
+                placingCollectionId === item.id &&
+                  "pointer-events-none opacity-55"
               )}
               style={{ paddingInlineStart: `${0.25 + depth * 0.75}rem` }}
-              onDragOver={(event) =>
-                handleSessionDragOver(event, item.root_folder_id ?? -1, item.id)
-              }
-              onDragLeave={handleSessionDragLeave}
-              onDrop={(event) =>
-                void handleSessionDrop(
-                  event,
-                  item.root_folder_id ?? -1,
-                  item.id
-                )
-              }
+              onDragOver={(event) => handleCollectionRowDragOver(event, item)}
+              onDragLeave={handleCollectionDragLeave}
+              onDrop={(event) => handleCollectionRowDrop(event, item)}
             >
+              {collectionDropTarget?.targetCollectionId === item.id &&
+              (collectionDropTarget.position === "before" ||
+                collectionDropTarget.position === "after") ? (
+                <span
+                  aria-hidden
+                  className={cn(
+                    "pointer-events-none absolute inset-x-1 z-10 h-0.5 rounded-full bg-primary",
+                    collectionDropTarget.position === "before"
+                      ? "-top-px"
+                      : "-bottom-px"
+                  )}
+                />
+              ) : null}
               <button
                 type="button"
                 className={cn(
@@ -703,9 +957,15 @@ export function CollectionTree({
               </button>
               <button
                 type="button"
-                className="flex h-full min-w-0 flex-1 items-center gap-1.5 text-start text-xs"
+                draggable={placingCollectionId == null}
+                data-collection-dragging={
+                  draggingCollectionId === item.id ? "true" : undefined
+                }
+                className="flex h-full min-w-0 flex-1 cursor-grab items-center gap-1.5 text-start text-xs active:cursor-grabbing"
                 title={item.name}
                 aria-label={item.name}
+                onDragStart={(event) => beginCollectionDrag(event, item)}
+                onDragEnd={finishCollectionDrag}
                 onClick={() => {
                   if (!showSessions) {
                     onOpenScope(item.id)
@@ -885,10 +1145,32 @@ export function CollectionTree({
     return (
       <div key={root.id} data-collection-path={root.id}>
         <div
+          data-collection-root-drop={
+            collectionDropTarget?.position === "root" &&
+            collectionDropTarget.rootFolderId === root.id
+              ? "true"
+              : undefined
+          }
           className={cn(
             "group flex h-8 min-w-0 items-center rounded-md pe-1 hover:bg-sidebar-accent",
-            root.id === canonicalActiveRootId && "bg-sidebar-primary/8"
+            root.id === canonicalActiveRootId && "bg-sidebar-primary/8",
+            collectionDropTarget?.position === "root" &&
+              collectionDropTarget.rootFolderId === root.id &&
+              "bg-primary/10 ring-1 ring-inset ring-primary/45"
           )}
+          onDragOver={(event) => {
+            if (collectionDragRef.current) {
+              handleCollectionRootDragOver(event, root.id)
+            }
+          }}
+          onDragLeave={(event) => {
+            if (collectionDragRef.current) handleCollectionDragLeave(event)
+          }}
+          onDrop={(event) => {
+            if (collectionDragRef.current) {
+              handleCollectionRootDrop(event, root.id)
+            }
+          }}
         >
           <button
             type="button"

@@ -8,6 +8,7 @@ const h = vi.hoisted(() => ({
   create: vi.fn(),
   rename: vi.fn(),
   move: vi.fn(),
+  place: vi.fn(),
   remove: vi.fn(),
 }))
 
@@ -16,6 +17,7 @@ vi.mock("@/lib/api", () => ({
   createCollection: h.create,
   renameCollection: h.rename,
   moveCollection: h.move,
+  placeCollection: h.place,
   deleteCollection: h.remove,
 }))
 
@@ -76,5 +78,18 @@ describe("collection store", () => {
       collection(1, "Research"),
       collection(3, "Papers", 1),
     ])
+  })
+
+  it("replaces the tree with the authoritative placement snapshot", async () => {
+    const moved = [
+      { ...collection(2, "Second"), position: 0 },
+      { ...collection(1, "First"), position: 1 },
+    ]
+    h.place.mockResolvedValue(moved)
+
+    await useCollectionStore.getState().place(2, null, 0)
+
+    expect(h.place).toHaveBeenCalledWith(2, null, 0)
+    expect(useCollectionStore.getState().items).toEqual(moved)
   })
 })
