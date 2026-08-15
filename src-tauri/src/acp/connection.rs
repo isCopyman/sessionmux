@@ -389,6 +389,12 @@ fn tag_mcp_suspect(
 struct ConnectionCleanupGuard {
     connections: Arc<tokio::sync::Mutex<HashMap<String, AgentConnection>>>,
     connection_id: String,
+    /// `run_connection` is driven from a dedicated OS thread via
+    /// `Handle::block_on`. Once that call returns the thread is no longer
+    /// entered into a Tokio context, so calling the free `tokio::spawn` from
+    /// `Drop` panics with "there is no reactor running". Keep the runtime
+    /// handle that owns the connection and spawn through it explicitly.
+    runtime: tokio::runtime::Handle,
 }
 
 impl Drop for ConnectionCleanupGuard {
@@ -399,7 +405,7 @@ impl Drop for ConnectionCleanupGuard {
         }
         let connections = self.connections.clone();
         let connection_id = std::mem::take(&mut self.connection_id);
-        tokio::spawn(async move {
+        self.runtime.spawn(async move {
             connections.lock().await.remove(&connection_id);
         });
     }
@@ -1366,6 +1372,7 @@ pub async fn spawn_agent_connection(
     let cleanup_guard = ConnectionCleanupGuard {
         connections: cleanup_connections,
         connection_id: cleanup_connection_id,
+        runtime: connection_rt.clone(),
     };
     let connection_thread = std::thread::Builder::new()
         .name(format!("acp-conn-{conn_id}"))
@@ -10340,6 +10347,40 @@ async fn emit_conversation_update(
 mod tests {
     use super::*;
     use sacp::schema::{Diff, SessionConfigId};
+
+    #[test]
+    fn connection_cleanup_contended_drop_does_not_require_an_entered_runtime() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("test runtime");
+        let connections = Arc::new(tokio::sync::Mutex::new(HashMap::new()));
+
+        // Force the guard down its asynchronous cleanup branch, then drop it
+        // on an ordinary OS thread. This is the production shape: the ACP
+        // connection thread has just returned from Handle::block_on, so there
+        // is no ambient Tokio runtime on that thread anymore.
+        let held = runtime.block_on(connections.clone().lock_owned());
+        let cleanup = ConnectionCleanupGuard {
+            connections: connections.clone(),
+            connection_id: "already-gone".to_string(),
+            runtime: runtime.handle().clone(),
+        };
+        std::thread::spawn(move || drop(cleanup))
+            .join()
+            .expect("Drop must not panic without an entered runtime");
+
+        drop(held);
+        runtime.block_on(async {
+            tokio::time::timeout(std::time::Duration::from_secs(1), async {
+                // Acquiring the mutex after releasing the deliberately-held
+                // guard proves the spawned cleanup future was able to run.
+                drop(connections.lock().await);
+            })
+            .await
+            .expect("cleanup task should be scheduled on the stored runtime");
+        });
+    }
 
     /// Unwrap a select selector. The Grok synthesizers below only ever build
     /// selects, so any other kind is a test failure rather than a branch to
