@@ -11,9 +11,19 @@ import {
 import type { WorkbenchInfo } from "@/lib/types"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { duplicateWorkbenchLocalState, useTabStore } from "@/stores/tab-store"
+import {
+  closeWorkbenchWindowTab,
+  loadWorkbenchWindowTabs,
+  openWorkbenchWindowTab,
+  saveWorkbenchWindowTabs,
+} from "@/lib/workbench-window-tabs"
 
 interface WorkbenchStoreState {
   items: WorkbenchInfo[]
+  /** Workbench views mounted in this app window; saved Workbenches stay in items. */
+  openIds: number[]
+  /** Most-recently closed local views, newest first. */
+  recentlyClosedIds: number[]
   hydrated: boolean
   loading: boolean
   hydrate: () => Promise<void>
@@ -23,6 +33,9 @@ interface WorkbenchStoreState {
   setPinned: (id: number, isPinned: boolean) => Promise<void>
   previewOrder: (items: WorkbenchInfo[]) => void
   persistOrder: () => Promise<void>
+  ensureOpen: (id: number) => void
+  closeView: (id: number) => Promise<void>
+  reopenAndSwitch: (id: number) => Promise<void>
   remove: (id: number) => Promise<void>
 }
 
@@ -48,6 +61,8 @@ function seedDraftIfEmpty() {
 
 export const useWorkbenchStore = create<WorkbenchStoreState>()((set, get) => ({
   items: [],
+  openIds: [],
+  recentlyClosedIds: [],
   hydrated: false,
   loading: false,
 
@@ -55,7 +70,13 @@ export const useWorkbenchStore = create<WorkbenchStoreState>()((set, get) => ({
     if (get().loading) return
     set({ loading: true })
     try {
-      set({ items: ordered(await listWorkbenches()), hydrated: true })
+      const items = ordered(await listWorkbenches())
+      const windowTabs = loadWorkbenchWindowTabs(
+        items.map((item) => item.id),
+        useTabStore.getState().activeWorkbenchId
+      )
+      saveWorkbenchWindowTabs(windowTabs)
+      set({ items, ...windowTabs, hydrated: true })
     } finally {
       set({ loading: false })
     }
@@ -65,6 +86,7 @@ export const useWorkbenchStore = create<WorkbenchStoreState>()((set, get) => ({
     const created = await createWorkbenchApi(name)
     set({ items: ordered([...get().items, created]) })
     await useTabStore.getState().switchWorkbench(created.id)
+    get().ensureOpen(created.id)
 
     // A brand-new workbench should be immediately usable. Seed one draft from
     // the currently focused execution folder (or folderless chat when none is
@@ -80,6 +102,7 @@ export const useWorkbenchStore = create<WorkbenchStoreState>()((set, get) => ({
     duplicateWorkbenchLocalState(id, created.id)
     set({ items: ordered([...get().items, created]) })
     await useTabStore.getState().switchWorkbench(created.id)
+    get().ensureOpen(created.id)
     seedDraftIfEmpty()
     return created
   },
@@ -122,6 +145,48 @@ export const useWorkbenchStore = create<WorkbenchStoreState>()((set, get) => ({
     }
   },
 
+  ensureOpen: (id) => {
+    if (!get().items.some((item) => item.id === id)) return
+    const next = openWorkbenchWindowTab(get(), id)
+    if (
+      next.openIds === get().openIds &&
+      next.recentlyClosedIds.length === get().recentlyClosedIds.length
+    ) {
+      return
+    }
+    saveWorkbenchWindowTabs(next)
+    set(next)
+  },
+
+  closeView: async (id) => {
+    const current = get()
+    if (!current.items.some((item) => item.id === id)) return
+    // A sidebar-triggered switch can expose the active tab one render before
+    // the effect records it in openIds. Treat that active surface as open so a
+    // very fast close click still behaves deterministically.
+    const mounted = openWorkbenchWindowTab(current, id)
+    const next = closeWorkbenchWindowTab(mounted, id)
+    if (next === mounted) return
+
+    if (useTabStore.getState().activeWorkbenchId === id) {
+      const openItems = current.items.filter((item) =>
+        current.openIds.includes(item.id)
+      )
+      const index = openItems.findIndex((item) => item.id === id)
+      const fallback = openItems[index + 1] ?? openItems[index - 1]
+      if (!fallback) return
+      await useTabStore.getState().switchWorkbench(fallback.id)
+    }
+
+    saveWorkbenchWindowTabs(next)
+    set(next)
+  },
+
+  reopenAndSwitch: async (id) => {
+    get().ensureOpen(id)
+    await useTabStore.getState().switchWorkbench(id)
+  },
+
   remove: async (id) => {
     const current = get().items
     if (current.length <= 1)
@@ -132,6 +197,17 @@ export const useWorkbenchStore = create<WorkbenchStoreState>()((set, get) => ({
       await useTabStore.getState().switchWorkbench(fallback.id)
     }
     await deleteWorkbenchApi(id)
-    set({ items: current.filter((item) => item.id !== id) })
+    const remainingItems = current.filter((item) => item.id !== id)
+    const nextWindowTabs = {
+      openIds: get().openIds.filter((candidate) => candidate !== id),
+      recentlyClosedIds: get().recentlyClosedIds.filter(
+        (candidate) => candidate !== id
+      ),
+    }
+    if (nextWindowTabs.openIds.length === 0 && remainingItems[0]) {
+      nextWindowTabs.openIds.push(remainingItems[0].id)
+    }
+    saveWorkbenchWindowTabs(nextWindowTabs)
+    set({ items: remainingItems, ...nextWindowTabs })
   },
 }))

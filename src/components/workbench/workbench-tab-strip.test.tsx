@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import { NextIntlClientProvider } from "next-intl"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import enMessages from "@/i18n/messages/en.json"
@@ -11,6 +12,9 @@ const mocks = vi.hoisted(() => ({
   previewOrder: vi.fn(),
   persistOrder: vi.fn(async () => {}),
   setPinned: vi.fn(async () => {}),
+  ensureOpen: vi.fn(),
+  closeView: vi.fn(async () => {}),
+  reopenAndSwitch: vi.fn(async () => {}),
   switchWorkbench: vi.fn(async () => {}),
   items: [
     {
@@ -30,6 +34,8 @@ const mocks = vi.hoisted(() => ({
       updated_at: "2026-08-15T00:00:00Z",
     },
   ],
+  openIds: [1, 2],
+  recentlyClosedIds: [] as number[],
   activeWorkbenchId: 1,
   switchingWorkbenchId: null as number | null,
 }))
@@ -38,6 +44,8 @@ vi.mock("@/stores/workbench-store", () => ({
   useWorkbenchStore: (selector: (state: unknown) => unknown) =>
     selector({
       items: mocks.items,
+      openIds: mocks.openIds,
+      recentlyClosedIds: mocks.recentlyClosedIds,
       hydrated: true,
       loading: false,
       hydrate: mocks.hydrate,
@@ -46,6 +54,9 @@ vi.mock("@/stores/workbench-store", () => ({
       previewOrder: mocks.previewOrder,
       persistOrder: mocks.persistOrder,
       setPinned: mocks.setPinned,
+      ensureOpen: mocks.ensureOpen,
+      closeView: mocks.closeView,
+      reopenAndSwitch: mocks.reopenAndSwitch,
     }),
 }))
 
@@ -74,9 +85,14 @@ describe("WorkbenchTabStrip", () => {
     mocks.previewOrder.mockClear()
     mocks.persistOrder.mockClear()
     mocks.setPinned.mockClear()
+    mocks.ensureOpen.mockClear()
+    mocks.closeView.mockClear()
+    mocks.reopenAndSwitch.mockClear()
     mocks.switchWorkbench.mockClear()
     mocks.activeWorkbenchId = 1
     mocks.switchingWorkbenchId = null
+    mocks.openIds = [1, 2]
+    mocks.recentlyClosedIds = []
   })
 
   it("renders saved workbenches as window-level tabs and switches them", () => {
@@ -97,6 +113,32 @@ describe("WorkbenchTabStrip", () => {
       fireEvent.click(screen.getByRole("button", { name: "New workbench" }))
     })
     expect(mocks.createAndSwitch).toHaveBeenCalledWith("Workbench 3")
+  })
+
+  it("closes a Workbench view without deleting the saved Workbench", async () => {
+    renderStrip()
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Close Review" }))
+    })
+
+    expect(mocks.closeView).toHaveBeenCalledWith(2)
+  })
+
+  it("restores a Workbench from the recently closed menu", async () => {
+    const user = userEvent.setup()
+    mocks.openIds = [1]
+    mocks.recentlyClosedIds = [2]
+    renderStrip()
+
+    const trigger = screen.getByRole("button", {
+      name: "Recently closed workbenches",
+    })
+    trigger.focus()
+    await user.keyboard("{Enter}")
+    await user.click(await screen.findByRole("menuitem", { name: "Review" }))
+
+    expect(mocks.reopenAndSwitch).toHaveBeenCalledWith(2)
   })
 
   it("shows which target is restoring and locks competing switches", () => {

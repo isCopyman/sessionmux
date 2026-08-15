@@ -5,12 +5,14 @@ import { Reorder } from "motion/react"
 import {
   ArrowLeft,
   ArrowRight,
+  Clock3,
   Copy,
   Loader2,
   PanelsTopLeft,
   Pin,
   PinOff,
   Plus,
+  X,
 } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
@@ -25,11 +27,33 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import type { WorkbenchInfo } from "@/lib/types"
 
 interface WorkbenchTabStripProps {
   leftInset: number
   rightInset: number
+}
+
+function mergeOpenWorkbenchOrder(
+  allItems: WorkbenchInfo[],
+  orderedOpenIds: readonly number[],
+  openIds: ReadonlySet<number>
+): WorkbenchInfo[] {
+  const byId = new Map(allItems.map((item) => [item.id, item]))
+  const orderedOpen = orderedOpenIds.flatMap((id) => {
+    const item = byId.get(id)
+    return item ? [item] : []
+  })
+  let openIndex = 0
+  return allItems.map((item) =>
+    openIds.has(item.id) ? (orderedOpen[openIndex++] ?? item) : item
+  )
 }
 
 /**
@@ -45,6 +69,10 @@ export function WorkbenchTabStrip({
   const t = useTranslations("Folder.workbench")
   const tConversation = useTranslations("Folder.conversationCard")
   const items = useWorkbenchStore((state) => state.items)
+  const openIds = useWorkbenchStore((state) => state.openIds)
+  const recentlyClosedIds = useWorkbenchStore(
+    (state) => state.recentlyClosedIds
+  )
   const hydrated = useWorkbenchStore((state) => state.hydrated)
   const loading = useWorkbenchStore((state) => state.loading)
   const hydrate = useWorkbenchStore((state) => state.hydrate)
@@ -55,6 +83,9 @@ export function WorkbenchTabStrip({
   const previewOrder = useWorkbenchStore((state) => state.previewOrder)
   const persistOrder = useWorkbenchStore((state) => state.persistOrder)
   const setPinned = useWorkbenchStore((state) => state.setPinned)
+  const ensureOpen = useWorkbenchStore((state) => state.ensureOpen)
+  const closeView = useWorkbenchStore((state) => state.closeView)
+  const reopenAndSwitch = useWorkbenchStore((state) => state.reopenAndSwitch)
   const activeWorkbenchId = useTabStore((state) => state.activeWorkbenchId)
   const switchingWorkbenchId = useTabStore(
     (state) => state.switchingWorkbenchId
@@ -64,6 +95,8 @@ export function WorkbenchTabStrip({
   const [copyingId, setCopyingId] = useState<number | null>(null)
   const [ordering, setOrdering] = useState(false)
   const [pinningId, setPinningId] = useState<number | null>(null)
+  const [closingId, setClosingId] = useState<number | null>(null)
+  const [reopeningId, setReopeningId] = useState<number | null>(null)
   const dragStartOrderRef = useRef<string | null>(null)
   const dragClickGuardRef = useRef<number | null>(null)
   const busy =
@@ -71,7 +104,19 @@ export function WorkbenchTabStrip({
     creating ||
     copyingId != null ||
     pinningId != null ||
+    closingId != null ||
+    reopeningId != null ||
     ordering
+
+  const openIdSet = new Set(openIds)
+  // A switch triggered from the sidebar may finish one render before the local
+  // mounted-tab preference is updated. Never let the active Workbench vanish.
+  openIdSet.add(activeWorkbenchId)
+  const openItems = items.filter((item) => openIdSet.has(item.id))
+  const recentlyClosedItems = recentlyClosedIds.flatMap((id) => {
+    const item = items.find((candidate) => candidate.id === id)
+    return item ? [item] : []
+  })
 
   useEffect(() => {
     if (hydrated) return
@@ -79,6 +124,11 @@ export function WorkbenchTabStrip({
       toast.error(t("loadFailed", { message: toErrorMessage(error) }))
     )
   }, [hydrate, hydrated, t])
+
+  useEffect(() => {
+    if (!hydrated) return
+    ensureOpen(activeWorkbenchId)
+  }, [activeWorkbenchId, ensureOpen, hydrated])
 
   const create = async () => {
     if (busy) return
@@ -118,15 +168,21 @@ export function WorkbenchTabStrip({
 
   const moveBy = (item: WorkbenchInfo, delta: -1 | 1) => {
     if (busy) return
-    const index = items.findIndex((candidate) => candidate.id === item.id)
+    const index = openItems.findIndex((candidate) => candidate.id === item.id)
     const target = index + delta
-    if (index < 0 || target < 0 || target >= items.length) return
-    if (items[target].is_pinned !== item.is_pinned) return
-    const next = [...items]
+    if (index < 0 || target < 0 || target >= openItems.length) return
+    if (openItems[target].is_pinned !== item.is_pinned) return
+    const next = [...openItems]
     const current = next[index]
     next[index] = next[target]
     next[target] = current
-    previewOrder(next)
+    previewOrder(
+      mergeOpenWorkbenchOrder(
+        items,
+        next.map((candidate) => candidate.id),
+        openIdSet
+      )
+    )
     void commitOrder()
   }
 
@@ -139,6 +195,30 @@ export function WorkbenchTabStrip({
       toast.error(t("saveFailed", { message: toErrorMessage(error) }))
     } finally {
       setPinningId(null)
+    }
+  }
+
+  const close = async (item: WorkbenchInfo) => {
+    if (busy || openItems.length <= 1) return
+    setClosingId(item.id)
+    try {
+      await closeView(item.id)
+    } catch (error) {
+      toast.error(t("closeFailed", { message: toErrorMessage(error) }))
+    } finally {
+      setClosingId(null)
+    }
+  }
+
+  const reopen = async (item: WorkbenchInfo) => {
+    if (busy) return
+    setReopeningId(item.id)
+    try {
+      await reopenAndSwitch(item.id)
+    } catch (error) {
+      toast.error(t("switchFailed", { message: toErrorMessage(error) }))
+    } finally {
+      setReopeningId(null)
     }
   }
 
@@ -159,26 +239,20 @@ export function WorkbenchTabStrip({
         role="tablist"
         aria-label={t("switchTitle")}
         axis="x"
-        values={items.map((item) => item.id)}
+        values={openItems.map((item) => item.id)}
         onReorder={(orderedIds) => {
-          const byId = new Map(items.map((item) => [item.id, item]))
-          previewOrder(
-            orderedIds.flatMap((id) => {
-              const item = byId.get(id)
-              return item ? [item] : []
-            })
-          )
+          previewOrder(mergeOpenWorkbenchOrder(items, orderedIds, openIdSet))
         }}
         className="flex min-w-0 items-end gap-0.5 overflow-x-auto px-1 pt-1"
       >
-        {items.map((item, index) => {
+        {openItems.map((item, index) => {
           const active = item.id === activeWorkbenchId
           const restoring = item.id === switchingWorkbenchId
           const canMoveLeft =
-            index > 0 && items[index - 1].is_pinned === item.is_pinned
+            index > 0 && openItems[index - 1].is_pinned === item.is_pinned
           const canMoveRight =
-            index < items.length - 1 &&
-            items[index + 1].is_pinned === item.is_pinned
+            index < openItems.length - 1 &&
+            openItems[index + 1].is_pinned === item.is_pinned
           return (
             <ContextMenu key={item.id}>
               <ContextMenuTrigger asChild>
@@ -189,7 +263,7 @@ export function WorkbenchTabStrip({
                   dragListener={!busy}
                   onDragStart={() => {
                     dragClickGuardRef.current = item.id
-                    dragStartOrderRef.current = items
+                    dragStartOrderRef.current = openItems
                       .map((candidate) => candidate.id)
                       .join(",")
                   }}
@@ -201,12 +275,24 @@ export function WorkbenchTabStrip({
                     }, 0)
                     const currentOrder = useWorkbenchStore
                       .getState()
-                      .items.map((candidate) => candidate.id)
+                      .items.filter((candidate) =>
+                        useWorkbenchStore
+                          .getState()
+                          .openIds.includes(candidate.id)
+                      )
+                      .map((candidate) => candidate.id)
                       .join(",")
                     if (currentOrder === dragStartOrderRef.current) return
                     void commitOrder()
                   }}
-                  className="shrink-0"
+                  className={cn(
+                    "group flex h-9 max-w-52 min-w-24 shrink-0 items-stretch rounded-t-md border border-transparent outline-none transition-colors",
+                    "hover:bg-background/55 focus-within:ring-2 focus-within:ring-ring focus-within:ring-inset",
+                    active &&
+                      "border-border/70 border-b-background bg-background text-foreground",
+                    !active && "text-muted-foreground",
+                    busy && "opacity-70"
+                  )}
                 >
                   <button
                     type="button"
@@ -238,14 +324,7 @@ export function WorkbenchTabStrip({
                         moveBy(item, 1)
                       }
                     }}
-                    className={cn(
-                      "group flex h-9 max-w-52 min-w-24 items-center gap-2 rounded-t-md border border-transparent px-3 text-xs font-medium outline-none transition-colors",
-                      "hover:bg-background/55 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
-                      active &&
-                        "border-border/70 border-b-background bg-background text-foreground",
-                      !active && "text-muted-foreground",
-                      busy && "opacity-70"
-                    )}
+                    className="flex min-w-0 flex-1 items-center gap-2 rounded-tl-md py-0 pl-3 pr-1 text-xs font-medium outline-none"
                     title={item.name}
                   >
                     {restoring ||
@@ -267,6 +346,29 @@ export function WorkbenchTabStrip({
                       />
                     ) : null}
                     <span className="truncate">{item.name}</span>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy || openItems.length <= 1}
+                    aria-label={t("closeTab", { name: item.name })}
+                    title={t("close")}
+                    onPointerDown={(event) => event.stopPropagation()}
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      void close(item)
+                    }}
+                    className={cn(
+                      "mr-1 flex w-6 shrink-0 items-center justify-center self-center rounded-sm p-1 outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring",
+                      !active &&
+                        "opacity-0 group-hover:opacity-100 focus:opacity-100",
+                      openItems.length <= 1 && "invisible"
+                    )}
+                  >
+                    {closingId === item.id ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                      <X className="h-3 w-3" />
+                    )}
                   </button>
                 </Reorder.Item>
               </ContextMenuTrigger>
@@ -306,6 +408,14 @@ export function WorkbenchTabStrip({
                   <ArrowRight className="h-4 w-4" />
                   {t("moveRight")}
                 </ContextMenuItem>
+                <ContextMenuSeparator />
+                <ContextMenuItem
+                  disabled={busy || openItems.length <= 1}
+                  onSelect={() => void close(item)}
+                >
+                  <X className="h-4 w-4" />
+                  {t("close")}
+                </ContextMenuItem>
               </ContextMenuContent>
             </ContextMenu>
           )
@@ -325,6 +435,35 @@ export function WorkbenchTabStrip({
           <Plus className="h-4 w-4" />
         )}
       </button>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <button
+            type="button"
+            disabled={busy || recentlyClosedItems.length === 0}
+            className="my-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-background/60 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-35"
+            title={t("recentlyClosed")}
+            aria-label={t("recentlyClosed")}
+          >
+            {reopeningId != null ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Clock3 className="h-4 w-4" />
+            )}
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start">
+          {recentlyClosedItems.map((item) => (
+            <DropdownMenuItem
+              key={item.id}
+              disabled={busy}
+              onSelect={() => void reopen(item)}
+            >
+              <PanelsTopLeft className="h-4 w-4" />
+              <span className="max-w-64 truncate">{item.name}</span>
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
       <div data-tauri-drag-region className="h-full min-w-8 flex-1" />
       {rightInset > 0 && (
         <div
