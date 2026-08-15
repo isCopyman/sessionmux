@@ -156,8 +156,8 @@ function getRangeRect(range: Range): DOMRect | null {
   return visibleRect ?? range.getBoundingClientRect()
 }
 
-/** Center the exact rendered match, rather than only its virtualized row. */
-export function centerConversationFindRange(
+/** Keep a visible match steady; center it only after it leaves the viewport. */
+export function revealConversationFindRange(
   root: Element,
   range: Range
 ): boolean {
@@ -176,9 +176,18 @@ export function centerConversationFindRange(
     return false
   }
 
+  const rangeBottom = rangeRect.top + rangeRect.height
+  const viewportBottom = viewportRect.top + viewportRect.height
+  if (viewportRect.top <= rangeRect.top && rangeBottom <= viewportBottom) {
+    return true
+  }
+
   const matchCenter = rangeRect.top + rangeRect.height / 2
   const viewportCenter = viewportRect.top + viewportRect.height / 2
-  const delta = matchCenter - viewportCenter
+  const delta =
+    rangeRect.height > viewportRect.height
+      ? rangeRect.top - viewportRect.top
+      : matchCenter - viewportCenter
   if (Math.abs(delta) > 1) {
     viewport.scrollTo({ top: viewport.scrollTop + delta, behavior: "auto" })
   }

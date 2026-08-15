@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest"
 import {
   applyConversationFindHighlights,
-  centerConversationFindRange,
   findTextRanges,
+  revealConversationFindRange,
 } from "@/lib/conversation-find-highlight"
 
 describe("conversation find DOM ranges", () => {
@@ -79,7 +79,29 @@ describe("conversation find DOM ranges", () => {
     )
   })
 
-  it("centers the selected text range in the transcript viewport", () => {
+  it("keeps a fully visible selected range in place", () => {
+    const root = document.createElement("div")
+    const viewport = document.createElement("div")
+    viewport.className = "scrollbar-thin"
+    viewport.scrollTop = 120
+    root.append(viewport)
+    const scrollTo = vi.fn()
+    viewport.scrollTo = scrollTo
+    vi.spyOn(viewport, "getBoundingClientRect").mockReturnValue({
+      top: 100,
+      height: 600,
+    } as DOMRect)
+    const range = document.createRange()
+    Object.defineProperty(range, "getClientRects", {
+      configurable: true,
+      value: () => [{ top: 300, height: 20, width: 35 }],
+    })
+
+    expect(revealConversationFindRange(root, range)).toBe(true)
+    expect(scrollTo).not.toHaveBeenCalled()
+  })
+
+  it("centers a selected range outside the transcript viewport", () => {
     const root = document.createElement("div")
     const viewport = document.createElement("div")
     viewport.className = "scrollbar-thin"
@@ -97,7 +119,7 @@ describe("conversation find DOM ranges", () => {
       value: () => [{ top: 730, height: 20, width: 35 }],
     })
 
-    expect(centerConversationFindRange(root, range)).toBe(true)
+    expect(revealConversationFindRange(root, range)).toBe(true)
     expect(scrollTo).toHaveBeenCalledWith({
       top: 460,
       behavior: "auto",

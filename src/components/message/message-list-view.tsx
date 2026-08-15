@@ -83,7 +83,7 @@ import {
 } from "@/lib/conversation-find"
 import {
   applyConversationFindHighlights,
-  centerConversationFindRange,
+  revealConversationFindRange,
   clearConversationFindHighlights,
 } from "@/lib/conversation-find-highlight"
 
@@ -1174,7 +1174,7 @@ export function MessageListView({
         currentRange &&
         activeFindMatch &&
         pendingFindScrollMatchIdRef.current === activeFindMatch.id &&
-        centerConversationFindRange(root, currentRange)
+        revealConversationFindRange(root, currentRange)
       ) {
         pendingFindScrollMatchIdRef.current = null
       }
