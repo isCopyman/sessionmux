@@ -301,6 +301,13 @@ async fn async_main() -> ExitCode {
         hub.set_emitter(state.emitter.clone());
     }
 
+    // Standalone mode owns the same one-per-backend native Session watcher as
+    // the desktop process. Browser count does not change import concurrency.
+    tokio::spawn(codeg_lib::local_session_sync::run_local_session_sync(
+        state.db.conn.clone(),
+        state.emitter.clone(),
+    ));
+
     // Apply persisted delegation settings (depth, enabled) before
     // the listener starts accepting so even the first companion request
     // sees the operator's configured behavior. Cancellation is handled

@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::app_error::AppCommandError;
-use crate::db::entities::conversation;
+use crate::db::entities::{conversation, folder};
 use crate::db::entities::folder::FolderKind;
 use crate::db::service::{conversation_service, folder_service, import_service, tab_service};
 #[cfg(feature = "tauri-runtime")]
@@ -515,6 +515,187 @@ pub async fn import_local_conversations(
 /// instead of queueing — a second import racing the first is a user mistake to
 /// surface, not work to serialize.
 static IMPORT_GUARD: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Result of one best-effort background reconciliation pass. This is internal
+/// operational telemetry, not another import API contract.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RegisteredSessionSyncStats {
+    pub imported: u32,
+    pub updated: u32,
+    pub failed: u32,
+}
+
+/// Reconcile native sessions whose cwd already belongs to an open, registered
+/// Codeg Folder. This deliberately does not create/reopen Folders: discovering
+/// a transcript elsewhere on the machine must not silently add a project to
+/// the workspace.
+async fn sync_registered_from_summaries(
+    conn: &sea_orm::DatabaseConnection,
+    emitter: &EventEmitter,
+    summaries: Vec<(AgentType, ConversationSummary)>,
+) -> Result<RegisteredSessionSyncStats, AppCommandError> {
+    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+
+    let folder_rows = folder::Entity::find()
+        .filter(folder::Column::DeletedAt.is_null())
+        .filter(folder::Column::IsOpen.eq(true))
+        .filter(folder::Column::Kind.eq(FolderKind::Regular))
+        .all(conn)
+        .await
+        .map_err(crate::db::error::DbError::from)
+        .map_err(AppCommandError::from)?;
+    if folder_rows.is_empty() {
+        return Ok(RegisteredSessionSyncStats::default());
+    }
+
+    let folder_by_path: HashMap<String, i32> = folder_rows
+        .into_iter()
+        .map(|row| (normalize_path_for_matching(&row.path), row.id))
+        .collect();
+
+    // Keep one authoritative parsed summary per native identity. Parser bugs or
+    // overlapping roots must not make a background pass insert the same Session
+    // twice before the DB has a uniqueness constraint for this pair.
+    let mut matched_by_key: HashMap<(String, String), (i32, AgentType, ConversationSummary)> =
+        HashMap::new();
+    for (agent_type, summary) in summaries {
+        if summary.parent_id.is_some() {
+            continue;
+        }
+        let Some(path) = summary
+            .folder_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+        else {
+            continue;
+        };
+        let Some(folder_id) = folder_by_path.get(&normalize_path_for_matching(path)) else {
+            continue;
+        };
+        matched_by_key.entry((agent_type_db_str(&agent_type), summary.id.clone())).or_insert((
+            *folder_id,
+            agent_type,
+            summary,
+        ));
+    }
+    if matched_by_key.is_empty() {
+        return Ok(RegisteredSessionSyncStats::default());
+    }
+
+    let existing_rows = conversation::Entity::find()
+        .filter(conversation::Column::ExternalId.is_not_null())
+        .all(conn)
+        .await
+        .map_err(crate::db::error::DbError::from)
+        .map_err(AppCommandError::from)?;
+    let existing_keys: HashSet<(String, String)> = existing_rows
+        .iter()
+        .filter_map(|row| {
+            row.external_id
+                .as_ref()
+                .map(|external_id| (row.agent_type.clone(), external_id.clone()))
+        })
+        .collect();
+    let matched: Vec<(AgentType, ConversationSummary)> = matched_by_key
+        .values()
+        .map(|(_, agent_type, summary)| (*agent_type, summary.clone()))
+        .collect();
+
+    // Existing rows use the cheap conditional refresh path: an unchanged
+    // machine-wide scan performs no write and does not invalidate token usage.
+    let updated_ids = import_service::sync_imported_sessions(conn, &existing_rows, &matched).await;
+    let folder_id_by_conversation: HashMap<i32, i32> = existing_rows
+        .iter()
+        .map(|row| (row.id, row.folder_id))
+        .collect();
+    let mut touched_folder_ids: HashSet<i32> = updated_ids
+        .iter()
+        .filter_map(|id| folder_id_by_conversation.get(id).copied())
+        .collect();
+
+    // Only identities absent from every live/deleted/child row are new. A
+    // soft-deleted Session therefore stays deleted instead of being silently
+    // resurrected as a fresh root conversation.
+    let mut new_by_folder: HashMap<i32, Vec<(AgentType, ConversationSummary)>> = HashMap::new();
+    for (key, (folder_id, agent_type, summary)) in matched_by_key {
+        if existing_keys.contains(&key) {
+            continue;
+        }
+        new_by_folder
+            .entry(folder_id)
+            .or_default()
+            .push((agent_type, summary));
+    }
+
+    let mut stats = RegisteredSessionSyncStats {
+        updated: updated_ids.len() as u32,
+        ..RegisteredSessionSyncStats::default()
+    };
+    for (folder_id, items) in new_by_folder {
+        let (result, _updated_ids, failed) =
+            import_service::import_summaries_resilient(conn, folder_id, &items).await;
+        stats.imported += result.imported;
+        stats.updated += result.updated;
+        stats.failed += failed;
+        if result.imported > 0 || result.updated > 0 {
+            touched_folder_ids.insert(folder_id);
+        }
+    }
+
+    if stats.imported > 0 || stats.updated > 0 {
+        let mut folder_ids: Vec<i32> = touched_folder_ids.into_iter().collect();
+        folder_ids.sort_unstable();
+        emit_event(
+            emitter,
+            CONVERSATIONS_BULK_CHANGED_EVENT,
+            ConversationsBulkChanged {
+                imported: stats.imported,
+                updated: stats.updated,
+                folder_ids,
+            },
+        );
+    }
+
+    Ok(stats)
+}
+
+/// Run one automatic reconciliation pass. Manual/batch imports retain
+/// priority: if one already owns the process-wide import guard this pass is
+/// skipped and the watcher will retry after the next filesystem event or
+/// periodic safety tick.
+pub(crate) async fn sync_registered_local_sessions_core(
+    conn: &sea_orm::DatabaseConnection,
+    emitter: &EventEmitter,
+) -> Result<Option<RegisteredSessionSyncStats>, AppCommandError> {
+    // Avoid walking every Harness store when the user has not registered an
+    // execution Folder yet. The scan itself stays read-only and intentionally
+    // runs outside IMPORT_GUARD: a user-initiated import must not fail merely
+    // because the background watcher is parsing native history. We acquire the
+    // guard only for reconciliation below; the full helper repeats the Folder
+    // query so a Folder closed during the scan cannot receive an auto-import.
+    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+    let has_open_folder = folder::Entity::find()
+        .filter(folder::Column::DeletedAt.is_null())
+        .filter(folder::Column::IsOpen.eq(true))
+        .filter(folder::Column::Kind.eq(FolderKind::Regular))
+        .one(conn)
+        .await
+        .map_err(crate::db::error::DbError::from)
+        .map_err(AppCommandError::from)?
+        .is_some();
+    if !has_open_folder {
+        return Ok(Some(RegisteredSessionSyncStats::default()));
+    }
+
+    let summaries = import_service::collect_local_summaries(|_, _, _, _| {}).await;
+    let Ok(_guard) = IMPORT_GUARD.try_lock() else {
+        return Ok(None);
+    };
+    sync_registered_from_summaries(conn, emitter, summaries)
+        .await
+        .map(Some)
+}
 
 /// The DB's stored string for an [`AgentType`] (its snake_case serde name) —
 /// the same conversion `import_one` uses for the `agent_type` column.
@@ -4514,6 +4695,188 @@ mod tests {
         }
         assert_eq!(folder_events, 2, "one folder upsert per touched folder");
         assert_eq!(bulk_events, 1, "exactly one bulk nudge, never per-row spam");
+    }
+
+    #[tokio::test]
+    async fn registered_sync_imports_only_sessions_under_open_folders() {
+        use sea_orm::{ActiveModelTrait, EntityTrait, IntoActiveModel, Set};
+
+        let db = fresh_in_memory_db().await;
+        let open_folder_id = seed_folder(&db, "/tmp/registered-open").await;
+        let closed_folder_id = seed_folder(&db, "/tmp/registered-closed").await;
+        let closed = folder::Entity::find_by_id(closed_folder_id)
+            .one(&db.conn)
+            .await
+            .unwrap()
+            .unwrap();
+        let mut closed = closed.into_active_model();
+        closed.is_open = Set(false);
+        closed.update(&db.conn).await.unwrap();
+
+        let (broadcaster, emitter) = sync_test_emitter();
+        let mut rx = broadcaster.subscribe();
+        let (child_agent, mut child) = scan_summary(
+            "child",
+            AgentType::Codex,
+            Some("/tmp/registered-open"),
+            at(4),
+        );
+        child.parent_id = Some("native-parent".into());
+        let stats = sync_registered_from_summaries(
+            &db.conn,
+            &emitter,
+            vec![
+                scan_summary(
+                    "open",
+                    AgentType::ClaudeCode,
+                    Some("/tmp/registered-open/"),
+                    at(1),
+                ),
+                scan_summary(
+                    "closed",
+                    AgentType::Codex,
+                    Some("/tmp/registered-closed"),
+                    at(2),
+                ),
+                scan_summary(
+                    "unknown",
+                    AgentType::Gemini,
+                    Some("/tmp/not-registered"),
+                    at(3),
+                ),
+                (child_agent, child),
+            ],
+        )
+        .await
+        .expect("registered sync");
+
+        assert_eq!(
+            stats,
+            RegisteredSessionSyncStats {
+                imported: 1,
+                updated: 0,
+                failed: 0,
+            }
+        );
+        let rows = conversation::Entity::find().all(&db.conn).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].external_id.as_deref(), Some("open"));
+        assert_eq!(rows[0].folder_id, open_folder_id);
+
+        let event = rx.try_recv().expect("one bulk refresh event");
+        assert_eq!(event.channel, CONVERSATIONS_BULK_CHANGED_EVENT);
+        assert_eq!(event.payload["imported"], 1);
+        assert_eq!(event.payload["updated"], 0);
+        assert_eq!(
+            event.payload["folder_ids"],
+            serde_json::json!([open_folder_id])
+        );
+        assert!(rx.try_recv().is_err(), "one reconciliation emits once");
+    }
+
+    #[tokio::test]
+    async fn registered_sync_refreshes_activity_without_clobbering_a_locked_title() {
+        use sea_orm::EntityTrait;
+
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/registered-refresh").await;
+        let mut initial = scan_summary(
+            "native-1",
+            AgentType::Codex,
+            Some("/tmp/registered-refresh"),
+            at(0),
+        );
+        initial.1.ended_at = Some(at(1));
+        sync_registered_from_summaries(&db.conn, &EventEmitter::Noop, vec![initial])
+            .await
+            .expect("initial sync");
+
+        let imported = conversation::Entity::find()
+            .one(&db.conn)
+            .await
+            .unwrap()
+            .unwrap();
+        conversation_service::update_title(&db.conn, imported.id, "my stable name".into())
+            .await
+            .unwrap();
+
+        let mut changed = scan_summary(
+            "native-1",
+            AgentType::Codex,
+            Some("/tmp/registered-refresh"),
+            at(0),
+        );
+        changed.1.title = Some("renamed in native client".into());
+        changed.1.ended_at = Some(chrono::Utc::now() + chrono::Duration::minutes(1));
+        changed.1.message_count = 9;
+        let (broadcaster, emitter) = sync_test_emitter();
+        let mut rx = broadcaster.subscribe();
+        let stats = sync_registered_from_summaries(&db.conn, &emitter, vec![changed])
+            .await
+            .expect("refresh sync");
+
+        assert_eq!(
+            stats,
+            RegisteredSessionSyncStats {
+                imported: 0,
+                updated: 1,
+                failed: 0,
+            }
+        );
+        let refreshed = conversation::Entity::find_by_id(imported.id)
+            .one(&db.conn)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(refreshed.folder_id, folder_id);
+        assert_eq!(refreshed.title.as_deref(), Some("my stable name"));
+        assert!(refreshed.title_locked);
+        assert_eq!(refreshed.message_count, 9);
+
+        let event = rx.try_recv().expect("refresh event");
+        assert_eq!(event.channel, CONVERSATIONS_BULK_CHANGED_EVENT);
+        assert_eq!(event.payload["imported"], 0);
+        assert_eq!(event.payload["updated"], 1);
+        assert_eq!(event.payload["folder_ids"], serde_json::json!([folder_id]));
+    }
+
+    #[tokio::test]
+    async fn registered_sync_never_resurrects_a_deleted_session() {
+        use sea_orm::EntityTrait;
+
+        let db = fresh_in_memory_db().await;
+        seed_folder(&db, "/tmp/registered-deleted").await;
+        let make = || {
+            vec![scan_summary(
+                "native-deleted",
+                AgentType::ClaudeCode,
+                Some("/tmp/registered-deleted"),
+                at(0),
+            )]
+        };
+        sync_registered_from_summaries(&db.conn, &EventEmitter::Noop, make())
+            .await
+            .expect("initial sync");
+        let imported = conversation::Entity::find()
+            .one(&db.conn)
+            .await
+            .unwrap()
+            .unwrap();
+        conversation_service::soft_delete(&db.conn, imported.id)
+            .await
+            .unwrap();
+
+        let (broadcaster, emitter) = sync_test_emitter();
+        let mut rx = broadcaster.subscribe();
+        let stats = sync_registered_from_summaries(&db.conn, &emitter, make())
+            .await
+            .expect("repeat sync");
+        assert_eq!(stats, RegisteredSessionSyncStats::default());
+
+        let rows = conversation::Entity::find().all(&db.conn).await.unwrap();
+        assert_eq!(rows.len(), 1, "deleted native identity is not duplicated");
+        assert!(rows[0].deleted_at.is_some());
+        assert!(rx.try_recv().is_err(), "no change means no bulk event");
     }
 
     #[tokio::test]

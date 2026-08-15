@@ -26,6 +26,7 @@ pub mod git_repo;
 pub mod intern;
 pub mod keyring_store;
 pub mod logging;
+pub mod local_session_sync;
 pub mod models;
 mod network;
 pub mod office_watch;
@@ -466,6 +467,18 @@ mod tauri_app {
                             tracing::info!("[folders] labeled {n} worktree folder(s) by branch");
                         }
                     });
+                }
+
+                // Keep already-registered project paths in sync with the
+                // native Session stores owned by Claude/Codex/etc. One watcher
+                // per backend process (not per WebView) prevents duplicate
+                // imports when several windows observe the same workspace.
+                {
+                    let conn = app.state::<db::AppDatabase>().conn.clone();
+                    let emitter = web::event_bridge::EventEmitter::Tauri(app.handle().clone());
+                    tauri::async_runtime::spawn(crate::local_session_sync::run_local_session_sync(
+                        conn, emitter,
+                    ));
                 }
 
                 // Start chat channel background tasks
