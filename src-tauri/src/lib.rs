@@ -34,6 +34,7 @@ pub mod parsers;
 pub mod paths;
 pub mod pet_sessions;
 pub mod pet_state_mapper;
+pub mod prompt_queue;
 pub mod pets;
 #[cfg(feature = "tauri-runtime")]
 pub mod preferences;
@@ -71,6 +72,7 @@ mod tauri_app {
         folder_links, office_tools as office_tools_commands,
         folders, logging as logging_commands, mcp as mcp_commands,
         model_provider as model_provider_commands, notification, pet as pet_commands, project_boot,
+        prompt_queue as prompt_queue_commands,
         question as question_commands, quick_messages as quick_messages_commands,
         remote_proxy as remote_proxy_commands,
         remote_workspace as remote_workspace_commands, science as science_commands,
@@ -316,6 +318,22 @@ mod tauri_app {
                 ))
                 .map_err(|e| e.to_string())?;
                 app.manage(database);
+
+                // One backend-authoritative follow-up queue worker per process.
+                // It subscribes before the future is spawned, so a fast Harness
+                // lifecycle event cannot slip through the startup gap.
+                {
+                    let (handle, task) = crate::prompt_queue::build_prompt_queue_runtime(
+                        app.state::<db::AppDatabase>().conn.clone(),
+                        app.state::<ConnectionManager>().clone_ref(),
+                        web::event_bridge::EventEmitter::Tauri(app.handle().clone()),
+                        app.state::<std::sync::Arc<crate::acp::InternalEventBus>>()
+                            .inner()
+                            .clone(),
+                    );
+                    app.manage(handle);
+                    tauri::async_runtime::spawn(task);
+                }
 
                 // Restore and apply saved system proxy settings before any network operation.
                 let db = app.state::<db::AppDatabase>();
@@ -1334,6 +1352,13 @@ mod tauri_app {
                 workbenches::duplicate_workbench,
                 workbenches::reorder_workbenches,
                 workbenches::delete_workbench,
+                prompt_queue_commands::prompt_queue_get,
+                prompt_queue_commands::prompt_queue_enqueue,
+                prompt_queue_commands::prompt_queue_edit,
+                prompt_queue_commands::prompt_queue_delete,
+                prompt_queue_commands::prompt_queue_reorder,
+                prompt_queue_commands::prompt_queue_resume,
+                prompt_queue_commands::prompt_queue_retry,
                 automation_commands::automation_list,
                 automation_commands::automation_get,
                 automation_commands::automation_runs,

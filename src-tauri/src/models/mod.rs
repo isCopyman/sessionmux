@@ -7,6 +7,7 @@ pub mod folder;
 pub mod message;
 pub mod model_provider;
 pub mod pet;
+pub mod prompt_queue;
 pub mod quick_message;
 pub mod remote_workspace_connection;
 pub mod system;
@@ -37,6 +38,10 @@ pub use message::{
     TurnRole, TurnUsage, UnifiedMessage,
 };
 pub use quick_message::QuickMessageInfo;
+pub use prompt_queue::{
+    EnqueuePromptQueueItem, PromptQueueDraft, PromptQueueItem, PromptQueueItemState,
+    PromptQueueSnapshot,
+};
 pub use remote_workspace_connection::RemoteWorkspaceConnectionInfo;
 pub use token_usage::{
     TokenUsageBreakdownItem, TokenUsageBucket, TokenUsageConversationItem, TokenUsageFacets,

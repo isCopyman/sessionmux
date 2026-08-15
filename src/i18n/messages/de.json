@@ -2816,7 +2816,14 @@
         "saveEdit": "Speichern",
         "cancelEdit": "Bearbeitung abbrechen",
         "editItem": "Bearbeiten",
-        "deleteItem": "Entfernen"
+        "deleteItem": "Entfernen",
+        "retryItem": "Erneut versuchen",
+        "resumeQueue": "Fortsetzen",
+        "dispatching": "Wartende Nachricht wird gesendet",
+        "paused": "Warteschlange pausiert: {reason}",
+        "pauseReasonCancelled": "Der aktuelle Vorgang wurde abgebrochen. Setzen Sie fort, wenn Sie bereit sind.",
+        "pauseReasonUnknownDispatch": "Die vorherige Nachricht könnte den Agenten erreicht haben. Prüfen Sie die Sitzung vor einem erneuten Versuch.",
+        "persistFailed": "Die wartende Nachricht konnte nicht gespeichert werden: {error}. Der Text wurde im Eingabefeld wiederhergestellt."
       },
       "welcomeInputPanel": {
         "agentsSettingsPath": "Einstellungen > Agenten",

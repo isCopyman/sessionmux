@@ -2816,7 +2816,14 @@
         "saveEdit": "保存",
         "cancelEdit": "取消编辑",
         "editItem": "编辑",
-        "deleteItem": "删除"
+        "deleteItem": "删除",
+        "retryItem": "重试",
+        "resumeQueue": "继续发送",
+        "dispatching": "正在发送排队消息",
+        "paused": "队列已暂停：{reason}",
+        "pauseReasonCancelled": "当前任务已取消；确认后可继续发送。",
+        "pauseReasonUnknownDispatch": "上一条消息可能已经到达 Agent；请先检查会话，再决定是否重试。",
+        "persistFailed": "无法保存排队消息：{error}。消息文字已恢复到输入框。"
       },
       "welcomeInputPanel": {
         "agentsSettingsPath": "设置 > Agents",

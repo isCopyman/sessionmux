@@ -2,7 +2,14 @@
 
 import { useCallback, type PointerEvent } from "react"
 import { Reorder, useDragControls } from "motion/react"
-import { GripVertical, Pencil, X } from "lucide-react"
+import {
+  AlertTriangle,
+  GripVertical,
+  Loader2,
+  Pencil,
+  RotateCcw,
+  X,
+} from "lucide-react"
 import { useTranslations } from "next-intl"
 import { cn } from "@/lib/utils"
 import type { QueuedMessage } from "@/hooks/use-message-queue"
@@ -12,6 +19,9 @@ interface MessageQueueDisplayProps {
   onReorder: (items: QueuedMessage[]) => void
   onEdit: (id: string) => void
   onDelete: (id: string) => void
+  onRetry: (id: string) => void
+  onResume: () => void
+  pausedReason: string | null
   editingItemId: string | null
 }
 
@@ -21,6 +31,7 @@ interface QueueItemProps {
   isEditing: boolean
   onEdit: (id: string) => void
   onDelete: (id: string) => void
+  onRetry: (id: string) => void
 }
 
 function QueueItem({
@@ -29,17 +40,21 @@ function QueueItem({
   isEditing,
   onEdit,
   onDelete,
+  onRetry,
 }: QueueItemProps) {
   const t = useTranslations("Folder.chat.messageQueue")
   const dragControls = useDragControls()
+  const isClaimed = item.state === "claimed"
+  const isPaused = item.state === "paused"
 
   const startDrag = useCallback(
     (event: PointerEvent<HTMLButtonElement>) => {
+      if (isClaimed) return
       event.preventDefault()
       event.stopPropagation()
       dragControls.start(event)
     },
-    [dragControls]
+    [dragControls, isClaimed]
   )
 
   return (
@@ -51,12 +66,19 @@ function QueueItem({
       className={cn(
         "flex items-center gap-1 rounded-md border px-1.5 py-1 text-[10px] leading-none select-none [text-box-trim:both] [text-box-edge:cap_alphabetic]",
         "bg-muted/40 border-border/70",
-        isEditing && "border-primary/50 bg-primary/5"
+        isEditing && "border-primary/50 bg-primary/5",
+        isPaused && "border-destructive/35 bg-destructive/5"
       )}
     >
       <button
         type="button"
-        className="shrink-0 cursor-grab touch-none active:cursor-grabbing p-0"
+        className={cn(
+          "shrink-0 touch-none p-0",
+          isClaimed
+            ? "cursor-default opacity-40"
+            : "cursor-grab active:cursor-grabbing"
+        )}
+        disabled={isClaimed}
         onPointerDown={startDrag}
       >
         <GripVertical className="h-3 w-3 text-muted-foreground/60" />
@@ -67,11 +89,28 @@ function QueueItem({
       <span className="min-w-0 flex-1 truncate text-[10px] text-foreground/80">
         {item.draft.displayText}
       </span>
+      {isClaimed ? (
+        <Loader2
+          className="h-2.5 w-2.5 shrink-0 animate-spin text-muted-foreground"
+          aria-label={t("dispatching")}
+        />
+      ) : null}
+      {isPaused ? (
+        <button
+          type="button"
+          onClick={() => onRetry(item.id)}
+          className="shrink-0 rounded-sm p-0.5 text-destructive hover:bg-destructive/10"
+          title={t("retryItem")}
+        >
+          <RotateCcw className="h-2.5 w-2.5" />
+        </button>
+      ) : null}
       <button
         type="button"
         onClick={() => onEdit(item.id)}
         className="shrink-0 rounded-sm p-0.5 hover:bg-muted-foreground/15 text-muted-foreground"
         title={t("editItem")}
+        disabled={isClaimed}
       >
         <Pencil className="h-2.5 w-2.5" />
       </button>
@@ -80,6 +119,7 @@ function QueueItem({
         onClick={() => onDelete(item.id)}
         className="shrink-0 rounded-sm p-0.5 hover:bg-muted-foreground/15 text-muted-foreground"
         title={t("deleteItem")}
+        disabled={isClaimed}
       >
         <X className="h-2.5 w-2.5" />
       </button>
@@ -92,12 +132,43 @@ export function MessageQueueDisplay({
   onReorder,
   onEdit,
   onDelete,
+  onRetry,
+  onResume,
+  pausedReason,
   editingItemId,
 }: MessageQueueDisplayProps) {
+  const t = useTranslations("Folder.chat.messageQueue")
   if (queue.length === 0) return null
 
+  const displayedPausedReason =
+    pausedReason === "cancelled_current_turn"
+      ? t("pauseReasonCancelled")
+      : pausedReason === "dispatch_outcome_unknown"
+        ? t("pauseReasonUnknownDispatch")
+        : pausedReason
+
   return (
-    <div className="max-h-28 overflow-y-auto pb-1">
+    <div className="max-h-36 overflow-y-auto pb-1">
+      {pausedReason ? (
+        <div className="mb-1 flex items-center gap-1.5 rounded-md border border-amber-500/30 bg-amber-500/8 px-2 py-1 text-[10px] text-amber-700 dark:text-amber-300">
+          <AlertTriangle className="h-3 w-3 shrink-0" />
+          <span
+            className="min-w-0 flex-1 truncate"
+            title={displayedPausedReason ?? undefined}
+          >
+            {t("paused", { reason: displayedPausedReason ?? "" })}
+          </span>
+          {!queue.some((item) => item.state === "paused") ? (
+            <button
+              type="button"
+              onClick={onResume}
+              className="shrink-0 rounded px-1.5 py-0.5 font-medium hover:bg-amber-500/15"
+            >
+              {t("resumeQueue")}
+            </button>
+          ) : null}
+        </div>
+      ) : null}
       <Reorder.Group
         as="div"
         axis="y"
@@ -113,6 +184,7 @@ export function MessageQueueDisplay({
             isEditing={editingItemId === item.id}
             onEdit={onEdit}
             onDelete={onDelete}
+            onRetry={onRetry}
           />
         ))}
       </Reorder.Group>

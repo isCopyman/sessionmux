@@ -2816,7 +2816,14 @@
         "saveEdit": "حفظ",
         "cancelEdit": "إلغاء التعديل",
         "editItem": "تعديل",
-        "deleteItem": "حذف"
+        "deleteItem": "حذف",
+        "retryItem": "إعادة المحاولة",
+        "resumeQueue": "متابعة",
+        "dispatching": "جارٍ إرسال الرسالة المنتظرة",
+        "paused": "تم إيقاف قائمة الانتظار مؤقتًا: {reason}",
+        "pauseReasonCancelled": "تم إلغاء المهمة الحالية. استأنف عندما تكون مستعدًا.",
+        "pauseReasonUnknownDispatch": "ربما وصلت الرسالة السابقة إلى الوكيل. تحقّق من الجلسة قبل إعادة المحاولة.",
+        "persistFailed": "تعذر حفظ الرسالة المنتظرة: {error}. تمت استعادة النص في مربع الإدخال."
       },
       "welcomeInputPanel": {
         "agentsSettingsPath": "الإعدادات > الوكلاء",

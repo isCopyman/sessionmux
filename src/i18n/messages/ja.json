@@ -2816,7 +2816,14 @@
         "saveEdit": "保存",
         "cancelEdit": "編集をキャンセル",
         "editItem": "編集",
-        "deleteItem": "削除"
+        "deleteItem": "削除",
+        "retryItem": "再試行",
+        "resumeQueue": "再開",
+        "dispatching": "キューのメッセージを送信中",
+        "paused": "キューは一時停止中：{reason}",
+        "pauseReasonCancelled": "現在のタスクはキャンセルされました。準備ができたら再開してください。",
+        "pauseReasonUnknownDispatch": "前のメッセージはエージェントに届いている可能性があります。再試行する前にセッションを確認してください。",
+        "persistFailed": "キューのメッセージを保存できませんでした：{error}。本文を入力欄に戻しました。"
       },
       "welcomeInputPanel": {
         "agentsSettingsPath": "設定 > エージェント",

@@ -2816,7 +2816,14 @@
         "saveEdit": "Enregistrer",
         "cancelEdit": "Annuler la modification",
         "editItem": "Modifier",
-        "deleteItem": "Supprimer"
+        "deleteItem": "Supprimer",
+        "retryItem": "Réessayer",
+        "resumeQueue": "Reprendre",
+        "dispatching": "Envoi du message en attente",
+        "paused": "File d’attente en pause : {reason}",
+        "pauseReasonCancelled": "La tâche en cours a été annulée. Reprenez quand vous le souhaitez.",
+        "pauseReasonUnknownDispatch": "Le message précédent a peut-être atteint l’agent. Vérifiez la session avant de réessayer.",
+        "persistFailed": "Impossible d’enregistrer le message en attente : {error}. Son texte a été restauré dans la zone de saisie."
       },
       "welcomeInputPanel": {
         "agentsSettingsPath": "Paramètres > Agents",

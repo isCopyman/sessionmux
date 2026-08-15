@@ -1165,7 +1165,7 @@ pub async fn handle_followup(req: FollowupRequest<'_>) -> RichMessage {
     }
 
     // Send prompt to agent
-    if let Err(e) = send_chat_prompt(req.conn_mgr, &connection_id, req.text).await {
+    if let Err(e) = send_chat_prompt(req.db, req.conn_mgr, &connection_id, req.text).await {
         // A turn is already in flight on this (shared) connection — another
         // client, or a previous prompt still running. This is transient: the
         // connection is alive, so do NOT tear down the bridge/session. Tell the
@@ -1263,7 +1263,7 @@ async fn send_followup_to_session(
         }
     }
 
-    if let Err(e) = send_chat_prompt(req.conn_mgr, &connection_id, req.text).await {
+    if let Err(e) = send_chat_prompt(req.db, req.conn_mgr, &connection_id, req.text).await {
         if matches!(e, crate::acp::error::AcpError::TurnInProgress) {
             return RichMessage::info(i18n::agent_busy_retry(req.lang).to_string());
         }
@@ -1556,12 +1556,14 @@ async fn spawn_chat_connection_for_conversation(
 }
 
 async fn send_chat_prompt(
+    db: &DatabaseConnection,
     conn_mgr: &ConnectionManager,
     connection_id: &str,
     text: &str,
 ) -> Result<(), crate::acp::error::AcpError> {
     conn_mgr
-        .send_prompt(
+        .send_prompt_queue_aware(
+            db,
             connection_id,
             vec![PromptInputBlock::Text {
                 text: text.to_string(),

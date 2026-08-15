@@ -257,6 +257,12 @@ async fn async_main() -> ExitCode {
     // Build AppState
     let pet_state_handle = codeg_lib::pet_state_mapper::new_pet_state_handle();
     let connection_manager = codeg_lib::app_state::default_connection_manager();
+    let (prompt_queue, prompt_queue_task) = codeg_lib::prompt_queue::build_prompt_queue_runtime(
+        db.conn.clone(),
+        connection_manager.clone_ref(),
+        emitter.clone(),
+        acp_event_bus.clone(),
+    );
     let (
         delegation_broker,
         delegation_tokens,
@@ -277,6 +283,7 @@ async fn async_main() -> ExitCode {
         event_broadcaster: broadcaster,
         acp_event_bus: acp_event_bus.clone(),
         emitter,
+        prompt_queue,
         data_dir,
         web_server_state: WebServerState::new(),
         chat_channel_manager: codeg_lib::app_state::default_chat_channel_manager(),
@@ -294,6 +301,7 @@ async fn async_main() -> ExitCode {
         system_op_lock: codeg_lib::app_state::default_system_op_lock(),
         update_state: codeg_lib::app_state::default_update_state(),
     });
+    tokio::spawn(prompt_queue_task);
 
     // Logging phase 3: wire the emitter so the Logs viewer's live tail
     // (`logs://appended`) reaches WS clients.

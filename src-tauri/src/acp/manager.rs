@@ -789,6 +789,37 @@ impl ConnectionManager {
         self.send_prompt_inner(conn_id, blocks, None).await
     }
 
+    /// Queue-aware variant for host integrations that already have the
+    /// Session database. Chat channels use this path: they share the same live
+    /// connection as the GUI, so a channel message must not jump a durable GUI
+    /// follow-up merely because it arrived through a different ingress.
+    pub async fn send_prompt_queue_aware(
+        &self,
+        db: &sea_orm::DatabaseConnection,
+        conn_id: &str,
+        blocks: Vec<PromptInputBlock>,
+    ) -> Result<(), AcpError> {
+        let prompt_lock = self.clone_prompt_lock(conn_id).await?;
+        let _guard = prompt_lock.lock_owned().await;
+        let conversation_id = match self.get_state(conn_id).await {
+            Some(state) => state.read().await.conversation_id,
+            None => None,
+        };
+        if let Some(conversation_id) = conversation_id {
+            let admitted = crate::db::service::prompt_queue_service::send_is_admitted(
+                db,
+                conversation_id,
+                None,
+            )
+            .await
+            .map_err(|err| AcpError::protocol(err.to_string()))?;
+            if !admitted {
+                return Err(AcpError::TurnInProgress);
+            }
+        }
+        self.send_prompt_inner(conn_id, blocks, None).await
+    }
+
     /// Send a prompt while ensuring a `Conversation` DB row is bound to this
     /// connection. On the first call (when `state.conversation_id` is None),
     /// either:
@@ -1082,6 +1113,26 @@ impl ConnectionManager {
         // on the row (touches `updated_at` only).
         let conversation_id_for_status = state_arc.read().await.conversation_id;
         if let Some(cid) = conversation_id_for_status {
+            // A durable follow-up queue owns FIFO for this Session. An ordinary
+            // send from another window may have rendered an older empty-queue
+            // snapshot; reject it under the same per-connection prompt lock so
+            // it is re-enqueued at the tail instead of jumping the durable
+            // head. The queue worker is admitted by its exact claimed id.
+            let admitted = crate::db::service::prompt_queue_service::send_is_admitted(
+                &db.conn,
+                cid,
+                client_message_id.as_deref(),
+            )
+            .await
+            .map_err(|err| AcpError::protocol(err.to_string()))?;
+            if !admitted {
+                tracing::debug!(
+                    connection_id = %conn_id,
+                    conversation_id = cid,
+                    "[ACP] prompt rejected before admission: durable queue has priority"
+                );
+                return Err(AcpError::TurnInProgress);
+            }
             conversation_service::update_status(&db.conn, cid, ConversationStatus::InProgress)
                 .await
                 .map_err(|e| AcpError::protocol(e.to_string()))?;
@@ -1260,6 +1311,11 @@ impl ConnectionManager {
     }
 
     pub async fn cancel(&self, db: &DatabaseConnection, conn_id: &str) -> Result<(), AcpError> {
+        // Serialize Cancel with prompt admission. If a prompt has already
+        // crossed its final queue check, let it enter the command stream first
+        // so this Cancel stops that prompt rather than racing ahead of it.
+        let prompt_lock = self.clone_prompt_lock(conn_id).await?;
+        let _guard = prompt_lock.lock_owned().await;
         let (cmd_tx, state_arc, emitter) = {
             let connections = self.connections.lock().await;
             let conn = connections
@@ -3710,6 +3766,99 @@ mod tests {
             matches!(res, Err(AcpError::TurnInProgress)),
             "send_prompt must return TurnInProgress when a turn is in flight, got {res:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn queue_aware_prompt_cannot_jump_a_durable_followup() {
+        use crate::db::service::prompt_queue_service;
+        use crate::db::test_helpers;
+        use crate::models::{EnqueuePromptQueueItem, PromptQueueDraft};
+
+        let db = test_helpers::fresh_in_memory_db().await;
+        let folder_id = test_helpers::seed_folder(&db, "/tmp/queue-aware-chat").await;
+        let conversation_id =
+            test_helpers::seed_conversation(&db, folder_id, AgentType::ClaudeCode).await;
+        prompt_queue_service::enqueue(
+            &db.conn,
+            EnqueuePromptQueueItem {
+                conversation_id,
+                id: "queued-first".into(),
+                client_dedupe_id: "queued-first".into(),
+                draft: PromptQueueDraft {
+                    blocks: vec![PromptInputBlock::Text {
+                        text: "first".into(),
+                    }],
+                    display_text: "first".into(),
+                },
+                mode_id: None,
+            },
+        )
+        .await
+        .expect("enqueue");
+
+        let mgr = ConnectionManager::new();
+        let conn_id = "conn-queue-aware";
+        let mut rx =
+            insert_live_connection(&mgr, conn_id, AgentType::ClaudeCode, None).await;
+        let state = mgr.get_state(conn_id).await.expect("state");
+        state.write().await.conversation_id = Some(conversation_id);
+
+        let result = mgr
+            .send_prompt_queue_aware(
+                &db.conn,
+                conn_id,
+                vec![PromptInputBlock::Text {
+                    text: "must wait".into(),
+                }],
+            )
+            .await;
+        assert!(matches!(result, Err(AcpError::TurnInProgress)));
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn cancel_is_ordered_after_a_prompt_that_crossed_admission() {
+        use crate::db::test_helpers;
+
+        let db = test_helpers::fresh_in_memory_db().await;
+        let mgr = Arc::new(ConnectionManager::new());
+        let conn_id = "conn-cancel-order";
+        let mut commands =
+            insert_live_connection(&mgr, conn_id, AgentType::ClaudeCode, None).await;
+        let prompt_lock = mgr.clone_prompt_lock(conn_id).await.expect("prompt lock");
+        let guard = prompt_lock.lock_owned().await;
+
+        let cancel = {
+            let mgr = Arc::clone(&mgr);
+            let conn = db.conn.clone();
+            tokio::spawn(async move { mgr.cancel(&conn, conn_id).await })
+        };
+        tokio::task::yield_now().await;
+        assert!(
+            commands.try_recv().is_err(),
+            "Cancel must wait behind the prompt admission lock"
+        );
+
+        mgr.send_prompt_inner(
+            conn_id,
+            vec![PromptInputBlock::Text {
+                text: "already admitted".into(),
+            }],
+            None,
+        )
+        .await
+        .expect("enqueue admitted prompt");
+        drop(guard);
+        cancel.await.expect("cancel task").expect("cancel");
+
+        assert!(matches!(
+            commands.recv().await,
+            Some(ConnectionCommand::Prompt { .. })
+        ));
+        assert!(matches!(
+            commands.recv().await,
+            Some(ConnectionCommand::Cancel)
+        ));
     }
 
     #[tokio::test]

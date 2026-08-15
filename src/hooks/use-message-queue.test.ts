@@ -1,117 +1,248 @@
-import { describe, it, expect } from "vitest"
-import { act, renderHook } from "@testing-library/react"
+import { act, renderHook, waitFor } from "@testing-library/react"
+import { beforeEach, describe, expect, it, vi } from "vitest"
+import type { PromptDraft, PromptQueueSnapshot } from "@/lib/types"
+
+const api = vi.hoisted(() => ({
+  get: vi.fn(),
+  enqueue: vi.fn(),
+  edit: vi.fn(),
+  delete: vi.fn(),
+  reorder: vi.fn(),
+  resume: vi.fn(),
+  retry: vi.fn(),
+}))
+
+vi.mock("@/lib/api", () => ({
+  getPromptQueue: api.get,
+  enqueuePromptQueueItem: api.enqueue,
+  editPromptQueueItem: api.edit,
+  deletePromptQueueItem: api.delete,
+  reorderPromptQueueItems: api.reorder,
+  resumePromptQueue: api.resume,
+  retryPromptQueueItem: api.retry,
+}))
+
+const eventHandlers = new Set<(snapshot: PromptQueueSnapshot) => void>()
+vi.mock("@/lib/platform", () => ({
+  subscribe: vi.fn(
+    async (
+      _event: string,
+      handler: (snapshot: PromptQueueSnapshot) => void
+    ) => {
+      eventHandlers.add(handler)
+      return () => eventHandlers.delete(handler)
+    }
+  ),
+  onTransportReconnect: vi.fn(() => () => {}),
+}))
+
 import { useMessageQueue } from "./use-message-queue"
-import type { PromptDraft } from "@/lib/types"
 
 function draft(text: string): PromptDraft {
   return { blocks: [{ type: "text", text }], displayText: text }
 }
 
-function texts(q: { draft: PromptDraft }[]): string[] {
-  return q.map((item) => item.draft.displayText)
+function snapshot(
+  conversationId: number,
+  revision: number,
+  rows: Array<{
+    id: string
+    text: string
+    state?: "queued" | "claimed" | "paused"
+  }> = []
+): PromptQueueSnapshot {
+  return {
+    conversationId,
+    revision,
+    pausedReason: null,
+    items: rows.map((row, position) => ({
+      id: row.id,
+      conversationId,
+      position,
+      draft: draft(row.text),
+      originEventId: null,
+      modeId: null,
+      state: row.state ?? "queued",
+      clientDedupeId: row.id,
+      attempts: 0,
+      pausedReason: null,
+      createdAt: "2026-08-16T00:00:00Z",
+      updatedAt: "2026-08-16T00:00:00Z",
+    })),
+  }
 }
 
-describe("useMessageQueue bounce FIFO ordering", () => {
-  it("requeueFront keeps a bounced head ahead of items behind it", () => {
-    const { result } = renderHook(() => useMessageQueue())
+beforeEach(() => {
+  vi.clearAllMocks()
+  eventHandlers.clear()
+  api.get.mockResolvedValue(snapshot(7, 0))
+  api.enqueue.mockImplementation(
+    (input: { conversationId: number; id: string }) =>
+      Promise.resolve(
+        snapshot(input.conversationId, 1, [{ id: input.id, text: "A" }])
+      )
+  )
+})
 
-    // Queue [A, B].
-    act(() => result.current.enqueue(draft("A"), null))
-    act(() => result.current.enqueue(draft("B"), null))
-    expect(texts(result.current.queue)).toEqual(["A", "B"])
+function emit(snapshot: PromptQueueSnapshot) {
+  for (const handler of eventHandlers) handler(snapshot)
+}
 
-    // The auto-flush dequeues the head (A) and sends it.
-    let dequeued: ReturnType<typeof result.current.dequeue>
-    act(() => {
-      dequeued = result.current.dequeue()
-    })
-    expect(dequeued?.draft.displayText).toBe("A")
-    expect(texts(result.current.queue)).toEqual(["B"])
+describe("useMessageQueue backend-authoritative behavior", () => {
+  it("hydrates an existing Session and applies a newer cross-view snapshot", async () => {
+    api.get.mockResolvedValue(snapshot(7, 2, [{ id: "a", text: "A" }]))
+    const { result } = renderHook(() => useMessageQueue(7))
+    await waitFor(() => expect(result.current.hydrated).toBe(true))
+    expect(result.current.queue.map((item) => item.draft.displayText)).toEqual([
+      "A",
+    ])
 
-    // A bounces (TurnBusyError) → re-queued at the FRONT, NOT the tail, so it
-    // retries before B. (Re-enqueuing at the tail here would yield [B, A] and
-    // send B before A — the FIFO regression this guards against.)
-    act(() => result.current.requeueFront(draft("A"), null))
-    expect(texts(result.current.queue)).toEqual(["A", "B"])
-
-    // The next flush therefore dequeues A again, not B.
-    act(() => {
-      dequeued = result.current.dequeue()
-    })
-    expect(dequeued?.draft.displayText).toBe("A")
+    act(() => emit(snapshot(7, 3, [{ id: "b", text: "B" }])))
+    expect(result.current.revision).toBe(3)
+    expect(result.current.queue.map((item) => item.id)).toEqual(["b"])
   })
 
-  it("enqueue still appends to the tail (front vs tail are distinct)", () => {
-    const { result } = renderHook(() => useMessageQueue())
-    act(() => result.current.enqueue(draft("A"), null))
-    act(() => result.current.enqueue(draft("tail"), null))
-    act(() => result.current.requeueFront(draft("front"), null))
-    expect(texts(result.current.queue)).toEqual(["front", "A", "tail"])
+  it("does not let a stale response overwrite a newer worker event", async () => {
+    api.get.mockResolvedValue(snapshot(7, 1, [{ id: "a", text: "A" }]))
+    const { result } = renderHook(() => useMessageQueue(7))
+    await waitFor(() => expect(result.current.hydrated).toBe(true))
+    act(() => emit(snapshot(7, 5, [])))
+    act(() => emit(snapshot(7, 4, [{ id: "old", text: "old" }])))
+    expect(result.current.revision).toBe(5)
+    expect(result.current.queue).toEqual([])
   })
 
-  it("getQueueLength reflects mutations SYNCHRONOUSLY (same tick, before re-render)", () => {
-    const { result } = renderHook(() => useMessageQueue())
-    // Multiple mutations within a single act() — getQueueLength must observe
-    // each one immediately, without waiting for a React commit. This is what
-    // the fork-send guard relies on: a draft re-queued by a same-tick bounce
-    // is visible before the next render hides the fork affordance.
-    act(() => {
-      expect(result.current.getQueueLength()).toBe(0)
-      result.current.enqueue(draft("A"), null)
-      expect(result.current.getQueueLength()).toBe(1)
-      result.current.requeueFront(draft("B"), null)
-      expect(result.current.getQueueLength()).toBe(2)
-      result.current.dequeue()
-      expect(result.current.getQueueLength()).toBe(1)
-    })
-    // After commit the rendered queue matches the authoritative ref.
-    expect(texts(result.current.queue)).toEqual(["A"])
+  it("does not let a slow initial fetch overwrite an event that arrived first", async () => {
+    let resolve!: (value: PromptQueueSnapshot) => void
+    api.get.mockImplementation(
+      () => new Promise<PromptQueueSnapshot>((done) => (resolve = done))
+    )
+    const { result } = renderHook(() => useMessageQueue(7))
+    await waitFor(() => expect(eventHandlers.size).toBe(1))
+
+    act(() => emit(snapshot(7, 3, [{ id: "new", text: "new" }])))
+    expect(result.current.revision).toBe(3)
+    await act(async () => resolve(snapshot(7, 1, [{ id: "old", text: "old" }])))
+    expect(result.current.revision).toBe(3)
+    expect(result.current.queue.map((item) => item.id)).toEqual(["new"])
+  })
+
+  it("shows an enqueue synchronously and uses one stable id for persistence", async () => {
+    let resolve!: (value: PromptQueueSnapshot) => void
+    api.enqueue.mockImplementation(
+      () => new Promise<PromptQueueSnapshot>((done) => (resolve = done))
+    )
+    const { result } = renderHook(() => useMessageQueue(7))
+    await waitFor(() => expect(result.current.hydrated).toBe(true))
+
+    act(() => result.current.enqueue(draft("A"), null))
     expect(result.current.getQueueLength()).toBe(1)
+    const id = result.current.queue[0].id
+    expect(api.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({ id, clientDedupeId: id, conversationId: 7 })
+    )
+
+    await act(async () => resolve(snapshot(7, 1, [{ id, text: "A" }])))
+    expect(result.current.queue.map((item) => item.id)).toEqual([id])
   })
 
-  it("applies a valid reorder (a permutation of the live queue)", () => {
-    const { result } = renderHook(() => useMessageQueue())
-    act(() => result.current.enqueue(draft("A"), null))
-    act(() => result.current.enqueue(draft("B"), null))
-    const [a, b] = result.current.queue
-    act(() => result.current.reorder([b, a]))
-    expect(texts(result.current.queue)).toEqual(["B", "A"])
+  it("returns the draft to its owner when durable enqueue fails", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {})
+    const onPersistFailure = vi.fn()
+    api.enqueue.mockRejectedValue(new Error("disk full"))
+    const { result } = renderHook(() =>
+      useMessageQueue(7, { onPersistFailure })
+    )
+    await waitFor(() => expect(result.current.hydrated).toBe(true))
+
+    const failedDraft = draft("do not lose me")
+    act(() => result.current.enqueue(failedDraft, null))
+    await waitFor(() =>
+      expect(onPersistFailure).toHaveBeenCalledWith(
+        failedDraft,
+        expect.objectContaining({ message: "disk full" })
+      )
+    )
+    consoleError.mockRestore()
   })
 
-  it("ignores a STALE reorder whose id set no longer matches (no resurrect/drop)", () => {
-    const { result } = renderHook(() => useMessageQueue())
-    act(() => result.current.enqueue(draft("A"), null))
-    act(() => result.current.enqueue(draft("B"), null))
-    const stale = [...result.current.queue].reverse() // snapshot of [A, B] → [B, A]
-    // The queue changes (A dequeued) AFTER the drag snapshot was taken.
-    act(() => result.current.dequeue())
-    expect(texts(result.current.queue)).toEqual(["B"])
-    // Applying the stale [B, A] order would resurrect A — it must be ignored.
+  it("promotes a locally queued new-Session draft once its DB id arrives", async () => {
+    const { result, rerender } = renderHook(
+      ({ id }: { id: number | null }) => useMessageQueue(id),
+      { initialProps: { id: null as number | null } }
+    )
+    act(() => result.current.enqueue(draft("A"), "plan"))
+    const stableId = result.current.queue[0].id
+    expect(api.enqueue).not.toHaveBeenCalled()
+
+    rerender({ id: 7 })
+    await waitFor(() => expect(api.enqueue).toHaveBeenCalledTimes(1))
+    expect(api.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: stableId,
+        clientDedupeId: stableId,
+        conversationId: 7,
+        modeId: "plan",
+      })
+    )
+  })
+
+  it("rejects a stale reorder before it can drop or resurrect an item", async () => {
+    api.get.mockResolvedValue(
+      snapshot(7, 2, [
+        { id: "a", text: "A" },
+        { id: "b", text: "B" },
+      ])
+    )
+    const { result } = renderHook(() => useMessageQueue(7))
+    await waitFor(() => expect(result.current.queue).toHaveLength(2))
+    const stale = [...result.current.queue].reverse()
+    act(() => emit(snapshot(7, 3, [{ id: "b", text: "B" }])))
     act(() => result.current.reorder(stale))
-    expect(texts(result.current.queue)).toEqual(["B"])
+    expect(result.current.queue.map((item) => item.id)).toEqual(["b"])
+    expect(api.reorder).not.toHaveBeenCalled()
   })
 
-  it("ignores a reorder containing a duplicate id (would drop another item)", () => {
-    const { result } = renderHook(() => useMessageQueue())
-    act(() => result.current.enqueue(draft("A"), null))
-    act(() => result.current.enqueue(draft("B"), null))
-    const [a] = result.current.queue
-    // [A, A] matches length + membership but is NOT a permutation — applying it
-    // would duplicate A and drop B. Must be ignored.
-    act(() => result.current.reorder([a, a]))
-    expect(texts(result.current.queue)).toEqual(["A", "B"])
+  it("keeps two views of the same Session on one backend revision", async () => {
+    api.get.mockResolvedValue(snapshot(7, 1, [{ id: "a", text: "A" }]))
+    const first = renderHook(() => useMessageQueue(7))
+    const second = renderHook(() => useMessageQueue(7))
+    await waitFor(() => {
+      expect(first.result.current.hydrated).toBe(true)
+      expect(second.result.current.hydrated).toBe(true)
+      expect(eventHandlers.size).toBe(2)
+    })
+
+    act(() => emit(snapshot(7, 2, [{ id: "b", text: "B" }])))
+    expect(first.result.current.queue.map((item) => item.id)).toEqual(["b"])
+    expect(second.result.current.queue.map((item) => item.id)).toEqual(["b"])
+    expect(first.result.current.revision).toBe(2)
+    expect(second.result.current.revision).toBe(2)
   })
 
-  it("reorders the AUTHORITATIVE items, not the caller's stale objects", () => {
-    const { result } = renderHook(() => useMessageQueue())
-    act(() => result.current.enqueue(draft("A"), null))
-    act(() => result.current.enqueue(draft("B"), null))
-    const [a, b] = result.current.queue
-    // A is edited AFTER the drag snapshot [a, b] was captured.
-    act(() => result.current.updateItem(a.id, draft("A-edited")))
-    // The stale reorder carries the OLD `a` object (draft "A"); the commit must
-    // use the authoritative edited A (by id), only applying the requested order.
-    act(() => result.current.reorder([b, a]))
-    expect(texts(result.current.queue)).toEqual(["B", "A-edited"])
+  it("does not carry optimistic queue items across a real Session switch", async () => {
+    let resolve!: (value: PromptQueueSnapshot) => void
+    api.enqueue.mockImplementation(
+      () => new Promise<PromptQueueSnapshot>((done) => (resolve = done))
+    )
+    api.get.mockImplementation((id: number) =>
+      Promise.resolve(snapshot(id, id === 7 ? 1 : 4))
+    )
+    const { result, rerender } = renderHook(
+      ({ id }: { id: number | null }) => useMessageQueue(id),
+      { initialProps: { id: 7 as number | null } }
+    )
+    await waitFor(() => expect(result.current.hydrated).toBe(true))
+    act(() => result.current.enqueue(draft("belongs to seven"), null))
+    expect(result.current.queue).toHaveLength(1)
+
+    rerender({ id: 8 })
+    await waitFor(() => {
+      expect(result.current.hydrated).toBe(true)
+      expect(result.current.queue).toEqual([])
+    })
+    await act(async () => resolve(snapshot(7, 2, [])))
+    expect(result.current.queue).toEqual([])
+    expect(result.current.revision).toBe(4)
   })
 })

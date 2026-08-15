@@ -1,102 +1,266 @@
 "use client"
 
-import { useCallback, useRef, useState } from "react"
-import type { PromptDraft } from "@/lib/types"
+import { useCallback, useEffect, useRef, useState } from "react"
+import {
+  deletePromptQueueItem,
+  editPromptQueueItem,
+  enqueuePromptQueueItem,
+  getPromptQueue,
+  reorderPromptQueueItems,
+  resumePromptQueue,
+  retryPromptQueueItem,
+} from "@/lib/api"
+import { onTransportReconnect, subscribe } from "@/lib/platform"
+import type {
+  PromptDraft,
+  PromptQueueItem,
+  PromptQueueSnapshot,
+} from "@/lib/types"
 import { randomUUID } from "@/lib/utils"
+
+export const PROMPT_QUEUE_CHANGED_EVENT = "prompt-queue://changed"
 
 export interface QueuedMessage {
   id: string
   draft: PromptDraft
   modeId: string | null
+  state: "queued" | "claimed" | "paused"
+  attempts: number
+  pausedReason: string | null
 }
 
 export interface UseMessageQueueReturn {
   queue: QueuedMessage[]
+  revision: number
+  pausedReason: string | null
+  hydrated: boolean
   enqueue: (draft: PromptDraft, modeId: string | null) => void
-  /**
-   * Put a draft back at the FRONT of the queue. Used when an auto-flushed item
-   * was dequeued, sent, and bounced (TurnBusyError): it must return to the head
-   * so it retries before items that were already behind it (FIFO preserved).
-   */
-  requeueFront: (draft: PromptDraft, modeId: string | null) => void
-  dequeue: () => QueuedMessage | undefined
   remove: (id: string) => void
   reorder: (items: QueuedMessage[]) => void
   updateItem: (id: string, draft: PromptDraft) => void
-  /**
-   * The queue length, read SYNCHRONOUSLY from the authoritative ref — it
-   * reflects the same-tick result of an enqueue/requeue/dequeue, before React
-   * commits the next render. Callers gating on "is the queue non-empty right
-   * now" (the fork-send guard, the direct-send routing) must use this rather
-   * than `queue.length` (which lags a render).
-   */
+  retryItem: (id: string) => void
+  resume: () => void
   getQueueLength: () => number
   editingItemId: string | null
   startEditing: (id: string) => void
   cancelEditing: () => void
 }
 
-export function useMessageQueue(): UseMessageQueueReturn {
-  const [queue, setQueue] = useState<QueuedMessage[]>([])
-  const [editingItemId, setEditingItemId] = useState<string | null>(null)
-  // Authoritative copy of the queue, updated SYNCHRONOUSLY by every mutation
-  // (before the React state commit). Reads that must observe the same-tick
-  // result of a mutation — the fork-send guard and the direct-send queue
-  // routing — go through this ref / `getQueueLength`, NOT the `queue` state
-  // (which lags until React commits) and NOT a passive-effect-synced mirror
-  // (which lags a full render). Without this, a bounce that re-queues a draft
-  // leaves a window where the guard still sees an empty queue.
-  const queueRef = useRef<QueuedMessage[]>(queue)
+interface UseMessageQueueOptions {
+  onPersistFailure?: (draft: PromptDraft, error: unknown) => void
+}
 
-  // Update the authoritative ref first, then schedule the render. A plain value
-  // (not a functional updater) is correct because `queueRef.current` is always
-  // the latest committed value.
+function fromWire(item: PromptQueueItem): QueuedMessage | null {
+  if (!item.draft) return null
+  return {
+    id: item.id,
+    draft: item.draft,
+    modeId: item.modeId ?? null,
+    state: item.state,
+    attempts: item.attempts,
+    pausedReason: item.pausedReason ?? null,
+  }
+}
+
+export function useMessageQueue(
+  conversationId: number | null,
+  options: UseMessageQueueOptions = {}
+): UseMessageQueueReturn {
+  const [queue, setQueue] = useState<QueuedMessage[]>([])
+  const [revision, setRevision] = useState(0)
+  const [pausedReason, setPausedReason] = useState<string | null>(null)
+  const [hydrated, setHydrated] = useState(conversationId == null)
+  const [editingItemId, setEditingItemId] = useState<string | null>(null)
+  const queueRef = useRef<QueuedMessage[]>([])
+  const revisionRef = useRef(0)
+  const conversationIdRef = useRef(conversationId)
+  const loadedConversationIdRef = useRef(conversationId)
+  const pendingOptimisticRef = useRef(new Map<string, QueuedMessage>())
+  const generationRef = useRef(0)
+  const persistFailureRef = useRef(options.onPersistFailure)
+
+  useEffect(() => {
+    persistFailureRef.current = options.onPersistFailure
+  }, [options.onPersistFailure])
+
+  useEffect(() => {
+    conversationIdRef.current = conversationId
+  }, [conversationId])
+
   const commit = useCallback((next: QueuedMessage[]) => {
     queueRef.current = next
     setQueue(next)
   }, [])
 
+  const applySnapshot = useCallback(
+    (snapshot: PromptQueueSnapshot) => {
+      if (snapshot.conversationId !== conversationIdRef.current) return
+      if (snapshot.revision < revisionRef.current) return
+      revisionRef.current = snapshot.revision
+      setRevision(snapshot.revision)
+      setPausedReason(snapshot.pausedReason ?? null)
+      const backend = snapshot.items
+        .map(fromWire)
+        .filter((item): item is QueuedMessage => item != null)
+      const backendIds = new Set(backend.map((item) => item.id))
+      // Keep a just-clicked optimistic append visible until its own request
+      // resolves. An older fetch/event cannot erase it; once the request
+      // returns we remove it from this map and the authoritative snapshot wins.
+      for (const item of pendingOptimisticRef.current.values()) {
+        if (!backendIds.has(item.id)) backend.push(item)
+      }
+      commit(backend)
+      setEditingItemId((current) =>
+        current && backend.some((item) => item.id === current) ? current : null
+      )
+      setHydrated(true)
+    },
+    [commit]
+  )
+
+  const reload = useCallback(async () => {
+    const id = conversationIdRef.current
+    if (id == null) return
+    const generation = generationRef.current
+    try {
+      const snapshot = await getPromptQueue(id)
+      if (generation === generationRef.current) applySnapshot(snapshot)
+    } catch (error) {
+      console.error("[prompt-queue] snapshot:", error)
+      if (generation === generationRef.current) setHydrated(true)
+    }
+  }, [applySnapshot])
+
+  useEffect(() => {
+    const previousConversationId = loadedConversationIdRef.current
+    loadedConversationIdRef.current = conversationId
+    generationRef.current += 1
+    const generation = generationRef.current
+    revisionRef.current = 0
+    // Session identity changed, so stale queue state must disappear in the
+    // same commit before the new external subscription can publish data.
+    /* eslint-disable react-hooks/set-state-in-effect -- intentional identity-bound subscription reset */
+    setRevision(0)
+    setPausedReason(null)
+    setEditingItemId(null)
+    // Preserve only the intentional draft -> persisted Session promotion. A
+    // real Session switch must never flash or accidentally promote the old
+    // Session's optimistic queue into the new one.
+    if (!(previousConversationId == null && conversationId != null)) {
+      pendingOptimisticRef.current.clear()
+      commit([])
+    }
+    if (conversationId == null) {
+      setHydrated(true)
+      return
+    }
+    setHydrated(false)
+    /* eslint-enable react-hooks/set-state-in-effect */
+    void reload()
+
+    let disposed = false
+    let unsubscribe: (() => void) | undefined
+    void subscribe<PromptQueueSnapshot>(
+      PROMPT_QUEUE_CHANGED_EVENT,
+      (snapshot) => {
+        if (!disposed && generation === generationRef.current) {
+          applySnapshot(snapshot)
+        }
+      }
+    ).then((off) => {
+      if (disposed) off()
+      else unsubscribe = off
+    })
+    const offReconnect = onTransportReconnect(() => {
+      if (!disposed) void reload()
+    })
+    return () => {
+      disposed = true
+      unsubscribe?.()
+      offReconnect?.()
+    }
+  }, [conversationId, applySnapshot, commit, reload])
+
+  // A prompt can be queued in the narrow window after a new Session's first
+  // send starts but before its DB id reaches this hook. Preserve it locally,
+  // then promote it with the SAME stable id as soon as the id arrives.
+  useEffect(() => {
+    if (conversationId == null) return
+    for (const item of pendingOptimisticRef.current.values()) {
+      void enqueuePromptQueueItem({
+        conversationId,
+        id: item.id,
+        clientDedupeId: item.id,
+        draft: item.draft,
+        modeId: item.modeId,
+      })
+        .then((snapshot) => {
+          pendingOptimisticRef.current.delete(item.id)
+          applySnapshot(snapshot)
+        })
+        .catch((error) => {
+          pendingOptimisticRef.current.delete(item.id)
+          console.error("[prompt-queue] promote local item:", error)
+          persistFailureRef.current?.(item.draft, error)
+          void reload()
+        })
+    }
+  }, [conversationId, applySnapshot, reload])
+
   const enqueue = useCallback(
     (draft: PromptDraft, modeId: string | null) => {
-      commit([...queueRef.current, { id: randomUUID(), draft, modeId }])
+      const item: QueuedMessage = {
+        id: randomUUID(),
+        draft,
+        modeId,
+        state: "queued",
+        attempts: 0,
+        pausedReason: null,
+      }
+      pendingOptimisticRef.current.set(item.id, item)
+      commit([...queueRef.current, item])
+      const id = conversationIdRef.current
+      if (id == null) return
+      void enqueuePromptQueueItem({
+        conversationId: id,
+        id: item.id,
+        clientDedupeId: item.id,
+        draft,
+        modeId,
+      })
+        .then((snapshot) => {
+          pendingOptimisticRef.current.delete(item.id)
+          applySnapshot(snapshot)
+        })
+        .catch((error) => {
+          pendingOptimisticRef.current.delete(item.id)
+          console.error("[prompt-queue] enqueue:", error)
+          persistFailureRef.current?.(draft, error)
+          void reload()
+        })
     },
-    [commit]
+    [applySnapshot, commit, reload]
   )
-
-  const requeueFront = useCallback(
-    (draft: PromptDraft, modeId: string | null) => {
-      commit([{ id: randomUUID(), draft, modeId }, ...queueRef.current])
-    },
-    [commit]
-  )
-
-  const dequeue = useCallback((): QueuedMessage | undefined => {
-    const current = queueRef.current
-    if (current.length === 0) return undefined
-    commit(current.slice(1))
-    return current[0]
-  }, [commit])
 
   const remove = useCallback(
     (id: string) => {
-      if (editingItemId === id) {
-        setEditingItemId(null)
-      }
+      if (editingItemId === id) setEditingItemId(null)
+      pendingOptimisticRef.current.delete(id)
       commit(queueRef.current.filter((item) => item.id !== id))
+      const activeConversationId = conversationIdRef.current
+      if (activeConversationId == null) return
+      void deletePromptQueueItem(activeConversationId, id, revisionRef.current)
+        .then(applySnapshot)
+        .catch((error) => {
+          console.error("[prompt-queue] delete:", error)
+          void reload()
+        })
     },
-    [commit, editingItemId]
+    [applySnapshot, commit, editingItemId, reload]
   )
 
   const reorder = useCallback(
     (items: QueuedMessage[]) => {
-      // Apply a reorder ONLY if it is a true permutation of the live queue, and
-      // rebuild it from the AUTHORITATIVE items rather than the caller's
-      // (possibly stale) objects. A drag emission carries the queue order from
-      // the render it began in; if the live queue changed since (dequeue /
-      // requeue / remove / updateItem), the dragged array is stale. Reject any
-      // length mismatch, unknown id, or repeated id (e.g. `[A, A]` would
-      // otherwise drop `B` and duplicate `A`); commit the current item objects
-      // in the requested order so a concurrent `updateItem` isn't clobbered.
       const current = queueRef.current
       if (items.length !== current.length) return
       const byId = new Map(current.map((item) => [item.id, item]))
@@ -109,8 +273,20 @@ export function useMessageQueue(): UseMessageQueueReturn {
         next.push(authoritative)
       }
       commit(next)
+      const activeConversationId = conversationIdRef.current
+      if (activeConversationId == null) return
+      void reorderPromptQueueItems(
+        activeConversationId,
+        next.map((item) => item.id),
+        revisionRef.current
+      )
+        .then(applySnapshot)
+        .catch((error) => {
+          console.error("[prompt-queue] reorder:", error)
+          void reload()
+        })
     },
-    [commit]
+    [applySnapshot, commit, reload]
   )
 
   const updateItem = useCallback(
@@ -121,28 +297,67 @@ export function useMessageQueue(): UseMessageQueueReturn {
         )
       )
       setEditingItemId(null)
+      const activeConversationId = conversationIdRef.current
+      if (activeConversationId == null) {
+        const pending = pendingOptimisticRef.current.get(id)
+        if (pending) pendingOptimisticRef.current.set(id, { ...pending, draft })
+        return
+      }
+      void editPromptQueueItem(
+        activeConversationId,
+        id,
+        draft,
+        revisionRef.current
+      )
+        .then(applySnapshot)
+        .catch((error) => {
+          console.error("[prompt-queue] edit:", error)
+          void reload()
+        })
     },
-    [commit]
+    [applySnapshot, commit, reload]
   )
 
+  const retryItem = useCallback(
+    (id: string) => {
+      const activeConversationId = conversationIdRef.current
+      if (activeConversationId == null) return
+      void retryPromptQueueItem(activeConversationId, id, revisionRef.current)
+        .then(applySnapshot)
+        .catch((error) => {
+          console.error("[prompt-queue] retry:", error)
+          void reload()
+        })
+    },
+    [applySnapshot, reload]
+  )
+
+  const resume = useCallback(() => {
+    const activeConversationId = conversationIdRef.current
+    if (activeConversationId == null) return
+    void resumePromptQueue(activeConversationId, revisionRef.current)
+      .then(applySnapshot)
+      .catch((error) => {
+        console.error("[prompt-queue] resume:", error)
+        void reload()
+      })
+  }, [applySnapshot, reload])
+
   const getQueueLength = useCallback(() => queueRef.current.length, [])
-
-  const startEditing = useCallback((id: string) => {
-    setEditingItemId(id)
-  }, [])
-
-  const cancelEditing = useCallback(() => {
-    setEditingItemId(null)
-  }, [])
+  const startEditing = useCallback((id: string) => setEditingItemId(id), [])
+  const cancelEditing = useCallback(() => setEditingItemId(null), [])
 
   return {
     queue,
+    revision,
+    pausedReason,
+    hydrated,
     enqueue,
-    requeueFront,
-    dequeue,
     remove,
     reorder,
     updateItem,
+    retryItem,
+    resume,
     getQueueLength,
     editingItemId,
     startEditing,

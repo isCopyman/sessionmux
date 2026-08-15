@@ -2816,7 +2816,14 @@
         "saveEdit": "Save",
         "cancelEdit": "Cancel edit",
         "editItem": "Edit",
-        "deleteItem": "Remove"
+        "deleteItem": "Remove",
+        "retryItem": "Retry",
+        "resumeQueue": "Resume",
+        "dispatching": "Sending queued message",
+        "paused": "Queue paused: {reason}",
+        "pauseReasonCancelled": "The current turn was cancelled. Resume when you are ready.",
+        "pauseReasonUnknownDispatch": "The previous message may have reached the agent. Check the session before retrying.",
+        "persistFailed": "Could not save the queued message: {error}. Its text was restored to the composer."
       },
       "welcomeInputPanel": {
         "agentsSettingsPath": "Settings > Agents",

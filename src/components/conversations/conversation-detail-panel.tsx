@@ -49,7 +49,7 @@ import type { SplitDropEdge } from "@/lib/tab-drag-drop"
 import { useTaskContext } from "@/contexts/task-context"
 import { cn, copyTextFromMenu, randomUUID } from "@/lib/utils"
 import { useConnectionLifecycle } from "@/hooks/use-connection-lifecycle"
-import { useMessageQueue, type QueuedMessage } from "@/hooks/use-message-queue"
+import { useMessageQueue } from "@/hooks/use-message-queue"
 import { MessageListView } from "@/components/message/message-list-view"
 import {
   GoalControlProvider,
@@ -84,10 +84,8 @@ import {
 } from "@/lib/api"
 import { isWindowedDetail } from "@/lib/turn-window"
 import {
-  flushRetryDelayMs,
   forkSendBlockedByQueue,
   isConnectionReady,
-  shouldQueueDirectSend,
   shouldRejectDuplicateCreate,
 } from "@/lib/queue-flush"
 import { TurnBusyError } from "@/lib/turn-busy"
@@ -513,16 +511,14 @@ const ConversationTabView = memo(function ConversationTabView({
   // them actually changes. (message-list-view subscribes to the session's
   // liveMessage separately to render the live stream; the context indicator
   // reads its own session stats from the runtime store directly.)
-  const { externalId: runtimeExternalId, syncState: runtimeSyncState } =
-    useConversationRuntimeStore(
-      useShallow((s) => {
-        const session = s.byConversationId.get(effectiveConversationId)
-        return {
-          externalId: session?.externalId ?? null,
-          syncState: session?.syncState ?? "idle",
-        }
-      })
-    )
+  const { externalId: runtimeExternalId } = useConversationRuntimeStore(
+    useShallow((s) => {
+      const session = s.byConversationId.get(effectiveConversationId)
+      return {
+        externalId: session?.externalId ?? null,
+      }
+    })
+  )
 
   // Two-source resolution for the session id passed to acp_connect:
   //   1. detail.summary.external_id — DB value, available for tabs opened
@@ -586,6 +582,16 @@ const ConversationTabView = memo(function ConversationTabView({
     }
     return buildNewConversationDraftStorageKey(tabId)
   }, [dbConversationId, tabId])
+  const tQueue = useTranslations("Folder.chat.messageQueue")
+  const handleQueuePersistFailure = useCallback(
+    (draft: PromptDraft, error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error)
+      saveMessageInputDraft(draftStorageKey, draft.displayText)
+      setQuickActionInject({ text: draft.displayText })
+      toast.error(tQueue("persistFailed", { error: message }))
+    },
+    [draftStorageKey, tQueue]
+  )
   // One-shot handover of the pre-per-tab shared draft, so an in-flight draft
   // isn't stranded by the upgrade (no-ops for every later draft tab).
   useEffect(() => {
@@ -632,16 +638,20 @@ const ConversationTabView = memo(function ConversationTabView({
     ),
   })
   const { status: connStatus, sessionId: connSessionId } = conn
-  const messageQueue = useMessageQueue()
+  const messageQueue = useMessageQueue(dbConversationId, {
+    onPersistFailure: handleQueuePersistFailure,
+  })
   const {
     queue: msgQueue,
     enqueue: mqEnqueue,
-    requeueFront: mqRequeueFront,
     getQueueLength: mqGetQueueLength,
-    dequeue: mqDequeue,
     remove: mqRemove,
     reorder: mqReorder,
     updateItem: mqUpdateItem,
+    retryItem: mqRetryItem,
+    resume: mqResume,
+    pausedReason: mqPausedReason,
+    hydrated: mqHydrated,
     editingItemId: mqEditingItemId,
     startEditing: mqStartEditing,
     cancelEditing: mqCancelEditing,
@@ -781,75 +791,6 @@ const ConversationTabView = memo(function ConversationTabView({
     }
   }, [completeTurn, connStatus, effectiveConversationId, syncTurnMetadata])
 
-  // Auto-send queued messages when agent finishes responding.
-  // Refs are synced via useEffect; the auto-send effect is declared
-  // AFTER completeTurn so React runs it second.
-  const autoSendQueueRef = useRef<() => QueuedMessage | undefined>(mqDequeue)
-  useEffect(() => {
-    autoSendQueueRef.current = mqDequeue
-  }, [mqDequeue])
-  const handleSendRef = useRef<
-    (
-      draft: PromptDraft,
-      modeId?: string | null,
-      opts?: { fromQueueFlush?: boolean }
-    ) => void
-  >(() => {})
-  // Timestamp of the last send that bounced with TurnBusyError. The flush below
-  // backs off after a bounce so repeated busy rejections (backend still running
-  // another turn while this client believes it is idle) don't spin one failed
-  // send per round-trip.
-  const lastFlushBounceAtRef = useRef(0)
-
-  // Flush queued messages whenever the agent is idle. This is the queue's send
-  // engine, covering BOTH:
-  //   - the normal case: a message queued while the agent was prompting, sent
-  //     once the turn completes (prompting→connected drives syncState→idle); and
-  //   - a draft re-queued by a bounced concurrent send that landed AFTER the
-  //     prompting→connected transition already passed — which an edge-triggered
-  //     flush would strand until the next turn.
-  // Gated on syncState !== "awaiting_persist" so exactly one item flushes at a
-  // time: dequeuing + sending appends an optimistic turn → awaiting_persist,
-  // which blocks re-entry until that send settles (the turn completes, or it
-  // bounces and rolls back to idle to retry the next item). A bounce backoff
-  // rate-limits retries against a still-busy backend.
-  useEffect(() => {
-    if (connStatus !== "connected") return
-    // Don't flush onto a connection whose cwd doesn't match the tab's intended
-    // working dir. This matters for a just-bound chat conversation: bind switches
-    // the tab's workingDir from the draft's previous folder to the scratch dir,
-    // and for one render `connStatus` can still read the stale "connected" of the
-    // old-folder session before the reconnect lands. Flushing then would deliver
-    // the queued prompt to the wrong folder's agent. (No-op for normal
-    // conversations, whose connection cwd always equals the intended one.)
-    if (
-      (conn.connectedWorkingDir ?? null) !== (workingDirForConnection ?? null)
-    ) {
-      return
-    }
-    if (runtimeSyncState === "awaiting_persist") return
-    if (msgQueue.length === 0) return
-    // setTimeout (not microtask) so a COMPLETE_TURN commit settles first AND so
-    // a just-bounced retry waits out the backoff window before re-sending.
-    const wait = flushRetryDelayMs(Date.now(), lastFlushBounceAtRef.current)
-    const timer = setTimeout(() => {
-      if (connStatusRef.current !== "connected") return
-      const next = autoSendQueueRef.current()
-      if (next) {
-        // Mark this as the queue auto-flush: it sends the dequeued head now and,
-        // on a bounce, returns it to the FRONT (vs a direct send → tail).
-        handleSendRef.current(next.draft, next.modeId, { fromQueueFlush: true })
-      }
-    }, wait)
-    return () => clearTimeout(timer)
-  }, [
-    connStatus,
-    runtimeSyncState,
-    msgQueue.length,
-    conn.connectedWorkingDir,
-    workingDirForConnection,
-  ])
-
   // Mirror the connection's liveMessage into the runtime session OUTSIDE React.
   // The connection dispatch invokes this sink synchronously whenever liveMessage
   // changes (streaming deltas, tool updates, the prompt-start reset), so the
@@ -986,16 +927,7 @@ const ConversationTabView = memo(function ConversationTabView({
   ])
 
   const handleSend = useCallback(
-    (
-      draft: PromptDraft,
-      selectedModeIdArg?: string | null,
-      // `fromQueueFlush` marks the auto-flush draining the queue head — that
-      // path always sends and, on a bounce, re-queues at the FRONT. A direct
-      // input send (no flag) must NOT jump ahead of already-queued items: when
-      // a queue exists it tail-enqueues instead of sending, and on a bounce it
-      // re-queues at the TAIL.
-      opts?: { fromQueueFlush?: boolean }
-    ) => {
+    (draft: PromptDraft, selectedModeIdArg?: string | null) => {
       // Capture the tab's chat-draft state + eager scratch dir synchronously,
       // before any await. A folderless chat draft is NOT special-cased here:
       // its first send takes the exact same gated, inline path as a normal new
@@ -1015,11 +947,9 @@ const ConversationTabView = memo(function ConversationTabView({
       // deliver to the wrong workspace. Same predicate the flush effect uses.
       if (!connectionReady) return
 
-      const fromQueueFlush = opts?.fromQueueFlush ?? false
       // Preserve FIFO: a direct send issued while the queue is non-empty joins
-      // the tail rather than racing ahead of the queued items. Read the
-      // queue length synchronously (it reflects a same-tick bounce requeue).
-      if (shouldQueueDirectSend(fromQueueFlush, mqGetQueueLength())) {
+      // the backend-owned tail rather than racing ahead of queued items.
+      if (!mqHydrated || mqGetQueueLength() > 0) {
         mqEnqueue(draft, selectedModeIdArg ?? null)
         return
       }
@@ -1057,28 +987,20 @@ const ConversationTabView = memo(function ConversationTabView({
       // Backend rejected the send because a turn was already in flight (another
       // co-controlling client, or a "prompting" status this client hadn't
       // observed yet). Roll back the optimistic user turn and drop the draft
-      // into the queue above the input box — it auto-sends when the current
-      // turn completes, identical to enqueuing while already prompting. Stamp
-      // the bounce so the flush backs off instead of immediately retrying.
+      // into the durable queue above the input box. The backend worker sends it
+      // after the current turn completes; the panel itself never drains it.
       const onTurnInProgress = () => {
-        lastFlushBounceAtRef.current = Date.now()
         removeOptimisticTurn(effectiveConversationId, optimisticTurn.id)
-        // FIFO: the auto-flush draft WAS the queue head → return it to the
-        // front; a direct send (queue was empty when it left) → tail.
-        if (fromQueueFlush) {
-          mqRequeueFront(draft, selectedModeIdArg ?? null)
-        } else {
-          mqEnqueue(draft, selectedModeIdArg ?? null)
-        }
+        mqEnqueue(draft, selectedModeIdArg ?? null)
       }
 
       // Any OTHER send failure (413, image-hydration failure, network drop):
       // the lifecycle hook already toasts the error; here we roll back the
       // optimistic user turn so the failed prompt isn't displayed as though
       // it were sent — and, via REMOVE_OPTIMISTIC_TURN's settle-to-idle, the
-      // conversation drops out of `awaiting_persist` so queue auto-flush
-      // isn't blocked forever. The draft is NOT re-queued (unlike the busy
-      // bounce): a deterministic failure would retry — and toast — forever.
+      // conversation drops out of `awaiting_persist`. The draft is NOT
+      // re-queued (unlike the busy rejection): a deterministic failure must be
+      // surfaced for an explicit retry rather than looping forever.
       const onSendFailed = () => {
         removeOptimisticTurn(effectiveConversationId, optimisticTurn.id)
       }
@@ -1240,7 +1162,7 @@ const ConversationTabView = memo(function ConversationTabView({
       appendOptimisticTurn,
       removeOptimisticTurn,
       mqEnqueue,
-      mqRequeueFront,
+      mqHydrated,
       mqGetQueueLength,
       bindConversationTab,
       canAutoConnect,
@@ -1264,26 +1186,21 @@ const ConversationTabView = memo(function ConversationTabView({
     ]
   )
 
-  // Sync handleSend ref for auto-send effect (declared before handleSend)
-  useEffect(() => {
-    handleSendRef.current = handleSend
-  }, [handleSend])
-
   const handleForkSend = useCallback(
     // Fire-and-forget: the input clears the draft synchronously on click (like a
     // normal send), so there is no in-flight editable window. If the fork can't
     // run right now — disconnected, or the queue is non-empty (a fork is an
     // immediate session side effect and must not jump ahead of queued items) —
-    // the draft is NOT lost: it is queued as a normal send (it flushes after any
-    // queued items). The same on a fork failure.
+    // the draft is NOT lost: it is queued as a normal send (the backend sends
+    // it after earlier items). The same applies on a fork failure.
     async (draft: PromptDraft, selectedModeIdArg?: string | null) => {
       const connectionId = conn.connectionId
       if (
         !connectionId ||
         connStatus !== "connected" ||
-        // Read the queue length SYNCHRONOUSLY so a draft re-queued by a same-
-        // tick bounce is seen even before React commits. The UI also hides the
-        // fork affordance while the queue is non-empty; this is the guard.
+        // Read the queue length synchronously so a just-enqueued draft is seen
+        // before React commits. The UI also hides the fork affordance while the
+        // queue is non-empty; this is the defense-in-depth guard.
         forkSendBlockedByQueue(mqGetQueueLength())
       ) {
         mqEnqueue(draft, selectedModeIdArg ?? null)
@@ -1451,12 +1368,9 @@ const ConversationTabView = memo(function ConversationTabView({
         // Rejected because a turn was already in flight — roll back the
         // optimistic turn and re-queue so it isn't stranded or lost.
         onTurnInProgress: () => {
-          lastFlushBounceAtRef.current = Date.now()
           removeOptimisticTurn(effectiveConversationId, optimisticTurn.id)
-          // A direct answer (never dequeued from the queue) re-queues at the
-          // TAIL — it was sent after any already-queued items, so FIFO keeps it
-          // behind them. (Only the auto-flush path, whose draft WAS the head,
-          // re-queues at the front.)
+          // A direct answer joins the authoritative tail, preserving FIFO with
+          // any items another view queued at the same time.
           mqEnqueue(draft, null)
         },
         // Any other failure: settle the optimistic state (the lifecycle hook
@@ -1496,8 +1410,8 @@ const ConversationTabView = memo(function ConversationTabView({
   // follow-up user turn (`s` moves focus to the prompt). Mirror that: after
   // resolving keep-planning, send the notes as a normal prompt so Grok — still
   // in plan mode — revises and re-presents the plan. The send path queues the
-  // prompt if the keep-planning turn is still winding down, then flushes when
-  // idle (same optimistic-turn + re-queue dance as `handleAnswerQuestion`).
+  // prompt if the keep-planning turn is still winding down; the backend sends
+  // it when idle (same optimistic-turn + durable enqueue as above).
   const handleAnswerPlanApproval = useCallback(
     (approvalId: string, answer: PlanApprovalAnswer) => {
       const result = acpActions.answerPlanApproval(tabId, approvalId, answer)
@@ -1529,7 +1443,6 @@ const ConversationTabView = memo(function ConversationTabView({
           // Rejected because the keep-planning turn was still in flight — roll
           // back the optimistic turn and re-queue at the tail so it isn't lost.
           onTurnInProgress: () => {
-            lastFlushBounceAtRef.current = Date.now()
             removeOptimisticTurn(effectiveConversationId, optimisticTurn.id)
             mqEnqueue(draft, null)
           },
@@ -1725,8 +1638,8 @@ const ConversationTabView = memo(function ConversationTabView({
   // where the backend already reports no active turn but the frontend may still
   // read `connStatus === "prompting"`, and `handleSend` no-ops unless
   // "connected" — which would silently drop the note. The message queue holds it
-  // (visible above the composer) and auto-flushes when the turn completes, so
-  // the user's note is never lost.
+  // (visible above the composer), and the backend dispatches it when the turn
+  // completes, so the user's note is never lost even if this panel closes.
   const feedbackEnabled = useFeedbackEnabled()
   const resendFeedbackAsPrompt = useCallback(
     (text: string) => {
@@ -1812,6 +1725,9 @@ const ConversationTabView = memo(function ConversationTabView({
       onQueueReorder={mqReorder}
       onQueueEdit={handleQueueEdit}
       onQueueDelete={mqRemove}
+      onQueueRetry={mqRetryItem}
+      onQueueResume={mqResume}
+      queuePausedReason={mqPausedReason}
       editingItemId={mqEditingItemId}
       editingDraftText={editingQueueDraftText}
       editingDraftBlocks={editingQueueDraftBlocks}
@@ -1834,6 +1750,8 @@ const ConversationTabView = memo(function ConversationTabView({
           ? handleSteer
           : undefined
       }
+      injectContent={quickActionInject}
+      onInjectConsumed={handleQuickActionConsumed}
     >
       {isWelcomeMode ? (
         // Same overlay scrollbar as the sidebar / file lists (os-theme-codeg)

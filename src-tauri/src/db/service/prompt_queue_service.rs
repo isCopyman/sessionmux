@@ -1,0 +1,1269 @@
+use std::collections::HashSet;
+
+use chrono::{DateTime, Duration, Utc};
+use sea_orm::{
+    ConnectionTrait, DatabaseConnection, DatabaseTransaction, DbBackend, EntityTrait, QueryResult,
+    Statement, TransactionTrait,
+};
+
+use crate::db::entities::conversation;
+use crate::db::error::DbError;
+use crate::models::prompt_queue::{
+    ClaimedPromptQueueItem, EnqueuePromptQueueItem, PromptQueueDraft, PromptQueueItem,
+    PromptQueueItemState, PromptQueueSnapshot,
+};
+
+const MAX_QUEUE_ITEMS: usize = 1_000;
+const MAX_DISPLAY_TEXT_BYTES: usize = 1_000_000;
+const UNKNOWN_DISPATCH_REASON: &str = "dispatch_outcome_unknown";
+
+fn statement(sql: &str, values: Vec<sea_orm::Value>) -> Statement {
+    Statement::from_sql_and_values(DbBackend::Sqlite, sql, values)
+}
+
+fn validation(message: impl Into<String>) -> DbError {
+    DbError::Validation(message.into())
+}
+
+fn parse_timestamp(row: &QueryResult, column: &str) -> Result<DateTime<Utc>, DbError> {
+    row.try_get("", column).map_err(DbError::from)
+}
+
+fn parse_item(row: &QueryResult) -> Result<PromptQueueItem, DbError> {
+    let state_raw: String = row.try_get("", "state")?;
+    let state = PromptQueueItemState::parse(&state_raw)
+        .ok_or_else(|| validation(format!("Unknown prompt queue state: {state_raw}")))?;
+    let draft_json: Option<String> = row.try_get("", "draft_json")?;
+    let draft = draft_json
+        .map(|value| {
+            serde_json::from_str::<PromptQueueDraft>(&value)
+                .map_err(|err| validation(format!("Invalid queued prompt payload: {err}")))
+        })
+        .transpose()?;
+    Ok(PromptQueueItem {
+        id: row.try_get("", "id")?,
+        conversation_id: row.try_get("", "conversation_id")?,
+        position: row.try_get("", "position")?,
+        draft,
+        origin_event_id: row.try_get("", "origin_event_id")?,
+        mode_id: row.try_get("", "mode_id")?,
+        state,
+        client_dedupe_id: row.try_get("", "client_dedupe_id")?,
+        attempts: row.try_get("", "attempts")?,
+        paused_reason: row.try_get("", "paused_reason")?,
+        created_at: parse_timestamp(row, "created_at")?,
+        updated_at: parse_timestamp(row, "updated_at")?,
+    })
+}
+
+fn validate_draft(draft: &PromptQueueDraft) -> Result<(), DbError> {
+    if draft.blocks.is_empty() {
+        return Err(validation(
+            "A queued prompt must contain at least one content block",
+        ));
+    }
+    if draft.display_text.len() > MAX_DISPLAY_TEXT_BYTES {
+        return Err(validation("Queued prompt display text is too large"));
+    }
+    Ok(())
+}
+
+fn validate_id(label: &str, value: &str) -> Result<(), DbError> {
+    let value = value.trim();
+    if value.is_empty() || value.len() > 200 {
+        return Err(validation(format!(
+            "{label} must contain between 1 and 200 bytes"
+        )));
+    }
+    Ok(())
+}
+
+async fn ensure_conversation<C: ConnectionTrait>(
+    conn: &C,
+    conversation_id: i32,
+) -> Result<(), DbError> {
+    let exists = conversation::Entity::find_by_id(conversation_id)
+        .one(conn)
+        .await?
+        .is_some_and(|row| row.deleted_at.is_none());
+    if !exists {
+        return Err(DbError::NotFound(format!("Conversation {conversation_id}")));
+    }
+    Ok(())
+}
+
+async fn ensure_state(txn: &DatabaseTransaction, conversation_id: i32) -> Result<(), DbError> {
+    txn.execute(statement(
+        "INSERT OR IGNORE INTO conversation_prompt_queue_state \
+         (conversation_id, revision, paused_reason, updated_at) \
+         VALUES (?, 0, NULL, CURRENT_TIMESTAMP)",
+        vec![conversation_id.into()],
+    ))
+    .await?;
+    Ok(())
+}
+
+async fn state_row<C: ConnectionTrait>(
+    conn: &C,
+    conversation_id: i32,
+) -> Result<(i64, Option<String>), DbError> {
+    let row = conn
+        .query_one(statement(
+            "SELECT revision, paused_reason FROM conversation_prompt_queue_state \
+             WHERE conversation_id = ?",
+            vec![conversation_id.into()],
+        ))
+        .await?;
+    Ok(match row {
+        Some(row) => (
+            row.try_get("", "revision")?,
+            row.try_get("", "paused_reason")?,
+        ),
+        None => (0, None),
+    })
+}
+
+async fn verify_revision(
+    txn: &DatabaseTransaction,
+    conversation_id: i32,
+    expected_revision: i64,
+) -> Result<(), DbError> {
+    let (revision, _) = state_row(txn, conversation_id).await?;
+    if revision != expected_revision {
+        return Err(validation(format!(
+            "Prompt queue revision conflict: expected {expected_revision}, current {revision}"
+        )));
+    }
+    Ok(())
+}
+
+async fn bump_revision(txn: &DatabaseTransaction, conversation_id: i32) -> Result<(), DbError> {
+    txn.execute(statement(
+        "UPDATE conversation_prompt_queue_state \
+         SET revision = revision + 1, updated_at = CURRENT_TIMESTAMP \
+         WHERE conversation_id = ?",
+        vec![conversation_id.into()],
+    ))
+    .await?;
+    Ok(())
+}
+
+async fn snapshot_on<C: ConnectionTrait>(
+    conn: &C,
+    conversation_id: i32,
+) -> Result<PromptQueueSnapshot, DbError> {
+    ensure_conversation(conn, conversation_id).await?;
+    let (revision, paused_reason) = state_row(conn, conversation_id).await?;
+    let rows = conn
+        .query_all(statement(
+            "SELECT id, conversation_id, position, draft_json, origin_event_id, mode_id, \
+                    state, client_dedupe_id, attempts, paused_reason, created_at, updated_at \
+             FROM conversation_prompt_queue_item WHERE conversation_id = ? \
+             ORDER BY position ASC, created_at ASC, id ASC",
+            vec![conversation_id.into()],
+        ))
+        .await?;
+    let items = rows.iter().map(parse_item).collect::<Result<Vec<_>, _>>()?;
+    Ok(PromptQueueSnapshot {
+        conversation_id,
+        revision,
+        paused_reason,
+        items,
+    })
+}
+
+pub async fn snapshot(
+    conn: &DatabaseConnection,
+    conversation_id: i32,
+) -> Result<PromptQueueSnapshot, DbError> {
+    snapshot_on(conn, conversation_id).await
+}
+
+/// Admission guard shared by ordinary sends and the queue worker. When a
+/// durable queue exists, no ad-hoc prompt may jump its FIFO head. The worker is
+/// admitted only after it has claimed that exact stable message id.
+pub(crate) async fn send_is_admitted(
+    conn: &DatabaseConnection,
+    conversation_id: i32,
+    client_message_id: Option<&str>,
+) -> Result<bool, DbError> {
+    let row = conn
+        .query_one(statement(
+            "SELECT q.id, q.state, s.paused_reason \
+             FROM conversation_prompt_queue_item q \
+             LEFT JOIN conversation_prompt_queue_state s ON s.conversation_id = q.conversation_id \
+             WHERE q.conversation_id = ? \
+             ORDER BY q.position ASC, q.created_at ASC, q.id ASC LIMIT 1",
+            vec![conversation_id.into()],
+        ))
+        .await?;
+    let Some(row) = row else {
+        return Ok(true);
+    };
+    let id: String = row.try_get("", "id")?;
+    let state: String = row.try_get("", "state")?;
+    let paused_reason: Option<String> = row.try_get("", "paused_reason")?;
+    Ok(paused_reason.is_none() && state == "claimed" && client_message_id == Some(id.as_str()))
+}
+
+pub async fn enqueue(
+    conn: &DatabaseConnection,
+    input: EnqueuePromptQueueItem,
+) -> Result<PromptQueueSnapshot, DbError> {
+    validate_id("Queue item id", &input.id)?;
+    validate_id("Queue dedupe id", &input.client_dedupe_id)?;
+    validate_draft(&input.draft)?;
+    ensure_conversation(conn, input.conversation_id).await?;
+    let draft_json = serde_json::to_string(&input.draft)
+        .map_err(|err| validation(format!("Could not serialize queued prompt: {err}")))?;
+
+    let txn = conn.begin().await?;
+    ensure_state(&txn, input.conversation_id).await?;
+
+    // A client may retry after losing the response. The dedupe key makes that
+    // retry a read, not a second queued prompt and not a revision bump.
+    let duplicate = txn
+        .query_one(statement(
+            "SELECT id FROM conversation_prompt_queue_item \
+             WHERE conversation_id = ? AND client_dedupe_id = ?",
+            vec![
+                input.conversation_id.into(),
+                input.client_dedupe_id.clone().into(),
+            ],
+        ))
+        .await?;
+    if duplicate.is_some() {
+        txn.commit().await?;
+        return snapshot_on(conn, input.conversation_id).await;
+    }
+
+    let count: i64 = txn
+        .query_one(statement(
+            "SELECT COUNT(*) AS count FROM conversation_prompt_queue_item \
+             WHERE conversation_id = ?",
+            vec![input.conversation_id.into()],
+        ))
+        .await?
+        .expect("COUNT always returns one row")
+        .try_get("", "count")?;
+    if count >= MAX_QUEUE_ITEMS as i64 {
+        return Err(validation(format!(
+            "A Session queue can contain at most {MAX_QUEUE_ITEMS} items"
+        )));
+    }
+
+    // This write obtains SQLite's writer lock before the position read. Two
+    // clients appending concurrently therefore serialize and both survive.
+    bump_revision(&txn, input.conversation_id).await?;
+    let position: i32 = txn
+        .query_one(statement(
+            "SELECT COALESCE(MAX(position), -1) + 1 AS next_position \
+             FROM conversation_prompt_queue_item WHERE conversation_id = ?",
+            vec![input.conversation_id.into()],
+        ))
+        .await?
+        .expect("aggregate always returns one row")
+        .try_get("", "next_position")?;
+    txn.execute(statement(
+        "INSERT INTO conversation_prompt_queue_item \
+         (id, conversation_id, position, draft_json, origin_event_id, mode_id, state, \
+          client_dedupe_id, attempts, created_at, updated_at) \
+         VALUES (?, ?, ?, ?, NULL, ?, 'queued', ?, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+        vec![
+            input.id.into(),
+            input.conversation_id.into(),
+            position.into(),
+            draft_json.into(),
+            input.mode_id.into(),
+            input.client_dedupe_id.into(),
+        ],
+    ))
+    .await?;
+    txn.commit().await?;
+    snapshot_on(conn, input.conversation_id).await
+}
+
+pub async fn edit(
+    conn: &DatabaseConnection,
+    conversation_id: i32,
+    id: &str,
+    draft: PromptQueueDraft,
+    expected_revision: i64,
+) -> Result<PromptQueueSnapshot, DbError> {
+    validate_draft(&draft)?;
+    let draft_json = serde_json::to_string(&draft)
+        .map_err(|err| validation(format!("Could not serialize queued prompt: {err}")))?;
+    let txn = conn.begin().await?;
+    ensure_state(&txn, conversation_id).await?;
+    verify_revision(&txn, conversation_id, expected_revision).await?;
+    let result = txn
+        .execute(statement(
+            "UPDATE conversation_prompt_queue_item \
+             SET draft_json = ?, updated_at = CURRENT_TIMESTAMP \
+             WHERE id = ? AND conversation_id = ? AND state <> 'claimed'",
+            vec![draft_json.into(), id.into(), conversation_id.into()],
+        ))
+        .await?;
+    if result.rows_affected() != 1 {
+        return Err(validation(
+            "Queued prompt is missing or currently being dispatched",
+        ));
+    }
+    bump_revision(&txn, conversation_id).await?;
+    txn.commit().await?;
+    snapshot_on(conn, conversation_id).await
+}
+
+pub async fn delete(
+    conn: &DatabaseConnection,
+    conversation_id: i32,
+    id: &str,
+    expected_revision: i64,
+) -> Result<PromptQueueSnapshot, DbError> {
+    let txn = conn.begin().await?;
+    ensure_state(&txn, conversation_id).await?;
+    verify_revision(&txn, conversation_id, expected_revision).await?;
+    let result = txn
+        .execute(statement(
+            "DELETE FROM conversation_prompt_queue_item \
+             WHERE id = ? AND conversation_id = ? AND state <> 'claimed'",
+            vec![id.into(), conversation_id.into()],
+        ))
+        .await?;
+    if result.rows_affected() != 1 {
+        return Err(validation(
+            "Queued prompt is missing or currently being dispatched",
+        ));
+    }
+    bump_revision(&txn, conversation_id).await?;
+    txn.commit().await?;
+    snapshot_on(conn, conversation_id).await
+}
+
+pub async fn reorder(
+    conn: &DatabaseConnection,
+    conversation_id: i32,
+    ordered_ids: Vec<String>,
+    expected_revision: i64,
+) -> Result<PromptQueueSnapshot, DbError> {
+    let txn = conn.begin().await?;
+    ensure_state(&txn, conversation_id).await?;
+    verify_revision(&txn, conversation_id, expected_revision).await?;
+    let rows = txn
+        .query_all(statement(
+            "SELECT id, state FROM conversation_prompt_queue_item \
+             WHERE conversation_id = ? ORDER BY position ASC, created_at ASC, id ASC",
+            vec![conversation_id.into()],
+        ))
+        .await?;
+    let existing = rows
+        .iter()
+        .map(|row| row.try_get::<String>("", "id"))
+        .collect::<Result<Vec<_>, _>>()?;
+    if rows.iter().any(|row| {
+        row.try_get::<String>("", "state")
+            .is_ok_and(|state| state == "claimed")
+    }) {
+        return Err(validation(
+            "The queue changed while a prompt was being dispatched",
+        ));
+    }
+    let requested: HashSet<&str> = ordered_ids.iter().map(String::as_str).collect();
+    let live: HashSet<&str> = existing.iter().map(String::as_str).collect();
+    if ordered_ids.len() != existing.len()
+        || requested.len() != ordered_ids.len()
+        || requested != live
+    {
+        return Err(validation(
+            "Queue order must contain every queued prompt exactly once",
+        ));
+    }
+    for (position, id) in ordered_ids.iter().enumerate() {
+        txn.execute(statement(
+            "UPDATE conversation_prompt_queue_item SET position = ?, updated_at = CURRENT_TIMESTAMP \
+             WHERE id = ? AND conversation_id = ?",
+            vec![(position as i32).into(), id.clone().into(), conversation_id.into()],
+        ))
+        .await?;
+    }
+    bump_revision(&txn, conversation_id).await?;
+    txn.commit().await?;
+    snapshot_on(conn, conversation_id).await
+}
+
+pub async fn pause_queue(
+    conn: &DatabaseConnection,
+    conversation_id: i32,
+    reason: String,
+) -> Result<PromptQueueSnapshot, DbError> {
+    let reason = reason.trim().to_string();
+    if reason.is_empty() {
+        return Err(validation("Queue pause reason cannot be empty"));
+    }
+    let txn = conn.begin().await?;
+    ensure_conversation(&txn, conversation_id).await?;
+    ensure_state(&txn, conversation_id).await?;
+    txn.execute(statement(
+        "UPDATE conversation_prompt_queue_state \
+         SET paused_reason = ?, revision = revision + 1, updated_at = CURRENT_TIMESTAMP \
+         WHERE conversation_id = ?",
+        vec![reason.into(), conversation_id.into()],
+    ))
+    .await?;
+    txn.commit().await?;
+    snapshot_on(conn, conversation_id).await
+}
+
+/// Pause a Session queue only when it actually has pending work. Cancellation
+/// calls this after sending the Harness cancel command: an empty queue should
+/// not gain invisible state or bump its revision merely because a turn was
+/// stopped.
+pub async fn pause_queue_if_pending(
+    conn: &DatabaseConnection,
+    conversation_id: i32,
+    reason: String,
+) -> Result<Option<PromptQueueSnapshot>, DbError> {
+    let reason = reason.trim().to_string();
+    if reason.is_empty() {
+        return Err(validation("Queue pause reason cannot be empty"));
+    }
+    let txn = conn.begin().await?;
+    ensure_conversation(&txn, conversation_id).await?;
+    let count: i64 = txn
+        .query_one(statement(
+            "SELECT COUNT(*) AS count FROM conversation_prompt_queue_item \
+             WHERE conversation_id = ?",
+            vec![conversation_id.into()],
+        ))
+        .await?
+        .expect("COUNT always returns one row")
+        .try_get("", "count")?;
+    if count == 0 {
+        txn.commit().await?;
+        return Ok(None);
+    }
+    ensure_state(&txn, conversation_id).await?;
+    txn.execute(statement(
+        "UPDATE conversation_prompt_queue_state \
+         SET paused_reason = ?, revision = revision + 1, updated_at = CURRENT_TIMESTAMP \
+         WHERE conversation_id = ?",
+        vec![reason.into(), conversation_id.into()],
+    ))
+    .await?;
+    txn.commit().await?;
+    Ok(Some(snapshot_on(conn, conversation_id).await?))
+}
+
+pub async fn resume_queue(
+    conn: &DatabaseConnection,
+    conversation_id: i32,
+    expected_revision: i64,
+) -> Result<PromptQueueSnapshot, DbError> {
+    let txn = conn.begin().await?;
+    ensure_state(&txn, conversation_id).await?;
+    verify_revision(&txn, conversation_id, expected_revision).await?;
+    txn.execute(statement(
+        "UPDATE conversation_prompt_queue_state \
+         SET paused_reason = NULL, revision = revision + 1, updated_at = CURRENT_TIMESTAMP \
+         WHERE conversation_id = ?",
+        vec![conversation_id.into()],
+    ))
+    .await?;
+    txn.commit().await?;
+    snapshot_on(conn, conversation_id).await
+}
+
+pub async fn retry_item(
+    conn: &DatabaseConnection,
+    conversation_id: i32,
+    id: &str,
+    expected_revision: i64,
+) -> Result<PromptQueueSnapshot, DbError> {
+    let txn = conn.begin().await?;
+    ensure_state(&txn, conversation_id).await?;
+    verify_revision(&txn, conversation_id, expected_revision).await?;
+    let result = txn
+        .execute(statement(
+            "UPDATE conversation_prompt_queue_item \
+             SET state = 'queued', paused_reason = NULL, claimed_by = NULL, \
+                 claim_expires_at = NULL, dispatch_started_at = NULL, \
+                 updated_at = CURRENT_TIMESTAMP \
+             WHERE id = ? AND conversation_id = ? AND state = 'paused'",
+            vec![id.into(), conversation_id.into()],
+        ))
+        .await?;
+    if result.rows_affected() != 1 {
+        return Err(validation("Queued prompt is not paused"));
+    }
+    txn.execute(statement(
+        "UPDATE conversation_prompt_queue_state \
+         SET paused_reason = NULL, updated_at = CURRENT_TIMESTAMP \
+         WHERE conversation_id = ?",
+        vec![conversation_id.into()],
+    ))
+    .await?;
+    bump_revision(&txn, conversation_id).await?;
+    txn.commit().await?;
+    snapshot_on(conn, conversation_id).await
+}
+
+pub(crate) async fn claim_head(
+    conn: &DatabaseConnection,
+    conversation_id: i32,
+    worker_id: &str,
+    lease: Duration,
+) -> Result<Option<(ClaimedPromptQueueItem, PromptQueueSnapshot)>, DbError> {
+    let txn = conn.begin().await?;
+    ensure_state(&txn, conversation_id).await?;
+    let (_, paused_reason) = state_row(&txn, conversation_id).await?;
+    if paused_reason.is_some() {
+        txn.commit().await?;
+        return Ok(None);
+    }
+    let expires_at = Utc::now() + lease;
+    // Select + claim in one SQLite write statement. A second backend process
+    // can race this worker, but it cannot observe the same head as claimable
+    // after this statement obtains the writer lock. This is the database-side
+    // equivalent of Codex Desktop's per-message acquire lock.
+    let Some(row) = txn
+        .query_one(statement(
+            "UPDATE conversation_prompt_queue_item \
+             SET state = 'claimed', claimed_by = ?, claim_expires_at = ?, \
+                 dispatch_started_at = NULL, attempts = attempts + 1, \
+                 updated_at = CURRENT_TIMESTAMP \
+             WHERE id = ( \
+                 SELECT id FROM conversation_prompt_queue_item \
+                 WHERE conversation_id = ? AND state = 'queued' \
+                 ORDER BY position ASC, created_at ASC, id ASC LIMIT 1 \
+             ) AND conversation_id = ? AND state = 'queued' \
+             RETURNING id, conversation_id, draft_json, mode_id",
+            vec![
+                worker_id.into(),
+                expires_at.into(),
+                conversation_id.into(),
+                conversation_id.into(),
+            ],
+        ))
+        .await?
+    else {
+        txn.commit().await?;
+        return Ok(None);
+    };
+    let id: String = row.try_get("", "id")?;
+    let draft_json: String = row.try_get("", "draft_json")?;
+    let draft: PromptQueueDraft = serde_json::from_str(&draft_json)
+        .map_err(|err| validation(format!("Invalid queued prompt payload: {err}")))?;
+    bump_revision(&txn, conversation_id).await?;
+    let claimed = ClaimedPromptQueueItem {
+        id,
+        conversation_id,
+        draft,
+        mode_id: row.try_get("", "mode_id")?,
+        claimed_by: worker_id.to_string(),
+    };
+    txn.commit().await?;
+    let snapshot = snapshot_on(conn, conversation_id).await?;
+    Ok(Some((claimed, snapshot)))
+}
+
+/// Renew ownership and cross the irreversible dispatch boundary. The worker
+/// must call this immediately before handing the prompt to the Harness. If the
+/// original lease already expired or was recovered, the CAS returns `false`
+/// and the caller must not send.
+pub(crate) async fn mark_dispatch_started(
+    conn: &DatabaseConnection,
+    item: &ClaimedPromptQueueItem,
+    lease: Duration,
+) -> Result<bool, DbError> {
+    let now = Utc::now();
+    let expires_at = now + lease;
+    let txn = conn.begin().await?;
+    ensure_state(&txn, item.conversation_id).await?;
+    let result = txn
+        .execute(statement(
+            "UPDATE conversation_prompt_queue_item \
+             SET dispatch_started_at = CURRENT_TIMESTAMP, claim_expires_at = ?, \
+                 updated_at = CURRENT_TIMESTAMP \
+             WHERE id = ? AND conversation_id = ? AND state = 'claimed' \
+               AND claimed_by = ? AND claim_expires_at > ? \
+               AND NOT EXISTS ( \
+                   SELECT 1 FROM conversation_prompt_queue_state s \
+                   WHERE s.conversation_id = ? AND s.paused_reason IS NOT NULL \
+               )",
+            vec![
+                expires_at.into(),
+                item.id.clone().into(),
+                item.conversation_id.into(),
+                item.claimed_by.clone().into(),
+                now.into(),
+                item.conversation_id.into(),
+            ],
+        ))
+        .await?;
+    if result.rows_affected() == 1 {
+        bump_revision(&txn, item.conversation_id).await?;
+    }
+    txn.commit().await?;
+    Ok(result.rows_affected() == 1)
+}
+
+async fn finish_claim(
+    conn: &DatabaseConnection,
+    item: &ClaimedPromptQueueItem,
+    action_sql: &str,
+    values: Vec<sea_orm::Value>,
+) -> Result<PromptQueueSnapshot, DbError> {
+    let txn = conn.begin().await?;
+    ensure_state(&txn, item.conversation_id).await?;
+    let result = txn.execute(statement(action_sql, values)).await?;
+    if result.rows_affected() != 1 {
+        return Err(validation("Prompt queue claim is no longer owned"));
+    }
+    bump_revision(&txn, item.conversation_id).await?;
+    txn.commit().await?;
+    snapshot_on(conn, item.conversation_id).await
+}
+
+pub(crate) async fn accept_claim(
+    conn: &DatabaseConnection,
+    item: &ClaimedPromptQueueItem,
+) -> Result<PromptQueueSnapshot, DbError> {
+    let txn = conn.begin().await?;
+    ensure_state(&txn, item.conversation_id).await?;
+    let result = txn
+        .execute(statement(
+            "DELETE FROM conversation_prompt_queue_item \
+             WHERE id = ? AND conversation_id = ? AND state = 'claimed' AND claimed_by = ?",
+            vec![
+                item.id.clone().into(),
+                item.conversation_id.into(),
+                item.claimed_by.clone().into(),
+            ],
+        ))
+        .await?;
+    if result.rows_affected() == 0 {
+        // Idempotent success for a lost response: the first DELETE may have
+        // committed and only its snapshot read failed. Retrying must not turn
+        // that successful acceptance into an "unknown" pause.
+        let still_exists = txn
+            .query_one(statement(
+                "SELECT 1 AS present FROM conversation_prompt_queue_item \
+                 WHERE id = ? AND conversation_id = ?",
+                vec![item.id.clone().into(), item.conversation_id.into()],
+            ))
+            .await?
+            .is_some();
+        if still_exists {
+            return Err(validation("Prompt queue claim is no longer owned"));
+        }
+        txn.commit().await?;
+        return snapshot_on(conn, item.conversation_id).await;
+    }
+    bump_revision(&txn, item.conversation_id).await?;
+    txn.commit().await?;
+    snapshot_on(conn, item.conversation_id).await
+}
+
+pub(crate) async fn release_claim_busy(
+    conn: &DatabaseConnection,
+    item: &ClaimedPromptQueueItem,
+) -> Result<PromptQueueSnapshot, DbError> {
+    finish_claim(
+        conn,
+        item,
+        "UPDATE conversation_prompt_queue_item \
+         SET state = 'queued', claimed_by = NULL, claim_expires_at = NULL, \
+             dispatch_started_at = NULL, updated_at = CURRENT_TIMESTAMP \
+         WHERE id = ? AND conversation_id = ? AND state = 'claimed' AND claimed_by = ?",
+        vec![
+            item.id.clone().into(),
+            item.conversation_id.into(),
+            item.claimed_by.clone().into(),
+        ],
+    )
+    .await
+}
+
+/// The Harness accepted the send, but Codeg could not durably acknowledge the
+/// queue item. Never return it to FIFO automatically: pause for a human check,
+/// because replaying a coding prompt can repeat filesystem side effects.
+pub(crate) async fn pause_dispatch_unknown(
+    conn: &DatabaseConnection,
+    item: &ClaimedPromptQueueItem,
+) -> Result<PromptQueueSnapshot, DbError> {
+    let txn = conn.begin().await?;
+    ensure_state(&txn, item.conversation_id).await?;
+    let result = txn
+        .execute(statement(
+            "UPDATE conversation_prompt_queue_item \
+             SET state = 'paused', claimed_by = NULL, claim_expires_at = NULL, \
+                 paused_reason = ?, updated_at = CURRENT_TIMESTAMP \
+             WHERE id = ? AND conversation_id = ? AND dispatch_started_at IS NOT NULL",
+            vec![
+                UNKNOWN_DISPATCH_REASON.into(),
+                item.id.clone().into(),
+                item.conversation_id.into(),
+            ],
+        ))
+        .await?;
+    if result.rows_affected() > 0 {
+        txn.execute(statement(
+            "UPDATE conversation_prompt_queue_state \
+             SET paused_reason = ?, updated_at = CURRENT_TIMESTAMP WHERE conversation_id = ?",
+            vec![UNKNOWN_DISPATCH_REASON.into(), item.conversation_id.into()],
+        ))
+        .await?;
+        bump_revision(&txn, item.conversation_id).await?;
+    }
+    txn.commit().await?;
+    snapshot_on(conn, item.conversation_id).await
+}
+
+pub(crate) async fn fail_claim(
+    conn: &DatabaseConnection,
+    item: &ClaimedPromptQueueItem,
+    reason: &str,
+) -> Result<PromptQueueSnapshot, DbError> {
+    let reason = reason.trim();
+    let txn = conn.begin().await?;
+    ensure_state(&txn, item.conversation_id).await?;
+    let result = txn
+        .execute(statement(
+            "UPDATE conversation_prompt_queue_item \
+             SET state = 'paused', claimed_by = NULL, claim_expires_at = NULL, \
+                 paused_reason = ?, updated_at = CURRENT_TIMESTAMP \
+             WHERE id = ? AND conversation_id = ? AND state = 'claimed' AND claimed_by = ?",
+            vec![
+                reason.into(),
+                item.id.clone().into(),
+                item.conversation_id.into(),
+                item.claimed_by.clone().into(),
+            ],
+        ))
+        .await?;
+    if result.rows_affected() != 1 {
+        return Err(validation("Prompt queue claim is no longer owned"));
+    }
+    txn.execute(statement(
+        "UPDATE conversation_prompt_queue_state \
+         SET paused_reason = ?, updated_at = CURRENT_TIMESTAMP WHERE conversation_id = ?",
+        vec![reason.into(), item.conversation_id.into()],
+    ))
+    .await?;
+    bump_revision(&txn, item.conversation_id).await?;
+    txn.commit().await?;
+    snapshot_on(conn, item.conversation_id).await
+}
+
+pub(crate) async fn recover_expired_claims(
+    conn: &DatabaseConnection,
+) -> Result<Vec<PromptQueueSnapshot>, DbError> {
+    let rows = conn
+        .query_all(statement(
+            "SELECT DISTINCT conversation_id FROM conversation_prompt_queue_item \
+             WHERE state = 'claimed' AND claim_expires_at <= ?",
+            vec![Utc::now().into()],
+        ))
+        .await?;
+    let conversation_ids = rows
+        .iter()
+        .map(|row| row.try_get::<i32>("", "conversation_id"))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut snapshots = Vec::with_capacity(conversation_ids.len());
+    for conversation_id in conversation_ids {
+        let txn = conn.begin().await?;
+        ensure_state(&txn, conversation_id).await?;
+        let safe_to_retry = txn
+            .execute(statement(
+                "UPDATE conversation_prompt_queue_item \
+                 SET state = 'queued', claimed_by = NULL, claim_expires_at = NULL, \
+                     updated_at = CURRENT_TIMESTAMP \
+                 WHERE conversation_id = ? AND state = 'claimed' \
+                   AND claim_expires_at <= ? AND dispatch_started_at IS NULL",
+                vec![conversation_id.into(), Utc::now().into()],
+            ))
+            .await?;
+        let uncertain = txn
+            .execute(statement(
+                "UPDATE conversation_prompt_queue_item \
+                 SET state = 'paused', claimed_by = NULL, claim_expires_at = NULL, \
+                     paused_reason = ?, updated_at = CURRENT_TIMESTAMP \
+                 WHERE conversation_id = ? AND state = 'claimed' \
+                   AND claim_expires_at <= ? AND dispatch_started_at IS NOT NULL",
+                vec![
+                    UNKNOWN_DISPATCH_REASON.into(),
+                    conversation_id.into(),
+                    Utc::now().into(),
+                ],
+            ))
+            .await?;
+        if uncertain.rows_affected() > 0 {
+            txn.execute(statement(
+                "UPDATE conversation_prompt_queue_state \
+                 SET paused_reason = ?, updated_at = CURRENT_TIMESTAMP WHERE conversation_id = ?",
+                vec![UNKNOWN_DISPATCH_REASON.into(), conversation_id.into()],
+            ))
+            .await?;
+        }
+        let changed = safe_to_retry.rows_affected() + uncertain.rows_affected();
+        if changed > 0 {
+            bump_revision(&txn, conversation_id).await?;
+        }
+        txn.commit().await?;
+        if changed > 0 {
+            snapshots.push(snapshot_on(conn, conversation_id).await?);
+        }
+    }
+    Ok(snapshots)
+}
+
+pub(crate) async fn pending_conversation_ids(
+    conn: &DatabaseConnection,
+) -> Result<Vec<i32>, DbError> {
+    let rows = conn
+        .query_all(statement(
+            "SELECT DISTINCT q.conversation_id \
+             FROM conversation_prompt_queue_item q \
+             LEFT JOIN conversation_prompt_queue_state s ON s.conversation_id = q.conversation_id \
+             WHERE q.state = 'queued' AND s.paused_reason IS NULL \
+             ORDER BY q.conversation_id ASC",
+            Vec::new(),
+        ))
+        .await?;
+    rows.iter()
+        .map(|row| {
+            row.try_get::<i32>("", "conversation_id")
+                .map_err(DbError::from)
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::acp::types::PromptInputBlock;
+    use crate::db::test_helpers::{
+        fresh_disk_db, fresh_in_memory_db, seed_conversation, seed_folder,
+    };
+    use crate::models::AgentType;
+
+    fn draft(text: &str) -> PromptQueueDraft {
+        PromptQueueDraft {
+            blocks: vec![PromptInputBlock::Text {
+                text: text.to_string(),
+            }],
+            display_text: text.to_string(),
+        }
+    }
+
+    fn input(conversation_id: i32, id: &str, text: &str) -> EnqueuePromptQueueItem {
+        EnqueuePromptQueueItem {
+            conversation_id,
+            id: id.to_string(),
+            client_dedupe_id: id.to_string(),
+            draft: draft(text),
+            mode_id: None,
+        }
+    }
+
+    async fn seeded_memory() -> (crate::db::AppDatabase, i32) {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/codeg-prompt-queue").await;
+        let conversation_id = seed_conversation(&db, folder_id, AgentType::Codex).await;
+        (db, conversation_id)
+    }
+
+    #[tokio::test]
+    async fn queue_survives_database_reopen_and_deduplicates_retries() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let db = fresh_disk_db(dir.path()).await;
+        let folder_id = seed_folder(&db, "/tmp/codeg-prompt-queue-disk").await;
+        let conversation_id = seed_conversation(&db, folder_id, AgentType::Codex).await;
+
+        let first = enqueue(&db.conn, input(conversation_id, "msg-1", "persist me"))
+            .await
+            .expect("enqueue");
+        let first_revision = first.revision;
+        let duplicate = enqueue(&db.conn, input(conversation_id, "msg-1", "ignored retry"))
+            .await
+            .expect("dedupe retry");
+        assert_eq!(duplicate.items.len(), 1);
+        assert_eq!(duplicate.revision, first_revision);
+        assert_eq!(
+            duplicate.items[0].draft.as_ref().unwrap().display_text,
+            "persist me"
+        );
+
+        drop(db);
+        let reopened = fresh_disk_db(dir.path()).await;
+        let restored = snapshot(&reopened.conn, conversation_id)
+            .await
+            .expect("restored snapshot");
+        assert_eq!(restored.items.len(), 1);
+        assert_eq!(restored.items[0].id, "msg-1");
+        assert_eq!(restored.revision, first_revision);
+    }
+
+    #[tokio::test]
+    async fn editing_reordering_and_deleting_require_current_revision() {
+        let (db, conversation_id) = seeded_memory().await;
+        let one = enqueue(&db.conn, input(conversation_id, "one", "first"))
+            .await
+            .expect("one");
+        let two = enqueue(&db.conn, input(conversation_id, "two", "second"))
+            .await
+            .expect("two");
+
+        let conflict = edit(
+            &db.conn,
+            conversation_id,
+            "one",
+            draft("stale"),
+            one.revision,
+        )
+        .await;
+        assert!(
+            conflict.is_err(),
+            "stale client must not overwrite newer state"
+        );
+
+        let reordered = reorder(
+            &db.conn,
+            conversation_id,
+            vec!["two".into(), "one".into()],
+            two.revision,
+        )
+        .await
+        .expect("reorder");
+        assert_eq!(reordered.items[0].id, "two");
+
+        let edited = edit(
+            &db.conn,
+            conversation_id,
+            "one",
+            draft("edited"),
+            reordered.revision,
+        )
+        .await
+        .expect("edit");
+        assert_eq!(
+            edited.items[1].draft.as_ref().unwrap().display_text,
+            "edited"
+        );
+
+        let deleted = delete(&db.conn, conversation_id, "two", edited.revision)
+            .await
+            .expect("delete");
+        assert_eq!(deleted.items.len(), 1);
+        assert_eq!(deleted.items[0].id, "one");
+    }
+
+    #[tokio::test]
+    async fn empty_drafts_and_invalid_reorders_are_rejected() {
+        let (db, conversation_id) = seeded_memory().await;
+        let mut empty = input(conversation_id, "empty", "");
+        empty.draft.blocks.clear();
+        assert!(enqueue(&db.conn, empty).await.is_err());
+
+        let snapshot = enqueue(&db.conn, input(conversation_id, "one", "first"))
+            .await
+            .expect("enqueue");
+        assert!(reorder(
+            &db.conn,
+            conversation_id,
+            vec!["one".into(), "one".into()],
+            snapshot.revision,
+        )
+        .await
+        .is_err());
+    }
+
+    #[tokio::test]
+    async fn a_head_has_one_owner_and_busy_release_preserves_identity() {
+        let (db, conversation_id) = seeded_memory().await;
+        enqueue(&db.conn, input(conversation_id, "head", "first"))
+            .await
+            .expect("enqueue");
+
+        let (claim, claimed_snapshot) =
+            claim_head(&db.conn, conversation_id, "worker-a", Duration::seconds(30))
+                .await
+                .expect("claim")
+                .expect("head");
+        assert_eq!(claim.id, "head");
+        assert_eq!(
+            claimed_snapshot.items[0].state,
+            PromptQueueItemState::Claimed
+        );
+        assert!(
+            claim_head(&db.conn, conversation_id, "worker-b", Duration::seconds(30),)
+                .await
+                .expect("second claim")
+                .is_none(),
+            "the claimed head cannot be acquired twice"
+        );
+
+        let released = release_claim_busy(&db.conn, &claim)
+            .await
+            .expect("release busy");
+        assert_eq!(released.items[0].id, "head");
+        assert_eq!(released.items[0].state, PromptQueueItemState::Queued);
+        assert_eq!(released.items[0].attempts, 1);
+    }
+
+    #[tokio::test]
+    async fn durable_head_prevents_a_direct_send_from_jumping_fifo() {
+        let (db, conversation_id) = seeded_memory().await;
+        enqueue(&db.conn, input(conversation_id, "head", "first"))
+            .await
+            .expect("enqueue");
+        assert!(!send_is_admitted(&db.conn, conversation_id, Some("direct"))
+            .await
+            .expect("admission"));
+
+        let (claim, _) = claim_head(&db.conn, conversation_id, "worker", Duration::seconds(30))
+            .await
+            .expect("claim")
+            .expect("head");
+        assert!(send_is_admitted(&db.conn, conversation_id, Some("head"))
+            .await
+            .expect("claimed admission"));
+        assert!(!send_is_admitted(&db.conn, conversation_id, Some("direct"))
+            .await
+            .expect("direct admission"));
+
+        accept_claim(&db.conn, &claim).await.expect("accept");
+        assert!(send_is_admitted(&db.conn, conversation_id, Some("direct"))
+            .await
+            .expect("empty admission"));
+    }
+
+    #[tokio::test]
+    async fn deterministic_failure_pauses_until_explicit_retry() {
+        let (db, conversation_id) = seeded_memory().await;
+        enqueue(&db.conn, input(conversation_id, "head", "first"))
+            .await
+            .expect("enqueue");
+        let (claim, _) = claim_head(&db.conn, conversation_id, "worker", Duration::seconds(30))
+            .await
+            .expect("claim")
+            .expect("head");
+
+        let paused = fail_claim(&db.conn, &claim, "mode rejected")
+            .await
+            .expect("pause");
+        assert_eq!(paused.paused_reason.as_deref(), Some("mode rejected"));
+        assert_eq!(paused.items[0].state, PromptQueueItemState::Paused);
+        assert!(
+            claim_head(&db.conn, conversation_id, "other", Duration::seconds(30),)
+                .await
+                .expect("paused claim")
+                .is_none()
+        );
+
+        let retried = retry_item(&db.conn, conversation_id, "head", paused.revision)
+            .await
+            .expect("retry");
+        assert!(retried.paused_reason.is_none());
+        assert_eq!(retried.items[0].state, PromptQueueItemState::Queued);
+        assert_eq!(retried.items[0].id, "head");
+    }
+
+    #[tokio::test]
+    async fn expired_claim_recovers_without_changing_message_identity() {
+        let (db, conversation_id) = seeded_memory().await;
+        enqueue(&db.conn, input(conversation_id, "head", "first"))
+            .await
+            .expect("enqueue");
+        claim_head(
+            &db.conn,
+            conversation_id,
+            "dead-worker",
+            Duration::seconds(-1),
+        )
+        .await
+        .expect("claim")
+        .expect("head");
+
+        let recovered = recover_expired_claims(&db.conn).await.expect("recover");
+        assert_eq!(recovered.len(), 1);
+        assert_eq!(recovered[0].items[0].id, "head");
+        assert_eq!(recovered[0].items[0].state, PromptQueueItemState::Queued);
+        assert_eq!(recovered[0].items[0].attempts, 1);
+    }
+
+    #[tokio::test]
+    async fn expired_dispatch_is_paused_as_unknown_instead_of_replayed() {
+        let (db, conversation_id) = seeded_memory().await;
+        enqueue(&db.conn, input(conversation_id, "head", "possibly sent"))
+            .await
+            .expect("enqueue");
+        let (claim, _) = claim_head(
+            &db.conn,
+            conversation_id,
+            "dead-worker",
+            Duration::seconds(30),
+        )
+        .await
+        .expect("claim")
+        .expect("head");
+        assert!(
+            mark_dispatch_started(&db.conn, &claim, Duration::seconds(-1))
+                .await
+                .expect("mark dispatch")
+        );
+
+        let recovered = recover_expired_claims(&db.conn).await.expect("recover");
+        assert_eq!(recovered.len(), 1);
+        assert_eq!(recovered[0].items[0].id, "head");
+        assert_eq!(recovered[0].items[0].state, PromptQueueItemState::Paused);
+        assert_eq!(
+            recovered[0].paused_reason.as_deref(),
+            Some("dispatch_outcome_unknown")
+        );
+        assert!(
+            claim_head(
+                &db.conn,
+                conversation_id,
+                "new-worker",
+                Duration::seconds(30),
+            )
+            .await
+            .expect("claim after recovery")
+            .is_none(),
+            "an unknown dispatch must never replay automatically"
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_cas_refuses_an_already_expired_claim() {
+        let (db, conversation_id) = seeded_memory().await;
+        enqueue(&db.conn, input(conversation_id, "head", "do not send"))
+            .await
+            .expect("enqueue");
+        let (claim, _) = claim_head(
+            &db.conn,
+            conversation_id,
+            "slow-worker",
+            Duration::seconds(-1),
+        )
+        .await
+        .expect("claim")
+        .expect("head");
+        assert!(
+            !mark_dispatch_started(&db.conn, &claim, Duration::seconds(30))
+                .await
+                .expect("dispatch CAS"),
+            "a worker that lost its lease must abandon the send"
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_cas_refuses_a_claim_paused_before_the_send_boundary() {
+        let (db, conversation_id) = seeded_memory().await;
+        enqueue(&db.conn, input(conversation_id, "head", "do not send"))
+            .await
+            .expect("enqueue");
+        let (claim, _) = claim_head(&db.conn, conversation_id, "worker", Duration::seconds(30))
+            .await
+            .expect("claim")
+            .expect("head");
+        pause_queue(&db.conn, conversation_id, "cancelled_current_turn".into())
+            .await
+            .expect("pause");
+
+        assert!(
+            !mark_dispatch_started(&db.conn, &claim, Duration::seconds(30))
+                .await
+                .expect("dispatch CAS"),
+            "a cancellation that wins before dispatch must prevent the send"
+        );
+    }
+
+    #[tokio::test]
+    async fn final_admission_refuses_a_dispatch_paused_after_marking() {
+        let (db, conversation_id) = seeded_memory().await;
+        enqueue(&db.conn, input(conversation_id, "head", "do not send"))
+            .await
+            .expect("enqueue");
+        let (claim, _) = claim_head(&db.conn, conversation_id, "worker", Duration::seconds(30))
+            .await
+            .expect("claim")
+            .expect("head");
+        assert!(
+            mark_dispatch_started(&db.conn, &claim, Duration::seconds(30))
+                .await
+                .expect("mark")
+        );
+        pause_queue(&db.conn, conversation_id, "cancelled_current_turn".into())
+            .await
+            .expect("pause");
+
+        assert!(
+            !send_is_admitted(&db.conn, conversation_id, Some(&claim.id))
+                .await
+                .expect("admission"),
+            "the send gate must re-check cancellation immediately before the Harness"
+        );
+        let released = release_claim_busy(&db.conn, &claim)
+            .await
+            .expect("release after rejected send");
+        assert_eq!(released.items[0].state, PromptQueueItemState::Queued);
+        assert_eq!(
+            released.paused_reason.as_deref(),
+            Some("cancelled_current_turn")
+        );
+    }
+
+    #[tokio::test]
+    async fn accepting_the_same_claim_twice_is_idempotent() {
+        let (db, conversation_id) = seeded_memory().await;
+        enqueue(&db.conn, input(conversation_id, "head", "once"))
+            .await
+            .expect("enqueue");
+        let (claim, _) = claim_head(&db.conn, conversation_id, "worker", Duration::seconds(30))
+            .await
+            .expect("claim")
+            .expect("head");
+        assert!(
+            mark_dispatch_started(&db.conn, &claim, Duration::seconds(30))
+                .await
+                .expect("mark")
+        );
+        let first = accept_claim(&db.conn, &claim).await.expect("first accept");
+        let retry = accept_claim(&db.conn, &claim).await.expect("retry accept");
+        assert!(first.items.is_empty());
+        assert!(retry.items.is_empty());
+        assert_eq!(retry.revision, first.revision);
+    }
+
+    #[tokio::test]
+    async fn deleting_the_session_cascades_its_queue() {
+        use sea_orm::{ConnectionTrait, DbBackend, Statement};
+
+        let (db, conversation_id) = seeded_memory().await;
+        enqueue(&db.conn, input(conversation_id, "head", "first"))
+            .await
+            .expect("enqueue");
+        db.conn
+            .execute(Statement::from_sql_and_values(
+                DbBackend::Sqlite,
+                "DELETE FROM conversation WHERE id = ?",
+                vec![conversation_id.into()],
+            ))
+            .await
+            .expect("delete conversation");
+        let count: i64 = db
+            .conn
+            .query_one(Statement::from_string(
+                DbBackend::Sqlite,
+                "SELECT COUNT(*) AS count FROM conversation_prompt_queue_item",
+            ))
+            .await
+            .expect("count query")
+            .expect("count row")
+            .try_get("", "count")
+            .expect("count");
+        assert_eq!(count, 0);
+    }
+}

@@ -287,6 +287,12 @@ pub struct ConversationsBulkChanged {
 /// webview and every WebSocket client.
 pub const TABS_CHANGED_EVENT: &str = "tabs://changed";
 
+/// Per-Session follow-up queue snapshot. The queue is backend-authoritative,
+/// so every desktop window and web client replaces its local view with this
+/// payload after a mutation. Reconnects still fetch a fresh snapshot; this
+/// event is the low-latency convergence path, not a durable event log.
+pub const PROMPT_QUEUE_CHANGED_EVENT: &str = "prompt-queue://changed";
+
 /// Payload for the [`TABS_CHANGED_EVENT`] side-channel. Carries the full
 /// conversation-bound tab set (a snapshot, not a delta) so every client
 /// converges idempotently — matching the full-replacement save semantics.

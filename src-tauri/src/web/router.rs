@@ -1288,6 +1288,29 @@ pub fn build_router(
             "/delete_workbench",
             post(handlers::workbenches::delete_workbench),
         )
+        // ─── Backend-authoritative Session follow-up queue ───
+        .route("/prompt_queue_get", post(handlers::prompt_queue::get))
+        .route(
+            "/prompt_queue_enqueue",
+            post(handlers::prompt_queue::enqueue),
+        )
+        .route("/prompt_queue_edit", post(handlers::prompt_queue::edit))
+        .route(
+            "/prompt_queue_delete",
+            post(handlers::prompt_queue::delete),
+        )
+        .route(
+            "/prompt_queue_reorder",
+            post(handlers::prompt_queue::reorder),
+        )
+        .route(
+            "/prompt_queue_resume",
+            post(handlers::prompt_queue::resume),
+        )
+        .route(
+            "/prompt_queue_retry",
+            post(handlers::prompt_queue::retry),
+        )
         // ─── Automations ───
         .route(
             "/automation_list",

@@ -32,6 +32,8 @@ use crate::web::event_bridge::EventEmitter;
 const ACP_AGENTS_UPDATED_EVENT: &str = "app://acp-agents-updated";
 const NPM_PREFIX_TIMEOUT: Duration = Duration::from_millis(1500);
 
+const CANCELLED_QUEUE_PAUSE_REASON: &str = "cancelled_current_turn";
+
 static NPM_GLOBAL_PREFIX_CACHE: tokio::sync::OnceCell<PathBuf> = tokio::sync::OnceCell::const_new();
 
 #[derive(Serialize, Clone)]
@@ -9367,14 +9369,61 @@ pub async fn acp_describe_agent_options(
     acp_describe_agent_options_core(&manager, &db, &app_data_dir, agent_type, working_dir).await
 }
 
+/// Cancel the running turn and freeze any later follow-ups for the same
+/// Session. This mirrors Codex Desktop's interrupt behavior: cancellation is
+/// not permission to immediately dispatch everything that had been queued
+/// behind the interrupted turn.
+pub async fn acp_cancel_core(
+    db: &AppDatabase,
+    manager: &ConnectionManager,
+    emitter: &EventEmitter,
+    connection_id: &str,
+) -> Result<(), AcpError> {
+    let conversation_id = match manager.get_state(connection_id).await {
+        Some(state) => state.read().await.conversation_id,
+        None => None,
+    };
+    // Freeze follow-ups before the cancel command enters the connection. If a
+    // queue dispatch already owns the prompt lock, it either observes this
+    // pause at its final admission check or lands immediately before Cancel
+    // and becomes the turn that Cancel stops. It cannot start afterwards.
+    if let Some(conversation_id) = conversation_id {
+        match crate::db::service::prompt_queue_service::pause_queue_if_pending(
+            &db.conn,
+            conversation_id,
+            CANCELLED_QUEUE_PAUSE_REASON.to_string(),
+        )
+        .await
+        {
+            Ok(Some(snapshot)) => crate::web::event_bridge::emit_event(
+                emitter,
+                crate::web::event_bridge::PROMPT_QUEUE_CHANGED_EVENT,
+                snapshot,
+            ),
+            Ok(None) => {}
+            Err(err) => tracing::error!(
+                "[prompt-queue] could not pause Session {conversation_id} after cancel: {err}"
+            ),
+        }
+    }
+    manager.cancel(&db.conn, connection_id).await
+}
+
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn acp_cancel(
     connection_id: String,
     db: State<'_, AppDatabase>,
     manager: State<'_, ConnectionManager>,
+    app: tauri::AppHandle,
 ) -> Result<(), AcpError> {
-    manager.cancel(&db.conn, &connection_id).await
+    acp_cancel_core(
+        &db,
+        &manager,
+        &EventEmitter::Tauri(app),
+        &connection_id,
+    )
+    .await
 }
 
 #[cfg(feature = "tauri-runtime")]

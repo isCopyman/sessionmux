@@ -2816,7 +2816,14 @@
         "saveEdit": "Guardar",
         "cancelEdit": "Cancelar edición",
         "editItem": "Editar",
-        "deleteItem": "Eliminar"
+        "deleteItem": "Eliminar",
+        "retryItem": "Reintentar",
+        "resumeQueue": "Reanudar",
+        "dispatching": "Enviando mensaje en cola",
+        "paused": "Cola en pausa: {reason}",
+        "pauseReasonCancelled": "Se canceló la tarea actual. Reanuda cuando quieras.",
+        "pauseReasonUnknownDispatch": "Es posible que el mensaje anterior haya llegado al agente. Revisa la sesión antes de reintentar.",
+        "persistFailed": "No se pudo guardar el mensaje en cola: {error}. El texto se restauró en el campo de entrada."
       },
       "welcomeInputPanel": {
         "agentsSettingsPath": "Ajustes > Agentes",

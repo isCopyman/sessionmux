@@ -22,6 +22,7 @@ import type {
 import type { QueuedMessage } from "@/hooks/use-message-queue"
 import { Loader2 } from "lucide-react"
 import { ChatInput } from "@/components/chat/chat-input"
+import type { ComposerInjectContent } from "@/components/chat/message-input"
 import { PermissionDialog } from "@/components/chat/permission-dialog"
 import { QuestionDialog } from "@/components/chat/question-dialog"
 import { AskQuestionCard } from "@/components/chat/ask-question-card"
@@ -90,6 +91,9 @@ interface ConversationShellProps {
   onQueueReorder?: (items: QueuedMessage[]) => void
   onQueueEdit?: (id: string) => void
   onQueueDelete?: (id: string) => void
+  onQueueRetry?: (id: string) => void
+  onQueueResume?: () => void
+  queuePausedReason?: string | null
   editingItemId?: string | null
   editingDraftText?: string | null
   editingDraftBlocks?: PromptInputBlock[] | null
@@ -101,6 +105,8 @@ interface ConversationShellProps {
    *  steering). Present only for sessions on the native channel; threaded
    *  straight through to the composer. */
   onSteer?: (text: string) => Promise<void>
+  injectContent?: ComposerInjectContent | null
+  onInjectConsumed?: () => void
   /** Optional banner pinned to the top of the panel, above the message area
    *  (e.g. the "restart to apply" config-stale banner). Renders nothing when
    *  omitted. */
@@ -150,6 +156,9 @@ export function ConversationShell({
   onQueueReorder,
   onQueueEdit,
   onQueueDelete,
+  onQueueRetry,
+  onQueueResume,
+  queuePausedReason,
   editingItemId,
   editingDraftText,
   editingDraftBlocks,
@@ -158,6 +167,8 @@ export function ConversationShell({
   onCancelQueueEdit,
   onForkSend,
   onSteer,
+  injectContent,
+  onInjectConsumed,
   topBanner,
 }: ConversationShellProps) {
   const tAcp = useTranslations("Folder.chat.acpConnections")
@@ -292,6 +303,9 @@ export function ConversationShell({
               onQueueReorder={onQueueReorder}
               onQueueEdit={onQueueEdit}
               onQueueDelete={onQueueDelete}
+              onQueueRetry={onQueueRetry}
+              onQueueResume={onQueueResume}
+              queuePausedReason={queuePausedReason}
               editingItemId={editingItemId}
               editingDraftText={editingDraftText}
               editingDraftBlocks={editingDraftBlocks}
@@ -300,6 +314,8 @@ export function ConversationShell({
               onCancelQueueEdit={onCancelQueueEdit}
               onForkSend={onForkSend}
               onSteer={onSteer}
+              injectContent={injectContent}
+              onInjectConsumed={onInjectConsumed}
               onAddFeedback={onAddFeedback}
               feedbackAddDisabled={feedbackAddDisabled}
             />

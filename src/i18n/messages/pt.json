@@ -2816,7 +2816,14 @@
         "saveEdit": "Salvar",
         "cancelEdit": "Cancelar edição",
         "editItem": "Editar",
-        "deleteItem": "Remover"
+        "deleteItem": "Remover",
+        "retryItem": "Tentar novamente",
+        "resumeQueue": "Retomar",
+        "dispatching": "Enviando mensagem na fila",
+        "paused": "Fila pausada: {reason}",
+        "pauseReasonCancelled": "A tarefa atual foi cancelada. Retome quando estiver pronto.",
+        "pauseReasonUnknownDispatch": "A mensagem anterior pode ter chegado ao agente. Verifique a sessão antes de tentar novamente.",
+        "persistFailed": "Não foi possível salvar a mensagem na fila: {error}. O texto foi restaurado no campo de entrada."
       },
       "welcomeInputPanel": {
         "agentsSettingsPath": "Configurações > Agentes",

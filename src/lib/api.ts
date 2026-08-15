@@ -100,6 +100,8 @@ import type {
   FolderCommand,
   TerminalInfo,
   PromptInputBlock,
+  PromptDraft,
+  PromptQueueSnapshot,
   FileTreeNode,
   WorkspaceFileEntry,
   DirectoryEntry,
@@ -1973,6 +1975,82 @@ export async function reorderWorkbenches(
 
 export async function deleteWorkbench(id: number): Promise<void> {
   return getTransport().call("delete_workbench", { id })
+}
+
+export async function getPromptQueue(
+  conversationId: number
+): Promise<PromptQueueSnapshot> {
+  return getTransport().call("prompt_queue_get", { conversationId })
+}
+
+export async function enqueuePromptQueueItem(input: {
+  conversationId: number
+  id: string
+  clientDedupeId: string
+  draft: PromptDraft
+  modeId?: string | null
+}): Promise<PromptQueueSnapshot> {
+  return getTransport().call("prompt_queue_enqueue", { input })
+}
+
+export async function editPromptQueueItem(
+  conversationId: number,
+  id: string,
+  draft: PromptDraft,
+  expectedRevision: number
+): Promise<PromptQueueSnapshot> {
+  return getTransport().call("prompt_queue_edit", {
+    conversationId,
+    id,
+    draft,
+    expectedRevision,
+  })
+}
+
+export async function deletePromptQueueItem(
+  conversationId: number,
+  id: string,
+  expectedRevision: number
+): Promise<PromptQueueSnapshot> {
+  return getTransport().call("prompt_queue_delete", {
+    conversationId,
+    id,
+    expectedRevision,
+  })
+}
+
+export async function reorderPromptQueueItems(
+  conversationId: number,
+  orderedIds: string[],
+  expectedRevision: number
+): Promise<PromptQueueSnapshot> {
+  return getTransport().call("prompt_queue_reorder", {
+    conversationId,
+    orderedIds,
+    expectedRevision,
+  })
+}
+
+export async function resumePromptQueue(
+  conversationId: number,
+  expectedRevision: number
+): Promise<PromptQueueSnapshot> {
+  return getTransport().call("prompt_queue_resume", {
+    conversationId,
+    expectedRevision,
+  })
+}
+
+export async function retryPromptQueueItem(
+  conversationId: number,
+  id: string,
+  expectedRevision: number
+): Promise<PromptQueueSnapshot> {
+  return getTransport().call("prompt_queue_retry", {
+    conversationId,
+    id,
+    expectedRevision,
+  })
 }
 
 export async function listOpenFolderDetails(): Promise<FolderDetail[]> {

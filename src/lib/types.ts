@@ -1143,6 +1143,30 @@ export interface PromptDraft {
   displayText: string
 }
 
+export type PromptQueueItemState = "queued" | "claimed" | "paused"
+
+export interface PromptQueueItem {
+  id: string
+  conversationId: number
+  position: number
+  draft?: PromptDraft | null
+  originEventId?: string | null
+  modeId?: string | null
+  state: PromptQueueItemState
+  clientDedupeId: string
+  attempts: number
+  pausedReason?: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export interface PromptQueueSnapshot {
+  conversationId: number
+  revision: number
+  pausedReason?: string | null
+  items: PromptQueueItem[]
+}
+
 // Permission option info from agent
 export interface PermissionOptionInfo {
   option_id: string

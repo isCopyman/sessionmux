@@ -42,6 +42,7 @@ mod m20260815_000002_conversation_archived_at;
 mod m20260815_000003_collection;
 mod m20260815_000004_collection_root_folder;
 mod m20260815_000005_workbench_pinned;
+mod m20260816_000001_prompt_queue;
 pub struct Migrator;
 
 #[async_trait::async_trait]
@@ -90,6 +91,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260815_000003_collection::Migration),
             Box::new(m20260815_000004_collection_root_folder::Migration),
             Box::new(m20260815_000005_workbench_pinned::Migration),
+            Box::new(m20260816_000001_prompt_queue::Migration),
         ]
     }
 }

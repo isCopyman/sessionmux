@@ -2816,7 +2816,14 @@
         "saveEdit": "儲存",
         "cancelEdit": "取消編輯",
         "editItem": "編輯",
-        "deleteItem": "刪除"
+        "deleteItem": "刪除",
+        "retryItem": "重試",
+        "resumeQueue": "繼續傳送",
+        "dispatching": "正在傳送排隊訊息",
+        "paused": "佇列已暫停：{reason}",
+        "pauseReasonCancelled": "目前任務已取消；確認後可繼續傳送。",
+        "pauseReasonUnknownDispatch": "上一則訊息可能已到達 Agent；請先檢查會話，再決定是否重試。",
+        "persistFailed": "無法儲存排隊訊息：{error}。訊息文字已恢復到輸入框。"
       },
       "welcomeInputPanel": {
         "agentsSettingsPath": "設定 > Agents",

@@ -778,6 +778,10 @@ pub(crate) async fn do_start_web_server_tauri(
             .inner()
             .clone(),
         emitter: crate::web::event_bridge::EventEmitter::Tauri(app.clone()),
+        prompt_queue: app
+            .state::<crate::prompt_queue::PromptQueueHandle>()
+            .inner()
+            .clone(),
         // Resolve through the effective data dir so a custom
         // `CODEG_DATA_DIR` reaches the credential helper and any HTTP
         // handler that reads `state.data_dir`.

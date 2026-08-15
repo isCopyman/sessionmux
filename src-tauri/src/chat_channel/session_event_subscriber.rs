@@ -132,7 +132,10 @@ async fn handle_acp_envelope(
                     let blocks = vec![PromptInputBlock::Text {
                         text: prompt_text.clone(),
                     }];
-                    if let Err(e) = conn_mgr.send_prompt(connection_id, blocks).await {
+                    if let Err(e) = conn_mgr
+                        .send_prompt_queue_aware(db, connection_id, blocks)
+                        .await
+                    {
                         // A turn is already in flight on this shared connection
                         // (another client raced this kickoff between
                         // SessionStarted and here). Transient, not a failure —
@@ -510,7 +513,10 @@ async fn handle_acp_envelope(
                     let blocks = vec![PromptInputBlock::Text {
                         text: prompt_text.clone(),
                     }];
-                    if let Err(e) = conn_mgr.send_prompt(connection_id, blocks).await {
+                    if let Err(e) = conn_mgr
+                        .send_prompt_queue_aware(db, connection_id, blocks)
+                        .await
+                    {
                         if matches!(e, crate::acp::error::AcpError::TurnInProgress) {
                             let mut g = bridge.lock().await;
                             if let Some(s) = g.get_mut(connection_id) {
