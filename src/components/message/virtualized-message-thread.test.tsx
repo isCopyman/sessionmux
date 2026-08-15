@@ -4,15 +4,52 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 
 const testState = vi.hoisted(() => ({
   scrollRef: { current: null as HTMLDivElement | null },
+  stopScroll: vi.fn(),
+  scrollTo: vi.fn(),
+  captureCache: vi.fn(),
 }))
 
 vi.mock("use-stick-to-bottom", () => ({
-  useStickToBottomContext: () => ({ scrollRef: testState.scrollRef }),
+  useStickToBottomContext: () => ({
+    scrollRef: testState.scrollRef,
+    stopScroll: testState.stopScroll,
+  }),
 }))
 
-vi.mock("virtua", () => ({
-  Virtualizer: ({ children }: { children: ReactNode }) => <>{children}</>,
-}))
+vi.mock("virtua", async () => {
+  const React = await import("react")
+  const MockVirtualizer = React.forwardRef(
+    (
+      {
+        children,
+        cache,
+      }: {
+        children: ReactNode
+        cache?: unknown
+      },
+      ref
+    ) => {
+      testState.captureCache(cache)
+      React.useImperativeHandle(ref, () => ({
+        cache: { measured: true },
+        scrollOffset: 720,
+        scrollSize: 1600,
+        viewportSize: 600,
+        findItemIndex: () => 0,
+        getItemOffset: () => 0,
+        getItemSize: () => 0,
+        scrollToIndex: vi.fn(),
+        scrollTo: testState.scrollTo,
+        scrollBy: vi.fn(),
+      }))
+      return <>{children}</>
+    }
+  )
+  MockVirtualizer.displayName = "MockVirtualizer"
+  return {
+    Virtualizer: MockVirtualizer,
+  }
+})
 
 vi.mock("@/components/ai-elements/message-thread", () => ({
   MessageThreadContent: ({
@@ -58,6 +95,9 @@ function keyDown(element: HTMLElement, key: string) {
 
 beforeEach(() => {
   testState.scrollRef.current = null
+  testState.stopScroll.mockClear()
+  testState.scrollTo.mockClear()
+  testState.captureCache.mockClear()
 })
 
 describe("VirtualizedMessageThread focus origin", () => {
@@ -121,5 +161,47 @@ describe("VirtualizedMessageThread focus origin", () => {
 
     expect(viewport).not.toHaveAttribute("data-focus-origin")
     expect(document.activeElement).not.toBe(viewport)
+  })
+
+  it("restores a warm non-bottom reading position before paint", () => {
+    const virtualizerCache = { measured: "cache" } as never
+    render(
+      <VirtualizedMessageThread
+        items={[{ id: "message-1" }]}
+        getItemKey={(item) => item.id}
+        renderItem={() => <div>message</div>}
+        initialViewState={{
+          scrollOffset: 420,
+          atBottom: false,
+          virtualItemCount: 1,
+          virtualizerCache,
+        }}
+      />
+    )
+
+    expect(testState.captureCache).toHaveBeenCalledWith(virtualizerCache)
+    expect(testState.stopScroll).toHaveBeenCalled()
+    expect(testState.scrollTo).toHaveBeenCalledWith(420)
+  })
+
+  it("publishes the last virtualizer geometry when the surface unmounts", () => {
+    const onViewStateChange = vi.fn()
+    const view = render(
+      <VirtualizedMessageThread
+        items={[{ id: "message-1" }]}
+        getItemKey={(item) => item.id}
+        renderItem={() => <div>message</div>}
+        onViewStateChange={onViewStateChange}
+      />
+    )
+
+    view.unmount()
+
+    expect(onViewStateChange).toHaveBeenCalledWith({
+      scrollOffset: 720,
+      atBottom: false,
+      virtualItemCount: 1,
+      virtualizerCache: { measured: true },
+    })
   })
 })

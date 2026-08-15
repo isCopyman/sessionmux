@@ -12,6 +12,7 @@ import {
 import { resolveDefaultAgent } from "@/lib/resolve-default-agent"
 import { formatConversationTitle } from "@/lib/conversation-title"
 import { RecentWorkbenchSnapshotCache } from "@/lib/workbench-snapshot-cache"
+import type { WorkbenchSessionViewState } from "@/lib/workbench-snapshot-cache"
 import { useConversationRuntimeStore } from "@/stores/conversation-runtime-store"
 import {
   firstLeafId,
@@ -546,6 +547,11 @@ function rememberWorkbenchSnapshot(
       validKeys.has(key)
     )
   )
+  const priorSessionViewState = Object.fromEntries(
+    Object.entries(prior?.sessionViewStateByTab ?? {}).filter(([tabId]) =>
+      validConnectionKeys.has(tabId)
+    )
+  )
   const evicted = recentWorkbenchSnapshots.set({
     workbenchId,
     snapshot,
@@ -557,8 +563,29 @@ function rememberWorkbenchSnapshot(
     runtimeConversationIdByTab: tabs
       ? runtimeConversationIdsByTab(tabs)
       : priorRuntimeIds,
+    sessionViewStateByTab: priorSessionViewState,
   })
   cleanupEvictedWorkbenchRuntimes(evicted)
+}
+
+/** Read the last in-memory transcript position for a warm Workbench remount. */
+export function getWorkbenchSessionViewState(
+  workbenchId: number,
+  tabId: string
+): WorkbenchSessionViewState | null {
+  return recentWorkbenchSnapshots.getSessionViewState(workbenchId, tabId)
+}
+
+/**
+ * Remember transcript geometry inside the same bounded LRU as Session data and
+ * ACP ownership. This is view state, so it is neither persisted nor broadcast.
+ */
+export function setWorkbenchSessionViewState(
+  workbenchId: number,
+  tabId: string,
+  state: WorkbenchSessionViewState
+): void {
+  recentWorkbenchSnapshots.setSessionViewState(workbenchId, tabId, state)
 }
 
 /**

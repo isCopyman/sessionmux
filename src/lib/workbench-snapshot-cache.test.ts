@@ -101,4 +101,45 @@ describe("RecentWorkbenchSnapshotCache", () => {
     expect(cache.peek(1)?.workbenchId).toBe(1)
     expect([...cache.retainedConnectionContextKeys()]).toEqual(["tab-1"])
   })
+
+  it("keeps per-session reading positions inside the same bounded entry", () => {
+    const cache = new RecentWorkbenchSnapshotCache(1)
+    cache.set({
+      workbenchId: 1,
+      snapshot: snapshot(1, 11),
+      connectionContextKeys: ["tab-1"],
+      runtimeConversationIdByTab: {},
+    })
+
+    expect(
+      cache.setSessionViewState(1, "tab-1", {
+        scrollOffset: 720,
+        atBottom: false,
+        virtualItemCount: 9,
+        virtualizerCache: null,
+      })
+    ).toBe(true)
+    expect(cache.getSessionViewState(1, "tab-1")).toEqual({
+      scrollOffset: 720,
+      atBottom: false,
+      virtualItemCount: 9,
+      virtualizerCache: null,
+    })
+    expect(
+      cache.setSessionViewState(1, "not-owned", {
+        scrollOffset: 1,
+        atBottom: false,
+        virtualItemCount: 1,
+        virtualizerCache: null,
+      })
+    ).toBe(false)
+
+    cache.set({
+      workbenchId: 2,
+      snapshot: snapshot(2, 22),
+      connectionContextKeys: ["tab-2"],
+      runtimeConversationIdByTab: {},
+    })
+    expect(cache.getSessionViewState(1, "tab-1")).toBeNull()
+  })
 })

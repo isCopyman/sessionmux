@@ -1,8 +1,16 @@
 "use client"
 
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react"
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react"
 import type { CSSProperties, ReactNode, RefObject } from "react"
-import { Virtualizer, type VirtualizerHandle } from "virtua"
+import { Virtualizer, type CacheSnapshot, type VirtualizerHandle } from "virtua"
 import { useStickToBottomContext } from "use-stick-to-bottom"
 import { Loader2 } from "lucide-react"
 import {
@@ -23,6 +31,14 @@ import {
  * never scroll cannot auto-trigger a cascade of page loads.
  */
 const LOAD_OLDER_THRESHOLD_PX = 240
+const AT_BOTTOM_THRESHOLD_PX = 32
+
+export interface VirtualizedThreadViewState {
+  scrollOffset: number
+  atBottom: boolean
+  virtualItemCount: number
+  virtualizerCache: CacheSnapshot | null
+}
 
 interface VirtualizedMessageThreadProps<T> {
   /** Data to virtualise — each entry becomes one virtual row. */
@@ -87,6 +103,10 @@ interface VirtualizedMessageThreadProps<T> {
    */
   prependEpoch?: number
   prependScopeKey?: string | number
+  /** Browser-tab-like in-memory position restored after a warm remount. */
+  initialViewState?: VirtualizedThreadViewState | null
+  /** Publishes a fresh position/cache snapshot on scroll end and unmount. */
+  onViewStateChange?: (state: VirtualizedThreadViewState) => void
 }
 
 /**
@@ -120,9 +140,21 @@ function VirtualizedMessageThreadImpl<T>({
   loadingOlderLabel,
   prependEpoch = 0,
   prependScopeKey,
+  initialViewState = null,
+  onViewStateChange,
 }: VirtualizedMessageThreadProps<T>) {
-  const { scrollRef } = useStickToBottomContext()
+  const { scrollRef, stopScroll } = useStickToBottomContext()
   const virtualizerHandleRef = useRef<VirtualizerHandle>(null)
+  // React clears object refs during teardown. Keep the last handle separately
+  // so our layout-effect cleanup can still snapshot the outgoing surface.
+  const lastVirtualizerHandleRef = useRef<VirtualizerHandle | null>(null)
+  const setVirtualizerHandle = useCallback(
+    (handle: VirtualizerHandle | null) => {
+      virtualizerHandleRef.current = handle
+      if (handle) lastVirtualizerHandleRef.current = handle
+    },
+    []
+  )
 
   // The loader row occupies virtua index 0 when present, shifting every data
   // item's virtual index by one — account for it in scrollToIndex so nav
@@ -130,7 +162,56 @@ function VirtualizedMessageThreadImpl<T>({
   // into a ref post-commit (see the sync effect below); scrollToIndex only
   // runs from user interactions, so it always reads a committed value.
   const rowOffset = hasOlder ? 1 : 0
+  const virtualItemCount = items.length + rowOffset
   const rowOffsetRef = useRef(rowOffset)
+  const virtualItemCountRef = useRef(virtualItemCount)
+  const onViewStateChangeRef = useRef(onViewStateChange)
+
+  useEffect(() => {
+    onViewStateChangeRef.current = onViewStateChange
+    virtualItemCountRef.current = virtualItemCount
+  })
+
+  const publishViewState = useCallback(() => {
+    const callback = onViewStateChangeRef.current
+    const handle = lastVirtualizerHandleRef.current
+    if (!callback || !handle) return
+    try {
+      const scrollOffset = handle.scrollOffset
+      callback({
+        scrollOffset,
+        atBottom:
+          handle.scrollSize - scrollOffset - handle.viewportSize <=
+          AT_BOTTOM_THRESHOLD_PX,
+        virtualItemCount: virtualItemCountRef.current,
+        virtualizerCache: handle.cache,
+      })
+    } catch {
+      // A host can invalidate the imperative handle before passive cleanup.
+      // Scroll-end snapshots still cover the ordinary path, so teardown must
+      // remain best-effort rather than breaking Workbench switching.
+    }
+  }, [])
+
+  // Restore before first paint. Passing virtua's measurement cache avoids the
+  // visible "first row -> remembered row" sweep; the second frame only corrects
+  // geometry that the WebView measured during this mount.
+  const initialViewStateRef = useRef(initialViewState)
+  useLayoutEffect(() => {
+    const state = initialViewStateRef.current
+    if (!state || state.atBottom || state.virtualItemCount !== virtualItemCount)
+      return
+    const handle = virtualizerHandleRef.current
+    if (!handle) return
+    stopScroll()
+    handle.scrollTo(state.scrollOffset)
+    const rafId = requestAnimationFrame(() => {
+      virtualizerHandleRef.current?.scrollTo(state.scrollOffset)
+    })
+    return () => cancelAnimationFrame(rafId)
+  }, [stopScroll, virtualItemCount])
+
+  useLayoutEffect(() => publishViewState, [publishViewState])
 
   const scrollToIndex = useCallback<MessageScrollContextValue["scrollToIndex"]>(
     (index, opts) => {
@@ -295,12 +376,18 @@ function VirtualizedMessageThreadImpl<T>({
           (emptyState ?? null)
         ) : (
           <Virtualizer
-            ref={virtualizerHandleRef}
+            ref={setVirtualizerHandle}
             scrollRef={scrollRef as unknown as RefObject<HTMLElement | null>}
             itemSize={itemSize}
             bufferSize={bufferSize}
             shift={shift}
+            cache={
+              initialViewState?.virtualItemCount === virtualItemCount
+                ? (initialViewState.virtualizerCache ?? undefined)
+                : undefined
+            }
             onScroll={handleScroll}
+            onScrollEnd={publishViewState}
           >
             {hasOlder ? (
               <div key="load-older-row" style={styles.first}>

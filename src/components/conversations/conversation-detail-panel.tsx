@@ -37,8 +37,10 @@ import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { useTabActions, useTabStore } from "@/contexts/tab-context"
 import {
   groupOfTab,
+  getWorkbenchSessionViewState,
   isReparentUnmount,
   onWorkbenchCacheEvicted,
+  setWorkbenchSessionViewState,
   shouldRetainWorkbenchConnectionOnUnmount,
   shouldRetainWorkbenchRuntimeOnUnmount,
 } from "@/stores/tab-store"
@@ -271,6 +273,17 @@ const ConversationTabView = memo(function ConversationTabView({
   const tDiag = useTranslations("DiagnosticsSettings")
   const sharedT = useTranslations("Folder.chat.shared")
   const tMessageList = useTranslations("Folder.chat.messageList")
+  // Read once: a Session stays mounted for ordinary tab switches, and only a
+  // Workbench remount needs to consume its browser-like warm position.
+  const [initialMessageViewState] = useState(() =>
+    getWorkbenchSessionViewState(workbenchId, tabId)
+  )
+  const handleMessageViewStateChange = useCallback(
+    (state: Parameters<typeof setWorkbenchSessionViewState>[2]) => {
+      setWorkbenchSessionViewState(workbenchId, tabId, state)
+    },
+    [workbenchId, tabId]
+  )
   const refreshConversations = useAppWorkspaceStore(
     (s) => s.refreshConversations
   )
@@ -1701,6 +1714,8 @@ const ConversationTabView = memo(function ConversationTabView({
         onNewSession={
           canShowDetailErrorActions ? handleOpenNewSession : undefined
         }
+        initialViewState={initialMessageViewState}
+        onViewStateChange={handleMessageViewStateChange}
       />
     </GoalControlProvider>
   )

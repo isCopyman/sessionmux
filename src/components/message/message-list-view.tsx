@@ -63,7 +63,10 @@ import {
 } from "@/lib/agent-plan"
 import type { AgentType, ConnectionStatus, MessageTurn } from "@/lib/types"
 import { copyTextToClipboard } from "@/lib/utils"
-import { VirtualizedMessageThread } from "@/components/message/virtualized-message-thread"
+import {
+  VirtualizedMessageThread,
+  type VirtualizedThreadViewState,
+} from "@/components/message/virtualized-message-thread"
 import {
   ConversationMessageNav,
   type MessageNavEntry,
@@ -105,6 +108,10 @@ interface MessageListViewProps {
    * items render in arbitrary order and multiplicity. `null` = no divider.
    */
   userTurnHeader?: ((group: ResolvedMessageGroup) => string | null) | null
+  /** Warm Workbench remount position; omitted by read-only/embedded surfaces. */
+  initialViewState?: VirtualizedThreadViewState | null
+  /** Saves this Session surface's current reading position in the warm cache. */
+  onViewStateChange?: (state: VirtualizedThreadViewState) => void
 }
 
 export interface ResolvedMessageGroup {
@@ -674,6 +681,8 @@ export function MessageListView({
   onNewSession,
   showMessageNav = true,
   userTurnHeader = null,
+  initialViewState = null,
+  onViewStateChange,
 }: MessageListViewProps) {
   const t = useTranslations("Folder.chat.messageList")
   const sharedT = useTranslations("Folder.chat.shared")
@@ -1118,6 +1127,7 @@ export function MessageListView({
     <div className="relative flex h-full min-h-0 flex-col">
       <MessageThread
         className="flex-1 min-h-0"
+        initial={initialViewState?.atBottom === false ? false : "instant"}
         resize={shouldUseSmoothResize ? "smooth" : undefined}
       >
         <AutoScrollOnSend signal={sendSignal} />
@@ -1134,6 +1144,8 @@ export function MessageListView({
           loadingOlderLabel={t("loadingEarlier")}
           prependEpoch={session?.olderTurnsPrependEpoch ?? 0}
           prependScopeKey={conversationId}
+          initialViewState={initialViewState}
+          onViewStateChange={onViewStateChange}
         />
         <MessageThreadScrollButton />
       </MessageThread>

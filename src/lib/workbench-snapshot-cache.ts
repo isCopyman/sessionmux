@@ -1,4 +1,19 @@
 import type { OpenedTabsSnapshot } from "@/lib/types"
+import type { CacheSnapshot } from "virtua"
+
+/**
+ * Ephemeral browser-tab-like view state for one Session surface. The virtua
+ * cache keeps measured row heights while `scrollOffset` restores the exact
+ * reading position. It deliberately lives only in the bounded warm cache —
+ * durable Workbench layout remains backend-owned, while stale scroll geometry
+ * disappears with the cached surface that produced it.
+ */
+export interface WorkbenchSessionViewState {
+  scrollOffset: number
+  atBottom: boolean
+  virtualItemCount: number
+  virtualizerCache: CacheSnapshot | null
+}
 
 export interface WorkbenchSnapshotCacheEntry {
   workbenchId: number
@@ -12,6 +27,21 @@ export interface WorkbenchSnapshotCacheEntry {
    * second detail cache under the durable id.
    */
   runtimeConversationIdByTab: Readonly<Record<string, number>>
+  /** Per-tab transcript position/measurement state for warm remounts. */
+  sessionViewStateByTab?: Readonly<Record<string, WorkbenchSessionViewState>>
+}
+
+function cloneViewState(
+  state: WorkbenchSessionViewState
+): WorkbenchSessionViewState {
+  return {
+    scrollOffset: state.scrollOffset,
+    atBottom: state.atBottom,
+    virtualItemCount: state.virtualItemCount,
+    // CacheSnapshot is an opaque immutable snapshot from virtua. Retaining the
+    // reference is intentional; consumers must never mutate it.
+    virtualizerCache: state.virtualizerCache,
+  }
 }
 
 function cloneEntry(
@@ -27,6 +57,11 @@ function cloneEntry(
     runtimeConversationIdByTab: {
       ...entry.runtimeConversationIdByTab,
     },
+    sessionViewStateByTab: Object.fromEntries(
+      Object.entries(entry.sessionViewStateByTab ?? {}).map(
+        ([tabId, state]) => [tabId, cloneViewState(state)]
+      )
+    ),
   }
 }
 
@@ -78,6 +113,29 @@ export class RecentWorkbenchSnapshotCache {
   peek(workbenchId: number): WorkbenchSnapshotCacheEntry | null {
     const entry = this.entries.get(workbenchId)
     return entry ? cloneEntry(entry) : null
+  }
+
+  getSessionViewState(
+    workbenchId: number,
+    tabId: string
+  ): WorkbenchSessionViewState | null {
+    const state = this.entries.get(workbenchId)?.sessionViewStateByTab?.[tabId]
+    return state ? cloneViewState(state) : null
+  }
+
+  /** Update a mounted tab's view state without changing Workbench LRU order. */
+  setSessionViewState(
+    workbenchId: number,
+    tabId: string,
+    state: WorkbenchSessionViewState
+  ): boolean {
+    const entry = this.entries.get(workbenchId)
+    if (!entry || !entry.connectionContextKeys.includes(tabId)) return false
+    entry.sessionViewStateByTab = {
+      ...(entry.sessionViewStateByTab ?? {}),
+      [tabId]: cloneViewState(state),
+    }
+    return true
   }
 
   set(entry: WorkbenchSnapshotCacheEntry): WorkbenchSnapshotCacheEntry[] {
