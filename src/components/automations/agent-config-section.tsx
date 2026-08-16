@@ -17,7 +17,7 @@ import { cn } from "@/lib/utils"
 import type { AgentOptionsSnapshot, SessionConfigOptionInfo } from "@/lib/types"
 
 // Picking this clears the override (inherit the agent's own default). Mirrors
-// delegation-agent-defaults.tsx; the codeg prefix avoids colliding with a real
+// The codeg prefix avoids colliding with a real
 // option id.
 const DEFAULT_SENTINEL = "__codeg_default__"
 

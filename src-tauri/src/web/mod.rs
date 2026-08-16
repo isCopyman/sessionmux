@@ -802,19 +802,13 @@ pub(crate) async fn do_start_web_server_tauri(
             .state::<crate::pet_state_mapper::PetStateHandle>()
             .inner()
             .clone(),
-        // Reuse the live broker / token registry / socket path from the
-        // Tauri-managed state so HTTP-side delegation commands target the
-        // same listener the desktop process is already running.
-        delegation_broker: app
-            .state::<Arc<crate::acp::delegation::broker::DelegationBroker>>()
-            .inner()
-            .clone(),
-        delegation_tokens: app
+        // Reuse the live codeg-mcp token registry and transport address.
+        codeg_mcp_tokens: app
             .state::<Arc<crate::acp::delegation::listener::TokenRegistry>>()
             .inner()
             .clone(),
-        delegation_socket_path: app
-            .state::<crate::commands::delegation::DelegationSocketPath>()
+        codeg_mcp_socket_path: app
+            .state::<crate::app_state::CodegMcpSocketPath>()
             .0
             .clone(),
         // Reuse the same live-feedback config handle the desktop MCP injection
@@ -959,9 +953,7 @@ pub async fn probe_web_service_port(
 
 #[cfg(test)]
 mod local_address_tests {
-    use super::{
-        addresses_for_bind, advertise_host, get_local_addresses, is_advertisable_ipv4,
-    };
+    use super::{addresses_for_bind, advertise_host, get_local_addresses, is_advertisable_ipv4};
     use std::net::{Ipv4Addr, SocketAddr};
 
     #[test]
@@ -971,7 +963,7 @@ mod local_address_tests {
         assert!(!is_advertisable_ipv4(Ipv4Addr::LOCALHOST)); // 127.0.0.1
         assert!(!is_advertisable_ipv4(Ipv4Addr::new(169, 254, 3, 4))); // link-local
         assert!(!is_advertisable_ipv4(Ipv4Addr::UNSPECIFIED)); // 0.0.0.0
-        // Accepted: ordinary private/LAN addresses the user may want to share.
+                                                               // Accepted: ordinary private/LAN addresses the user may want to share.
         assert!(is_advertisable_ipv4(Ipv4Addr::new(192, 168, 1, 5)));
         assert!(is_advertisable_ipv4(Ipv4Addr::new(10, 0, 0, 4)));
         assert!(is_advertisable_ipv4(Ipv4Addr::new(172, 16, 0, 9)));
@@ -1031,7 +1023,10 @@ mod local_address_tests {
         );
         // A wildcard bind stays wildcard, so addresses_for_bind still enumerates.
         assert_eq!(
-            advertise_host(Some("0.0.0.0:3080".parse::<SocketAddr>().unwrap()), "0.0.0.0"),
+            advertise_host(
+                Some("0.0.0.0:3080".parse::<SocketAddr>().unwrap()),
+                "0.0.0.0"
+            ),
             "0.0.0.0"
         );
         // End to end: a `localhost` config advertises only loopback, never LAN.

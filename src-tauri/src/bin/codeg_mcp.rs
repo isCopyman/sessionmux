@@ -1,11 +1,7 @@
 //! `codeg-mcp` — the per-launch stdio MCP companion that an agent CLI runs
-//! to surface codeg's tools to its LLM: the multi-agent delegation tools
-//! (`delegate_to_agent` etc.), `check_user_feedback` (pull the user's mid-turn
-//! steering notes), `ask_user_question` (block on a multiple-choice card), and
-//! `get_session_info` (resolve a referenced session by id), plus the
-//! chat-authoring tools (`create_automation` / `create_work_task`), gated by the
-//! `--features` groups (`delegation` / `feedback` / `ask` / `sessions` /
-//! `tasks` / `automations` / `taskboard`).
+//! to surface codeg-owned feedback, question, Session collaboration,
+//! task-reporting, and chat-authoring tools to its LLM, gated by independent
+//! `--features` groups.
 //!
 //! The agent's MCP config (injected by codeg via `load_mcp_servers_for_agent`)
 //! spawns this binary with three required flags:
@@ -16,10 +12,6 @@
 //!     --token <ephemeral secret>
 //!
 //! All three are required and the binary exits early if any is missing.
-//! `--custom-agents` optionally carries the `custom:<id>` slugs registered
-//! in the parent, so `delegate_to_agent`'s schema can offer them as targets;
-//! `--disabled-agents` optionally names the built-ins to drop from that
-//! schema so only agents enabled in settings are advertised.
 //! Everything heavyweight — JSON-RPC dispatch, UDS round-trip, MCP tool
 //! schema, cancellation tracking — lives in
 //! `codeg_lib::acp::delegation::{companion, transport}` so it's
@@ -37,7 +29,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use codeg_lib::acp::delegation::companion::{
-    dispatch_line, drain_and_cancel_all, CompanionContext, CompanionFeatures, InflightCalls,
+    dispatch_line, drain_inflight_calls, CompanionContext, CompanionFeatures, InflightCalls,
     JsonRpcResponse, LineAction, SpawnResult,
 };
 use codeg_lib::acp::delegation::parent_watcher::{wait_for_parent_exit, DEFAULT_POLL_INTERVAL};
@@ -55,20 +47,8 @@ struct Args {
     /// from. Omitted by older parents — backward compatible.
     parent_pid: Option<u32>,
     /// Comma-joined tool groups to expose (e.g.
-    /// `delegation,feedback,ask,sessions,automations,taskboard`). Omitted by parents that predate
-    /// feature gating; see `CompanionFeatures::parse` (defaults to
-    /// delegation-only).
+    /// `feedback,ask,sessions,collaboration,tasks,automations,taskboard`).
     features: Option<String>,
-    /// Comma-joined `custom:<id>` slugs of the custom ACP agents registered
-    /// in the parent at injection time, appended to `delegate_to_agent`'s
-    /// `agent_type` enum. Omitted when the parent has none (the embedded
-    /// builtin-only schema is served unchanged).
-    custom_agents: Option<String>,
-    /// Comma-joined wire slugs of the built-in agents the user has disabled
-    /// in settings, removed from `delegate_to_agent`'s `agent_type` enum so
-    /// only launchable targets are advertised. Omitted when nothing is
-    /// disabled (disabled customs are simply left out of `--custom-agents`).
-    disabled_agents: Option<String>,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -77,8 +57,6 @@ fn parse_args() -> Result<Args, String> {
     let mut token = None;
     let mut parent_pid = None;
     let mut features = None;
-    let mut custom_agents = None;
-    let mut disabled_agents = None;
 
     let mut iter = std::env::args().skip(1);
     while let Some(arg) = iter.next() {
@@ -116,21 +94,9 @@ fn parse_args() -> Result<Args, String> {
                         .ok_or_else(|| "--features requires a value".to_string())?,
                 );
             }
-            "--custom-agents" => {
-                custom_agents = Some(
-                    iter.next()
-                        .ok_or_else(|| "--custom-agents requires a value".to_string())?,
-                );
-            }
-            "--disabled-agents" => {
-                disabled_agents = Some(
-                    iter.next()
-                        .ok_or_else(|| "--disabled-agents requires a value".to_string())?,
-                );
-            }
             "--help" | "-h" => {
                 println!(
-                    "codeg-mcp --parent-connection-id <uuid> --socket-path <path> --token <secret> [--parent-pid <pid>] [--features delegation,feedback,ask,sessions,collaboration,tasks,automations,taskboard] [--custom-agents custom:<id>,...] [--disabled-agents <agent>,...]"
+                    "codeg-mcp --parent-connection-id <uuid> --socket-path <path> --token <secret> [--parent-pid <pid>] [--features feedback,ask,sessions,collaboration,tasks,automations,taskboard]"
                 );
                 std::process::exit(0);
             }
@@ -144,21 +110,7 @@ fn parse_args() -> Result<Args, String> {
         token: token.ok_or_else(|| "missing --token".to_string())?,
         parent_pid,
         features,
-        custom_agents,
-        disabled_agents,
     })
-}
-
-/// Split an optional comma-joined arg value into its non-empty entries.
-fn parse_csv(raw: Option<&str>) -> Vec<String> {
-    raw.map(|csv| {
-        csv.split(',')
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(str::to_string)
-            .collect()
-    })
-    .unwrap_or_default()
 }
 
 /// Serialize a `JsonRpcResponse` and append a newline; small enough to keep
@@ -195,8 +147,6 @@ async fn main() -> ExitCode {
         socket_path: args.socket_path,
         token: args.token,
         features: CompanionFeatures::parse(args.features.as_deref()),
-        custom_agents: parse_csv(args.custom_agents.as_deref()),
-        disabled_agents: parse_csv(args.disabled_agents.as_deref()),
     };
 
     let stdin = tokio::io::stdin();
@@ -222,14 +172,7 @@ async fn main() -> ExitCode {
             // whose response no one will read.
             biased;
             _ = &mut watchdog => {
-                // Best-effort: cancel every in-flight delegation BEFORE we
-                // hard-exit so the broker doesn't park each pending row
-                // on `rx.await` waiting for a TurnComplete it can never
-                // deliver. cancel_by_parent on the codeg main side is the
-                // ultimate backstop, but firing the explicit cancels here
-                // closes the window between MCP shutdown and parent ACP
-                // disconnect detection on the codeg side.
-                drain_and_cancel_all(&ctx, &inflight, "parent process exited").await;
+                drain_inflight_calls(&inflight).await;
                 let _ = writeln!(
                     std::io::stderr(),
                     "codeg-mcp: parent process exited, shutting down"
@@ -247,15 +190,13 @@ async fn main() -> ExitCode {
                     Ok(Some(l)) => l,
                     Ok(None) => {
                         // Parent closed stdin. Same shutdown rationale as
-                        // the watchdog branch: drain pending delegations
-                        // before returning so the broker can resolve them
-                        // immediately.
-                        drain_and_cancel_all(&ctx, &inflight, "companion stdio closed").await;
+                        // the watchdog branch: wake pending calls before exit.
+                        drain_inflight_calls(&inflight).await;
                         break;
                     }
                     Err(e) => {
                         let _ = writeln!(std::io::stderr(), "codeg-mcp: read stdin: {e}");
-                        drain_and_cancel_all(&ctx, &inflight, "companion stdin error").await;
+                        drain_inflight_calls(&inflight).await;
                         return ExitCode::from(1);
                     }
                 };

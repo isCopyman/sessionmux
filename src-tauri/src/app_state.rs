@@ -1,7 +1,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::acp::delegation::broker::DelegationBroker;
 use crate::acp::delegation::listener::TokenRegistry;
 use crate::acp::manager::ConnectionManager;
 use crate::acp::InternalEventBus;
@@ -35,30 +34,25 @@ pub struct AppState {
     /// Read by `pet_get_current_state` so a freshly-opened pet window can
     /// pick up the current state without waiting for the next transition.
     pub pet_state: PetStateHandle,
-    /// Multi-agent delegation broker. Spawned in both desktop and server
-    /// mode at startup; the UDS listener task forwards incoming companion
-    /// requests here. v1 uses the default `DelegationConfig`; settings UI
-    /// hot-swaps via `delegation_broker.set_config`.
-    pub delegation_broker: Arc<DelegationBroker>,
     /// Per-launch ephemeral tokens identifying parent ACP connections.
     /// Registered when `load_mcp_servers_for_agent` injects the
     /// `codeg-mcp` MCP entry, revoked on parent teardown.
-    pub delegation_tokens: Arc<TokenRegistry>,
+    pub codeg_mcp_tokens: Arc<TokenRegistry>,
     /// Absolute path of the UDS / named pipe the companion connects to.
     /// PID-scoped so multiple codeg processes on the same host don't fight.
-    pub delegation_socket_path: PathBuf,
+    pub codeg_mcp_socket_path: PathBuf,
     /// Hot-swappable live-feedback (`check_user_feedback`) enable flag. Shared
-    /// with the `DelegationInjection` so MCP injection reads it, and updated by
+    /// with the codeg-mcp injection so MCP injection reads it, and updated by
     /// the feedback settings command on save. Populated at startup by
     /// `apply_persisted_feedback_config`.
     pub feedback_config: crate::acp::feedback::FeedbackRuntimeConfig,
     /// Hot-swappable ask-user-question (`ask_user_question`) enable flag. Shared
-    /// with the `DelegationInjection` so MCP injection reads it, and updated by
+    /// with the codeg-mcp injection so MCP injection reads it, and updated by
     /// the question settings command on save. Populated at startup by
     /// `apply_persisted_question_config`.
     pub question_config: crate::acp::question::QuestionRuntimeConfig,
     /// Hot-swappable get-session-info (`get_session_info`) enable flag. Shared
-    /// with the `DelegationInjection` so MCP injection reads it, and updated by
+    /// with the codeg-mcp injection so MCP injection reads it, and updated by
     /// the session-info settings command on save. Populated at startup by
     /// `apply_persisted_session_info_config`.
     pub session_info_config: crate::acp::session_info::SessionInfoRuntimeConfig,
@@ -67,7 +61,7 @@ pub struct AppState {
     pub session_collaboration_config:
         crate::acp::session_collaboration::SessionCollaborationRuntimeConfig,
     /// Hot-swappable chat-authoring flags (`create_automation` /
-    /// `create_work_task`). Shared with the `DelegationInjection` so MCP
+    /// `create_work_task`). Shared with the codeg-mcp injection so MCP
     /// injection reads it, re-read by the authoring write path at call time, and
     /// updated by the chat-authoring settings command on save. Populated at
     /// startup by `apply_persisted_chat_authoring_config`.
@@ -104,19 +98,19 @@ pub fn default_chat_channel_manager() -> ChatChannelManager {
     ChatChannelManager::new()
 }
 
-/// Build the delegation broker + token registry + per-process UDS socket
-/// path. Shared between codeg-server bootstrap and the Tauri `setup` block
-/// so both modes apply identical depth limit + timeout defaults.
+/// Tauri managed-state wrapper for the codeg-mcp UDS / named-pipe address.
+#[derive(Clone)]
+pub struct CodegMcpSocketPath(pub PathBuf);
+
+/// Build the shared codeg-mcp token registry, per-process socket path, and
+/// runtime feature handles. Shared by server and desktop bootstrap.
 ///
 /// The listener task is _not_ spawned here — callers spawn it after they
 /// own an `Arc<AppState>` (or the relevant pieces) so the listener can
 /// borrow the long-lived state without circular Arc shenanigans.
-pub fn build_delegation_stack(
+pub fn build_codeg_mcp_stack(
     connection_manager: &ConnectionManager,
-    db_conn: sea_orm::DatabaseConnection,
-    data_dir: PathBuf,
 ) -> (
-    Arc<DelegationBroker>,
     Arc<TokenRegistry>,
     PathBuf,
     crate::acp::feedback::FeedbackRuntimeConfig,
@@ -125,50 +119,8 @@ pub fn build_delegation_stack(
     crate::acp::session_collaboration::SessionCollaborationRuntimeConfig,
     crate::acp::chat_authoring::ChatAuthoringRuntimeConfig,
 ) {
-    use crate::acp::connection::DelegationInjection;
-    use crate::acp::delegation::broker::{
-        ChildStatusLookup, ConversationDepthLookup, DbChildStatusLookup, DbDepthLookup,
-    };
-    use crate::acp::delegation::event_emitter::{
-        ConnectionManagerEventEmitter, DelegationEventEmitter,
-    };
+    use crate::acp::connection::CodegMcpInjection;
     use crate::acp::delegation::listener::default_socket_path;
-    use crate::acp::delegation::live_reply::{
-        ChildLiveReplyLookup, ConnectionManagerLiveReplyLookup,
-    };
-    use crate::acp::delegation::meta_writer::{ConnectionManagerMetaWriter, DelegationMetaWriter};
-    use crate::acp::delegation::spawner::ConnectionSpawner;
-    use crate::acp::manager::ConnectionManagerSpawner;
-
-    let cm_arc = Arc::new(connection_manager.clone_ref());
-    let db_arc = Arc::new(AppDatabase {
-        conn: db_conn.clone(),
-    });
-    let spawner = Arc::new(ConnectionManagerSpawner {
-        manager: cm_arc.clone(),
-        db: db_arc.clone(),
-        data_dir: Arc::new(data_dir),
-    }) as Arc<dyn ConnectionSpawner>;
-    let depth_lookup =
-        Arc::new(DbDepthLookup { db: db_arc.clone() }) as Arc<dyn ConversationDepthLookup>;
-    let agent_availability = Arc::new(crate::acp::connection::DbAgentAvailabilityLookup {
-        db: db_arc.clone(),
-    })
-        as Arc<dyn crate::acp::connection::AgentAvailabilityLookup>;
-    let status_lookup = Arc::new(DbChildStatusLookup { db: db_arc }) as Arc<dyn ChildStatusLookup>;
-    let meta_writer = Arc::new(ConnectionManagerMetaWriter {
-        manager: cm_arc.clone(),
-    }) as Arc<dyn DelegationMetaWriter>;
-    let live_reply_lookup = Arc::new(ConnectionManagerLiveReplyLookup {
-        manager: cm_arc.clone(),
-    }) as Arc<dyn ChildLiveReplyLookup>;
-    let event_emitter = Arc::new(ConnectionManagerEventEmitter { manager: cm_arc })
-        as Arc<dyn DelegationEventEmitter>;
-    let broker = Arc::new(
-        DelegationBroker::with_writers(spawner, depth_lookup, meta_writer, event_emitter)
-            .with_status_lookup(status_lookup)
-            .with_live_reply_lookup(live_reply_lookup),
-    );
     let tokens = Arc::new(TokenRegistry::default());
     let socket_path = default_socket_path(&std::env::temp_dir());
     let feedback = crate::acp::feedback::FeedbackRuntimeConfig::new();
@@ -179,11 +131,9 @@ pub fn build_delegation_stack(
 
     // Install the injection on the manager so spawn_agent picks it up
     // without an extra parameter at every call site.
-    connection_manager.install_delegation(DelegationInjection {
-        broker: broker.clone(),
+    connection_manager.install_codeg_mcp(CodegMcpInjection {
         tokens: tokens.clone(),
         socket_path: socket_path.clone(),
-        agent_availability,
         feedback: feedback.clone(),
         ask: ask.clone(),
         sessions: sessions.clone(),
@@ -202,7 +152,6 @@ pub fn build_delegation_stack(
     });
 
     (
-        broker,
         tokens,
         socket_path,
         feedback,
@@ -232,15 +181,14 @@ impl AppState {
 
         let connection_manager = default_connection_manager();
         let (
-            delegation_broker,
-            delegation_tokens,
-            delegation_socket_path,
+            codeg_mcp_tokens,
+            codeg_mcp_socket_path,
             feedback_config,
             question_config,
             session_info_config,
             session_collaboration_config,
             chat_authoring_config,
-        ) = build_delegation_stack(&connection_manager, db.conn.clone(), data_dir.clone());
+        ) = build_codeg_mcp_stack(&connection_manager);
 
         Self {
             db,
@@ -259,9 +207,8 @@ impl AppState {
                 ),
             ),
             pet_state: crate::pet_state_mapper::new_pet_state_handle(),
-            delegation_broker,
-            delegation_tokens,
-            delegation_socket_path,
+            codeg_mcp_tokens,
+            codeg_mcp_socket_path,
             feedback_config,
             question_config,
             session_info_config,

@@ -615,37 +615,12 @@
     "envVars": "环境变量",
     "hostTools": {
       "label": "由 Agent 自行处理文件与命令",
-      "description": "codeg 不再代为提供文件访问和终端命令，改由 Agent 在自己的进程中执行——只有这样它自带的沙箱与权限规则才会生效。同时会关闭向其他 Agent 委托，否则同样的操作又会绕回 codeg 执行。codeg 本身不提供沙箱，因此请仅在 Agent 已配置沙箱时开启。"
+      "description": "codeg 不再代为提供文件访问和终端命令，改由 Agent 在自己的进程中执行——只有这样它自带的沙箱与权限规则才会生效。codeg 托管的协作与工具通道也会关闭，因为这些能力仍会把执行路由回 codeg。codeg 本身不提供沙箱，因此请仅在 Agent 已配置沙箱时开启。"
     },
     "nativeJsonConfig": "原生 JSON 配置",
     "modelHintDefault": "留空则使用系统默认模型。",
     "generalConfigDescriptionClaude": "支持 API URL、API Key 与 Claude 模型快捷配置，并与原生 JSON 配置联动。",
     "generalConfigDescriptionDefault": "支持重要配置输入（API URL、API Key、Model）和原生 JSON 配置管理。",
-    "multiAgent": {
-      "title": "多智能体协同",
-      "description": "允许活跃的智能体把子任务委托给其他智能体。",
-      "enable": "启用委托",
-      "enableHint": "关闭后，delegate_to_agent 工具会从智能体的 MCP 工具清单中隐藏。",
-      "depthLimit": "最大委托深度",
-      "depthHint": "允许范围：{min}–{max}。限制委托链（根 → 子 → 孙 …）的最大递归深度。",
-      "completedCacheLabel": "已完成结果缓存（MB）",
-      "completedCacheHint": "运行中委托会话已完成子智能体结果的内存缓存，仅在该会话运行期间保留，会话结束后自动清除。超出此预算时优先从内存中丢弃最旧的结果（仍可在子智能体自己的会话中查看）；0 表示不限（会话结束后仍会清除）。",
-      "save": "保存",
-      "saving": "保存中…",
-      "saved": "委托设置已保存",
-      "saveFailed": "委托设置保存失败",
-      "loadFailed": "加载委托设置失败：{detail}",
-      "tabGeneral": "通用",
-      "tabAgentDefaults": "子智能体配置",
-      "agentDefaultsDescription": "多智能体协同在为委托调用启动子智能体时使用这些覆盖项。下方选项通过实时探测获取，所选即所用。",
-      "probing": "正在加载该智能体的可用配置项…",
-      "probeFailed": "加载配置项失败：{detail}",
-      "retry": "重试",
-      "noConfigAvailable": "该智能体没有可配置项。",
-      "modeLabel": "模式",
-      "agentDefaultHint": "智能体默认：{value}",
-      "defaultOptionLabel": "默认（{value}）"
-    },
     "actions": {
       "dragSort": "拖拽排序",
       "dragSortAgent": "拖拽排序 {name}",
@@ -1377,7 +1352,7 @@
     "customAgentSkillsDirLabel": "专属技能目录",
     "customAgentSkillsDirHint": "该智能体自身加载技能的目录绝对路径 —— 可与共享目录并存，也可单独使用。~ 会展开为主目录；链接技能时优先放入此目录。",
     "customAgentMcpLabel": "MCP 支持",
-    "customAgentMcpHint": "会话建立时向该智能体注入 codeg 内置的 codeg-mcp 伴生进程 —— 委托、实时反馈与任务工具都依赖它。若该智能体不支持 MCP、连接时报错，请关闭此项；设置在下次连接时生效。",
+    "customAgentMcpHint": "会话建立时向该智能体注入 codeg 内置的 MCP 伴生进程——Session 协作、实时反馈与任务工具都依赖它。若该智能体不支持 MCP、连接时报错，请关闭此项；设置在下次连接时生效。",
     "customAgentIconNotAnImage": "请选择图片文件。",
     "customAgentIconTooLarge": "图标需小于 {limit} KB。",
     "customAgentIconReadFailed": "无法读取该图片。",
@@ -1394,7 +1369,7 @@
   "GeneralSettings": {
     "loading": "加载中...",
     "sectionTitle": "常规",
-    "sectionDescription": "集中管理默认终端、渲染加速以及多智能体协同等通用偏好。",
+    "sectionDescription": "集中管理默认终端、渲染加速以及会话内工具等通用偏好。",
     "terminalTitle": "默认终端",
     "terminalDescription": "选择从终端栏或文件树打开新终端标签页时使用的 Shell。智能体请求 codeg 代为执行整条命令行时也会使用它。",
     "terminalSystemDefault": "系统默认",
@@ -2951,11 +2926,6 @@
         "openAgentsSettings": "打开 Agents 设置",
         "notInstalled": "未安装"
       },
-      "subAgentOverlay": {
-        "title": "子智能体",
-        "collapsedSummary": "子智能体 {count}",
-        "collapseAria": "折叠子智能体"
-      },
       "agentPlanOverlay": {
         "title": "计划任务",
         "collapsePlanAria": "折叠计划",
@@ -3098,45 +3068,6 @@
         "tool": "工具",
         "error": "错误",
         "result": "结果"
-      },
-      "delegation": {
-        "subAgentRunning": "子智能体运行中…",
-        "noDetail": "暂无详情。",
-        "unknownAgent": "子智能体",
-        "openDetail": "查看会话",
-        "detailTitle": "子智能体会话",
-        "detailDescription": "只读查看委托给子智能体的会话内容。",
-        "waitForResult": "等待 {task} 任务执行结果",
-        "waitForResultNoTask": "等待任务执行结果",
-        "cancelTask": "取消 {task} 任务",
-        "cancelTaskNoTask": "取消任务",
-        "resultPageOf": "{current} / {total}",
-        "prevResult": "上一个结果",
-        "nextResult": "下一个结果",
-        "noResultText": "本次检查暂无结果",
-        "status": {
-          "starting": "启动中",
-          "running": "运行中",
-          "checked": "已查询",
-          "waiting": "待批准",
-          "ok": "完成",
-          "err": {
-            "default": "失败",
-            "delegation_disabled": "已禁用",
-            "depth_limit": "深度超限",
-            "invalid_agent_type": "代理类型无效",
-            "spawn_failed": "启动失败",
-            "send_failed": "发送失败",
-            "timeout": "超时",
-            "canceled": "已取消",
-            "child_refusal": "子代理拒绝",
-            "child_max_tokens": "子代理超出 token 上限",
-            "child_max_turn_requests": "子代理超出请求上限",
-            "child_empty": "子代理无响应",
-            "child_unknown": "子代理未知错误",
-            "unknown": "未知任务"
-          }
-        }
       },
       "contentParts": {
         "showingTailOutput": "为保证性能，流式输出时仅显示尾部内容。",

@@ -615,37 +615,12 @@
     "envVars": "環境變數",
     "hostTools": {
       "label": "由 Agent 自行處理檔案與指令",
-      "description": "codeg 不再代為提供檔案存取與終端指令，改由 Agent 在自己的行程中執行——只有這樣它自帶的沙箱與權限規則才會生效。同時會關閉向其他 Agent 委派，否則同樣的操作又會繞回 codeg 執行。codeg 本身不提供沙箱，因此請僅在 Agent 已設定沙箱時開啟。"
+      "description": "codeg 不再代為提供檔案存取與終端指令，改由 Agent 在自己的行程中執行——只有這樣它自帶的沙箱與權限規則才會生效。codeg 託管的協作與工具通道也會關閉，因為這些能力仍會把執行路由回 codeg。codeg 本身不提供沙箱，因此請僅在 Agent 已設定沙箱時開啟。"
     },
     "nativeJsonConfig": "原生 JSON 配置",
     "modelHintDefault": "留空則使用系統預設模型。",
     "generalConfigDescriptionClaude": "支援 API URL、API Key 與 Claude 模型快捷配置，並與原生 JSON 配置聯動。",
     "generalConfigDescriptionDefault": "支援重要配置輸入（API URL、API Key、Model）和原生 JSON 配置管理。",
-    "multiAgent": {
-      "title": "多智慧體協同",
-      "description": "允許活躍的智慧體將子任務委派給其他智慧體。",
-      "enable": "啟用委派",
-      "enableHint": "關閉後，delegate_to_agent 工具會從智慧體的 MCP 工具清單中隱藏。",
-      "depthLimit": "最大委派深度",
-      "depthHint": "允許範圍：{min}–{max}。限制委派鏈（根 → 子 → 孫 …）的最大遞迴深度。",
-      "completedCacheLabel": "已完成結果快取（MB）",
-      "completedCacheHint": "執行中委派工作階段已完成子代理結果的記憶體快取，僅在該工作階段執行期間保留，工作階段結束後自動清除。超出此預算時優先從記憶體中捨棄最舊的結果（仍可在子代理自己的工作階段中檢視）；0 表示不限（工作階段結束後仍會清除）。",
-      "save": "儲存",
-      "saving": "儲存中…",
-      "saved": "委派設定已儲存",
-      "saveFailed": "委派設定儲存失敗",
-      "loadFailed": "載入委派設定失敗：{detail}",
-      "tabGeneral": "一般",
-      "tabAgentDefaults": "子智慧體設定",
-      "agentDefaultsDescription": "多智慧體協同在為委派呼叫啟動子智慧體時使用這些覆寫項。下方選項透過即時探測取得，所選即所用。",
-      "probing": "正在載入該智慧體的可用設定項…",
-      "probeFailed": "載入設定項失敗：{detail}",
-      "retry": "重試",
-      "noConfigAvailable": "該智慧體沒有可設定項。",
-      "modeLabel": "模式",
-      "agentDefaultHint": "智慧體預設：{value}",
-      "defaultOptionLabel": "預設（{value}）"
-    },
     "actions": {
       "dragSort": "拖拽排序",
       "dragSortAgent": "拖拽排序 {name}",
@@ -1377,7 +1352,7 @@
     "customAgentSkillsDirLabel": "專屬技能目錄",
     "customAgentSkillsDirHint": "該智慧體自身載入技能的目錄絕對路徑 —— 可與共享目錄並存，也可單獨使用。~ 會展開為主目錄；連結技能時優先放入此目錄。",
     "customAgentMcpLabel": "MCP 支援",
-    "customAgentMcpHint": "工作階段建立時向該智慧體注入 codeg 內建的 codeg-mcp 伴生行程 —— 委派、即時回饋與任務工具都依賴它。若該智慧體不支援 MCP、連線時報錯，請關閉此項；設定會在下次連線時生效。",
+    "customAgentMcpHint": "工作階段建立時向此 Agent 注入 codeg 內建的 MCP 伴生程序——Session 協作、即時回饋與任務工具都依賴它。若此 Agent 不支援 MCP、連線時發生錯誤，請關閉此項；設定會在下次連線時生效。",
     "customAgentIconNotAnImage": "請選擇圖片檔案。",
     "customAgentIconTooLarge": "圖示需小於 {limit} KB。",
     "customAgentIconReadFailed": "無法讀取該圖片。",
@@ -1394,7 +1369,7 @@
   "GeneralSettings": {
     "loading": "載入中...",
     "sectionTitle": "一般",
-    "sectionDescription": "集中管理預設終端機、渲染加速以及多智能體協同等通用偏好。",
+    "sectionDescription": "集中管理預設終端機、渲染加速以及會話內工具等通用偏好。",
     "terminalTitle": "預設終端",
     "terminalDescription": "選擇從終端列或檔案樹開啟新終端分頁時使用的 Shell。智慧代理請求 codeg 代為執行整條命令列時也會使用它。",
     "terminalSystemDefault": "系統預設",
@@ -2951,11 +2926,6 @@
         "openAgentsSettings": "開啟 Agents 設定",
         "notInstalled": "未安裝"
       },
-      "subAgentOverlay": {
-        "title": "子智能體",
-        "collapsedSummary": "子智能體 {count}",
-        "collapseAria": "摺疊子智能體"
-      },
       "agentPlanOverlay": {
         "title": "計畫任務",
         "collapsePlanAria": "摺疊計畫",
@@ -3098,45 +3068,6 @@
         "tool": "工具",
         "error": "錯誤",
         "result": "結果"
-      },
-      "delegation": {
-        "subAgentRunning": "子代理執行中…",
-        "noDetail": "暫無詳情。",
-        "unknownAgent": "子智慧體",
-        "openDetail": "檢視會話",
-        "detailTitle": "子智慧體會話",
-        "detailDescription": "唯讀檢視委派給子智慧體的會話內容。",
-        "waitForResult": "等待 {task} 任務執行結果",
-        "waitForResultNoTask": "等待任務執行結果",
-        "cancelTask": "取消 {task} 任務",
-        "cancelTaskNoTask": "取消任務",
-        "resultPageOf": "{current} / {total}",
-        "prevResult": "上一個結果",
-        "nextResult": "下一個結果",
-        "noResultText": "本次檢查暫無結果",
-        "status": {
-          "starting": "啟動中",
-          "running": "執行中",
-          "checked": "已查詢",
-          "waiting": "待批准",
-          "ok": "完成",
-          "err": {
-            "default": "失敗",
-            "delegation_disabled": "已停用",
-            "depth_limit": "深度超限",
-            "invalid_agent_type": "代理類型無效",
-            "spawn_failed": "啟動失敗",
-            "send_failed": "傳送失敗",
-            "timeout": "逾時",
-            "canceled": "已取消",
-            "child_refusal": "子代理拒絕",
-            "child_max_tokens": "子代理超出 token 上限",
-            "child_max_turn_requests": "子代理超出請求上限",
-            "child_empty": "子代理無回應",
-            "child_unknown": "子代理未知錯誤",
-            "unknown": "未知任務"
-          }
-        }
       },
       "contentParts": {
         "showingTailOutput": "為確保效能，串流輸出時僅顯示尾端內容。",

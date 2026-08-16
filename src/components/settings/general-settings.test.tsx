@@ -118,14 +118,12 @@ describe("GeneralSettings", () => {
       "Disable hardware acceleration",
       "Warm Session cache",
       "Notification sounds",
-      "Multi-Agent Collaboration",
       "In-conversation tools",
     ]) {
       expect(screen.getByRole("heading", { name: heading })).toBeInTheDocument()
     }
 
     // Sibling toggles keep their label association through SettingRow.
-    expect(screen.getByLabelText("Enable delegation")).toBeInTheDocument()
     expect(screen.getByLabelText("Live Feedback")).toBeInTheDocument()
     expect(screen.getByLabelText("Ask user question")).toBeInTheDocument()
     expect(screen.getByLabelText("Get session info")).toBeInTheDocument()

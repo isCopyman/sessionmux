@@ -170,7 +170,6 @@ pub async fn acp_prompt(
             params.blocks,
             params.folder_id,
             params.conversation_id,
-            None,
             params.client_message_id,
         )
         .await

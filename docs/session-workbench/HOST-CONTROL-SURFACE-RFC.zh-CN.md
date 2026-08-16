@@ -35,19 +35,20 @@ Host command bus/API 是唯一能力实现和事实源；GUI 与 MCP 都不能�
 或审计逻辑。受管 Session 的正式 Agent 控制路径只有“Skill + Codeg 自有渐进式 MCP”。本文提到的
 第三方 CLI 仅是竞品事实，不构成 Codeg 的产品要求。
 
-## 2. Delegation 三工具已授权直接移除
+## 2. Delegation 三工具已移除
 
 完整源码链路、文件清单、删除边界与分阶段迁移见
 [`delegate_to_agent` 子系统源码审计与 Session 化方案](./DELEGATION-SUBSYSTEM-AUDIT.zh-CN.md)。本节只
 保留 Host 产品边界，不重复维护实现清单。
 
-Codeg 当前 `delegate_to_agent` 的真实行为是：创建一个全新的 ACP 子 Session，注入一条自包含
-任务，异步运行，保存父子关系，再由父 Session 查询或等待结果。当前工具 Schema 也明确说明子
-Session 冷启动、不能看到父对话，适合独立任务而不适合持续往返：
+删除前 `delegate_to_agent` 的真实行为是：创建一个全新的 ACP 子 Session，注入一条自包含任务，
+异步运行，保存父子关系，再由父 Session 查询或等待结果。历史工具 Schema 也明确说明子 Session
+冷启动、不能看到父对话，适合独立任务而不适合持续往返。完整证据保留在审计文档中；下列路径中
+的专属 engine 文件已随 Removal 删除：
 
-- [`tool_schema.json`](../../src-tauri/src/acp/delegation/tool_schema.json)
-- [`ConnectionSpawner`](../../src-tauri/src/acp/delegation/spawner.rs)
-- [`conversation.parent_id` 子会话查询](../../src-tauri/src/db/service/conversation_service.rs)
+- 保留下来的 `src-tauri/src/acp/delegation/tool_schema.json` 历史版本；
+- 已删除的 `src-tauri/src/acp/delegation/spawner.rs` 与 `ConnectionSpawner`；
+- [`conversation.parent_id` 子会话查询](../../src-tauri/src/db/service/conversation_service.rs)。
 
 因此它不是另一种与 Session 无关的 Agent 对象，而可以分解为：
 
@@ -65,13 +66,13 @@ delegate_to_agent(task, agent_type, cwd)
 父会话只能等结果，第一轮不满意时又缺少自然的后续往返。它不应成为 Codeg 未来协作体系的主入口，
 也不值得为它继续建设第二套独立的 Session UI。
 
-三个旧工具 `delegate_to_agent`、`get_delegation_status`、`cancel_delegation` 已授权在独立批次直接
-删除，不保留 compatibility toggle、task_id wire 协议或等价替代前置条件。删除以后 Agent 暂时
+三个旧工具 `delegate_to_agent`、`get_delegation_status`、`cancel_delegation` 已在独立批次直接
+删除，没有 compatibility toggle、task_id wire 协议或等价替代前置条件。删除以后 Agent 暂时
 不能主动创建 Session，是已接受的开发期缺口；新功能不得再依赖 delegation `task_id`。
 
-但这不等于现有实现全部无用。鉴权、MCP companion、ACP 启动、异步状态、取消、父子绑定、
-持久化、阻塞提示和结果投影都属于可复用基础设施。应当保留这些能力，把 delegation 的专用产品层
-压薄，并让底层逐步服务普通的 `create/resume/send/wait` Session 原语。
+删除没有带走共享基础设施。鉴权、MCP companion、ACP 启动、普通 MCP 取消、持久 Session、
+`list_sessions/send_message` 和通用 Tool Call 投影仍由中性的 Host bridge 承载。后续直接让这些
+底层服务普通的 `create/resume/send` Session 原语，不恢复 delegation 专用产品层。
 
 需要调整的是产品边界：
 

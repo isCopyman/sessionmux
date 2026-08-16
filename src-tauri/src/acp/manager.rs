@@ -16,8 +16,8 @@ use crate::acp::connection::{
 };
 use crate::acp::error::AcpError;
 use crate::acp::feedback::{
-    bounded_feedback_batch, FeedbackItem, FeedbackStatus, PendingFeedback,
-    SessionFeedbackAccess, MAX_FEEDBACK_CHARS, MAX_FEEDBACK_RESPONSE_BYTES,
+    bounded_feedback_batch, FeedbackItem, FeedbackStatus, PendingFeedback, SessionFeedbackAccess,
+    MAX_FEEDBACK_CHARS, MAX_FEEDBACK_RESPONSE_BYTES,
 };
 use crate::acp::plan_approval::{
     PlanApprovalAnswer, RegisteredPlanApproval, SessionPlanApprovalAccess,
@@ -104,34 +104,6 @@ fn publish_collaboration_change(emitter: &EventEmitter, conversation_ids: Vec<i3
         COLLABORATION_CHANGED_EVENT,
         CollaborationChanged { conversation_ids },
     );
-}
-
-/// Seed title for a freshly-created delegation child row, derived from the
-/// delegating prompt's text blocks (the sub-agent's task). Uses the parser's own
-/// `title_from_user_text` (folds reference links, caps at 100 chars) so the value
-/// matches what `refresh_auto_title` would later compute from that same first
-/// turn — the conditional UPDATE then sees no change and doesn't churn. Returns
-/// `None` for a textless prompt, leaving the title unset to be backfilled on
-/// first detail load as before. Kept unlocked by the caller so an AI-generated
-/// title can still replace it later.
-fn delegation_child_title_seed(blocks: &[PromptInputBlock]) -> Option<String> {
-    let joined = blocks
-        .iter()
-        .filter_map(|b| match b {
-            PromptInputBlock::Text { text } => {
-                let t = text.trim();
-                (!t.is_empty()).then_some(t)
-            }
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join(" ");
-    let trimmed = joined.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(crate::parsers::title_from_user_text(trimmed))
-    }
 }
 
 /// Composite key identifying a logical agent session for spawn-time dedup.
@@ -223,12 +195,12 @@ pub struct ConnectionManager {
     /// model sessions as well as newly spawned ones.
     terminal_shell_config: TerminalShellRuntimeConfig,
     /// Delegation broker + token registry + UDS path installed during app
-    /// bootstrap (`install_delegation`). When present, `spawn_agent` propagates
+    /// bootstrap (`install_codeg_mcp`). When present, `spawn_agent` propagates
     /// the injection to `spawn_agent_connection`, which makes
     /// `codeg-mcp` appear in the agent's MCP server list during ACP
     /// init. `Arc<OnceLock>` so the inner `Self` cloned from `clone_ref` sees
     /// the install too — the lock is set once at startup and never mutated.
-    delegation_injection: Arc<std::sync::OnceLock<crate::acp::connection::DelegationInjection>>,
+    codeg_mcp_injection: Arc<std::sync::OnceLock<crate::acp::connection::CodegMcpInjection>>,
     /// Per-agent-type serialization for `probe_agent_options`. Without
     /// this, rapid agent-tab clicks in the settings UI would fan out one
     /// real CLI process per click — each one running up to 60s. The
@@ -284,7 +256,7 @@ impl ConnectionManager {
             spawn_locks: Arc::new(Mutex::new(HashMap::new())),
             spawn_handshake_timeout: spawn_handshake_timeout_from_env(),
             terminal_shell_config: TerminalShellRuntimeConfig::new(),
-            delegation_injection: Arc::new(std::sync::OnceLock::new()),
+            codeg_mcp_injection: Arc::new(std::sync::OnceLock::new()),
             probe_locks: Arc::new(Mutex::new(HashMap::new())),
             pending_questions: Arc::new(Mutex::new(HashMap::new())),
             pending_plan_approvals: Arc::new(Mutex::new(HashMap::new())),
@@ -298,7 +270,7 @@ impl ConnectionManager {
             spawn_locks: self.spawn_locks.clone(),
             spawn_handshake_timeout: self.spawn_handshake_timeout,
             terminal_shell_config: self.terminal_shell_config.clone(),
-            delegation_injection: self.delegation_injection.clone(),
+            codeg_mcp_injection: self.codeg_mcp_injection.clone(),
             probe_locks: self.probe_locks.clone(),
             pending_questions: self.pending_questions.clone(),
             pending_plan_approvals: self.pending_plan_approvals.clone(),
@@ -308,12 +280,12 @@ impl ConnectionManager {
     /// Set the delegation injection context exactly once during bootstrap.
     /// Calling twice is a no-op — protects against accidental re-init in
     /// the unlikely event a second `build_delegation_stack` runs.
-    pub fn install_delegation(&self, injection: crate::acp::connection::DelegationInjection) {
-        let _ = self.delegation_injection.set(injection);
+    pub fn install_codeg_mcp(&self, injection: crate::acp::connection::CodegMcpInjection) {
+        let _ = self.codeg_mcp_injection.set(injection);
     }
 
-    fn delegation_snapshot(&self) -> Option<crate::acp::connection::DelegationInjection> {
-        self.delegation_injection.get().cloned()
+    fn codeg_mcp_snapshot(&self) -> Option<crate::acp::connection::CodegMcpInjection> {
+        self.codeg_mcp_injection.get().cloned()
     }
 
     /// Returns the shared terminal-shell setting consumed by ACP terminal
@@ -332,7 +304,7 @@ impl ConnectionManager {
             spawn_locks: Arc::new(Mutex::new(HashMap::new())),
             spawn_handshake_timeout: timeout,
             terminal_shell_config: TerminalShellRuntimeConfig::new(),
-            delegation_injection: Arc::new(std::sync::OnceLock::new()),
+            codeg_mcp_injection: Arc::new(std::sync::OnceLock::new()),
             probe_locks: Arc::new(Mutex::new(HashMap::new())),
             pending_questions: Arc::new(Mutex::new(HashMap::new())),
             pending_plan_approvals: Arc::new(Mutex::new(HashMap::new())),
@@ -490,7 +462,9 @@ impl ConnectionManager {
         let connection_id = uuid::Uuid::new_v4().to_string();
         tracing::info!(
             "[ACP] spawning connection id={} owner_window={} agent={:?}",
-            connection_id, owner_window_label, agent_type
+            connection_id,
+            owner_window_label,
+            agent_type
         );
 
         // `spawn_agent_connection` inserts the entry into `self.connections`,
@@ -508,7 +482,7 @@ impl ConnectionManager {
             self.connections.clone(),
             preferred_mode_id,
             preferred_config_values,
-            self.delegation_snapshot(),
+            self.codeg_mcp_snapshot(),
             self.terminal_shell_config.clone(),
         )
         .await?;
@@ -659,7 +633,12 @@ impl ConnectionManager {
             }
         }
         for (state, emitter, stale) in targets {
-            emit_with_state(&state, &emitter, AcpEvent::SessionConfigStale { stale, kind }).await;
+            emit_with_state(
+                &state,
+                &emitter,
+                AcpEvent::SessionConfigStale { stale, kind },
+            )
+            .await;
         }
         stale_count
     }
@@ -914,7 +893,6 @@ impl ConnectionManager {
         blocks: Vec<PromptInputBlock>,
         folder_id: Option<i32>,
         conversation_id: Option<i32>,
-        delegation: Option<crate::acp::delegation::spawner::DelegationLink>,
     ) -> Result<Option<i32>, AcpError> {
         self.send_prompt_linked_with_message_id(
             db,
@@ -922,7 +900,6 @@ impl ConnectionManager {
             blocks,
             folder_id,
             conversation_id,
-            delegation,
             None,
         )
         .await
@@ -944,7 +921,6 @@ impl ConnectionManager {
         mut blocks: Vec<PromptInputBlock>,
         folder_id: Option<i32>,
         conversation_id: Option<i32>,
-        delegation: Option<crate::acp::delegation::spawner::DelegationLink>,
         client_message_id: Option<String>,
     ) -> Result<Option<i32>, AcpError> {
         // Reject an empty prompt up front, BEFORE any side effects: linking /
@@ -966,16 +942,6 @@ impl ConnectionManager {
                 "conversation_id provided without folder_id".to_string(),
             ));
         }
-        // Delegation is only meaningful on the create-new-row branch — adopting
-        // an existing caller-supplied row already has its own (or no) parent
-        // linkage. Reject the combination loudly so a misuse from the broker
-        // doesn't silently drop the linkage.
-        if delegation.is_some() && conversation_id.is_some() {
-            return Err(AcpError::protocol(
-                "delegation link is incompatible with caller-supplied conversation_id".to_string(),
-            ));
-        }
-
         // Acquire the per-connection prompt lock for the entire link-check
         // + DB write + emit + cmd_tx.send sequence. Two concurrent prompts
         // (multiple browser tabs of the same conversation; chat-channel
@@ -1002,7 +968,11 @@ impl ConnectionManager {
                 .ok_or_else(|| AcpError::ConnectionNotFound(conn_id.into()))?;
             let (already, linked_id, in_flight) = {
                 let s = conn.state.read().await;
-                (s.conversation_id.is_some(), s.conversation_id, s.turn_in_flight)
+                (
+                    s.conversation_id.is_some(),
+                    s.conversation_id,
+                    s.turn_in_flight,
+                )
             };
             (
                 conn.state.clone(),
@@ -1087,41 +1057,18 @@ impl ConnectionManager {
                 // silent fallback to working_dir-based find-or-create masked
                 // contract violations.
                 (None, Some(folder_id)) => {
-                    // Snapshot the delegation link before move-into-create: we
-                    // still need the parent ids for the ConversationLinked
-                    // event payload.
-                    let parent_conversation_id_for_event =
-                        delegation.as_ref().map(|d| d.parent_conversation_id);
-                    let parent_tool_use_id_for_event =
-                        delegation.as_ref().map(|d| d.parent_tool_use_id.clone());
-                    // Seed a delegation child's title from the task prompt so the
-                    // sidebar shows a meaningful label immediately. `list_children`
-                    // returns the raw DB title, so a child born with NULL reads
-                    // "Untitled" until the first detail load backfills it. Roots
-                    // (no delegation) keep `None` and follow the existing backfill.
-                    let seed_title = if delegation.is_some() {
-                        delegation_child_title_seed(&blocks)
-                    } else {
-                        None
-                    };
-                    let row = conversation_service::create_with_delegation(
-                        &db.conn,
-                        folder_id,
-                        agent_type,
-                        seed_title,
-                        None,
-                        delegation.clone(),
-                    )
-                    .await
-                    .map_err(|e| AcpError::protocol(e.to_string()))?;
+                    let row =
+                        conversation_service::create(&db.conn, folder_id, agent_type, None, None)
+                            .await
+                            .map_err(|e| AcpError::protocol(e.to_string()))?;
                     emit_with_state(
                         &state_arc,
                         &emitter,
                         AcpEvent::ConversationLinked {
                             conversation_id: row.id,
                             folder_id,
-                            parent_conversation_id: parent_conversation_id_for_event,
-                            parent_tool_use_id: parent_tool_use_id_for_event,
+                            parent_conversation_id: None,
+                            parent_tool_use_id: None,
                         },
                     )
                     .await;
@@ -1137,19 +1084,6 @@ impl ConnectionManager {
                         &emitter, &db.conn, row.id,
                     )
                     .await;
-                    // A new delegation child changes its parent's child_count
-                    // (0 → >0 makes the parent's expand chevron appear). Re-emit
-                    // the parent so every client converges its count from the
-                    // authoritative DB aggregate rather than a drift-prone
-                    // per-client increment. The parent may itself be a root or a
-                    // nested child — the upsert routes correctly either way by its
-                    // own parent_id.
-                    if let Some(parent_id) = parent_conversation_id_for_event {
-                        crate::commands::conversations::emit_conversation_upsert(
-                            &emitter, &db.conn, parent_id,
-                        )
-                        .await;
-                    }
                 }
                 (None, None) => {
                     return Err(AcpError::protocol(
@@ -1201,7 +1135,7 @@ impl ConnectionManager {
         // the same status value, so re-writing `InProgress` is a benign no-op
         // on the row (touches `updated_at` only).
         let conversation_id_for_status = state_arc.read().await.conversation_id;
-        let viewer_message_id = if delegation.is_none() && conversation_id_for_status.is_some() {
+        let viewer_message_id = if conversation_id_for_status.is_some() {
             Some(match client_message_id.as_deref() {
                 Some(id) if !is_reserved_turn_id(id) => id.to_string(),
                 _ => format!("user-{}-{}", conn_id, state_arc.read().await.event_seq),
@@ -1249,7 +1183,7 @@ impl ConnectionManager {
         // message starts the next ordinary turn. An invoke_when_idle queue item
         // is excluded transactionally by the collaboration service so its
         // reply obligation cannot become ambiguous.
-        let claimed_store_only = if delegation.is_none() && client_message_id.is_some() {
+        let claimed_store_only = if client_message_id.is_some() {
             match (conversation_id_for_status, viewer_message_id.as_deref()) {
                 (Some(cid), Some(turn_ref)) => {
                     match collaboration_service::claim_pending_store_only_for_turn(
@@ -1289,11 +1223,7 @@ impl ConnectionManager {
         // (`delegation.is_none()`): delegation / sub-agent prompts are not user
         // messages. Emitted after the send succeeds (below) so a prompt that
         // never reached the agent produces no "user message" notification.
-        let user_prompt_preview = if delegation.is_none() {
-            user_prompt_text_preview(&visible_user_blocks)
-        } else {
-            None
-        };
+        let user_prompt_preview = user_prompt_text_preview(&visible_user_blocks);
 
         // Project the user's prompt blocks for the cross-client viewer
         // broadcast BEFORE `send_prompt_inner` consumes `blocks`, and hand the
@@ -1307,7 +1237,7 @@ impl ConnectionManager {
         // `message_id` prefers the sender's client-supplied id (exact echo
         // dedup), falling back to a connection-scoped id for non-UI senders.
         let user_message: Option<(String, Vec<crate::acp::UserMessageBlock>)> =
-            if delegation.is_none() && conversation_id_for_status.is_some() {
+            if conversation_id_for_status.is_some() {
                 let user_blocks = crate::acp::user_blocks_from_prompt(&visible_user_blocks);
                 if user_blocks.is_empty() {
                     None
@@ -1752,7 +1682,9 @@ impl ConnectionManager {
             // Surface failures even when the caller is gone (the detached task's
             // Result would otherwise be dropped silently).
             if let Err(ref e) = outcome {
-                tracing::error!("[ACP][ERROR] fork persistence failed (conn={conn_id_for_task}): {e}");
+                tracing::error!(
+                    "[ACP][ERROR] fork persistence failed (conn={conn_id_for_task}): {e}"
+                );
             }
             outcome
         });
@@ -2087,13 +2019,7 @@ impl ConnectionManager {
         let grace_period = Duration::from_millis(500);
         let mut selectors_ready_at: Option<std::time::Instant> = None;
         loop {
-            let (
-                config_options,
-                modes,
-                available_commands,
-                prompt_capabilities,
-                selectors_ready,
-            ) = {
+            let (config_options, modes, available_commands, prompt_capabilities, selectors_ready) = {
                 let conns = self.connections.lock().await;
                 let conn = conns
                     .get(conn_id)
@@ -2156,7 +2082,8 @@ impl ConnectionManager {
         }
         tracing::info!(
             "[ACP] disconnect by owner window owner_window={} count={}",
-            owner_window_label, disconnected
+            owner_window_label,
+            disconnected
         );
         disconnected
     }
@@ -2286,8 +2213,7 @@ impl ConnectionManager {
         let mut out = Vec::new();
         for (id, conn) in connections.iter() {
             let state = conn.state.read().await;
-            let (Some(conversation_id), Some(folder_id)) =
-                (state.conversation_id, state.folder_id)
+            let (Some(conversation_id), Some(folder_id)) = (state.conversation_id, state.folder_id)
             else {
                 continue;
             };
@@ -2452,11 +2378,8 @@ impl ConnectionManager {
             return Self::submit_feedback_native(conn_id, state, cmd_tx, emitter, text).await;
         }
 
-        let item = FeedbackItem::new_pending(
-            uuid::Uuid::new_v4().to_string(),
-            text,
-            chrono::Utc::now(),
-        );
+        let item =
+            FeedbackItem::new_pending(uuid::Uuid::new_v4().to_string(), text, chrono::Utc::now());
         // Gate on `turn_in_flight` and append in ONE critical section (via the
         // gated emit): a `TurnComplete` (flips the flag) or `UserMessage`
         // (clears `feedback`) can't slip between the gate and the append+seq, so
@@ -2564,9 +2487,9 @@ impl ConnectionManager {
                     })
                     .await
                     .map_err(|_| AcpError::ProcessExited)?;
-                let steer = reply_rx.await.map_err(|_| {
-                    AcpError::protocol("Steer reply channel closed".to_string())
-                })??;
+                let steer = reply_rx
+                    .await
+                    .map_err(|_| AcpError::protocol("Steer reply channel closed".to_string()))??;
                 match steer {
                     // Honored opt-in: the content was NOT consumed and is
                     // still host-owned. Surface the frontend's existing
@@ -2787,7 +2710,12 @@ impl ConnectionManager {
         state: &std::sync::Arc<tokio::sync::RwLock<crate::acp::SessionState>>,
         emitter: &EventEmitter,
     ) -> bool {
-        if self.pending_questions.lock().await.contains_key(question_id) {
+        if self
+            .pending_questions
+            .lock()
+            .await
+            .contains_key(question_id)
+        {
             return false;
         }
         emit_with_state(
@@ -2825,7 +2753,9 @@ impl ConnectionManager {
         // (peer-close) at the same instant; the resolved-event below still clears
         // the card.
         let _ = entry.sender.send(outcome);
-        if let Some((state, emitter)) = self.get_state_and_emitter(&entry.parent_connection_id).await
+        if let Some((state, emitter)) = self
+            .get_state_and_emitter(&entry.parent_connection_id)
+            .await
         {
             emit_with_state(
                 &state,
@@ -2850,7 +2780,9 @@ impl ConnectionManager {
         let Some(entry) = removed else {
             return;
         };
-        if let Some((state, emitter)) = self.get_state_and_emitter(&entry.parent_connection_id).await
+        if let Some((state, emitter)) = self
+            .get_state_and_emitter(&entry.parent_connection_id)
+            .await
         {
             emit_with_state(
                 &state,
@@ -2971,7 +2903,12 @@ impl ConnectionManager {
         state: &std::sync::Arc<tokio::sync::RwLock<crate::acp::SessionState>>,
         emitter: &EventEmitter,
     ) -> bool {
-        if self.pending_plan_approvals.lock().await.contains_key(approval_id) {
+        if self
+            .pending_plan_approvals
+            .lock()
+            .await
+            .contains_key(approval_id)
+        {
             return false;
         }
         emit_with_state(
@@ -3008,8 +2945,9 @@ impl ConnectionManager {
         // (teardown) at the same instant; the resolved event below still clears
         // the card.
         let _ = entry.sender.send(answer);
-        if let Some((state, emitter)) =
-            self.get_state_and_emitter(&entry.parent_connection_id).await
+        if let Some((state, emitter)) = self
+            .get_state_and_emitter(&entry.parent_connection_id)
+            .await
         {
             emit_with_state(
                 &state,
@@ -3048,8 +2986,12 @@ impl ConnectionManager {
         // (disconnect removes it before this sweep), so tolerate `None`.
         if let Some((state, emitter)) = self.get_state_and_emitter(conn_id).await {
             for approval_id in drained {
-                emit_with_state(&state, &emitter, AcpEvent::PlanApprovalResolved { approval_id })
-                    .await;
+                emit_with_state(
+                    &state,
+                    &emitter,
+                    AcpEvent::PlanApprovalResolved { approval_id },
+                )
+                .await;
             }
         }
     }
@@ -3137,159 +3079,6 @@ impl ConnectionManager {
     }
 }
 
-/// Production impl of `ConnectionSpawner` used by `DelegationBroker`.
-///
-/// Bundles `Arc<ConnectionManager>` with `Arc<AppDatabase>` because
-/// `cancel` writes the cancelled status onto the conversation row, which
-/// happens inside `ConnectionManager::cancel`. The wrapper exists so the
-/// broker can depend on a small `dyn`-able interface instead of pulling
-/// in the full `AppState` graph.
-///
-/// `data_dir` is required so `spawn` can build a runtime env that
-/// includes the git credential helper — without it, delegated subagents
-/// fail any git command that depends on the codeg-injected helper.
-#[derive(Clone)]
-pub struct ConnectionManagerSpawner {
-    pub manager: Arc<ConnectionManager>,
-    pub db: Arc<AppDatabase>,
-    pub data_dir: Arc<PathBuf>,
-}
-
-#[async_trait::async_trait]
-impl crate::acp::delegation::spawner::ConnectionSpawner for ConnectionManagerSpawner {
-    async fn spawn(
-        &self,
-        parent_connection_id: &str,
-        agent_type: AgentType,
-        working_dir: Option<String>,
-        preferred_mode_id: Option<String>,
-        preferred_config_values: BTreeMap<String, String>,
-    ) -> Result<String, crate::acp::delegation::spawner::SpawnerError> {
-        use crate::acp::delegation::spawner::SpawnerError;
-        // Resolve the parent connection so we can inherit its emitter and
-        // owner_window. Falling back is not safe: a child whose emitter is
-        // wired to a different broadcaster would emit events the frontend
-        // never sees.
-        let (emitter, owner_window, parent_working_dir) = {
-            let conns = self.manager.connections.lock().await;
-            let parent = conns.get(parent_connection_id).ok_or_else(|| {
-                SpawnerError::Spawn(format!(
-                    "parent connection {parent_connection_id} not found"
-                ))
-            })?;
-            let pwd = {
-                let s = parent.state.read().await;
-                s.working_dir
-                    .as_ref()
-                    .map(|p| p.to_string_lossy().to_string())
-            };
-            (
-                parent.emitter.clone(),
-                parent.owner_window_label.clone(),
-                pwd,
-            )
-        };
-        let effective_working_dir = working_dir.or(parent_working_dir);
-
-        // Build the same runtime env `acp_connect` would build for a
-        // user-initiated session — disabled check, settings overrides,
-        // model provider creds, git helper. Without this, delegated
-        // subagents would skip the user's configuration entirely.
-        let runtime_env = crate::commands::acp::build_session_runtime_env(
-            &self.db,
-            agent_type,
-            None,
-            self.data_dir.as_path(),
-        )
-        .await
-        .map_err(|e| SpawnerError::Spawn(e.to_string()))?;
-
-        self.manager
-            .spawn_agent(
-                agent_type,
-                effective_working_dir,
-                None,
-                runtime_env,
-                owner_window,
-                emitter,
-                preferred_mode_id,
-                preferred_config_values,
-            )
-            .await
-            .map_err(|e| SpawnerError::Spawn(e.to_string()))
-    }
-
-    async fn send_prompt_linked_for_delegation(
-        &self,
-        conn_id: &str,
-        task: String,
-        link: crate::acp::delegation::spawner::DelegationLink,
-    ) -> Result<i32, crate::acp::delegation::spawner::SpawnerError> {
-        use crate::acp::delegation::spawner::SpawnerError;
-        // The child has no caller-supplied conversation_id (it's brand new).
-        // folder_id must be None too — the manager's create-new-row branch
-        // requires folder_id, which we resolve from the child's working_dir
-        // via folder_service. Do that lookup here so the trait stays small.
-        let working_dir_pathbuf = {
-            let conns = self.manager.connections.lock().await;
-            let conn = conns
-                .get(conn_id)
-                .ok_or_else(|| SpawnerError::Send(format!("child {conn_id} not found")))?;
-            let s = conn.state.read().await;
-            s.working_dir.clone()
-        };
-        let folder_path = working_dir_pathbuf
-            .ok_or_else(|| {
-                SpawnerError::Send(
-                    "child connection has no working_dir; cannot derive folder_id".into(),
-                )
-            })?
-            .to_string_lossy()
-            .to_string();
-        let folder = crate::db::service::folder_service::add_folder(&self.db.conn, &folder_path)
-            .await
-            .map_err(|e| SpawnerError::Send(format!("add_folder: {e}")))?;
-
-        let result = self
-            .manager
-            .send_prompt_linked(
-                &self.db,
-                conn_id,
-                vec![PromptInputBlock::Text { text: task }],
-                Some(folder.id),
-                None,
-                Some(link),
-            )
-            .await
-            .map_err(|e| SpawnerError::Send(e.to_string()))?;
-        result.ok_or_else(|| {
-            SpawnerError::Send(
-                "send_prompt_linked succeeded but no conversation_id was bound".into(),
-            )
-        })
-    }
-
-    async fn cancel(
-        &self,
-        conn_id: &str,
-    ) -> Result<(), crate::acp::delegation::spawner::SpawnerError> {
-        self.manager
-            .cancel(&self.db.conn, conn_id)
-            .await
-            .map_err(|e| crate::acp::delegation::spawner::SpawnerError::Cancel(e.to_string()))
-    }
-
-    async fn disconnect(
-        &self,
-        conn_id: &str,
-    ) -> Result<(), crate::acp::delegation::spawner::SpawnerError> {
-        self.manager
-            .disconnect(conn_id)
-            .await
-            .map_err(|e| crate::acp::delegation::spawner::SpawnerError::Disconnect(e.to_string()))
-    }
-}
-
 /// Production impl of `ParentSessionLookup` for the delegation listener.
 /// Resolves the parent's current `conversation_id` by reading its
 /// `SessionState`. Bundled with `ConnectionManagerSpawner` here so the
@@ -3321,10 +3110,7 @@ pub struct ConnectionManagerFeedbackLookup {
 
 #[async_trait::async_trait]
 impl SessionFeedbackAccess for ConnectionManagerFeedbackLookup {
-    async fn read_pending_feedback(
-        &self,
-        parent_connection_id: &str,
-    ) -> Vec<PendingFeedback> {
+    async fn read_pending_feedback(&self, parent_connection_id: &str) -> Vec<PendingFeedback> {
         self.manager
             .read_pending_feedback(parent_connection_id)
             .await
@@ -3466,7 +3252,10 @@ mod tests {
     async fn spawn_process_tree(pidfile: &std::path::Path) -> (std::process::Child, i32) {
         let mut child = std::process::Command::new("sh")
             .arg("-c")
-            .arg(format!("sleep 30 & echo $! > '{}'; wait", pidfile.display()))
+            .arg(format!(
+                "sleep 30 & echo $! > '{}'; wait",
+                pidfile.display()
+            ))
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -3817,7 +3606,6 @@ mod tests {
                 }],
                 Some(folder_id),
                 None,
-                None,
             )
             .await;
         assert!(
@@ -3870,7 +3658,6 @@ mod tests {
                 }],
                 Some(folder_id),
                 None,
-                None,
             )
             .await;
         assert!(first.is_ok(), "first prompt accepted");
@@ -3883,7 +3670,6 @@ mod tests {
                     text: "second".into(),
                 }],
                 Some(folder_id),
-                None,
                 None,
             )
             .await;
@@ -3921,7 +3707,7 @@ mod tests {
 
         let rows_before = count_conversation_rows(&db).await;
         let empty = mgr
-            .send_prompt_linked(&db, conn_id, vec![], Some(folder_id), None, None)
+            .send_prompt_linked(&db, conn_id, vec![], Some(folder_id), None)
             .await;
         assert!(empty.is_err(), "an empty prompt must be rejected");
         assert_eq!(
@@ -3946,7 +3732,6 @@ mod tests {
                 conn_id,
                 vec![PromptInputBlock::Text { text: "hi".into() }],
                 Some(folder_id),
-                None,
                 None,
             )
             .await;
@@ -4016,8 +3801,7 @@ mod tests {
 
         let mgr = ConnectionManager::new();
         let conn_id = "conn-queue-aware";
-        let mut rx =
-            insert_live_connection(&mgr, conn_id, AgentType::ClaudeCode, None).await;
+        let mut rx = insert_live_connection(&mgr, conn_id, AgentType::ClaudeCode, None).await;
         let state = mgr.get_state(conn_id).await.expect("state");
         state.write().await.conversation_id = Some(conversation_id);
 
@@ -4119,8 +3903,7 @@ mod tests {
         let db = test_helpers::fresh_in_memory_db().await;
         let mgr = Arc::new(ConnectionManager::new());
         let conn_id = "conn-cancel-order";
-        let mut commands =
-            insert_live_connection(&mgr, conn_id, AgentType::ClaudeCode, None).await;
+        let mut commands = insert_live_connection(&mgr, conn_id, AgentType::ClaudeCode, None).await;
         let prompt_lock = mgr.clone_prompt_lock(conn_id).await.expect("prompt lock");
         let guard = prompt_lock.lock_owned().await;
 
@@ -4440,7 +4223,6 @@ mod tests {
             vec![PromptInputBlock::Text { text: "hi".into() }],
             Some(folder_id),
             None,
-            None,
             Some("optimistic-abc".to_string()),
         )
         .await
@@ -4490,7 +4272,6 @@ mod tests {
                 }],
                 Some(folder_id),
                 Some(c1),
-                None,
                 Some("stale-c1-view".into()),
             )
             .await
@@ -4546,7 +4327,6 @@ mod tests {
             }],
             Some(folder_id),
             Some(target),
-            None,
             Some("optimistic-cross-harness".to_string()),
         )
         .await
@@ -4640,7 +4420,6 @@ mod tests {
                 }],
                 Some(folder_id),
                 Some(target),
-                None,
                 Some("optimistic-failed-cross-harness".to_string()),
             )
             .await
@@ -4688,7 +4467,6 @@ mod tests {
                 }],
                 Some(folder_id),
                 None,
-                None,
             )
             .await;
         assert!(result.is_err(), "a dropped receiver must fail the enqueue");
@@ -4703,66 +4481,6 @@ mod tests {
         assert!(
             pending.is_none(),
             "a failed enqueue must not strand pending_user_message"
-        );
-    }
-
-    #[tokio::test]
-    async fn send_prompt_linked_skips_user_message_for_delegation_child() {
-        // Delegation children surface their kickoff prompt via a separate path;
-        // send_prompt_linked must NOT broadcast a user_message (or capture
-        // pending) for them, so the sub-agent viewer doesn't double-render.
-        use crate::acp::delegation::spawner::DelegationLink;
-        use crate::db::test_helpers;
-        let db = test_helpers::fresh_in_memory_db().await;
-        let folder_id = test_helpers::seed_folder(&db, "/tmp/um-deleg").await;
-        let parent =
-            conversation_service::create(&db.conn, folder_id, AgentType::ClaudeCode, None, None)
-                .await
-                .expect("parent");
-        let mgr = ConnectionManager::new();
-        let conn_id = "conn-um-deleg";
-        let mut cmd_rx = insert_live_connection(
-            &mgr,
-            conn_id,
-            AgentType::Codex,
-            Some(PathBuf::from("/tmp/um-deleg")),
-        )
-        .await;
-
-        mgr.send_prompt_linked(
-            &db,
-            conn_id,
-            vec![PromptInputBlock::Text {
-                text: "child kickoff".into(),
-            }],
-            Some(folder_id),
-            None,
-            Some(DelegationLink {
-                parent_conversation_id: parent.id,
-                parent_tool_use_id: "tu-1".into(),
-                delegation_call_id: "call-1".into(),
-            }),
-        )
-        .await
-        .expect("delegation kickoff enqueues");
-
-        let prompts = drain_prompt_user_messages(&mut cmd_rx);
-        assert_eq!(prompts.len(), 1, "the kickoff prompt is enqueued");
-        assert!(
-            prompts[0].is_none(),
-            "delegation child Prompt must carry NO user_message (kickoff is surfaced separately)"
-        );
-        let pending = mgr
-            .get_state(conn_id)
-            .await
-            .unwrap()
-            .read()
-            .await
-            .pending_user_message
-            .clone();
-        assert!(
-            pending.is_none(),
-            "delegation child must not capture pending_user_message"
         );
     }
 
@@ -4805,46 +4523,6 @@ mod tests {
         assert!(preview.ends_with("..."));
     }
 
-    #[test]
-    fn delegation_child_title_seed_uses_parser_title_from_first_prompt() {
-        // The delegating prompt is a single text block (the task) — the seed must
-        // equal what the parser's `title_from_user_text` produces from it, so a
-        // later `refresh_auto_title` over the same first turn is a no-op.
-        let task = "Review the auth module for race conditions";
-        let blocks = vec![PromptInputBlock::Text { text: task.into() }];
-        assert_eq!(
-            delegation_child_title_seed(&blocks),
-            Some(crate::parsers::title_from_user_text(task))
-        );
-    }
-
-    #[test]
-    fn delegation_child_title_seed_is_none_for_textless_prompt() {
-        // Empty / whitespace / image-only prompts seed no title (stays NULL,
-        // backfilled on first detail load as before).
-        assert!(delegation_child_title_seed(&[]).is_none());
-        assert!(
-            delegation_child_title_seed(&[PromptInputBlock::Text { text: "  \n ".into() }])
-                .is_none()
-        );
-        let img = vec![PromptInputBlock::Image {
-            data: "x".into(),
-            mime_type: "image/png".into(),
-            uri: None,
-        }];
-        assert!(delegation_child_title_seed(&img).is_none());
-    }
-
-    #[test]
-    fn delegation_child_title_seed_caps_long_task_text() {
-        // Mirrors the parser cap (100 chars) so an over-long task doesn't store a
-        // runaway title; `title_from_user_text` keeps 100 then appends "...".
-        let long = "x".repeat(250);
-        let seed = delegation_child_title_seed(&[PromptInputBlock::Text { text: long }]).unwrap();
-        assert_eq!(seed.chars().count(), 103);
-        assert!(seed.ends_with("..."));
-    }
-
     /// A successful UI send (delegation = None, text present) emits
     /// `UserPromptSent` carrying the message preview, after the link + status
     /// events.
@@ -4871,7 +4549,6 @@ mod tests {
                 text: "hello world".into(),
             }],
             Some(folder_id),
-            None,
             None,
         )
         .await
@@ -4915,7 +4592,6 @@ mod tests {
                 uri: None,
             }],
             Some(folder_id),
-            None,
             None,
         )
         .await
@@ -4990,7 +4666,7 @@ mod tests {
         // First call: creates conversation row, sets state.conversation_id.
         // The mpsc send error after linking is expected and ignored here.
         let _ = mgr
-            .send_prompt_linked(&db, conn_id, one_text_block(), Some(folder_id), None, None)
+            .send_prompt_linked(&db, conn_id, one_text_block(), Some(folder_id), None)
             .await;
         let snap = mgr
             .get_state(conn_id)
@@ -5008,7 +4684,7 @@ mod tests {
 
         // Second call: ignores folder_id, does NOT create another row.
         let _ = mgr
-            .send_prompt_linked(&db, conn_id, one_text_block(), Some(folder_id), None, None)
+            .send_prompt_linked(&db, conn_id, one_text_block(), Some(folder_id), None)
             .await;
         let snap2 = mgr
             .get_state(conn_id)
@@ -5031,7 +4707,7 @@ mod tests {
             map.insert(conn_id.into(), fake_connection(conn_id, None));
         }
         let result = mgr
-            .send_prompt_linked(&db, conn_id, one_text_block(), None, None, None)
+            .send_prompt_linked(&db, conn_id, one_text_block(), None, None)
             .await;
         assert!(
             result.is_err(),
@@ -5091,7 +4767,6 @@ mod tests {
                 one_text_block(),
                 Some(folder_id),
                 Some(pre_existing.id),
-                None,
             )
             .await;
 
@@ -5169,7 +4844,7 @@ mod tests {
         // cmd_tx receiver is dropped → the prompt send fails after linking, but
         // the link + external_id persist + broadcast already happened.
         let _ = mgr
-            .send_prompt_linked(&db, conn_id, one_text_block(), Some(folder_id), None, None)
+            .send_prompt_linked(&db, conn_id, one_text_block(), Some(folder_id), None)
             .await;
 
         let cid = mgr
@@ -5223,7 +4898,6 @@ mod tests {
                 one_text_block(),
                 Some(folder_id),
                 Some(pre.id),
-                None,
             )
             .await;
 
@@ -5254,7 +4928,7 @@ mod tests {
         .await;
 
         let err = mgr
-            .send_prompt_linked(&db, conn_id, one_text_block(), None, Some(42), None)
+            .send_prompt_linked(&db, conn_id, one_text_block(), None, Some(42))
             .await
             .expect_err("should reject conversation_id without folder_id");
         assert!(matches!(err, AcpError::Protocol(_)));
@@ -5296,7 +4970,6 @@ mod tests {
                 one_text_block(),
                 Some(folder_id),
                 Some(pre.id),
-                None,
             )
             .await;
         let after = count_conversation_rows(&db).await;
@@ -5367,7 +5040,7 @@ mod tests {
         //   2. ConversationStatusChanged(InProgress)  [pre-send write]
         //   3. ConversationStatusChanged(Cancelled)   [rollback after send failure]
         let _ = mgr
-            .send_prompt_linked(&db, conn_id, one_text_block(), Some(folder_id), None, None)
+            .send_prompt_linked(&db, conn_id, one_text_block(), Some(folder_id), None)
             .await;
 
         let env1 = recv_first_acp_event(&mut rx).await;
@@ -5436,7 +5109,7 @@ mod tests {
             .unwrap();
 
         let _ = mgr
-            .send_prompt_linked(&db, conn_id, one_text_block(), Some(folder_id), None, None)
+            .send_prompt_linked(&db, conn_id, one_text_block(), Some(folder_id), None)
             .await;
 
         let env4 = recv_first_acp_event(&mut rx).await;
@@ -5828,12 +5501,12 @@ mod tests {
         tokio::join!(
             async {
                 let _ = mgr_ref
-                    .send_prompt_linked(&db, conn_id, one_text_block(), Some(folder_id), None, None)
+                    .send_prompt_linked(&db, conn_id, one_text_block(), Some(folder_id), None)
                     .await;
             },
             async {
                 let _ = mgr_ref
-                    .send_prompt_linked(&db, conn_id, one_text_block(), Some(folder_id), None, None)
+                    .send_prompt_linked(&db, conn_id, one_text_block(), Some(folder_id), None)
                     .await;
             },
         );
@@ -5964,7 +5637,6 @@ mod tests {
                     text: "trigger send failure".into(),
                 }],
                 Some(folder_id),
-                None,
                 None,
             )
             .await;
@@ -6136,8 +5808,7 @@ mod tests {
         let folder_id = test_helpers::seed_folder(&db, "/tmp/fork-happy").await;
         let c1 = seed_forkable(&db, folder_id, Some("Original Topic")).await;
 
-        let (mgr, join) =
-            manager_with_fake_fork("c-fork", c1.id, "session-S2", "session-S1").await;
+        let (mgr, join) = manager_with_fake_fork("c-fork", c1.id, "session-S2", "session-S1").await;
         let result = mgr.fork_session(&db, "c-fork", None, None).await.unwrap();
         let _ = join.await;
 
@@ -6189,13 +5860,9 @@ mod tests {
             collection_service::create(&db.conn, "Fork Context".into(), None, Some(folder_id))
                 .await
                 .unwrap();
-        collection_service::assign_conversations(
-            &db.conn,
-            vec![c1.id],
-            Some(collection.id),
-        )
-        .await
-        .unwrap();
+        collection_service::assign_conversations(&db.conn, vec![c1.id], Some(collection.id))
+            .await
+            .unwrap();
 
         prompt_queue_service::enqueue(
             &db.conn,
@@ -6272,9 +5939,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(refs.len(), 2);
-        assert!(refs
-            .iter()
-            .all(|item| item.collection_id == collection.id));
+        assert!(refs.iter().all(|item| item.collection_id == collection.id));
     }
 
     #[tokio::test]
@@ -6350,13 +6015,11 @@ mod tests {
             .unwrap();
         assert_eq!(c2.title, None);
         assert!(!c2.title_locked);
-        assert!(conversation_service::refresh_auto_title(
-            &db.conn,
-            c2.id,
-            "First Name".into()
-        )
-        .await
-        .unwrap());
+        assert!(
+            conversation_service::refresh_auto_title(&db.conn, c2.id, "First Name".into())
+                .await
+                .unwrap()
+        );
     }
 
     #[tokio::test]
@@ -6406,13 +6069,8 @@ mod tests {
             .await
             .unwrap();
 
-        let (mgr, join) = manager_with_fake_fork(
-            "c-stale-binding",
-            c1.id,
-            "session-S2",
-            "session-S1",
-        )
-        .await;
+        let (mgr, join) =
+            manager_with_fake_fork("c-stale-binding", c1.id, "session-S2", "session-S1").await;
         let error = mgr
             .fork_session(&db, "c-stale-binding", None, None)
             .await
@@ -6870,7 +6528,11 @@ mod tests {
         let at_bound = "y".repeat(MAX_FEEDBACK_CHARS);
         assert!(mgr.submit_feedback("c1", at_bound).await.is_ok());
         let state = mgr.get_state("c1").await.unwrap();
-        assert_eq!(state.read().await.feedback.len(), 1, "only the valid note stuck");
+        assert_eq!(
+            state.read().await.feedback.len(),
+            1,
+            "only the valid note stuck"
+        );
     }
 
     // --- native steering (push channel) ----------------------------------
@@ -6912,7 +6574,10 @@ mod tests {
         set_feedback_tool_available(&mgr, "c1").await;
         let fake_loop = answer_steer(rx, Ok(SteerOutcome::Injected));
 
-        let item = mgr.submit_feedback("c1", "  ship it  ".into()).await.unwrap();
+        let item = mgr
+            .submit_feedback("c1", "  ship it  ".into())
+            .await
+            .unwrap();
         assert_eq!(item.status, FeedbackStatus::Delivered);
         assert!(item.delivered_at.is_some());
         assert_eq!(item.text, "ship it");
@@ -7092,7 +6757,10 @@ mod tests {
         mark_native_steering_ready(&mgr, "c1").await;
         // feedback_tool_available stays false.
         let fake_loop = answer_steer(rx, Ok(SteerOutcome::Injected));
-        let item = mgr.submit_feedback("c1", "no tool needed".into()).await.unwrap();
+        let item = mgr
+            .submit_feedback("c1", "no tool needed".into())
+            .await
+            .unwrap();
         assert_eq!(item.status, FeedbackStatus::Delivered);
         let _ = fake_loop.await;
     }
@@ -7404,7 +7072,12 @@ mod tests {
         // The first is still the pending one and still answerable.
         let state = mgr.get_state("cc2").await.unwrap();
         assert_eq!(
-            state.read().await.pending_question.as_ref().map(|p| p.question_id.clone()),
+            state
+                .read()
+                .await
+                .pending_question
+                .as_ref()
+                .map(|p| p.question_id.clone()),
             Some(first.question_id.clone())
         );
         mgr.answer_question(
@@ -7440,12 +7113,7 @@ mod tests {
         assert_eq!(texts, vec!["a", "b"]);
         // A second read still returns them — read is non-destructive, so an
         // abandoned (peer-closed) call leaves the notes retryable.
-        assert_eq!(
-            mgr.read_pending_feedback("c1")
-                .await
-                .len(),
-            2
-        );
+        assert_eq!(mgr.read_pending_feedback("c1").await.len(), 2);
         {
             let state = mgr.get_state("c1").await.unwrap();
             assert!(state
@@ -7460,10 +7128,7 @@ mod tests {
         mgr.commit_feedback_delivered("c1", vec![a.id.clone(), b.id.clone()])
             .await;
         // Now READ returns nothing (delivered notes are filtered out).
-        assert!(mgr
-            .read_pending_feedback("c1")
-            .await
-            .is_empty());
+        assert!(mgr.read_pending_feedback("c1").await.is_empty());
         let state = mgr.get_state("c1").await.unwrap();
         assert!(state
             .read()
@@ -7479,12 +7144,9 @@ mod tests {
     #[tokio::test]
     async fn read_pending_missing_connection_returns_empty() {
         let mgr = ConnectionManager::new();
-        assert!(mgr
-            .read_pending_feedback("nope")
-            .await
-            .is_empty());
+        assert!(mgr.read_pending_feedback("nope").await.is_empty());
         // Commit on a missing connection is a safe no-op.
-        mgr.commit_feedback_delivered("nope", vec!["x".into()]).await;
+        mgr.commit_feedback_delivered("nope", vec!["x".into()])
+            .await;
     }
-
 }

@@ -25,8 +25,8 @@ pub mod git_credential;
 pub mod git_repo;
 pub mod intern;
 pub mod keyring_store;
-pub mod logging;
 pub mod local_session_sync;
+pub mod logging;
 pub mod models;
 mod network;
 pub mod office_watch;
@@ -34,11 +34,11 @@ pub mod parsers;
 pub mod paths;
 pub mod pet_sessions;
 pub mod pet_state_mapper;
-pub mod prompt_queue;
 pub mod pets;
 #[cfg(feature = "tauri-runtime")]
 pub mod preferences;
 pub mod process;
+pub mod prompt_queue;
 pub mod supervise;
 mod terminal;
 pub mod turn_timings;
@@ -63,23 +63,20 @@ mod tauri_app {
     use crate::acp::manager::ConnectionManager;
     use crate::chat_channel::manager::ChatChannelManager;
     use crate::commands::{
-        acp as acp_commands, app_update as app_update_commands,
-        automation as automation_commands, background as background_commands, backup,
-        chat_authoring as chat_authoring_commands, chat_channel as chat_channel_commands,
-        collaboration as collaboration_commands, collections, conversations,
-        custom_skills as custom_skills_commands, delegation as delegation_commands,
+        acp as acp_commands, app_update as app_update_commands, automation as automation_commands,
+        background as background_commands, backup, chat_authoring as chat_authoring_commands,
+        chat_channel as chat_channel_commands, collaboration as collaboration_commands,
+        collections, conversations, custom_skills as custom_skills_commands,
         experts as experts_commands, feedback as feedback_commands, file_io, folder_commands,
-        folder_links, office_tools as office_tools_commands,
-        folders, logging as logging_commands, mcp as mcp_commands,
-        model_provider as model_provider_commands, notification, pet as pet_commands, project_boot,
-        prompt_queue as prompt_queue_commands,
-        question as question_commands, quick_messages as quick_messages_commands,
-        remote_proxy as remote_proxy_commands,
+        folder_links, folders, logging as logging_commands, mcp as mcp_commands,
+        model_provider as model_provider_commands, notification,
+        office_tools as office_tools_commands, pet as pet_commands, project_boot,
+        prompt_queue as prompt_queue_commands, question as question_commands,
+        quick_messages as quick_messages_commands, remote_proxy as remote_proxy_commands,
         remote_workspace as remote_workspace_commands, science as science_commands,
         session_info as session_info_commands, session_search as session_search_commands,
-        system_settings, terminal as terminal_commands,
-        token_usage as token_usage_commands,
-        version_control, windows, workbenches, work_task as work_task_commands,
+        system_settings, terminal as terminal_commands, token_usage as token_usage_commands,
+        version_control, windows, work_task as work_task_commands, workbenches,
         workspace_state as workspace_state_commands,
     };
     use crate::terminal::manager::TerminalManager;
@@ -581,17 +578,11 @@ mod tauri_app {
                     );
                 }
 
-                // Delegation broker + UDS listener. Built from the managed
-                // ConnectionManager + DB so spawn / depth-lookup work against
-                // live state. Managed alongside the existing per-resource
-                // states so commands (Tauri + web) can resolve them by type.
-                // MUST run before the LifecycleSubscriber spawn below so the
-                // broker handle is available to it.
-                let broker_for_lifecycle = {
+                // Shared codeg-mcp token registry + UDS/named-pipe listener.
+                {
                     let cm_state = app.state::<ConnectionManager>();
                     let db_conn = app.state::<db::AppDatabase>().conn.clone();
                     let (
-                        broker,
                         tokens,
                         socket_path,
                         feedback_config,
@@ -599,25 +590,18 @@ mod tauri_app {
                         session_info_config,
                         session_collaboration_config,
                         chat_authoring_config,
-                    ) = crate::app_state::build_delegation_stack(
-                        &cm_state,
-                        db_conn.clone(),
-                        effective_data_dir.clone(),
-                    );
-                    app.manage(broker.clone());
+                    ) = crate::app_state::build_codeg_mcp_stack(&cm_state);
                     app.manage(tokens.clone());
                     app.manage(feedback_config.clone());
                     app.manage(question_config.clone());
                     app.manage(session_info_config.clone());
                     app.manage(session_collaboration_config.clone());
                     app.manage(chat_authoring_config.clone());
-                    app.manage(crate::commands::delegation::DelegationSocketPath(
+                    app.manage(crate::app_state::CodegMcpSocketPath(
                         socket_path.clone(),
                     ));
 
-                    // Push persisted settings into the broker + feedback + question
-                    // + session-info config before listener accept.
-                    let broker_for_init = broker.clone();
+                    // Push persisted shared-tool settings before listener accept.
                     let db_for_init = db_conn.clone();
                     let feedback_for_init = feedback_config.clone();
                     let question_for_init = question_config.clone();
@@ -626,11 +610,6 @@ mod tauri_app {
                         session_collaboration_config.clone();
                     let chat_authoring_for_init = chat_authoring_config.clone();
                     tauri::async_runtime::block_on(async move {
-                        delegation_commands::apply_persisted_config(
-                            &db_for_init,
-                            &broker_for_init,
-                        )
-                        .await;
                         crate::commands::feedback::apply_persisted_feedback_config(
                             &db_for_init,
                             &feedback_for_init,
@@ -658,9 +637,7 @@ mod tauri_app {
                         .await;
                     });
 
-                    let listener_broker = broker.clone();
-                    let listener = crate::acp::delegation::listener::DelegationListener::new(
-                        listener_broker,
+                    let listener = crate::acp::delegation::listener::HostBridgeListener::new(
                         tokens,
                         std::sync::Arc::new(
                             crate::acp::manager::ConnectionManagerParentLookup {
@@ -713,11 +690,10 @@ mod tauri_app {
                     );
                     tauri::async_runtime::spawn(async move {
                         if let Err(e) = listener.run(socket_path).await {
-                            tracing::info!("[delegation] listener exited: {e}");
+                            tracing::info!("[codeg-mcp] host bridge listener exited: {e}");
                         }
                     });
-                    broker
-                };
+                }
 
                 // Spawn the LifecycleSubscriber: persists cross-connection DB state
                 // (currently `external_id` on conversation rows when SessionStarted fires)
@@ -736,7 +712,6 @@ mod tauri_app {
                         db_conn,
                         cm,
                         bus,
-                        Some(broker_for_lifecycle),
                     ));
                 }
 
@@ -1223,8 +1198,6 @@ mod tauri_app {
                 logging_commands::get_recent_logs,
                 logging_commands::list_log_files,
                 logging_commands::open_logs_dir,
-                delegation_commands::get_delegation_settings,
-                delegation_commands::set_delegation_settings,
                 feedback_commands::get_feedback_settings,
                 feedback_commands::set_feedback_settings,
                 feedback_commands::submit_session_feedback,

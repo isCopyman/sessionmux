@@ -341,41 +341,6 @@ pub enum AcpEvent {
         /// race without cross-namespace id dedup.
         watermark: u64,
     },
-    /// A `delegate_to_agent` MCP tool call from the parent agent has spawned a
-    /// child sub-session and the child's prompt is in flight. Emitted as soon
-    /// as the broker registers the pending call. The frontend uses this to
-    /// build the parent ↔ child mapping for inline rendering.
-    DelegationStarted {
-        parent_connection_id: String,
-        parent_tool_use_id: String,
-        child_connection_id: String,
-        child_conversation_id: i32,
-        agent_type: crate::models::agent::AgentType,
-        /// Bounded preview of the delegated task text (broker's
-        /// `TASK_PREVIEW_CAP`). Lets the live card show WHAT was delegated even
-        /// when the parent tool call's `raw_input` never carries the arguments
-        /// (Cursor announces MCP calls identity-less and never re-sends them).
-        task_preview: String,
-        /// Broker-minted task id — the same id the running ack embeds as
-        /// `task_id=<id>` — so the live card can label the delegation before
-        /// the ack text lands on the tool output.
-        task_id: String,
-    },
-    /// The child sub-session has finished (or errored / timed out / been
-    /// canceled). The MCP tool_result has been delivered to the parent agent.
-    DelegationCompleted {
-        parent_connection_id: String,
-        parent_tool_use_id: String,
-        child_connection_id: String,
-        child_conversation_id: i32,
-        /// Child agent type. Carried so a frontend that missed the
-        /// `DelegationStarted` event (context mounted mid-flight, reconnect,
-        /// or web/server snapshot replay that only re-delivered the completion)
-        /// can synthesize the binding with the correct agent instead of a
-        /// hardcoded default. Mirrors `DelegationStarted.agent_type`.
-        agent_type: crate::models::agent::AgentType,
-        result: DelegationResultSummary,
-    },
     /// A human submitted a prompt from the Codeg conversation UI (desktop or
     /// web). Synthetic, notification-only event: it mutates no `SessionState`
     /// field and exists purely to drive the chat-channel "user message" push.
@@ -454,10 +419,7 @@ pub enum AcpEvent {
     /// clear its "restart to apply" banner. Carried into `SessionState` so a
     /// snapshot attach (web reconnect, window refresh, new tile) recovers the
     /// staleness the one-shot event won't replay for it.
-    SessionConfigStale {
-        stale: bool,
-        kind: ConfigStaleKind,
-    },
+    SessionConfigStale { stale: bool, kind: ConfigStaleKind },
 }
 
 /// One background task settled by a `<task-notification>` transcript record,
@@ -577,24 +539,6 @@ pub fn user_blocks_from_prompt(blocks: &[PromptInputBlock]) -> Vec<UserMessageBl
             },
         })
         .collect()
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum DelegationResultSummary {
-    Ok {
-        duration_ms: u64,
-        /// Bounded preview (≤ ~2 KiB) of the child's final assistant text, so
-        /// the parent UI can render the result inline on the live
-        /// `delegation_completed` event without re-fetching the child session,
-        /// and the chat-channel relay can echo it. `None` for older payloads /
-        /// when the child produced no text.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        text_preview: Option<String>,
-    },
-    Err {
-        error_code: String,
-    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

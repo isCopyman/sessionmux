@@ -1,6 +1,6 @@
 # Codeg `delegate_to_agent` 子系统源码审计与 Session 化方案
 
-> 状态：Architecture audit / 三个旧工具已授权直接移除，实现批次待执行
+> 状态：Removal 已实现并验证；本文保留删除依据、共享边界与历史审计
 >
 > 调研日期：2026-08-16
 >
@@ -12,6 +12,27 @@
 不能误删共享基础设施，也不能继续为一次性 delegation 扩张第二套 Session 系统。
 
 ## 1. 结论
+
+### 1.1 2026-08-16 实施结果
+
+本次独立 Removal 批次已经完成：
+
+- `delegate_to_agent`、`get_delegation_status`、`cancel_delegation` 已从 MCP Schema、Host dispatch、
+  设置、前端协议与专属 UI 中移除；
+- 一次性 `task_id` Broker、轮询/等待/取消协议、首轮结束强制断开，以及专属 ACP 生命周期投影已
+  删除；
+- `codeg-mcp` companion、Session-scoped token、UDS/Windows named pipe、普通 MCP cancel、
+  `list_sessions/send_message`、feedback/question/session-info/task/automation 等共享能力继续保留；
+- 共享运行结构已使用 `CodegMcpInjection`、`HostBridgeListener`、`CodegMcpSocketPath` 等中性名称，
+  但承载共享 Host bridge 的 `acp/delegation/` 目录暂不为改名而大搬迁；
+- 已发布数据库 migration、历史 `delegate` Conversation、`parent_id`/历史列与 transcript 导入解析
+  继续保留，只停止创建新的旧式委托任务；
+- 专属 task UI 已删除，低耦合的 `LiveTranscriptView`、普通 MCP Tool Call 渲染和后台任务展示继续
+  作为通用视觉基础。
+
+验证覆盖 Rust 全量库测试、前端全量测试、TypeScript、生产构建、默认 Tauri 编译，以及真实
+Tauri WebView 启动与设置页检查。后文大量“当前实现”描述是删除前的审计快照，用于解释为何删除
+以及哪些共享边界必须保留，不再表示最新运行时事实。
 
 不能把 `src-tauri/src/acp/delegation/` 整个目录直接删除，也不应继续把它当作一套独立的 Agent
 产品扩建。

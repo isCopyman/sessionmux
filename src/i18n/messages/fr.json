@@ -615,37 +615,12 @@
     "envVars": "Variables d'environnement",
     "hostTools": {
       "label": "Laisser l'agent gérer les fichiers et les commandes",
-      "description": "codeg cesse d'assurer l'accès aux fichiers et les commandes de terminal : l'agent les exécute dans son propre processus, là où son bac à sable et ses règles d'autorisation s'appliquent réellement. La délégation à d'autres agents est également désactivée, car elle ferait repasser le même travail par codeg. codeg n'ajoute aucun bac à sable, n'activez donc ceci que si l'agent en a un configuré."
+      "description": "codeg cesse d'assurer l'accès aux fichiers et les commandes de terminal : l'agent les exécute dans son propre processus, là où son bac à sable et ses règles d'autorisation s'appliquent réellement. Les canaux de collaboration et d'outils hébergés par codeg sont également désactivés, car ils feraient repasser l'exécution par codeg. codeg n'ajoute aucun bac à sable, n'activez donc ceci que si l'agent en a un configuré."
     },
     "nativeJsonConfig": "Configuration JSON native",
     "modelHintDefault": "Laissez vide pour utiliser le modèle système par défaut.",
     "generalConfigDescriptionClaude": "Prend en charge la configuration rapide de l'API URL, API Key et des modèles Claude, et synchronise avec la configuration JSON native.",
     "generalConfigDescriptionDefault": "Prend en charge les entrées de configuration importantes (API URL, API Key, Model) et la gestion de la configuration JSON native.",
-    "multiAgent": {
-      "title": "Collaboration multi-agent",
-      "description": "Permet aux agents actifs de déléguer des sous-tâches à d’autres agents.",
-      "enable": "Activer la délégation",
-      "enableHint": "Lorsque cette option est désactivée, l’outil delegate_to_agent est masqué du catalogue d’outils MCP de l’agent.",
-      "depthLimit": "Profondeur maximale de délégation",
-      "depthHint": "Plage autorisée : {min}–{max}. Limite la profondeur de récursion d’une chaîne de délégation (racine → enfant → petit-enfant …).",
-      "completedCacheLabel": "Cache des résultats terminés (MB)",
-      "completedCacheHint": "Cache en mémoire des résultats terminés des sous-agents, conservé uniquement tant que la session de délégation est en cours et libéré automatiquement à la fin de cette session. Au-delà de ce budget, les résultats les plus anciens sont supprimés de la mémoire en premier (toujours consultables dans la session du sous-agent) ; 0 = illimité (libéré quand même à la fin de la session).",
-      "save": "Enregistrer",
-      "saving": "Enregistrement…",
-      "saved": "Paramètres de délégation enregistrés",
-      "saveFailed": "Échec de l’enregistrement des paramètres de délégation",
-      "loadFailed": "Échec du chargement des paramètres de délégation : {detail}",
-      "tabGeneral": "Général",
-      "tabAgentDefaults": "Valeurs par défaut du sous-agent",
-      "agentDefaultsDescription": "Remplacements par agent appliqués lorsque la Collaboration multi-agent démarre un sous-agent pour un appel de délégation. Les options affichées proviennent d’une sonde en direct : votre sélection correspond exactement à ce que l’agent acceptera.",
-      "probing": "Chargement des options disponibles depuis l’agent…",
-      "probeFailed": "Échec du chargement des options : {detail}",
-      "retry": "Réessayer",
-      "noConfigAvailable": "Cet agent n’a aucune option configurable.",
-      "modeLabel": "Mode",
-      "agentDefaultHint": "Valeur par défaut de l’agent : {value}",
-      "defaultOptionLabel": "Par défaut ({value})"
-    },
     "actions": {
       "dragSort": "Glisser pour réordonner",
       "dragSortAgent": "Glisser pour réordonner {name}",
@@ -1377,7 +1352,7 @@
     "customAgentSkillsDirLabel": "Répertoire de skills dédié",
     "customAgentSkillsDirHint": "Chemin absolu du répertoire depuis lequel cet agent charge ses skills — son propre magasin, en plus du magasin partagé ou à sa place. ~ est remplacé par le répertoire personnel ; les skills liées y sont placées en premier.",
     "customAgentMcpLabel": "Prise en charge de MCP",
-    "customAgentMcpHint": "Transmet le compagnon MCP intégré de codeg à cet agent au démarrage de la session — le canal derrière la délégation, le retour en direct et les outils de tâches. Désactivez-le pour un agent qui refuse les serveurs MCP et ne parvient pas à se connecter ; le changement s'applique à la prochaine connexion.",
+    "customAgentMcpHint": "Envoie à cet agent le compagnon MCP intégré de codeg au démarrage d'une session — le canal de collaboration entre sessions, de retour en direct et d'outils de tâches. Désactivez-le pour un agent qui refuse les serveurs MCP et ne parvient pas à se connecter ; le changement s'applique à la prochaine connexion.",
     "customAgentIconNotAnImage": "Choisissez un fichier image.",
     "customAgentIconTooLarge": "L'icône doit faire moins de {limit} Ko.",
     "customAgentIconReadFailed": "Impossible de lire cette image.",
@@ -1394,7 +1369,7 @@
   "GeneralSettings": {
     "loading": "Chargement...",
     "sectionTitle": "Général",
-    "sectionDescription": "Préférences centralisées pour le terminal par défaut, l'accélération du rendu et la délégation multi-agents.",
+    "sectionDescription": "Préférences centralisées pour le terminal par défaut, l'accélération du rendu et les outils de conversation.",
     "terminalTitle": "Terminal par défaut",
     "terminalDescription": "Choisissez le shell utilisé à l'ouverture de nouveaux onglets de terminal depuis la barre de terminal ou l'arborescence des fichiers. Les agents l'utilisent aussi lorsqu'ils demandent à codeg d'exécuter une ligne de commande complète.",
     "terminalSystemDefault": "Par défaut système",
@@ -2951,11 +2926,6 @@
         "openAgentsSettings": "Ouvrir les paramètres des agents",
         "notInstalled": "Non installé"
       },
-      "subAgentOverlay": {
-        "title": "Sous-agents",
-        "collapsedSummary": "Sous-agents {count}",
-        "collapseAria": "Réduire les sous-agents"
-      },
       "agentPlanOverlay": {
         "title": "Plan de l'agent",
         "collapsePlanAria": "Réduire le plan",
@@ -3098,45 +3068,6 @@
         "tool": "Outil",
         "error": "Erreur",
         "result": "Résultat"
-      },
-      "delegation": {
-        "subAgentRunning": "Sous-agent en cours…",
-        "noDetail": "Aucun détail disponible pour le moment.",
-        "unknownAgent": "Sous-agent",
-        "openDetail": "Voir la conversation",
-        "detailTitle": "Conversation du sous-agent",
-        "detailDescription": "Vue en lecture seule de la conversation du sous-agent délégué.",
-        "waitForResult": "En attente du résultat de la tâche {task}",
-        "waitForResultNoTask": "En attente du résultat de la tâche",
-        "cancelTask": "Annulation de la tâche {task}",
-        "cancelTaskNoTask": "Annulation de la tâche",
-        "resultPageOf": "{current} / {total}",
-        "prevResult": "Résultat précédent",
-        "nextResult": "Résultat suivant",
-        "noResultText": "Aucun résultat pour cette vérification.",
-        "status": {
-          "starting": "démarrage",
-          "running": "en cours",
-          "checked": "vérifié",
-          "waiting": "en attente d'approbation",
-          "ok": "terminé",
-          "err": {
-            "default": "échec",
-            "delegation_disabled": "désactivé",
-            "depth_limit": "limite de profondeur",
-            "invalid_agent_type": "agent invalide",
-            "spawn_failed": "échec du démarrage",
-            "send_failed": "échec de l'envoi",
-            "timeout": "délai dépassé",
-            "canceled": "annulé",
-            "child_refusal": "sous-agent refusé",
-            "child_max_tokens": "sous-agent : limite de jetons",
-            "child_max_turn_requests": "sous-agent : limite de requêtes",
-            "child_empty": "sous-agent sans sortie",
-            "child_unknown": "sous-agent : erreur",
-            "unknown": "tâche inconnue"
-          }
-        }
       },
       "contentParts": {
         "showingTailOutput": "Affichage de la fin de la sortie pendant le streaming pour de meilleures performances.",

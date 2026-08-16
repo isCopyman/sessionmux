@@ -4,9 +4,7 @@
 //! The frame is dead simple: a little-endian `u32` byte length followed by
 //! that many bytes of UTF-8 JSON. One request, one response — the companion
 //! reopens the socket per `tools/call`. This trades a few extra connects for
-//! a wire that's trivial to test and that doesn't need multiplexing
-//! (a parent makes at most one delegation call at a time from the LLM's
-//! perspective — the broker handles concurrency at a higher level).
+//! a wire that's trivial to test and that doesn't need multiplexing.
 //!
 //! Why length-prefix instead of newline-delimited JSON? The LLM-issued
 //! `task` arguments can contain newlines, and we'd rather avoid escaping
@@ -16,24 +14,8 @@
 //!
 //! ### Message shapes
 //!
-//! Inbound traffic is a tagged [`BrokerMessage`] enum, one variant per MCP
-//! tool plus the MCP cancel notification:
-//!   * `call` — [`BrokerRequest`] for `delegate_to_agent`; returns a
-//!     [`BrokerResponse`] wrapping a `DelegationTaskReport` (a `Running` ack, or
-//!     a terminal report).
-//!   * `status` — [`BrokerStatusRequest`] for `get_delegation_status`. Carries a
-//!     `task_ids` list (one or many) and an optional `wait_ms` long-poll —
-//!     omitted is an immediate snapshot, an explicit `0` blocks until a task is
-//!     terminal, a positive value is a bounded wait. Returns a `{ "tasks": [..] }`
-//!     envelope with one task report per requested id (in request order); a
-//!     batch wait wakes as soon as ANY requested task reaches a terminal state.
-//!   * `cancel_task` — [`BrokerCancelTaskRequest`] for `cancel_delegation`;
-//!     returns a task report.
-//!   * `cancel` — fire-and-forget [`BrokerCancelRequest`] from MCP
-//!     `notifications/cancelled`, targeting an in-flight `delegate_to_agent`
-//!     call by `external_handle`; gets a `Value::Null` ack.
-//!
-//! All arms are authenticated by the same per-launch `token`.
+//! Inbound traffic is a tagged [`BrokerMessage`] enum, one variant per host
+//! bridge tool. All arms are authenticated by the same per-launch `token`.
 //!
 //! ### Version coupling
 //!
@@ -58,80 +40,6 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use crate::acp::chat_authoring::{NewAutomationSpec, NewWorkTaskSpec};
 use crate::acp::question::QuestionSpec;
 use crate::acp::session_collaboration::SessionMessageSpec;
-
-/// One delegation call's worth of input forwarded from the companion to the
-/// main process. The main process re-validates `token` and maps
-/// `parent_connection_id` to the live ACP connection.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BrokerRequest {
-    /// Shared secret minted by the main process when it spawned the agent CLI;
-    /// the agent passes it through to the companion via `--token`. Rejects
-    /// anything else.
-    pub token: String,
-    /// codeg-internal ACP connection UUID for the parent session.
-    pub parent_connection_id: String,
-    /// The MCP `tool_use_id` for the LLM-issued `delegate_to_agent` call.
-    /// Used to bind the eventual child outcome back to the parent's
-    /// tool_use_id in the UI / DB.
-    pub parent_tool_use_id: String,
-    /// Opaque companion-minted token (one per `tools/call`). The broker
-    /// keys its `cancel_by_external_handle` lookup off this value so an
-    /// MCP-side `notifications/cancelled` can target this specific call.
-    /// Older companions / tests can omit it; missing handles disable the
-    /// cancel path for that call.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub external_handle: Option<String>,
-    /// Raw `arguments` JSON from the MCP `tools/call` request, schema-shaped
-    /// per [`super::tool_schema_json`]. The main process re-parses into
-    /// [`super::types::DelegationRequest`].
-    pub input: Value,
-}
-
-/// Cancel an in-flight delegation by its companion-minted
-/// `external_handle`. Sent fire-and-forget — the listener acknowledges by
-/// writing an empty [`BrokerResponse`] so the companion can detect a
-/// broken socket, but the response body carries no information.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BrokerCancelRequest {
-    pub token: String,
-    pub external_handle: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
-}
-
-/// Query the status (and, optionally, block briefly for the result) of one or
-/// more previously-issued delegation tasks by their broker `task_id`s. Backs the
-/// `get_delegation_status` MCP tool. Authenticated by the same per-launch
-/// `token`; the listener scopes each lookup to the token's parent connection
-/// so one parent can't read another's tasks.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BrokerStatusRequest {
-    pub token: String,
-    /// One or many task ids to resolve. The companion forwards the MCP
-    /// `task_ids` array into this list (trimmed, de-duplicated, order-preserving).
-    /// The listener returns one report per id, in this order.
-    pub task_ids: Vec<String>,
-    /// How long the listener may block waiting for a task to reach a terminal
-    /// state before returning the current (possibly still-running) snapshot.
-    /// `None` (omitted) returns an immediate snapshot; an explicit `0` blocks
-    /// with no timeout until a task finishes (long-running children); any
-    /// positive value is a long-poll the listener clamps to a hard ceiling so a
-    /// single bounded call can't hang unbounded. For a batch the wait resolves as
-    /// soon as ANY requested task reaches a terminal state.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub wait_ms: Option<u64>,
-}
-
-/// Cancel a previously-issued delegation task by its broker `task_id`. Backs
-/// the `cancel_delegation` MCP tool. Distinct from [`BrokerCancelRequest`],
-/// which targets an in-flight `tools/call` by its companion-minted
-/// `external_handle` for MCP `notifications/cancelled`; this targets a running
-/// task the LLM is explicitly stopping by id.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BrokerCancelTaskRequest {
-    pub token: String,
-    pub task_id: String,
-}
 
 /// Pull the pending live-feedback notes for the parent session. Backs the
 /// `check_user_feedback` MCP tool. Authenticated by the same per-launch
@@ -171,8 +79,7 @@ pub struct BrokerAskRequest {
 /// metadata + stats, optionally with its recent messages. Backs the
 /// `get_session_info` MCP tool. Authenticated by the same per-launch `token`; the
 /// lookup is by codeg's internal conversation id (the number in the reference),
-/// so — unlike the delegation arms — it is NOT scoped to the parent connection
-/// (any non-deleted session the user references can be read).
+/// so any non-deleted session the user references can be read.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BrokerSessionRequest {
     pub token: String,
@@ -250,10 +157,6 @@ pub struct BrokerCreateWorkTaskRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum BrokerMessage {
-    Call(BrokerRequest),
-    Cancel(BrokerCancelRequest),
-    Status(BrokerStatusRequest),
-    CancelTask(BrokerCancelTaskRequest),
     Feedback(BrokerFeedbackRequest),
     CommitFeedback(BrokerCommitFeedbackRequest),
     Ask(BrokerAskRequest),
@@ -267,10 +170,6 @@ pub enum BrokerMessage {
 }
 
 /// The wrapped outcome the main process returns over the same socket.
-/// `outcome` is a serialized [`super::types::DelegationTaskReport`] for `Call`
-/// / `CancelTask` messages, a `{ "tasks": [report, ...] }` envelope (one report
-/// per requested id, in request order) for `Status`, and `Value::Null` for
-/// `Cancel` acknowledgements.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BrokerResponse {
     pub outcome: Value,
@@ -321,8 +220,8 @@ where
 }
 
 /// One-shot client round-trip: connect, write one [`BrokerMessage`], read the
-/// response, drop the connection. The three public helpers below differ only
-/// in which message they build, so the connect/write/read is shared here.
+/// response, drop the connection. Public helpers differ only in which message
+/// they build, so the connect/write/read is shared here.
 #[cfg(unix)]
 async fn message_round_trip(socket_path: &str, msg: &BrokerMessage) -> io::Result<BrokerResponse> {
     use tokio::net::UnixStream;
@@ -339,34 +238,6 @@ async fn message_round_trip(socket_path: &str, msg: &BrokerMessage) -> io::Resul
         .map_err(|e| io::Error::other(format!("open pipe: {e}")))?;
     write_frame(&mut stream, msg).await?;
     read_frame(&mut stream).await
-}
-
-/// Dispatch a `delegate_to_agent` call and read back the broker's
-/// [`super::types::DelegationTaskReport`] (a `Running` ack, or a terminal
-/// report when the child finished during setup / setup failed).
-pub async fn client_round_trip(
-    socket_path: &str,
-    req: &BrokerRequest,
-) -> io::Result<BrokerResponse> {
-    message_round_trip(socket_path, &BrokerMessage::Call(req.clone())).await
-}
-
-/// Dispatch a `get_delegation_status` query and read back the
-/// `{ "tasks": [report, ...] }` envelope (one report per requested id, in
-/// request order).
-pub async fn client_status_round_trip(
-    socket_path: &str,
-    req: &BrokerStatusRequest,
-) -> io::Result<BrokerResponse> {
-    message_round_trip(socket_path, &BrokerMessage::Status(req.clone())).await
-}
-
-/// Dispatch a `cancel_delegation` request and read back the task report.
-pub async fn client_cancel_task_round_trip(
-    socket_path: &str,
-    req: &BrokerCancelTaskRequest,
-) -> io::Result<BrokerResponse> {
-    message_round_trip(socket_path, &BrokerMessage::CancelTask(req.clone())).await
 }
 
 /// Dispatch a `check_user_feedback` query and read back the
@@ -461,10 +332,7 @@ pub async fn client_create_work_task_round_trip(
     message_round_trip(socket_path, &BrokerMessage::CreateWorkTask(req.clone())).await
 }
 
-/// Total budget for `open()` retries on Windows named pipes. Has to be
-/// short enough that it nests comfortably inside the companion's
-/// `BROKER_CANCEL_BUDGET` (500 ms) — leaving ≥ 300 ms for the actual
-/// write/read after the open lands.
+/// Total budget for `open()` retries on Windows named pipes.
 #[cfg(windows)]
 const PIPE_OPEN_RETRY_BUDGET: std::time::Duration = std::time::Duration::from_millis(200);
 
@@ -474,10 +342,8 @@ const PIPE_OPEN_RETRY_DELAY: std::time::Duration = std::time::Duration::from_mil
 /// Windows-only: `ClientOptions::open()` can fail with
 /// `ERROR_PIPE_BUSY` (231) or `NotFound` during the brief window between
 /// the listener accepting one connection and binding the next instance
-/// (see `DelegationListener::run` on Windows). The companion has already
-/// removed the inflight entry by the time it dispatches a cancel, so
-/// dropping the cancel on a transient open failure would silently lose
-/// it. Retry with small backoff inside a tight budget. Non-busy errors
+/// (see `HostBridgeListener::run` on Windows). Retry with small backoff inside
+/// a tight budget. Non-busy errors
 /// (e.g. listener not running at all) propagate immediately.
 #[cfg(windows)]
 async fn open_named_pipe_with_retry(
@@ -508,35 +374,6 @@ async fn open_named_pipe_with_retry(
     }
 }
 
-/// Fire-and-forget cancel: open a fresh socket, write a
-/// `BrokerMessage::Cancel`, read the (always-empty) ack so the listener gets
-/// a chance to flush its side before we drop, then close. Errors are
-/// returned but generally treated as "best effort" by callers — a cancel
-/// race that loses to a completed response is fine, the companion will
-/// suppress the response per MCP spec either way.
-#[cfg(unix)]
-pub async fn client_cancel(socket_path: &str, req: &BrokerCancelRequest) -> io::Result<()> {
-    use tokio::net::UnixStream;
-    let mut stream = UnixStream::connect(socket_path).await?;
-    let msg = BrokerMessage::Cancel(req.clone());
-    write_frame(&mut stream, &msg).await?;
-    // The listener writes an empty BrokerResponse so we can detect a broken
-    // pipe; we don't care what's inside.
-    let _: io::Result<BrokerResponse> = read_frame(&mut stream).await;
-    Ok(())
-}
-
-#[cfg(windows)]
-pub async fn client_cancel(socket_path: &str, req: &BrokerCancelRequest) -> io::Result<()> {
-    let mut stream = open_named_pipe_with_retry(socket_path)
-        .await
-        .map_err(|e| io::Error::other(format!("open pipe: {e}")))?;
-    let msg = BrokerMessage::Cancel(req.clone());
-    write_frame(&mut stream, &msg).await?;
-    let _: io::Result<BrokerResponse> = read_frame(&mut stream).await;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -546,160 +383,80 @@ mod tests {
     #[tokio::test]
     async fn frame_round_trip_in_memory() {
         let (mut a, mut b) = duplex(8 * 1024);
-        let msg = BrokerMessage::Call(BrokerRequest {
+        let msg = BrokerMessage::Feedback(BrokerFeedbackRequest {
             token: "tok".into(),
-            parent_connection_id: "p1".into(),
-            parent_tool_use_id: "pt1".into(),
-            external_handle: Some("h1".into()),
-            input: json!({"agent_type": "codex", "task": "hi"}),
         });
-        write_frame(&mut a, &msg).await.unwrap();
+        let writer = tokio::spawn(async move {
+            write_frame(&mut a, &msg).await.unwrap();
+        });
         let got: BrokerMessage = read_frame(&mut b).await.unwrap();
+        writer.await.unwrap();
         match got {
-            BrokerMessage::Call(req) => {
-                assert_eq!(req.token, "tok");
-                assert_eq!(req.input["agent_type"], "codex");
-                assert_eq!(req.external_handle.as_deref(), Some("h1"));
-            }
-            other => panic!("expected Call variant, got {other:?}"),
+            BrokerMessage::Feedback(req) => assert_eq!(req.token, "tok"),
+            other => panic!("unexpected variant: {other:?}"),
         }
     }
 
     #[tokio::test]
-    async fn session_message_round_trip_in_memory() {
+    async fn response_round_trip_in_memory() {
         let (mut a, mut b) = duplex(8 * 1024);
-        let msg = BrokerMessage::SessionInfo(BrokerSessionRequest {
-            token: "tok".into(),
-            session_id: 42,
-            max_messages: Some(20),
-        });
-        write_frame(&mut a, &msg).await.unwrap();
-        let got: BrokerMessage = read_frame(&mut b).await.unwrap();
-        match got {
-            BrokerMessage::SessionInfo(req) => {
-                assert_eq!(req.token, "tok");
-                assert_eq!(req.session_id, 42);
-                assert_eq!(req.max_messages, Some(20));
-            }
-            other => panic!("expected SessionInfo variant, got {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn cancel_message_round_trip_in_memory() {
-        let (mut a, mut b) = duplex(8 * 1024);
-        let msg = BrokerMessage::Cancel(BrokerCancelRequest {
-            token: "tok".into(),
-            external_handle: "h1".into(),
-            reason: Some("user requested".into()),
-        });
-        write_frame(&mut a, &msg).await.unwrap();
-        let got: BrokerMessage = read_frame(&mut b).await.unwrap();
-        match got {
-            BrokerMessage::Cancel(req) => {
-                assert_eq!(req.token, "tok");
-                assert_eq!(req.external_handle, "h1");
-                assert_eq!(req.reason.as_deref(), Some("user requested"));
-            }
-            other => panic!("expected Cancel variant, got {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn rejects_oversized_frame() {
-        let (mut a, mut b) = duplex(8);
-        // Write a length prefix larger than the cap, no body.
-        let bad_len: u32 = (MAX_FRAME_BYTES as u32) + 1;
-        a.write_all(&bad_len.to_le_bytes()).await.unwrap();
-        a.flush().await.unwrap();
-        let result: io::Result<BrokerMessage> = read_frame(&mut b).await;
-        let err = result.expect_err("expected oversized frame to be rejected");
-        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
-    }
-
-    #[cfg(windows)]
-    #[tokio::test]
-    async fn named_pipe_round_trip() {
-        use tokio::net::windows::named_pipe::ServerOptions;
-
-        // PID + nanosecond suffix keeps the pipe name unique across parallel
-        // tests and avoids collisions with a live listener on the same box.
-        let pipe_name = format!(
-            r"\\.\pipe\codeg-mcp-test-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or_default()
-        );
-        let server = ServerOptions::new()
-            .first_pipe_instance(true)
-            .create(&pipe_name)
-            .unwrap();
-
-        let server_pipe = pipe_name.clone();
-        let server_task = tokio::spawn(async move {
-            let mut conn = server;
-            conn.connect().await.unwrap();
-            let msg: BrokerMessage = read_frame(&mut conn).await.unwrap();
-            match msg {
-                BrokerMessage::Call(req) => assert_eq!(req.token, "tok"),
-                other => panic!("expected Call, got {other:?}"),
-            }
-            let resp = BrokerResponse {
-                outcome: json!({"kind": "ok", "text": "hello"}),
-            };
-            write_frame(&mut conn, &resp).await.unwrap();
-            // Silence "unused" — server name is captured for clarity.
-            let _ = server_pipe;
-        });
-
-        let req = BrokerRequest {
-            token: "tok".into(),
-            parent_connection_id: "p1".into(),
-            parent_tool_use_id: "pt1".into(),
-            external_handle: None,
-            input: json!({"agent_type": "codex", "task": "do x"}),
+        let response = BrokerResponse {
+            outcome: json!({"recorded": true}),
         };
-        let resp = client_round_trip(&pipe_name, &req).await.unwrap();
-        assert_eq!(resp.outcome["kind"], "ok");
-        assert_eq!(resp.outcome["text"], "hello");
-        server_task.await.unwrap();
+        let writer = tokio::spawn(async move {
+            write_frame(&mut a, &response).await.unwrap();
+        });
+        let got: BrokerResponse = read_frame(&mut b).await.unwrap();
+        writer.await.unwrap();
+        assert_eq!(got.outcome, json!({"recorded": true}));
+    }
+
+    #[tokio::test]
+    async fn oversized_frame_is_rejected_before_allocation() {
+        let (mut a, mut b) = duplex(8);
+        let writer = tokio::spawn(async move {
+            let len = (MAX_FRAME_BYTES as u32 + 1).to_le_bytes();
+            a.write_all(&len).await.unwrap();
+        });
+        let result: io::Result<BrokerMessage> = read_frame(&mut b).await;
+        writer.await.unwrap();
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::InvalidData);
     }
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn uds_round_trip() {
+    async fn unix_socket_round_trip_keeps_shared_host_bridge_working() {
         use tokio::net::UnixListener;
 
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("codeg-mcp.sock");
+        let path = dir.path().join("host-bridge.sock");
         let listener = UnixListener::bind(&path).unwrap();
-        let server_path = path.to_string_lossy().to_string();
-
         let server = tokio::spawn(async move {
             let (mut conn, _) = listener.accept().await.unwrap();
             let msg: BrokerMessage = read_frame(&mut conn).await.unwrap();
             match msg {
-                BrokerMessage::Call(req) => assert_eq!(req.token, "tok"),
-                other => panic!("expected Call, got {other:?}"),
+                BrokerMessage::Feedback(req) => assert_eq!(req.token, "tok"),
+                other => panic!("unexpected variant: {other:?}"),
             }
-            let resp = BrokerResponse {
-                outcome: json!({"kind": "ok", "text": "hello"}),
-            };
-            write_frame(&mut conn, &resp).await.unwrap();
+            write_frame(
+                &mut conn,
+                &BrokerResponse {
+                    outcome: json!({"feedback": [], "count": 0}),
+                },
+            )
+            .await
+            .unwrap();
         });
 
-        let req = BrokerRequest {
-            token: "tok".into(),
-            parent_connection_id: "p1".into(),
-            parent_tool_use_id: "pt1".into(),
-            external_handle: None,
-            input: json!({"agent_type": "codex", "task": "do x"}),
-        };
-        let resp = client_round_trip(&server_path, &req).await.unwrap();
-        assert_eq!(resp.outcome["kind"], "ok");
-        assert_eq!(resp.outcome["text"], "hello");
+        let response = client_feedback_round_trip(
+            path.to_str().unwrap(),
+            &BrokerFeedbackRequest {
+                token: "tok".into(),
+            },
+        )
+        .await
+        .unwrap();
         server.await.unwrap();
+        assert_eq!(response.outcome["count"], 0);
     }
 }

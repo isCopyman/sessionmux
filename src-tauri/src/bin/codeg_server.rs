@@ -213,9 +213,7 @@ async fn async_main() -> ExitCode {
         // bearer credential and must never enter the durable log files or the
         // in-app log viewer. `eprintln!` bypasses the tracing sinks (file +
         // ring buffer); only the local terminal / Docker stderr sees it.
-        eprintln!(
-            "[SERVER] No CODEG_TOKEN set; generated an access token (persisted): {token}"
-        );
+        eprintln!("[SERVER] No CODEG_TOKEN set; generated an access token (persisted): {token}");
         eprintln!("[SERVER] Pin your own by setting the CODEG_TOKEN environment variable.");
     }
 
@@ -264,19 +262,14 @@ async fn async_main() -> ExitCode {
         acp_event_bus.clone(),
     );
     let (
-        delegation_broker,
-        delegation_tokens,
-        delegation_socket_path,
+        codeg_mcp_tokens,
+        codeg_mcp_socket_path,
         feedback_config,
         question_config,
         session_info_config,
         session_collaboration_config,
         chat_authoring_config,
-    ) = codeg_lib::app_state::build_delegation_stack(
-        &connection_manager,
-        db.conn.clone(),
-        data_dir.clone(),
-    );
+    ) = codeg_lib::app_state::build_codeg_mcp_stack(&connection_manager);
     let state = Arc::new(AppState {
         db,
         connection_manager,
@@ -292,9 +285,8 @@ async fn async_main() -> ExitCode {
             codeg_lib::workspace_transfer::WorkspaceTransferManager::new_from_env(),
         ),
         pet_state: pet_state_handle.clone(),
-        delegation_broker: delegation_broker.clone(),
-        delegation_tokens: delegation_tokens.clone(),
-        delegation_socket_path: delegation_socket_path.clone(),
+        codeg_mcp_tokens: codeg_mcp_tokens.clone(),
+        codeg_mcp_socket_path: codeg_mcp_socket_path.clone(),
         feedback_config: feedback_config.clone(),
         question_config: question_config.clone(),
         session_info_config: session_info_config.clone(),
@@ -318,13 +310,6 @@ async fn async_main() -> ExitCode {
         state.emitter.clone(),
     ));
 
-    // Apply persisted delegation settings (depth, enabled) before
-    // the listener starts accepting so even the first companion request
-    // sees the operator's configured behavior. Cancellation is handled
-    // out-of-band via MCP `notifications/cancelled` — no broker-side
-    // timeout to apply here.
-    codeg_lib::commands::delegation::apply_persisted_config(&state.db.conn, &delegation_broker)
-        .await;
     // Same for the live-feedback enable flag, so the first companion launch
     // sees the operator's configured behavior.
     codeg_lib::commands::feedback::apply_persisted_feedback_config(
@@ -365,13 +350,11 @@ async fn async_main() -> ExitCode {
     )
     .await;
 
-    // Spawn the delegation listener so companion processes can round-trip
-    // through the broker. Path is PID-scoped, so the listener owns it for
-    // the lifetime of the process.
+    // Spawn the host bridge listener. The path is PID-scoped, so the listener
+    // owns it for the lifetime of the process.
     {
-        let listener = codeg_lib::acp::delegation::listener::DelegationListener::new(
-            delegation_broker,
-            delegation_tokens,
+        let listener = codeg_lib::acp::delegation::listener::HostBridgeListener::new(
+            codeg_mcp_tokens,
             Arc::new(codeg_lib::acp::manager::ConnectionManagerParentLookup {
                 manager: Arc::new(state.connection_manager.clone_ref()),
             }),
@@ -405,10 +388,10 @@ async fn async_main() -> ExitCode {
                 chat_authoring_config.clone(),
             )),
         );
-        let socket = delegation_socket_path.clone();
+        let socket = codeg_mcp_socket_path.clone();
         tokio::spawn(async move {
             if let Err(e) = listener.run(socket).await {
-                tracing::info!("[delegation] listener exited: {e}");
+                tracing::info!("[codeg-mcp] host bridge listener exited: {e}");
             }
         });
     }
@@ -467,15 +450,11 @@ async fn async_main() -> ExitCode {
         )
         .await;
 
-    // Spawn the LifecycleSubscriber for cross-connection DB writes. The
-    // broker is supplied so TurnComplete on a delegation child resolves the
-    // parent's pending `delegate_to_agent` tool_use_id and emits
-    // `DelegationCompleted`.
+    // Spawn the LifecycleSubscriber for cross-connection DB writes.
     tokio::spawn(codeg_lib::lifecycle_subscriber_task(
         state.db.conn.clone(),
         state.connection_manager.clone_ref(),
         state.acp_event_bus.clone(),
-        Some(state.delegation_broker.clone()),
     ));
 
     // Spawn the desktop pet state mapper so server-mode browsers viewing
@@ -597,9 +576,11 @@ async fn async_main() -> ExitCode {
     // Publish runtime state so the settings page (served by us) shows
     // the truth — running on `actual_port` with this token — instead of
     // the placeholder "stopped" that triggers the stale-port banner.
-    state
-        .web_server_state
-        .mark_externally_running(advertised_host.clone(), actual_port, token.clone());
+    state.web_server_state.mark_externally_running(
+        advertised_host.clone(),
+        actual_port,
+        token.clone(),
+    );
     let addresses = addresses_for_bind(&advertised_host, actual_port);
 
     // Token on stderr ONLY (bearer credential — keep it out of the log files

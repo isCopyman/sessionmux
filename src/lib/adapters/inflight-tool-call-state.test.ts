@@ -21,8 +21,6 @@ import {
   type AdaptedToolCallPart,
   type AdapterMessageText,
 } from "@/lib/adapters/ai-elements-adapter"
-import { deriveBadge, parseStatusReports } from "@/lib/delegation-status"
-import { parseToolOutput, resolveDelegationStatus } from "@/lib/delegation-card"
 import type { ContentBlock, MessageTurn } from "@/lib/types"
 
 const TEXT: AdapterMessageText = {
@@ -130,71 +128,5 @@ describe("a MATCHED placeholder result (the grok shape)", () => {
     expect(toolParts(adapted.content).map((p) => p.state)).toEqual([
       "output-available",
     ])
-  })
-})
-
-describe("the delegation cards follow that state", () => {
-  const statusPoll = (id: string): ContentBlock => ({
-    type: "tool_use",
-    tool_use_id: id,
-    tool_name: "mcp__codeg-mcp__get_delegation_status",
-    input_preview: JSON.stringify({ task_ids: ["task-1"], wait_ms: 0 }),
-  })
-
-  it("a blocking status poll badges running, not a green ✓", () => {
-    const adapted = adaptMessageTurn(
-      turnWith([statusPoll("toolu_poll")]),
-      TEXT,
-      false,
-      new Set(["toolu_poll"])
-    )
-    // The poll is collapsed into a `delegation-status-group`; pull its poll back
-    // out and resolve the badge the card would render.
-    const group = adapted.content.find(
-      (p) => p.type === "delegation-status-group"
-    )
-    expect(group).toBeDefined()
-    const polls = (group as { polls: AdaptedToolCallPart[] }).polls
-    expect(polls).toHaveLength(1)
-    expect(polls[0].state).toBe("input-available")
-    const badge = deriveBadge(
-      "status",
-      parseStatusReports(polls[0].output, polls[0].errorText)[0],
-      polls[0].state,
-      !!polls[0].errorText
-    )
-    expect(badge.status).toBe("running")
-  })
-
-  it("the same poll without the proof still badges ok — the bug this fixes", () => {
-    const adapted = adaptMessageTurn(
-      turnWith([statusPoll("toolu_poll")]),
-      TEXT,
-      false
-    )
-    const group = adapted.content.find(
-      (p) => p.type === "delegation-status-group"
-    )
-    const polls = (group as { polls: AdaptedToolCallPart[] }).polls
-    const badge = deriveBadge(
-      "status",
-      parseStatusReports(polls[0].output, polls[0].errorText)[0],
-      polls[0].state,
-      !!polls[0].errorText
-    )
-    expect(badge.status).toBe("ok")
-  })
-
-  it("an in-flight delegate_to_agent no longer resolves to ok", () => {
-    expect(
-      resolveDelegationStatus({
-        binding: undefined,
-        parsedMeta: null,
-        toolOutput: parseToolOutput(null),
-        state: "input-available",
-        errorText: null,
-        childAwaitingPermission: false,
-      })
-    ).not.toBe("ok")
   })
 })

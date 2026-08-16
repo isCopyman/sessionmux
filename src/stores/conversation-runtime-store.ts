@@ -1175,10 +1175,8 @@ export function buildStreamingTurnsFromLiveMessage(
           // until an authoritative detail reload. See dropEmptyInFlightToolCalls.
           status: block.info.status ?? null,
           // Forward the ACP `meta` field downstream so the renderer can
-          // read delegation state (`meta["codeg.delegation"]`) for
-          // pre-binding / post-refresh fallback rendering of
-          // <DelegatedSubThread>. Opaque pass-through — adapter layer
-          // does not interpret.
+          // preserve host-specific tool metadata. Opaque pass-through — the
+          // adapter layer does not interpret it.
           meta: block.info.meta,
         })
         const isFinalState =
@@ -2627,12 +2625,11 @@ function resolveViewerRuntimeId(
 // write race) must be protected, i.e. `localTurns.length > 0` AND either:
 //   - `lastTurnOwned` — this client DROVE the promoted turn (an owner send); its
 //     reply lives only in `localTurns` until the transcript catches up; or
-//   - `liveOwnsActiveTurn` — a delegation-child dialog adopted its reply from the
-//     wire ahead of persistence (see `sub-agent-session-dialog.tsx`, which then
-//     deliberately does NOT refetch) and owns its promotion/dedup path.
+//   - `liveOwnsActiveTurn` — a read-only transcript view adopted its reply from
+//     the wire ahead of persistence and owns its promotion/dedup path.
 // Both are gated on `localTurns.length > 0`: the pre-promotion streaming phase is
-// already covered by `liveMessage`, and a MARKER-ONLY delegation child (the no-
-// child-connection fallback that never streams or promotes) has nothing to guard,
+// already covered by `liveMessage`, and a marker-only viewer that never streams
+// or promotes has nothing to guard,
 // so it must stay eligible to sync on a later completion nudge. The synthesized
 // viewer user turn lives in `optimisticTurns` WITHOUT `awaiting_persist`, so it
 // never blocks a detail load from replacing it.

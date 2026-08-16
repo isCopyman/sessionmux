@@ -6,7 +6,7 @@ import { toErrorMessage } from "@/lib/app-error"
 import type { AgentOptionsSnapshot, AgentType } from "@/lib/types"
 
 // Module-scope probe cache, isolated from the chat selectors (same approach as
-// delegation-agent-defaults). 30s TTL absorbs rapid re-opens without a stale
+// 30s TTL absorbs rapid re-opens without a stale
 // snapshot surviving a real config change. The inflight map dedups concurrent
 // callers so the editor + its config section share a single probe.
 const CACHE_TTL_MS = 30_000

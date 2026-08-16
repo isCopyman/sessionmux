@@ -1440,14 +1440,9 @@ export interface AgentOptionsSnapshot {
   prompt_capabilities?: PromptCapabilitiesInfo | null
 }
 
-export interface AgentDelegationDefaults {
-  mode_id?: string | null
-  config_values: Record<string, string>
-}
-
 // ─── Automations ───────────────────────────────────────────────────────────
 // Mirrors src-tauri/src/models/automation.rs. Wire form is snake_case (serde
-// default), matching AgentDelegationDefaults.
+// default).
 
 export type AutomationTriggerKind = "schedule" | "manual"
 export type AutomationIsolation = "worktree_per_run" | "shared_in_root"
@@ -1472,9 +1467,8 @@ export interface AutomationLabelSnapshot {
  *  the legacy `launch_session`. */
 export type AutomationAction = "launch_session" | "enqueue_task"
 
-/** The captured composer snapshot stored in `automation.config`. `mode_id` +
- *  `config_values` are exactly AgentDelegationDefaults; the model rides inside
- *  `config_values["model"]`, never as its own field. */
+/** The captured composer snapshot stored in `automation.config`. The model
+ *  rides inside `config_values["model"]`, never as its own field. */
 export interface AutomationConfig {
   action?: AutomationAction
   prompt_blocks: PromptInputBlock[]
@@ -2141,48 +2135,10 @@ export type AcpEvent =
       watermark: number
     }
   /**
-   * A `delegate_to_agent` MCP tool call from the parent agent has spawned a
-   * child sub-session and the child's prompt is in flight. Emitted as soon as
-   * the broker registers the pending call. Frontend uses this to build the
-   * parent ↔ child mapping for inline ToolCallBlock rendering.
-   */
-  | {
-      type: "delegation_started"
-      parent_connection_id: string
-      parent_tool_use_id: string
-      child_connection_id: string
-      child_conversation_id: number
-      agent_type: AgentType
-      /** Bounded preview of the delegated task text. Labels the card on
-       *  hosts whose parent tool call never carries the arguments in
-       *  `raw_input` (Cursor). Optional for older-backend tolerance. */
-      task_preview?: string | null
-      /** Broker-minted task id (the `task_id=` embedded in the running ack). */
-      task_id?: string | null
-    }
-  /**
-   * The child sub-session has finished (or errored / timed out / been
-   * canceled). The MCP tool_result has been delivered to the parent agent;
-   * frontend updates the ToolCallBlock badge from "running" to ok/err.
-   */
-  | {
-      type: "delegation_completed"
-      parent_connection_id: string
-      parent_tool_use_id: string
-      child_connection_id: string
-      child_conversation_id: number
-      /** Child agent type. Carried so a frontend that missed the
-       *  `delegation_started` event (mounted mid-flight, reconnect, or
-       *  snapshot replay) can bind the correct agent instead of a default. */
-      agent_type: AgentType
-      result: DelegationResultSummary
-    }
-  /**
    * The user's submitted prompt, broadcast on the connection stream so OTHER
    * clients viewing this conversation synthesize the user turn in real time.
    * The sending client renders its own optimistic turn and ignores this echo.
-   * Emitted only for root sends (delegation children synthesize kickoff text
-   * separately).
+   * Emitted for user-visible prompts only.
    */
   | {
       type: "user_message"
@@ -2270,18 +2226,6 @@ export type ConfigStaleKind = "agent_config" | "model_provider"
 export type UserMessageBlock =
   | { type: "text"; text: string }
   | { type: "image"; data: string; mime_type: string }
-
-/**
- * Mirror of Rust `DelegationResultSummary`. `kind` discriminates Ok vs Err;
- * Ok carries `duration_ms` (broker-measured) and an optional `text_preview`
- * (≤ ~2 KiB of the child's final assistant text, so the parent card can render
- * the result inline without re-fetching the child session); Err carries a
- * stable code from the `DelegationError` taxonomy (e.g. `"timeout"`,
- * `"canceled"`).
- */
-export type DelegationResultSummary =
-  | { kind: "ok"; duration_ms: number; text_preview?: string | null }
-  | { kind: "err"; error_code: string }
 
 /**
  * Wire envelope for all ACP events. JSON shape is flat via Rust's serde
@@ -2372,28 +2316,6 @@ export interface PendingPermissionState {
   queued?: number
 }
 
-/**
- * Snapshot-recoverable record of an in-flight (running) sub-agent delegation,
- * keyed by `parent_tool_use_id`. Mirror of Rust `ActiveDelegationState`. Only
- * running delegations are carried here — completed ones are removed (recovered
- * instead from the child's persisted DB row via `inject_delegation_meta`, or
- * the live `DelegationProvider` binding). Unlike `active_tool_calls`, these
- * survive the parent's `TurnComplete`, so a web/server client can recover the
- * running parent↔child binding from the snapshot on any attach — even when it
- * missed the transient `delegation_started` event.
- */
-export interface ActiveDelegationState {
-  parent_tool_use_id: string
-  child_connection_id: string
-  child_conversation_id: number
-  agent_type: AgentType
-  /** Task label + broker task id mirrored from `delegation_started` so a
-   *  snapshot re-attach reseeds the binding WITH its label (required on
-   *  hosts whose tool call `raw_input` never carries the arguments). */
-  task_preview?: string | null
-  task_id?: string | null
-}
-
 /** Lifecycle of a live-feedback note (mirror of Rust `FeedbackStatus`). */
 export type FeedbackStatus = "pending" | "delivered"
 
@@ -2439,9 +2361,6 @@ export interface LiveSessionSnapshot {
     message_id: string
     blocks: UserMessageBlock[]
   } | null
-  /** Live sub-agent delegations recoverable from the snapshot. May be absent
-   *  on older server payloads (then treated as `[]`). */
-  active_delegations?: ActiveDelegationState[]
   /** Live-feedback notes for the current turn. Absent on older payloads /
    *  when empty (then treated as `[]`). */
   feedback?: FeedbackItem[]

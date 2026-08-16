@@ -162,7 +162,7 @@ function BackgroundTaskRowView({ row }: { row: BackgroundTaskRow }) {
           // A sub-agent's result is a written report (headings, tables, fenced
           // code), not a shell stream — the ANSI terminal panel rendered it as
           // a wall of monospace. Same prose treatment the delegation card gives
-          // a child agent's result (`delegation-status-row.tsx`).
+          // a child agent's result.
           <div
             id={panelId}
             className="max-h-80 overflow-auto border-t border-border px-3 py-2"

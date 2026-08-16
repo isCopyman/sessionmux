@@ -1,5 +1,4 @@
 import type {
-  ActiveDelegationState,
   AvailableCommandInfo,
   ConfigStaleKind,
   ConnectionStatus,
@@ -79,11 +78,6 @@ export interface SnapshotPatch {
    *  that string feeds the composer status tooltip, which must stay one line. */
   lastErrorDetails: string | null
   eventSeq: number
-  /** Live sub-agent delegations carried by the snapshot. Consumed directly at
-   *  the attach call sites to re-seed `DelegationProvider` bindings (see
-   *  `seedDelegationsFromSnapshot`); the reducer does not store this on
-   *  ConnectionState. `[]` when the server omitted the field. */
-  activeDelegations: ActiveDelegationState[]
 }
 
 const DEFAULT_PROMPT_CAPS: PromptCapabilitiesInfo = {
@@ -147,7 +141,6 @@ export function denormalizeSnapshot(wire: LiveSessionSnapshot): SnapshotPatch {
     lastError,
     lastErrorDetails,
     eventSeq: wire.event_seq,
-    activeDelegations: wire.active_delegations ?? [],
   }
 }
 

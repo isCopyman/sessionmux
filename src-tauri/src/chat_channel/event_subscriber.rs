@@ -458,7 +458,6 @@ mod permission_push_tests {
     use crate::db::test_helpers;
     use crate::models::agent::AgentType;
     use async_trait::async_trait;
-    use std::collections::HashSet;
     use tokio::sync::mpsc;
 
     /// Channel backend that records the rendered plain text of every message,
@@ -650,7 +649,6 @@ mod permission_push_tests {
             content_buffer: String::new(),
             tool_calls: Vec::new(),
             tool_call_inputs: HashMap::new(),
-            delegation_rendered: HashSet::new(),
             last_flushed: Instant::now(),
             pending_prompt: None,
             permission_pending: None,

@@ -667,7 +667,6 @@ impl PromptQueueRuntime {
                 claimed.draft.blocks.clone(),
                 Some(row.folder_id),
                 Some(row.id),
-                None,
                 Some(claimed.id.clone()),
             )
             .await;

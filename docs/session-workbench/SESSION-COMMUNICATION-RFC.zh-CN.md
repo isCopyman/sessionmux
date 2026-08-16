@@ -685,9 +685,10 @@ token/connection 绑定。Codeg 不为不支持 MCP 的 Harness 再建立 CLI fa
 受管 Backend federation、AgentBus Adapter，以及本 RFC 下一阶段的 Attention/Obligation/reminder
 闭环。文档必须把这些扩展与已工作的 direct 工具分开，不能继续写成“全部尚未提供”。
 
-`collaboration` 表示“联系已经存在的持久 Session”。三个 delegation 工具已授权直接删除，不等待
-create/get/list/send 与精确 cancel/stop 全部落地，也不保留 `task_id` 兼容协议。删除旧工具不影响
-现有 direct event/Delivery、`list_sessions/send_message` 或可信 caller identity。
+`collaboration` 表示“联系已经存在的持久 Session”。三个 delegation 工具已从产品面与运行时直接
+移除，没有等待 create/get/list/send 与精确 cancel/stop 全部落地，也没有保留 `task_id` 兼容协议。
+Removal 保留了现有 direct event/Delivery、`list_sessions/send_message`、可信 caller identity 与
+共享 `codeg-mcp` Host bridge。
 
 未来新建/委派统一实现为
 `create_session + send_message(initial task) + optional lineage/workbench placement`。普通 `send_message`

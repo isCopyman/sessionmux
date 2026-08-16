@@ -23,7 +23,6 @@ import {
   AcpConnectionsProvider,
   useAcpActions,
 } from "@/contexts/acp-connections-context"
-import { DelegationProvider } from "@/contexts/delegation-context"
 import { ConversationRuntimeProvider } from "@/contexts/conversation-runtime-context"
 import { TabProvider, useTabStore, useTabActions } from "@/contexts/tab-context"
 import { selectIsSplit } from "@/stores/tab-store"
@@ -1191,45 +1190,43 @@ function WorkspaceLayoutInner({ children }: { children: React.ReactNode }) {
         <GitCredentialProvider>
           <TaskProvider>
             <AcpConnectionsProvider>
-              <DelegationProvider>
-                <ConversationStatusEventBridge />
-                <ConversationRuntimeProvider>
-                  <WorkspaceProvider>
-                    <TabProvider>
-                      <WorkspaceDocumentTitle />
-                      <TabKeysSync />
-                      <HeavyPluginsWarmup />
-                      <DeepLinkBootstrap />
-                      <PetFocusBridge />
-                      {/* Always mounted: external-change conflicts must be
+              <ConversationStatusEventBridge />
+              <ConversationRuntimeProvider>
+                <WorkspaceProvider>
+                  <TabProvider>
+                    <WorkspaceDocumentTitle />
+                    <TabKeysSync />
+                    <HeavyPluginsWarmup />
+                    <DeepLinkBootstrap />
+                    <PetFocusBridge />
+                    {/* Always mounted: external-change conflicts must be
                             resolvable even with the aux file tree closed. */}
-                      <ExternalConflictDialog />
-                      <SidebarProvider>
-                        <AuxPanelProvider>
-                          <TerminalProvider>
-                            <SearchDialogProvider>
-                              <AutomationsViewProvider>
-                                <TasksViewProvider>
-                                  <WorkbenchRouteProvider>
-                                    <WorkbenchRouteConversationSync />
-                                    {/* Inside WorkbenchRouteProvider: the
+                    <ExternalConflictDialog />
+                    <SidebarProvider>
+                      <AuxPanelProvider>
+                        <TerminalProvider>
+                          <SearchDialogProvider>
+                            <AutomationsViewProvider>
+                              <TasksViewProvider>
+                                <WorkbenchRouteProvider>
+                                  <WorkbenchRouteConversationSync />
+                                  {/* Inside WorkbenchRouteProvider: the
                                           listener calls openConversations() to
                                           surface a launcher-opened folder. */}
-                                    <WorkspaceOpenFolderListener />
-                                    <FolderLayoutShell>
-                                      {children}
-                                    </FolderLayoutShell>
-                                  </WorkbenchRouteProvider>
-                                </TasksViewProvider>
-                              </AutomationsViewProvider>
-                            </SearchDialogProvider>
-                          </TerminalProvider>
-                        </AuxPanelProvider>
-                      </SidebarProvider>
-                    </TabProvider>
-                  </WorkspaceProvider>
-                </ConversationRuntimeProvider>
-              </DelegationProvider>
+                                  <WorkspaceOpenFolderListener />
+                                  <FolderLayoutShell>
+                                    {children}
+                                  </FolderLayoutShell>
+                                </WorkbenchRouteProvider>
+                              </TasksViewProvider>
+                            </AutomationsViewProvider>
+                          </SearchDialogProvider>
+                        </TerminalProvider>
+                      </AuxPanelProvider>
+                    </SidebarProvider>
+                  </TabProvider>
+                </WorkspaceProvider>
+              </ConversationRuntimeProvider>
             </AcpConnectionsProvider>
           </TaskProvider>
         </GitCredentialProvider>

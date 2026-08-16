@@ -22,7 +22,6 @@ pub async fn create(
         agent_type,
         title,
         git_branch,
-        None,
         ConversationKind::Regular,
     )
     .await
@@ -45,32 +44,9 @@ pub async fn create_chat(
         agent_type,
         title,
         git_branch,
-        None,
         ConversationKind::Chat,
     )
     .await
-}
-
-/// Mirror of [`create`] plus optional delegation linkage. Used by the
-/// multi-agent broker when spawning a child sub-session — populates
-/// `parent_id` / `parent_tool_use_id` / `delegation_call_id` so the lifecycle
-/// subscriber and frontend can rebuild the parent ↔ child binding without
-/// inspecting the live broker state. `kind` follows the invariant
-/// `delegate ⟺ parent_id set`.
-pub async fn create_with_delegation(
-    conn: &DatabaseConnection,
-    folder_id: i32,
-    agent_type: AgentType,
-    title: Option<String>,
-    git_branch: Option<String>,
-    delegation: Option<crate::acp::delegation::spawner::DelegationLink>,
-) -> Result<conversation::Model, DbError> {
-    let kind = if delegation.is_some() {
-        ConversationKind::Delegate
-    } else {
-        ConversationKind::Regular
-    };
-    create_inner(conn, folder_id, agent_type, title, git_branch, delegation, kind).await
 }
 
 async fn create_inner(
@@ -79,7 +55,6 @@ async fn create_inner(
     agent_type: AgentType,
     title: Option<String>,
     git_branch: Option<String>,
-    delegation: Option<crate::acp::delegation::spawner::DelegationLink>,
     kind: ConversationKind,
 ) -> Result<conversation::Model, DbError> {
     let at_str = serde_json::to_value(agent_type)
@@ -87,14 +62,6 @@ async fn create_inner(
         .and_then(|v| v.as_str().map(String::from))
         .unwrap_or_default();
     let now = Utc::now();
-    let (parent_id, parent_tool_use_id, delegation_call_id) = match delegation {
-        Some(link) => (
-            Some(link.parent_conversation_id),
-            Some(link.parent_tool_use_id),
-            Some(link.delegation_call_id),
-        ),
-        None => (None, None, None),
-    };
     let model = conversation::ActiveModel {
         id: NotSet,
         folder_id: Set(folder_id),
@@ -106,9 +73,9 @@ async fn create_inner(
         model: Set(None),
         git_branch: Set(git_branch),
         external_id: Set(None),
-        parent_id: Set(parent_id),
-        parent_tool_use_id: Set(parent_tool_use_id),
-        delegation_call_id: Set(delegation_call_id),
+        parent_id: Set(None),
+        parent_tool_use_id: Set(None),
+        delegation_call_id: Set(None),
         message_count: Set(0),
         created_at: Set(now),
         updated_at: Set(now),
@@ -652,11 +619,63 @@ pub async fn list_children(
     Ok(summaries)
 }
 
+/// Insert a historical child row for compatibility tests. Production releases
+/// after delegation removal never call this path.
+#[cfg(test)]
+pub(crate) async fn create_historical_child_fixture(
+    conn: &DatabaseConnection,
+    folder_id: i32,
+    agent_type: AgentType,
+    title: Option<String>,
+    parent_conversation_id: i32,
+    parent_tool_use_id: String,
+    delegation_call_id: String,
+) -> Result<conversation::Model, DbError> {
+    use sea_orm::IntoActiveModel;
+
+    let row = create(conn, folder_id, agent_type, title, None).await?;
+    let mut active = row.into_active_model();
+    active.kind = Set(ConversationKind::Delegate);
+    active.parent_id = Set(Some(parent_conversation_id));
+    active.parent_tool_use_id = Set(Some(parent_tool_use_id));
+    active.delegation_call_id = Set(Some(delegation_call_id));
+    Ok(active.update(conn).await?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::acp::delegation::spawner::DelegationLink;
     use crate::db::test_helpers::{fresh_in_memory_db, seed_folder};
+
+    struct HistoricalChildLink {
+        parent_conversation_id: i32,
+        parent_tool_use_id: String,
+        delegation_call_id: String,
+    }
+
+    /// Test fixture for rows written by pre-removal releases. Production no
+    /// longer creates these children, but list/import compatibility remains.
+    async fn create_historical_child(
+        conn: &DatabaseConnection,
+        folder_id: i32,
+        agent_type: AgentType,
+        title: Option<String>,
+        git_branch: Option<String>,
+        link: Option<HistoricalChildLink>,
+    ) -> Result<conversation::Model, DbError> {
+        let _ = git_branch;
+        let link = link.expect("historical child link");
+        create_historical_child_fixture(
+            conn,
+            folder_id,
+            agent_type,
+            title,
+            link.parent_conversation_id,
+            link.parent_tool_use_id,
+            link.delegation_call_id,
+        )
+        .await
+    }
 
     /// Build a parent + a delegation child for filter assertions.
     async fn seed_parent_with_child(conn: &DatabaseConnection, folder_id: i32) -> (i32, i32) {
@@ -669,12 +688,12 @@ mod tests {
         )
         .await
         .expect("parent");
-        let link = DelegationLink {
+        let link = HistoricalChildLink {
             parent_conversation_id: parent.id,
             parent_tool_use_id: "tu-1".into(),
             delegation_call_id: "call-1".into(),
         };
-        let child = create_with_delegation(
+        let child = create_historical_child(
             conn,
             folder_id,
             AgentType::Codex,
@@ -747,10 +766,7 @@ mod tests {
         let archived = list_all(&db.conn, None, None, None, None, None, true, false)
             .await
             .expect("archived");
-        let archived_row = archived
-            .iter()
-            .find(|item| item.id == row.id)
-            .expect("row");
+        let archived_row = archived.iter().find(|item| item.id == row.id).expect("row");
         assert!(archived_row.archived_at.is_some());
         assert_eq!(archived_row.status, "in_progress");
 
@@ -785,17 +801,23 @@ mod tests {
     async fn list_children_orders_newest_first() {
         let db = fresh_in_memory_db().await;
         let folder = seed_folder(&db, "/tmp/codeg-list-children-order").await;
-        let parent = create(&db.conn, folder, AgentType::ClaudeCode, Some("P".into()), None)
-            .await
-            .expect("parent");
+        let parent = create(
+            &db.conn,
+            folder,
+            AgentType::ClaudeCode,
+            Some("P".into()),
+            None,
+        )
+        .await
+        .expect("parent");
         // Two children created oldest → newest under the same parent.
-        let first = create_with_delegation(
+        let first = create_historical_child(
             &db.conn,
             folder,
             AgentType::Codex,
             Some("first".into()),
             None,
-            Some(DelegationLink {
+            Some(HistoricalChildLink {
                 parent_conversation_id: parent.id,
                 parent_tool_use_id: "tu-1".into(),
                 delegation_call_id: "call-1".into(),
@@ -803,13 +825,13 @@ mod tests {
         )
         .await
         .expect("first child");
-        let second = create_with_delegation(
+        let second = create_historical_child(
             &db.conn,
             folder,
             AgentType::Codex,
             Some("second".into()),
             None,
-            Some(DelegationLink {
+            Some(HistoricalChildLink {
                 parent_conversation_id: parent.id,
                 parent_tool_use_id: "tu-2".into(),
                 delegation_call_id: "call-2".into(),
@@ -857,12 +879,12 @@ mod tests {
 
         // Delegate a grandchild from the child so the child itself becomes
         // expandable one level down.
-        let link = DelegationLink {
+        let link = HistoricalChildLink {
             parent_conversation_id: child,
             parent_tool_use_id: "tu-2".into(),
             delegation_call_id: "call-2".into(),
         };
-        create_with_delegation(
+        create_historical_child(
             &db.conn,
             folder,
             AgentType::Codex,
@@ -886,7 +908,9 @@ mod tests {
         let folder = seed_folder(&db, "/tmp/codeg-child-count-deleted").await;
         let (parent, child) = seed_parent_with_child(&db.conn, folder).await;
 
-        soft_delete(&db.conn, child).await.expect("soft delete child");
+        soft_delete(&db.conn, child)
+            .await
+            .expect("soft delete child");
 
         // A removed sub-session must not keep the parent's chevron alive: the
         // aggregate filters deleted_at IS NULL, matching list_children.
@@ -904,9 +928,15 @@ mod tests {
     async fn update_pin_sets_and_clears_without_bumping_updated_at() {
         let db = fresh_in_memory_db().await;
         let folder = seed_folder(&db, "/tmp/codeg-update-pin").await;
-        let conv = create(&db.conn, folder, AgentType::ClaudeCode, Some("c".into()), None)
-            .await
-            .expect("create");
+        let conv = create(
+            &db.conn,
+            folder,
+            AgentType::ClaudeCode,
+            Some("c".into()),
+            None,
+        )
+        .await
+        .expect("create");
 
         // Freshly created rows are unpinned, and the summary projection carries
         // the field through (conv_to_summary mapping).
@@ -921,7 +951,10 @@ mod tests {
         // preference, not activity).
         update_pin(&db.conn, conv.id, true).await.expect("pin");
         let pinned = get_by_id(&db.conn, conv.id).await.expect("get pinned");
-        assert!(pinned.pinned_at.is_some(), "pinned_at must be set after pin");
+        assert!(
+            pinned.pinned_at.is_some(),
+            "pinned_at must be set after pin"
+        );
         assert_eq!(
             pinned.updated_at, updated_at_before,
             "pinning must not bump updated_at"
@@ -959,11 +992,20 @@ mod tests {
     async fn create_leaves_title_unlocked() {
         let db = fresh_in_memory_db().await;
         let folder = seed_folder(&db, "/tmp/codeg-title-unlocked").await;
-        let row = create(&db.conn, folder, AgentType::ClaudeCode, Some("hi".into()), None)
-            .await
-            .expect("create");
+        let row = create(
+            &db.conn,
+            folder,
+            AgentType::ClaudeCode,
+            Some("hi".into()),
+            None,
+        )
+        .await
+        .expect("create");
         let summary = get_by_id(&db.conn, row.id).await.expect("get");
-        assert!(!summary.title_locked, "new conversation must start unlocked");
+        assert!(
+            !summary.title_locked,
+            "new conversation must start unlocked"
+        );
     }
 
     #[tokio::test]
@@ -1205,13 +1247,13 @@ mod tests {
         let parent = create(&db.conn, folder, AgentType::ClaudeCode, None, None)
             .await
             .expect("parent");
-        let child = create_with_delegation(
+        let child = create_historical_child(
             &db.conn,
             folder,
             AgentType::ClaudeCode,
             None,
             None,
-            Some(DelegationLink {
+            Some(HistoricalChildLink {
                 parent_conversation_id: parent.id,
                 parent_tool_use_id: "tu-activity".into(),
                 delegation_call_id: "call-activity".into(),
@@ -1265,13 +1307,13 @@ mod tests {
             .expect("chat");
         assert_eq!(chat.kind, ConversationKind::Chat);
 
-        let child = create_with_delegation(
+        let child = create_historical_child(
             &db.conn,
             folder_id,
             AgentType::Codex,
             None,
             None,
-            Some(DelegationLink {
+            Some(HistoricalChildLink {
                 parent_conversation_id: regular.id,
                 parent_tool_use_id: "tu-kind".into(),
                 delegation_call_id: "call-kind".into(),

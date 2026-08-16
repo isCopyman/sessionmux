@@ -4,16 +4,11 @@
 //!
 //! The companion speaks newline-delimited JSON-RPC 2.0 on stdio:
 //! one request → one response per line, with concurrent dispatch so
-//! `notifications/cancelled` can race an in-flight `tools/call`. It exposes up
-//! to six tools — `delegate_to_agent` (async; returns a `task_id` ack),
-//! `get_delegation_status` (poll/long-poll for the result), `cancel_delegation`,
-//! `check_user_feedback` (pull the user's mid-turn steering notes),
-//! `ask_user_question` (block on a multiple-choice card), and `get_session_info`
-//! (resolve a referenced session by id) — whose schemas are embedded at compile
-//! time from [`TOOL_SCHEMA_JSON`] and gated by the `--features` groups (delegation
-//! / feedback / ask / sessions). Only `delegate_to_agent` registers a broker-side
-//! cancel handle; canceling a status / cancel / feedback / session round-trip
-//! merely suppresses its response — and for `check_user_feedback` also skips the
+//! `notifications/cancelled` can race an in-flight `tools/call`. It exposes
+//! codeg-owned feedback, question, Session collaboration, task-reporting, and
+//! authoring tools whose schemas are embedded at compile time from
+//! [`TOOL_SCHEMA_JSON`] and gated by independent `--features` groups. Canceling
+//! a call suppresses its response; for `check_user_feedback` it also skips the
 //! delivery commit, so a cancelled note stays pending.
 //!
 //! Notifications (id = None) produce no response, matching MCP's expectation
@@ -21,13 +16,11 @@
 //!
 //! Cancellation flow per the MCP 2024-11-05 / 2025-11-25 cancellation utility:
 //!
-//! 1. Companion receives `tools/call` with JSON-RPC `id = X`, mints an opaque
-//!    `external_handle`, registers `X → (handle, cancel_tx)` in
-//!    [`InflightCalls`], and kicks off the broker round-trip.
+//! 1. Companion receives `tools/call` with JSON-RPC `id = X`, registers
+//!    `X → cancel_tx` in [`InflightCalls`], and starts the host round-trip.
 //! 2. If `notifications/cancelled` for `requestId = X` arrives, the
-//!    notification handler pops the entry, fires `cancel_tx`, and sends a
-//!    `BrokerMessage::Cancel { external_handle }` to the broker.
-//! 3. The `tools/call` task observes `cancel_tx`, abandons its UDS read,
+//!    notification handler pops the entry and fires `cancel_tx`.
+//! 3. The `tools/call` task abandons its UDS read,
 //!    and returns `None` — the binary suppresses the response per spec.
 //! 4. If the round-trip completes before the cancel arrives, the entry is
 //!    removed normally and the response goes out on stdout; a late cancel
@@ -46,16 +39,13 @@ use crate::acp::chat_authoring::{
     NewAutomationSpec, NewWorkTaskSpec, MAX_PROMPT_CHARS, MAX_TITLE_CHARS,
 };
 use crate::acp::delegation::transport::{
-    client_ask_round_trip, client_cancel, client_cancel_task_round_trip, client_commit_feedback,
-    client_create_automation_round_trip, client_create_work_task_round_trip,
-    client_feedback_round_trip, client_list_sessions_round_trip, client_round_trip,
-    client_send_message_round_trip, client_session_round_trip, client_status_round_trip,
+    client_ask_round_trip, client_commit_feedback, client_create_automation_round_trip,
+    client_create_work_task_round_trip, client_feedback_round_trip,
+    client_list_sessions_round_trip, client_send_message_round_trip, client_session_round_trip,
     client_task_complete_round_trip, client_task_progress_round_trip, BrokerAskRequest,
-    BrokerCancelRequest, BrokerCancelTaskRequest, BrokerCommitFeedbackRequest,
-    BrokerCreateAutomationRequest, BrokerCreateWorkTaskRequest, BrokerFeedbackRequest,
-    BrokerListSessionsRequest, BrokerRequest, BrokerResponse, BrokerSendMessageRequest,
-    BrokerSessionRequest, BrokerStatusRequest, BrokerTaskCompleteRequest,
-    BrokerTaskProgressRequest,
+    BrokerCommitFeedbackRequest, BrokerCreateAutomationRequest, BrokerCreateWorkTaskRequest,
+    BrokerFeedbackRequest, BrokerListSessionsRequest, BrokerResponse, BrokerSendMessageRequest,
+    BrokerSessionRequest, BrokerTaskCompleteRequest, BrokerTaskProgressRequest,
 };
 use crate::acp::question::parse_questions;
 use crate::acp::session_collaboration::{
@@ -65,29 +55,12 @@ use crate::acp::session_collaboration::{
 use crate::acp::session_info::MAX_SESSION_MESSAGES;
 use crate::models::AutomationAction;
 
-/// Upper bound on one broker-side cancel round-trip. Bounds both
-/// `handle_cancel_notification` (so stdin dispatch can't stall behind a
-/// stuck UDS connect/read) and the shutdown-drain loop (so an
-/// unresponsive listener can't keep the EOF / watchdog path hung). 500 ms
-/// is generous for a same-host UDS exchange and short enough that a user
-/// won't notice the bound being hit. Misses are absorbed by the codeg
-/// main side's `cancel_by_parent` cascade when the parent ACP connection
-/// eventually ends.
-const BROKER_CANCEL_BUDGET: Duration = Duration::from_millis(500);
-
-/// Wrap `client_cancel` in [`BROKER_CANCEL_BUDGET`] so callers can fire
-/// a synchronous cancel without worrying about a hung listener freezing
-/// them. Both success, transport error, and timeout collapse to `()` —
-/// callers couldn't usefully react anyway, and the broker has independent
-/// cancel backstops (parent / child disconnect cascades) if this one
-/// misses.
-async fn send_broker_cancel(socket_path: &str, req: &BrokerCancelRequest) {
-    let _ = tokio::time::timeout(BROKER_CANCEL_BUDGET, client_cancel(socket_path, req)).await;
-}
+/// Upper bound on the best-effort feedback delivery commit.
+const FEEDBACK_COMMIT_BUDGET: Duration = Duration::from_millis(500);
 
 /// Static MCP tool schema. Lives next to this module so codeg-mcp ships
 /// a single embedded copy — no runtime file IO, no version skew with the
-/// broker's [`super::types::DelegationRequest`].
+/// host listener.
 pub const TOOL_SCHEMA_JSON: &str = include_str!("tool_schema.json");
 
 #[derive(Debug, Deserialize)]
@@ -141,14 +114,11 @@ pub fn err(id: Value, code: i64, message: impl Into<String>) -> JsonRpcResponse 
     }
 }
 
-/// Which tool groups this companion exposes. One `codeg-mcp` process can carry
-/// the delegation tools, the feedback tool, or both — gated independently so
-/// each feature can be toggled in settings without the other. Passed in via the
-/// `--features` arg at launch; a tool whose group is off is hidden from
-/// `tools/list` and rejected on `tools/call`.
+/// Which tool groups this companion exposes. Passed in via the `--features`
+/// arg at launch; a tool whose group is off is hidden from `tools/list` and
+/// rejected on `tools/call`.
 #[derive(Debug, Clone, Copy)]
 pub struct CompanionFeatures {
-    pub delegation: bool,
     pub feedback: bool,
     pub ask: bool,
     pub sessions: bool,
@@ -164,15 +134,12 @@ pub struct CompanionFeatures {
 
 impl CompanionFeatures {
     /// Parse the comma-joined `--features` value (e.g.
-    /// `delegation,feedback,ask,sessions,collaboration,automations,taskboard`). Unknown tokens
-    /// are ignored. An absent
-    /// value (`None`) defaults to delegation-only — backward compatible with a
-    /// parent that predates feature gating (companion + listener ship together, so
-    /// post-upgrade the parent always passes an explicit `--features`).
+    /// `feedback,ask,sessions,collaboration,tasks,automations,taskboard`).
+    /// Unknown tokens are ignored. An absent value enables no tools; the main
+    /// process and companion ship together and always pass an explicit value.
     pub fn parse(raw: Option<&str>) -> Self {
         let Some(s) = raw else {
             return Self {
-                delegation: true,
                 feedback: false,
                 ask: false,
                 sessions: false,
@@ -183,7 +150,6 @@ impl CompanionFeatures {
             };
         };
         let mut f = Self {
-            delegation: false,
             feedback: false,
             ask: false,
             sessions: false,
@@ -194,7 +160,6 @@ impl CompanionFeatures {
         };
         for tok in s.split(',').map(str::trim).filter(|t| !t.is_empty()) {
             match tok {
-                "delegation" => f.delegation = true,
                 "feedback" => f.feedback = true,
                 "ask" => f.ask = true,
                 "sessions" => f.sessions = true,
@@ -218,14 +183,12 @@ impl CompanionFeatures {
             "task_progress" | "task_complete" => self.tasks,
             "create_automation" => self.automations,
             "create_work_task" => self.taskboard,
-            "delegate_to_agent" | "get_delegation_status" | "cancel_delegation" => self.delegation,
             _ => false,
         }
     }
 }
 
-/// Process arguments threaded through every `tools/call` so the dispatcher
-/// can build a [`BrokerRequest`] without re-parsing argv per call.
+/// Process arguments threaded through every `tools/call`.
 #[derive(Debug, Clone)]
 pub struct CompanionContext {
     pub parent_connection_id: String,
@@ -233,36 +196,12 @@ pub struct CompanionContext {
     pub token: String,
     /// Tool groups this launch exposes (see [`CompanionFeatures`]).
     pub features: CompanionFeatures,
-    /// Extra `agent_type` slugs (`custom:<id>` wire forms) appended to
-    /// `delegate_to_agent`'s enum at `tools/list` time. The embedded schema
-    /// only knows the built-in agents; the parent passes the custom agents
-    /// registered (and enabled) at injection time via `--custom-agents`.
-    /// Empty when the parent has none (or predates the flag) — the schema is
-    /// then served byte-identical to the embedded file.
-    pub custom_agents: Vec<String>,
-    /// Built-in `agent_type` slugs removed from `delegate_to_agent`'s enum at
-    /// `tools/list` time — the agents the user has disabled in settings,
-    /// passed via `--disabled-agents`. Subtracting companion-side keeps the
-    /// embedded schema the single source of truth for the builtin list and
-    /// its order. Empty when nothing is disabled (or the parent predates the
-    /// flag). Disabled customs never appear here: the parent just leaves them
-    /// out of `custom_agents`.
-    pub disabled_agents: Vec<String>,
 }
 
 /// Per-in-flight-call state. The companion stashes one of these per
 /// `tools/call` so a subsequent `notifications/cancelled` for the same
-/// JSON-RPC `id` can wake the round-trip task and trigger a broker-side
-/// cancel.
+/// JSON-RPC `id` can wake the round-trip task.
 pub struct InflightEntry {
-    /// Companion-minted opaque handle threaded through the broker, for the
-    /// `delegate_to_agent` tool ONLY — a `notifications/cancelled` during its
-    /// setup must tear down the just-started child via the broker's
-    /// `cancel_by_external_handle`. `None` for `get_delegation_status` /
-    /// `cancel_delegation`: canceling those round-trips only suppresses the
-    /// response (no broker-side cancel — the query/cancel itself must not touch
-    /// the task).
-    external_handle: Option<String>,
     /// Tripped by the cancel handler to wake the round-trip task.
     cancel_tx: oneshot::Sender<()>,
 }
@@ -290,11 +229,8 @@ impl InflightCalls {
     }
 
     /// Drain every in-flight entry, clearing the registry. Called at
-    /// companion shutdown so we can fire one broker cancel per pending
-    /// delegation — without this the broker would park on `rx.await` for
-    /// each entry until the parent ACP connection's `cancel_by_parent`
-    /// fires (or never, if the agent CLI keeps running after only the
-    /// MCP child died).
+    /// companion shutdown so every pending call is woken before the runtime
+    /// exits.
     pub async fn drain_all(&self) -> Vec<InflightEntry> {
         let mut map = self.inner.lock().await;
         map.drain().map(|(_k, v)| v).collect()
@@ -371,7 +307,7 @@ pub async fn dispatch_line(
     // the only notification we act on.
     if req.id.is_none() {
         if req.method == "notifications/cancelled" {
-            handle_cancel_notification(ctx, &inflight, &req.params).await;
+            handle_cancel_notification(&inflight, &req.params).await;
         }
         return LineAction::Silent;
     }
@@ -403,7 +339,7 @@ pub async fn dispatch_line(
                     ));
                 }
             };
-            let mut tools = match all.as_array() {
+            let tools = match all.as_array() {
                 Some(arr) => Value::Array(
                     arr.iter()
                         .filter(|t| {
@@ -417,71 +353,10 @@ pub async fn dispatch_line(
                 ),
                 None => all,
             };
-            remove_disabled_agents_from_delegate_enum(&mut tools, &ctx.disabled_agents);
-            append_custom_agents_to_delegate_enum(&mut tools, &ctx.custom_agents);
             LineAction::Respond(ok(id, json!({ "tools": tools })))
         }
         "tools/call" => build_tools_call_spawn(ctx.clone(), inflight, id, req.params).await,
         _ => LineAction::Respond(err(id, -32601, format!("method not found: {}", req.method))),
-    }
-}
-
-/// Remove the parent-declared disabled agents from `delegate_to_agent`'s
-/// `agent_type` enum, so only targets the user can actually launch are
-/// advertised. Same defensive posture as the append below: a missing tool /
-/// property / enum array leaves the tools untouched, and a slug the embedded
-/// list doesn't contain is a no-op — a parent/companion version skew can
-/// narrow the enum, never corrupt it.
-fn remove_disabled_agents_from_delegate_enum(tools: &mut Value, disabled_agents: &[String]) {
-    if disabled_agents.is_empty() {
-        return;
-    }
-    let Some(arr) = tools.as_array_mut() else {
-        return;
-    };
-    let Some(variants) = arr
-        .iter_mut()
-        .find(|t| t.get("name").and_then(|v| v.as_str()) == Some("delegate_to_agent"))
-        .and_then(|t| t.pointer_mut("/inputSchema/properties/agent_type/enum"))
-        .and_then(|e| e.as_array_mut())
-    else {
-        return;
-    };
-    variants.retain(|variant| {
-        variant
-            .as_str()
-            .map(|slug| !disabled_agents.iter().any(|d| d == slug))
-            .unwrap_or(true)
-    });
-}
-
-/// Append the parent-provided custom-agent slugs to `delegate_to_agent`'s
-/// `agent_type` enum. The embedded schema stays the single source of truth
-/// for the built-in list (and its order); customs are appended after it,
-/// de-duplicated, so a stale double-send can never corrupt the schema. A
-/// missing tool / property / enum array (feature-filtered list, or a future
-/// schema shape change) leaves the tools untouched rather than erroring —
-/// serving the narrower built-in enum is strictly better than serving no
-/// tools at all.
-fn append_custom_agents_to_delegate_enum(tools: &mut Value, custom_agents: &[String]) {
-    if custom_agents.is_empty() {
-        return;
-    }
-    let Some(arr) = tools.as_array_mut() else {
-        return;
-    };
-    let Some(variants) = arr
-        .iter_mut()
-        .find(|t| t.get("name").and_then(|v| v.as_str()) == Some("delegate_to_agent"))
-        .and_then(|t| t.pointer_mut("/inputSchema/properties/agent_type/enum"))
-        .and_then(|e| e.as_array_mut())
-    else {
-        return;
-    };
-    for slug in custom_agents {
-        if !variants.iter().any(|v| v.as_str() == Some(slug)) {
-            variants.push(Value::String(slug.clone()));
-        }
     }
 }
 
@@ -510,90 +385,6 @@ async fn build_tools_call_spawn(
         return LineAction::Respond(err(id, -32602, format!("unknown tool: {name}")));
     }
     match name.as_str() {
-        "delegate_to_agent" => {
-            // MCP clients (Codex / Claude Code) generally do NOT populate
-            // `_meta.tool_use_id` when calling an MCP server. We still surface it
-            // when present (the most precise binding), but a missing one is
-            // expected — the broker falls back to claiming the most recent
-            // `delegate_to_agent` tool_call_id observed on the parent's ACP
-            // event stream.
-            let tool_use_id = params
-                .get("_meta")
-                .and_then(|m| m.get("tool_use_id"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
-            // Mint an external_handle so a `notifications/cancelled` during setup
-            // tears down the just-started child via `cancel_by_external_handle`.
-            let external_handle = uuid::Uuid::new_v4().to_string();
-            let req = BrokerRequest {
-                token: ctx.token.clone(),
-                parent_connection_id: ctx.parent_connection_id.clone(),
-                parent_tool_use_id: tool_use_id,
-                external_handle: Some(external_handle.clone()),
-                input: arguments,
-            };
-            let round_trip = Box::pin(async move { client_round_trip(&socket, &req).await });
-            register_and_spawn(
-                inflight,
-                id,
-                Some(external_handle),
-                round_trip,
-                render_task_report,
-            )
-            .await
-        }
-        "get_delegation_status" => {
-            // Normalize the `task_ids` array: trim, drop empty/whitespace
-            // entries, de-dup (order-preserving). A non-string entry violates the
-            // schema's `items: string` contract and is rejected outright (rather
-            // than silently polling a subset); an all-empty / missing array maps
-            // to `Ok(empty)`, rejected below.
-            let task_ids = match normalize_status_task_ids(&arguments) {
-                Ok(ids) if !ids.is_empty() => ids,
-                Ok(_) => {
-                    return LineAction::Respond(err(
-                        id,
-                        -32602,
-                        "get_delegation_status requires a non-empty task_ids array \
-                         (one or more task ids)",
-                    ));
-                }
-                Err(msg) => return LineAction::Respond(err(id, -32602, msg)),
-            };
-            let wait_ms = arguments.get("wait_ms").and_then(|v| v.as_u64());
-            let req = BrokerStatusRequest {
-                token: ctx.token.clone(),
-                task_ids,
-                wait_ms,
-            };
-            // No external_handle: canceling a status query only suppresses its
-            // response — it must not touch the task itself. The status round-trip
-            // returns a `{tasks:[..]}` envelope, so it renders via
-            // `render_status_result` — uniformly one `{tasks:[..]}` entry per id,
-            // whether the poll asked for a single id or a whole fan-out.
-            let round_trip = Box::pin(async move { client_status_round_trip(&socket, &req).await });
-            register_and_spawn(inflight, id, None, round_trip, render_status_result).await
-        }
-        "cancel_delegation" => {
-            let task_id = match arguments.get("task_id").and_then(|v| v.as_str()) {
-                Some(s) if !s.is_empty() => s.to_string(),
-                _ => {
-                    return LineAction::Respond(err(
-                        id,
-                        -32602,
-                        "cancel_delegation requires a non-empty string task_id",
-                    ));
-                }
-            };
-            let req = BrokerCancelTaskRequest {
-                token: ctx.token.clone(),
-                task_id,
-            };
-            let round_trip =
-                Box::pin(async move { client_cancel_task_round_trip(&socket, &req).await });
-            register_and_spawn(inflight, id, None, round_trip, render_task_report).await
-        }
         "check_user_feedback" => {
             let req = BrokerFeedbackRequest {
                 token: ctx.token.clone(),
@@ -622,7 +413,7 @@ async fn build_tools_call_spawn(
             // socket, which the listener observes (peer-close) to tear the
             // pending question down — no broker-side cancel to dispatch.
             let round_trip = Box::pin(async move { client_ask_round_trip(&socket, &req).await });
-            register_and_spawn(inflight, id, None, round_trip, render_ask_result).await
+            register_and_spawn(inflight, id, round_trip, render_ask_result).await
         }
         "get_session_info" => {
             // `session_id` is the codeg conversation id the agent read out of a
@@ -652,7 +443,7 @@ async fn build_tools_call_spawn(
             // broker-side — canceling only suppresses the response.
             let round_trip =
                 Box::pin(async move { client_session_round_trip(&socket, &req).await });
-            register_and_spawn(inflight, id, None, round_trip, render_session_result).await
+            register_and_spawn(inflight, id, round_trip, render_session_result).await
         }
         "list_sessions" => {
             let query = arguments
@@ -669,7 +460,7 @@ async fn build_tools_call_spawn(
             };
             let round_trip =
                 Box::pin(async move { client_list_sessions_round_trip(&socket, &req).await });
-            register_and_spawn(inflight, id, None, round_trip, render_session_list_result).await
+            register_and_spawn(inflight, id, round_trip, render_session_list_result).await
         }
         "send_message" => {
             let target_session_ids = match parse_target_session_ids(&arguments) {
@@ -725,9 +516,7 @@ async fn build_tools_call_spawn(
                     ))
                 }
             };
-            if steer_if_supported
-                && delivery_mode == SessionMessageDeliveryMode::DeliverOnly
-            {
+            if steer_if_supported && delivery_mode == SessionMessageDeliveryMode::DeliverOnly {
                 return LineAction::Respond(err(
                     id,
                     -32602,
@@ -752,7 +541,7 @@ async fn build_tools_call_spawn(
             };
             let round_trip =
                 Box::pin(async move { client_send_message_round_trip(&socket, &req).await });
-            register_and_spawn(inflight, id, None, round_trip, render_session_send_result).await
+            register_and_spawn(inflight, id, round_trip, render_session_send_result).await
         }
         "task_progress" => {
             let message = arguments
@@ -776,7 +565,7 @@ async fn build_tools_call_spawn(
             // cancel broker-side.
             let round_trip =
                 Box::pin(async move { client_task_progress_round_trip(&socket, &req).await });
-            register_and_spawn(inflight, id, None, round_trip, render_task_ack).await
+            register_and_spawn(inflight, id, round_trip, render_task_ack).await
         }
         "task_complete" => {
             let verdict = arguments
@@ -804,7 +593,7 @@ async fn build_tools_call_spawn(
             };
             let round_trip =
                 Box::pin(async move { client_task_complete_round_trip(&socket, &req).await });
-            register_and_spawn(inflight, id, None, round_trip, render_task_ack).await
+            register_and_spawn(inflight, id, round_trip, render_task_ack).await
         }
         "create_automation" => {
             // Validate the shape HERE so a malformed call gets a synchronous
@@ -823,7 +612,7 @@ async fn build_tools_call_spawn(
             // down broker-side.
             let round_trip =
                 Box::pin(async move { client_create_automation_round_trip(&socket, &req).await });
-            register_and_spawn(inflight, id, None, round_trip, render_authoring_result).await
+            register_and_spawn(inflight, id, round_trip, render_authoring_result).await
         }
         "create_work_task" => {
             let spec = match parse_work_task_spec(&arguments) {
@@ -836,38 +625,25 @@ async fn build_tools_call_spawn(
             };
             let round_trip =
                 Box::pin(async move { client_create_work_task_round_trip(&socket, &req).await });
-            register_and_spawn(inflight, id, None, round_trip, render_authoring_result).await
+            register_and_spawn(inflight, id, round_trip, render_authoring_result).await
         }
         other => LineAction::Respond(err(id, -32602, format!("unknown tool: {other}"))),
     }
 }
 
 /// Register the inflight entry and build the [`SpawnedCall`] that races the
-/// broker round-trip against the cancel signal. `external_handle` is `Some` only
-/// for `delegate_to_agent` (so a cancel during setup tears the child down);
-/// `None` for status/cancel queries (a cancel only suppresses the response).
-///
-/// `render` maps the broker's `BrokerResponse.outcome` into the MCP `tools/call`
-/// result body: `delegate_to_agent` / `cancel_delegation` pass
-/// [`render_task_report`] (a single report); `get_delegation_status` passes
-/// [`render_status_result`] (always a `{tasks:[..]}` envelope, one entry per id).
+/// host round-trip against the cancel signal. `render` maps the listener's
+/// `BrokerResponse.outcome` into the MCP `tools/call` result body.
 async fn register_and_spawn(
     inflight: Arc<InflightCalls>,
     id: Value,
-    external_handle: Option<String>,
     round_trip: futures_util::future::BoxFuture<'static, std::io::Result<BrokerResponse>>,
     render: fn(&Value) -> Value,
 ) -> LineAction {
     let (cancel_tx, cancel_rx) = oneshot::channel();
     let id_key = request_id_key(&id);
     inflight
-        .register(
-            id_key.clone(),
-            InflightEntry {
-                external_handle,
-                cancel_tx,
-            },
-        )
+        .register(id_key.clone(), InflightEntry { cancel_tx })
         .await;
 
     let id_for_response = id.clone();
@@ -875,10 +651,7 @@ async fn register_and_spawn(
     let inflight_for_task = inflight.clone();
     let future = Box::pin(async move {
         // Race the UDS round-trip against the cancel signal. Cancel wins →
-        // suppress the response per MCP spec; for `delegate_to_agent` the cancel
-        // notification handler is responsible for dispatching the broker-side
-        // `Cancel` (status/cancel queries carry no external_handle, so nothing
-        // is dispatched).
+        // suppress the response per MCP spec.
         let response = tokio::select! {
             biased;
             _ = cancel_rx => {
@@ -897,7 +670,6 @@ async fn register_and_spawn(
                 }
             }
         };
-        // Delegation / status / cancel have no post-relay step.
         SpawnResult {
             response,
             after_relay: None,
@@ -936,13 +708,7 @@ async fn register_and_spawn_feedback(
     let (cancel_tx, cancel_rx) = oneshot::channel();
     let id_key = request_id_key(&id);
     inflight
-        .register(
-            id_key.clone(),
-            InflightEntry {
-                external_handle: None,
-                cancel_tx,
-            },
-        )
+        .register(id_key.clone(), InflightEntry { cancel_tx })
         .await;
 
     let id_for_response = id.clone();
@@ -1001,7 +767,7 @@ async fn register_and_spawn_feedback(
 }
 
 /// Send a `CommitFeedback` for the note ids the listener embedded in the
-/// response (`_commit_ids`). Fire-and-forget, bounded by [`BROKER_CANCEL_BUDGET`]:
+/// response (`_commit_ids`). Fire-and-forget, bounded by [`FEEDBACK_COMMIT_BUDGET`]:
 /// a failed commit just leaves the notes pending for the next check.
 async fn commit_feedback_after_delivery(socket: &str, token: &str, outcome: &Value) {
     let ids: Vec<String> = outcome
@@ -1020,17 +786,14 @@ async fn commit_feedback_after_delivery(socket: &str, token: &str, outcome: &Val
         token: token.to_string(),
         ids,
     };
-    let _ = tokio::time::timeout(BROKER_CANCEL_BUDGET, client_commit_feedback(socket, &req)).await;
+    let _ =
+        tokio::time::timeout(FEEDBACK_COMMIT_BUDGET, client_commit_feedback(socket, &req)).await;
 }
 
 /// Handle a `notifications/cancelled` notification. Looks up the in-flight
 /// call by `requestId` and fires its cancel channel. Unknown ids are
 /// silently ignored per MCP spec.
-async fn handle_cancel_notification(
-    ctx: &CompanionContext,
-    inflight: &Arc<InflightCalls>,
-    params: &Value,
-) {
+async fn handle_cancel_notification(inflight: &Arc<InflightCalls>, params: &Value) {
     let request_id = match params.get("requestId") {
         Some(v) => v.clone(),
         None => return,
@@ -1040,147 +803,16 @@ async fn handle_cancel_notification(
         return;
     };
     let _ = entry.cancel_tx.send(());
-    // Only `delegate_to_agent` carries an external_handle. For
-    // `get_delegation_status` / `cancel_delegation` there is nothing to cancel
-    // broker-side — suppressing the (possibly long-poll) response is the whole
-    // effect, and dispatching a broker `Cancel` would wrongly target a task.
-    let Some(external_handle) = entry.external_handle else {
-        return;
-    };
-    // Single broker-side cancel per notification: the round-trip task
-    // observes `cancel_rx` and only suppresses its response. If we ALSO
-    // dispatched a cancel from the task we'd hit the broker twice — the
-    // first call drains the pending entry, the second buffers the handle
-    // in `pre_canceled_handles` with no consumer (silent leak).
-    //
-    // Synchronous, bounded by `BROKER_CANCEL_BUDGET`. Detaching via
-    // `tokio::spawn` would race the runtime shutdown: if stdin closes
-    // before the spawned task scheduled its UDS connect, the runtime
-    // drops it and the broker never gets the cancel. The bounded await
-    // here guarantees the cancel either lands or hits a known cap
-    // before the next stdin line is read.
-    let cancel_req = BrokerCancelRequest {
-        token: ctx.token.clone(),
-        external_handle,
-        reason: params
-            .get("reason")
-            .and_then(|v| v.as_str())
-            .map(str::to_string),
-    };
-    send_broker_cancel(&ctx.socket_path, &cancel_req).await;
 }
 
-/// Drain every in-flight `tools/call` entry and dispatch a broker cancel
-/// for each. Called at companion shutdown (stdin EOF, parent-watchdog
-/// fire) so the broker doesn't hold a `pending` row open forever waiting
-/// for a `TurnComplete` whose response we couldn't deliver anyway. Each
-/// cancel is bounded by [`BROKER_CANCEL_BUDGET`] so a hung listener
-/// can't pin shutdown — the codeg main side's `cancel_by_parent` cascade
-/// is the eventual backstop for any cancel that times out here.
-pub async fn drain_and_cancel_all(
-    ctx: &CompanionContext,
-    inflight: &Arc<InflightCalls>,
-    reason: &str,
-) {
+/// Drain every in-flight `tools/call` entry and wake its task. Called at
+/// companion shutdown (stdin EOF or parent-watchdog fire).
+pub async fn drain_inflight_calls(inflight: &Arc<InflightCalls>) {
     for entry in inflight.drain_all().await {
-        // Wake the round-trip task if it's still scheduled, so it can
-        // exit promptly when the runtime tears down.
         let _ = entry.cancel_tx.send(());
-        // Only delegate_to_agent entries hold an external_handle worth a
-        // broker-side cancel; status/cancel queries have nothing to tear down.
-        let Some(external_handle) = entry.external_handle else {
-            continue;
-        };
-        let cancel_req = BrokerCancelRequest {
-            token: ctx.token.clone(),
-            external_handle,
-            reason: Some(reason.to_string()),
-        };
-        send_broker_cancel(&ctx.socket_path, &cancel_req).await;
     }
 }
 
-/// Normalize the MCP `get_delegation_status` arguments into the wire `task_ids`
-/// list. Reads the `task_ids` array, trims each entry, drops empty / whitespace
-/// strings, and de-duplicates while preserving first-seen order. A non-string
-/// entry violates the schema's `items: string` contract, so the whole call is
-/// rejected (`Err`) instead of silently polling a subset — otherwise a malformed
-/// `{"task_ids":[123,"abc"]}` would quietly resolve to just `abc`. `Ok(empty)`
-/// means nothing usable was supplied (missing array, or all empty/whitespace);
-/// the caller rejects both `Err` and `Ok(empty)` with `-32602`. Empty strings are
-/// dropped (not rejected): `items` carries no `minLength`, so `""` satisfies the
-/// schema and is treated as a formatting nicety. No upper bound on the count: a
-/// fan-out can be arbitrarily wide.
-fn normalize_status_task_ids(arguments: &Value) -> Result<Vec<String>, String> {
-    let Some(arr) = arguments.get("task_ids").and_then(|v| v.as_array()) else {
-        return Ok(Vec::new());
-    };
-    let mut out: Vec<String> = Vec::new();
-    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for v in arr {
-        let Some(s) = v.as_str() else {
-            return Err(
-                "get_delegation_status task_ids must contain only string task ids".to_string(),
-            );
-        };
-        let trimmed = s.trim();
-        if !trimmed.is_empty() && seen.insert(trimmed.to_string()) {
-            out.push(trimmed.to_string());
-        }
-    }
-    Ok(out)
-}
-
-/// Render the `get_delegation_status` round-trip outcome (always a
-/// `{ "tasks": [..] }` envelope from the broker) into an MCP `tools/call`
-/// result. EVERY poll renders through [`render_batch_report`] — a single id and
-/// a fan-out take the SAME path — so the shape the LLM and frontend see is
-/// uniform: a `{ "tasks": [..] }` object with one entry per requested id (one
-/// entry for a single id), each carrying its `task_id` + `status`. A bare report
-/// with no `tasks` array (older / unexpected shape) is wrapped as a one-element
-/// batch so the output stays uniform.
-pub fn render_status_result(outcome: &Value) -> Value {
-    match outcome.get("tasks").and_then(|v| v.as_array()) {
-        Some(tasks) => render_batch_report(tasks),
-        None => render_batch_report(std::slice::from_ref(outcome)),
-    }
-}
-
-/// Render a `get_delegation_status` result as a `{ "tasks": [..] }` batch — the
-/// single rendering path for every poll, whether it carries one report or many.
-/// The `content` text is the compact `{ "tasks": [..] }` JSON so hosts that
-/// persist only `CallToolResult.content` text (e.g. Claude Code) can still
-/// recover every task; `structuredContent` carries the same shape for hosts that
-/// keep it. `isError` is set only when EVERY task failed — a coarse signal (a
-/// lone failed task therefore flags `isError`, matching the old single-report
-/// behavior); the frontend derives per-task badges from the structured reports,
-/// not from this flag.
-fn render_batch_report(tasks: &[Value]) -> Value {
-    let all_failed = !tasks.is_empty()
-        && tasks
-            .iter()
-            .all(|t| t.get("status").and_then(|v| v.as_str()) == Some("failed"));
-    let envelope = json!({ "tasks": tasks });
-    let text = serde_json::to_string(&envelope).unwrap_or_else(|_| String::from("{\"tasks\":[]}"));
-    json!({
-        "content": [{ "type": "text", "text": text }],
-        "isError": all_failed,
-        "structuredContent": envelope,
-    })
-}
-
-/// Map a serialized [`super::types::DelegationTaskReport`] into MCP `tools/call`
-/// result content. Shared by `delegate_to_agent` and `cancel_delegation`, which
-/// each resolve to a single report; `get_delegation_status` no longer uses this
-/// path — it always renders via [`render_status_result`] / [`render_batch_report`].
-/// Kept separate so unit tests can assert the mapping without a real socket.
-///
-/// The human-readable `content` text is the result for a `completed` task and
-/// the `message` (status note / failure reason) otherwise. `isError` is set
-/// ONLY for `failed` — `running` (ack), `canceled` (a successful cancel or a
-/// canceled task), and `unknown` are all valid tool results the LLM should read
-/// rather than treat as errors. The full report rides along in
-/// `structuredContent` so the frontend can read `status` + the child ids.
 /// Map the `check_user_feedback` round-trip outcome (a `{ count, feedback:[..] }`
 /// envelope from the listener) into an MCP `tools/call` result.
 ///
@@ -1770,1023 +1402,197 @@ fn render_session_summary_text(o: &Value) -> String {
     out
 }
 
-pub fn render_task_report(report: &Value) -> Value {
-    let status = report.get("status").and_then(|v| v.as_str()).unwrap_or("");
-    let is_error = status == "failed";
-    let report_str = |key: &str| {
-        report
-            .get(key)
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty())
-    };
-    let text = if status == "completed" {
-        // Prefer the result text; fall back to `message` so the DB-fallback note
-        // ("Result no longer cached; open child session N…") for an evicted
-        // result isn't rendered as empty content.
-        report_str("text")
-            .or_else(|| report_str("message"))
-            .unwrap_or("")
-            .to_string()
-    } else {
-        report_str("message")
-            .or_else(|| report_str("text"))
-            .unwrap_or("")
-            .to_string()
-    };
-    json!({
-        "content": [{ "type": "text", "text": text }],
-        "isError": is_error,
-        "structuredContent": report.clone(),
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn ctx() -> CompanionContext {
-        // Delegation-only by default so the existing delegation-focused tests
-        // keep seeing exactly the three delegation tools.
-        ctx_with(CompanionFeatures {
-            delegation: true,
+    fn all_features() -> CompanionFeatures {
+        CompanionFeatures {
+            feedback: true,
+            ask: true,
+            sessions: true,
+            collaboration: true,
+            tasks: true,
+            automations: true,
+            taskboard: true,
+        }
+    }
+
+    fn collaboration_features() -> CompanionFeatures {
+        CompanionFeatures {
             feedback: false,
             ask: false,
             sessions: false,
-            collaboration: false,
+            collaboration: true,
             tasks: false,
             automations: false,
             taskboard: false,
-        })
+        }
     }
 
-    fn ctx_with(features: CompanionFeatures) -> CompanionContext {
+    fn ctx(features: CompanionFeatures) -> CompanionContext {
         CompanionContext {
-            parent_connection_id: "p1".into(),
-            socket_path: "/tmp/codeg-mcp-companion-test-nope.sock".into(),
-            token: "tok".into(),
+            parent_connection_id: "parent-1".into(),
+            socket_path: "/tmp/codeg-mcp-test.sock".into(),
+            token: "token".into(),
             features,
-            custom_agents: Vec::new(),
-            disabled_agents: Vec::new(),
         }
     }
 
-    async fn dispatch_for_test(line: &str) -> LineAction {
-        dispatch_line(&ctx(), Arc::new(InflightCalls::new()), line).await
-    }
-
-    async fn dispatch_with_features(features: CompanionFeatures, line: &str) -> LineAction {
-        dispatch_line(&ctx_with(features), Arc::new(InflightCalls::new()), line).await
-    }
-
-    fn unwrap_respond(action: LineAction) -> JsonRpcResponse {
+    async fn response(action: LineAction) -> JsonRpcResponse {
         match action {
-            LineAction::Respond(r) => r,
-            LineAction::Spawn(_) => panic!("expected Respond, got Spawn"),
-            LineAction::Silent => panic!("expected Respond, got Silent"),
+            LineAction::Respond(response) => response,
+            LineAction::Spawn(spawned) => spawned
+                .future
+                .await
+                .response
+                .expect("spawned call should respond"),
+            LineAction::Silent => panic!("expected response"),
         }
     }
 
     #[tokio::test]
-    async fn initialize_returns_protocol_version() {
-        let line = r#"{"jsonrpc":"2.0","id":1,"method":"initialize"}"#;
-        let resp = unwrap_respond(dispatch_for_test(line).await);
-        let result = resp.result.unwrap();
-        assert_eq!(result["protocolVersion"], "2024-11-05");
-        assert_eq!(result["serverInfo"]["name"], "codeg-mcp");
+    async fn initialize_reports_mcp_capabilities() {
+        let action = dispatch_line(
+            &ctx(all_features()),
+            Arc::new(InflightCalls::new()),
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#,
+        )
+        .await;
+        let response = response(action).await;
+        assert_eq!(response.result.unwrap()["serverInfo"]["name"], "codeg-mcp");
     }
 
     #[tokio::test]
-    async fn tools_list_returns_three_delegation_tools() {
-        let line = r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#;
-        let resp = unwrap_respond(dispatch_for_test(line).await);
-        let result = resp.result.unwrap();
-        let tools = result["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 3);
-        let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert!(names.contains(&"delegate_to_agent"));
-        assert!(names.contains(&"get_delegation_status"));
-        assert!(names.contains(&"cancel_delegation"));
-        // delegate_to_agent schema still enumerates all 12 agent types.
-        let delegate = tools
-            .iter()
-            .find(|t| t["name"] == "delegate_to_agent")
-            .unwrap();
-        let agents = delegate["inputSchema"]["properties"]["agent_type"]["enum"]
-            .as_array()
-            .unwrap();
-        assert_eq!(agents.len(), 12);
-        assert!(agents.iter().any(|a| a == "hermes"));
-        assert!(agents.iter().any(|a| a == "code_buddy"));
-        assert!(agents.iter().any(|a| a == "kimi_code"));
-        assert!(agents.iter().any(|a| a == "pi"));
-        assert!(agents.iter().any(|a| a == "grok"));
-        assert!(agents.iter().any(|a| a == "cursor"));
-        // get_delegation_status takes a single id param — task_ids (required) —
-        // plus wait_ms. The legacy single `task_id` param is gone.
-        let status = tools
-            .iter()
-            .find(|t| t["name"] == "get_delegation_status")
-            .unwrap();
-        assert!(status["inputSchema"]["properties"]["task_id"].is_null());
-        assert!(status["inputSchema"]["properties"]["task_ids"].is_object());
-        assert!(status["inputSchema"]["properties"]["wait_ms"].is_object());
-        let required = status["inputSchema"]["required"].as_array().unwrap();
-        assert!(required.iter().any(|v| v == "task_ids"));
-    }
-
-    #[tokio::test]
-    async fn custom_agents_extend_the_delegate_enum_after_the_builtins() {
-        let mut ctx = ctx();
-        // The duplicate and the already-built-in slug exercise the de-dup: a
-        // parent that double-sends (or somehow lists a builtin) must not
-        // produce a corrupted enum.
-        ctx.custom_agents = vec![
-            "custom:goose".into(),
-            "custom:amp".into(),
-            "custom:goose".into(),
-            "codex".into(),
-        ];
-        let line = r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#;
-        let resp = unwrap_respond(dispatch_line(&ctx, Arc::new(InflightCalls::new()), line).await);
-        let tools = resp.result.unwrap()["tools"].clone();
-        let delegate = tools
+    async fn tools_list_contains_only_shared_host_bridge_tools() {
+        let action = dispatch_line(
+            &ctx(all_features()),
+            Arc::new(InflightCalls::new()),
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}"#,
+        )
+        .await;
+        let response = response(action).await;
+        let result = response.result.unwrap();
+        let names: Vec<&str> = result["tools"]
             .as_array()
             .unwrap()
             .iter()
-            .find(|t| t["name"] == "delegate_to_agent")
-            .cloned()
-            .unwrap();
-        let agents = delegate["inputSchema"]["properties"]["agent_type"]["enum"]
-            .as_array()
-            .unwrap()
-            .clone();
-        assert_eq!(agents.len(), 14, "12 builtins + 2 distinct customs");
-        // Builtins keep the embedded order and come first.
-        assert_eq!(agents[0], "claude_code");
-        assert_eq!(agents[12], "custom:goose");
-        assert_eq!(agents[13], "custom:amp");
-        // The other delegation tools carry no agent_type and are untouched.
-        let status = tools
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|t| t["name"] == "get_delegation_status")
-            .unwrap();
-        assert!(status["inputSchema"]["properties"]["agent_type"].is_null());
-    }
-
-    // Disabled builtins are subtracted from the enum (the user's settings
-    // toggles must narrow the advertised targets), the remaining builtins keep
-    // the embedded order, enabled customs still append after them, and a slug
-    // the embedded list doesn't know is a harmless no-op — version skew can
-    // narrow the enum, never corrupt it.
-    #[tokio::test]
-    async fn disabled_agents_are_subtracted_from_the_delegate_enum() {
-        let mut ctx = ctx();
-        ctx.disabled_agents = vec!["codex".into(), "grok".into(), "not-an-agent".into()];
-        ctx.custom_agents = vec!["custom:goose".into()];
-        let line = r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#;
-        let resp = unwrap_respond(dispatch_line(&ctx, Arc::new(InflightCalls::new()), line).await);
-        let tools = resp.result.unwrap()["tools"].clone();
-        let delegate = tools
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|t| t["name"] == "delegate_to_agent")
-            .cloned()
-            .unwrap();
-        let agents = delegate["inputSchema"]["properties"]["agent_type"]["enum"]
-            .as_array()
-            .unwrap()
-            .clone();
-        assert_eq!(agents.len(), 11, "12 builtins - 2 disabled + 1 custom");
-        assert!(!agents.contains(&serde_json::json!("codex")));
-        assert!(!agents.contains(&serde_json::json!("grok")));
-        // Survivors keep the embedded order, customs still come last.
-        assert_eq!(agents[0], "claude_code");
-        assert_eq!(agents[1], "open_code");
-        assert_eq!(agents[10], "custom:goose");
-    }
-
-    // An empty disabled list (the parent omitted `--disabled-agents`) leaves
-    // the schema byte-identical to the embedded builtin set — the exact
-    // behavior every pre-flag parent relies on.
-    #[tokio::test]
-    async fn empty_disabled_list_serves_the_embedded_builtin_enum_unchanged() {
-        let line = r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#;
-        let resp = unwrap_respond(dispatch_for_test(line).await);
-        let tools = resp.result.unwrap()["tools"].clone();
-        let delegate = tools
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|t| t["name"] == "delegate_to_agent")
-            .cloned()
-            .unwrap();
-        let agents = delegate["inputSchema"]["properties"]["agent_type"]["enum"]
-            .as_array()
-            .unwrap()
-            .clone();
-        assert_eq!(agents.len(), 12);
-        assert_eq!(agents[0], "claude_code");
-        assert_eq!(agents[11], "cursor");
-    }
-
-    #[tokio::test]
-    async fn get_delegation_status_without_task_ids_rejected() {
-        let line = r#"{
-            "jsonrpc":"2.0",
-            "id":11,
-            "method":"tools/call",
-            "params": { "name": "get_delegation_status", "arguments": {} }
-        }"#;
-        let resp = unwrap_respond(dispatch_for_test(line).await);
-        let e = resp.error.unwrap();
-        assert_eq!(e.code, -32602);
-        assert!(e.message.contains("task_ids"));
-    }
-
-    #[tokio::test]
-    async fn notifications_initialized_produces_no_response() {
-        let line = r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#;
-        let action = dispatch_for_test(line).await;
-        assert!(matches!(action, LineAction::Silent));
-    }
-
-    #[tokio::test]
-    async fn parse_error_returns_null_id_error() {
-        let line = "not json";
-        let resp = unwrap_respond(dispatch_for_test(line).await);
-        let e = resp.error.unwrap();
-        assert_eq!(e.code, -32700);
-        assert!(e.message.contains("parse"));
-        assert_eq!(resp.id, Value::Null);
-    }
-
-    #[tokio::test]
-    async fn unknown_method_returns_32601() {
-        let line = r#"{"jsonrpc":"2.0","id":9,"method":"resources/list"}"#;
-        let resp = unwrap_respond(dispatch_for_test(line).await);
-        let e = resp.error.unwrap();
-        assert_eq!(e.code, -32601);
-    }
-
-    #[tokio::test]
-    async fn tools_call_with_unknown_tool_rejected_synchronously() {
-        let line = r#"{
-            "jsonrpc":"2.0",
-            "id":3,
-            "method":"tools/call",
-            "params": {
-                "name": "other_tool",
-                "arguments": {},
-                "_meta": {"tool_use_id": "tu1"}
-            }
-        }"#;
-        let resp = unwrap_respond(dispatch_for_test(line).await);
-        let e = resp.error.unwrap();
-        assert_eq!(e.code, -32602);
-        assert!(e.message.contains("other_tool"));
-    }
-
-    #[tokio::test]
-    async fn tools_call_registers_inflight_and_returns_spawn() {
-        let inflight = Arc::new(InflightCalls::new());
-        let line = r#"{
-            "jsonrpc":"2.0",
-            "id":4,
-            "method":"tools/call",
-            "params": {
-                "name": "delegate_to_agent",
-                "arguments": {"agent_type": "codex", "task": "x"}
-            }
-        }"#;
-        let action = dispatch_line(&ctx(), inflight.clone(), line).await;
-        match action {
-            LineAction::Spawn(call) => {
-                assert_eq!(call.request_id_key, request_id_key(&Value::from(4)));
-            }
-            _ => panic!("expected Spawn"),
-        }
-        // The inflight registry should now have an entry for id=4.
-        let map = inflight.inner.lock().await;
-        assert_eq!(map.len(), 1);
-        assert!(map.contains_key(&request_id_key(&Value::from(4))));
-    }
-
-    #[tokio::test]
-    async fn cancel_notification_fires_inflight_cancel_channel() {
-        let inflight = Arc::new(InflightCalls::new());
-        // Pre-seed an inflight entry with a known cancel_tx; verify the
-        // notification handler trips it.
-        let (cancel_tx, mut cancel_rx) = oneshot::channel();
-        inflight
-            .register(
-                request_id_key(&Value::from(7)),
-                InflightEntry {
-                    external_handle: Some("h-7".into()),
-                    cancel_tx,
-                },
-            )
-            .await;
-
-        let line = r#"{
-            "jsonrpc":"2.0",
-            "method":"notifications/cancelled",
-            "params": {"requestId": 7, "reason": "user requested"}
-        }"#;
-        let action = dispatch_line(&ctx(), inflight.clone(), line).await;
-        assert!(matches!(action, LineAction::Silent));
-        // The cancel channel should now be tripped (best-effort
-        // `client_cancel` to a bogus socket failed silently — that's fine).
-        assert!(cancel_rx.try_recv().is_ok());
-        // Entry has been pulled.
-        let map = inflight.inner.lock().await;
-        assert!(map.is_empty());
-    }
-
-    #[tokio::test]
-    async fn cancel_for_unknown_request_id_is_silent_noop() {
-        let inflight = Arc::new(InflightCalls::new());
-        let line = r#"{
-            "jsonrpc":"2.0",
-            "method":"notifications/cancelled",
-            "params": {"requestId": 999}
-        }"#;
-        let action = dispatch_line(&ctx(), inflight.clone(), line).await;
-        assert!(matches!(action, LineAction::Silent));
-        assert!(inflight.inner.lock().await.is_empty());
-    }
-
-    #[test]
-    fn render_task_report_running_ack_is_not_error() {
-        let report = json!({
-            "task_id": "t1",
-            "status": "running",
-            "child_conversation_id": 42,
-            "message": "running in background"
-        });
-        let rendered = render_task_report(&report);
-        assert_eq!(rendered["isError"], false);
-        assert_eq!(rendered["content"][0]["text"], "running in background");
-        assert_eq!(rendered["structuredContent"]["status"], "running");
-        assert_eq!(rendered["structuredContent"]["child_conversation_id"], 42);
-    }
-
-    #[test]
-    fn render_task_report_completed_surfaces_text() {
-        let report = json!({
-            "task_id": "t1",
-            "status": "completed",
-            "child_conversation_id": 42,
-            "text": "the result"
-        });
-        let rendered = render_task_report(&report);
-        assert_eq!(rendered["isError"], false);
-        assert_eq!(rendered["content"][0]["text"], "the result");
-        assert_eq!(rendered["structuredContent"]["status"], "completed");
-    }
-
-    #[test]
-    fn render_task_report_failed_is_error() {
-        let report = json!({
-            "status": "failed",
-            "error_code": "spawn_failed",
-            "message": "spawn failed: agent missing"
-        });
-        let rendered = render_task_report(&report);
-        assert_eq!(rendered["isError"], true);
+            .filter_map(|tool| tool["name"].as_str())
+            .collect();
         assert_eq!(
-            rendered["content"][0]["text"],
-            "spawn failed: agent missing"
-        );
-        assert_eq!(rendered["structuredContent"]["error_code"], "spawn_failed");
-    }
-
-    #[test]
-    fn render_task_report_canceled_is_not_error() {
-        // A successful cancel (or a canceled task) is a valid result, not an
-        // error the LLM should treat as a failure.
-        let report = json!({
-            "task_id": "t1",
-            "status": "canceled",
-            "error_code": "canceled",
-            "message": "canceled: canceled by request"
-        });
-        let rendered = render_task_report(&report);
-        assert_eq!(rendered["isError"], false);
-        assert_eq!(rendered["structuredContent"]["status"], "canceled");
-    }
-
-    #[test]
-    fn render_task_report_completed_without_text_falls_back_to_message() {
-        // DB-fallback for an evicted completed result: status completed, no
-        // text, only a message. The content must not be empty.
-        let report = json!({
-            "task_id": "t1",
-            "status": "completed",
-            "child_conversation_id": 7,
-            "message": "Result no longer cached; open child session 7 for the full output."
-        });
-        let rendered = render_task_report(&report);
-        assert_eq!(rendered["isError"], false);
-        assert_eq!(
-            rendered["content"][0]["text"],
-            "Result no longer cached; open child session 7 for the full output."
-        );
-    }
-
-    // -- Batch get_delegation_status normalization + rendering -------------
-
-    #[tokio::test]
-    async fn get_delegation_status_bare_task_id_now_rejected() {
-        // The legacy single `task_id` param is gone: a bare `{task_id}` no longer
-        // resolves to a poll — it's an empty task set and must be rejected,
-        // steering the caller to `task_ids`.
-        let line = json!({
-            "jsonrpc": "2.0", "id": 20, "method": "tools/call",
-            "params": { "name": "get_delegation_status", "arguments": { "task_id": "abc" } }
-        })
-        .to_string();
-        let resp = unwrap_respond(dispatch_for_test(&line).await);
-        let e = resp.error.unwrap();
-        assert_eq!(e.code, -32602);
-        assert!(e.message.contains("task_ids"));
-    }
-
-    #[tokio::test]
-    async fn get_delegation_status_accepts_task_ids_array() {
-        let line = json!({
-            "jsonrpc": "2.0", "id": 21, "method": "tools/call",
-            "params": { "name": "get_delegation_status", "arguments": { "task_ids": ["a", "b"] } }
-        })
-        .to_string();
-        assert!(matches!(
-            dispatch_for_test(&line).await,
-            LineAction::Spawn(_)
-        ));
-    }
-
-    #[tokio::test]
-    async fn get_delegation_status_empty_task_ids_rejected() {
-        // An absent, empty, or all-whitespace array yields no usable ids.
-        for args in [json!({ "task_ids": [] }), json!({ "task_ids": ["  "] })] {
-            let line = json!({
-                "jsonrpc": "2.0", "id": 22, "method": "tools/call",
-                "params": { "name": "get_delegation_status", "arguments": args }
-            })
-            .to_string();
-            let resp = unwrap_respond(dispatch_for_test(&line).await);
-            let e = resp.error.expect("empty task_ids must be rejected");
-            assert_eq!(e.code, -32602);
-            assert!(e.message.contains("task_ids"));
-        }
-    }
-
-    #[tokio::test]
-    async fn get_delegation_status_non_string_task_id_rejected() {
-        // A non-string entry violates the schema's `items: string` contract — the
-        // whole call is rejected, NOT silently narrowed to the valid ids. Both a
-        // lone non-string and a mixed `[123, "abc"]` must fail.
-        for args in [
-            json!({ "task_ids": [123] }),
-            json!({ "task_ids": [123, "abc"] }),
-        ] {
-            let line = json!({
-                "jsonrpc": "2.0", "id": 23, "method": "tools/call",
-                "params": { "name": "get_delegation_status", "arguments": args }
-            })
-            .to_string();
-            let resp = unwrap_respond(dispatch_for_test(&line).await);
-            let e = resp
-                .error
-                .expect("non-string task_ids entry must be rejected");
-            assert_eq!(e.code, -32602);
-            assert!(e.message.contains("task_ids"));
-        }
-    }
-
-    #[test]
-    fn normalize_status_task_ids_dedups_preserves_order() {
-        // Trim each entry, drop "", collapse the duplicate "a", keep first-seen
-        // order.
-        let args = json!({ "task_ids": [" a ", "b", "a", "", "c"] });
-        assert_eq!(
-            normalize_status_task_ids(&args).unwrap(),
-            vec!["a", "b", "c"]
-        );
-    }
-
-    #[test]
-    fn normalize_status_task_ids_rejects_non_string_entry() {
-        // A non-string survivor alongside valid ids is a hard error, not a
-        // silent drop.
-        assert!(normalize_status_task_ids(&json!({ "task_ids": [123] })).is_err());
-        assert!(normalize_status_task_ids(&json!({ "task_ids": ["a", 123] })).is_err());
-        assert!(normalize_status_task_ids(&json!({ "task_ids": [true] })).is_err());
-    }
-
-    #[test]
-    fn normalize_status_task_ids_empty_when_none_usable() {
-        // Missing, empty, and all-blank arrays all yield no ids; a bare legacy
-        // `task_id` is no longer read. (These are `Ok(empty)`, not errors.)
-        assert!(normalize_status_task_ids(&json!({})).unwrap().is_empty());
-        assert!(normalize_status_task_ids(&json!({ "task_ids": [] }))
-            .unwrap()
-            .is_empty());
-        assert!(normalize_status_task_ids(&json!({ "task_ids": ["  "] }))
-            .unwrap()
-            .is_empty());
-        assert!(normalize_status_task_ids(&json!({ "task_id": "abc" }))
-            .unwrap()
-            .is_empty());
-    }
-
-    #[test]
-    fn render_status_result_single_renders_as_one_element_batch() {
-        // A single-id poll now renders through the SAME `{tasks:[..]}` envelope as
-        // a fan-out (unified shape) — NOT the bare single-report path. The
-        // structured batch carries the one task with its id + status, and the
-        // content text is the `{tasks:[..]}` JSON (not the bare result text).
-        let report = json!({
-            "task_id": "t1", "status": "completed",
-            "child_conversation_id": 42, "text": "the result"
-        });
-        let rendered = render_status_result(&json!({ "tasks": [report.clone()] }));
-        let tasks = rendered["structuredContent"]["tasks"].as_array().unwrap();
-        assert_eq!(tasks.len(), 1);
-        assert_eq!(tasks[0]["task_id"], "t1");
-        assert_eq!(tasks[0]["status"], "completed");
-        // Content text is the compact {tasks:[..]} JSON, recoverable by
-        // content-only hosts — not the raw "the result" string.
-        let text = rendered["content"][0]["text"].as_str().unwrap();
-        let parsed: Value = serde_json::from_str(text).unwrap();
-        assert_eq!(parsed["tasks"][0]["text"], "the result");
-        assert_eq!(rendered["isError"], false);
-    }
-
-    #[test]
-    fn render_status_result_bare_report_wrapped_as_one_element_batch() {
-        // Defensive: an outcome with no `tasks` array (older / unexpected shape) is
-        // wrapped into a one-element batch so the output stays uniformly
-        // `{tasks:[..]}`. A lone failed task flags `isError` (all-failed).
-        let report = json!({
-            "task_id": "t1", "status": "failed",
-            "error_code": "spawn_failed", "message": "spawn failed"
-        });
-        let rendered = render_status_result(&report);
-        let tasks = rendered["structuredContent"]["tasks"].as_array().unwrap();
-        assert_eq!(tasks.len(), 1);
-        assert_eq!(tasks[0]["task_id"], "t1");
-        assert_eq!(tasks[0]["status"], "failed");
-        assert_eq!(rendered["isError"], true);
-    }
-
-    #[test]
-    fn render_batch_report_carries_tasks_and_parseable_text() {
-        let envelope = json!({ "tasks": [
-            { "task_id": "t1", "status": "completed", "text": "r1" },
-            { "task_id": "t2", "status": "running", "message": "Running." },
-        ] });
-        let rendered = render_status_result(&envelope);
-        // structuredContent carries the whole batch.
-        assert_eq!(
-            rendered["structuredContent"]["tasks"]
-                .as_array()
-                .unwrap()
-                .len(),
-            2
-        );
-        // The content text is the compact {tasks:[..]} JSON, recoverable by hosts
-        // that persist only CallToolResult.content text (e.g. Claude Code).
-        let text = rendered["content"][0]["text"].as_str().unwrap();
-        let parsed: Value = serde_json::from_str(text).unwrap();
-        assert_eq!(parsed["tasks"][0]["task_id"], "t1");
-        assert_eq!(parsed["tasks"][1]["status"], "running");
-        // Mixed statuses → not all failed → not flagged as an error.
-        assert_eq!(rendered["isError"], false);
-    }
-
-    #[test]
-    fn render_batch_report_is_error_only_when_all_failed() {
-        let all_failed = json!({ "tasks": [
-            { "task_id": "t1", "status": "failed", "message": "x" },
-            { "task_id": "t2", "status": "failed", "message": "y" },
-        ] });
-        assert_eq!(render_status_result(&all_failed)["isError"], true);
-        let mixed = json!({ "tasks": [
-            { "task_id": "t1", "status": "failed" },
-            { "task_id": "t2", "status": "canceled" },
-        ] });
-        assert_eq!(render_status_result(&mixed)["isError"], false);
-    }
-
-    // -- check_user_feedback feature gating + rendering --------------------
-
-    const FEEDBACK_ONLY: CompanionFeatures = CompanionFeatures {
-        delegation: false,
-        feedback: true,
-        ask: false,
-        sessions: false,
-        collaboration: false,
-        tasks: false,
-        automations: false,
-        taskboard: false,
-    };
-    const BOTH: CompanionFeatures = CompanionFeatures {
-        delegation: true,
-        feedback: true,
-        ask: false,
-        sessions: false,
-        collaboration: false,
-        tasks: false,
-        automations: false,
-        taskboard: false,
-    };
-    const ASK_ONLY: CompanionFeatures = CompanionFeatures {
-        delegation: false,
-        feedback: false,
-        ask: true,
-        sessions: false,
-        collaboration: false,
-        tasks: false,
-        automations: false,
-        taskboard: false,
-    };
-    const SESSIONS_ONLY: CompanionFeatures = CompanionFeatures {
-        delegation: false,
-        feedback: false,
-        ask: false,
-        sessions: true,
-        collaboration: false,
-        tasks: false,
-        automations: false,
-        taskboard: false,
-    };
-    const COLLABORATION_ONLY: CompanionFeatures = CompanionFeatures {
-        delegation: false,
-        feedback: false,
-        ask: false,
-        sessions: false,
-        collaboration: true,
-        tasks: false,
-        automations: false,
-        taskboard: false,
-    };
-
-    fn list_tool_names(action: LineAction) -> Vec<String> {
-        let resp = unwrap_respond(action);
-        resp.result.unwrap()["tools"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|t| t["name"].as_str().unwrap().to_string())
-            .collect()
-    }
-
-    #[test]
-    fn features_parse_defaults_and_tokens() {
-        // Absent → delegation-only (backward compatible).
-        let def = CompanionFeatures::parse(None);
-        assert!(def.delegation && !def.feedback);
-        assert!(!def.ask);
-        assert!(!def.sessions);
-        // Explicit list, whitespace + unknown tokens tolerated.
-        let all = CompanionFeatures::parse(Some(
-            " delegation , feedback , ask , sessions , collaboration ,bogus",
-        ));
-        assert!(all.delegation && all.feedback && all.ask && all.sessions && all.collaboration);
-        let fb = CompanionFeatures::parse(Some("feedback"));
-        assert!(!fb.delegation && fb.feedback && !fb.ask);
-        let ask = CompanionFeatures::parse(Some("ask"));
-        assert!(!ask.delegation && !ask.feedback && ask.ask);
-        let sessions = CompanionFeatures::parse(Some("sessions"));
-        assert!(!sessions.delegation && !sessions.feedback && !sessions.ask && sessions.sessions);
-        let collaboration = CompanionFeatures::parse(Some("collaboration"));
-        assert!(collaboration.collaboration && !collaboration.sessions);
-        // Empty string → nothing enabled.
-        let none = CompanionFeatures::parse(Some(""));
-        assert!(!none.delegation && !none.feedback && !none.ask && !none.sessions);
-    }
-
-    #[tokio::test]
-    async fn tools_list_hides_feedback_when_disabled() {
-        // Default ctx is delegation-only: check_user_feedback must not appear.
-        let names = list_tool_names(
-            dispatch_for_test(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#).await,
-        );
-        assert!(!names.contains(&"check_user_feedback".to_string()));
-        assert_eq!(names.len(), 3);
-    }
-
-    #[tokio::test]
-    async fn tools_list_includes_feedback_when_enabled() {
-        let names = list_tool_names(
-            dispatch_with_features(BOTH, r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#).await,
-        );
-        assert!(names.contains(&"check_user_feedback".to_string()));
-        assert_eq!(names.len(), 4);
-    }
-
-    #[tokio::test]
-    async fn tools_list_feedback_only_hides_delegation_tools() {
-        let names = list_tool_names(
-            dispatch_with_features(
-                FEEDBACK_ONLY,
-                r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#,
-            )
-            .await,
-        );
-        assert_eq!(names, vec!["check_user_feedback".to_string()]);
-    }
-
-    #[tokio::test]
-    async fn check_user_feedback_spawns_when_enabled() {
-        let line = json!({
-            "jsonrpc": "2.0", "id": 30, "method": "tools/call",
-            "params": { "name": "check_user_feedback", "arguments": {} }
-        })
-        .to_string();
-        assert!(matches!(
-            dispatch_with_features(FEEDBACK_ONLY, &line).await,
-            LineAction::Spawn(_)
-        ));
-    }
-
-    #[tokio::test]
-    async fn check_user_feedback_rejected_as_unknown_when_feature_off() {
-        // Delegation-only ctx: the feedback tool is indistinguishable from a
-        // nonexistent one (-32602 unknown tool), not a "disabled" leak.
-        let line = json!({
-            "jsonrpc": "2.0", "id": 31, "method": "tools/call",
-            "params": { "name": "check_user_feedback", "arguments": {} }
-        })
-        .to_string();
-        let resp = unwrap_respond(dispatch_for_test(&line).await);
-        let e = resp.error.unwrap();
-        assert_eq!(e.code, -32602);
-        assert!(e.message.contains("unknown tool"));
-    }
-
-    #[tokio::test]
-    async fn delegate_rejected_as_unknown_when_delegation_off() {
-        // Feedback-only ctx: delegation tools are hidden + rejected uniformly.
-        let line = json!({
-            "jsonrpc": "2.0", "id": 32, "method": "tools/call",
-            "params": { "name": "delegate_to_agent", "arguments": {"agent_type":"codex","task":"x"} }
-        })
-        .to_string();
-        let resp = unwrap_respond(dispatch_with_features(FEEDBACK_ONLY, &line).await);
-        assert_eq!(resp.error.unwrap().code, -32602);
-    }
-
-    // -- ask_user_question feature gating + validation + rendering ----------
-
-    #[tokio::test]
-    async fn tools_list_includes_ask_only_when_enabled() {
-        let off = list_tool_names(
-            dispatch_for_test(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#).await,
-        );
-        assert!(!off.contains(&"ask_user_question".to_string()));
-        let on = list_tool_names(
-            dispatch_with_features(
-                ASK_ONLY,
-                r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#,
-            )
-            .await,
-        );
-        assert_eq!(on, vec!["ask_user_question".to_string()]);
-    }
-
-    fn ask_args() -> Value {
-        json!({
-            "questions": [{
-                "question": "Which approach?",
-                "header": "Approach",
-                "multiSelect": false,
-                "options": [
-                    { "label": "Incremental", "description": "smaller diffs" },
-                    { "label": "Rewrite", "description": "clean slate" }
-                ]
-            }]
-        })
-    }
-
-    #[tokio::test]
-    async fn ask_user_question_spawns_when_valid_and_enabled() {
-        let line = json!({
-            "jsonrpc": "2.0", "id": 40, "method": "tools/call",
-            "params": { "name": "ask_user_question", "arguments": ask_args() }
-        })
-        .to_string();
-        assert!(matches!(
-            dispatch_with_features(ASK_ONLY, &line).await,
-            LineAction::Spawn(_)
-        ));
-    }
-
-    #[tokio::test]
-    async fn ask_user_question_invalid_args_rejected_synchronously() {
-        // Empty questions array → -32602, fixable by the LLM without a round-trip.
-        let line = json!({
-            "jsonrpc": "2.0", "id": 41, "method": "tools/call",
-            "params": { "name": "ask_user_question", "arguments": { "questions": [] } }
-        })
-        .to_string();
-        let resp = unwrap_respond(dispatch_with_features(ASK_ONLY, &line).await);
-        assert_eq!(resp.error.unwrap().code, -32602);
-    }
-
-    #[tokio::test]
-    async fn ask_user_question_rejected_as_unknown_when_feature_off() {
-        let line = json!({
-            "jsonrpc": "2.0", "id": 42, "method": "tools/call",
-            "params": { "name": "ask_user_question", "arguments": ask_args() }
-        })
-        .to_string();
-        let resp = unwrap_respond(dispatch_for_test(&line).await);
-        let e = resp.error.unwrap();
-        assert_eq!(e.code, -32602);
-        assert!(e.message.contains("unknown tool"));
-    }
-
-    #[test]
-    fn render_ask_result_lists_selections() {
-        let outcome = json!({
-            "declined": false,
-            "answers": [
-                { "question": "Which approach?", "header": "Approach", "multiSelect": false,
-                  "selected": ["Incremental"] }
+            names,
+            vec![
+                "check_user_feedback",
+                "ask_user_question",
+                "get_session_info",
+                "list_sessions",
+                "send_message",
+                "create_automation",
+                "create_work_task",
+                "task_progress",
+                "task_complete",
             ]
-        });
-        let rendered = render_ask_result(&outcome);
-        assert_eq!(rendered["isError"], false);
-        let text = rendered["content"][0]["text"].as_str().unwrap();
-        assert!(text.contains("Approach"));
-        assert!(text.contains("Incremental"));
-        assert_eq!(rendered["structuredContent"]["declined"], false);
-    }
-
-    #[test]
-    fn render_ask_result_declined_tells_agent_to_proceed() {
-        let rendered = render_ask_result(&json!({ "declined": true, "answers": [] }));
-        assert_eq!(rendered["isError"], false);
-        let text = rendered["content"][0]["text"].as_str().unwrap();
-        assert!(text.contains("dismissed"));
-    }
-
-    // -- get_session_info feature gating + parsing + rendering -------------
-
-    #[tokio::test]
-    async fn tools_list_includes_session_only_when_enabled() {
-        // Default ctx is delegation-only: get_session_info must NOT appear.
-        let names = list_tool_names(
-            dispatch_for_test(r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#).await,
         );
-        assert!(!names.contains(&"get_session_info".to_string()));
-        // sessions feature on → exactly that one tool surfaces.
-        let names = list_tool_names(
-            dispatch_with_features(
-                SESSIONS_ONLY,
-                r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#,
-            )
-            .await,
-        );
-        assert_eq!(names, vec!["get_session_info".to_string()]);
+        assert!(!TOOL_SCHEMA_JSON.contains("delegate_to_agent"));
+        assert!(!TOOL_SCHEMA_JSON.contains("get_delegation_status"));
+        assert!(!TOOL_SCHEMA_JSON.contains("cancel_delegation"));
     }
-
-    #[tokio::test]
-    async fn get_session_info_spawns_when_valid_and_enabled() {
-        let line = json!({
-            "jsonrpc": "2.0", "id": 30, "method": "tools/call",
-            "params": { "name": "get_session_info", "arguments": { "session_id": 214 } }
-        })
-        .to_string();
-        assert!(matches!(
-            dispatch_with_features(SESSIONS_ONLY, &line).await,
-            LineAction::Spawn(_)
-        ));
-    }
-
-    #[tokio::test]
-    async fn get_session_info_accepts_numeric_string_id() {
-        // Some hosts stringify integer args — still resolves to a Spawn.
-        let line = json!({
-            "jsonrpc": "2.0", "id": 31, "method": "tools/call",
-            "params": { "name": "get_session_info", "arguments": { "session_id": "214" } }
-        })
-        .to_string();
-        assert!(matches!(
-            dispatch_with_features(SESSIONS_ONLY, &line).await,
-            LineAction::Spawn(_)
-        ));
-    }
-
-    #[tokio::test]
-    async fn get_session_info_missing_or_bad_id_rejected_synchronously() {
-        for args in [
-            json!({}),
-            json!({ "session_id": "abc" }),
-            json!({ "session_id": true }),
-        ] {
-            let line = json!({
-                "jsonrpc": "2.0", "id": 32, "method": "tools/call",
-                "params": { "name": "get_session_info", "arguments": args }
-            })
-            .to_string();
-            let resp = unwrap_respond(dispatch_with_features(SESSIONS_ONLY, &line).await);
-            let e = resp.error.expect("bad session_id must be rejected");
-            assert_eq!(e.code, -32602);
-            assert!(e.message.contains("session_id"));
-        }
-    }
-
-    #[tokio::test]
-    async fn get_session_info_rejected_as_unknown_when_feature_off() {
-        // Default ctx is delegation-only — calling the tool by name is rejected
-        // uniformly as an unknown tool (no leak that the feature exists but is off).
-        let line = json!({
-            "jsonrpc": "2.0", "id": 33, "method": "tools/call",
-            "params": { "name": "get_session_info", "arguments": { "session_id": 1 } }
-        })
-        .to_string();
-        let resp = unwrap_respond(dispatch_for_test(&line).await);
-        let e = resp.error.unwrap();
-        assert_eq!(e.code, -32602);
-        assert!(e.message.contains("unknown tool"));
-    }
-
-    // -- persistent Session collaboration ---------------------------------
 
     #[tokio::test]
     async fn tools_list_gates_session_collaboration_as_one_group() {
-        let list = r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#;
-        let names = list_tool_names(dispatch_with_features(COLLABORATION_ONLY, list).await);
-        assert_eq!(
-            names,
-            vec!["list_sessions".to_string(), "send_message".to_string()]
-        );
+        let action = dispatch_line(
+            &ctx(collaboration_features()),
+            Arc::new(InflightCalls::new()),
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}"#,
+        )
+        .await;
+        let response = response(action).await;
+        let result = response.result.unwrap();
+        let names: Vec<&str> = result["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect();
+        assert_eq!(names, vec!["list_sessions", "send_message"]);
     }
 
     #[tokio::test]
     async fn collaboration_calls_validate_before_spawning() {
-        let list = json!({
+        let list = serde_json::json!({
             "jsonrpc": "2.0", "id": 40, "method": "tools/call",
             "params": { "name": "list_sessions", "arguments": { "query": "review", "limit": 20 } }
         })
         .to_string();
         assert!(matches!(
-            dispatch_with_features(COLLABORATION_ONLY, &list).await,
+            dispatch_line(
+                &ctx(collaboration_features()),
+                Arc::new(InflightCalls::new()),
+                &list,
+            )
+            .await,
             LineAction::Spawn(_)
         ));
 
-        let send = json!({
+        let send = serde_json::json!({
             "jsonrpc": "2.0", "id": 41, "method": "tools/call",
             "params": { "name": "send_message", "arguments": {
                 "target_session_ids": [7, "8", 7],
                 "content": "Please review this.",
                 "delivery_mode": "queue",
                 "delivery_hint": "steer_if_supported",
-                "expects_reply": true,
-                "reply_to_event_id": "event-1"
-            } }
+                "expects_reply": true
+            }}
         })
         .to_string();
         assert!(matches!(
-            dispatch_with_features(COLLABORATION_ONLY, &send).await,
+            dispatch_line(
+                &ctx(collaboration_features()),
+                Arc::new(InflightCalls::new()),
+                &send,
+            )
+            .await,
             LineAction::Spawn(_)
         ));
 
         for arguments in [
-            json!({ "target_session_ids": [], "content": "x" }),
-            json!({ "target_session_ids": ["bad"], "content": "x" }),
-            json!({ "target_session_ids": [7], "content": " " }),
-            json!({ "target_session_ids": [7], "content": "x", "delivery_mode": "interrupt" }),
-            json!({ "target_session_ids": [7], "content": "x", "delivery_hint": "interrupt" }),
-            json!({ "target_session_ids": [7], "content": "x", "delivery_mode": "deliver_only", "delivery_hint": "steer_if_supported" }),
+            serde_json::json!({ "target_session_ids": [], "content": "x" }),
+            serde_json::json!({ "target_session_ids": ["bad"], "content": "x" }),
+            serde_json::json!({ "target_session_ids": [7], "content": " " }),
+            serde_json::json!({ "target_session_ids": [7], "content": "x", "delivery_mode": "interrupt" }),
+            serde_json::json!({ "target_session_ids": [7], "content": "x", "delivery_hint": "interrupt" }),
+            serde_json::json!({ "target_session_ids": [7], "content": "x", "delivery_mode": "deliver_only", "delivery_hint": "steer_if_supported" }),
         ] {
-            let line = json!({
+            let line = serde_json::json!({
                 "jsonrpc": "2.0", "id": 42, "method": "tools/call",
                 "params": { "name": "send_message", "arguments": arguments }
             })
             .to_string();
-            let response = unwrap_respond(dispatch_with_features(COLLABORATION_ONLY, &line).await);
+            let action = dispatch_line(
+                &ctx(collaboration_features()),
+                Arc::new(InflightCalls::new()),
+                &line,
+            )
+            .await;
+            let LineAction::Respond(response) = action else {
+                panic!("invalid call must fail before spawning");
+            };
             assert_eq!(response.error.expect("invalid call").code, -32602);
         }
     }
 
     #[test]
     fn collaboration_mcp_dedupe_key_is_stable_per_parent_and_request() {
-        let first = mcp_call_dedupe_id("parent-1", &json!(41));
-        assert_eq!(first, mcp_call_dedupe_id("parent-1", &json!(41)));
-        assert_ne!(first, mcp_call_dedupe_id("parent-1", &json!(42)));
-        assert_ne!(first, mcp_call_dedupe_id("parent-2", &json!(41)));
+        let first = mcp_call_dedupe_id("parent-1", &serde_json::json!(41));
+        assert_eq!(first, mcp_call_dedupe_id("parent-1", &serde_json::json!(41)));
+        assert_ne!(first, mcp_call_dedupe_id("parent-1", &serde_json::json!(42)));
+        assert_ne!(first, mcp_call_dedupe_id("parent-2", &serde_json::json!(41)));
         assert!(first.starts_with("mcp:"));
     }
 
     #[test]
     fn collaboration_results_keep_delivery_distinct_from_completion() {
-        let list = render_session_list_result(&json!({
+        let list = render_session_list_result(&serde_json::json!({
             "available": true,
             "sessions": [{
                 "session_id": 7,
@@ -2801,541 +1607,108 @@ mod tests {
             .unwrap()
             .contains("7: Reviewer"));
 
-        let sent = render_session_send_result(&json!({
+        let sent = render_session_send_result(&serde_json::json!({
             "accepted": true,
             "event_id": "event-1",
             "deliveries": [{
                 "target_session_id": 7,
                 "target_title": "Reviewer",
-                "state": "queued"
+                "state": "queued",
+                "accepted": true
             }]
         }));
         let text = sent["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("event-1"));
         assert!(text.contains("queued"));
         assert!(text.contains("does not mean"));
     }
 
-    // -- chat authoring: feature gating + parsing + rendering ---------------
-
-    const AUTOMATIONS_ONLY: CompanionFeatures = CompanionFeatures {
-        delegation: false,
-        feedback: false,
-        ask: false,
-        sessions: false,
-        collaboration: false,
-        tasks: false,
-        automations: true,
-        taskboard: false,
-    };
-    const TASKBOARD_ONLY: CompanionFeatures = CompanionFeatures {
-        delegation: false,
-        feedback: false,
-        ask: false,
-        sessions: false,
-        collaboration: false,
-        tasks: false,
-        automations: false,
-        taskboard: true,
-    };
-
-    /// The two authoring groups gate independently: enabling one must not
-    /// surface the other's tool.
-    #[tokio::test]
-    async fn tools_list_gates_authoring_tools_independently() {
-        let list = r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#;
-        // Default ctx is delegation-only: neither appears.
-        let names = list_tool_names(dispatch_for_test(list).await);
-        assert!(!names.contains(&"create_automation".to_string()));
-        assert!(!names.contains(&"create_work_task".to_string()));
-
-        let names = list_tool_names(dispatch_with_features(AUTOMATIONS_ONLY, list).await);
-        assert_eq!(names, vec!["create_automation".to_string()]);
-
-        let names = list_tool_names(dispatch_with_features(TASKBOARD_ONLY, list).await);
-        assert_eq!(names, vec!["create_work_task".to_string()]);
-    }
-
-    /// Calling a tool whose group is off is rejected as an unknown tool — same
-    /// no-leak shape as the other gated tools.
-    #[tokio::test]
-    async fn authoring_tools_rejected_as_unknown_when_feature_off() {
-        for (name, args) in [
-            ("create_automation", json!({ "name": "n", "prompt": "p" })),
-            ("create_work_task", json!({ "title": "t", "prompt": "p" })),
-        ] {
-            let line = json!({
-                "jsonrpc": "2.0", "id": 40, "method": "tools/call",
-                "params": { "name": name, "arguments": args }
-            })
-            .to_string();
-            let resp = unwrap_respond(dispatch_for_test(&line).await);
-            let e = resp.error.unwrap();
-            assert_eq!(e.code, -32602);
-            assert!(e.message.contains("unknown tool"));
-        }
-        // Cross-gating: the automations group must not unlock the board tool.
-        let line = json!({
-            "jsonrpc": "2.0", "id": 41, "method": "tools/call",
-            "params": { "name": "create_work_task", "arguments": { "title": "t", "prompt": "p" } }
-        })
-        .to_string();
-        let resp = unwrap_respond(dispatch_with_features(AUTOMATIONS_ONLY, &line).await);
-        assert!(resp.error.unwrap().message.contains("unknown tool"));
-    }
-
-    #[tokio::test]
-    async fn create_automation_spawns_when_valid_and_enabled() {
-        let line = json!({
-            "jsonrpc": "2.0", "id": 42, "method": "tools/call",
-            "params": { "name": "create_automation", "arguments": {
-                "name": "Nightly audit", "prompt": "audit deps", "cron": "0 3 * * *"
-            }}
-        })
-        .to_string();
-        assert!(matches!(
-            dispatch_with_features(AUTOMATIONS_ONLY, &line).await,
-            LineAction::Spawn(_)
+    #[test]
+    fn feature_parser_is_explicit_and_independent() {
+        let none = CompanionFeatures::parse(None);
+        assert!(!none.feedback && !none.ask && !none.sessions && !none.collaboration);
+        let parsed = CompanionFeatures::parse(Some(
+            "feedback,ask,sessions,collaboration,tasks,automations,taskboard,unknown",
         ));
+        assert!(parsed.feedback);
+        assert!(parsed.ask);
+        assert!(parsed.sessions);
+        assert!(parsed.collaboration);
+        assert!(parsed.tasks);
+        assert!(parsed.automations);
+        assert!(parsed.taskboard);
     }
 
     #[tokio::test]
-    async fn create_automation_missing_fields_rejected_synchronously() {
-        for (args, expect) in [
-            (json!({ "prompt": "p" }), "name"),
-            (json!({ "name": "n" }), "prompt"),
-            (json!({ "name": "  ", "prompt": "p" }), "name"),
-            (
-                json!({ "name": "n", "prompt": "p", "action": "delete_everything" }),
-                "action",
-            ),
-        ] {
-            let line = json!({
-                "jsonrpc": "2.0", "id": 43, "method": "tools/call",
-                "params": { "name": "create_automation", "arguments": args }
-            })
-            .to_string();
-            let resp = unwrap_respond(dispatch_with_features(AUTOMATIONS_ONLY, &line).await);
-            let e = resp.error.expect("bad arguments must be rejected");
-            assert_eq!(e.code, -32602);
-            assert!(e.message.contains(expect), "got: {}", e.message);
-        }
-    }
-
-    #[tokio::test]
-    async fn create_work_task_missing_fields_rejected_synchronously() {
-        for (args, expect) in [
-            (json!({ "prompt": "p" }), "title"),
-            (json!({ "title": "t" }), "prompt"),
-        ] {
-            let line = json!({
-                "jsonrpc": "2.0", "id": 44, "method": "tools/call",
-                "params": { "name": "create_work_task", "arguments": args }
-            })
-            .to_string();
-            let resp = unwrap_respond(dispatch_with_features(TASKBOARD_ONLY, &line).await);
-            let e = resp.error.expect("bad arguments must be rejected");
-            assert_eq!(e.code, -32602);
-            assert!(e.message.contains(expect), "got: {}", e.message);
-        }
-    }
-
-    #[test]
-    fn parse_automation_spec_defaults_and_normalizes() {
-        let spec = parse_automation_spec(&json!({
-            "name": "  Nightly  ", "prompt": " do it ",
-            "cron": "  ", "timezone": "", "folder_path": " /repo/app "
-        }))
-        .unwrap();
-        // Trimmed…
-        assert_eq!(spec.name, "Nightly");
-        assert_eq!(spec.prompt, "do it");
-        assert_eq!(spec.folder_path.as_deref(), Some("/repo/app"));
-        // …and whitespace-only optionals collapse to "use the default", not to
-        // an empty cron that would make this a broken scheduled automation.
-        assert!(spec.cron.is_none());
-        assert!(spec.timezone.is_none());
-        // Defaults.
-        assert!(spec.enabled);
-        assert_eq!(spec.action, AutomationAction::LaunchSession);
-
-        let spec = parse_automation_spec(&json!({
-            "name": "n", "prompt": "p", "action": "enqueue_task", "enabled": false
-        }))
-        .unwrap();
-        assert_eq!(spec.action, AutomationAction::EnqueueTask);
-        assert!(!spec.enabled);
-    }
-
-    /// A 6-field cron is REJECTED, not silently accepted.
-    ///
-    /// `normalize_cron` remaps POSIX weekdays only for 5-field input; a 6-field
-    /// expression reaches the `cron` crate verbatim, where `1` is Sunday. So the
-    /// natural-looking `0 0 9 * * 1-5` would be stored happily and then fire
-    /// Sun–Thu instead of Mon–Fri. Nothing downstream can detect that, so the
-    /// arity gate here is the only thing standing between the LLM and a
-    /// wrong-by-two-days schedule.
-    #[test]
-    fn parse_automation_spec_rejects_non_five_field_cron() {
-        for expr in [
-            "0 0 9 * * 1-5",
-            "0 0 9 * * 1-5 2027",
-            "9 * * *",
-            "* * * * * *",
-        ] {
-            let err = parse_automation_spec(&json!({
-                "name": "n", "prompt": "p", "cron": expr
-            }))
-            .expect_err("non-5-field cron must be rejected");
-            assert!(err.contains("5 fields"), "got: {err}");
-        }
-        // The advertised 5-field form still goes through, extra whitespace and all.
-        let spec = parse_automation_spec(&json!({
-            "name": "n", "prompt": "p", "cron": "  0   9 * * 1-5 "
-        }))
-        .unwrap();
-        assert_eq!(spec.cron.as_deref(), Some("0   9 * * 1-5"));
-    }
-
-    #[test]
-    fn parse_specs_truncate_over_long_input() {
-        let long_title = "x".repeat(MAX_TITLE_CHARS + 50);
-        let long_prompt = "y".repeat(MAX_PROMPT_CHARS + 50);
-        let spec = parse_automation_spec(&json!({
-            "name": long_title, "prompt": long_prompt
-        }))
-        .unwrap();
-        assert_eq!(spec.name.chars().count(), MAX_TITLE_CHARS);
-        assert_eq!(spec.prompt.chars().count(), MAX_PROMPT_CHARS);
-
-        let spec = parse_work_task_spec(&json!({
-            "title": "t", "prompt": "p", "agent_type": "codex"
-        }))
-        .unwrap();
-        assert_eq!(spec.agent_type.as_deref(), Some("codex"));
-        assert!(spec.folder_path.is_none());
-    }
-
-    #[test]
-    fn render_authoring_result_created_summarizes() {
-        let outcome = json!({
-            "created": true, "kind": "automation", "id": 12, "title": "Nightly audit",
-            "folder_name": "app", "agent_type": "claude_code",
-            "cron": "0 3 * * *", "timezone": "Asia/Shanghai",
-            "next_run_at": "2026-08-08T03:00:00Z"
-        });
-        let rendered = render_authoring_result(&outcome);
-        assert_eq!(rendered["isError"], false);
-        let text = rendered["content"][0]["text"].as_str().unwrap();
-        assert!(text.contains("Created automation #12"));
-        assert!(text.contains("Nightly audit"));
-        assert!(text.contains("0 3 * * * (Asia/Shanghai)"));
-        assert!(text.contains("2026-08-08T03:00:00Z"));
-        assert_eq!(rendered["structuredContent"]["id"], 12);
-    }
-
-    #[test]
-    fn render_authoring_result_refusal_is_soft_with_note() {
-        // A refusal must stay `isError: false` so the LLM reads the note and can
-        // tell the user / retry instead of the turn blowing up.
-        let outcome = json!({
-            "created": false, "kind": "work_task",
-            "note": "Creating board tasks from chat is turned off"
-        });
-        let rendered = render_authoring_result(&outcome);
-        assert_eq!(rendered["isError"], false);
-        let text = rendered["content"][0]["text"].as_str().unwrap();
-        assert!(text.contains("turned off"));
-        assert_eq!(rendered["structuredContent"]["created"], false);
-    }
-
-    #[test]
-    fn parse_session_id_tolerates_number_string_and_whole_float() {
-        assert_eq!(parse_session_id(&json!({ "session_id": 7 })), Some(7));
-        assert_eq!(parse_session_id(&json!({ "session_id": " 7 " })), Some(7));
-        assert_eq!(parse_session_id(&json!({ "session_id": 7.0 })), Some(7));
-        assert_eq!(parse_session_id(&json!({ "session_id": "abc" })), None);
-        assert_eq!(parse_session_id(&json!({ "session_id": 7.5 })), None);
-        assert_eq!(parse_session_id(&json!({})), None);
-    }
-
-    #[test]
-    fn parse_max_messages_is_robust() {
-        // Omitted → default.
-        assert_eq!(parse_max_messages(&json!({})), 20);
-        // Explicit 0 (number AND string) is preserved → metadata-only.
-        assert_eq!(parse_max_messages(&json!({ "max_messages": 0 })), 0);
-        assert_eq!(parse_max_messages(&json!({ "max_messages": "0" })), 0);
-        // Plain value within range.
-        assert_eq!(parse_max_messages(&json!({ "max_messages": 5 })), 5);
-        assert_eq!(parse_max_messages(&json!({ "max_messages": "5" })), 5);
-        // Whole float ok; over the cap clamps to MAX_SESSION_MESSAGES.
-        assert_eq!(parse_max_messages(&json!({ "max_messages": 50.0 })), 50);
-        assert_eq!(parse_max_messages(&json!({ "max_messages": 999 })), 200);
-        // A huge value must SATURATE to the cap, not wrap to a small number.
-        assert_eq!(
-            parse_max_messages(&json!({ "max_messages": 4_294_967_296_u64 })),
-            200
-        );
-        assert_eq!(parse_max_messages(&json!({ "max_messages": 1e30 })), 200);
-        // Invalid / negative / fractional → default (optional knob, not an error).
-        assert_eq!(parse_max_messages(&json!({ "max_messages": "abc" })), 20);
-        assert_eq!(parse_max_messages(&json!({ "max_messages": -5 })), 20);
-        assert_eq!(parse_max_messages(&json!({ "max_messages": 5.5 })), 20);
-        assert_eq!(parse_max_messages(&json!({ "max_messages": true })), 20);
-    }
-
-    #[test]
-    fn render_session_result_not_found_is_soft_with_note_text() {
-        let outcome = json!({
-            "found": false, "session_id": 9,
-            "note": "No session matches id 9. It may have been deleted, or never imported into codeg."
-        });
-        let rendered = render_session_result(&outcome);
-        assert_eq!(rendered["isError"], false);
-        let text = rendered["content"][0]["text"].as_str().unwrap();
-        assert!(text.contains("No session matches id 9"));
-        assert_eq!(rendered["structuredContent"]["found"], false);
-    }
-
-    #[test]
-    fn render_session_result_found_renders_metadata_and_messages() {
-        let outcome = json!({
-            "found": true,
-            "session_id": 214,
-            "agent_type": "claude_code",
-            "title": "Fix auth flow",
-            "status": "completed",
-            "git_branch": "main",
-            "model": "claude-opus-4-8",
-            "workspace_path": "/home/me/proj",
-            "message_count": 12,
-            "is_delegation_child": false,
-            "stats": { "total_tokens": 4242 },
-            "messages": {
-                "total": 12, "included": 2, "truncated": true,
-                "items": [
-                    { "role": "user", "text": "fix the login", "tools": [] },
-                    { "role": "assistant", "text": "done", "tools": ["Read", "Edit"] }
-                ]
-            }
-        });
-        let rendered = render_session_result(&outcome);
-        assert_eq!(rendered["isError"], false);
-        let text = rendered["content"][0]["text"].as_str().unwrap();
-        assert!(text.contains("Session #214 (claude_code)"));
-        assert!(text.contains("Fix auth flow"));
-        assert!(text.contains("status: completed"));
-        assert!(text.contains("Workspace: /home/me/proj"));
-        assert!(text.contains("Total tokens: 4242"));
-        assert!(text.contains("Recent messages (2/12, older turns omitted)"));
-        assert!(text.contains("- [assistant] done (tools: Read, Edit)"));
-        // Full structured envelope preserved for hosts that keep it.
-        assert_eq!(rendered["structuredContent"]["session_id"], 214);
-    }
-
-    #[test]
-    fn render_feedback_empty_is_not_error_and_says_no_feedback() {
-        let rendered = render_feedback_result(&json!({ "count": 0, "feedback": [] }));
-        assert_eq!(rendered["isError"], false);
-        let text = rendered["content"][0]["text"].as_str().unwrap();
-        assert!(text.contains("No new feedback"));
-        assert_eq!(rendered["structuredContent"]["count"], 0);
-    }
-
-    #[test]
-    fn render_feedback_lists_notes_as_high_priority_steering() {
-        let outcome = json!({
-            "count": 2,
-            "feedback": [
-                { "text": "use the existing UserService", "created_at": "2026-06-07T00:00:00Z" },
-                { "text": "skip the migration", "created_at": "2026-06-07T00:00:01Z" },
-            ]
-        });
-        let rendered = render_feedback_result(&outcome);
-        assert_eq!(rendered["isError"], false);
-        let text = rendered["content"][0]["text"].as_str().unwrap();
-        assert!(text.contains("high-priority steering"));
-        assert!(text.contains("1. use the existing UserService"));
-        assert!(text.contains("2. skip the migration"));
-        // Structured payload carries the notes for hosts that keep it.
-        assert_eq!(rendered["structuredContent"]["count"], 2);
-    }
-
-    #[test]
-    fn render_feedback_strips_internal_commit_ids() {
-        // The listener embeds `_commit_ids` for the companion to echo back; they
-        // must NEVER leak into the agent-facing result (content or structured).
-        let outcome = json!({
-            "count": 1,
-            "feedback": [{ "text": "note", "created_at": "2026-06-07T00:00:00Z" }],
-            "_commit_ids": ["secret-id-1"],
-        });
-        let rendered = render_feedback_result(&outcome);
-        assert!(rendered["structuredContent"].get("_commit_ids").is_none());
-        assert_eq!(rendered["structuredContent"]["count"], 1);
-        assert_eq!(rendered["structuredContent"]["feedback"][0]["text"], "note");
-        let text = rendered["content"][0]["text"].as_str().unwrap();
-        assert!(!text.contains("secret-id-1"));
-    }
-
-    // -- commit-on-delivery protocol (the at-least-once delivery guarantee) ---
-
-    #[cfg(unix)]
-    fn feedback_resp_with_ids(ids: &[&str]) -> BrokerResponse {
-        BrokerResponse {
-            outcome: json!({
-                "count": 1,
-                "feedback": [{ "text": "steer", "created_at": "x" }],
-                "_commit_ids": ids,
-            }),
-        }
-    }
-
-    /// When the round-trip wins (no cancel), the companion COMMITS delivery by
-    /// sending a `CommitFeedback` with the listener's `_commit_ids`.
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn feedback_spawn_commits_after_delivery() {
-        use crate::acp::delegation::transport::{read_frame, write_frame, BrokerMessage};
-        use tokio::net::UnixListener;
-
-        let dir = tempfile::tempdir().unwrap();
-        let sock = dir.path().join("fb.sock").to_string_lossy().to_string();
-        let listener = UnixListener::bind(&sock).unwrap();
-        let committed = Arc::new(Mutex::new(Vec::<Vec<String>>::new()));
-        let committed2 = committed.clone();
-        let server = tokio::spawn(async move {
-            // 1) Feedback round-trip → respond with notes + _commit_ids.
-            let (mut c1, _) = listener.accept().await.unwrap();
-            let _: BrokerResponse = match read_frame::<_, BrokerMessage>(&mut c1).await.unwrap() {
-                BrokerMessage::Feedback(_) => {
-                    write_frame(&mut c1, &feedback_resp_with_ids(&["f1"]))
-                        .await
-                        .unwrap();
-                    BrokerResponse {
-                        outcome: Value::Null,
-                    }
-                }
-                other => panic!("expected Feedback, got {other:?}"),
-            };
-            // 2) CommitFeedback → record the ids.
-            let (mut c2, _) = listener.accept().await.unwrap();
-            if let BrokerMessage::CommitFeedback(req) = read_frame(&mut c2).await.unwrap() {
-                committed2.lock().await.push(req.ids);
-            }
-            write_frame(
-                &mut c2,
-                &BrokerResponse {
-                    outcome: Value::Null,
-                },
-            )
-            .await
-            .unwrap();
-        });
-
-        let inflight = Arc::new(InflightCalls::new());
-        let action = register_and_spawn_feedback(
-            inflight,
-            Value::from(1),
-            sock,
-            "tok".into(),
-            BrokerFeedbackRequest {
-                token: "tok".into(),
-            },
+    async fn removed_tool_is_rejected_even_if_called_directly() {
+        let action = dispatch_line(
+            &ctx(all_features()),
+            Arc::new(InflightCalls::new()),
+            r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"delegate_to_agent","arguments":{}}}"#,
         )
         .await;
-        let LineAction::Spawn(call) = action else {
-            panic!("expected Spawn")
-        };
-        let result = call.future.await;
-        let resp = result.response.expect("feedback result");
-        assert_eq!(resp.result.unwrap()["structuredContent"]["count"], 1);
-        // The commit is deferred to `after_relay`, which the binary runs ONLY
-        // after a successful stdout write — drive it here to simulate that relay.
-        result
-            .after_relay
-            .expect("feedback must carry a post-relay commit")
-            .await;
-        server.await.unwrap();
-        assert_eq!(*committed.lock().await, vec![vec!["f1".to_string()]]);
+        let response = response(action).await;
+        assert_eq!(response.error.unwrap().code, -32602);
     }
 
-    /// When a cancel wins the select, the companion suppresses the response AND
-    /// sends NO commit — so the notes stay pending for the next check.
-    #[cfg(unix)]
     #[tokio::test]
-    async fn feedback_spawn_cancel_sends_no_commit() {
-        use crate::acp::delegation::transport::{read_frame, write_frame, BrokerMessage};
-        use tokio::net::UnixListener;
-
-        let dir = tempfile::tempdir().unwrap();
-        let sock = dir.path().join("fb.sock").to_string_lossy().to_string();
-        let listener = UnixListener::bind(&sock).unwrap();
-        let saw_commit = Arc::new(Mutex::new(false));
-        let saw_commit2 = saw_commit.clone();
-        let server = tokio::spawn(async move {
-            // Accept the Feedback connection but DELAY responding, so the cancel
-            // (fired below) wins the select first.
-            if let Ok((mut c1, _)) = listener.accept().await {
-                tokio::time::sleep(Duration::from_millis(150)).await;
-                let _ = write_frame(&mut c1, &feedback_resp_with_ids(&["f1"])).await;
-            }
-            // A commit (if any) would arrive as a second connection. Wait briefly;
-            // a timeout (no connection) is the expected, correct outcome.
-            if let Ok(Ok((mut c2, _))) =
-                tokio::time::timeout(Duration::from_millis(200), listener.accept()).await
-            {
-                if matches!(
-                    read_frame::<_, BrokerMessage>(&mut c2).await,
-                    Ok(BrokerMessage::CommitFeedback(_))
-                ) {
-                    *saw_commit2.lock().await = true;
-                }
-            }
-        });
-
-        let ctx = CompanionContext {
-            parent_connection_id: "p".into(),
-            socket_path: sock,
-            token: "tok".into(),
-            features: FEEDBACK_ONLY,
-            custom_agents: Vec::new(),
-            disabled_agents: Vec::new(),
-        };
+    async fn cancellation_suppresses_an_ordinary_inflight_response() {
         let inflight = Arc::new(InflightCalls::new());
-        // tools/call → Spawn (registers the inflight entry).
-        let call_line = json!({
-            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
-            "params": { "name": "check_user_feedback", "arguments": {} }
-        })
-        .to_string();
-        let action = dispatch_line(&ctx, inflight.clone(), &call_line).await;
-        let LineAction::Spawn(call) = action else {
-            panic!("expected Spawn")
+        let pending = Box::pin(futures_util::future::pending())
+            as futures_util::future::BoxFuture<'static, std::io::Result<BrokerResponse>>;
+        let action =
+            register_and_spawn(inflight.clone(), json!(42), pending, render_feedback_result).await;
+        let LineAction::Spawn(spawned) = action else {
+            panic!("expected spawned call");
         };
-        // Cancel for the same id BEFORE the (delayed) response arrives.
-        let cancel_line =
-            json!({ "jsonrpc": "2.0", "method": "notifications/cancelled", "params": { "requestId": 1 } })
-                .to_string();
-        assert!(matches!(
-            dispatch_line(&ctx, inflight.clone(), &cancel_line).await,
-            LineAction::Silent
-        ));
-        // Cancel won → response suppressed AND no post-relay commit exists.
-        let result = call.future.await;
-        assert!(
-            result.response.is_none(),
-            "cancel must suppress the response"
-        );
-        assert!(
-            result.after_relay.is_none(),
-            "a suppressed response carries no commit"
-        );
-        server.abort();
-        // Crucially: no commit was sent for a cancelled (undelivered) check.
-        assert!(
-            !*saw_commit.lock().await,
-            "a cancelled check must not commit"
-        );
+
+        handle_cancel_notification(&inflight, &json!({"requestId": 42})).await;
+        let result = tokio::time::timeout(Duration::from_secs(1), spawned.future)
+            .await
+            .expect("cancel wakes call");
+        assert!(result.response.is_none());
+    }
+
+    #[tokio::test]
+    async fn shutdown_drain_wakes_all_inflight_calls() {
+        let inflight = Arc::new(InflightCalls::new());
+        let (one_tx, one_rx) = oneshot::channel();
+        let (two_tx, two_rx) = oneshot::channel();
+        inflight
+            .register("one".into(), InflightEntry { cancel_tx: one_tx })
+            .await;
+        inflight
+            .register("two".into(), InflightEntry { cancel_tx: two_tx })
+            .await;
+
+        drain_inflight_calls(&inflight).await;
+
+        assert!(one_rx.await.is_ok());
+        assert!(two_rx.await.is_ok());
+        assert!(inflight.drain_all().await.is_empty());
+    }
+
+    #[test]
+    fn shared_renderers_keep_mcp_content_and_structured_content() {
+        let feedback = render_feedback_result(&json!({
+            "count": 1,
+            "feedback": [{"text": "Please adjust", "created_at": "now"}]
+        }));
+        assert_eq!(feedback["isError"], false);
+        assert!(feedback["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("Please adjust"));
+
+        let task = render_task_ack(&json!({"recorded": true, "message": "saved"}));
+        assert_eq!(task["structuredContent"]["recorded"], true);
+
+        let authoring = render_authoring_result(&json!({
+            "kind": "work_task",
+            "created": true,
+            "id": 9,
+            "message": "queued"
+        }));
+        assert_eq!(authoring["structuredContent"]["created"], true);
     }
 }

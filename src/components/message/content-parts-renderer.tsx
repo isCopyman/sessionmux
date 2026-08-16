@@ -13,7 +13,6 @@ import {
 } from "@/lib/tool-call-normalization"
 import { parseBackgroundLaunch } from "@/lib/background-task"
 import { normalizePriority, normalizeStatus } from "@/lib/plan-parse"
-import { isDelegateToAgentToolName } from "@/lib/delegation-card"
 import { useTranslations } from "next-intl"
 import { cn } from "@/lib/utils"
 import {
@@ -68,9 +67,6 @@ import {
   WAIT_TOOL_NAME,
 } from "@/lib/shell-session-tool"
 import { COLLAB_AGENT_TOOL_NAME } from "@/lib/collab-tool"
-import { DelegatedSubThread } from "./delegated-sub-thread"
-import { DelegationStatusCard } from "./delegation-status-card"
-import { DelegationStatusGroupCard } from "./delegation-status-group-card"
 import { BackgroundTaskCard } from "./background-task-card"
 import { GeneratedImagesBlock } from "./generated-images-block"
 import { GoalRunPart, GoalToolCallPart } from "./goal-tool-call"
@@ -2604,55 +2600,6 @@ const ToolCallPart = memo(function ToolCallPart({
     )
   }
 
-  // Multi-agent delegation tool: surfaces an inline DelegatedSubThread
-  // bound to the child sub-session via parent_tool_use_id. Matches the
-  // bare `delegate_to_agent` (post-normalization) plus any host-specific
-  // server-prefixed form (`mcp__<server>__delegate_to_agent`,
-  // `<server>/delegate_to_agent`, `<server>.delegate_to_agent`, etc.)
-  // as a defensive fallback in case the value reaches the renderer
-  // un-normalized. Falls through to the normal renderer when no
-  // toolCallId is available (snapshot replays without a live binding)
-  // so the user still sees the tool input/output.
-  if (isDelegateToAgentToolName(normalizedToolName) && part.toolCallId) {
-    return (
-      <DelegatedSubThread
-        parentToolUseId={part.toolCallId}
-        input={part.input ?? null}
-        output={part.output ?? null}
-        errorText={part.errorText ?? null}
-        state={part.state}
-        meta={part.meta ?? null}
-      />
-    )
-  }
-
-  // Multi-agent delegation companion tools: render compact status cards
-  // consistent with DelegatedSubThread instead of the generic tool shell.
-  // `normalizeToolName` has already collapsed any host-specific server prefix
-  // (`mcp__<server>__…`) to these canonical names.
-  if (toolNameLower === "get_delegation_status") {
-    return (
-      <DelegationStatusCard
-        kind="status"
-        input={part.input ?? null}
-        output={part.output ?? null}
-        errorText={part.errorText ?? null}
-        state={part.state}
-      />
-    )
-  }
-  if (toolNameLower === "cancel_delegation") {
-    return (
-      <DelegationStatusCard
-        kind="cancel"
-        input={part.input ?? null}
-        output={part.output ?? null}
-        errorText={part.errorText ?? null}
-        state={part.state}
-      />
-    )
-  }
-
   // codeg-mcp ask_user_question: render the asked question(s) and the user's
   // selection as a dedicated read-only card instead of the generic tool shell.
   // The live interactive answering is handled separately by the pinned
@@ -3019,12 +2966,6 @@ export const ContentPartsRenderer = memo(function ContentPartsRenderer({
           part={part}
           renderPart={(child, childKey) => renderPart(child, childKey)}
         />
-      )
-    }
-
-    if (part.type === "delegation-status-group") {
-      return (
-        <DelegationStatusGroupCard key={`dsg-${keyId}`} polls={part.polls} />
       )
     }
 

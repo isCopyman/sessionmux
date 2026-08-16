@@ -9,7 +9,6 @@ pub mod collaboration;
 pub mod collections;
 pub mod conversations;
 pub mod custom_skills;
-pub mod delegation;
 mod error;
 pub mod event_metrics;
 pub mod experts;

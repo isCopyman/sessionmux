@@ -618,7 +618,6 @@ pub async fn handle_task(
             content_buffer: String::new(),
             tool_calls: Vec::new(),
             tool_call_inputs: std::collections::HashMap::new(),
-            delegation_rendered: std::collections::HashSet::new(),
             last_flushed: Instant::now(),
             pending_prompt: None,
             permission_pending: None,
@@ -919,7 +918,6 @@ pub async fn handle_resume(
             content_buffer: String::new(),
             tool_calls: Vec::new(),
             tool_call_inputs: std::collections::HashMap::new(),
-            delegation_rendered: std::collections::HashSet::new(),
             last_flushed: Instant::now(),
             pending_prompt: None,
             permission_pending: None,
@@ -1318,7 +1316,6 @@ async fn resume_topic_binding_and_send_followup(
         content_buffer: String::new(),
         tool_calls: Vec::new(),
         tool_call_inputs: std::collections::HashMap::new(),
-        delegation_rendered: std::collections::HashSet::new(),
         last_flushed: Instant::now(),
         pending_prompt: None,
         permission_pending: None,
@@ -1589,7 +1586,6 @@ async fn send_chat_prompt_linked(
             }],
             Some(folder_id),
             Some(conversation_id),
-            None,
         )
         .await
         .map(|_| ())
@@ -1907,7 +1903,6 @@ mod tests {
                 content_buffer: String::new(),
                 tool_calls: Vec::new(),
                 tool_call_inputs: std::collections::HashMap::new(),
-                delegation_rendered: std::collections::HashSet::new(),
                 last_flushed: Instant::now(),
                 pending_prompt: None,
                 permission_pending: None,
@@ -2112,7 +2107,6 @@ mod tests {
                 content_buffer: String::new(),
                 tool_calls: Vec::new(),
                 tool_call_inputs: std::collections::HashMap::new(),
-                delegation_rendered: std::collections::HashSet::new(),
                 last_flushed: Instant::now(),
                 pending_prompt: None,
                 permission_pending: None,

@@ -615,37 +615,12 @@
     "envVars": "Variables de entorno",
     "hostTools": {
       "label": "Dejar que el agente gestione archivos y comandos",
-      "description": "codeg deja de atender el acceso a archivos y los comandos de terminal, de modo que el agente los ejecuta en su propio proceso, donde sí se aplican su sandbox y sus reglas de permisos. También se desactiva la delegación a otros agentes, ya que devolvería ese mismo trabajo a codeg. codeg no añade ningún sandbox propio, así que actívalo solo si el agente tiene uno configurado."
+      "description": "codeg deja de atender el acceso a archivos y los comandos de terminal, de modo que el agente los ejecuta en su propio proceso, donde sí se aplican su sandbox y sus reglas de permisos. También se desactivan los canales de colaboración y herramientas alojados por codeg, porque volverían a dirigir la ejecución a través de codeg. codeg no añade ningún sandbox propio, así que actívalo solo si el agente tiene uno configurado."
     },
     "nativeJsonConfig": "Configuración JSON nativa",
     "modelHintDefault": "Déjalo vacío para usar el modelo predeterminado del sistema.",
     "generalConfigDescriptionClaude": "Admite configuración rápida de API URL, API Key y modelos de Claude, y sincroniza con la configuración JSON nativa.",
     "generalConfigDescriptionDefault": "Admite entrada de configuración importante (API URL, API Key, Model) y gestión de configuración JSON nativa.",
-    "multiAgent": {
-      "title": "Colaboración multiagente",
-      "description": "Permite que los agentes activos deleguen subtareas a otros agentes.",
-      "enable": "Activar delegación",
-      "enableHint": "Cuando está desactivado, la herramienta delegate_to_agent se oculta del catálogo de herramientas MCP del agente.",
-      "depthLimit": "Profundidad máxima de delegación",
-      "depthHint": "Rango permitido: {min}–{max}. Limita la profundidad de recursión de una cadena de delegación (raíz → hijo → nieto …).",
-      "completedCacheLabel": "Caché de resultados completados (MB)",
-      "completedCacheHint": "Caché en memoria de los resultados completados de subagentes, que se conserva solo mientras la sesión de delegación está en ejecución y se libera automáticamente cuando esa sesión termina. Al superar este presupuesto, los resultados más antiguos se descartan primero de la memoria (aún visibles en la sesión propia del subagente); 0 = sin límite (igualmente se libera al terminar la sesión).",
-      "save": "Guardar",
-      "saving": "Guardando…",
-      "saved": "Configuración de delegación guardada",
-      "saveFailed": "Error al guardar la configuración de delegación",
-      "loadFailed": "Error al cargar la configuración de delegación: {detail}",
-      "tabGeneral": "General",
-      "tabAgentDefaults": "Valores por defecto del agente",
-      "agentDefaultsDescription": "Anulaciones por agente que se aplican cuando Colaboración multiagente inicia un subagente para una llamada de delegación. Las opciones mostradas provienen de un sondeo en vivo: lo que selecciones es exactamente lo que el agente aceptará.",
-      "probing": "Cargando las opciones disponibles del agente…",
-      "probeFailed": "Error al cargar las opciones: {detail}",
-      "retry": "Reintentar",
-      "noConfigAvailable": "Este agente no tiene opciones configurables.",
-      "modeLabel": "Modo",
-      "agentDefaultHint": "Predeterminado del agente: {value}",
-      "defaultOptionLabel": "Predeterminado ({value})"
-    },
     "actions": {
       "dragSort": "Arrastrar para reordenar",
       "dragSortAgent": "Arrastrar para reordenar {name}",
@@ -1377,7 +1352,7 @@
     "customAgentSkillsDirLabel": "Directorio de skills dedicado",
     "customAgentSkillsDirHint": "Ruta absoluta del directorio desde el que este agente carga skills: su propio almacén, además del compartido o en su lugar. ~ se expande al directorio personal; las skills vinculadas se colocan aquí primero.",
     "customAgentMcpLabel": "Compatibilidad con MCP",
-    "customAgentMcpHint": "Envía el complemento MCP integrado de codeg a este agente al iniciar la sesión: es el canal de la delegación, los comentarios en vivo y las herramientas de tareas. Desactívalo para un agente que rechaza servidores MCP y no llega a conectarse; el cambio se aplica en la próxima conexión.",
+    "customAgentMcpHint": "Envía al agente el complemento MCP integrado de codeg cuando comienza una sesión: el canal para la colaboración entre sesiones, los comentarios en vivo y las herramientas de tareas. Desactívalo si el agente rechaza servidores MCP y no puede conectarse; el cambio se aplica en la siguiente conexión.",
     "customAgentIconNotAnImage": "Selecciona un archivo de imagen.",
     "customAgentIconTooLarge": "El icono debe pesar menos de {limit} KB.",
     "customAgentIconReadFailed": "No se pudo leer esa imagen.",
@@ -1394,7 +1369,7 @@
   "GeneralSettings": {
     "loading": "Cargando...",
     "sectionTitle": "General",
-    "sectionDescription": "Preferencias centralizadas para el terminal predeterminado, la aceleración de renderizado y la delegación entre agentes.",
+    "sectionDescription": "Preferencias centralizadas para el terminal predeterminado, la aceleración de renderizado y las herramientas de conversación.",
     "terminalTitle": "Terminal predeterminada",
     "terminalDescription": "Elige el shell que se usa al abrir nuevas pestañas de terminal desde la barra de terminal o el árbol de archivos. Los agentes también lo usan cuando piden a codeg que ejecute una línea de comandos completa.",
     "terminalSystemDefault": "Predeterminado del sistema",
@@ -2951,11 +2926,6 @@
         "openAgentsSettings": "Abrir ajustes de agentes",
         "notInstalled": "No instalado"
       },
-      "subAgentOverlay": {
-        "title": "Subagentes",
-        "collapsedSummary": "Subagentes {count}",
-        "collapseAria": "Contraer subagentes"
-      },
       "agentPlanOverlay": {
         "title": "Plan del agente",
         "collapsePlanAria": "Contraer plan",
@@ -3098,45 +3068,6 @@
         "tool": "Herramienta",
         "error": "Error de ejecución",
         "result": "Resultado"
-      },
-      "delegation": {
-        "subAgentRunning": "Subagente en ejecución…",
-        "noDetail": "No detail available yet.",
-        "unknownAgent": "Sub-agente",
-        "openDetail": "Ver conversación",
-        "detailTitle": "Conversación del subagente",
-        "detailDescription": "Vista de solo lectura de la conversación del subagente delegado.",
-        "waitForResult": "Esperando el resultado de la tarea {task}",
-        "waitForResultNoTask": "Esperando el resultado de la tarea",
-        "cancelTask": "Cancelando la tarea {task}",
-        "cancelTaskNoTask": "Cancelando la tarea",
-        "resultPageOf": "{current} / {total}",
-        "prevResult": "Resultado anterior",
-        "nextResult": "Resultado siguiente",
-        "noResultText": "Sin resultado en esta comprobación.",
-        "status": {
-          "starting": "iniciando",
-          "running": "en curso",
-          "checked": "consultado",
-          "waiting": "esperando aprobación",
-          "ok": "completado",
-          "err": {
-            "default": "fallido",
-            "delegation_disabled": "deshabilitado",
-            "depth_limit": "límite de profundidad",
-            "invalid_agent_type": "agente inválido",
-            "spawn_failed": "fallo al iniciar",
-            "send_failed": "fallo al enviar",
-            "timeout": "tiempo agotado",
-            "canceled": "cancelado",
-            "child_refusal": "subagente rechazó",
-            "child_max_tokens": "subagente: límite de tokens",
-            "child_max_turn_requests": "subagente: límite de solicitudes",
-            "child_empty": "subagente sin salida",
-            "child_unknown": "subagente: error",
-            "unknown": "tarea desconocida"
-          }
-        }
       },
       "contentParts": {
         "showingTailOutput": "Mostrando la salida final durante el streaming para mejorar el rendimiento.",

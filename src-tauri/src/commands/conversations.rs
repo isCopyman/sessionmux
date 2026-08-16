@@ -3017,19 +3017,14 @@ mod tests {
         )
         .await
         .expect("parent");
-        // Attach a child to this parent via the delegation-link path.
-        let link = crate::acp::delegation::spawner::DelegationLink {
-            parent_conversation_id: parent_id,
-            parent_tool_use_id: "tu-historical".into(),
-            delegation_call_id: "call-historical".into(),
-        };
-        conversation_service::create_with_delegation(
+        conversation_service::create_historical_child_fixture(
             &db.conn,
             folder_id,
             AgentType::Codex,
             Some("child".into()),
-            None,
-            Some(link),
+            parent_id,
+            "tu-historical".into(),
+            "call-historical".into(),
         )
         .await
         .expect("child");
@@ -3997,7 +3992,6 @@ mod tests {
 
     #[tokio::test]
     async fn list_child_conversations_core_returns_only_matching_children() {
-        use crate::acp::delegation::spawner::DelegationLink;
         use crate::db::service::conversation_service;
 
         let db = fresh_in_memory_db().await;
@@ -4009,18 +4003,14 @@ mod tests {
         // Two delegation children — both should come back, newest-first.
         let mut child_ids = Vec::new();
         for (i, tool_use) in ["tu-A", "tu-B"].iter().enumerate() {
-            let link = DelegationLink {
-                parent_conversation_id: parent_id,
-                parent_tool_use_id: (*tool_use).into(),
-                delegation_call_id: format!("call-{i}"),
-            };
-            let child = conversation_service::create_with_delegation(
+            let child = conversation_service::create_historical_child_fixture(
                 &db.conn,
                 folder_id,
                 AgentType::Codex,
                 Some(format!("child-{i}")),
-                None,
-                Some(link),
+                parent_id,
+                (*tool_use).into(),
+                format!("call-{i}"),
             )
             .await
             .expect("create child");
@@ -4142,23 +4132,19 @@ mod tests {
         // `parent_id`. The payload must therefore carry `parent_id` (the routing
         // key) and a fresh `child_count` (so a grandchild bumps the nested
         // chevron), unlike a root whose `parent_id` is omitted.
-        use crate::acp::delegation::spawner::DelegationLink;
         let db = fresh_in_memory_db().await;
         let folder_id = seed_folder(&db, "/tmp/codeg-sync-child-broadcast").await;
         let parent_id = create_conversation_core(&db.conn, folder_id, AgentType::ClaudeCode, None)
             .await
             .expect("parent");
-        let child = conversation_service::create_with_delegation(
+        let child = conversation_service::create_historical_child_fixture(
             &db.conn,
             folder_id,
             AgentType::Codex,
             Some("child".into()),
-            None,
-            Some(DelegationLink {
-                parent_conversation_id: parent_id,
-                parent_tool_use_id: "tu-1".into(),
-                delegation_call_id: "call-1".into(),
-            }),
+            parent_id,
+            "tu-1".into(),
+            "call-1".into(),
         )
         .await
         .expect("child");
@@ -4186,23 +4172,19 @@ mod tests {
         // Deleting a delegation child must re-broadcast its parent so every
         // client's child_count (and chevron) converges from the DB aggregate —
         // symmetric with the create-time parent re-emit.
-        use crate::acp::delegation::spawner::DelegationLink;
         let db = fresh_in_memory_db().await;
         let folder_id = seed_folder(&db, "/tmp/codeg-delete-child-reemit").await;
         let parent_id = create_conversation_core(&db.conn, folder_id, AgentType::ClaudeCode, None)
             .await
             .expect("parent");
-        let child = conversation_service::create_with_delegation(
+        let child = conversation_service::create_historical_child_fixture(
             &db.conn,
             folder_id,
             AgentType::Codex,
             Some("child".into()),
-            None,
-            Some(DelegationLink {
-                parent_conversation_id: parent_id,
-                parent_tool_use_id: "tu-1".into(),
-                delegation_call_id: "call-1".into(),
-            }),
+            parent_id,
+            "tu-1".into(),
+            "call-1".into(),
         )
         .await
         .expect("child");

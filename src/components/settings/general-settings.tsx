@@ -43,7 +43,6 @@ import { usePlatform } from "@/hooks/use-platform"
 import { relaunchApp } from "@/lib/updater"
 import { toErrorMessage } from "@/lib/app-error"
 import { NotificationSoundSettingsSection } from "@/components/settings/notification-sound-settings"
-import { DelegationSettingsSection } from "@/components/settings/delegation-settings"
 import { AgentToolsSettingsSection } from "@/components/settings/agent-tools-settings"
 import {
   readSessionWarmCacheLimit,
@@ -461,8 +460,6 @@ export function GeneralSettings() {
         />
 
         <NotificationSoundSettingsSection />
-
-        <DelegationSettingsSection />
 
         <AgentToolsSettingsSection />
       </div>

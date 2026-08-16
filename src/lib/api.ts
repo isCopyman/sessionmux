@@ -14,7 +14,6 @@ import type { FolderThemeColor } from "./theme-presets"
 import type { FollowUpIntent } from "./task-follow-up"
 import type {
   AgentType,
-  AgentDelegationDefaults,
   AgentOptionsSnapshot,
   Automation,
   AutomationRun,
@@ -4719,29 +4718,6 @@ export async function deleteModelProvider(id: number): Promise<void> {
   return getTransport().call("delete_model_provider", { id })
 }
 
-// ─── Delegation settings ───────────────────────────────────────────────
-
-export interface DelegationSettings {
-  enabled: boolean
-  depth_limit: number
-  /** Per-parent byte budget (in MB) for the broker's in-memory cache of
-   * completed sub-agent result text. `0` = unlimited. */
-  completed_cache_max_mb: number
-  /** Optional per-agent overrides applied when codeg-mcp spawns a subagent.
-   * Keyed by `agent_type`. Missing entries mean "use agent defaults." */
-  agent_defaults?: Partial<Record<AgentType, AgentDelegationDefaults>>
-}
-
-export async function getDelegationSettings(): Promise<DelegationSettings> {
-  return getTransport().call("get_delegation_settings")
-}
-
-export async function setDelegationSettings(
-  settings: DelegationSettings
-): Promise<DelegationSettings> {
-  return getTransport().call("set_delegation_settings", { settings })
-}
-
 // ─── Live feedback settings + submit ───────────────────────────────────
 
 /** Mirror of Rust `FeedbackSettings`. */
@@ -4846,9 +4822,8 @@ export async function setChatAuthoringSettings(
 }
 
 /** Live probe — opens a transient ACP connection to `agent_type`, reads what
- * it advertises (modes / config_options), and tears down. Used by the
- * delegation-settings UI so the option set on screen matches exactly what
- * codeg-mcp will receive when a subagent is spawned for delegation.
+ * it advertises (modes / config_options), and tears down. Used by automation
+ * and task editors so their option set matches what a later launch accepts.
  *
  * Does NOT touch chat-side `selectorsCache` or `localStorage` preferences. */
 export async function describeAgentOptions(

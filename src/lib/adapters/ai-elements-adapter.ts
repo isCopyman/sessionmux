@@ -9,10 +9,7 @@ import type {
   PlanEntryInfo,
   ImageData,
 } from "@/lib/types"
-import {
-  isAgentLikeToolName,
-  isDelegationStatusToolName,
-} from "@/lib/adapters/tool-kind-classifier"
+import { isAgentLikeToolName } from "@/lib/adapters/tool-kind-classifier"
 import { normalizeToolName } from "@/lib/tool-call-normalization"
 import { isBackgroundTaskToolCall } from "@/lib/background-task"
 import { isContextCompactionMeta } from "@/lib/context-compaction"
@@ -53,7 +50,7 @@ export type AdaptedToolCallPart = {
    * tool_use.status`); absent/`null` for DB-persisted rows (the Rust `ToolUse`
    * model has no status field). Consumed via `isUnsettledToolCall` by both the
    * generic tool-group filter (`dropEmptyInFlightToolCalls`) and the specialized
-   * lane row-builders (`buildDelegationTaskRows` / `buildBackgroundTaskRows`) to
+   * background-task row builder to
    * recognise an interrupted arg-less orphan that survives `COMPLETE_TURN`
    * promotion (its `state` flips to `output-available`, but its status stays
    * unsettled).
@@ -61,9 +58,7 @@ export type AdaptedToolCallPart = {
   toolStatus?: string | null
   /**
    * ACP extensibility metadata forwarded from `ContentBlock.tool_use.meta`.
-   * Opaque pass-through; the only consumer today is `<DelegatedSubThread>`
-   * which reads `meta["codeg.delegation"]` as a binding fallback when the
-   * live DelegationContext entry is missing (page refresh, late mount).
+   * Opaque pass-through for host-specific renderers.
    */
   meta?: Record<string, unknown> | null
   /**
@@ -146,18 +141,6 @@ export type AdaptedContentPart =
       type: "tool-group"
       items: AdaptedToolCallPart[]
       isStreaming: boolean
-    }
-  /**
-   * A run of consecutive `get_delegation_status` poll cards, merged into one
-   * card. When a delegated task runs longer than the 60s status-wait cap, the
-   * agent re-polls repeatedly; rather than stack N near-identical cards, the
-   * renderer collapses the run and (grouping by `task_id`) shows the latest
-   * poll per task — so parallel waits surface as one row each. Non-consecutive
-   * polls are NOT merged (text / other tools break the run).
-   */
-  | {
-      type: "delegation-status-group"
-      polls: AdaptedToolCallPart[]
     }
   /**
    * A run of consecutive Claude Code background-task polls (`TaskOutput`),
@@ -1327,76 +1310,9 @@ export function dropEmptyInFlightToolCalls(
 }
 
 /**
- * Wrap each run of consecutive `get_delegation_status` poll parts into a single
- * `delegation-status-group` part. Runs after `groupConsecutiveToolCalls`, which
- * leaves delegation (agent-like) tool calls standalone — so the status polls
- * arrive here as bare `tool-call` parts. Any non-status part (text, reasoning,
- * tool-group, the `delegate_to_agent` / `cancel_delegation` cards, …) breaks
- * the run, so only genuinely consecutive polls collapse. Even a single poll is
- * wrapped, so the merged-card status resolution (a returned "running" poll
- * reads as a settled snapshot, not a spinner) applies uniformly.
- */
-export function groupConsecutiveDelegationStatus(
-  parts: AdaptedContentPart[]
-): AdaptedContentPart[] {
-  const result: AdaptedContentPart[] = []
-  let buffer: AdaptedToolCallPart[] = []
-
-  const flush = () => {
-    if (buffer.length === 0) return
-    const polls = buffer
-    buffer = []
-    result.push({ type: "delegation-status-group", polls })
-  }
-
-  for (const part of parts) {
-    if (
-      part.type === "tool-call" &&
-      isDelegationStatusToolName(part.toolName)
-    ) {
-      buffer.push(part)
-      continue
-    }
-    flush()
-    result.push(part)
-  }
-  flush()
-
-  return result
-}
-
-/**
- * Merge adjacent `delegation-status-group` parts into one. Mirrors
- * `mergeAdjacentToolGroups`: used for cross-turn merging, where each polling
- * round is its own assistant turn and the concatenated parts land two
- * single-poll groups next to each other.
- */
-export function mergeAdjacentDelegationStatusGroups(
-  parts: AdaptedContentPart[]
-): AdaptedContentPart[] {
-  const result: AdaptedContentPart[] = []
-  for (const part of parts) {
-    const last = result[result.length - 1]
-    if (
-      part.type === "delegation-status-group" &&
-      last?.type === "delegation-status-group"
-    ) {
-      result[result.length - 1] = {
-        type: "delegation-status-group",
-        polls: [...last.polls, ...part.polls],
-      }
-    } else {
-      result.push(part)
-    }
-  }
-  return result
-}
-
-/**
  * Wrap each run of consecutive Claude Code background-task polls
  * (`TaskOutput`/`TaskStop`) into a single `background-task-group` part. Mirrors
- * `groupConsecutiveDelegationStatus`: those polls are left standalone by
- * `groupConsecutiveToolCalls` (they break the run), so they arrive here as bare
+ * `groupConsecutiveToolCalls`: those polls arrive here as bare
  * `tool-call` parts. Any other part breaks the run, so only genuinely
  * consecutive polls collapse. Even a single poll is wrapped, so the merged-card
  * status resolution applies uniformly.
@@ -1428,10 +1344,9 @@ export function groupConsecutiveBackgroundTasks(
 }
 
 /**
- * Merge adjacent `background-task-group` parts into one. Mirrors
- * `mergeAdjacentDelegationStatusGroups`: each polling round is its own assistant
- * turn, so the concatenated parts land two single-poll groups next to each
- * other across the turn boundary.
+ * Merge adjacent `background-task-group` parts into one. Each polling round is
+ * its own assistant turn, so the concatenated parts land two single-poll groups
+ * next to each other across the turn boundary.
  */
 export function mergeAdjacentBackgroundTaskGroups(
   parts: AdaptedContentPart[]
@@ -1945,11 +1860,9 @@ export function adaptMessageTurn(
     turn.role === "assistant"
       ? groupGoalRuns(
           groupConsecutiveBackgroundTasks(
-            groupConsecutiveDelegationStatus(
-              groupConsecutiveToolCalls(
-                dropEmptyInFlightToolCalls(
-                  dropHiddenFeedbackChecks(adaptedContent)
-                )
+            groupConsecutiveToolCalls(
+              dropEmptyInFlightToolCalls(
+                dropHiddenFeedbackChecks(adaptedContent)
               )
             )
           ),

@@ -615,37 +615,12 @@
     "envVars": "環境変数",
     "hostTools": {
       "label": "ファイルとコマンドをエージェント自身に処理させる",
-      "description": "codeg がファイルアクセスとターミナルコマンドを代行しなくなり、エージェントが自身のプロセスで実行します。そうすることで初めて、エージェント自身のサンドボックスと権限ルールが適用されます。他のエージェントへの委任も無効になります（同じ処理が codeg 経由に戻ってしまうため）。codeg 自体はサンドボックスを提供しないため、エージェント側でサンドボックスを設定済みの場合にのみ有効にしてください。"
+      "description": "codeg がファイルアクセスとターミナルコマンドを代行せず、エージェントが自身のプロセスで実行します。これにより、エージェント自身のサンドボックスと権限ルールが適用されます。実行を codeg 経由に戻す codeg 管理のコラボレーションおよびツールチャネルも無効になります。codeg 自体はサンドボックスを提供しないため、エージェント側で設定済みの場合にのみ有効にしてください。"
     },
     "nativeJsonConfig": "ネイティブ JSON 設定",
     "modelHintDefault": "空欄の場合はシステム既定モデルを使用します。",
     "generalConfigDescriptionClaude": "API URL、API Key、Claude モデルをすばやく設定でき、ネイティブ JSON 設定と同期します。",
     "generalConfigDescriptionDefault": "重要な設定入力（API URL、API Key、Model）とネイティブ JSON 設定管理をサポートします。",
-    "multiAgent": {
-      "title": "マルチエージェント連携",
-      "description": "アクティブなエージェントがサブタスクを他のエージェントに委任できるようにします。",
-      "enable": "委任を有効化",
-      "enableHint": "オフにすると、delegate_to_agent ツールはエージェントの MCP ツール一覧から非表示になります。",
-      "depthLimit": "最大委任深度",
-      "depthHint": "許可範囲: {min}–{max}。委任チェーン（ルート → 子 → 孫 …）の再帰深度を制限します。",
-      "completedCacheLabel": "完了結果のキャッシュ（MB）",
-      "completedCacheHint": "実行中の委任セッションが保持する、完了したサブエージェント結果のメモリ内キャッシュ。そのセッションの実行中のみ保持され、セッション終了時に自動的に破棄されます。この予算を超えると古い結果から順にメモリから破棄されます（サブエージェント自身のセッションでは引き続き閲覧可能）。0 は無制限（それでもセッション終了時に破棄）。",
-      "save": "保存",
-      "saving": "保存中…",
-      "saved": "委任設定を保存しました",
-      "saveFailed": "委任設定の保存に失敗しました",
-      "loadFailed": "委任設定の読み込みに失敗しました: {detail}",
-      "tabGeneral": "一般",
-      "tabAgentDefaults": "サブエージェント設定",
-      "agentDefaultsDescription": "マルチエージェント連携が委任呼び出しのためにサブエージェントを起動するときに適用される上書き設定です。ここに表示されるオプションはライブプローブで取得しており、選択した内容がそのままエージェントに渡されます。",
-      "probing": "エージェントの利用可能な設定項目を読み込み中…",
-      "probeFailed": "設定項目の読み込みに失敗しました: {detail}",
-      "retry": "再試行",
-      "noConfigAvailable": "このエージェントには設定可能な項目がありません。",
-      "modeLabel": "モード",
-      "agentDefaultHint": "エージェント既定: {value}",
-      "defaultOptionLabel": "既定（{value}）"
-    },
     "actions": {
       "dragSort": "ドラッグして並べ替え",
       "dragSortAgent": "{name} をドラッグして並べ替え",
@@ -1377,7 +1352,7 @@
     "customAgentSkillsDirLabel": "専用スキルディレクトリ",
     "customAgentSkillsDirHint": "このエージェントがスキルを読み込むディレクトリの絶対パスです。共有ストアと併用も単独利用も可能です。~ はホームディレクトリに展開され、リンクしたスキルはまずここに配置されます。",
     "customAgentMcpLabel": "MCP サポート",
-    "customAgentMcpHint": "セッション開始時に codeg 内蔵の codeg-mcp コンパニオンをこのエージェントへ渡します。委任・リアルタイムフィードバック・タスクツールはこの経路を使います。MCP サーバーを受け付けず接続に失敗するエージェントではオフにしてください。設定は次回の接続から有効になります。",
+    "customAgentMcpHint": "セッション開始時に codeg 内蔵の MCP コンパニオンをこのエージェントへ送信します。セッション間コラボレーション、ライブフィードバック、タスクツールのためのチャネルです。MCP サーバーを受け付けず接続に失敗するエージェントでは無効にしてください。変更は次回接続時に適用されます。",
     "customAgentIconNotAnImage": "画像ファイルを選んでください。",
     "customAgentIconTooLarge": "アイコンは {limit} KB 未満にしてください。",
     "customAgentIconReadFailed": "その画像を読み込めませんでした。",
@@ -1394,7 +1369,7 @@
   "GeneralSettings": {
     "loading": "読み込み中...",
     "sectionTitle": "一般",
-    "sectionDescription": "デフォルトターミナル、レンダリング高速化、マルチエージェント委譲などの共通設定をここで一括管理します。",
+    "sectionDescription": "デフォルトターミナル、レンダリング高速化、会話内ツールなどの共通設定を一括管理します。",
     "terminalTitle": "デフォルトターミナル",
     "terminalDescription": "ターミナルバーやファイルツリーから新しいターミナルタブを開くときに使用するシェルを選択します。エージェントが codeg にコマンドライン全体の実行を依頼するときにも使われます。",
     "terminalSystemDefault": "システムデフォルト",
@@ -2951,11 +2926,6 @@
         "openAgentsSettings": "エージェント設定を開く",
         "notInstalled": "未インストール"
       },
-      "subAgentOverlay": {
-        "title": "サブエージェント",
-        "collapsedSummary": "サブエージェント {count}",
-        "collapseAria": "サブエージェントを折りたたむ"
-      },
       "agentPlanOverlay": {
         "title": "エージェントプラン",
         "collapsePlanAria": "プランを折りたたむ",
@@ -3098,45 +3068,6 @@
         "tool": "ツール",
         "error": "エラー",
         "result": "結果"
-      },
-      "delegation": {
-        "subAgentRunning": "サブエージェント実行中…",
-        "noDetail": "No detail available yet.",
-        "unknownAgent": "サブエージェント",
-        "openDetail": "会話を表示",
-        "detailTitle": "サブエージェントの会話",
-        "detailDescription": "委任されたサブエージェントの会話を読み取り専用で表示します。",
-        "waitForResult": "タスク {task} の実行結果を待機中",
-        "waitForResultNoTask": "タスクの実行結果を待機中",
-        "cancelTask": "タスク {task} をキャンセル中",
-        "cancelTaskNoTask": "タスクをキャンセル中",
-        "resultPageOf": "{current} / {total}",
-        "prevResult": "前の結果",
-        "nextResult": "次の結果",
-        "noResultText": "このチェックでは結果がありません",
-        "status": {
-          "starting": "起動中",
-          "running": "実行中",
-          "checked": "確認済み",
-          "waiting": "承認待ち",
-          "ok": "完了",
-          "err": {
-            "default": "失敗",
-            "delegation_disabled": "無効",
-            "depth_limit": "深さ上限",
-            "invalid_agent_type": "不正なエージェント",
-            "spawn_failed": "起動失敗",
-            "send_failed": "送信失敗",
-            "timeout": "タイムアウト",
-            "canceled": "キャンセル済み",
-            "child_refusal": "サブエージェント拒否",
-            "child_max_tokens": "サブエージェント: トークン上限",
-            "child_max_turn_requests": "サブエージェント: 要求上限",
-            "child_empty": "サブエージェント応答なし",
-            "child_unknown": "サブエージェント: エラー",
-            "unknown": "不明なタスク"
-          }
-        }
       },
       "contentParts": {
         "showingTailOutput": "パフォーマンスのため、ストリーミング中は末尾出力を表示しています。",

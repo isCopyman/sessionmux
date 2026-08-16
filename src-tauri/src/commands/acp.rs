@@ -9284,7 +9284,6 @@ pub async fn acp_prompt(
             blocks,
             folder_id,
             conversation_id,
-            None,
             client_message_id,
         )
         .await
