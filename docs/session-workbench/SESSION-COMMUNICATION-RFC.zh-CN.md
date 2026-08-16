@@ -168,6 +168,33 @@ target = human   （别名 user）
 人仍然可以旁观任一 Session 的往来（监督、排错、手动代发），但旁观只增加 Human Mailbox 或调试
 视图里的副本状态，不改 Agent Mailbox 的未读、已读未回和回复债。
 
+写给 `human`/`user`、且尚未被人类消费或仍欠人类回复的信，Desktop 应用**系统悬浮窗 / 通知条**
+提醒，而不是为此启动任何一个 Session。悬浮窗只引用原 `event_id` 和短摘要（谁、要不要回、几封），
+不复制正文，也不把点击「我看过了」写成某个 Agent Session 的 receipt。需要人回复的信，人在
+Human Inbox 或往来里写出回复后，才清偿该 Delivery。
+
+### 3.6 Session 勿扰
+
+长时间独占当前 Turn、又没有真正后台任务时（例如必须占着 ACP 连接的训练、大下载），空闲后
+自动处理仍可能在它刚喘口气时再开一轮。因此每个受管 Session 可以进入 **勿扰**：
+
+| | 系统推送（提醒 Turn、空闲唤醒、催办 digest） | Agent 主动读 inbox / `list_sessions` / `send_message` | 人看往来、给人发信 |
+|---|---|---|---|
+| 普通 | 允许 | 允许 | 允许 |
+| 勿扰 | **禁止** | **允许** | 允许 |
+
+勿扰不是隐身，也不是把信扔掉。Mailbox 里的未读和已读未回继续长着，只是 daemon 先不敲门。
+Agent 随时可以自己拉 inbox。人仍可在 UI 里看信，也可对这个 Session 点「停止当前任务并发送」；
+普通提醒和紧急催办默认**不**破勿扰，否则开关没有意义。
+
+约束：
+
+- Agent 可以给自己设，人也可以在该 Session 上设；
+- 必须带截止时间（例如 30 分钟、2 小时、到本次任务结束），到期自动解除，禁止永久勿扰；
+- 设/解勿扰要写入可审计状态，发送方 UI 可显示「对方勿扰至 xx:xx」；
+- 目标忙碌或勿扰时，reminder 扫描可以标 overdue，但不增加 `repeat_count`，恢复普通状态后再发
+  一条受 cooldown 约束的摘要。
+
 ## 4. 寻址与身份
 
 ### 4.1 名字只用于选择
@@ -315,9 +342,27 @@ Mailbox 需要分别记录：
    就批量清偿；
 5. 重复打开、重连或多窗口查看不能后推 deadline；两个时间戳都只允许首次建立或显式策略修订。
 
-期限采用持久 wall-clock timestamp，目标离线、关闭或 busy 时不反复暂停、重算时间轴。Router 将
-“已经到期”与“现在适合提醒”分开：不可达或忙碌时可以显示 overdue，但不发送提醒、不增加重复
-次数；重新可达且空闲后再进行一次受 cooldown 约束的提醒。逾期时长本身不产生 cancel 权。
+期限采用持久 wall-clock timestamp，目标离线、关闭、busy 或勿扰时不反复暂停、重算时间轴。Router
+将“已经到期”与“现在适合提醒”分开：不可达、忙碌或勿扰时可以显示 overdue，但不发送提醒、
+不增加重复次数；重新可达且空闲、且未勿扰后再进行一次受 cooldown 约束的提醒。逾期时长本身
+不产生 cancel 权。
+
+### 5.6 提醒时间用系统预设，不做成每封信一个闹钟
+
+发信人第一版只选「需要回复 / 无需回复」和「普通 / 紧急」。具体时限由后端映射，不在 Composer
+上放分钟数输入框。建议预设：
+
+| 对象 | 事件 | 普通 | 紧急 |
+|---|---|---|---|
+| Agent | 未读且对方空闲 | 直接走 `invoke_when_idle`，不必先催 | 空闲则立即排一轮 |
+| Agent | 未读且对方忙碌 | 本轮结束后提醒；持续忙碌则约 2–3 分钟合并一条 digest | 空闲后立即提醒 |
+| Agent | 已进入上下文但仍欠回复 | 约 10–15 分钟首次催办，之后约 15 分钟一轮 | 约 3–5 分钟 |
+| 人类 | 未读 | Desktop 悬浮窗 / 通知，不启动模型 | 立即悬浮窗 |
+| 人类 | Human Inbox 中已打开但仍欠回复 | 约 30 分钟 | 约 10 分钟 |
+
+同一目标一个 cooldown 窗口只打一条摘要。提醒不重发正文，自身 `expects_reply=false`。达到最大
+重复次数后通知发送者或人类，**不**自动 interrupt。这些数字是第一版产品默认，实施时写入配置
+而不是写死在每个 Harness adapter 里。
 
 ## 6. Delivery Router 状态机
 
@@ -427,6 +472,37 @@ digest cooldown。只有实际成功展示或注入提醒才增加 repeat count�
 
 该设计吸收 SessionDock 的 mailbox truth + broker reminder，以及 CCCC 的分级 nudge、节流、最大
 重复次数与 foreman escalation，但 Codeg 的受管 Session 不依赖 terminal `wait` 或 role 注册。
+
+### 6.3 人类提醒走宿主悬浮窗，不走 Session Turn
+
+目标为 `human`/`user` 的未读或已读未回，由 Desktop 宿主提示，不创建任何 Agent Turn：
+
+- 主窗在前台：工作区内一条不抢焦点的通知条或角标即可；
+- 主窗在后台或被挡住：系统托盘 / 应用内悬浮窗，点击打开 Human Inbox 或对应往来；
+- 文案只说「有未读」或「有已读未回」，带发送 Session 的标题快照和是否需要回复；
+- 人点开悬浮窗不等于 Agent 签收；点开 Human Inbox 才消费写给人类的那一封。
+
+Web / 服务器模式没有原生悬浮窗时，降级为页面内横幅和浏览器通知（若用户授权），不能假装
+已经 Desktop 提醒过。
+
+### 6.4 Hook 只是长工具循环里的可选喊话，不是提醒主路径
+
+SessionDock 用 Hook / 往终端塞字，是因为宿主往往不能对那个 Session 做正规 `session/prompt`。
+Codeg 已经拥有连接、Prompt Queue 和 Delivery Router，**提醒和状态注入的主路径是 Codeg 自己
+投递**：空闲后开一轮、或给人类打悬浮窗。
+
+Claude 等少数 Harness 的 session-scoped Hook（例如 `PostToolUse` 返回
+`additionalContext`）只作为后续可选优化，用来在**一轮尚未结束、Agent 又不会主动调工具**时
+低声补一句状态摘要（勿扰与否、未读几封、已读未回几封）。它不能：
+
+- 叫醒已经 idle 或关闭的 Session；
+- 替代 mailbox claim / 去重；
+- 修改用户全局 Hook 配置；
+- 作为验收正确性依赖。
+
+通用状态注入放在每次系统发起的 Turn 信封头，以及 Agent 可随时拉取的 inbox/status 工具上。
+Hook 做不到就等本轮结束，由 Router 再投。详见 [9.2](#92-本-rfc-新增什么) 中
+「Claude Hook checkpoint adapter 仅是 V1.5 可选优化」。
 
 ## 7. 上下文、重放与幂等
 
@@ -923,6 +999,10 @@ transcript 对账，以及同一 Session 多视图 revision 的真实端到端�
   还是可选 Human Mailbox；
 - 人打开 Session 往来不得回填 Agent receipt，也不得启动 `reply_due_at`；
 - 增加保留地址 `human`/`user` 的投递与 Human Inbox 投影，不把人类建成可 Resume Session；
+- Desktop 对写给人类的未读 / 已读未回使用悬浮窗或通知条，不启动 Session Turn；
+- Session 勿扰：抑制系统推送，保留主动读 inbox；必须带截止时间；
+- 提醒时限用系统预设（见 [5.6](#56-提醒时间用系统预设不做成每封信一个闹钟)），Composer
+  第一版不暴露分钟数；
 - 迁移、重命名、linked reply 精确清偿、多 View revision 和崩溃恢复测试。
 
 ### 后续独立批次：V1.2 Conversation Timeline Projection
@@ -957,7 +1037,8 @@ transcript 对账，以及同一 Session 多视图 revision 的真实端到端�
 
 - 后端扫描到期 mailbox，按 target 生成 cooldown/digest，而不是复制正文重新投递；
 - 每项最大提醒次数、稳定去重键、失败恢复和重启续扫；
-- 离线/busy 时不增加提醒次数，恢复可达后再提醒；
+- 离线 / busy / 勿扰时不增加提醒次数，恢复可达且未勿扰后再提醒；
+- Agent 提醒走空闲 Turn 或队列；人类提醒走 Desktop 悬浮窗 / 通知，不启动模型；
 - 默认再次提醒或通知发送者，绝不因逾期自动 cancel；
 - reminder/escalation 自身不创建 reply obligation，防止催促循环。
 
