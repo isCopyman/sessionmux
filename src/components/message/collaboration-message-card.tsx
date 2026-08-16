@@ -9,6 +9,7 @@ import { SessionMessageComposerDialog } from "@/components/collaboration/session
 import { Button } from "@/components/ui/button"
 import { useTabActions } from "@/contexts/tab-context"
 import { formatConversationTitle } from "@/lib/conversation-title"
+import { markCollaborationSeen } from "@/lib/api"
 import type { CollaborationDelivery } from "@/lib/types"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { ContentPartsRenderer } from "./content-parts-renderer"
@@ -28,6 +29,8 @@ export function CollaborationMessageCard({
 }) {
   const t = useTranslations("Collaboration")
   const [replyOpen, setReplyOpen] = useState(false)
+  const [optimisticallySeenDeliveryId, setOptimisticallySeenDeliveryId] =
+    useState<string | null>(null)
   const conversations = useAppWorkspaceStore((state) => state.conversations)
   const sourceConversation = conversations.find(
     (conversation) => conversation.id === delivery.source.conversationId
@@ -48,9 +51,26 @@ export function CollaborationMessageCard({
           ? t("stateReplied")
           : t("noReplyNeeded")
         : null
+  const isUnread =
+    delivery.attentionState === "unread" &&
+    optimisticallySeenDeliveryId !== delivery.id
+
+  const markSeenFromExplicitAction = () => {
+    if (!isUnread) return
+    setOptimisticallySeenDeliveryId(delivery.id)
+    void markCollaborationSeen(currentConversationId, [delivery.id]).catch(
+      (error) => {
+        setOptimisticallySeenDeliveryId((current) =>
+          current === delivery.id ? null : current
+        )
+        console.error("[collaboration] mark timeline card seen:", error)
+      }
+    )
+  }
 
   const openSource = () => {
     if (!sourceConversation) return
+    markSeenFromExplicitAction()
     openTab(
       sourceConversation.folder_id,
       sourceConversation.id,
@@ -84,13 +104,9 @@ export function CollaborationMessageCard({
               </span>
             </div>
             <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-              <span
-                className={statusClass(delivery.attentionState === "unread")}
-              >
+              <span className={statusClass(isUnread)}>
                 <Eye className="mr-1 inline h-3 w-3" />
-                {delivery.attentionState === "opened"
-                  ? t("stateSeen")
-                  : t("unreadCount", { count: 1 })}
+                {isUnread ? t("unreadCount", { count: 1 }) : t("stateSeen")}
               </span>
               <span className={statusClass(false)}>
                 <Bot className="mr-1 inline h-3 w-3" />
@@ -128,7 +144,10 @@ export function CollaborationMessageCard({
               title={t("reply")}
               aria-label={t("reply")}
               disabled={!sourceConversation}
-              onClick={() => setReplyOpen(true)}
+              onClick={() => {
+                markSeenFromExplicitAction()
+                setReplyOpen(true)
+              }}
             >
               <Reply className="h-3.5 w-3.5" />
             </Button>

@@ -9,6 +9,7 @@ const workspace = vi.hoisted(() => ({
   ],
 }))
 const replyDialog = vi.hoisted(() => ({ props: null as unknown }))
+const api = vi.hoisted(() => ({ markCollaborationSeen: vi.fn() }))
 
 vi.mock("next-intl", () => ({
   useTranslations: () => (key: string, values?: Record<string, unknown>) =>
@@ -27,6 +28,7 @@ vi.mock("@/components/collaboration/session-message-composer-dialog", () => ({
     return <div data-testid="reply-dialog" />
   },
 }))
+vi.mock("@/lib/api", () => api)
 vi.mock("./content-parts-renderer", () => ({
   ContentPartsRenderer: ({ parts }: { parts: Array<{ text?: string }> }) => (
     <p>{parts.map((part) => part.text).join("")}</p>
@@ -74,6 +76,7 @@ function delivery(): CollaborationDelivery {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  api.markCollaborationSeen.mockResolvedValue({})
   replyDialog.props = null
 })
 
@@ -91,9 +94,12 @@ describe("CollaborationMessageCard", () => {
     expect(screen.getByText("unreadCount")).toBeInTheDocument()
     expect(screen.getByText("stateEmbedded")).toBeInTheDocument()
     expect(screen.getByText("stateNeedsReply")).toBeInTheDocument()
+    expect(api.markCollaborationSeen).not.toHaveBeenCalled()
 
     fireEvent.click(screen.getByRole("button", { name: "openSession" }))
     expect(tabs.openTab).toHaveBeenCalledWith(10, 1, "codex", true, "Reviewer")
+    expect(api.markCollaborationSeen).toHaveBeenCalledWith(2, ["delivery-1"])
+    expect(screen.getByText("stateSeen")).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole("button", { name: "reply" }))
     expect(replyDialog.props).toEqual(
@@ -104,5 +110,21 @@ describe("CollaborationMessageCard", () => {
         open: true,
       })
     )
+    expect(api.markCollaborationSeen).toHaveBeenCalledTimes(1)
+  })
+
+  it("marks an unread delivery seen when reply is the first explicit action", () => {
+    render(
+      <CollaborationMessageCard
+        delivery={delivery()}
+        currentConversationId={2}
+      />
+    )
+
+    expect(api.markCollaborationSeen).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole("button", { name: "reply" }))
+
+    expect(api.markCollaborationSeen).toHaveBeenCalledWith(2, ["delivery-1"])
+    expect(screen.getByText("stateSeen")).toBeInTheDocument()
   })
 })
