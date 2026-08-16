@@ -658,6 +658,8 @@ mod tauri_app {
                                     .inner()
                                     .clone_ref(),
                                 host_control_config.clone(),
+                                cm_state.clone_ref(),
+                                effective_data_dir.clone(),
                             ),
                         ),
                         std::sync::Arc::new(

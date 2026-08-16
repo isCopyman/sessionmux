@@ -1238,6 +1238,7 @@ pub async fn spawn_agent_connection(
     preferred_config_values: BTreeMap<String, String>,
     codeg_mcp_injection: Option<CodegMcpInjection>,
     terminal_shell_config: TerminalShellRuntimeConfig,
+    initial_conversation_binding: Option<(i32, i32)>,
 ) -> Result<tokio::sync::oneshot::Receiver<()>, AcpError> {
     // Create the authoritative session state up front. Subsequent emit_with_state
     // calls write through this state and increment its seq counter so the first
@@ -1266,6 +1267,25 @@ pub async fn spawn_agent_connection(
         },
     )
     .await;
+
+    // Host-created persistent Sessions own a Conversation row before the ACP
+    // handshake starts. Bind that row into the authoritative connection state
+    // immediately so SessionStarted can persist the native id even when no
+    // initial prompt is supplied. Ordinary UI-created draft sessions keep the
+    // existing lazy-link behavior and pass None here.
+    if let Some((conversation_id, folder_id)) = initial_conversation_binding {
+        emit_with_state(
+            &session_state,
+            &emitter,
+            AcpEvent::ConversationLinked {
+                conversation_id,
+                folder_id,
+                parent_conversation_id: None,
+                parent_tool_use_id: None,
+            },
+        )
+        .await;
+    }
 
     // Align ~/.hermes/.env's base-URL var with config.yaml's model.base_url so
     // Hermes' auxiliary tasks (title generation, compression, …) resolve the
@@ -5597,6 +5617,25 @@ async fn send_goal_control(
 /// `ModeChanged{preferred}` and converges to the preferred value before
 /// `SelectorsReady` fires. Failures on individual preferences are logged
 /// and skipped so a stale/invalid preference can't block session startup.
+/// Internal key used by Host Control to select the provider-advertised model
+/// option by semantic category. It never reaches the agent: the connection
+/// resolves it to the concrete config id published by this Harness.
+pub(crate) const PREFERRED_MODEL_CONFIG_KEY: &str = "__codeg_host_model__";
+
+fn resolve_preferred_config_id(
+    options: &[SessionConfigOption],
+    requested_config_id: &str,
+) -> Option<String> {
+    if requested_config_id == PREFERRED_MODEL_CONFIG_KEY {
+        options
+            .iter()
+            .find(|option| matches!(option.category, Some(SessionConfigOptionCategory::Model)))
+            .map(|option| option.id.to_string())
+    } else {
+        Some(requested_config_id.to_string())
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn apply_preferred_session_options(
     cx: &ConnectionTo<Agent>,
@@ -5628,14 +5667,24 @@ async fn apply_preferred_session_options(
 
     let session_id = session.session_id().clone();
     let mut options = initial_config_options;
-    for (config_id, value_id) in preferred_config_values {
+    for (requested_config_id, value_id) in preferred_config_values {
+        let config_id = match resolve_preferred_config_id(&options, requested_config_id) {
+            Some(config_id) => config_id,
+            None => {
+                tracing::error!(
+                    "[ACP] failed to apply preferred model '{value_id}': \
+                     the agent did not advertise a model config option"
+                );
+                continue;
+            }
+        };
         // Skip the round-trip when the agent's current value already matches.
         // Note: codex-acp 1.0.0 advertises "mode" as a config option (so the
         // match check below normally fires), but we still do NOT skip when a
         // requested config_id is absent from the advertised options — older or
         // edge-case builds accept `set_config_option` for an unadvertised "mode"
         // (see `ensure_codex_mode_option`), so let the agent decide.
-        let advertised = options.iter().find(|o| o.id.to_string() == *config_id);
+        let advertised = options.iter().find(|o| o.id.to_string() == config_id);
         let already_matches =
             advertised.is_some_and(|o| config_option_already_holds(o, value_id.as_str()));
         if already_matches {
@@ -15008,6 +15057,32 @@ mod tests {
         });
         let resp: NewSessionResponse = serde_json::from_value(raw).expect("must parse");
         assert_eq!(resp.config_options.map(|o| o.len()), Some(2));
+    }
+
+    #[test]
+    fn host_model_preference_resolves_the_semantic_model_category() {
+        let option: SessionConfigOption = serde_json::from_value(serde_json::json!({
+            "type": "select",
+            "id": "provider-specific-model-id",
+            "name": "Model",
+            "category": "model",
+            "currentValue": "model-a",
+            "options": [{"value": "model-a", "name": "Model A"}]
+        }))
+        .expect("model option must parse");
+
+        assert_eq!(
+            resolve_preferred_config_id(&[option], PREFERRED_MODEL_CONFIG_KEY).as_deref(),
+            Some("provider-specific-model-id")
+        );
+        assert_eq!(
+            resolve_preferred_config_id(&[], "ordinary-config").as_deref(),
+            Some("ordinary-config")
+        );
+        assert_eq!(
+            resolve_preferred_config_id(&[], PREFERRED_MODEL_CONFIG_KEY),
+            None
+        );
     }
 
     #[test]
