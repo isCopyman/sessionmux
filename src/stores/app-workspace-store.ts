@@ -301,7 +301,7 @@ export const useAppWorkspaceStore = create<AppWorkspaceStoreState>()(
       // Archive is a library visibility flag, not deletion. Remove the row
       // from ordinary sidebar data without tombstoning its id, so a later
       // restore upsert can insert it again. Open workbench tabs are untouched.
-      if (summary.archived_at != null) {
+      if (summary.archived_at != null || summary.harness_internal) {
         if (idx < 0) return
         const next = prev.slice()
         next.splice(idx, 1)

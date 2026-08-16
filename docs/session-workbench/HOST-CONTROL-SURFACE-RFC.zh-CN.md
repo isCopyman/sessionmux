@@ -137,6 +137,16 @@ Host Control 不再定义独立的 `create_subagent` 或一次性 delegation 对
 对话、Agent 临时找另一个 Harness 调研，还是创建长期协作者，底层都只创建一种真实、持久、可
 Resume 的 Session。所谓“子 Agent”只是这个 Session 的来源关系、默认展示位置和生命周期策略。
 
+这里的“子 Agent”只指 **Codeg Host 创建并受管的 Session**，不包括 Harness 在一次 Turn 内自行
+派生的原生内部 subagent。后者没有 Codeg 创建意图、Host capability 授权或受管生命周期，默认不
+进入 Host Control 的 Session Registry 和普通 UI。Codeg 不应因为扫描到一份 Codex/Claude/Grok
+内部 transcript，就自动把它变成可寻址的协作者或顶层 Session。
+
+归属判断不能只看 Harness 的 `thread_source=subagent`：Codeg 创建的受管 Session 也可能由适配器
+映射到类似的原生能力。判定优先级为 Codeg 持久化的创建/provenance 事实优先，原生 metadata
+其次。该分类是导入和投影规则，不要求继续向 `conversation` 主行堆叠一个同时承担来源、展示和
+生命周期的 `is_subagent` 字段。
+
 截至 2026-08-16，已实施的 `session.create` 接受：
 
 ```text
@@ -218,6 +228,10 @@ Session 可以继续被追问、Fork、加入其他 Workbench，并按权限联�
 
 子关系可递归形成协作树，但 fan-out、深度、并发和费用受 Host Policy 限制。默认临时子 Session
 嵌套且后台创建；只有用户明确要求或既有策略授权时才打开、聚焦或创建新 Worktree。
+
+上述嵌套、提级、Mailbox、Workbench 和生命周期规则仅作用于用户拥有或 Codeg Host 拥有的
+Session。Harness-internal subagent 默认不参与这些组织关系；需要排障时通过独立的高级诊断投影
+查看，不能污染日常 Session 树。
 
 Removal 批次删除旧 Schema、Broker/task_id、专属 UI 和设置；共享 companion、transport、可信 caller
 identity、`list_sessions/send_message` 等 Host bridge 必须保留。纯展示卡片/浮窗可抽成普通 Session

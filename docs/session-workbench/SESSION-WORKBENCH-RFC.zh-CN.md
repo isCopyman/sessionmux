@@ -218,7 +218,8 @@ Codeg
 - Session 最多只有一个主要 Collection；收藏、最近、搜索和快捷视图不算第二个归属；
 - Session 可以出现在多个 Workbench 和 App Window，但仍只有一份 Conversation 与运行时；
 - Workbench 不属于某个固定 Folder；
-- 一个 Workbench 同一时刻只挂载到一个 App Window；复制 Workbench 会生成新身份；
+- Workbench 结构由 Backend 按稳定 ID/revision 共享；第一阶段可限制同一设备只有一个结构编辑
+  mount，复制 Workbench 会生成新身份；
 - 群聊可以引用任意 Session，不改变 Collection、Workbench 和 Session 私聊；
 - AgentBus project 可以映射到外部群聊成员或 Collection，但不与它们合并；
 - 最近使用、收藏和搜索属于视图，不需要复制 Session。
@@ -243,7 +244,7 @@ Codeg
 - 复杂 Workflow 或 Autopilot；
 - 一次完成完整群聊协议、自动主持人或复杂 Workflow；
 - 替换 ACP 或统一抹平所有 Harness 的能力差异；
-- Workbench 布局跨设备实时协同编辑；
+- 同一 Workbench 的多人无冲突实时协同拖拽编辑；基础结构仍须由 Backend 按 revision 共享；
 - 把聊天正文做成自由画布；
 - 强制把现有 Folder、Git 或 worktree 概念删除。
 
@@ -301,6 +302,23 @@ Codeg
 
 实现可以采用文件监听加周期性校验；界面仍保留手动刷新作为故障恢复入口。
 
+自动发现必须先分类，再决定是否进入普通 Session 投影：
+
+```text
+用户创建/显式导入             -> 普通可见 Session
+Codeg Host 创建并持久化来源关系 -> 受管 Session，可嵌套或提级
+Harness 自行派生的内部 subagent -> 默认排除，仅高级诊断可见
+```
+
+以 Codex 为例，导入器应读取 `session_meta.thread_source`、`parent_thread_id` 及
+`source.subagent.thread_spawn` 等原生元数据，不能再把明确的内部 subagent 一律写成顶层
+`parent_id = NULL` 的“未命名会话”。但 Codeg 自己的持久创建/provenance 记录优先于原生标记，
+避免误隐藏由 Codeg 发起并负责生命周期的子 Session。
+
+旧版本已经误导入的 Harness-internal 行不得通过删除原生文件来清理。迁移或重扫只调整日常可见
+投影，并保留可审计的原生身份；默认搜索、Collection、Workbench、消息目标和自动化选择器均不
+返回这些内部记录。
+
 原生来源暂时不可读、路径移动或单次扫描失败时，Conversation 先标记来源不可用，并提供重扫、
 重新定位或忘记索引。只有确认原生 Session 已删除且用户明确选择后，才清理 Codeg 索引；不得把
 I/O 故障当作删除事件。
@@ -322,9 +340,12 @@ Fork 必须进一步区分当前末端 Fork、历史消息分叉和文件恢复�
 到同一个活动 Session runtime：已发送消息、流式输出、工具调用、审批/问题、状态、取消和用量
 实时广播；不得因为打开第二个视图而创建或 Resume 第二份原生会话。
 
-布局、焦点、滚动位置和选区属于 View Instance。未发送草稿在同一设备内按 Session 共享，
-输入框采用可接管的单编辑者规则；send/cancel 由后台按 Session 串行化，并使用幂等请求 ID
-避免重复提交。跨设备草稿同步不是第一阶段硬要求，已发送消息和运行时事件同步是正确性要求。
+Workbench 的分屏树、比例、内容标签归属与顺序属于共享 Workbench；活动 Workbench、每个 Pane
+的活动内容标签、焦点、滚动位置和选区属于客户端的 View Instance。局部 View 状态可以持久化并在
+该桌面窗口或浏览器下次打开时恢复，但不广播给其他客户端。未发送草稿在同一设备内按 Session
+共享，输入框采用可接管的单编辑者规则；send/cancel 由后台按 Session 串行化，并使用幂等请求 ID
+避免重复提交。跨设备草稿同步不是第一阶段硬要求，已发送消息、运行时事件和 Workbench 结构的
+权威 revision 是正确性要求。
 
 #### LIFE-001 生命周期动作不得级联
 
@@ -478,7 +499,9 @@ Workbench 切换必须是应用内状态切换，不允许通过整页导航重�
 #### WIN-006 原生系统窗口
 
 一个 App Window 可以打开多个 Workbench Tab。Workbench 可以在窗口之间移动；同一 Workbench
-默认不能同时挂载两次，避免布局双写。需要两份不同布局时执行复制并生成新的 Workbench ID。
+第一阶段默认只有一个结构编辑 mount，其他位置只读或显式接管，避免布局双写。这是编辑租约，
+不是存储所有权；Workbench 结构始终由 Backend 按 ID/revision 保存。需要两份长期不同布局时执行
+复制并生成新的 Workbench ID。
 把 Pane 或内容标签拆为独立 Tauri 窗口、再重新吸附，列为第二阶段。
 
 ### 7.4 分屏与拖放
@@ -566,6 +589,43 @@ Paseo 已实现 editor target registry、常见编辑器探测、按文件/目�
 交互和跨平台实现参考。Codeg 已有 `platform.ts` 的本地桌面判断与 opener 封装，适合在其上增加
 专门的 external-editor command；系统默认 `openPath` 不能替代显式编辑器选择。
 
+#### RESOURCE-002 Diff 必须提供行内变化强调
+
+当前 [`UnifiedDiffPreview`](../../src/components/diff/unified-diff-preview.tsx) 已解析文件、hunk、
+旧/新行号和新增/删除行，并被聊天工具调用、权限确认、文件工作区和任务详情共同复用；但
+`classifyRows` 目前只产生整行 `added/deleted`，渲染层只有一段完整 `row.text`，所以无法显示行内
+真正变化的片段。
+
+目标仍以 unified diff 为默认，不要求先增加 side-by-side 模式。渲染流水线增加独立的行配对与
+intraline 分段阶段：
+
+```text
+Raw hunk
+  -> 连续 delete/add block
+  -> 候选旧行/新行配对
+  -> unchanged / removed / added spans
+  -> 浅色行背景 + 深色变化片段
+```
+
+约束如下：
+
+- 只在同一 hunk 内相邻的 delete/add block 中配对，不能跨上下文行猜测；
+- 单行替换优先直接配对；多行 block 使用有界相似度匹配，并保持顺序，不进行全文件二次 Diff；
+- 英文和代码可利用词/标识符边界，中文、路径、时间戳及长无空格串必须能回退到字符级；
+- 空白变化必须可见，但不能因制表符、行尾或 Unicode 组合字符导致错位或破坏原文；
+- 新文件和删除文件没有对应侧，继续使用整行基础新增/删除色；相似度过低时不显示深色片段；
+- 深色 span 只是显示投影，复制文本、行号、原始 patch、Apply/审批和文件内容均不得被改写；
+- 保留 `+/-`、旧/新行号及可访问的文本语义，亮色和暗色主题都要有足够对比度；
+- 大 Diff 按可见文件/hunk 懒计算；单行或单 block 超过预算时安全退回整行高亮，不阻塞消息滚动。
+
+同一个组件的所有入口必须达到一致效果：聊天消息中的文件编辑、权限弹窗、File Workspace/Git
+Changes、Work Task 详情和独立 Diff Tab。第一阶段不要求语法高亮或可编辑 Diff；若以后加入语法
+颜色，必须与增删背景和行内强调叠加，而不能覆盖变化强度。
+
+最小验收包括：短字符串替换、中文短语替换、路径/时间戳变化、多行增删配对、纯新增/纯删除文件、
+空白变化、超长行降级、亮/暗主题，以及各入口渲染一致。测试不仅断言整行 class，还应断言深色
+removed/added span 只覆盖实际变化内容。
+
 ### 7.6 协作动作与可选群聊（后置）
 
 #### COLLAB-001 先提供无组织负担的动作
@@ -605,6 +665,10 @@ App、缺少直接 federation 的跨 Backend 或需要离线持久 mailbox 时�
 同一 Delivery Router，并为每条消息选择唯一 adapter；
 不得让 Codeg 直接注入后，同一 Session 又从 AgentBus 重复领取同一消息。
 
+内部定向消息先区分通信事件、UI 投影和实际 Harness turn，再由调用策略决定是否启动目标；稳定
+寻址、忙碌/关闭状态机、上下文持久化和最小工具面见
+[Session 间通信与调用策略 RFC](./SESSION-COMMUNICATION-RFC.zh-CN.md)。
+
 AgentBus daemon/CLI 继续独立存在。未来 Operator UI 可以展示 project、role、绑定 Session、
 pending、leased、owed 和真实投递状态，但不得把“已入邮箱”写成“已唤醒或已处理”。完整设计见
 [AgentBus 协作子 RFC](./AGENTBUS-COLLABORATION-RFC.zh-CN.md)。
@@ -613,12 +677,52 @@ pending、leased、owed 和真实投递状态，但不得把“已入邮箱”�
 
 Agent 在群里 `@` 另一个成员时，交接消息和后续回复进入共享时间线；没有被 `@` 的其他成员可
 查询但不启动。Agent direct 私信和 Room 交接共用 `expects_reply`、链深、总 turn 数和可选预算；
-普通最终回复固定为不期待再回复，只进入来源记录，不自动启动原发送者。只有新的显式目标投递才
-延长协作链。系统支持停止单成员、停止本条链和停止当前 Room 活动；thinking、状态和工具日志不得
-自动触发下一位成员。
+普通最终回复固定为不期待再回复，并使用不调用来源模型的 `store_only` 策略，只进入来源记录。
+`expects_reply` 与是否调用模型是两个独立维度；只有新的显式目标投递才延长协作链。系统支持停止
+单成员、停止本条链和停止当前 Room 活动；thinking、状态和工具日志不得自动触发下一位成员。
 
 完整 Room 行为和拟议数据边界见
 [群聊面板与 Session 协作 RFC](./GROUP-CONVERSATION-RFC.zh-CN.md)。
+
+### 7.7 SSH 自动部署远端 Backend（后置）
+
+截至 2026-08-16，Codeg 已有可独立运行的 `codeg-server`、HTTP API、认证 WebSocket 和前端
+Transport 抽象。SSH 远程模式不应再造第二套 Session、文件或消息协议，而应作为现有 Server
+模式的 bootstrap 与 transport adapter：
+
+```text
+Codeg Desktop
+  → 系统 SSH：探测远端 OS/架构
+  → 上传或复用匹配版本的 codeg-server
+  → 远端仅监听 127.0.0.1 的随机端口
+  → SSH local forwarding
+  → 现有 Codeg HTTP/WebSocket Transport
+```
+
+第一版优先调用系统 `ssh`/`scp`，从而继承用户已经验证的 OpenSSH config、SSH Agent、
+`ProxyJump`、`ProxyCommand` 和企业认证策略；不在 Tauri 内立即重写完整 SSH 客户端。启动器必须
+使用参数数组而非拼接 shell 字符串，并对主机、远端路径、版本、校验和及握手输出做严格验证。
+
+运行和状态边界如下：
+
+- 一个远端用户/主机默认复用一个受管 `codeg-server`，而不是每个 Session 启动一个服务；
+- Conversation、Folder、原生 Session 索引、文件和 Harness Runtime 由远端 Backend 持有；
+- Workbench 结构由所连接 Backend 持有；物理窗口挂载、活动项、滚动位置和设备本地草稿按客户端
+  命名空间保存；
+- 多个本地窗口或 Web View 连接同一远端 Backend 时，必须通过后端事件和 Conversation Runtime
+  单实例规则同步，不能各自启动一份 Harness；
+- SSH 断开与停止远端服务是不同动作。默认 detach 后允许服务和任务继续，重连时优先恢复原
+  Conversation/Runtime；只有用户显式停止时才终止服务；
+- 远端服务仅绑定回环地址，使用临时认证令牌并校验上传二进制；不得为了省去隧道而默认暴露公网
+  端口；
+- SSH 私钥始终留在本机。默认使用远端 `~/.claude`、`~/.codex` 等已有 Harness 认证；本机模型
+  凭据和环境变量只有在独立、显式授权的转发功能中才能进入远端；
+- 模型 endpoint 必须对运行 Harness 的远端机器可达。本机 `127.0.0.1` gateway 不会因建立 SSH
+  连接自动变成远端可用地址，端口转发必须是显式能力和状态。
+
+该模式只增加 Backend Connection/Execution Context 的创建方式，不引入 `ssh_session`、远端
+Workspace 或第二套 Conversation 表。远端文件在外部编辑器中的打开仍遵守资源页的主机归属
+规则，后续可映射到 VS Code Remote SSH URI，不能把远端路径直接交给本机编辑器。
 
 ## 8. Codeg 落地设计
 
@@ -726,7 +830,8 @@ Conversation。
 
 App Window 挂载、窗口几何和活动 Workbench 属于设备本地状态，第一阶段不要求建立服务器共享
 领域表。至少保存：`window_instance_id`、打开的 Workbench ID 顺序、活动 Workbench、位置、尺寸
-和显示器。一个设备内同一 Workbench ID 只允许一个活动 mount；“复制工作台”创建新 ID。
+和显示器。一个设备内同一 Workbench ID 第一阶段只允许一个可编辑 mount；其他只读 View 不改变
+其 Backend 结构，“复制工作台”创建新 ID。
 
 `collection.parent_id` 是新增 Collection 自身的嵌套关系，与现有 `folder.parent_id` 无关。
 Collection 成员关系不得使用 `folder_link`，因为后者具有真实文件系统链接和路径授权语义。
@@ -738,23 +843,34 @@ Collection 成员关系不得使用 `folder_link`，因为后者具有真实文�
 
 ### 8.3 Workbench 与 App Window 状态
 
-第一阶段把当前单一键：
+当前实现曾把单一布局和窗口状态集中在前端键中：
 
 ```text
 workspace:tab-groups:v1
 ```
 
-迁移为按 Workbench 和设备隔离的键，并增加窗口挂载状态：
+按 Workbench 分区的本地键可以作为迁移期缓存，但不是最终事实源。目标模型拆成两类：
 
 ```text
-workbench:{workbenchId}:tab-groups:v1
-app-window:{windowInstanceId}:workbench-tabs:v1
-app-window:last-active-id
+Backend shared
+  workbench:{workbenchId}:structure + revision
+    ├── pane tree / split ratios
+    └── content tab references / order
+
+Client-local projection
+  client:{clientInstanceId}:window:{windowInstanceId}:mounts
+  client:{clientInstanceId}:view:{viewInstanceId}:state
+    └── active tab / focus / scroll / selection / panel state
 ```
 
-SQLite 保存 Workbench 元数据和持久 Session 视图关系；本地存储保存 App Window 挂载、布局树、
-Pane 选择、焦点和设备相关显示状态。Session 草稿另按 Conversation 保存并通过单编辑者租约在
-同一设备视图间共享。这样不会让桌面、Web 和移动端互相覆盖焦点与布局。
+SQLite/Backend 保存 Workbench 元数据、持久 Session/资源引用、分屏结构和 revision；客户端局部
+存储保存 App Window 挂载、活动 Workbench、每个 Pane 的活动标签、焦点、滚动和设备相关显示状态。
+Session 草稿另按 Conversation 保存并通过单编辑者租约在同一设备视图间共享。这样桌面、Web 和
+未来移动端看到相同工作台结构，却不会互相覆盖正在查看的位置。
+
+局部投影不等于易失状态。桌面可以把它写入本地 SQLite、WebView storage 或状态文件，像 VS Code
+一样在重启后恢复；浏览器可以写入自己的 IndexedDB/local storage。若以后为了备份而由 Server
+代存，必须按 `client_instance_id + window_instance_id` 分区，不能混入共享 Workbench revision。
 
 当前 `tab_service` 使用全局 `opened_tabs_version` 做 CAS，并通过替换整张 `opened_tab` 集合保存
 状态，并把 `is_active` 作为跨客户端共享事实镜像。引入 Workbench 和独立 App Window 后不能
@@ -762,7 +878,9 @@ Pane 选择、焦点和设备相关显示状态。Session 草稿另按 Conversat
 Workbench 分区，并停止在窗口之间同步焦点，否则一个客户端保存某个 Workbench 时会清空其他
 Workbench，两个物理窗口也会互相抢活动标签。迁移前应先为现有全局 CAS 行为增加回归测试。
 
-如果以后需要跨设备同步布局，再增加带 `client_id` 和版本号的 Workbench state，而不是让多个客户端争写同一个 JSON。
+Workbench 结构写入必须使用后端命令和 revision/CAS，不能让多个客户端各自替换整份本地 JSON。
+结构事件只负责提示客户端刷新权威 snapshot；焦点和滚动等局部投影不进入该事件。若某个结构
+修改删除了当前客户端正在看的 Tab，客户端只对失效引用做回退，不照搬发送端的活动项。
 
 ### 8.4 状态边界
 
@@ -776,7 +894,8 @@ Workbench 的基本条件。新增 Workbench 与 View Instance 后应保持：
 - 一个 View Instance 引用一个 Conversation，但多个 View Instance 共享一个 Runtime Session；
 - 后台运行连接独立于 Workbench 是否可见；
 - Conversation Store 不因切换 Workbench 而重新导入会话正文；
-- domain/runtime 事件广播到全部视图，focus/scroll/layout 事件只留在本 View/Workbench/App Window。
+- domain/runtime 事件广播到全部视图，Workbench 结构事件广播给引用该 Workbench 的客户端；
+- active/focus/scroll/selection 等局部事件只留在本 client/App Window/View，并可独立持久化恢复。
 
 Library View Store 独立于上述 Runtime 和布局状态，建议最小结构为：
 
@@ -953,6 +1072,18 @@ Session 身份稳定后作为并行 Collaboration Track 实施；直接 Harness 
 受管 CLI Gateway 不进入 Milestone 5 的完成条件。它在 Codeg 原生协作和 AgentBus 外部桥稳定后
 作为独立后续里程碑实施，不能以 PTY wrapper 取代结构化 ACP/原生运行时。
 
+### Milestone 6：可选 SSH Remote Bootstrap
+
+- 添加可验证、可删除的 SSH Host 配置和连接状态；
+- 探测远端平台，校验并部署匹配版本的 `codeg-server`；
+- 通过回环监听与 SSH 隧道复用现有 HTTP/WebSocket Transport；
+- 支持短暂断线重连、服务复用、显式停止和版本升级失败回退；
+- 验证同一远端 Conversation 被多个 View 打开时仍只有一个 Runtime；
+- 默认不转发本机 Harness 凭据，不自动开放远端网络端口。
+
+该里程碑独立于 Session Workbench 的核心闭环。现有“连接已运行的远端 `codeg-server`”继续保留，
+SSH 只是免手工部署入口，不能阻塞 Collection、Workbench、Session Center 或多视图同步。
+
 ### 10.1 GitHub Issue 对应关系
 
 当前已提交的标题、同步、Collection、Workbench、新窗口和 Team/Chatroom Issue 统一记录在
@@ -965,7 +1096,7 @@ Session 身份稳定后作为并行 Collaboration Track 实施；直接 Harness 
 
 1. 用户能创建至少两套命名 Workbench，并在一个 App Window 顶部一秒内切换；
 2. 每套 Workbench 可保存不同的跨 Folder、跨 Harness Session 组合；
-3. 重启后 Workbench 挂载、布局、Tab、活动项和草稿正确恢复；
+3. 重启后共享 Workbench 结构与该客户端自己的挂载、活动项、滚动位置和草稿分别正确恢复；
 4. 把 Tab 拖到 Pane 四边能创建对应分屏，中央能加入现有 Pane；
 5. 运行中的 Session 在移动内容标签或切换 Workbench 时不丢流式输出；
 6. 用户能建立层级 Collection，并在不改变 cwd 的情况下分类 Session；
@@ -981,12 +1112,16 @@ Session 身份稳定后作为并行 Collaboration Track 实施；直接 Harness 
 16. 可选 ctx 全文搜索不可用时，Codeg 标题、属性和 Collection 搜索仍可正常使用。
 
 Milestone 4 还必须满足：同一 Session 在两个 Workbench/窗口显示时只启动一份 runtime，双方实时
-看到消息和 stream；两个 App Window 可以独立切换工作台和焦点；桌面与 Web 读取同一 Workbench
-和 Collection 元数据时，不用设备焦点和布局互相覆盖。
+看到消息和 stream；两个 App Window 可以独立切换工作台和焦点；桌面修改 Workbench 结构后 Web
+读到相同 revision，但各自的活动项、焦点和滚动保持独立；双方重启后只恢复自己的局部 View 状态。
 
 若交付 Milestone 5 的群聊部分，还必须满足：群里 `@A` 后全体成员可查看但只有 A 被执行；无目标
 消息明确标为仅记录；`@all` 发送前显示目标数量；成员私聊不回流；关闭 Room 不停止或删除成员；
 后台成员能排队或显示真实不可投递原因；Agent 协作链达到限制或被用户停止后可靠终止。
+
+若交付 Milestone 6，必须在不开放远端公网端口、不上传 SSH 私钥和不复制 Conversation 的前提下，
+完成首次部署、再次复用、短暂断线重连、版本不匹配升级回退及显式停止测试；模型 Gateway 仅本机
+可达时必须给出明确诊断，不能把连接失败伪装成 Harness 故障。
 
 ## 12. 暂缓决策
 

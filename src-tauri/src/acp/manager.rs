@@ -1025,12 +1025,8 @@ impl ConnectionManager {
                 }
                 Err(AcpError::DispatchUncertain) => Ok(Vec::new()),
                 Err(_) => {
-                    collaboration_service::release_store_only_batch(
-                        db,
-                        conversation_id,
-                        batch,
-                    )
-                    .await
+                    collaboration_service::release_store_only_batch(db, conversation_id, batch)
+                        .await
                 }
             };
             match transition {
@@ -2029,6 +2025,8 @@ impl ConnectionManager {
                         archived_at: Set(None),
                         pinned_at: Set(None),
                         origin_cwd: Set(current.origin_cwd.clone()),
+                        harness_internal: Set(false),
+                        codeg_owned: Set(true),
                     };
                     let inserted = forked.insert(txn).await?;
 
@@ -4009,8 +4007,8 @@ mod tests {
     async fn managed_chat_ingress_attaches_store_only_mail_through_generic_acp() {
         use crate::db::test_helpers;
         use crate::models::{
-            CollaborationDeliveryHint, CollaborationDeliveryState,
-            CollaborationInvocationPolicy, CollaborationUrgency, SendCollaborationMessageInput,
+            CollaborationDeliveryHint, CollaborationDeliveryState, CollaborationInvocationPolicy,
+            CollaborationUrgency, SendCollaborationMessageInput,
         };
 
         let db = test_helpers::fresh_in_memory_db().await;

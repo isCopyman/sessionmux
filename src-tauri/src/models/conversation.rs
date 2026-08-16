@@ -23,6 +23,11 @@ pub struct ConversationSummary {
     pub parent_tool_use_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub delegation_call_id: Option<String>,
+    /// Native Harness-internal subagent (Codex `thread_source=subagent` and
+    /// equivalents). Parser-level classification only; Codeg-owned rows stay
+    /// visible even when the native file carries this mark.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub harness_internal: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -71,6 +76,11 @@ pub struct DbConversationSummary {
     /// path (set when a removed task worktree's conversations were re-parented).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub origin_cwd: Option<String>,
+    /// Ordinary-projection hide flag. True for already-imported Harness-internal
+    /// subagents that are not Codeg-owned. Lists omit these; get-by-id still
+    /// returns them.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub harness_internal: bool,
 }
 
 /// One full-text hit from an optional local history index. The conversation

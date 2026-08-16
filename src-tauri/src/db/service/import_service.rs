@@ -16,9 +16,9 @@ use crate::parsers::gemini::GeminiParser;
 use crate::parsers::grok::GrokParser;
 use crate::parsers::hermes::HermesParser;
 use crate::parsers::kimi_code::KimiCodeParser;
-use crate::parsers::pi::PiParser;
 use crate::parsers::openclaw::OpenClawParser;
 use crate::parsers::opencode::OpenCodeParser;
+use crate::parsers::pi::PiParser;
 use crate::parsers::{path_eq_for_matching, AgentParser};
 
 /// Every locally-parsable agent, in the canonical parser order.
@@ -52,9 +52,9 @@ fn build_parser(agent_type: AgentType) -> Box<dyn AgentParser> {
         AgentType::Grok => Box::new(GrokParser::new()),
         AgentType::Cursor => Box::new(CursorParser::new()),
         // Custom agents' history lives in codeg's own ACP transcript.
-        AgentType::Custom(_) => Box::new(crate::parsers::acp_native::AcpNativeParser::new(
-            agent_type,
-        )),
+        AgentType::Custom(_) => {
+            Box::new(crate::parsers::acp_native::AcpNativeParser::new(agent_type))
+        }
     }
 }
 
@@ -158,7 +158,14 @@ pub(crate) async fn import_summaries(
         }
     }
 
-    Ok((ImportResult { imported, updated, skipped }, updated_ids))
+    Ok((
+        ImportResult {
+            imported,
+            updated,
+            skipped,
+        },
+        updated_ids,
+    ))
 }
 
 /// Like [`import_summaries`] but resilient — a single row's DB error is logged
@@ -199,7 +206,15 @@ pub(crate) async fn import_summaries_resilient(
         }
     }
 
-    (ImportResult { imported, updated, skipped }, updated_ids, failed)
+    (
+        ImportResult {
+            imported,
+            updated,
+            skipped,
+        },
+        updated_ids,
+        failed,
+    )
 }
 
 /// Import (and refresh the titles of) the local agent sessions under
@@ -308,6 +323,15 @@ async fn refresh_existing(
         .await?;
     }
 
+    // Hide already-imported Harness-internal subagents. Codeg-created rows
+    // stay in the ordinary projection even when native metadata says
+    // `thread_source=subagent`.
+    if !existing.codeg_owned && existing.harness_internal != summary.harness_internal {
+        wrote |=
+            conversation_service::set_harness_internal(conn, existing.id, summary.harness_internal)
+                .await?;
+    }
+
     Ok(wrote)
 }
 
@@ -377,6 +401,22 @@ async fn import_one(
         .one(conn)
         .await?;
 
+    if summary.harness_internal && !exists.as_ref().is_some_and(|row| row.codeg_owned) {
+        if let Some(existing) = exists.as_ref() {
+            if existing.parent_id.is_some() || existing.deleted_at.is_some() {
+                return Ok(ImportOutcome::Skipped);
+            }
+            return Ok(
+                if conversation_service::set_harness_internal(conn, existing.id, true).await? {
+                    ImportOutcome::Updated(existing.id)
+                } else {
+                    ImportOutcome::Skipped
+                },
+            );
+        }
+        return Ok(ImportOutcome::Skipped);
+    }
+
     if let Some(existing) = exists {
         // Mirrors the guard inside [`refresh_existing`] for rows the sidebar
         // never shows (a soft-deleted conversation, or a delegation child):
@@ -442,6 +482,8 @@ async fn import_one(
         archived_at: Set(None),
         pinned_at: Set(None),
         origin_cwd: Set(None),
+        harness_internal: Set(false),
+        codeg_owned: Set(false),
     };
     conv.insert(conn).await?;
     Ok(ImportOutcome::Imported)
@@ -468,6 +510,7 @@ mod tests {
             parent_id: None,
             parent_tool_use_id: None,
             delegation_call_id: None,
+            harness_internal: false,
         }
     }
 
@@ -522,9 +565,14 @@ mod tests {
         let folder = seed_folder(&db, "/tmp/codeg-import").await;
         let at = AgentType::ClaudeCode;
 
-        let first = import_one(&db.conn, folder, &at, &summary("ext-1", Some("first prompt")))
-            .await
-            .expect("import");
+        let first = import_one(
+            &db.conn,
+            folder,
+            &at,
+            &summary("ext-1", Some("first prompt")),
+        )
+        .await
+        .expect("import");
         assert_eq!(first, ImportOutcome::Imported);
 
         let id = find_id(&db.conn, "ext-1").await;
@@ -607,9 +655,14 @@ mod tests {
         let at = AgentType::ClaudeCode;
 
         assert_eq!(
-            import_one(&db.conn, folder, &at, &summary("ext-1", Some("first prompt")))
-                .await
-                .expect("import"),
+            import_one(
+                &db.conn,
+                folder,
+                &at,
+                &summary("ext-1", Some("first prompt"))
+            )
+            .await
+            .expect("import"),
             ImportOutcome::Imported
         );
 
@@ -649,9 +702,14 @@ mod tests {
         let folder = seed_folder(&db, "/tmp/codeg-import-lock").await;
         let at = AgentType::ClaudeCode;
 
-        import_one(&db.conn, folder, &at, &summary("ext-1", Some("first prompt")))
-            .await
-            .expect("import");
+        import_one(
+            &db.conn,
+            folder,
+            &at,
+            &summary("ext-1", Some("first prompt")),
+        )
+        .await
+        .expect("import");
         let id = find_id(&db.conn, "ext-1").await;
         conversation_service::update_title(&db.conn, id, "User Pick".into())
             .await
@@ -973,9 +1031,14 @@ mod tests {
             .to_string();
 
         // A root conversation to parent the child.
-        import_one(&db.conn, folder, &at, &summary("parent-ext", Some("parent")))
-            .await
-            .expect("import parent");
+        import_one(
+            &db.conn,
+            folder,
+            &at,
+            &summary("parent-ext", Some("parent")),
+        )
+        .await
+        .expect("import parent");
         let parent_id = find_id(&db.conn, "parent-ext").await;
 
         // A delegation child carrying its own external_id, as a parser would
@@ -1002,14 +1065,21 @@ mod tests {
             archived_at: Set(None),
             pinned_at: Set(None),
             origin_cwd: Set(None),
+            harness_internal: Set(false),
+            codeg_owned: Set(false),
         }
         .insert(&db.conn)
         .await
         .expect("insert child");
 
-        let outcome = import_one(&db.conn, folder, &at, &summary("child-ext", Some("AI Summary")))
-            .await
-            .expect("re-import child");
+        let outcome = import_one(
+            &db.conn,
+            folder,
+            &at,
+            &summary("child-ext", Some("AI Summary")),
+        )
+        .await
+        .expect("re-import child");
         assert_eq!(
             outcome,
             ImportOutcome::Skipped,
@@ -1027,5 +1097,81 @@ mod tests {
             Some("child original"),
             "child title untouched"
         );
+    }
+
+    #[tokio::test]
+    async fn import_skips_harness_internal_summaries() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-import-internal").await;
+        let mut internal = summary("codex-sub", Some("Faraday"));
+        internal.harness_internal = true;
+        assert_eq!(
+            import_one(&db.conn, folder, &AgentType::Codex, &internal)
+                .await
+                .expect("import"),
+            ImportOutcome::Skipped
+        );
+        assert!(conversation::Entity::find()
+            .filter(conversation::Column::ExternalId.eq("codex-sub"))
+            .one(&db.conn)
+            .await
+            .expect("query")
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn sync_marks_already_imported_harness_internal() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-sync-internal").await;
+        import_one(
+            &db.conn,
+            folder,
+            &AgentType::Codex,
+            &summary("codex-sub", Some("unnamed")),
+        )
+        .await
+        .expect("import");
+        let mut internal = summary("codex-sub", Some("unnamed"));
+        internal.harness_internal = true;
+        let rows = external_rows(&db.conn).await;
+        let updated =
+            sync_imported_sessions(&db.conn, &rows, &[(AgentType::Codex, internal)]).await;
+        assert_eq!(updated.len(), 1);
+        let row = find_row(&db.conn, "codex-sub").await;
+        assert!(row.harness_internal);
+        assert!(!row.codeg_owned);
+    }
+
+    #[tokio::test]
+    async fn sync_does_not_hide_codeg_owned_subagent_metadata() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-owned-internal").await;
+        let created = conversation_service::create(
+            &db.conn,
+            folder,
+            AgentType::Codex,
+            Some("host child".into()),
+            None,
+        )
+        .await
+        .expect("create");
+        let mut active: conversation::ActiveModel = created.into();
+        active.external_id = Set(Some("codex-managed".into()));
+        let created = active.update(&db.conn).await.expect("bind external id");
+        let mut internal = summary("codex-managed", Some("host child"));
+        internal.harness_internal = true;
+        let rows = external_rows(&db.conn).await;
+        assert!(
+            sync_imported_sessions(&db.conn, &rows, &[(AgentType::Codex, internal)])
+                .await
+                .is_empty()
+        );
+        let row = conversation::Entity::find_by_id(created.id)
+            .one(&db.conn)
+            .await
+            .expect("query")
+            .expect("row");
+        assert!(row.codeg_owned);
+        assert!(!row.harness_internal);
     }
 }

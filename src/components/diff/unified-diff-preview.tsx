@@ -6,6 +6,10 @@ import { useActiveFolder } from "@/contexts/active-folder-context"
 import { cn } from "@/lib/utils"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { FilePathLink } from "@/components/ai-elements/link-safety"
+import {
+  decorateDeleteAddBlock,
+  type IntralineSpan,
+} from "@/lib/diff-intraline"
 
 type RowMarker = "none" | "added" | "deleted" | "modified"
 type DiffFileMode = "modified" | "added" | "deleted" | "renamed"
@@ -23,6 +27,7 @@ interface ParsedDiffRow {
   sign: " " | "+" | "-"
   oldLine: number | null
   newLine: number | null
+  spans?: IntralineSpan[]
 }
 
 interface ParsedDiffHunk {
@@ -76,6 +81,12 @@ const SIGN_CLASS: Record<string, string> = {
   "+": "text-green-700 dark:text-green-400",
   "-": "text-red-700 dark:text-red-400",
   " ": "text-muted-foreground/50",
+}
+
+const INTRALINE_CLASS: Record<IntralineSpan["kind"], string> = {
+  equal: "",
+  removed: "rounded-[2px] bg-red-500/35 dark:bg-red-400/35",
+  added: "rounded-[2px] bg-green-500/35 dark:bg-green-400/35",
 }
 
 function normalizePath(raw: string): string | null {
@@ -192,29 +203,34 @@ function classifyRows(rows: RawDiffRow[]): ParsedDiffRow[] {
       addEnd += 1
     }
 
-    for (let d = index; d < delEnd; d++) {
-      const row = rows[d]
-      if (!row) continue
+    const deletedRows = rows.slice(index, delEnd)
+    const addedRows = rows.slice(delEnd, addEnd)
+    const decorated = decorateDeleteAddBlock(
+      deletedRows.map((row) => row.text),
+      addedRows.map((row) => row.text)
+    )
+
+    deletedRows.forEach((row, offset) => {
       parsed.push({
         type: "deleted",
         text: row.text,
         sign: "-",
         oldLine: row.oldLine,
         newLine: row.newLine,
+        spans: decorated.deletedSpans[offset] ?? undefined,
       })
-    }
+    })
 
-    for (let a = delEnd; a < addEnd; a++) {
-      const row = rows[a]
-      if (!row) continue
+    addedRows.forEach((row, offset) => {
       parsed.push({
         type: "added",
         text: row.text,
         sign: "+",
         oldLine: row.oldLine,
         newLine: row.newLine,
+        spans: decorated.addedSpans[offset] ?? undefined,
       })
-    }
+    })
 
     index = addEnd
   }
@@ -471,6 +487,27 @@ function HunkSeparator({ hunk }: { hunk: ParsedDiffHunk }) {
   )
 }
 
+function DiffRowText({ row }: { row: ParsedDiffRow }) {
+  if (!row.spans?.length) return <>{row.text}</>
+  return (
+    <>
+      {row.spans.map((span, index) =>
+        span.kind === "equal" ? (
+          <span key={index}>{span.text}</span>
+        ) : (
+          <span
+            key={index}
+            data-intraline={span.kind}
+            className={INTRALINE_CLASS[span.kind]}
+          >
+            {span.text}
+          </span>
+        )
+      )}
+    </>
+  )
+}
+
 function HunkLines({ rows }: { rows: ParsedDiffRow[] }) {
   return (
     <div className="font-mono text-[12px] leading-[20px]">
@@ -492,7 +529,9 @@ function HunkLines({ rows }: { rows: ParsedDiffRow[] }) {
             >
               {row.sign === " " ? "" : row.sign}
             </span>
-            <span className="flex-1 whitespace-pre pr-3">{row.text}</span>
+            <span className="flex-1 whitespace-pre pr-3">
+              <DiffRowText row={row} />
+            </span>
           </div>
         )
       })}

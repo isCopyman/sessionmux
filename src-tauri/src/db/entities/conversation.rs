@@ -75,6 +75,13 @@ pub struct Model {
     /// Gemini/Cline/OpenClaw stale-external-id fallback matches on
     /// `origin_cwd ?? folder.path`. Always NULL for ordinary conversations.
     pub origin_cwd: Option<String>,
+    /// True when this row is a Harness-internal subagent that should stay out
+    /// of ordinary Session projections. Native files are never deleted.
+    pub harness_internal: bool,
+    /// True when Codeg itself created the Session (user, Host Control,
+    /// automation, fork). Those rows stay visible even if native metadata
+    /// later says `thread_source=subagent`.
+    pub codeg_owned: bool,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

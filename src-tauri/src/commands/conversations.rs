@@ -1,8 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::app_error::AppCommandError;
-use crate::db::entities::{conversation, folder};
 use crate::db::entities::folder::FolderKind;
+use crate::db::entities::{conversation, folder};
 use crate::db::service::{conversation_service, folder_service, import_service, tab_service};
 #[cfg(feature = "tauri-runtime")]
 use crate::db::AppDatabase;
@@ -12,14 +12,14 @@ use crate::parsers::claude::ClaudeParser;
 use crate::parsers::cline::ClineParser;
 use crate::parsers::codebuddy::CodeBuddyParser;
 use crate::parsers::codex::CodexParser;
-use crate::parsers::gemini::GeminiParser;
 use crate::parsers::cursor::CursorParser;
+use crate::parsers::gemini::GeminiParser;
 use crate::parsers::grok::GrokParser;
 use crate::parsers::hermes::HermesParser;
 use crate::parsers::kimi_code::KimiCodeParser;
-use crate::parsers::pi::PiParser;
 use crate::parsers::openclaw::OpenClawParser;
 use crate::parsers::opencode::OpenCodeParser;
+use crate::parsers::pi::PiParser;
 use crate::parsers::{
     folder_name_from_path, normalize_path_for_matching, path_eq_for_matching, AgentParser,
     ParseError,
@@ -170,14 +170,10 @@ pub async fn save_workbench_tabs_core(
     expected_version: i64,
     origin: String,
 ) -> Result<SaveTabsOutcome, AppCommandError> {
-    let outcome = tab_service::save_tabs_cas_for_workbench(
-        conn,
-        workbench_id,
-        items,
-        expected_version,
-    )
-    .await
-    .map_err(AppCommandError::from)?;
+    let outcome =
+        tab_service::save_tabs_cas_for_workbench(conn, workbench_id, items, expected_version)
+            .await
+            .map_err(AppCommandError::from)?;
 
     if outcome.accepted {
         emit_workbench_tabs_changed(
@@ -276,6 +272,9 @@ fn list_conversations_sync(
             Ok(conversations) => {
                 // Deduplicate conversations based on (agent_type, id) combination
                 for conversation in conversations {
+                    if conversation.harness_internal {
+                        continue;
+                    }
                     let key = format!("{:?}-{}", conversation.agent_type, conversation.id);
                     if seen_keys.insert(key) {
                         all_conversations.push(conversation);
@@ -573,11 +572,9 @@ async fn sync_registered_from_summaries(
         let Some(folder_id) = folder_by_path.get(&normalize_path_for_matching(path)) else {
             continue;
         };
-        matched_by_key.entry((agent_type_db_str(&agent_type), summary.id.clone())).or_insert((
-            *folder_id,
-            agent_type,
-            summary,
-        ));
+        matched_by_key
+            .entry((agent_type_db_str(&agent_type), summary.id.clone()))
+            .or_insert((*folder_id, agent_type, summary));
     }
     if matched_by_key.is_empty() {
         return Ok(RegisteredSessionSyncStats::default());
@@ -619,7 +616,7 @@ async fn sync_registered_from_summaries(
     // resurrected as a fresh root conversation.
     let mut new_by_folder: HashMap<i32, Vec<(AgentType, ConversationSummary)>> = HashMap::new();
     for (key, (folder_id, agent_type, summary)) in matched_by_key {
-        if existing_keys.contains(&key) {
+        if existing_keys.contains(&key) || summary.harness_internal {
             continue;
         }
         new_by_folder
@@ -741,7 +738,9 @@ async fn load_folder_rows(
 fn index_folder_rows(rows: &[ScanFolderRow]) -> HashMap<String, &ScanFolderRow> {
     let mut index: HashMap<String, &ScanFolderRow> = HashMap::new();
     for row in rows {
-        let slot = index.entry(normalize_path_for_matching(&row.path)).or_insert(row);
+        let slot = index
+            .entry(normalize_path_for_matching(&row.path))
+            .or_insert(row);
         if slot.deleted && !row.deleted {
             *slot = row;
         }
@@ -771,6 +770,9 @@ fn build_scan_result(
     let mut no_folder_count = 0u32;
 
     for (at, summary) in summaries {
+        if summary.harness_internal {
+            continue;
+        }
         let raw_path = match summary.folder_path.as_deref().map(str::trim) {
             Some(p) if !p.is_empty() => p.to_string(),
             _ => {
@@ -785,7 +787,9 @@ fn build_scan_result(
                 // Reuse the stored row's exact path string so the import-side
                 // add_folder upsert hits the same UNIQUE(path) key instead of
                 // minting a near-duplicate from a trailing-slash/case variant.
-                path: row.map(|r| r.path.clone()).unwrap_or_else(|| raw_path.clone()),
+                path: row
+                    .map(|r| r.path.clone())
+                    .unwrap_or_else(|| raw_path.clone()),
                 name: row
                     .map(|r| r.name.clone())
                     .or_else(|| summary.folder_name.clone())
@@ -820,8 +824,7 @@ fn build_scan_result(
     let mut folders: Vec<ScanFolder> = groups
         .into_values()
         .map(|mut g| {
-            g.sessions
-                .sort_by_key(|s| std::cmp::Reverse(s.started_at));
+            g.sessions.sort_by_key(|s| std::cmp::Reverse(s.started_at));
             ScanFolder {
                 path: g.path,
                 name: g.name,
@@ -945,7 +948,7 @@ pub(crate) async fn import_selected_from_summaries(
     // pointing at one resolves to not_found.
     let mut by_key: HashMap<(AgentType, String), (AgentType, ConversationSummary)> = summaries
         .into_iter()
-        .filter(|(_, c)| c.parent_id.is_none())
+        .filter(|(_, c)| c.parent_id.is_none() && !c.harness_internal)
         .map(|(at, c)| ((at, c.id.clone()), (at, c)))
         .collect();
 
@@ -1042,9 +1045,9 @@ pub(crate) async fn import_selected_from_summaries(
                     skipped: tally.skipped,
                 });
                 if failed_in_group > 0 && result.errors.len() < MAX_ERRORS {
-                    result
-                        .errors
-                        .push(format!("{target_path}: {failed_in_group} session(s) failed"));
+                    result.errors.push(format!(
+                        "{target_path}: {failed_in_group} session(s) failed"
+                    ));
                 }
                 // Broadcast every touched folder: even a pre-existing row may
                 // have flipped is_open/deleted_at in add_folder, and clients
@@ -1265,8 +1268,14 @@ pub async fn get_folder_conversation_core(
         .await
         .map_err(AppCommandError::from)?;
 
-    let (mut turns, session_stats, resolved_ext_id, parsed_title, parsed_model, transcript_watermark) =
-        if let Some(ref ext_id) = summary.external_id {
+    let (
+        mut turns,
+        session_stats,
+        resolved_ext_id,
+        parsed_title,
+        parsed_model,
+        transcript_watermark,
+    ) = if let Some(ref ext_id) = summary.external_id {
         let at = summary.agent_type;
         let eid = ext_id.clone();
         let db_created_at = summary.created_at;
@@ -1819,11 +1828,7 @@ pub(crate) fn emit_workbench_tabs_changed(
     );
 }
 
-pub(crate) fn emit_tabs_invalidated(
-    emitter: &EventEmitter,
-    version: i64,
-    tabs: Vec<OpenedTab>,
-) {
+pub(crate) fn emit_tabs_invalidated(emitter: &EventEmitter, version: i64, tabs: Vec<OpenedTab>) {
     emit_event(
         emitter,
         TABS_CHANGED_EVENT,
@@ -2115,19 +2120,20 @@ pub async fn create_chat_conversation_core(
     // soft-deleting the just-created hidden folder — otherwise it would linger as
     // an orphan (active, conversation-less, never reached by the delete path) and
     // pollute the active-folder scope.
-    let model =
-        match conversation_service::create_chat(conn, folder.id, agent_type, title, None).await {
-            Ok(model) => model,
-            Err(create_err) => {
-                if let Err(cleanup_err) = folder_service::remove_folder(conn, &folder.path).await {
-                    tracing::error!(
+    let model = match conversation_service::create_chat(conn, folder.id, agent_type, title, None)
+        .await
+    {
+        Ok(model) => model,
+        Err(create_err) => {
+            if let Err(cleanup_err) = folder_service::remove_folder(conn, &folder.path).await {
+                tracing::error!(
                         "[conversations] failed to clean up orphan chat folder {} after conversation create error: {cleanup_err}",
                         folder.id
                     );
-                }
-                return Err(AppCommandError::from(create_err));
             }
-        };
+            return Err(AppCommandError::from(create_err));
+        }
+    };
 
     Ok(CreateChatConversationResult {
         conversation_id: model.id,
@@ -2169,7 +2175,9 @@ pub async fn create_chat_conversation(
 /// conversation are still created lazily on first send (reusing this dir).
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
-pub async fn create_chat_dir(app: tauri::AppHandle) -> Result<CreateChatDirResult, AppCommandError> {
+pub async fn create_chat_dir(
+    app: tauri::AppHandle,
+) -> Result<CreateChatDirResult, AppCommandError> {
     use tauri::Manager;
     let data_dir = app
         .path()
@@ -2288,7 +2296,8 @@ pub async fn update_conversation_title(
 ) -> Result<(), AppCommandError> {
     update_conversation_title_core(&db.conn, conversation_id, title).await?;
     emit_conversation_upsert(&EventEmitter::Tauri(app), &db.conn, conversation_id).await;
-    sync_conversation_title_to_channels_core(&db.conn, &chat_channel_manager, conversation_id).await;
+    sync_conversation_title_to_channels_core(&db.conn, &chat_channel_manager, conversation_id)
+        .await;
     Ok(())
 }
 
@@ -2487,6 +2496,7 @@ mod tests {
             parent_tool_use_id: Some(parent_tool_use_id.into()),
             delegation_call_id: Some("call-1".into()),
             origin_cwd: None,
+            harness_internal: false,
         }
     }
 
@@ -2581,11 +2591,21 @@ mod tests {
             assistant_text_turn("turn-1", "reply", at(-29), true),
             user_text_turn("turn-2", "hello", at(1)),
         ];
-        let stamped =
-            apply_in_flight_message_id(&mut turns, &pending_text("msg-live", "hello"), Some(turn_started()));
-        assert_eq!(stamped.as_deref(), Some("msg-live"), "reports the stamped id");
+        let stamped = apply_in_flight_message_id(
+            &mut turns,
+            &pending_text("msg-live", "hello"),
+            Some(turn_started()),
+        );
+        assert_eq!(
+            stamped.as_deref(),
+            Some("msg-live"),
+            "reports the stamped id"
+        );
         assert_eq!(turns[2].id, "msg-live");
-        assert_eq!(turns[0].id, "turn-0", "earlier identical-position turn intact");
+        assert_eq!(
+            turns[0].id, "turn-0",
+            "earlier identical-position turn intact"
+        );
         assert_eq!(turns[1].id, "turn-1");
     }
 
@@ -2604,11 +2624,18 @@ mod tests {
             user_text_turn("turn-0", "hello", at(1)),
             assistant_text_turn("turn-1", "partial...", at(2), true),
         ];
-        let stamped =
-            apply_in_flight_message_id(&mut turns, &pending_text("msg-live", "hello"), Some(turn_started()));
+        let stamped = apply_in_flight_message_id(
+            &mut turns,
+            &pending_text("msg-live", "hello"),
+            Some(turn_started()),
+        );
         assert_eq!(stamped.as_deref(), Some("msg-live"));
         assert_eq!(turns[0].id, "msg-live");
-        assert_eq!(turns.len(), 2, "the partial reply is preserved (not dropped)");
+        assert_eq!(
+            turns.len(),
+            2,
+            "the partial reply is preserved (not dropped)"
+        );
         assert_eq!(turns[1].id, "turn-1", "the partial reply is untouched");
     }
 
@@ -2639,10 +2666,16 @@ mod tests {
             assistant_text_turn("turn-1", "reply", at(-29), true),
             user_text_turn("turn-2", "hello", at(1)),
         ];
-        let stamped =
-            apply_in_flight_message_id(&mut turns, &pending_text("turn-0", "hello"), Some(turn_started()));
+        let stamped = apply_in_flight_message_id(
+            &mut turns,
+            &pending_text("turn-0", "hello"),
+            Some(turn_started()),
+        );
         assert_eq!(stamped, None, "colliding broadcast id → no stamp");
-        assert_eq!(turns[2].id, "turn-2", "the in-flight prompt keeps its parser id");
+        assert_eq!(
+            turns[2].id, "turn-2",
+            "the in-flight prompt keeps its parser id"
+        );
         assert_eq!(turns[0].id, "turn-0", "the colliding turn is untouched");
     }
 
@@ -2657,9 +2690,16 @@ mod tests {
             user_text_turn("turn-2", "ok", at(1)),
             assistant_text_turn("turn-3", "b", at(2), false),
         ];
-        apply_in_flight_message_id(&mut turns, &pending_text("msg-live", "hello"), Some(turn_started()));
+        apply_in_flight_message_id(
+            &mut turns,
+            &pending_text("msg-live", "hello"),
+            Some(turn_started()),
+        );
         assert_eq!(turns[0].id, "turn-0");
-        assert_eq!(turns[2].id, "turn-2", "non-matching tail user turn untouched");
+        assert_eq!(
+            turns[2].id, "turn-2",
+            "non-matching tail user turn untouched"
+        );
     }
 
     #[test]
@@ -2671,7 +2711,11 @@ mod tests {
             assistant_text_turn("turn-1", "a", at(2), false),
             assistant_text_turn("turn-2", "b", at(3), false),
         ];
-        apply_in_flight_message_id(&mut turns, &pending_text("msg-live", "hello"), Some(turn_started()));
+        apply_in_flight_message_id(
+            &mut turns,
+            &pending_text("msg-live", "hello"),
+            Some(turn_started()),
+        );
         assert_eq!(turns[0].id, "turn-0", "left untouched");
     }
 
@@ -2691,30 +2735,43 @@ mod tests {
             model: None,
             completed_at: None,
         };
-        let pending_image = |message_id: &str, data: &str| {
-            crate::acp::session_state::PendingUserMessage {
+        let pending_image =
+            |message_id: &str, data: &str| crate::acp::session_state::PendingUserMessage {
                 message_id: message_id.into(),
                 blocks: vec![crate::acp::types::UserMessageBlock::Image {
                     data: data.into(),
                     mime_type: "image/png".into(),
                 }],
-            }
-        };
+            };
 
         let mut turns = vec![image_turn("turn-0", "AAAA")];
-        apply_in_flight_message_id(&mut turns, &pending_image("msg-live", "AAAA"), Some(turn_started()));
-        assert_eq!(turns[0].id, "msg-live", "uri difference is ignored, data matches");
+        apply_in_flight_message_id(
+            &mut turns,
+            &pending_image("msg-live", "AAAA"),
+            Some(turn_started()),
+        );
+        assert_eq!(
+            turns[0].id, "msg-live",
+            "uri difference is ignored, data matches"
+        );
 
         let mut turns = vec![image_turn("turn-0", "AAAA")];
-        apply_in_flight_message_id(&mut turns, &pending_image("msg-live", "BBBB"), Some(turn_started()));
+        apply_in_flight_message_id(
+            &mut turns,
+            &pending_image("msg-live", "BBBB"),
+            Some(turn_started()),
+        );
         assert_eq!(turns[0].id, "turn-0", "different image bytes → no stamp");
     }
 
     #[test]
     fn empty_turns_is_a_noop() {
         let mut turns: Vec<MessageTurn> = vec![];
-        let stamped =
-            apply_in_flight_message_id(&mut turns, &pending_text("msg-live", "hello"), Some(turn_started()));
+        let stamped = apply_in_flight_message_id(
+            &mut turns,
+            &pending_text("msg-live", "hello"),
+            Some(turn_started()),
+        );
         assert_eq!(stamped, None);
         assert!(turns.is_empty());
     }
@@ -2732,7 +2789,11 @@ mod tests {
             user_text_turn("turn-0", "continue", at(-60)),
             assistant_text_turn("turn-1", "done", at(-58), true),
         ];
-        apply_in_flight_message_id(&mut turns, &pending_text("msg-live", "continue"), Some(turn_started()));
+        apply_in_flight_message_id(
+            &mut turns,
+            &pending_text("msg-live", "continue"),
+            Some(turn_started()),
+        );
         assert_eq!(turns[0].id, "turn-0", "older identical prompt → untouched");
     }
 
@@ -2751,8 +2812,15 @@ mod tests {
         // backend broadcasts `UserMessage` before issuing the agent request), so
         // a turn exactly at the start qualifies — the boundary is inclusive.
         let mut turns = vec![user_text_turn("turn-0", "hello", at(0))];
-        apply_in_flight_message_id(&mut turns, &pending_text("msg-live", "hello"), Some(turn_started()));
-        assert_eq!(turns[0].id, "msg-live", "persisted exactly at the start is in-flight");
+        apply_in_flight_message_id(
+            &mut turns,
+            &pending_text("msg-live", "hello"),
+            Some(turn_started()),
+        );
+        assert_eq!(
+            turns[0].id, "msg-live",
+            "persisted exactly at the start is in-flight"
+        );
     }
 
     #[test]
@@ -2760,8 +2828,15 @@ mod tests {
         // Strict gate, no backward tolerance: a turn even one second before the
         // start belongs to an earlier turn, never the in-flight prompt.
         let mut turns = vec![user_text_turn("turn-0", "hello", at(-1))];
-        apply_in_flight_message_id(&mut turns, &pending_text("msg-live", "hello"), Some(turn_started()));
-        assert_eq!(turns[0].id, "turn-0", "one second before the start is not in-flight");
+        apply_in_flight_message_id(
+            &mut turns,
+            &pending_text("msg-live", "hello"),
+            Some(turn_started()),
+        );
+        assert_eq!(
+            turns[0].id, "turn-0",
+            "one second before the start is not in-flight"
+        );
     }
 
     #[test]
@@ -2777,10 +2852,19 @@ mod tests {
             user_text_turn("turn-0", "continue", at(-1)),
             assistant_text_turn("turn-1", "done", at(0), true),
         ];
-        let stamped =
-            apply_in_flight_message_id(&mut turns, &pending_text("msg-live", "continue"), Some(turn_started()));
-        assert_eq!(stamped, None, "fast prior identical prompt → nothing reported");
-        assert_eq!(turns[0].id, "turn-0", "fast prior identical prompt → untouched");
+        let stamped = apply_in_flight_message_id(
+            &mut turns,
+            &pending_text("msg-live", "continue"),
+            Some(turn_started()),
+        );
+        assert_eq!(
+            stamped, None,
+            "fast prior identical prompt → nothing reported"
+        );
+        assert_eq!(
+            turns[0].id, "turn-0",
+            "fast prior identical prompt → untouched"
+        );
         assert_eq!(turns.len(), 2, "the prior completed reply is preserved");
     }
 
@@ -2836,7 +2920,11 @@ mod tests {
                  Call get_delegation_status with this id in the task_ids array.",
             ),
         ];
-        let mut child = summary_child(2890, "exec-0fb6db94-3042-4cc4-b492-2edd1804c1fa", "completed");
+        let mut child = summary_child(
+            2890,
+            "exec-0fb6db94-3042-4cc4-b492-2edd1804c1fa",
+            "completed",
+        );
         child.delegation_call_id = Some("8ff4c14c-740c-4482-b758-8f2091f97063".into());
 
         inject_delegation_meta(&mut turns, &[child]);
@@ -3341,7 +3429,10 @@ mod tests {
         .await
         .expect("gc");
 
-        assert_eq!(removed, 0, "a fresh dir below the staleness threshold is spared");
+        assert_eq!(
+            removed, 0,
+            "a fresh dir below the staleness threshold is spared"
+        );
         assert!(
             std::path::Path::new(&fresh).is_dir(),
             "fresh dir retained (anti-race)"
@@ -3421,13 +3512,10 @@ mod tests {
         symlink(real.path(), &link).expect("symlink");
 
         // GC runs under the symlinked spelling; the live dir must still be spared.
-        let removed = gc_orphan_chat_dirs_core_with_threshold(
-            &db.conn,
-            &link,
-            std::time::Duration::ZERO,
-        )
-        .await
-        .expect("gc");
+        let removed =
+            gc_orphan_chat_dirs_core_with_threshold(&db.conn, &link, std::time::Duration::ZERO)
+                .await
+                .expect("gc");
 
         assert_eq!(
             removed, 0,
@@ -3673,7 +3761,9 @@ mod tests {
 
         let (broadcaster, emitter) = sync_test_emitter();
         let mut rx = broadcaster.subscribe();
-        delete_conversation_core(&db.conn, c1).await.expect("delete");
+        delete_conversation_core(&db.conn, c1)
+            .await
+            .expect("delete");
         cleanup_tabs_for_deleted_conversation(&emitter, &db.conn, c1).await;
 
         let snap = list_opened_tabs_core(&db.conn).await.expect("list");
@@ -3688,7 +3778,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cleanup_tabs_for_deleted_conversation_bumps_barrier_without_emitting_when_no_open_tab() {
+    async fn cleanup_tabs_for_deleted_conversation_bumps_barrier_without_emitting_when_no_open_tab()
+    {
         let db = fresh_in_memory_db().await;
         let folder_id = seed_folder(&db, "/tmp/codeg-tab-conv-del-noop").await;
         let c1 = create_conversation_core(&db.conn, folder_id, AgentType::ClaudeCode, None)
@@ -3769,7 +3860,9 @@ mod tests {
         assert_eq!(saved.version, 1);
 
         // Server deletes c1 and atomically cleans its tab → v2 (only c2 remains).
-        delete_conversation_core(&db.conn, c1).await.expect("delete c1");
+        delete_conversation_core(&db.conn, c1)
+            .await
+            .expect("delete c1");
         cleanup_tabs_for_deleted_conversation(&EventEmitter::Noop, &db.conn, c1).await;
 
         // A client still on the pre-cleanup version re-saves the OLD set (with c1
@@ -3835,7 +3928,10 @@ mod tests {
         )
         .await
         .expect("stale save returns Ok");
-        assert!(!stale.accepted, "save on the pre-removal version must be rejected");
+        assert!(
+            !stale.accepted,
+            "save on the pre-removal version must be rejected"
+        );
 
         let snap = list_opened_tabs_core(&db.conn).await.expect("list");
         assert!(
@@ -3874,11 +3970,16 @@ mod tests {
 
         // c1 deleted with no persisted c1 tab → zero rows removed, but the
         // version barrier still advances (v1 → v2) and nothing is broadcast.
-        delete_conversation_core(&db.conn, c1).await.expect("delete c1");
+        delete_conversation_core(&db.conn, c1)
+            .await
+            .expect("delete c1");
         let (broadcaster, emitter) = sync_test_emitter();
         let mut rx = broadcaster.subscribe();
         cleanup_tabs_for_deleted_conversation(&emitter, &db.conn, c1).await;
-        assert!(rx.try_recv().is_err(), "zero-row cleanup must not broadcast");
+        assert!(
+            rx.try_recv().is_err(),
+            "zero-row cleanup must not broadcast"
+        );
 
         // A's debounced save (built on v1, still including the now-deleted c1) is
         // rejected by the barrier — c1 must not be persisted as a ghost.
@@ -4245,6 +4346,7 @@ mod tests {
                 parent_id: None,
                 parent_tool_use_id: None,
                 delegation_call_id: None,
+                harness_internal: false,
             },
         )
     }
@@ -4428,7 +4530,10 @@ mod tests {
             .unwrap();
         assert_eq!(folder_rows.len(), 1);
         assert_eq!(folder_rows[0].path, "/tmp/proj-a");
-        assert!(folder_rows[0].is_open, "created folder must open in sidebar");
+        assert!(
+            folder_rows[0].is_open,
+            "created folder must open in sidebar"
+        );
 
         let convs = conversation::Entity::find().all(&db.conn).await.unwrap();
         assert_eq!(convs.len(), 2);
@@ -4558,8 +4663,9 @@ mod tests {
 
     #[tokio::test]
     async fn batch_import_never_resurrects_a_deleted_conversation() {
-        use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter,
-            Set};
+        use sea_orm::{
+            ActiveModelTrait, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter, Set,
+        };
         let db = fresh_in_memory_db().await;
 
         let make = || {
@@ -4981,6 +5087,7 @@ mod tests {
                 parent_tool_use_id: None,
                 delegation_call_id: None,
                 origin_cwd: None,
+                harness_internal: false,
             },
             turns,
             session_stats: None,
@@ -5025,7 +5132,11 @@ mod tests {
         assert_eq!(detail.turns_total, Some(4));
         assert_eq!(detail.assistant_turns_before_offset, Some(1));
         assert_eq!(
-            detail.turns.iter().map(|t| t.id.as_str()).collect::<Vec<_>>(),
+            detail
+                .turns
+                .iter()
+                .map(|t| t.id.as_str())
+                .collect::<Vec<_>>(),
             vec!["turn-2", "turn-3"]
         );
         // The windowed turns are the same objects the full response carries.
@@ -5109,7 +5220,10 @@ mod tests {
         assert_eq!((start, end), (0, 2));
         let own = crate::commands::turn_window::window_meta(&turns, start);
         let seam = crate::commands::turn_window::window_meta(&turns, 2);
-        assert_eq!(own.prefix_hash, crate::commands::turn_window::prefix_fingerprint(&[]));
+        assert_eq!(
+            own.prefix_hash,
+            crate::commands::turn_window::prefix_fingerprint(&[])
+        );
         assert_eq!(
             seam.prefix_hash,
             crate::commands::turn_window::prefix_fingerprint(&turns[..2])

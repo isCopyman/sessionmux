@@ -47,6 +47,7 @@ mod m20260816_000002_collaboration;
 mod m20260816_000003_collaboration_interrupt;
 mod m20260816_000004_collaboration_reply_index;
 mod m20260816_000005_collaboration_mailbox;
+mod m20260817_000001_conversation_harness_internal;
 pub struct Migrator;
 
 #[async_trait::async_trait]
@@ -100,6 +101,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260816_000003_collaboration_interrupt::Migration),
             Box::new(m20260816_000004_collaboration_reply_index::Migration),
             Box::new(m20260816_000005_collaboration_mailbox::Migration),
+            Box::new(m20260817_000001_conversation_harness_internal::Migration),
         ]
     }
 }

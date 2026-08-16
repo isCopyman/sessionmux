@@ -11,9 +11,8 @@ use walkdir::WalkDir;
 use crate::models::*;
 use crate::parsers::codex_code_mode::{
     extract_chunk_ids, extract_shell_session_ids, is_code_mode_call, parse_code_mode_script,
-    script_card_input,
-    split_code_mode_output, with_note, CodeModeCall, CodeModeOutput, CodeModeScript, ScriptStatus,
-    Separator, CODEX_SCRIPT_TOOL_NAME,
+    script_card_input, split_code_mode_output, with_note, CodeModeCall, CodeModeOutput,
+    CodeModeScript, ScriptStatus, Separator, CODEX_SCRIPT_TOOL_NAME,
 };
 use crate::parsers::{
     folder_name_from_path, title_from_user_text, truncate_str, AgentParser, ParseError,
@@ -71,6 +70,7 @@ impl CodexParser {
         let mut has_real_user = false;
         let mut goal_objective: Option<String> = None;
         let mut goal_opens_session = false;
+        let mut harness_internal = false;
 
         for line in reader.lines() {
             let line = match line {
@@ -117,6 +117,7 @@ impl CodexParser {
                             .and_then(|g| g.get("branch"))
                             .and_then(|b| b.as_str())
                             .map(|s| s.to_string());
+                        harness_internal = codex_session_is_harness_internal(payload);
                     }
                 }
                 "turn_context" if model.is_none() => {
@@ -266,6 +267,7 @@ impl CodexParser {
             parent_id: None,
             parent_tool_use_id: None,
             delegation_call_id: None,
+            harness_internal,
         }))
     }
 
@@ -321,6 +323,33 @@ fn read_codex_session_index_titles(path: &std::path::Path) -> HashMap<String, St
 
 pub(crate) fn resolve_codex_home_dir() -> PathBuf {
     resolve_codex_home_dir_from(std::env::var_os("CODEX_HOME"), dirs::home_dir())
+}
+
+/// Codex's own one-turn subagents write a separate `rollout-*.jsonl` whose
+/// `session_meta` is marked `thread_source=subagent` (and usually also carries
+/// `parent_thread_id` / `source.subagent.thread_spawn`). Those are Harness
+/// execution details, not user or Codeg-owned Sessions.
+pub(crate) fn codex_session_is_harness_internal(payload: &serde_json::Value) -> bool {
+    if payload
+        .get("thread_source")
+        .and_then(|value| value.as_str())
+        .is_some_and(|source| source.eq_ignore_ascii_case("subagent"))
+    {
+        return true;
+    }
+    if payload
+        .get("parent_thread_id")
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .is_some_and(|id| !id.is_empty())
+    {
+        return true;
+    }
+    payload
+        .get("source")
+        .and_then(|source| source.get("subagent"))
+        .and_then(|subagent| subagent.get("thread_spawn"))
+        .is_some()
 }
 
 fn resolve_codex_home_dir_from(
@@ -1910,6 +1939,7 @@ impl CodexParser {
         let mut git_branch: Option<String> = None;
         let mut model: Option<String> = None;
         let mut title: Option<String> = None;
+        let mut harness_internal = false;
         // Objective of the goal run currently open while replaying `/goal`
         // transitions, so a persisted `thread_goal_updated` with `goal: null`
         // closes the run by objective — identical to the live path. See
@@ -2083,6 +2113,7 @@ impl CodexParser {
                             .and_then(|g| g.get("branch"))
                             .and_then(|b| b.as_str())
                             .map(|s| s.to_string());
+                        harness_internal = codex_session_is_harness_internal(payload);
                     }
                 }
                 "turn_context" => {
@@ -2326,10 +2357,8 @@ impl CodexParser {
                                 // instead of one card per section. If no grouped
                                 // summary arrives (interrupted/older rollouts), the
                                 // buffer is flushed on its own and nothing is lost.
-                                let text = payload
-                                    .get("text")
-                                    .and_then(|t| t.as_str())
-                                    .unwrap_or("");
+                                let text =
+                                    payload.get("text").and_then(|t| t.as_str()).unwrap_or("");
                                 if !text.trim().is_empty() {
                                     pending_reasoning.push(text.to_string());
                                     pending_reasoning_ts = Some(timestamp);
@@ -2557,9 +2586,7 @@ impl CodexParser {
                                     .map(|parts| {
                                         parts
                                             .iter()
-                                            .filter_map(|p| {
-                                                p.get("text").and_then(|t| t.as_str())
-                                            })
+                                            .filter_map(|p| p.get("text").and_then(|t| t.as_str()))
                                             .filter(|t| !t.trim().is_empty())
                                             .collect::<Vec<_>>()
                                             .join("\n\n")
@@ -2964,10 +2991,7 @@ impl CodexParser {
                                                     completed_at: Some(timestamp),
                                                 });
                                                 messages.push(UnifiedMessage {
-                                                    id: format!(
-                                                        "tool-result-{}",
-                                                        messages.len()
-                                                    ),
+                                                    id: format!("tool-result-{}", messages.len()),
                                                     role: MessageRole::Tool,
                                                     content: vec![ContentBlock::ToolResult {
                                                         tool_use_id,
@@ -2996,11 +3020,8 @@ impl CodexParser {
                                             // just `completed`): an errored/notFound
                                             // close with no wait must not lose its
                                             // message or its error state.
-                                            if let Some(prev) =
-                                                output_obj.get("previous_status")
-                                            {
-                                                let (st, msg) =
-                                                    extract_wait_agent_status(prev);
+                                            if let Some(prev) = output_obj.get("previous_status") {
+                                                let (st, msg) = extract_wait_agent_status(prev);
                                                 if let Some(text) = msg {
                                                     agent_fallback_results
                                                         .entry(agent_id.clone())
@@ -3051,21 +3072,21 @@ impl CodexParser {
                                             &mut shell_sessions,
                                         );
                                     }
-                                    let (raw_output, envelope_error) =
-                                        if envelope.status != ScriptStatus::Unknown
-                                            || output_value.is_some_and(|v| v.is_array())
-                                        {
-                                            (
-                                                with_note(
-                                                    Some(envelope.joined()),
-                                                    envelope.note.as_deref(),
-                                                )
-                                                .filter(|s| !s.is_empty()),
-                                                envelope.is_error(),
+                                    let (raw_output, envelope_error) = if envelope.status
+                                        != ScriptStatus::Unknown
+                                        || output_value.is_some_and(|v| v.is_array())
+                                    {
+                                        (
+                                            with_note(
+                                                Some(envelope.joined()),
+                                                envelope.note.as_deref(),
                                             )
-                                        } else {
-                                            (value_to_preview(output_value), false)
-                                        };
+                                            .filter(|s| !s.is_empty()),
+                                            envelope.is_error(),
+                                        )
+                                    } else {
+                                        (value_to_preview(output_value), false)
+                                    };
                                     // A poll about to be folded into the card of
                                     // the command it is collecting for: its
                                     // envelope has to go, and an envelope that
@@ -3251,7 +3272,8 @@ impl CodexParser {
                                     *is_error = true;
                                 }
                                 if let Some(dir) = session_dir {
-                                    let stats = agent_stats_cache.entry(agent_id.to_string())
+                                    let stats = agent_stats_cache
+                                        .entry(agent_id.to_string())
                                         .or_insert_with(|| {
                                             parse_codex_subagent_stats(dir, agent_id)
                                         });
@@ -3353,6 +3375,7 @@ impl CodexParser {
             parent_id: None,
             parent_tool_use_id: None,
             delegation_call_id: None,
+            harness_internal,
         };
 
         Ok(ConversationDetail {
@@ -3532,7 +3555,9 @@ fn reconcile_turn_usage(turns: &mut [MessageTurn], recorded: &TurnUsage) {
         .fold(TurnUsage::default(), |acc, u| codex_usage_add(&acc, u));
 
     let missing = TurnUsage {
-        input_tokens: recorded.input_tokens.saturating_sub(attributed.input_tokens),
+        input_tokens: recorded
+            .input_tokens
+            .saturating_sub(attributed.input_tokens),
         output_tokens: recorded
             .output_tokens
             .saturating_sub(attributed.output_tokens),
@@ -3550,10 +3575,11 @@ fn reconcile_turn_usage(turns: &mut [MessageTurn], recorded: &TurnUsage) {
     // Prefer a turn that already reports usage — it is one the transcript
     // itself tied to a model call, so the recovered tokens land beside spend
     // that really happened rather than on an unrelated bubble.
-    let target = turns
-        .iter()
-        .rposition(|t| t.usage.is_some())
-        .or_else(|| turns.iter().rposition(|t| matches!(t.role, TurnRole::Assistant)));
+    let target = turns.iter().rposition(|t| t.usage.is_some()).or_else(|| {
+        turns
+            .iter()
+            .rposition(|t| matches!(t.role, TurnRole::Assistant))
+    });
     if let Some(turn) = target.and_then(|i| turns.get_mut(i)) {
         turn.usage = Some(match turn.usage {
             Some(ref existing) => codex_usage_add(existing, &missing),
@@ -3844,9 +3870,9 @@ fn response_item_user_has_image(payload: &serde_json::Value) -> bool {
         .get("content")
         .and_then(|c| c.as_array())
         .is_some_and(|items| {
-            items.iter().any(|item| {
-                item.get("type").and_then(|v| v.as_str()) == Some("input_image")
-            })
+            items
+                .iter()
+                .any(|item| item.get("type").and_then(|v| v.as_str()) == Some("input_image"))
         })
 }
 
@@ -4018,6 +4044,88 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn detects_codex_harness_internal_session_meta() {
+        assert!(super::codex_session_is_harness_internal(
+            &serde_json::json!({
+                "id": "child",
+                "thread_source": "subagent",
+            })
+        ));
+        assert!(super::codex_session_is_harness_internal(
+            &serde_json::json!({
+                "id": "child",
+                "parent_thread_id": "parent",
+            })
+        ));
+        assert!(super::codex_session_is_harness_internal(
+            &serde_json::json!({
+                "id": "child",
+                "source": { "subagent": { "thread_spawn": { "parent_thread_id": "parent" } } },
+            })
+        ));
+        assert!(!super::codex_session_is_harness_internal(
+            &serde_json::json!({
+                "id": "user",
+                "thread_source": "user",
+                "source": "vscode",
+            })
+        ));
+        assert!(!super::codex_session_is_harness_internal(
+            &serde_json::json!({
+                "id": "fork",
+                "forked_from_id": "parent",
+                "thread_source": "user",
+            })
+        ));
+    }
+
+    #[test]
+    fn list_conversations_marks_internal_subagent_rollouts() {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time ok")
+            .as_nanos();
+        let dir = env::temp_dir().join(format!("codeg-codex-internal-{nanos}"));
+        fs::create_dir_all(&dir).expect("create sessions dir");
+        let user = dir.join("rollout-user.jsonl");
+        let child = dir.join("rollout-child.jsonl");
+        fs::write(
+            &user,
+            concat!(
+                r#"{"timestamp":"2026-06-09T13:52:12.542Z","type":"session_meta","payload":{"id":"user-1","cwd":"/tmp/demo","thread_source":"user","source":"vscode"}}"#,
+                "\n",
+                r#"{"timestamp":"2026-06-09T13:52:13.000Z","type":"event_msg","payload":{"type":"user_message","message":"hello"}}"#,
+                "\n",
+            ),
+        )
+        .expect("write user");
+        fs::write(
+            &child,
+            concat!(
+                r#"{"timestamp":"2026-06-09T17:18:25.007Z","type":"session_meta","payload":{"id":"child-1","cwd":"/tmp/demo","thread_source":"subagent","parent_thread_id":"user-1","source":{"subagent":{"thread_spawn":{"parent_thread_id":"user-1"}}}}}"#,
+                "\n",
+                r#"{"timestamp":"2026-06-09T17:18:26.000Z","type":"event_msg","payload":{"type":"user_message","message":"explore"}}"#,
+                "\n",
+            ),
+        )
+        .expect("write child");
+
+        let parser = CodexParser::with_base_dir(dir.clone());
+        let listed = parser.list_conversations().expect("list");
+        let user_row = listed.iter().find(|row| row.id == "user-1").expect("user");
+        let child_row = listed
+            .iter()
+            .find(|row| row.id == "child-1")
+            .expect("child");
+        assert!(!user_row.harness_internal);
+        assert!(child_row.harness_internal);
+
+        let _ = fs::remove_file(user);
+        let _ = fs::remove_file(child);
+        let _ = fs::remove_dir(dir);
+    }
 
     #[test]
     fn skips_agents_instructions_title_candidate() {
@@ -4305,13 +4413,19 @@ mod tests {
             .iter()
             .filter_map(|t| t.usage.as_ref())
             .map(|u| {
-                u.input_tokens + u.output_tokens + u.cache_creation_input_tokens
+                u.input_tokens
+                    + u.output_tokens
+                    + u.cache_creation_input_tokens
                     + u.cache_read_input_tokens
             })
             .sum()
     }
 
-    fn parse_rollout(label: &str, content: &str, session_id: &str) -> crate::models::ConversationDetail {
+    fn parse_rollout(
+        label: &str,
+        content: &str,
+        session_id: &str,
+    ) -> crate::models::ConversationDetail {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("system time ok")
@@ -4431,7 +4545,10 @@ mod tests {
         );
         let detail = parse_rollout("toolonly", content, "toolonly-1");
         assert!(
-            !detail.turns.iter().any(|t| matches!(t.role, TurnRole::Assistant)),
+            !detail
+                .turns
+                .iter()
+                .any(|t| matches!(t.role, TurnRole::Assistant)),
             "precondition: this rollout has no assistant turn"
         );
         let total = detail
@@ -4694,8 +4811,7 @@ mod tests {
 
         // active → create_goal, objective + status carried in the tool_result.
         let create_id = find("create_goal");
-        let create_out: serde_json::Value =
-            serde_json::from_str(&outputs[&create_id]).unwrap();
+        let create_out: serde_json::Value = serde_json::from_str(&outputs[&create_id]).unwrap();
         assert_eq!(create_out["goal"]["status"], "active");
         assert_eq!(create_out["goal"]["objective"], "Refactor the auth module");
         // Distinct goal events get distinct (occurrence-addressed) ids.
@@ -4703,8 +4819,7 @@ mod tests {
 
         // budgetLimited → update_goal with the status normalized to snake_case.
         let update_id = find("update_goal");
-        let update_out: serde_json::Value =
-            serde_json::from_str(&outputs[&update_id]).unwrap();
+        let update_out: serde_json::Value = serde_json::from_str(&outputs[&update_id]).unwrap();
         assert_eq!(update_out["goal"]["status"], "budget_limited");
         assert_eq!(update_out["goal"]["tokensUsed"], 5200);
         let update_in: serde_json::Value = serde_json::from_str(&inputs[&update_id]).unwrap();
@@ -4858,8 +4973,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("system time ok")
             .as_nanos();
-        let path: PathBuf =
-            env::temp_dir().join(format!("codeg-codex-goaltext-{nanos}.jsonl"));
+        let path: PathBuf = env::temp_dir().join(format!("codeg-codex-goaltext-{nanos}.jsonl"));
         let content = concat!(
             "{\"timestamp\":\"2026-03-01T10:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"gt-1\",\"cwd\":\"/tmp/demo\"}}\n",
             "{\"timestamp\":\"2026-03-01T10:00:01Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"user_message\",\"message\":\"/goal Analyze the README\"}}\n",
@@ -4877,7 +4991,10 @@ mod tests {
             .iter()
             .filter(|t| matches!(t.role, TurnRole::User))
             .count();
-        assert_eq!(user_turns, 1, "real user_message not duplicated by synthesis");
+        assert_eq!(
+            user_turns, 1,
+            "real user_message not duplicated by synthesis"
+        );
         let user_text = detail
             .turns
             .iter()
@@ -4906,8 +5023,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("system time ok")
             .as_nanos();
-        let path: PathBuf =
-            env::temp_dir().join(format!("codeg-codex-goaldup-{nanos}.jsonl"));
+        let path: PathBuf = env::temp_dir().join(format!("codeg-codex-goaldup-{nanos}.jsonl"));
         let content = concat!(
             "{\"timestamp\":\"2026-03-01T10:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"gd-1\",\"cwd\":\"/tmp/demo\"}}\n",
             "{\"timestamp\":\"2026-03-01T10:00:01Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"thread_goal_updated\",\"goal\":{\"objective\":\"Investigate auth\",\"status\":\"active\"}}}\n",
@@ -4955,8 +5071,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("system time ok")
             .as_nanos();
-        let path: PathBuf =
-            env::temp_dir().join(format!("codeg-codex-goalconfirm-{nanos}.jsonl"));
+        let path: PathBuf = env::temp_dir().join(format!("codeg-codex-goalconfirm-{nanos}.jsonl"));
         let content = concat!(
             "{\"timestamp\":\"2026-03-01T10:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"gc-1\",\"cwd\":\"/tmp/demo\"}}\n",
             "{\"timestamp\":\"2026-03-01T10:00:01Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"thread_goal_updated\",\"goal\":{\"objective\":\"Build a static page\",\"status\":\"active\"}}}\n",
@@ -5024,8 +5139,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("system time ok")
             .as_nanos();
-        let path: PathBuf =
-            env::temp_dir().join(format!("codeg-codex-sumconfirm-{nanos}.jsonl"));
+        let path: PathBuf = env::temp_dir().join(format!("codeg-codex-sumconfirm-{nanos}.jsonl"));
         let content = concat!(
             "{\"timestamp\":\"2026-03-01T10:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"sc-1\",\"cwd\":\"/tmp/demo\"}}\n",
             "{\"timestamp\":\"2026-03-01T10:00:01Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"thread_goal_updated\",\"goal\":{\"objective\":\"Build a static page\",\"status\":\"active\"}}}\n",
@@ -5060,8 +5174,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("system time ok")
             .as_nanos();
-        let path: PathBuf =
-            env::temp_dir().join(format!("codeg-codex-sumgoal-{nanos}.jsonl"));
+        let path: PathBuf = env::temp_dir().join(format!("codeg-codex-sumgoal-{nanos}.jsonl"));
         let content = concat!(
             "{\"timestamp\":\"2026-03-01T10:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"sg-1\",\"cwd\":\"/tmp/demo\"}}\n",
             "{\"timestamp\":\"2026-03-01T10:00:01Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"thread_goal_updated\",\"goal\":{\"objective\":\"Build a static test page\",\"status\":\"active\"}}}\n",
@@ -5077,10 +5190,7 @@ mod tests {
             .expect("summary present");
 
         // Objective wins as title; the internal-context text never leaks in.
-        assert_eq!(
-            summary.title.as_deref(),
-            Some("Build a static test page")
-        );
+        assert_eq!(summary.title.as_deref(), Some("Build a static test page"));
         // The synthesized user turn (+1) plus the agent_message (+1).
         assert_eq!(summary.message_count, 2);
 
@@ -5095,8 +5205,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("system time ok")
             .as_nanos();
-        let path: PathBuf =
-            env::temp_dir().join(format!("codeg-codex-sumname-{nanos}.jsonl"));
+        let path: PathBuf = env::temp_dir().join(format!("codeg-codex-sumname-{nanos}.jsonl"));
         let content = concat!(
             "{\"timestamp\":\"2026-03-01T10:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"sn-1\",\"cwd\":\"/tmp/demo\"}}\n",
             "{\"timestamp\":\"2026-03-01T10:00:01Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"thread_goal_updated\",\"goal\":{\"objective\":\"Build a static test page\",\"status\":\"active\"}}}\n",
@@ -5127,8 +5236,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("system time ok")
             .as_nanos();
-        let path: PathBuf =
-            env::temp_dir().join(format!("codeg-codex-sumimg-{nanos}.jsonl"));
+        let path: PathBuf = env::temp_dir().join(format!("codeg-codex-sumimg-{nanos}.jsonl"));
         let content = concat!(
             "{\"timestamp\":\"2026-03-01T10:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"si-1\",\"cwd\":\"/tmp/demo\"}}\n",
             "{\"timestamp\":\"2026-03-01T10:00:01Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"thread_goal_updated\",\"goal\":{\"objective\":\"Do the thing\",\"status\":\"active\"}}}\n",
@@ -5179,8 +5287,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("system time ok")
             .as_nanos();
-        let path: PathBuf =
-            env::temp_dir().join(format!("codeg-codex-sumnull-{nanos}.jsonl"));
+        let path: PathBuf = env::temp_dir().join(format!("codeg-codex-sumnull-{nanos}.jsonl"));
         let content = concat!(
             "{\"timestamp\":\"2026-03-01T10:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"snl-1\",\"cwd\":\"/tmp/demo\"}}\n",
             "{\"timestamp\":\"2026-03-01T10:00:01Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"thread_goal_updated\",\"goal\":null}}\n",
@@ -5212,8 +5319,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("system time ok")
             .as_nanos();
-        let path: PathBuf =
-            env::temp_dir().join(format!("codeg-codex-gtxt-{nanos}.jsonl"));
+        let path: PathBuf = env::temp_dir().join(format!("codeg-codex-gtxt-{nanos}.jsonl"));
         let content = concat!(
             "{\"timestamp\":\"2026-03-01T10:00:00Z\",\"type\":\"session_meta\",\"payload\":{\"id\":\"gt2-1\",\"cwd\":\"/tmp/demo\"}}\n",
             "{\"timestamp\":\"2026-03-01T10:00:01Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"thread_goal_updated\",\"goal\":{\"objective\":\"Do X\",\"status\":\"active\"}}}\n",
@@ -5265,8 +5371,7 @@ mod tests {
             .as_nanos();
 
         // (a) terminal-only goal → no capture, no synthetic count/title.
-        let path_a: PathBuf =
-            env::temp_dir().join(format!("codeg-codex-term-{nanos}.jsonl"));
+        let path_a: PathBuf = env::temp_dir().join(format!("codeg-codex-term-{nanos}.jsonl"));
         fs::write(
             &path_a,
             concat!(
@@ -5282,13 +5387,15 @@ mod tests {
             .expect("ok")
             .expect("present");
         assert_eq!(summary_a.title, None, "terminal goal is not a title");
-        assert_eq!(summary_a.message_count, 1, "no synthetic user for terminal goal");
+        assert_eq!(
+            summary_a.message_count, 1,
+            "no synthetic user for terminal goal"
+        );
         let _ = fs::remove_file(&path_a);
 
         // (b) terminal THEN active → the active objective is captured (not the
         // terminal one), matching the detail parser's first-create_goal capture.
-        let path_b: PathBuf =
-            env::temp_dir().join(format!("codeg-codex-termact-{nanos}.jsonl"));
+        let path_b: PathBuf = env::temp_dir().join(format!("codeg-codex-termact-{nanos}.jsonl"));
         fs::write(
             &path_b,
             concat!(
@@ -5312,8 +5419,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("system time ok")
             .as_nanos();
-        let codex_home =
-            env::temp_dir().join(format!("codeg-codex-session-index-{nanos}"));
+        let codex_home = env::temp_dir().join(format!("codeg-codex-session-index-{nanos}"));
         let sessions_dir = codex_home
             .join("sessions")
             .join("2026")
@@ -5957,7 +6063,11 @@ mod tests {
                 serde_json::json!({"agent_b":{"completed":"B_RESULT_TOKEN"}}),
             ),
             narration("2026-06-27T10:00:09Z", "NARRATION_MID B back waiting A"),
-            wait("2026-06-27T10:00:10Z", "wait_2", serde_json::json!(["agent_a"])),
+            wait(
+                "2026-06-27T10:00:10Z",
+                "wait_2",
+                serde_json::json!(["agent_a"]),
+            ),
             wait_out(
                 "2026-06-27T10:00:11Z",
                 "wait_2",
@@ -6351,8 +6461,7 @@ mod tests {
                 _ => None,
             })
             .expect("spawn Agent capsule present");
-        let parsed: serde_json::Value =
-            serde_json::from_str(input).expect("spawn input is JSON");
+        let parsed: serde_json::Value = serde_json::from_str(input).expect("spawn input is JSON");
         assert_eq!(
             parsed.get("agent_id").and_then(|v| v.as_str()),
             Some("AGENT_UUID_X"),
@@ -7744,20 +7853,35 @@ mod tests {
     fn a_labelled_fanout_splits_a_collapsed_blob_per_command() {
         let detail = code_mode_detail(
             &labelled_fanout(&["query-entry", "formula-service", "factor-full"]),
-            labelled_blob(6, &[
-                ("query-entry", "one"),
-                ("formula-service", "two"),
-                ("factor-full", "three"),
-            ]),
+            labelled_blob(
+                6,
+                &[
+                    ("query-entry", "one"),
+                    ("formula-service", "two"),
+                    ("factor-full", "three"),
+                ],
+            ),
             "code-mode-labelled",
         );
 
         assert_eq!(
             tool_uses(&detail),
             vec![
-                ("call_1#0".into(), "exec_command".into(), Some("echo 0".into())),
-                ("call_1#1".into(), "exec_command".into(), Some("echo 1".into())),
-                ("call_1#2".into(), "exec_command".into(), Some("echo 2".into())),
+                (
+                    "call_1#0".into(),
+                    "exec_command".into(),
+                    Some("echo 0".into())
+                ),
+                (
+                    "call_1#1".into(),
+                    "exec_command".into(),
+                    Some("echo 1".into())
+                ),
+                (
+                    "call_1#2".into(),
+                    "exec_command".into(),
+                    Some("echo 2".into())
+                ),
             ]
         );
         assert_eq!(
@@ -7781,12 +7905,21 @@ mod tests {
     #[test]
     fn a_truncated_separator_leaves_its_command_without_output() {
         let detail = code_mode_detail(
-            &labelled_fanout(&["query-entry", "formula-service", "vo", "formula-splice", "factor-full"]),
-            labelled_blob(20, &[
-                ("query-entry", "first"),
-                ("formula-service", "second\nvo-output\nsplice-output"),
-                ("factor-full", "last"),
+            &labelled_fanout(&[
+                "query-entry",
+                "formula-service",
+                "vo",
+                "formula-splice",
+                "factor-full",
             ]),
+            labelled_blob(
+                20,
+                &[
+                    ("query-entry", "first"),
+                    ("formula-service", "second\nvo-output\nsplice-output"),
+                    ("factor-full", "last"),
+                ],
+            ),
             "code-mode-labelled-partial",
         );
 
@@ -7794,7 +7927,11 @@ mod tests {
             tool_results(&detail),
             vec![
                 ("call_1#0".into(), Some("first".into()), false),
-                ("call_1#1".into(), Some("second\nvo-output\nsplice-output".into()), false),
+                (
+                    "call_1#1".into(),
+                    Some("second\nvo-output\nsplice-output".into()),
+                    false
+                ),
                 ("call_1#2".into(), None, false),
                 ("call_1#3".into(), None, false),
                 ("call_1#4".into(), Some("last".into()), false),
@@ -7802,7 +7939,10 @@ mod tests {
         );
 
         let metas = tool_metas(&detail);
-        assert_eq!(metas[1]["sharedWith"], serde_json::json!(["vo", "formula-splice"]));
+        assert_eq!(
+            metas[1]["sharedWith"],
+            serde_json::json!(["vo", "formula-splice"])
+        );
         assert_eq!(metas[2]["outputMissing"], true);
         assert_eq!(metas[3]["outputMissing"], true);
         assert!(metas[0].get("sharedWith").is_none());
@@ -7816,10 +7956,7 @@ mod tests {
     fn a_repeated_separator_line_keeps_the_script_card() {
         let detail = code_mode_detail(
             &labelled_fanout(&["alpha", "beta"]),
-            labelled_blob(8, &[
-                ("alpha", "one\n===== beta ====="),
-                ("beta", "two"),
-            ]),
+            labelled_blob(8, &[("alpha", "one\n===== beta ====="), ("beta", "two")]),
             "code-mode-labelled-dup",
         );
 
@@ -7835,11 +7972,14 @@ mod tests {
     fn a_repeated_output_line_still_splits() {
         let detail = code_mode_detail(
             &labelled_fanout(&["alpha", "beta", "gamma"]),
-            labelled_blob(8, &[
-                ("alpha", "shared line\none"),
-                ("beta", "shared line\ntwo"),
-                ("gamma", "three"),
-            ]),
+            labelled_blob(
+                8,
+                &[
+                    ("alpha", "shared line\none"),
+                    ("beta", "shared line\ntwo"),
+                    ("gamma", "three"),
+                ],
+            ),
             "code-mode-labelled-repeat",
         );
 

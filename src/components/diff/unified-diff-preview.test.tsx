@@ -34,7 +34,39 @@ function newFileDiff(lineCount: number): string {
   return `${header}${body}\n`
 }
 
+function replacementDiff(): string {
+  return [
+    "diff --git a/meta.ts b/meta.ts",
+    "--- a/meta.ts",
+    "+++ b/meta.ts",
+    "@@ -1,1 +1,1 @@",
+    "-modified: 2026-08-15T08:05:08.980Z",
+    "+modified: 2026-08-15T08:12:35.069Z",
+    "",
+  ].join("\n")
+}
+
 describe("UnifiedDiffPreview", () => {
+  it("renders dark intraline spans only over the changed timestamp", () => {
+    const { container } = renderWithIntl(
+      <UnifiedDiffPreview diffText={replacementDiff()} />
+    )
+
+    const removed = [
+      ...container.querySelectorAll('[data-intraline="removed"]'),
+    ]
+      .map((node) => node.textContent)
+      .join("")
+    const added = [...container.querySelectorAll('[data-intraline="added"]')]
+      .map((node) => node.textContent)
+      .join("")
+    expect(removed).toBe("0508980Z")
+    expect(added).toBe("1235069Z")
+    expect(
+      container.querySelector('[data-intraline="removed"]')
+    ).not.toHaveTextContent("modified")
+  })
+
   it("renders every row for a small diff and shows no reveal control", () => {
     renderWithIntl(<UnifiedDiffPreview diffText={newFileDiff(3)} />)
 

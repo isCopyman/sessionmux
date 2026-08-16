@@ -450,6 +450,8 @@ export interface DbConversationSummary {
    *  worktree path it originally ran in. Drives the "source worktree removed"
    *  badge. */
   origin_cwd?: string | null
+  /** Harness-internal subagent hidden from ordinary Session projections. */
+  harness_internal?: boolean
 }
 
 export interface SessionContentSearchHit {

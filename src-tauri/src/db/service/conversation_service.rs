@@ -83,6 +83,8 @@ async fn create_inner(
         archived_at: Set(None),
         pinned_at: Set(None),
         origin_cwd: Set(None),
+        harness_internal: Set(false),
+        codeg_owned: Set(true),
     };
     Ok(model.insert(conn).await?)
 }
@@ -169,6 +171,26 @@ pub async fn update_title_if_live_in_folder(
                 .add(conversation::Column::Kind.eq(ConversationKind::Chat)),
         )
         .filter(conversation::Column::ParentId.is_null())
+        .exec(conn)
+        .await?;
+    Ok(result.rows_affected == 1)
+}
+
+/// Persist the ordinary-projection hide flag without treating it as activity.
+/// Returns `true` when the stored value changed.
+pub async fn set_harness_internal(
+    conn: &DatabaseConnection,
+    conversation_id: i32,
+    harness_internal: bool,
+) -> Result<bool, DbError> {
+    use sea_orm::sea_query::Expr;
+    let result = conversation::Entity::update_many()
+        .col_expr(
+            conversation::Column::HarnessInternal,
+            Expr::value(harness_internal),
+        )
+        .filter(conversation::Column::Id.eq(conversation_id))
+        .filter(conversation::Column::HarnessInternal.ne(harness_internal))
         .exec(conn)
         .await?;
     Ok(result.rows_affected == 1)
@@ -410,6 +432,7 @@ fn conv_to_summary(r: conversation::Model) -> DbConversationSummary {
         parent_tool_use_id: r.parent_tool_use_id,
         delegation_call_id: r.delegation_call_id,
         origin_cwd: r.origin_cwd,
+        harness_internal: r.harness_internal,
     }
 }
 
@@ -493,7 +516,8 @@ pub async fn list_by_folder(
 ) -> Result<Vec<DbConversationSummary>, DbError> {
     let mut query = conversation::Entity::find()
         .filter(conversation::Column::FolderId.eq(folder_id))
-        .filter(conversation::Column::DeletedAt.is_null());
+        .filter(conversation::Column::DeletedAt.is_null())
+        .filter(conversation::Column::HarnessInternal.eq(false));
 
     // Filter by agent_type
     if let Some(ref at) = agent_type {
@@ -542,7 +566,9 @@ pub async fn list_by_folder(
 /// `false` (the default for the top-level list), rows whose `parent_id` is
 /// non-null are filtered out — they belong to their parent's tool-call view,
 /// not the workspace conversation list. Rows with `kind = 'loop'` are always
-/// excluded — they belong to the loops workbench.
+/// excluded — they belong to the loops workbench. Harness-internal subagents
+/// (`harness_internal = true`) are also excluded from this ordinary
+/// projection; `get_by_id` still returns them.
 pub async fn list_all(
     conn: &DatabaseConnection,
     folder_ids: Option<Vec<i32>>,
@@ -564,6 +590,8 @@ pub async fn list_all(
     // Loop-engineering runs never surface in the workspace conversation list —
     // their entry point is the loops workbench.
     query = query.filter(conversation::Column::Kind.ne(ConversationKind::Loop));
+    // Harness-internal subagents stay out of ordinary Session projections.
+    query = query.filter(conversation::Column::HarnessInternal.eq(false));
 
     if !include_children {
         query = query.filter(conversation::Column::ParentId.is_null());
@@ -1390,5 +1418,47 @@ mod tests {
             !rows.iter().any(|r| r.title.as_deref() == Some("hide")),
             "loop row must be excluded"
         );
+    }
+
+    #[tokio::test]
+    async fn list_all_excludes_harness_internal_rows() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/harness-internal-filter").await;
+        let keep = create(
+            &db.conn,
+            folder_id,
+            AgentType::Codex,
+            Some("user session".into()),
+            None,
+        )
+        .await
+        .expect("keep");
+        let hide = create(
+            &db.conn,
+            folder_id,
+            AgentType::Codex,
+            Some("codex subagent".into()),
+            None,
+        )
+        .await
+        .expect("hide");
+        let hide_id = hide.id;
+        let mut active: conversation::ActiveModel = hide.into();
+        active.harness_internal = Set(true);
+        active.codeg_owned = Set(false);
+        active.update(&db.conn).await.expect("mark internal");
+
+        let rows = list_all(&db.conn, None, None, None, None, None, false, false)
+            .await
+            .expect("list");
+        assert!(rows.iter().any(|r| r.id == keep.id), "user session stays");
+        assert!(
+            !rows
+                .iter()
+                .any(|r| r.title.as_deref() == Some("codex subagent")),
+            "harness-internal row must be excluded"
+        );
+        let fetched = get_by_id(&db.conn, hide_id).await.expect("direct fetch");
+        assert!(fetched.harness_internal);
     }
 }

@@ -217,14 +217,7 @@ pub async fn search_session_content_core(
         }
     };
     let conversations = conversation_service::list_all(
-        conn,
-        folder_ids,
-        agent_type,
-        None,
-        None,
-        None,
-        archived,
-        false,
+        conn, folder_ids, agent_type, None, None, None, archived, false,
     )
     .await
     .map_err(AppCommandError::from)?;
@@ -284,6 +277,7 @@ mod tests {
             parent_tool_use_id: None,
             delegation_call_id: None,
             origin_cwd: None,
+            harness_internal: false,
         }
     }
 
