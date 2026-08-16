@@ -26,16 +26,22 @@ Session Center、可选内容全文检索、单窗口拖边吸附，以及 Colle
 - [Session Center、全文检索与打开行为子 RFC](./SESSION-DISCOVERY-OPENING-RFC.zh-CN.md)：全局会话管理、ctx 可选全文检索、默认打开决策和 Focus 语义。
 - [Workbench 层级、多窗口与 Session 多视图同步子 RFC](./WORKBENCH-LAYOUT-SYNC-RFC.zh-CN.md)：顶层工作台标签、物理窗口、视图/运行时边界与同步规则。
 - [Session 历史能力子 RFC](./SESSION-HISTORY-CAPABILITIES-RFC.zh-CN.md)：Fork、旧消息编辑、Rewind、文件检查点及各 Harness 的能力降级。
+- [Session 间通信与调用策略 RFC](./SESSION-COMMUNICATION-RFC.zh-CN.md)：稳定寻址、消息/显示/模型调用三层边界、定向发送、调用策略和 Delivery Router。
 - [Session Runtime 生命周期 RFC](./SESSION-RUNTIME-LIFECYCLE-RFC.zh-CN.md)：统一 Session/ACP/Turn、PromptQueue、Mailbox、Dispatcher、崩溃恢复与未来等待点的事实和拟议语义。
+- [Host 控制面与 Agent 可编程工作台 RFC](./HOST-CONTROL-SURFACE-RFC.zh-CN.md)：把现有 delegation 解释为 Session 生命周期组合预设，并统一记录 Session 启动、持续通信、Workbench/资源操控、Skill + 渐进式 MCP 控制路径及外部实现依据。
+- [Delegation Removal 与共享 Host Bridge 审计](./DELEGATION-SUBSYSTEM-AUDIT.zh-CN.md)：旧三工具直接移除；逐层区分应删除的 task_id/Broker/专属 UI 与必须保留的 companion、可信身份、transport、普通 MCP 工具和可复用视觉 primitive。
 - [群聊面板与 Session 协作 RFC](./GROUP-CONVERSATION-RFC.zh-CN.md)：Room 作为内容面板、Session 成员、共享/私聊边界、显式目标、上下文摄入和协作链限制。
-- [AgentBus 协作子 RFC](./AGENTBUS-COLLABORATION-RFC.zh-CN.md)：Codeg 原生 Delivery Router、跨 App/主机 AgentBus、`wait` 降级与未来受管 CLI Gateway。
+- [AgentBus 协作子 RFC](./AGENTBUS-COLLABORATION-RFC.zh-CN.md)：Codeg 原生 Delivery Router、跨 App/主机 AgentBus、`wait` 降级与未托管边界 Adapter。
 - [GitHub Issue 与需求追踪](./ISSUE-TRACKER.zh-CN.md)：已提交问题、状态、RFC 条目和实施里程碑的对应关系。
 - [Atrium 公开功能审计](./ATRIUM-FEATURE-AUDIT.zh-CN.md)：竞品样本的完整功能族、Codeg 差距、可借鉴机制和明确不照搬项。
 
 领域模型回答“产品里的概念是什么”，主 RFC 回答“如何在 Codeg 中安全实现”，Session Center
 子 RFC 回答“如何找到并可预测地打开会话”，历史能力子 RFC 回答“不同 Harness 如何可靠地
-分叉或恢复”，群聊 RFC 回答“共享时间线、私聊和 Session 激活如何分开”，AgentBus RFC 回答
-“如何把跨边界传输变成受管理的协作能力”。若它们
+分叉或恢复”，Session 通信 RFC 回答“消息到达、UI 可见和模型调用如何分开”，Host 控制面 RFC
+回答“人和 Agent 如何共用同一套 Session、运行时、布局与资源操作”，群聊 RFC 回答
+“共享时间线、私聊和 Session 激活如何分开”，AgentBus RFC 回答
+“如何把跨边界传输变成受管理的协作能力”，delegation 专项审计回答“现有一次性子 Agent 代码
+究竟怎样拆而不误伤共享 Host Bridge”。若它们
 冲突，不能直接用概念模型覆盖现有代码；必须先修订 RFC，写明适配或迁移方式，再修改代码。
 
 Atrium 审计只提供外部参考，不是需求事实源。竞品功能与产品文档冲突时，应先回到真实使用

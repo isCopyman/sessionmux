@@ -280,6 +280,11 @@ Mailbox 需要分别记录：
 | 受管远端 Backend | 由远端 Router 执行相同规则 | 由远端 Runtime 决定 | 显示真实远端状态 |
 | 未托管外部目标 | 经 AgentBus 等 Adapter 落入 mailbox | 是否唤醒取决于外部能力 | 已入邮箱，不声称已处理 |
 
+离线唤醒采用按来源授权：用户在 UI 中明确执行 invoke 时，可以冷启动可恢复的受管 Session；
+Session/Agent 来源只有目标启用 `allow_background_wake`，或消息属于用户批准的协作关系/工作流时
+才可冷启动，V1 默认关闭。用户主动 stopped 永不自动唤醒；crashed/reconnecting 必须先恢复并核对
+native binding。active idle 的 `invoke_when_idle` 正常进入 Dispatcher，`store_only` 永不单独起 Turn。
+
 忙碌竞态不增加第二套判定。Router 应复用现有消息队列、连接门槛和 `TurnBusyError` 回队行为；
 判定空闲后仍发生竞争时，消息返回队首而不是丢失或重复启动。
 
@@ -471,7 +476,7 @@ steer，只有用户明确操作或 Session/发送者命中可审计预授权策
 尚未产生稳定 `conversation_id` 的草稿不进入可投递结果，或明确标为不可寻址；选择器不能让
 用户选中一个只有临时 Tab ID、无法真正接收消息的目标。
 
-### 8.2 Agent 指导采用“极小网关 + 能力包 + 常驻规则 + Skill”四层
+### 8.2 Agent 指导统一为“Skill + Codeg 自有渐进式 MCP”
 
 Codeg 不把完整协作协议和全部工具 Schema 永久追加到每个 Session，也不能把寻址、安全和投递
 语义只放进可能没有触发的 Skill。这个分层不是凭空新增一套插件机制：当前 `codeg-mcp` 已经按
@@ -481,9 +486,9 @@ Codeg 不把完整协作协议和全部工具 Schema 永久追加到每个 Sessi
 `collaboration` 组和 `list_sessions` / `send_message` 已沿用这一宿主工具面；进一步把粗粒度启动
 开关收敛成按需 capability 仍是拟议优化。Skill 补充工具 Schema 不适合承载的协作策略与例子。
 
-发送端的模型可见指导分为三层：
+发送端的模型可见指导分为四层，但只有一条正式执行路径：
 
-1. **极小 capability gateway。** 每个支持结构化工具的受管 Harness 只需常驻帮助、能力发现和
+1. **极小 MCP capability gateway。** 每个支持 MCP 的受管 Harness 只需常驻帮助、能力发现和
    能力调用入口。协作能力未触发时，不必承担完整 `list_sessions`/`send_message` Schema。
 2. **Collaboration capability。** `list_sessions` 和 `send_message` 的名称、描述与输入 Schema 说明单次调用
    做什么、参数如何填写、返回值代表什么。工具只接受稳定 Session Address；会话名、角色名和
@@ -516,7 +521,7 @@ Gemini/OpenCode 可接受的提示或工具指导格式。不同适配器可以�
 注入。若某 Harness 暂不支持 Skill，adapter 可以在明确触发时注入等价的有界指导，但基础工具、
 常驻安全规则和 Delivery Router 行为不得因此改变。
 
-这三层只指导**发送方如何调用**。接收方不需要安装同一个 Skill 才能收到消息；Codeg Runtime
+这四层只指导**发送方如何调用**。接收方不需要安装同一个 Skill 才能收到消息；Codeg Runtime
 仍按第 7 节的不可变协作信封和调用策略将事件送入目标 Harness。AgentBus Skill 只服务未托管的
 外部 Session，不作为 Codeg 内部通信 Skill 的重复接收路径。
 
@@ -552,6 +557,21 @@ Gemini/OpenCode 可接受的提示或工具指导格式。不同适配器可以�
 drawer、完整 Global Center、原生对话时间线 collaboration card，以及把 Agent 发信定位到真实
 Turn/tool call 的 `source_turn_ref` / `source_tool_call_ref`。下节属于拟议 Timeline Projection，
 不能描述成当前 UI。
+
+#### 8.3.1 轻量往来处理与全局找回
+
+Session Inbox drawer 第一版只提供“待处理 / 收到 / 发出 / 全部”四个入口；Global Session Center
+提供“未读 / 待我处理 / 等待对方 / 失败或逾期 / 全部往来”。二者都是同一 event/Delivery 的
+查询投影，不建立邮件文件夹、规则引擎或第二份正文。
+
+快捷过滤至少覆盖方向、UI 未看、尚未 Agent received、待回复、等待对方、已回复、失败/逾期，
+并可按 Session、Collection 和 Harness 缩小范围。排序只提供最新、最旧未处理、到期、最近活动和
+参与者；V1 不引入复杂规则。搜索覆盖正文、当前标题、发送时 title snapshot、参与者、Collection
+和附件名。
+
+一条 fan-out 在 Outbox 中仍显示为一个 event，展开后列出每个目标的 Delivery 状态，不能复制成
+多封正文。可用操作收敛为“回复、加入下一轮、立即处理、仅参考、稍后提醒、无需回复”。pending
+不会仅因 UI 打开而进入 PromptQueue；只有真正 embedded 后才获得 Agent receipt 并进入时间线投影。
 
 ### 8.4 正常对话时间线中的 Collaboration Projection
 
@@ -632,22 +652,16 @@ ACP session/new | load | resume
 Agent 打开 Terminal 执行 `codeg send`；`codeg-mcp` 是随 Codeg 一起发布、由 Harness 作为 MCP
 进程启动的宿主桥。
 
-#### MCP 与未来 CLI 必须共享同一个 Caller Context
+#### 受管 Agent 只通过 Host 绑定的 MCP Caller Context
 
-受管 Session 的通信主路径采用 `Skill + codeg-mcp`：Skill 教 Agent 何时联系既有 Session，MCP
-提供结构化 `list_sessions`/`send_message`，companion token 让后端反查真实来源。未来增加
-`codeg session send` CLI 时，它只能是同一个 Collaboration Core 的薄适配器，不能建立第二套
-Mailbox、队列、身份或投递状态机。
+受管 Session 的唯一正式 Agent 路径是 `Skill + codeg-mcp`：Skill 教 Agent 何时联系既有 Session，
+MCP 提供结构化 `list_sessions`/`send_message`，companion token 让后端反查真实来源。模型不填写自己
+的 Session ID，也不存在可伪造的 `from` 参数。
 
-CLI 在 Atrium 式受管 Pane、外部 Terminal、脚本和不支持 MCP 的 Harness 中，可以通过
-`CODEG_ENDPOINT`、`CODEG_CLI_PATH` 与短期 `CODEG_CONTEXT_HANDLE` 找到 Host。调用仍只提交目标和
-正文；Host 根据 handle 解析来源并执行与 MCP 相同的鉴权、幂等和 Delivery 状态迁移。标题和角色
-只用于选择，不能成为 `--from` 或最终地址。Handle 必须限权、可撤销并绑定 Backend/Session，不能
-把全局 Token 或长期私钥放进 Agent 环境。
-
-环境变量只是 ambient discovery。ACP `session/new` 本身没有通用 Agent 环境字段，只有其
-`mcpServers` 中的 stdio server 可以携带 `env`；而且环境变量是进程级，不能在一个进程承载多个
-ACP Session 时可靠区分调用者。故 CLI fallback 不能反向削弱 MCP 现有的 per-session token 绑定。
+环境变量若需要，只用于 Codeg 启动/托管 MCP 或 Harness 时注入 ambient backend、connection、
+endpoint 或短期 capability token。ACP `session/new` 本身没有通用 Agent 环境字段，只有其
+`mcpServers` 中的 stdio server 可以携带 `env`；环境变量又是进程级，不能替代现有 per-session
+token/connection 绑定。Codeg 不为不支持 MCP 的 Harness 再建立 CLI fallback 产品路径。
 
 与 Buzz 不同，Codeg 普通 ACP 回复已经属于当前 Session 时间线，不需要再次通过 CLI 发布；只有
 显式跨 Session Delivery 才调用通信能力。这避免“模型已经回答，但 CLI 发布失败所以 UI 看不到”的
@@ -671,16 +685,15 @@ ACP Session 时可靠区分调用者。故 CLI fallback 不能反向削弱 MCP �
 受管 Backend federation、AgentBus Adapter，以及本 RFC 下一阶段的 Attention/Obligation/reminder
 闭环。文档必须把这些扩展与已工作的 direct 工具分开，不能继续写成“全部尚未提供”。
 
-`delegation` 继续表示“创建新的临时 Agent/Session 并跟踪任务”，`collaboration` 表示“联系已经
-存在的持久 Session”。二者可以共用 companion、鉴权和内部 transport，不能共用产品语义或把
-`delegate_to_agent` 改名后冒充持久通信。
+`collaboration` 表示“联系已经存在的持久 Session”。三个 delegation 工具已授权直接删除，不等待
+create/get/list/send 与精确 cancel/stop 全部落地，也不保留 `task_id` 兼容协议。删除旧工具不影响
+现有 direct event/Delivery、`list_sessions/send_message` 或可信 caller identity。
 
-但这不意味着两者要长期维护两套 Session 创建与发送实现。现有 delegation 本身已经创建并持久化
-一个带 `parent_id` 的真实子 Conversation；从 Host 控制面看，它应当逐步实现为
-`create_session + initial_prompt + parent_link + wait/report` 的组合预设。普通 `send_message` 可以
-继续联系这个子 Session；能力允许时，用户也可继续追问、Fork 或把它固定为长期 Session，而不是
-只能再次发起一个冷任务。提升为长期可见项不能抹掉原父子来源，具体兼容策略见
-[Host 控制面与 Agent 可编程工作台 RFC](./HOST-CONTROL-SURFACE-RFC.zh-CN.md#2-delegate_to_agent-是-session-体系的组合预设)。
+未来新建/委派统一实现为
+`create_session + send_message(initial task) + optional lineage/workbench placement`。普通 `send_message`
+继续联系这个 Session；用户可以继续追问、Fork 或把它固定到 Collection/Workbench，而不是再次发起
+一个冷 task。具体删除边界与共享代码见
+[Host 控制面与 Agent 可编程工作台 RFC](./HOST-CONTROL-SURFACE-RFC.zh-CN.md)。
 
 ### 9.3 发送端与接收端能力不同
 
@@ -740,7 +753,7 @@ Delivery claim、去重和 idle activation 的唯一 owner。Hook 只能：
 恢复和 Router 测试稳定以后，才单独实现和验证。本阶段不安装 Hook，不修改用户或项目的 Claude
 Hook 配置。
 
-### 9.4 不支持 MCP 时的降级
+### 9.4 不支持 MCP 时的产品边界
 
 Codeg 当前已经知道“ACP 字段被接受”不等于“MCP 真正到达内部模型”：例如源码明确记录 pi-acp
 会丢弃 wire MCP，而 OpenClaw 会拒绝非空 MCP server entry，见
@@ -748,12 +761,13 @@ Codeg 当前已经知道“ACP 字段被接受”不等于“MCP 真正到达内
 [`supports_mcp` 连接门控](../../src-tauri/src/acp/connection.rs#L4168)。通信功能必须沿用真实能力
 门槛，不能只检查 `session/new` 没报错。
 
-降级顺序为：
+产品行为为：
 
 1. 用户仍可在 Codeg UI 中选择目标并直接发送，消息不依赖当前模型拥有工具；
 2. Agent 可输出结构化“建议发送”卡片，由用户确认后由 UI 执行；
-3. 未托管外部 Session 才使用 AgentBus/CLI Adapter；
-4. 不扫描 Agent 普通 Markdown、thinking 或代码块中的 `@名字` 自动产生副作用。
+3. 不支持 MCP 的受管 Harness 暂不提供 Agent Host Control Surface，UI 明确显示不可用；
+4. 未托管外部 Session 仍可由未来 AgentBus Adapter 接入，但它不是 Codeg CLI fallback；
+5. 不扫描 Agent 普通 Markdown、thinking 或代码块中的 `@名字` 自动产生副作用。
 
 结构化 `@` 选择器属于用户输入 UI：候选选中后保存稳定 Session Address，可以直接发送。Agent
 输出中的普通 `@Fable` 只作文本显示；真正的 Agent 主动发信必须出现可审计 Tool Call。这样可以

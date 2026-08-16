@@ -1,8 +1,8 @@
 # Codeg Session Runtime 生命周期 RFC
 
-> 状态：语义基线草案；本轮仅审计和文档，不授权实现
+> 状态：语义基线；Fork 身份批次已实现，其余拟议能力仍受实施 Gate 约束
 >
-> 审计基线：2026-08-16，`codex/session-workbench-foundation`，提交 `2f2aa793`
+> 审计基线：2026-08-16，`codex/session-workbench-foundation`，Fork 实现提交 `0bfb86a0`
 >
 > 相邻文档：[Session 间通信与调用策略 RFC](./SESSION-COMMUNICATION-RFC.zh-CN.md)、
 > [领域模型](./DOMAIN-MODEL.zh-CN.md)、
@@ -48,7 +48,7 @@
 SessionAddress = (backend_ref, conversation_id)
 ```
 
-单 Backend UI 可以继续只传 `conversation_id`，但协议、深链、远端 View、CLI/MCP 不应假设裸
+单 Backend UI 可以继续只传 `conversation_id`，但协议、深链、远端 View 和 MCP 不应假设裸
 整数跨 Backend 唯一。`external_id` 只负责找回 Harness 原生历史，不能替代 Codeg 地址。
 
 ### 2.2 名字、角色与 @ 自动补全
@@ -73,33 +73,28 @@ SessionAddress = (backend_ref, conversation_id)
 Backend 快照；迁移有意避免让来源删除级联抹掉已送达邮件。`conversation.archived_at` 与
 `deleted_at`、运行状态、Workbench 引用彼此独立。
 
-### 2.3 Fork 的身份冲突必须先裁决
+### 2.3 Fork：历史身份不可变，活动 View 显式 handoff
 
-**【当前事实】** 当前 `ConnectionManager::fork_session` 和 `persist_fork_outcome` 的行为是：
+**【当前事实】** 提交 `0bfb86a0` 已将 `ConnectionManager::fork_session`、
+`persist_fork_outcome` 与前端 Runtime store 调整为：
 
 ```text
 Fork 前：Codeg C1 → native S1
 
-Fork 后：Codeg C1 → native S2（当前活动分支，标题加 [Fork]）
-        Codeg C2 → native S1（新建的旧分支 sibling）
+Fork 后：Codeg C1 → native S1（原历史与通信身份保持不变）
+        Codeg C2 → native S2（新分支、新稳定地址）
+
+触发 Fork 的 View：C1 → C2
+其他已经打开 C1 的 View：仍然引用 C1
 ```
 
-也就是说，当前 Codeg ID `C1` 跟随用户正在看的新原生分支，旧原生历史反而获得新 Codeg ID。
-这有利于保持当前 Tab/连接连续，但与“地址永远指向同一逻辑历史”的直觉冲突：发给 `C1` 的
-后续消息可能在 Fork 后进入 S2。
+Fork API 显式返回原/新 Codeg ID、原/新 native ID 和 handoff 信息；连接在 C2 持久化完成前不会
+公开 `session_started`，避免出现 C1 短暂指向 S2 的窗口。C2 可以继承 Harness、cwd、必要模型配置、
+Collection 和静态展示信息，但不会继承 PromptQueue、Mailbox Delivery、Attention/Obligation、
+Reminder、WaitSubscription、草稿或正在运行的 Turn。旧数据保持原有解释，不做猜测式重写。
 
-**【已审计缺陷】** 当前 Fork 行为尚未与 Mailbox、待发送 Prompt、联系人和等待义务的继承规则
-共同定义；一旦 Session ID 成为公开通信地址，仅靠现有 UI 连续性不足以保证路由含义稳定。
-
-**【未决问题】** 后续必须二选一，不能在 Mailbox 上线后默默改变：
-
-| 方案 | 原 C1 指向 | 新 C2 指向 | 主要代价 |
-|---|---|---|---|
-| 活动视图连续（当前） | 新分支 S2 | 旧分支 S1 | 通信地址语义随 Fork 改变 |
-| 身份不可变 | 旧分支 S1 | 新分支 S2 | 需要把活动 View/connection 显式切换到 C2 |
-
-无论选择哪种，两个可继续的分支都必须拥有两个独立地址；待发送 Prompt、Mailbox obligation、
-未读和联系人是否跟随哪一支也必须显式迁移，不能仅靠标题前缀猜测。
+这项裁决同时保留两种用户直觉：稳定地址永远指向同一逻辑历史；发起 Fork 的用户仍自然地继续
+操作新分支。`parent_id` 继续表示来源/委派关系，不承担 Fork lineage 或身份替换。
 
 ## 3. 所有权：前端不是运行时事实源
 
@@ -219,6 +214,19 @@ stateDiagram-v2
 - **断开或进程错误**：生命周期 worker处理 terminal 状态；`InProgress` 会话可转为 `Cancelled`，
   但原生 Session 和 Codeg 行仍可用于恢复。
 - **重启**：不恢复内存 connection；SQLite 队列、Conversation 和 Collaboration facts 继续存在。
+
+### 4.4 离线唤醒采用按来源授权，而不是统一冷启动
+
+**【已裁决、尚未完整实现】** “目标当前没有 Runtime”与“允许为这条消息启动 Runtime”必须分开：
+
+- 用户在 Codeg UI 明确执行 `invoke` 时，可以冷启动受管且可恢复的 unloaded Session；
+- Session/Agent 来源的 `invoke` 只有目标开启 `allow_background_wake`，或消息属于用户明确批准的
+  协作关系/工作流时才可冷启动；V1 默认不授权；
+- 用户主动 `stopped` 的 Session 永不被后台消息自动唤醒；
+- `crashed/reconnecting` 必须先恢复并核对 Codeg/native binding，不能直接 claim 下一项；
+- active idle 的 `invoke_when_idle` 可由 Dispatcher 正常执行；`store_only` 不单独创建 Turn。
+
+这一策略只固定未来 Dispatcher 语义，不表示当前 direct Router 已提供全部冷启动策略字段。
 
 ## 5. 用户 PromptQueue 生命周期
 
@@ -447,15 +455,17 @@ flowchart TD
 当前 PromptQueue 已实现“pre-dispatch 可恢复、post-dispatch 暂停”这一底线；自动 transcript 对账、
 统一 Turn ref 和跨 Provider 幂等仍是拟议。
 
-## 9. `wait_sessions` / `wait_threads`：可选等待点，不是信箱
+## 9. `wait_sessions` / `wait_threads`：Optional/Later 的宿主等待点
 
 **【当前事实】** Codeg 当前源码没有 `wait_sessions` 或 `wait_threads` 公共能力。AgentBus 的
 `recv --wait` 属于未托管边界，不代表 Codeg 内部必须让 Agent 常驻阻塞。
 
-**【已审计缺陷】** 现有受管 Session 可以异步派发和回复，但公共 Host 控制面缺少一个按 cursor
-等待多个 Session 的可恢复观察点；调用者只能轮询或依赖宿主特有会话工具。
+**【裁决】** 这不是近期通信正确性依赖，也不是普通 Agent 协作的默认路径。Codex 一类宿主的
+wait 能力本质是订阅目标状态，满足 completion、attention 或 user-input 条件后返回紧凑 snapshot/
+final；它不持续读取对方完整 transcript。读取历史与 ctx 搜索属于另一能力。
 
-**【拟议设计】** 未来等待工具只观察异步任务，不保存消息、不负责调度、不维持可靠性：
+**【拟议设计 / Optional Later】** 未来若 Goal、Automation 或显式 fan-in 确实需要等待，等待工具只
+观察异步任务，不保存消息、不负责调度、不维持可靠性：
 
 ```text
 wait_sessions(
@@ -472,10 +482,13 @@ wait_sessions(
 - `first` 在任一目标达到新 terminal/needs-attention 时返回；`all` 等到全部目标越过各自 cursor；
 - timeout 返回当前 snapshot，不把 timeout 记成目标失败；
 - 等待中的来源 Session 收到用户新输入时，以 `user_input` 原因立即返回，让用户重新取得控制；
-- 等待 API 是长轮询/订阅边界，不能占用 Session Dispatcher 或 ACP prompt lock；
+- 等待 API 是宿主 run state 中可恢复的订阅边界，不能作为普通 ACP Turn 内的长时 MCP 调用占用
+  prompt lock、connection 或模型调用；
 - Session 即使无人 wait，Mailbox 仍可靠落库，Dispatcher 仍按策略运行；
-- Goal/Automation 可以在一个步骤里调用 wait 观察工作，但 wait 本身不创建 Goal、不唤醒目标、
-  不清偿 obligation。
+- Goal/Automation fan-in 将 continuation、cursor 和等待条件持久化到宿主 run state，事件到达后再
+  恢复；wait 本身不创建 Goal、不唤醒目标、不清偿 obligation；
+- 普通协作采用 Mailbox + Obligation + Dispatcher 的 event-driven continuation。ctx 仅在遗忘后
+  检索历史，不承担可靠投递、UI Attention 或待回复义务。
 
 ```mermaid
 sequenceDiagram
@@ -546,14 +559,14 @@ sequenceDiagram
     DB-->>A: revision changed / reply available
 ```
 
-如果 A 此时正在 `wait_sessions`，新 reply 可以结束等待；如果 A 没在等待，E2 仍在 A 的 mailbox
-中，不会丢失。等待只是观察方式，Delivery 才是可靠性事实。
+如果未来某个宿主 run 正在观察 B，新 reply 可以恢复该 continuation；如果没有观察者，E2 仍在 A
+的 mailbox 中，不会丢失。等待只是可选的宿主观察方式，Delivery 才是可靠性事实。
 
 ## 11. 已审计缺陷与未决问题
 
 | 项目 | 当前结论 | 实施前需要裁决 |
 |---|---|---|
-| Fork 地址 | 原 Codeg ID 跟随新 native 分支 | 保留活动连续，还是改为身份不可变 |
+| Fork 地址 | `0bfb86a0` 已实现 C1/S1 不变、C2/S2 新建、触发 View handoff | 旧数据不猜测重写；继续补真实 Provider 矩阵 |
 | 跨 Backend 地址 | 当前 direct 仅同 Backend `conversation.id` | `backend_ref` 格式、迁移和深链 |
 | Queue 终态 | 接受后删除，Turn 结果在别处 | 是否需要只读 execution history/projection |
 | 批量清空 | 无统一语义 | queued draft、mailbox ref、obligation 分别怎样处理 |
@@ -561,22 +574,23 @@ sequenceDiagram
 | Mailbox receipt | `embedded_turn_ref` 是当前证据 | 独立 receipt/Attention/Obligation migration |
 | Reminder | 尚未实现 | deadline 起点、cooldown、digest、升级策略 |
 | Dispatcher | PromptQueue 已是统一入口雏形 | Automation/Goal 如何加入 projection 而不旁路 |
-| Wait | 尚未实现 | cursor、first/all、用户输入唤醒和权限边界 |
+| Wait | Optional/Later，尚未实现 | 仅在明确 fan-in 需求出现后裁决复合 cursor 与宿主 continuation |
 | Turn result | ACP terminal 与 Conversation status 不同 | UI 文案和 API 怎样避免滥用 `completed` |
 
 ## 12. 实施 Gate
 
-本轮只建立共同语义和审计基线：
+当前 Gate 按能力分别生效：
 
 - 不新增/修改 migration；
-- 不改变 PromptQueue、Collaboration、ACP 或 Fork 运行时代码；
+- Fork 身份批次已经独立实现并提交为 `0bfb86a0`，不能再按旧的 C1→S2 语义扩展；
+- 本文其余内容不授权改变 PromptQueue、Collaboration、Dispatcher 或 Automation 运行时代码；
 - 不安装 Hook，不修改 Claude/Codex/其他 Harness 配置；
 - 不实现 wait、Reminder、统一执行计划 UI 或跨 Backend 通信；
 - 不把本文的拟议状态直接冻结成公共 API。
 
 后续任何实现都必须先与用户讨论上述未决问题并获得明确授权，再拆成独立、可测试、可回滚的
-批次。优先顺序建议仍是：先裁决 Fork/稳定身份，再完善 Mailbox receipt/obligation，然后才讨论
-统一 execution projection、Reminder 和 wait。
+批次。稳定身份已经完成；Mailbox receipt/obligation、统一 execution projection 和 Reminder 仍须
+单独授权。wait 明确降级为 Optional/Later，不与近期 Mailbox 批次混做。
 
 ## 13. 一手证据索引
 
