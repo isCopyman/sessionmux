@@ -22,6 +22,11 @@ const MAX_TARGETS: usize = 16;
 const MAX_DEDUPE_ID_BYTES: usize = 200;
 const DEFAULT_FEED_LIMIT: u32 = 100;
 const MAX_FEED_LIMIT: u32 = 500;
+const MAX_STORE_ONLY_DELIVERIES_PER_TURN: usize = 16;
+// One legal event body may already be MAX_BODY_BYTES. Leave bounded room for
+// the transcript-safe envelope so the oldest large message can still make
+// progress instead of blocking every later delivery forever.
+const MAX_STORE_ONLY_ENVELOPE_BYTES_PER_TURN: usize = MAX_BODY_BYTES + 128_000;
 pub const INACTIVE_TARGET_CONFIRMATION_REASON: &str =
     "collaboration_target_inactive_confirmation_required";
 /// An Agent may create replies through this depth, but the event at the limit
@@ -35,6 +40,14 @@ pub const MAX_AGENT_REPLY_CHAIN_DEPTH: i32 = 4;
 const ENVELOPE_VERSION: u8 = 1;
 const ENVELOPE_PREFIX: &str = "<<<CODEG_SESSION_MESSAGE_V1:";
 const ENVELOPE_END_PREFIX: &str = "<<<END_CODEG_SESSION_MESSAGE_V1:";
+
+#[derive(Debug, Clone)]
+pub(crate) struct ClaimedStoreOnlyBatch {
+    pub blocks: Vec<PromptInputBlock>,
+    pub event_ids: Vec<String>,
+    pub affected_conversation_ids: Vec<i32>,
+    pub turn_ref: String,
+}
 
 fn statement(sql: &str, values: Vec<sea_orm::Value>) -> Statement {
     Statement::from_sql_and_values(DbBackend::Sqlite, sql, values)
@@ -402,29 +415,7 @@ fn validate_input(input: &SendCollaborationMessageInput) -> Result<Vec<i32>, DbE
 /// Resolve an immutable collaboration event into the only text copied into a
 /// Harness transcript. Event/delivery rows remain the source of truth; the
 /// prompt queue stores only `origin_event_id`, never a second body copy.
-pub(crate) async fn prompt_draft_for_origin<C: ConnectionTrait>(
-    conn: &C,
-    target_conversation_id: i32,
-    event_id: &str,
-) -> Result<PromptQueueDraft, DbError> {
-    let row = conn
-        .query_one(statement(
-            "SELECT d.id AS delivery_id, e.id AS event_id, e.body, e.reply_to_event_id, \
-                    e.expects_reply, e.source_conversation_id, e.source_title_snapshot, \
-                    e.source_agent_type_snapshot, e.source_folder_path_snapshot \
-             FROM collaboration_delivery d \
-             JOIN collaboration_event e ON e.id = d.event_id \
-             WHERE d.event_id = ? AND d.target_conversation_id = ? \
-               AND d.invocation_policy = 'invoke_when_idle'",
-            vec![event_id.into(), target_conversation_id.into()],
-        ))
-        .await?
-        .ok_or_else(|| {
-            validation(format!(
-                "Queued collaboration event {event_id} has no delivery for Session {target_conversation_id}"
-            ))
-        })?;
-
+fn prompt_draft_from_delivery_row(row: &QueryResult) -> Result<PromptQueueDraft, DbError> {
     let event_id: String = row.try_get("", "event_id")?;
     let delivery_id: String = row.try_get("", "delivery_id")?;
     let body: String = row.try_get("", "body")?;
@@ -461,6 +452,214 @@ If expectsReply is true, send the finished response with Codeg's send_message to
         blocks: vec![PromptInputBlock::Text { text }],
         display_text: format!("From {source_label}: {body}"),
     })
+}
+
+pub(crate) async fn prompt_draft_for_origin<C: ConnectionTrait>(
+    conn: &C,
+    target_conversation_id: i32,
+    event_id: &str,
+) -> Result<PromptQueueDraft, DbError> {
+    let row = conn
+        .query_one(statement(
+            "SELECT d.id AS delivery_id, e.id AS event_id, e.body, e.reply_to_event_id, \
+                    e.expects_reply, e.source_conversation_id, e.source_title_snapshot, \
+                    e.source_agent_type_snapshot, e.source_folder_path_snapshot \
+             FROM collaboration_delivery d \
+             JOIN collaboration_event e ON e.id = d.event_id \
+             WHERE d.event_id = ? AND d.target_conversation_id = ? \
+               AND d.invocation_policy = 'invoke_when_idle'",
+            vec![event_id.into(), target_conversation_id.into()],
+        ))
+        .await?
+        .ok_or_else(|| {
+            validation(format!(
+                "Queued collaboration event {event_id} has no delivery for Session {target_conversation_id}"
+            ))
+        })?;
+    prompt_draft_from_delivery_row(&row)
+}
+
+/// Atomically reserve the oldest `store_only` deliveries for a Session's next
+/// ordinary turn. The caller already owns the Session prompt lock, so this DB
+/// transition is the durable boundary between multiple views/ingresses. A
+/// prompt-queue item whose own origin is a collaboration event is deliberately
+/// excluded: one invoked request must remain one unambiguous reply obligation.
+pub(crate) async fn claim_pending_store_only_for_turn(
+    conn: &DatabaseConnection,
+    target_conversation_id: i32,
+    turn_ref: &str,
+) -> Result<Option<ClaimedStoreOnlyBatch>, DbError> {
+    if turn_ref.trim().is_empty() || turn_ref.len() > MAX_DEDUPE_ID_BYTES {
+        return Err(validation(format!(
+            "Collaboration turn reference must contain between 1 and {MAX_DEDUPE_ID_BYTES} bytes"
+        )));
+    }
+
+    let txn = conn.begin().await?;
+    let invoked_origin: i64 = txn
+        .query_one(statement(
+            "SELECT EXISTS (SELECT 1 FROM conversation_prompt_queue_item \
+             WHERE conversation_id = ? AND id = ? AND origin_event_id IS NOT NULL) AS found",
+            vec![target_conversation_id.into(), turn_ref.into()],
+        ))
+        .await?
+        .ok_or_else(|| validation("Could not inspect the current prompt queue item"))?
+        .try_get("", "found")?;
+    if invoked_origin != 0 {
+        txn.commit().await?;
+        return Ok(None);
+    }
+
+    let rows = txn
+        .query_all(statement(
+            &format!(
+                "SELECT d.id AS delivery_id, e.id AS event_id, e.body, e.reply_to_event_id, \
+                        e.expects_reply, e.source_conversation_id, e.source_title_snapshot, \
+                        e.source_agent_type_snapshot, e.source_folder_path_snapshot \
+                 FROM collaboration_delivery d \
+                 JOIN collaboration_event e ON e.id = d.event_id \
+                 WHERE d.target_conversation_id = ? \
+                   AND d.invocation_policy = 'store_only' AND d.state = 'pending' \
+                 ORDER BY d.created_at ASC, d.rowid ASC \
+                 LIMIT {MAX_STORE_ONLY_DELIVERIES_PER_TURN}"
+            ),
+            vec![target_conversation_id.into()],
+        ))
+        .await?;
+
+    let mut event_ids = Vec::new();
+    let mut blocks = Vec::new();
+    let mut participants = BTreeSet::from([target_conversation_id]);
+    let mut envelope_bytes = 0usize;
+    for row in rows {
+        let draft = prompt_draft_from_delivery_row(&row)?;
+        let next_bytes = draft
+            .blocks
+            .iter()
+            .map(|block| match block {
+                PromptInputBlock::Text { text } => text.len(),
+                _ => 0,
+            })
+            .sum::<usize>();
+        if !event_ids.is_empty()
+            && envelope_bytes.saturating_add(next_bytes) > MAX_STORE_ONLY_ENVELOPE_BYTES_PER_TURN
+        {
+            break;
+        }
+
+        let event_id: String = row.try_get("", "event_id")?;
+        let source_conversation_id: i32 = row.try_get("", "source_conversation_id")?;
+        let changed = txn
+            .execute(statement(
+                "UPDATE collaboration_delivery \
+                 SET state = 'embedding', embedded_turn_ref = ?, attempts = attempts + 1, \
+                     error = NULL, updated_at = CURRENT_TIMESTAMP \
+                 WHERE event_id = ? AND target_conversation_id = ? \
+                   AND invocation_policy = 'store_only' AND state = 'pending'",
+                vec![
+                    turn_ref.into(),
+                    event_id.clone().into(),
+                    target_conversation_id.into(),
+                ],
+            ))
+            .await?
+            .rows_affected()
+            == 1;
+        if !changed {
+            continue;
+        }
+        envelope_bytes = envelope_bytes.saturating_add(next_bytes);
+        event_ids.push(event_id);
+        blocks.extend(draft.blocks);
+        participants.insert(source_conversation_id);
+    }
+
+    if event_ids.is_empty() {
+        txn.commit().await?;
+        return Ok(None);
+    }
+    let affected_conversation_ids = bump_live_participants(&txn, participants).await?;
+    txn.commit().await?;
+    Ok(Some(ClaimedStoreOnlyBatch {
+        blocks,
+        event_ids,
+        affected_conversation_ids,
+        turn_ref: turn_ref.to_string(),
+    }))
+}
+
+async fn transition_store_only_batch(
+    conn: &DatabaseConnection,
+    target_conversation_id: i32,
+    batch: &ClaimedStoreOnlyBatch,
+    next_state: &str,
+) -> Result<Vec<i32>, DbError> {
+    if next_state != "embedded" && next_state != "pending" {
+        return Err(validation("Invalid store-only batch transition"));
+    }
+    let txn = conn.begin().await?;
+    let mut participants = BTreeSet::from([target_conversation_id]);
+    let mut changed_any = false;
+    for event_id in &batch.event_ids {
+        let source = source_for_origin(&txn, target_conversation_id, event_id).await?;
+        let clear_turn_ref = next_state == "pending";
+        let sql = if clear_turn_ref {
+            "UPDATE collaboration_delivery \
+             SET state = 'pending', embedded_turn_ref = NULL, error = NULL, \
+                 updated_at = CURRENT_TIMESTAMP \
+             WHERE event_id = ? AND target_conversation_id = ? \
+               AND invocation_policy = 'store_only' AND state = 'embedding' \
+               AND embedded_turn_ref = ?"
+        } else {
+            "UPDATE collaboration_delivery \
+             SET state = 'embedded', error = NULL, updated_at = CURRENT_TIMESTAMP \
+             WHERE event_id = ? AND target_conversation_id = ? \
+               AND invocation_policy = 'store_only' AND state = 'embedding' \
+               AND embedded_turn_ref = ?"
+        };
+        let changed = txn
+            .execute(statement(
+                sql,
+                vec![
+                    event_id.clone().into(),
+                    target_conversation_id.into(),
+                    batch.turn_ref.clone().into(),
+                ],
+            ))
+            .await?
+            .rows_affected()
+            == 1;
+        if changed {
+            changed_any = true;
+            participants.insert(source);
+        }
+    }
+    let affected = if changed_any {
+        bump_live_participants(&txn, participants).await?
+    } else {
+        Vec::new()
+    };
+    txn.commit().await?;
+    Ok(affected)
+}
+
+pub(crate) async fn mark_store_only_batch_embedded(
+    conn: &DatabaseConnection,
+    target_conversation_id: i32,
+    batch: &ClaimedStoreOnlyBatch,
+) -> Result<Vec<i32>, DbError> {
+    transition_store_only_batch(conn, target_conversation_id, batch, "embedded").await
+}
+
+/// A known pre-dispatch failure is safe to retry. A process crash after the
+/// command may have reached the Harness leaves `embedding` untouched instead;
+/// Codeg must not silently duplicate a message whose outcome is unknown.
+pub(crate) async fn release_store_only_batch(
+    conn: &DatabaseConnection,
+    target_conversation_id: i32,
+    batch: &ClaimedStoreOnlyBatch,
+) -> Result<Vec<i32>, DbError> {
+    transition_store_only_batch(conn, target_conversation_id, batch, "pending").await
 }
 
 pub(crate) async fn delivery_hint_for_origin<C: ConnectionTrait>(
@@ -1301,6 +1500,175 @@ mod tests {
             .try_get("", "count")
             .unwrap();
         assert_eq!(queued, 0, "store_only must not wake or enqueue the Harness");
+    }
+
+    #[tokio::test]
+    async fn store_only_mail_is_claimed_once_and_embedded_in_the_next_natural_turn() {
+        let (db, source, target, _) = seeded_memory().await;
+        let first = send(
+            &db.conn,
+            input(source, vec![target], "natural-first", "first review note"),
+        )
+        .await
+        .unwrap();
+        let second = send(
+            &db.conn,
+            input(source, vec![target], "natural-second", "second review note"),
+        )
+        .await
+        .unwrap();
+
+        let claimed = claim_pending_store_only_for_turn(&db.conn, target, "optimistic-natural")
+            .await
+            .unwrap()
+            .expect("pending mail should attach to the next ordinary turn");
+        assert_eq!(
+            claimed.event_ids,
+            vec![first.event_id.clone(), second.event_id.clone()]
+        );
+        let attached = claimed
+            .blocks
+            .iter()
+            .filter_map(|block| match block {
+                PromptInputBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(attached[0].contains("first review note"));
+        assert!(attached[1].contains("second review note"));
+        assert!(
+            claim_pending_store_only_for_turn(&db.conn, target, "another-turn")
+                .await
+                .unwrap()
+                .is_none()
+        );
+
+        mark_store_only_batch_embedded(&db.conn, target, &claimed)
+            .await
+            .unwrap();
+        let feed = feed(&db.conn, target, None).await.unwrap();
+        assert!(feed.inbound.iter().all(|delivery| {
+            delivery.state == CollaborationDeliveryState::Embedded
+                && delivery.embedded_turn_ref.as_deref() == Some("optimistic-natural")
+                && delivery.attempts == 1
+        }));
+    }
+
+    #[tokio::test]
+    async fn known_prompt_failure_releases_store_only_mail_for_a_retry() {
+        let (db, source, target, _) = seeded_memory().await;
+        let sent = send(
+            &db.conn,
+            input(source, vec![target], "natural-retry", "do not lose this"),
+        )
+        .await
+        .unwrap();
+        let first = claim_pending_store_only_for_turn(&db.conn, target, "failed-turn")
+            .await
+            .unwrap()
+            .unwrap();
+        release_store_only_batch(&db.conn, target, &first)
+            .await
+            .unwrap();
+
+        let retry = claim_pending_store_only_for_turn(&db.conn, target, "retry-turn")
+            .await
+            .unwrap()
+            .expect("known pre-dispatch failure is safe to retry");
+        assert_eq!(retry.event_ids, vec![sent.event_id]);
+        let delivery = feed(&db.conn, target, None)
+            .await
+            .unwrap()
+            .inbound
+            .remove(0);
+        assert_eq!(delivery.state, CollaborationDeliveryState::Embedding);
+        assert_eq!(delivery.embedded_turn_ref.as_deref(), Some("retry-turn"));
+        assert_eq!(delivery.attempts, 2);
+    }
+
+    #[tokio::test]
+    async fn invoked_collaboration_turn_does_not_mix_pending_store_only_mail() {
+        let (db, source, target, _) = seeded_memory().await;
+        let invoked = send(
+            &db.conn,
+            invoke_input(source, vec![target], "invoke-alone", "answer this alone"),
+        )
+        .await
+        .unwrap();
+        let pending = send(
+            &db.conn,
+            input(source, vec![target], "pending-later", "save this for later"),
+        )
+        .await
+        .unwrap();
+        let queue = prompt_queue_service::snapshot(&db.conn, target)
+            .await
+            .unwrap();
+        let invoked_item_id = queue
+            .items
+            .iter()
+            .find(|item| item.origin_event_id.as_deref() == Some(invoked.event_id.as_str()))
+            .unwrap()
+            .id
+            .clone();
+
+        assert!(
+            claim_pending_store_only_for_turn(&db.conn, target, &invoked_item_id)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let pending_delivery = feed(&db.conn, target, None)
+            .await
+            .unwrap()
+            .inbound
+            .into_iter()
+            .find(|delivery| delivery.event_id == pending.event_id)
+            .unwrap();
+        assert_eq!(pending_delivery.state, CollaborationDeliveryState::Pending);
+        assert_eq!(pending_delivery.attempts, 0);
+    }
+
+    #[tokio::test]
+    async fn natural_turn_batch_is_bounded_and_leaves_overflow_pending() {
+        let (db, source, target, _) = seeded_memory().await;
+        for index in 0..=MAX_STORE_ONLY_DELIVERIES_PER_TURN {
+            send(
+                &db.conn,
+                input(
+                    source,
+                    vec![target],
+                    &format!("bounded-{index}"),
+                    &format!("message {index}"),
+                ),
+            )
+            .await
+            .unwrap();
+        }
+
+        let batch = claim_pending_store_only_for_turn(&db.conn, target, "bounded-turn")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            batch.event_ids.len(),
+            MAX_STORE_ONLY_DELIVERIES_PER_TURN
+        );
+        let feed = feed(&db.conn, target, None).await.unwrap();
+        assert_eq!(
+            feed.inbound
+                .iter()
+                .filter(|delivery| delivery.state == CollaborationDeliveryState::Pending)
+                .count(),
+            1
+        );
+        assert_eq!(
+            feed.inbound
+                .iter()
+                .filter(|delivery| delivery.state == CollaborationDeliveryState::Embedding)
+                .count(),
+            MAX_STORE_ONLY_DELIVERIES_PER_TURN
+        );
     }
 
     #[tokio::test]

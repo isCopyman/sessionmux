@@ -31,10 +31,13 @@ use crate::acp::types::{
     ForkResultInfo, PromptCapabilitiesInfo, PromptInputBlock,
 };
 use crate::db::entities::conversation::{self, ConversationKind, ConversationStatus};
-use crate::db::service::conversation_service;
+use crate::db::service::{collaboration_service, conversation_service};
 use crate::db::AppDatabase;
 use crate::models::agent::AgentType;
-use crate::web::event_bridge::{emit_with_state, emit_with_state_gated, EventEmitter};
+use crate::models::CollaborationChanged;
+use crate::web::event_bridge::{
+    emit_event, emit_with_state, emit_with_state_gated, EventEmitter, COLLABORATION_CHANGED_EVENT,
+};
 
 /// Cap on the number of prompt-text chars kept in the `user_prompt_sent`
 /// preview. Past this, `truncate_str` keeps this many chars and appends a short
@@ -88,6 +91,17 @@ fn user_prompt_text_preview(blocks: &[PromptInputBlock]) -> Option<String> {
             USER_PROMPT_PREVIEW_MAX_CHARS,
         ))
     }
+}
+
+fn publish_collaboration_change(emitter: &EventEmitter, conversation_ids: Vec<i32>) {
+    if conversation_ids.is_empty() {
+        return;
+    }
+    emit_event(
+        emitter,
+        COLLABORATION_CHANGED_EVENT,
+        CollaborationChanged { conversation_ids },
+    );
 }
 
 /// Seed title for a freshly-created delegation child row, derived from the
@@ -797,13 +811,18 @@ impl ConnectionManager {
         &self,
         db: &sea_orm::DatabaseConnection,
         conn_id: &str,
-        blocks: Vec<PromptInputBlock>,
+        mut blocks: Vec<PromptInputBlock>,
     ) -> Result<(), AcpError> {
         let prompt_lock = self.clone_prompt_lock(conn_id).await?;
         let _guard = prompt_lock.lock_owned().await;
-        let conversation_id = match self.get_state(conn_id).await {
-            Some(state) => state.read().await.conversation_id,
-            None => None,
+        let (conversation_id, emitter) = {
+            let connections = self.connections.lock().await;
+            let conn = connections
+                .get(conn_id)
+                .ok_or_else(|| AcpError::ConnectionNotFound(conn_id.into()))?;
+            let conversation_id = conn.state.read().await.conversation_id;
+            let emitter = conn.emitter.clone();
+            (conversation_id, emitter)
         };
         if let Some(conversation_id) = conversation_id {
             let admitted = crate::db::service::prompt_queue_service::send_is_admitted(
@@ -817,7 +836,55 @@ impl ConnectionManager {
                 return Err(AcpError::TurnInProgress);
             }
         }
-        self.send_prompt_inner(conn_id, blocks, None).await
+
+        let turn_ref = format!("host-{}", uuid::Uuid::new_v4());
+        let claimed = if let Some(conversation_id) = conversation_id {
+            match collaboration_service::claim_pending_store_only_for_turn(
+                db,
+                conversation_id,
+                &turn_ref,
+            )
+            .await
+            {
+                Ok(Some(batch)) => {
+                    publish_collaboration_change(&emitter, batch.affected_conversation_ids.clone());
+                    let mut harness_blocks = batch.blocks.clone();
+                    harness_blocks.extend(blocks);
+                    blocks = harness_blocks;
+                    Some(batch)
+                }
+                Ok(None) => None,
+                Err(err) => {
+                    tracing::warn!(
+                        connection_id = %conn_id,
+                        conversation_id,
+                        "[ACP] could not attach pending Session messages: {err}"
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        let outcome = self.send_prompt_inner(conn_id, blocks, None).await;
+        if let (Some(conversation_id), Some(batch)) = (conversation_id, claimed.as_ref()) {
+            let transition = if outcome.is_ok() {
+                collaboration_service::mark_store_only_batch_embedded(db, conversation_id, batch)
+                    .await
+            } else {
+                collaboration_service::release_store_only_batch(db, conversation_id, batch).await
+            };
+            match transition {
+                Ok(affected) => publish_collaboration_change(&emitter, affected),
+                Err(err) => tracing::error!(
+                    connection_id = %conn_id,
+                    conversation_id,
+                    "[ACP][ERROR] could not finalize attached Session messages: {err}"
+                ),
+            }
+        }
+        outcome
     }
 
     /// Send a prompt while ensuring a `Conversation` DB row is bound to this
@@ -971,6 +1038,10 @@ impl ConnectionManager {
             &crate::paths::codeg_uploads_root(),
         )
         .await?;
+        // Collaboration envelopes are private Harness context. Keep the real
+        // user blocks separate so previews and cross-view UserMessage events
+        // never present another Session's mail as text authored by the human.
+        let visible_user_blocks = blocks.clone();
 
         if !already_linked {
             match (conversation_id, folder_id) {
@@ -1112,6 +1183,14 @@ impl ConnectionManager {
         // the same status value, so re-writing `InProgress` is a benign no-op
         // on the row (touches `updated_at` only).
         let conversation_id_for_status = state_arc.read().await.conversation_id;
+        let viewer_message_id = if delegation.is_none() && conversation_id_for_status.is_some() {
+            Some(match client_message_id.as_deref() {
+                Some(id) if !is_reserved_turn_id(id) => id.to_string(),
+                _ => format!("user-{}-{}", conn_id, state_arc.read().await.event_seq),
+            })
+        } else {
+            None
+        };
         if let Some(cid) = conversation_id_for_status {
             // A durable follow-up queue owns FIFO for this Session. An ordinary
             // send from another window may have rendered an older empty-queue
@@ -1147,13 +1226,53 @@ impl ConnectionManager {
             .await;
         }
 
+        // A `store_only` message is delivered visibly without waking the
+        // target. Attach the oldest bounded batch only when a real user/queue
+        // message starts the next ordinary turn. An invoke_when_idle queue item
+        // is excluded transactionally by the collaboration service so its
+        // reply obligation cannot become ambiguous.
+        let claimed_store_only = if delegation.is_none() && client_message_id.is_some() {
+            match (conversation_id_for_status, viewer_message_id.as_deref()) {
+                (Some(cid), Some(turn_ref)) => {
+                    match collaboration_service::claim_pending_store_only_for_turn(
+                        &db.conn, cid, turn_ref,
+                    )
+                    .await
+                    {
+                        Ok(Some(batch)) => {
+                            publish_collaboration_change(
+                                &emitter,
+                                batch.affected_conversation_ids.clone(),
+                            );
+                            let mut harness_blocks = batch.blocks.clone();
+                            harness_blocks.extend(blocks);
+                            blocks = harness_blocks;
+                            Some(batch)
+                        }
+                        Ok(None) => None,
+                        Err(err) => {
+                            tracing::warn!(
+                                connection_id = %conn_id,
+                                conversation_id = cid,
+                                "[ACP] could not attach pending Session messages: {err}"
+                            );
+                            None
+                        }
+                    }
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
+
         // Capture a bounded preview of the user's message BEFORE `blocks` is
         // moved into `send_prompt_inner`. Only on the genuine UI path
         // (`delegation.is_none()`): delegation / sub-agent prompts are not user
         // messages. Emitted after the send succeeds (below) so a prompt that
         // never reached the agent produces no "user message" notification.
         let user_prompt_preview = if delegation.is_none() {
-            user_prompt_text_preview(&blocks)
+            user_prompt_text_preview(&visible_user_blocks)
         } else {
             None
         };
@@ -1171,21 +1290,13 @@ impl ConnectionManager {
         // dedup), falling back to a connection-scoped id for non-UI senders.
         let user_message: Option<(String, Vec<crate::acp::UserMessageBlock>)> =
             if delegation.is_none() && conversation_id_for_status.is_some() {
-                let user_blocks = crate::acp::user_blocks_from_prompt(&blocks);
+                let user_blocks = crate::acp::user_blocks_from_prompt(&visible_user_blocks);
                 if user_blocks.is_empty() {
                     None
                 } else {
-                    // A client-supplied id in the parsers' turn-id namespace
-                    // (`turn-<digits>`, which every parser assigns) would collide
-                    // with a persisted transcript turn id and break id-keyed dedup
-                    // — a colliding id can suppress or hide a prompt. The id is
-                    // untrusted (the web/Tauri prompt API accepts it verbatim), so
-                    // reject that shape and fall back to a connection-scoped id;
-                    // legitimate UI senders use `optimistic-<uuid>`.
-                    let message_id = match client_message_id {
-                        Some(id) if !is_reserved_turn_id(&id) => id,
-                        _ => format!("user-{}-{}", conn_id, state_arc.read().await.event_seq),
-                    };
+                    let message_id = viewer_message_id
+                        .clone()
+                        .expect("bound non-delegation prompts have a viewer message id");
                     Some((message_id, user_blocks))
                 }
             } else {
@@ -1205,6 +1316,22 @@ impl ConnectionManager {
         // row would be stuck until a follow-up `send_prompt_linked` re-flipped it.
         match self.send_prompt_inner(conn_id, blocks, user_message).await {
             Ok(()) => {
+                if let (Some(cid), Some(batch)) =
+                    (conversation_id_for_status, claimed_store_only.as_ref())
+                {
+                    match collaboration_service::mark_store_only_batch_embedded(
+                        &db.conn, cid, batch,
+                    )
+                    .await
+                    {
+                        Ok(affected) => publish_collaboration_change(&emitter, affected),
+                        Err(err) => tracing::error!(
+                            connection_id = %conn_id,
+                            conversation_id = cid,
+                            "[ACP][ERROR] prompt was accepted but attached Session messages could not be finalized: {err}"
+                        ),
+                    }
+                }
                 // The prompt reached the agent: surface it to the chat-channel
                 // "user message" event feed. Notification-only — never gates the
                 // send result.
@@ -1220,6 +1347,18 @@ impl ConnectionManager {
             }
             Err(send_err) => {
                 if let Some(cid) = conversation_id_for_status {
+                    if let Some(batch) = claimed_store_only.as_ref() {
+                        match collaboration_service::release_store_only_batch(&db.conn, cid, batch)
+                            .await
+                        {
+                            Ok(affected) => publish_collaboration_change(&emitter, affected),
+                            Err(err) => tracing::error!(
+                                connection_id = %conn_id,
+                                conversation_id = cid,
+                                "[ACP][ERROR] could not restore attached Session messages after send failure: {err}"
+                            ),
+                        }
+                    }
                     match conversation_service::update_status(
                         &db.conn,
                         cid,
@@ -3859,6 +3998,84 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn managed_chat_ingress_attaches_store_only_mail_through_generic_acp() {
+        use crate::db::test_helpers;
+        use crate::models::{
+            CollaborationDeliveryHint, CollaborationDeliveryState, CollaborationInvocationPolicy,
+            CollaborationUrgency, SendCollaborationMessageInput,
+        };
+
+        let db = test_helpers::fresh_in_memory_db().await;
+        let folder_id = test_helpers::seed_folder(&db, "/tmp/chat-store-only").await;
+        let source = test_helpers::seed_conversation(&db, folder_id, AgentType::OpenCode).await;
+        let target = test_helpers::seed_conversation(&db, folder_id, AgentType::Gemini).await;
+        let sent = collaboration_service::send(
+            &db.conn,
+            SendCollaborationMessageInput {
+                source_conversation_id: source,
+                target_conversation_ids: vec![target],
+                body: "mail from another Harness".into(),
+                client_dedupe_id: "chat-store-only".into(),
+                invocation_policy: CollaborationInvocationPolicy::StoreOnly,
+                delivery_hint: CollaborationDeliveryHint::Default,
+                expects_reply: false,
+                urgency: CollaborationUrgency::Normal,
+                reply_to_event_id: None,
+            },
+        )
+        .await
+        .unwrap();
+        let mgr = ConnectionManager::new();
+        let conn_id = "conn-chat-store-only";
+        let mut commands = insert_live_connection(&mgr, conn_id, AgentType::Gemini, None).await;
+        mgr.get_state(conn_id)
+            .await
+            .unwrap()
+            .write()
+            .await
+            .conversation_id = Some(target);
+
+        mgr.send_prompt_queue_aware(
+            &db.conn,
+            conn_id,
+            vec![PromptInputBlock::Text {
+                text: "message from managed chat".into(),
+            }],
+        )
+        .await
+        .unwrap();
+        let crate::acp::connection::ConnectionCommand::Prompt {
+            blocks,
+            user_message,
+        } = commands.try_recv().unwrap()
+        else {
+            panic!("expected prompt command");
+        };
+        assert!(user_message.is_none());
+        let text = blocks
+            .iter()
+            .filter_map(|block| match block {
+                PromptInputBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(text[0].contains("mail from another Harness"));
+        assert_eq!(text[1], "message from managed chat");
+        let delivery = collaboration_service::feed(&db.conn, target, None)
+            .await
+            .unwrap()
+            .inbound
+            .into_iter()
+            .find(|delivery| delivery.event_id == sent.event_id)
+            .unwrap();
+        assert_eq!(delivery.state, CollaborationDeliveryState::Embedded);
+        assert!(delivery
+            .embedded_turn_ref
+            .as_deref()
+            .is_some_and(|turn_ref| turn_ref.starts_with("host-")));
+    }
+
+    #[tokio::test]
     async fn cancel_is_ordered_after_a_prompt_that_crossed_admission() {
         use crate::db::test_helpers;
 
@@ -4198,6 +4415,163 @@ mod tests {
             Some("optimistic-abc"),
             "Prompt's user_message must carry the client-supplied message_id verbatim"
         );
+    }
+
+    #[tokio::test]
+    async fn natural_turn_attaches_cross_harness_mail_without_forging_the_user_message() {
+        use crate::db::test_helpers;
+        use crate::models::{
+            CollaborationDeliveryHint, CollaborationDeliveryState, CollaborationInvocationPolicy,
+            CollaborationUrgency, SendCollaborationMessageInput,
+        };
+
+        let db = test_helpers::fresh_in_memory_db().await;
+        let folder_id = test_helpers::seed_folder(&db, "/tmp/um-collaboration").await;
+        let source = test_helpers::seed_conversation(&db, folder_id, AgentType::Codex).await;
+        let target = test_helpers::seed_conversation(&db, folder_id, AgentType::Gemini).await;
+        let sent = collaboration_service::send(
+            &db.conn,
+            SendCollaborationMessageInput {
+                source_conversation_id: source,
+                target_conversation_ids: vec![target],
+                body: "compare this evidence".to_string(),
+                client_dedupe_id: "cross-harness-natural-turn".to_string(),
+                invocation_policy: CollaborationInvocationPolicy::StoreOnly,
+                delivery_hint: CollaborationDeliveryHint::Default,
+                expects_reply: true,
+                urgency: CollaborationUrgency::Normal,
+                reply_to_event_id: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        let mgr = ConnectionManager::new();
+        let conn_id = "conn-um-collaboration";
+        let mut cmd_rx = insert_live_connection(
+            &mgr,
+            conn_id,
+            AgentType::Gemini,
+            Some(PathBuf::from("/tmp/um-collaboration")),
+        )
+        .await;
+        mgr.send_prompt_linked_with_message_id(
+            &db,
+            conn_id,
+            vec![PromptInputBlock::Text {
+                text: "my own question".into(),
+            }],
+            Some(folder_id),
+            Some(target),
+            None,
+            Some("optimistic-cross-harness".to_string()),
+        )
+        .await
+        .expect("natural Gemini turn should be accepted through generic ACP");
+
+        let crate::acp::connection::ConnectionCommand::Prompt {
+            blocks,
+            user_message,
+        } = cmd_rx.try_recv().expect("one prompt command")
+        else {
+            panic!("expected a prompt command");
+        };
+        let harness_text = blocks
+            .iter()
+            .filter_map(|block| match block {
+                PromptInputBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(harness_text.len(), 2);
+        assert!(harness_text[0].contains("compare this evidence"));
+        assert_eq!(harness_text[1], "my own question");
+
+        let (message_id, visible_blocks) = user_message.expect("viewer user message");
+        assert_eq!(message_id, "optimistic-cross-harness");
+        assert_eq!(visible_blocks.len(), 1);
+        assert!(matches!(
+            &visible_blocks[0],
+            crate::acp::types::UserMessageBlock::Text { text } if text == "my own question"
+        ));
+
+        let delivery = collaboration_service::feed(&db.conn, target, None)
+            .await
+            .unwrap()
+            .inbound
+            .into_iter()
+            .find(|delivery| delivery.event_id == sent.event_id)
+            .unwrap();
+        assert_eq!(delivery.state, CollaborationDeliveryState::Embedded);
+        assert_eq!(
+            delivery.embedded_turn_ref.as_deref(),
+            Some("optimistic-cross-harness")
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_natural_turn_restores_attached_mail_to_pending() {
+        use crate::db::test_helpers;
+        use crate::models::{
+            CollaborationDeliveryHint, CollaborationDeliveryState, CollaborationInvocationPolicy,
+            CollaborationUrgency, SendCollaborationMessageInput,
+        };
+
+        let db = test_helpers::fresh_in_memory_db().await;
+        let folder_id = test_helpers::seed_folder(&db, "/tmp/um-collaboration-fail").await;
+        let source = test_helpers::seed_conversation(&db, folder_id, AgentType::OpenCode).await;
+        let target = test_helpers::seed_conversation(&db, folder_id, AgentType::ClaudeCode).await;
+        let sent = collaboration_service::send(
+            &db.conn,
+            SendCollaborationMessageInput {
+                source_conversation_id: source,
+                target_conversation_ids: vec![target],
+                body: "retry after a known failure".to_string(),
+                client_dedupe_id: "cross-harness-failed-turn".to_string(),
+                invocation_policy: CollaborationInvocationPolicy::StoreOnly,
+                delivery_hint: CollaborationDeliveryHint::Default,
+                expects_reply: false,
+                urgency: CollaborationUrgency::Normal,
+                reply_to_event_id: None,
+            },
+        )
+        .await
+        .unwrap();
+        let mgr = ConnectionManager::new();
+        let conn_id = "conn-um-collaboration-fail";
+        insert_fake_connection(
+            &mgr,
+            conn_id,
+            AgentType::ClaudeCode,
+            Some(PathBuf::from("/tmp/um-collaboration-fail")),
+            EventEmitter::Noop,
+        )
+        .await;
+
+        assert!(mgr
+            .send_prompt_linked_with_message_id(
+                &db,
+                conn_id,
+                vec![PromptInputBlock::Text {
+                    text: "this command cannot be enqueued".into(),
+                }],
+                Some(folder_id),
+                Some(target),
+                None,
+                Some("optimistic-failed-cross-harness".to_string()),
+            )
+            .await
+            .is_err());
+        let delivery = collaboration_service::feed(&db.conn, target, None)
+            .await
+            .unwrap()
+            .inbound
+            .into_iter()
+            .find(|delivery| delivery.event_id == sent.event_id)
+            .unwrap();
+        assert_eq!(delivery.state, CollaborationDeliveryState::Pending);
+        assert!(delivery.embedded_turn_ref.is_none());
+        assert_eq!(delivery.attempts, 1);
     }
 
     #[tokio::test]
