@@ -2,6 +2,7 @@
 
 > 状态：部分实现。内部 direct 通信主干已落地；完整 mailbox lifecycle、Timeline、统一 Dispatcher、附件、跨 Backend 与 Room 仍为拟议
 > 更新时间：2026-08-17
+> 按使用方式阅读：[Session 交流：工具、使用方式与结果](./SESSION-COMMUNICATION-USAGE.zh-CN.md)  
 > 上位产品需求：[产品需求与使用场景](./PRODUCT-SPEC.zh-CN.md#410-联系其他-backend-或-codeg-管理边界之外的-agent)
 > 相邻设计：[Session Runtime 生命周期 RFC](./SESSION-RUNTIME-LIFECYCLE-RFC.zh-CN.md)、[AgentBus 协作子 RFC](./AGENTBUS-COLLABORATION-RFC.zh-CN.md)、[群聊面板与 Session 协作 RFC](./GROUP-CONVERSATION-RFC.zh-CN.md)
 

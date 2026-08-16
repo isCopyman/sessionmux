@@ -16,6 +16,10 @@ Session Center、可选内容全文检索、单窗口拖边吸附，以及 Colle
 
 > [产品需求与使用场景](./PRODUCT-SPEC.zh-CN.md)
 
+如果只关心 Session 之间怎么写信、Agent 有哪些工具、每种用法会怎样，只看：
+
+> [Session 交流：工具、使用方式与结果](./SESSION-COMMUNICATION-USAGE.zh-CN.md)
+
 其他文档是给实现和维护使用的，可以不看。
 
 ## 文档分工
@@ -27,6 +31,7 @@ Session Center、可选内容全文检索、单窗口拖边吸附，以及 Colle
 - [Session Center、全文检索与打开行为子 RFC](./SESSION-DISCOVERY-OPENING-RFC.zh-CN.md)：全局会话管理、ctx 可选全文检索、默认打开决策和 Focus 语义。
 - [Workbench 层级、多窗口与 Session 多视图同步子 RFC](./WORKBENCH-LAYOUT-SYNC-RFC.zh-CN.md)：顶层工作台标签、物理窗口、视图/运行时边界与同步规则。
 - [Session 历史能力子 RFC](./SESSION-HISTORY-CAPABILITIES-RFC.zh-CN.md)：Fork、旧消息编辑、Rewind、文件检查点及各 Harness 的能力降级。
+- [Session 交流：工具、使用方式与结果](./SESSION-COMMUNICATION-USAGE.zh-CN.md)：按使用方式说明人/Agent 怎么写信、现有工具和每种模式的结果；实现细节仍指向通信 RFC。
 - [Session 间通信与调用策略 RFC](./SESSION-COMMUNICATION-RFC.zh-CN.md)：稳定寻址、消息/显示/模型调用三层边界、定向发送、调用策略和 Delivery Router。
 - [Session Runtime 生命周期 RFC](./SESSION-RUNTIME-LIFECYCLE-RFC.zh-CN.md)：统一 Session/ACP/Turn、PromptQueue、Mailbox、Dispatcher、崩溃恢复与未来等待点的事实和拟议语义。
 - [Host 控制面与 Agent 可编程工作台 RFC](./HOST-CONTROL-SURFACE-RFC.zh-CN.md)：把现有 delegation 解释为 Session 生命周期组合预设，并统一记录 Session 启动、持续通信、Workbench/资源操控、Skill + 渐进式 MCP 控制路径及外部实现依据。
