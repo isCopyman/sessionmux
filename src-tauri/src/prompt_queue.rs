@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::time::Duration as StdDuration;
 
 use chrono::Duration;
-use sea_orm::EntityTrait;
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use tokio::sync::{broadcast, mpsc};
 
 use crate::acp::error::AcpError;
@@ -655,6 +655,14 @@ impl PromptQueueRuntime {
             }
             Err(err) => tracing::error!("[prompt-queue] pending scan failed: {err}"),
         }
+        match collaboration_service::pending_store_only_conversation_ids(&self.db.conn).await {
+            Ok(ids) => {
+                for id in ids {
+                    self.process(id).await;
+                }
+            }
+            Err(err) => tracing::error!("[session-message] parked-mail scan failed: {err}"),
+        }
     }
 
     async fn on_acp_event(&self, event: &crate::acp::EventEnvelope) {
@@ -682,7 +690,12 @@ impl PromptQueueRuntime {
                             state.last_turn_ended_abnormally,
                         ));
                     }
-                    state.conversation_id
+                    match state.conversation_id {
+                        Some(id) => Some(id),
+                        None => self
+                            .conversation_id_from_external(&state)
+                            .await,
+                    }
                 }
                 None => None,
             },
@@ -912,6 +925,22 @@ impl PromptQueueRuntime {
             }
             Err(err) => self.fail(&claimed, &err.to_string()).await,
         }
+    }
+
+    async fn conversation_id_from_external(
+        &self,
+        state: &crate::acp::SessionState,
+    ) -> Option<i32> {
+        let external_id = state.external_id.as_deref()?;
+        conversation::Entity::find()
+            .filter(conversation::Column::ExternalId.eq(external_id))
+            .filter(conversation::Column::AgentType.eq(state.agent_type.as_wire().as_ref()))
+            .filter(conversation::Column::DeletedAt.is_null())
+            .one(&self.db.conn)
+            .await
+            .ok()
+            .flatten()
+            .map(|row| row.id)
     }
 
     async fn deliver_parked_session_messages(&self, conversation_id: i32) {

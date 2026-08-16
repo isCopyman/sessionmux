@@ -508,6 +508,23 @@ pub(crate) async fn prompt_draft_for_origin<C: ConnectionTrait>(
 
 /// Oldest parked Session letter waiting on this target. Used to start a
 /// turn after `TurnComplete` / resume — mailbox idle-start without inbox.
+pub(crate) async fn pending_store_only_conversation_ids(
+    conn: &DatabaseConnection,
+) -> Result<Vec<i32>, DbError> {
+    let rows = conn
+        .query_all(statement(
+            "SELECT DISTINCT target_conversation_id \
+             FROM collaboration_delivery \
+             WHERE invocation_policy = 'store_only' AND state = 'pending' \
+             ORDER BY target_conversation_id",
+            vec![],
+        ))
+        .await?;
+    rows.into_iter()
+        .map(|row| Ok(row.try_get("", "target_conversation_id")?))
+        .collect()
+}
+
 pub(crate) async fn oldest_pending_store_only_event_id<C: ConnectionTrait>(
     conn: &C,
     target_conversation_id: i32,
