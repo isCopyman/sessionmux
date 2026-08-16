@@ -21,6 +21,7 @@ Session Center、可选内容全文检索、单窗口拖边吸附，以及 Colle
 ## 文档分工
 
 - [产品需求与使用场景](./PRODUCT-SPEC.zh-CN.md)：唯一的人类需求入口，只描述最终体验。
+- [Desktop 开发、调试与验收手册](./DESKTOP-DEVELOPMENT-AND-VALIDATION-GUIDE.zh-CN.md)：真实 Tauri Desktop 的数据隔离、分层测试、WebView2 调试、截图与重启验收流程。
 - [领域模型](./DOMAIN-MODEL.zh-CN.md)：稳定的产品概念、用户行为、对象关系和长期边界。
 - [Session Workbench 主 RFC](./SESSION-WORKBENCH-RFC.zh-CN.md)：Codeg 当前实现、拟议字段、迁移步骤、里程碑和验收标准。
 - [Session Center、全文检索与打开行为子 RFC](./SESSION-DISCOVERY-OPENING-RFC.zh-CN.md)：全局会话管理、ctx 可选全文检索、默认打开决策和 Focus 语义。
