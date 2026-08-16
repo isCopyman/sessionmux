@@ -486,24 +486,25 @@ digest cooldown。只有实际成功展示或注入提醒才增加 repeat count�
 Web / 服务器模式没有原生悬浮窗时，降级为页面内横幅和浏览器通知（若用户授权），不能假装
 已经 Desktop 提醒过。
 
-### 6.4 Hook 只是长工具循环里的可选喊话，不是提醒主路径
+### 6.4 提醒分两段：跑着用 Hook，空闲时由 Codeg 开一轮
 
-SessionDock 用 Hook / 往终端塞字，是因为宿主往往不能对那个 Session 做正规 `session/prompt`。
-Codeg 已经拥有连接、Prompt Queue 和 Delivery Router，**提醒和状态注入的主路径是 Codeg 自己
-投递**：空闲后开一轮、或给人类打悬浮窗。
+若提醒只等「下次有人说话」，信可能永远进不了 Agent。已裁决的通道是：
 
-Claude 等少数 Harness 的 session-scoped Hook（例如 `PostToolUse` 返回
-`additionalContext`）只作为后续可选优化，用来在**一轮尚未结束、Agent 又不会主动调工具**时
-低声补一句状态摘要（勿扰与否、未读几封、已读未回几封）。它不能：
+| 目标状态 | 通道 | 不是什么 |
+|---|---|---|
+| 正在跑一轮 | session-scoped Hook / checkpoint 注入**短提醒** | 不是 interrupt，不重发正文 |
+| 已连接且空闲 / 休息 | Codeg **强制开一轮**（`session/prompt` / Prompt Queue） | 不是冷启动已关闭的 Session |
+| 勿扰 | 不推送；Agent 仍可拉 inbox | 不是把信删掉 |
+| 已关闭 | 不自动 Resume；提醒人 | 不是偷偷 `session/new` |
+| 写给 human | Desktop 悬浮窗 | 不是开某个 Session |
 
-- 叫醒已经 idle 或关闭的 Session；
-- 替代 mailbox claim / 去重；
-- 修改用户全局 Hook 配置；
-- 作为验收正确性依赖。
+Hook 在这里是**运行中的必要喊话**，不是可有可无的玩具：长工具 / 训练占着唯一一轮时，没有
+Hook 就只能等本轮自己结束。但它仍然叫不醒已经 idle 或关掉的 Session，所以空闲启动必须由
+Codeg 自己做。
 
-通用状态注入放在每次系统发起的 Turn 信封头，以及 Agent 可随时拉取的 inbox/status 工具上。
-Hook 做不到就等本轮结束，由 Router 再投。详见 [9.2](#92-本-rfc-新增什么) 中
-「Claude Hook checkpoint adapter 仅是 V1.5 可选优化」。
+约束与 [9.2](#92-本-rfc-新增什么) 中 Claude Hook adapter 相同：只装 session-scoped Hook，不改
+用户全局配置；与 Router 共用 Delivery claim；`Stop` 只在真正 idle 之前续一次。决策函数见
+[`collaboration_reminder.rs`](../../src-tauri/src/acp/collaboration_reminder.rs)。
 
 ## 7. 上下文、重放与幂等
 

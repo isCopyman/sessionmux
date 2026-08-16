@@ -4,6 +4,7 @@ pub mod chat_authoring;
 pub mod codex_catalog_source;
 pub mod codex_goal;
 pub mod codex_model_catalog;
+pub mod collaboration_reminder;
 pub mod connection;
 pub mod custom_registry;
 pub mod delegation;
