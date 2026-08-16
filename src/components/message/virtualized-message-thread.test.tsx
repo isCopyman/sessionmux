@@ -185,7 +185,7 @@ describe("VirtualizedMessageThread focus origin", () => {
   })
 
   it("restores a saved offset after a cold remount even if the item count differs", () => {
-    render(
+    const view = render(
       <VirtualizedMessageThread
         items={[{ id: "message-1" }, { id: "message-2" }]}
         getItemKey={(item) => item.id}
@@ -200,6 +200,22 @@ describe("VirtualizedMessageThread focus origin", () => {
     )
 
     expect(testState.stopScroll).toHaveBeenCalled()
+    expect(testState.scrollTo).toHaveBeenCalledWith(1800)
+
+    testState.scrollTo.mockClear()
+    view.rerender(
+      <VirtualizedMessageThread
+        items={[{ id: "message-1" }, { id: "message-2" }, { id: "message-3" }]}
+        getItemKey={(item) => item.id}
+        renderItem={() => <div>message</div>}
+        initialViewState={{
+          scrollOffset: 1800,
+          atBottom: false,
+          virtualItemCount: 21,
+          virtualizerCache: null,
+        }}
+      />
+    )
     expect(testState.scrollTo).toHaveBeenCalledWith(1800)
   })
 

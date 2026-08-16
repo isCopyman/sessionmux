@@ -1990,6 +1990,26 @@ describe("TabProvider tab groups", () => {
     )
   })
 
+  it("writes a pane reading position to the workbench blob immediately", async () => {
+    await renderWithTabs([tabItem(1, 1, true)])
+
+    act(() => {
+      setWorkbenchSessionViewState(1, "conv-1-codex-1", {
+        scrollOffset: 640,
+        atBottom: false,
+        virtualItemCount: 6,
+        virtualizerCache: null,
+      })
+    })
+
+    const blob = JSON.parse(
+      localStorage.getItem("workspace:tab-groups:v1")!
+    ) as {
+      sessionViewState: Record<string, { scrollOffset: number }>
+    }
+    expect(blob.sessionViewState["conv-1-codex-1"]?.scrollOffset).toBe(640)
+  })
+
   it("flushes a pending reading position when the page is being hidden", async () => {
     await renderWithTabs([tabItem(1, 1, true)])
     act(() => {

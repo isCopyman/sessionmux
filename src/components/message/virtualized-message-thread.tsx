@@ -32,6 +32,7 @@ import {
  */
 const LOAD_OLDER_THRESHOLD_PX = 240
 const AT_BOTTOM_THRESHOLD_PX = 32
+const RESTORE_SETTLE_MS = 1600
 
 export interface VirtualizedThreadViewState {
   scrollOffset: number
@@ -199,11 +200,10 @@ function VirtualizedMessageThreadImpl<T>({
     }
   }, [])
 
-  // Restore before first paint. Passing virtua's measurement cache avoids the
-  // visible "first row -> remembered row" sweep; the second frame only corrects
-  // geometry that the WebView measured during this mount. A cold start may
-  // remount with a different item count (older-page row, first history page);
-  // still apply the saved offset so we do not fall back to the top/bottom.
+  // Restore before first paint, then keep applying until the list is tall
+  // enough for the saved offset. A cold start first measures estimated row
+  // heights; settling on that frame would clamp to the bottom and persist
+  // that wrong position over the real one.
   useLayoutEffect(() => {
     const state = initialViewStateRef.current
     if (!state || state.atBottom) {
@@ -211,15 +211,36 @@ function VirtualizedMessageThreadImpl<T>({
       return
     }
     if (virtualItemCount === 0) return
-    const handle = virtualizerHandleRef.current
-    if (!handle) return
-    stopScroll()
-    handle.scrollTo(state.scrollOffset)
-    const rafId = requestAnimationFrame(() => {
-      virtualizerHandleRef.current?.scrollTo(state.scrollOffset)
+    let cancelled = false
+    const started = performance.now()
+    const apply = () => {
+      if (cancelled) return
+      const handle = virtualizerHandleRef.current
+      if (!handle) return
+      stopScroll()
+      handle.scrollTo(state.scrollOffset)
+      const maxScroll = Math.max(0, handle.scrollSize - handle.viewportSize)
+      if (
+        maxScroll >= state.scrollOffset - AT_BOTTOM_THRESHOLD_PX ||
+        performance.now() - started >= RESTORE_SETTLE_MS
+      ) {
+        restorePendingRef.current = false
+      }
+    }
+    apply()
+    const rafId = requestAnimationFrame(apply)
+    const intervalId = window.setInterval(apply, 50)
+    const timeoutId = window.setTimeout(() => {
+      apply()
       restorePendingRef.current = false
-    })
-    return () => cancelAnimationFrame(rafId)
+      window.clearInterval(intervalId)
+    }, RESTORE_SETTLE_MS)
+    return () => {
+      cancelled = true
+      cancelAnimationFrame(rafId)
+      window.clearInterval(intervalId)
+      window.clearTimeout(timeoutId)
+    }
   }, [stopScroll, virtualItemCount])
 
   useLayoutEffect(() => {
@@ -300,6 +321,12 @@ function VirtualizedMessageThreadImpl<T>({
   })
   const prevScrollOffsetRef = useRef<number | null>(null)
   const handleScroll = useCallback((offset: number) => {
+    if (restorePendingRef.current) {
+      const state = initialViewStateRef.current
+      if (state && !state.atBottom) {
+        virtualizerHandleRef.current?.scrollTo(state.scrollOffset)
+      }
+    }
     const prev = prevScrollOffsetRef.current
     prevScrollOffsetRef.current = offset
     const s = loadOlderStateRef.current

@@ -761,6 +761,29 @@ function rememberPersistedSessionViewState(
   })
 }
 
+function persistSessionViewStateNow(
+  workbenchId: number,
+  tabId: string,
+  state: WorkbenchSessionViewState
+) {
+  rememberPersistedSessionViewState(workbenchId, tabId, state)
+  if (typeof window === "undefined") return
+  try {
+    const key = groupStorageKey(workbenchId)
+    const raw = localStorage.getItem(key)
+    if (!raw) return
+    const parsed = JSON.parse(raw) as Record<string, unknown>
+    if (!parsed || !isLayoutNode(parsed.layout)) return
+    parsed.sessionViewState = {
+      ...sanitizeSessionViewState(parsed.sessionViewState),
+      [tabId]: durableSessionViewState(state),
+    }
+    localStorage.setItem(key, JSON.stringify(parsed))
+  } catch {
+    /* ignore */
+  }
+}
+
 /** Read one Workbench × tab position. A warm remount prefers the in-memory
  *  snapshot (including virtua cache). A cold client falls back to the
  *  device-local group blob. */
@@ -793,7 +816,7 @@ export function setWorkbenchSessionViewState(
   if (recentSessionWarmCache.hasConnectionContextKey(tabId)) {
     recentWorkbenchSnapshots.setSessionViewState(workbenchId, tabId, state)
   }
-  rememberPersistedSessionViewState(workbenchId, tabId, state)
+  persistSessionViewStateNow(workbenchId, tabId, state)
   schedulePersistGroupState()
 }
 
@@ -1217,7 +1240,10 @@ function persistGroupState() {
     persistedSessionViewStateByWorkbench.get(st.activeWorkbenchId) ?? {}
   const sessionViewState: Record<string, WorkbenchSessionViewState> = {}
   for (const tabId of Object.keys(assignments)) {
-    const state = memoryViewState[tabId] ?? persistedViewState[tabId]
+    // The durable map is updated on every scroll snapshot. The in-memory
+    // workbench snapshot can still hold a hydrate-time offset; preferring
+    // it here would write that stale position over the one just saved.
+    const state = persistedViewState[tabId] ?? memoryViewState[tabId]
     if (state) sessionViewState[tabId] = durableSessionViewState(state)
   }
   persistedSessionViewStateByWorkbench.set(
