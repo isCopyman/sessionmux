@@ -24,9 +24,11 @@ pub use automation::{
 pub use chat_channel::{ChannelStatusInfo, ChatChannelInfo, ChatChannelMessageLogInfo};
 pub use collaboration::{
     CollaborationChanged, CollaborationDeliveryHint, CollaborationDeliveryState,
-    CollaborationDeliveryView, CollaborationFeed, CollaborationInvocationPolicy,
+    CollaborationDeliveryView, CollaborationFeed, CollaborationInterruptOperationView,
+    CollaborationInterruptResult, CollaborationInterruptState, CollaborationInvocationPolicy,
     CollaborationSendResult, CollaborationSessionSnapshot, CollaborationUrgency,
-    SendCollaborationMessageInput,
+    InterruptCollaborationInput, SendAndInterruptCollaborationInput,
+    SendAndInterruptCollaborationResult, SendCollaborationMessageInput,
 };
 pub use conversation::{
     AgentConversationCount, AgentStats, ConversationDetail, ConversationSummary,

@@ -19,7 +19,9 @@ use crate::acp::manager::ConnectionManager;
 use crate::acp::types::{AcpEvent, ConnectionStatus};
 use crate::acp::InternalEventBus;
 use crate::db::entities::{conversation, folder};
-use crate::db::service::{collaboration_service, prompt_queue_service};
+use crate::db::service::{
+    collaboration_interrupt_service, collaboration_service, prompt_queue_service,
+};
 use crate::db::AppDatabase;
 use crate::models::{
     AgentType, CollaborationChanged, CollaborationDeliveryHint, PromptQueueSnapshot,
@@ -88,7 +90,7 @@ impl PromptQueueHandle {
     }
 }
 
-async fn active_connection_for_row(
+pub(crate) async fn active_connection_for_row(
     manager: &ConnectionManager,
     row: &conversation::Model,
 ) -> Option<(String, Arc<tokio::sync::RwLock<crate::acp::SessionState>>)> {
@@ -149,6 +151,47 @@ struct PromptQueueRuntime {
 }
 
 impl PromptQueueRuntime {
+    async fn emit_interrupt_change(&self, conversation_id: i32, event_id: &str) {
+        match prompt_queue_service::snapshot(&self.db.conn, conversation_id).await {
+            Ok(snapshot) => emit_snapshot(&self.emitter, snapshot),
+            Err(err) => tracing::error!(
+                "[prompt-queue] interrupt snapshot failed for {conversation_id}: {err}"
+            ),
+        }
+        match collaboration_service::origin_participants(
+            &self.db.conn,
+            conversation_id,
+            event_id,
+        )
+        .await
+        {
+            Ok(conversation_ids) if !conversation_ids.is_empty() => emit_event(
+                &self.emitter,
+                COLLABORATION_CHANGED_EVENT,
+                CollaborationChanged { conversation_ids },
+            ),
+            Ok(_) => {}
+            Err(err) => tracing::error!(
+                "[prompt-queue] interrupt collaboration invalidation failed for {event_id}: {err}"
+            ),
+        }
+    }
+
+    async fn reconcile_interrupt_terminal(&self, conversation_id: i32) {
+        match collaboration_interrupt_service::observe_terminal(&self.db.conn, conversation_id)
+            .await
+        {
+            Ok(Some(observation)) => {
+                self.emit_interrupt_change(conversation_id, &observation.event_id)
+                    .await;
+            }
+            Ok(None) => {}
+            Err(err) => tracing::error!(
+                "[prompt-queue] interrupt terminal reconciliation failed for {conversation_id}: {err}"
+            ),
+        }
+    }
+
     async fn emit_origin_change(&self, item: &crate::models::prompt_queue::ClaimedPromptQueueItem) {
         let Some(event_id) = item.origin_event_id.as_deref() else {
             return;
@@ -276,6 +319,36 @@ impl PromptQueueRuntime {
 
     async fn recover_and_scan(&self) {
         self.reconcile_collaboration_policy().await;
+        match collaboration_interrupt_service::recover_after_process_loss(
+            &self.db.conn,
+            chrono::Utc::now() - Duration::seconds(60),
+        )
+        .await
+        {
+            Ok(recoveries) => {
+                for recovery in recoveries {
+                    self.emit_interrupt_change(
+                        recovery.target_conversation_id,
+                        &recovery.event_id,
+                    )
+                    .await;
+                }
+            }
+            Err(err) => tracing::error!("[prompt-queue] interrupt recovery failed: {err}"),
+        }
+        match collaboration_interrupt_service::waiting_target_ids(&self.db.conn).await {
+            Ok(ids) => {
+                for id in ids {
+                    // A TurnComplete can be dropped while the Session state has
+                    // already become idle. `process` rechecks that authoritative
+                    // runtime flag and releases only the matching owned pause.
+                    self.process(id).await;
+                }
+            }
+            Err(err) => tracing::error!(
+                "[prompt-queue] waiting interrupt reconciliation failed: {err}"
+            ),
+        }
         match prompt_queue_service::recover_expired_claims(&self.db.conn).await {
             Ok(snapshots) => {
                 for snapshot in snapshots {
@@ -319,6 +392,7 @@ impl PromptQueueRuntime {
     }
 
     async fn on_acp_event(&self, event: &crate::acp::EventEnvelope) {
+        let turn_completed = matches!(&event.payload, AcpEvent::TurnComplete { .. });
         let explicit = match &event.payload {
             AcpEvent::ConversationLinked {
                 conversation_id, ..
@@ -337,6 +411,9 @@ impl PromptQueueRuntime {
             },
         };
         if let Some(id) = conversation_id {
+            if turn_completed {
+                self.reconcile_interrupt_terminal(id).await;
+            }
             self.process(id).await;
         }
     }
@@ -380,6 +457,13 @@ impl PromptQueueRuntime {
         };
         if status != ConnectionStatus::Connected {
             return;
+        }
+        if !turn_in_flight {
+            // Covers a dropped TurnComplete and the first idle SessionStarted
+            // after an application restart. The operation itself proves that
+            // cancellation was previously requested; an idle runtime proves
+            // the old turn is no longer executing.
+            self.reconcile_interrupt_terminal(conversation_id).await;
         }
         if turn_in_flight {
             if native_steering_available {
@@ -744,11 +828,14 @@ mod tests {
     use crate::acp::connection::{ConnectionCommand, SteerOutcome};
     use crate::acp::internal_bus::EventBusMetrics;
     use crate::acp::types::{EventEnvelope, PromptInputBlock};
-    use crate::db::service::{collaboration_service, prompt_queue_service};
+    use crate::db::service::{
+        collaboration_interrupt_service, collaboration_service, prompt_queue_service,
+    };
     use crate::db::test_helpers::{fresh_in_memory_db, seed_conversation, seed_folder};
     use crate::models::{
         CollaborationDeliveryHint, CollaborationDeliveryState, CollaborationInvocationPolicy,
-        CollaborationUrgency, EnqueuePromptQueueItem, PromptQueueDraft, PromptQueueItemState,
+        CollaborationInterruptState, CollaborationUrgency, EnqueuePromptQueueItem,
+        InterruptCollaborationInput, PromptQueueDraft, PromptQueueItemState,
         SendCollaborationMessageInput,
     };
     use std::path::PathBuf;
@@ -1023,6 +1110,93 @@ mod tests {
             collaboration_service::feed(&db.conn, target, None)
                 .await
                 .is_ok_and(|feed| feed.inbound[0].state == CollaborationDeliveryState::Embedded)
+        })
+        .await;
+        worker.abort();
+    }
+
+    #[tokio::test]
+    async fn explicit_interrupt_waits_for_terminal_before_dispatching_saved_message() {
+        let path = "/tmp/codeg-collaboration-interrupt";
+        let (db, folder_id, target, manager, bus) = setup(path).await;
+        let source = seed_conversation(&db, folder_id, AgentType::ClaudeCode).await;
+        let mut commands = bind_live_connection(&manager, "active", path, folder_id, target).await;
+        let state = manager.get_state("active").await.expect("state");
+        state.write().await.turn_in_flight = true;
+        let sent = collaboration_service::send(
+            &db.conn,
+            collaboration_input(source, target, "interrupt-message", "change direction now"),
+        )
+        .await
+        .expect("collaboration send");
+        let prepared = collaboration_interrupt_service::prepare(
+            &db.conn,
+            InterruptCollaborationInput {
+                event_id: sent.event_id,
+                target_conversation_id: target,
+                client_dedupe_id: "interrupt-operation".into(),
+                reason: "user requested stop and send".into(),
+            },
+            "active",
+            true,
+        )
+        .await
+        .expect("prepare interrupt");
+        assert!(prepared.should_cancel);
+
+        manager
+            .cancel(&db.conn, "active")
+            .await
+            .expect("enqueue cancel");
+        assert!(matches!(commands.recv().await, Some(ConnectionCommand::Cancel)));
+        let waiting = collaboration_interrupt_service::mark_cancel_enqueued(
+            &db.conn,
+            &prepared.operation.id,
+        )
+        .await
+        .expect("persist cancel acknowledgement");
+        assert_eq!(
+            waiting.state,
+            CollaborationInterruptState::WaitingForTerminal
+        );
+
+        let (_handle, task) = build_prompt_queue_runtime(
+            db.conn.clone(),
+            manager.clone_ref(),
+            EventEmitter::Noop,
+            bus.clone(),
+        );
+        let worker = tokio::spawn(task);
+        tokio::time::sleep(StdDuration::from_millis(80)).await;
+        assert!(
+            commands.try_recv().is_err(),
+            "saved message must not dispatch before TurnComplete"
+        );
+
+        state.write().await.turn_in_flight = false;
+        bus.send(Arc::new(EventEnvelope {
+            seq: 1,
+            connection_id: "active".into(),
+            payload: AcpEvent::TurnComplete {
+                session_id: "native-session".into(),
+                stop_reason: "cancelled".into(),
+                agent_type: "codex".into(),
+            },
+        }));
+        assert!(matches!(
+            tokio::time::timeout(StdDuration::from_secs(2), commands.recv())
+                .await
+                .expect("next prompt timeout"),
+            Some(ConnectionCommand::Prompt { .. })
+        ));
+        wait_until(|| async {
+            collaboration_service::feed(&db.conn, target, None)
+                .await
+                .is_ok_and(|feed| {
+                    feed.inbound[0].state == CollaborationDeliveryState::Embedded
+                        && feed.inbound[0].interrupt_state
+                            == Some(CollaborationInterruptState::Completed)
+                })
         })
         .await;
         worker.abort();

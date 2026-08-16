@@ -7,11 +7,25 @@ use crate::app_error::AppCommandError;
 use crate::app_state::AppState;
 use crate::commands::collaboration;
 use crate::commands::collaboration::SessionCollaborationSettings;
-use crate::models::{CollaborationFeed, CollaborationSendResult, SendCollaborationMessageInput};
+use crate::models::{
+    CollaborationFeed, CollaborationInterruptResult, CollaborationSendResult,
+    InterruptCollaborationInput, SendAndInterruptCollaborationInput,
+    SendAndInterruptCollaborationResult, SendCollaborationMessageInput,
+};
 
 #[derive(Deserialize)]
 pub struct SendParams {
     pub input: SendCollaborationMessageInput,
+}
+
+#[derive(Deserialize)]
+pub struct InterruptParams {
+    pub input: InterruptCollaborationInput,
+}
+
+#[derive(Deserialize)]
+pub struct SendInterruptParams {
+    pub input: SendAndInterruptCollaborationInput,
 }
 
 #[derive(Deserialize)]
@@ -71,6 +85,38 @@ pub async fn send(
     Ok(Json(
         collaboration::collaboration_send_core(
             &state.db.conn,
+            &state.emitter,
+            &state.prompt_queue,
+            params.input,
+        )
+        .await?,
+    ))
+}
+
+pub async fn interrupt(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<InterruptParams>,
+) -> Result<Json<CollaborationInterruptResult>, AppCommandError> {
+    Ok(Json(
+        collaboration::collaboration_interrupt_core(
+            &state.db.conn,
+            &state.connection_manager,
+            &state.emitter,
+            &state.prompt_queue,
+            params.input,
+        )
+        .await?,
+    ))
+}
+
+pub async fn send_interrupt(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<SendInterruptParams>,
+) -> Result<Json<SendAndInterruptCollaborationResult>, AppCommandError> {
+    Ok(Json(
+        collaboration::collaboration_send_interrupt_core(
+            &state.db.conn,
+            &state.connection_manager,
             &state.emitter,
             &state.prompt_queue,
             params.input,

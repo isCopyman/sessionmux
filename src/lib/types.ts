@@ -1177,6 +1177,15 @@ export type CollaborationDeliveryState =
   | "embedded"
   | "dismissed"
   | "failed"
+export type CollaborationInterruptState =
+  | "requested"
+  | "cancelling"
+  | "terminal_observed"
+  | "waiting_for_terminal"
+  | "ready"
+  | "dispatching"
+  | "completed"
+  | "failed"
 
 export interface CollaborationSessionSnapshot {
   conversationId: number
@@ -1205,6 +1214,9 @@ export interface CollaborationDelivery {
   embeddedTurnRef?: string | null
   attempts: number
   error?: string | null
+  interruptOperationId?: string | null
+  interruptState?: CollaborationInterruptState | null
+  interruptError?: string | null
   createdAt: string
   updatedAt: string
 }
@@ -1234,6 +1246,43 @@ export interface CollaborationSendResult {
   deliveries: CollaborationDelivery[]
   affectedConversationIds: number[]
   deduplicated: boolean
+}
+
+export interface InterruptCollaborationInput {
+  eventId: string
+  targetConversationId: number
+  clientDedupeId: string
+  reason: string
+}
+
+export interface CollaborationInterruptOperation {
+  id: string
+  eventId: string
+  targetConversationId: number
+  clientDedupeId: string
+  reason: string
+  state: CollaborationInterruptState
+  connectionIdSnapshot?: string | null
+  error?: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export interface CollaborationInterruptResult {
+  operation: CollaborationInterruptOperation
+  deduplicated: boolean
+}
+
+export interface SendAndInterruptCollaborationInput {
+  message: SendCollaborationMessageInput
+  interruptClientDedupeId: string
+  reason: string
+}
+
+export interface SendAndInterruptCollaborationResult {
+  message: CollaborationSendResult
+  interrupt?: CollaborationInterruptResult | null
+  interruptError?: string | null
 }
 
 export interface CollaborationChanged {

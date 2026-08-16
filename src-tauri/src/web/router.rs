@@ -1324,6 +1324,14 @@ pub fn build_router(
             post(handlers::collaboration::send),
         )
         .route(
+            "/collaboration_interrupt",
+            post(handlers::collaboration::interrupt),
+        )
+        .route(
+            "/collaboration_send_interrupt",
+            post(handlers::collaboration::send_interrupt),
+        )
+        .route(
             "/collaboration_feed",
             post(handlers::collaboration::feed),
         )

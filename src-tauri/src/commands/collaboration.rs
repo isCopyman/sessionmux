@@ -2,8 +2,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use sea_orm::EntityTrait;
 use serde::{Deserialize, Serialize};
 
+use crate::acp::manager::ConnectionManager;
 use crate::acp::session_collaboration::{
     SessionAddress, SessionCollaborationAccess, SessionCollaborationConfig,
     SessionCollaborationRuntimeConfig, SessionListOutcome, SessionMessageDeliveryMode,
@@ -11,14 +13,16 @@ use crate::acp::session_collaboration::{
 };
 use crate::app_error::AppCommandError;
 use crate::db::service::{
-    app_metadata_service, collaboration_service, conversation_service, folder_service,
-    prompt_queue_service,
+    app_metadata_service, collaboration_interrupt_service, collaboration_service,
+    conversation_service, folder_service, prompt_queue_service,
 };
 use crate::db::AppDatabase;
 use crate::models::{
     CollaborationChanged, CollaborationDeliveryHint, CollaborationDeliveryState, CollaborationFeed,
-    CollaborationInvocationPolicy, CollaborationSendResult, CollaborationUrgency,
-    PromptQueueItemState, SendCollaborationMessageInput,
+    CollaborationInterruptResult, CollaborationInterruptState, CollaborationInvocationPolicy,
+    CollaborationSendResult, CollaborationUrgency, InterruptCollaborationInput,
+    PromptQueueItemState, SendAndInterruptCollaborationInput, SendAndInterruptCollaborationResult,
+    SendCollaborationMessageInput,
 };
 use crate::prompt_queue::PromptQueueHandle;
 use crate::web::event_bridge::{
@@ -85,9 +89,8 @@ fn publish(emitter: &EventEmitter, conversation_ids: Vec<i32>) {
     );
 }
 
-pub async fn collaboration_send_core(
+async fn persist_collaboration_message(
     conn: &sea_orm::DatabaseConnection,
-    emitter: &EventEmitter,
     prompt_queue: &PromptQueueHandle,
     input: SendCollaborationMessageInput,
 ) -> Result<CollaborationSendResult, AppCommandError> {
@@ -102,15 +105,25 @@ pub async fn collaboration_send_core(
             }
         }
     }
-    let result = collaboration_service::send_with_initially_inactive_targets(
-        conn,
-        input,
-        &inactive_target_ids,
-    )
-    .await?;
+    collaboration_service::send_with_initially_inactive_targets(conn, input, &inactive_target_ids)
+        .await
+        .map_err(AppCommandError::from)
+}
+
+fn publish_persisted_message(emitter: &EventEmitter, result: &CollaborationSendResult) {
     if !result.deduplicated {
         publish(emitter, result.affected_conversation_ids.clone());
     }
+}
+
+pub async fn collaboration_send_core(
+    conn: &sea_orm::DatabaseConnection,
+    emitter: &EventEmitter,
+    prompt_queue: &PromptQueueHandle,
+    input: SendCollaborationMessageInput,
+) -> Result<CollaborationSendResult, AppCommandError> {
+    let result = persist_collaboration_message(conn, prompt_queue, input).await?;
+    publish_persisted_message(emitter, &result);
     for delivery in result.deliveries.iter().filter(|delivery| {
         delivery.invocation_policy == CollaborationInvocationPolicy::InvokeWhenIdle
             && delivery.state == CollaborationDeliveryState::Queued
@@ -125,6 +138,66 @@ pub async fn collaboration_send_core(
     Ok(result)
 }
 
+pub async fn collaboration_send_interrupt_core(
+    conn: &sea_orm::DatabaseConnection,
+    manager: &ConnectionManager,
+    emitter: &EventEmitter,
+    prompt_queue: &PromptQueueHandle,
+    mut input: SendAndInterruptCollaborationInput,
+) -> Result<SendAndInterruptCollaborationResult, AppCommandError> {
+    if !prompt_queue_service::collaboration_dispatch_enabled(conn).await? {
+        return Err(crate::db::error::DbError::Validation(
+            "Session collaboration is disabled in Codeg settings".to_string(),
+        )
+        .into());
+    }
+    if input.message.target_conversation_ids.len() != 1 {
+        return Err(crate::db::error::DbError::Validation(
+            "Stop and send requires exactly one target Session".to_string(),
+        )
+        .into());
+    }
+    input.message.invocation_policy = CollaborationInvocationPolicy::InvokeWhenIdle;
+    input.message.delivery_hint = CollaborationDeliveryHint::Default;
+    let target_conversation_id = input.message.target_conversation_ids[0];
+
+    // Do not wake the queue between persistence and interrupt preparation. If
+    // the target was idle, a two-request renderer flow could otherwise start
+    // this new message and then accidentally cancel that very turn.
+    let message = persist_collaboration_message(conn, prompt_queue, input.message).await?;
+    publish_persisted_message(emitter, &message);
+    emit_event(
+        emitter,
+        PROMPT_QUEUE_CHANGED_EVENT,
+        prompt_queue_service::snapshot(conn, target_conversation_id).await?,
+    );
+    let interrupt = collaboration_interrupt_core(
+        conn,
+        manager,
+        emitter,
+        prompt_queue,
+        InterruptCollaborationInput {
+            event_id: message.event_id.clone(),
+            target_conversation_id,
+            client_dedupe_id: input.interrupt_client_dedupe_id,
+            reason: input.reason,
+        },
+    )
+    .await;
+    match interrupt {
+        Ok(interrupt) => Ok(SendAndInterruptCollaborationResult {
+            message,
+            interrupt: Some(interrupt),
+            interrupt_error: None,
+        }),
+        Err(err) => Ok(SendAndInterruptCollaborationResult {
+            message,
+            interrupt: None,
+            interrupt_error: Some(err.to_string()),
+        }),
+    }
+}
+
 pub async fn collaboration_feed_core(
     conn: &sea_orm::DatabaseConnection,
     conversation_id: i32,
@@ -133,6 +206,121 @@ pub async fn collaboration_feed_core(
     collaboration_service::feed(conn, conversation_id, limit)
         .await
         .map_err(AppCommandError::from)
+}
+
+pub async fn collaboration_interrupt_core(
+    conn: &sea_orm::DatabaseConnection,
+    manager: &ConnectionManager,
+    emitter: &EventEmitter,
+    prompt_queue: &PromptQueueHandle,
+    input: InterruptCollaborationInput,
+) -> Result<CollaborationInterruptResult, AppCommandError> {
+    if !prompt_queue_service::collaboration_dispatch_enabled(conn).await? {
+        return Err(crate::db::error::DbError::Validation(
+            "Session collaboration is disabled in Codeg settings".to_string(),
+        )
+        .into());
+    }
+    let target_conversation_id = input.target_conversation_id;
+    let row = crate::db::entities::conversation::Entity::find_by_id(target_conversation_id)
+        .one(conn)
+        .await
+        .map_err(crate::db::error::DbError::from)?
+        .ok_or_else(|| {
+            crate::db::error::DbError::NotFound(format!("Conversation {target_conversation_id}"))
+        })?;
+    if row.deleted_at.is_some() {
+        return Err(crate::db::error::DbError::NotFound(format!(
+            "Conversation {target_conversation_id}"
+        ))
+        .into());
+    }
+    let Some((connection_id, state)) =
+        crate::prompt_queue::active_connection_for_row(manager, &row).await
+    else {
+        return Err(crate::db::error::DbError::Validation(
+            "Target Session is not active; the durable message remains queued for confirmation"
+                .to_string(),
+        )
+        .into());
+    };
+    let (connected, turn_active) = {
+        let state = state.read().await;
+        (
+            state.status == crate::acp::types::ConnectionStatus::Connected,
+            state.turn_in_flight,
+        )
+    };
+    if !connected {
+        return Err(crate::db::error::DbError::Validation(
+            "Target Session is not connected; the durable message remains queued".to_string(),
+        )
+        .into());
+    }
+
+    let prepared =
+        collaboration_interrupt_service::prepare(conn, input, &connection_id, turn_active).await?;
+    let event_id = prepared.operation.event_id.clone();
+    let mut operation = prepared.operation;
+    emit_event(
+        emitter,
+        PROMPT_QUEUE_CHANGED_EVENT,
+        prompt_queue_service::snapshot(conn, target_conversation_id).await?,
+    );
+    publish(
+        emitter,
+        collaboration_service::origin_participants(conn, target_conversation_id, &event_id).await?,
+    );
+
+    if prepared.should_cancel {
+        let still_running = match manager.get_state(&connection_id).await {
+            Some(state) => state.read().await.turn_in_flight,
+            None => false,
+        };
+        operation = if !still_running {
+            // The old turn ended between the initial runtime snapshot and the
+            // cancellation boundary. Record that terminal observation before
+            // releasing the owned queue pause; never send Cancel to an idle
+            // runtime where it could affect a later prompt.
+            collaboration_interrupt_service::observe_terminal(conn, target_conversation_id).await?;
+            collaboration_interrupt_service::mark_cancel_enqueued(conn, &operation.id).await?
+        } else {
+            match manager.cancel(conn, &connection_id).await {
+                Ok(()) => {
+                    collaboration_interrupt_service::mark_cancel_enqueued(conn, &operation.id)
+                        .await?
+                }
+                Err(err) => {
+                    collaboration_interrupt_service::mark_cancel_failed(
+                        conn,
+                        &operation.id,
+                        &err.to_string(),
+                    )
+                    .await?
+                }
+            }
+        };
+        emit_event(
+            emitter,
+            PROMPT_QUEUE_CHANGED_EVENT,
+            prompt_queue_service::snapshot(conn, target_conversation_id).await?,
+        );
+        publish(
+            emitter,
+            collaboration_service::origin_participants(conn, target_conversation_id, &event_id)
+                .await?,
+        );
+    }
+    if matches!(
+        operation.state,
+        CollaborationInterruptState::Ready | CollaborationInterruptState::Dispatching
+    ) {
+        prompt_queue.wake(target_conversation_id);
+    }
+    Ok(CollaborationInterruptResult {
+        operation,
+        deduplicated: prepared.deduplicated,
+    })
 }
 
 pub async fn collaboration_mark_seen_core(
@@ -484,6 +672,44 @@ pub async fn collaboration_send(
 
 #[cfg(feature = "tauri-runtime")]
 #[tauri::command]
+pub async fn collaboration_interrupt(
+    input: InterruptCollaborationInput,
+    db: tauri::State<'_, AppDatabase>,
+    manager: tauri::State<'_, ConnectionManager>,
+    prompt_queue: tauri::State<'_, PromptQueueHandle>,
+    app: tauri::AppHandle,
+) -> Result<CollaborationInterruptResult, AppCommandError> {
+    collaboration_interrupt_core(
+        &db.conn,
+        &manager,
+        &EventEmitter::Tauri(app),
+        &prompt_queue,
+        input,
+    )
+    .await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn collaboration_send_interrupt(
+    input: SendAndInterruptCollaborationInput,
+    db: tauri::State<'_, AppDatabase>,
+    manager: tauri::State<'_, ConnectionManager>,
+    prompt_queue: tauri::State<'_, PromptQueueHandle>,
+    app: tauri::AppHandle,
+) -> Result<SendAndInterruptCollaborationResult, AppCommandError> {
+    collaboration_send_interrupt_core(
+        &db.conn,
+        &manager,
+        &EventEmitter::Tauri(app),
+        &prompt_queue,
+        input,
+    )
+    .await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
 pub async fn collaboration_feed(
     conversation_id: i32,
     limit: Option<u32>,
@@ -529,12 +755,54 @@ pub async fn collaboration_dismiss(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::acp::connection::ConnectionCommand;
+    use crate::acp::internal_bus::EventBusMetrics;
+    use crate::acp::InternalEventBus;
     use crate::db::test_helpers::{fresh_in_memory_db, seed_conversation, seed_folder};
     use crate::models::{
         AgentType, CollaborationDeliveryHint, CollaborationInvocationPolicy, CollaborationUrgency,
     };
     use crate::web::event_bridge::WebEventBroadcaster;
+    use std::path::PathBuf;
     use std::sync::Arc;
+
+    async fn live_queue(
+        db: &AppDatabase,
+        folder: i32,
+        target: i32,
+        busy: bool,
+    ) -> (
+        ConnectionManager,
+        PromptQueueHandle,
+        tokio::sync::mpsc::Receiver<ConnectionCommand>,
+    ) {
+        let manager = ConnectionManager::new();
+        let commands = manager
+            .insert_test_connection_live(
+                "interrupt-target",
+                AgentType::ClaudeCode,
+                Some(PathBuf::from("/tmp/codeg-interrupt-command")),
+                EventEmitter::Noop,
+            )
+            .await;
+        let state = manager
+            .get_state("interrupt-target")
+            .await
+            .expect("connection state");
+        let mut state = state.write().await;
+        state.folder_id = Some(folder);
+        state.conversation_id = Some(target);
+        state.turn_in_flight = busy;
+        drop(state);
+        let bus = Arc::new(InternalEventBus::new(Arc::new(EventBusMetrics::default())));
+        let (prompt_queue, _task) = crate::prompt_queue::build_prompt_queue_runtime(
+            db.conn.clone(),
+            manager.clone_ref(),
+            EventEmitter::Noop,
+            bus,
+        );
+        (manager, prompt_queue, commands)
+    }
 
     async fn enabled_agent_access(
         db: &AppDatabase,
@@ -652,6 +920,104 @@ mod tests {
         assert_eq!(queue.items.len(), 1);
         assert_eq!(queue.items[0].state, PromptQueueItemState::Paused);
         assert_eq!(queue.items[0].id, delivery.id);
+    }
+
+    #[tokio::test]
+    async fn atomic_stop_and_send_cancels_old_busy_turn_after_persisting() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-interrupt-command").await;
+        let source = seed_conversation(&db, folder, AgentType::Codex).await;
+        let target = seed_conversation(&db, folder, AgentType::ClaudeCode).await;
+        let (manager, prompt_queue, mut commands) = live_queue(&db, folder, target, true).await;
+
+        let result = collaboration_send_interrupt_core(
+            &db.conn,
+            &manager,
+            &EventEmitter::Noop,
+            &prompt_queue,
+            SendAndInterruptCollaborationInput {
+                message: SendCollaborationMessageInput {
+                    source_conversation_id: source,
+                    target_conversation_ids: vec![target],
+                    body: "change direction".into(),
+                    client_dedupe_id: "atomic-interrupt-message".into(),
+                    invocation_policy: CollaborationInvocationPolicy::StoreOnly,
+                    delivery_hint: CollaborationDeliveryHint::SteerIfSupported,
+                    expects_reply: false,
+                    urgency: CollaborationUrgency::Normal,
+                    reply_to_event_id: None,
+                },
+                interrupt_client_dedupe_id: "atomic-interrupt-operation".into(),
+                reason: "user requested stop and send".into(),
+            },
+        )
+        .await
+        .expect("atomic stop and send");
+
+        assert!(matches!(
+            commands.recv().await,
+            Some(ConnectionCommand::Cancel)
+        ));
+        assert_eq!(
+            result.interrupt.as_ref().unwrap().operation.state,
+            CollaborationInterruptState::WaitingForTerminal
+        );
+        assert_eq!(
+            result.message.deliveries[0].state,
+            CollaborationDeliveryState::Queued
+        );
+        assert!(prompt_queue_service::snapshot(&db.conn, target)
+            .await
+            .unwrap()
+            .paused_reason
+            .is_some());
+    }
+
+    #[tokio::test]
+    async fn atomic_stop_and_send_never_cancels_the_new_message_when_target_is_idle() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-interrupt-command").await;
+        let source = seed_conversation(&db, folder, AgentType::Codex).await;
+        let target = seed_conversation(&db, folder, AgentType::ClaudeCode).await;
+        let (manager, prompt_queue, mut commands) = live_queue(&db, folder, target, false).await;
+
+        let result = collaboration_send_interrupt_core(
+            &db.conn,
+            &manager,
+            &EventEmitter::Noop,
+            &prompt_queue,
+            SendAndInterruptCollaborationInput {
+                message: SendCollaborationMessageInput {
+                    source_conversation_id: source,
+                    target_conversation_ids: vec![target],
+                    body: "run next".into(),
+                    client_dedupe_id: "idle-interrupt-message".into(),
+                    invocation_policy: CollaborationInvocationPolicy::InvokeWhenIdle,
+                    delivery_hint: CollaborationDeliveryHint::Default,
+                    expects_reply: false,
+                    urgency: CollaborationUrgency::Normal,
+                    reply_to_event_id: None,
+                },
+                interrupt_client_dedupe_id: "idle-interrupt-operation".into(),
+                reason: "user requested stop and send".into(),
+            },
+        )
+        .await
+        .expect("idle stop and send");
+
+        assert_eq!(
+            result.interrupt.as_ref().unwrap().operation.state,
+            CollaborationInterruptState::Ready
+        );
+        assert!(
+            commands.try_recv().is_err(),
+            "idle target must not receive Cancel"
+        );
+        assert!(prompt_queue_service::snapshot(&db.conn, target)
+            .await
+            .unwrap()
+            .paused_reason
+            .is_none());
     }
 
     #[tokio::test]

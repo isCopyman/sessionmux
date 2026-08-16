@@ -1385,6 +1385,8 @@ mod tauri_app {
                 prompt_queue_commands::prompt_queue_resume,
                 prompt_queue_commands::prompt_queue_retry,
                 collaboration_commands::collaboration_send,
+                collaboration_commands::collaboration_interrupt,
+                collaboration_commands::collaboration_send_interrupt,
                 collaboration_commands::collaboration_feed,
                 collaboration_commands::collaboration_mark_seen,
                 collaboration_commands::collaboration_dismiss,

@@ -104,6 +104,10 @@ import type {
   PromptQueueSnapshot,
   CollaborationFeed,
   CollaborationSendResult,
+  CollaborationInterruptResult,
+  InterruptCollaborationInput,
+  SendAndInterruptCollaborationInput,
+  SendAndInterruptCollaborationResult,
   SendCollaborationMessageInput,
   FileTreeNode,
   WorkspaceFileEntry,
@@ -2060,6 +2064,18 @@ export async function sendCollaborationMessage(
   input: SendCollaborationMessageInput
 ): Promise<CollaborationSendResult> {
   return getTransport().call("collaboration_send", { input })
+}
+
+export async function interruptCollaborationMessage(
+  input: InterruptCollaborationInput
+): Promise<CollaborationInterruptResult> {
+  return getTransport().call("collaboration_interrupt", { input })
+}
+
+export async function sendAndInterruptCollaborationMessage(
+  input: SendAndInterruptCollaborationInput
+): Promise<SendAndInterruptCollaborationResult> {
+  return getTransport().call("collaboration_send_interrupt", { input })
 }
 
 export async function getCollaborationFeed(

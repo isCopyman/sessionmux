@@ -175,4 +175,26 @@ describe("SessionCommunicationBanner", () => {
       screen.queryByRole("button", { name: "retry" })
     ).not.toBeInTheDocument()
   })
+
+  it("shows the durable stop operation separately from delivery state", () => {
+    hook.feed = {
+      conversationId: 2,
+      revision: 4,
+      unreadCount: 1,
+      inbound: [
+        delivery({
+          invocationPolicy: "invoke_when_idle",
+          state: "queued",
+          queueItemId: "delivery-1",
+          queueState: "queued",
+          interruptOperationId: "interrupt-1",
+          interruptState: "waiting_for_terminal",
+        }),
+      ],
+      outbound: [],
+    }
+    render(<SessionCommunicationBanner conversationId={2} />)
+    fireEvent.click(screen.getByRole("button", { name: /panelTitle/ }))
+    expect(screen.getByText("stateStoppingCurrentTask")).toBeInTheDocument()
+  })
 })

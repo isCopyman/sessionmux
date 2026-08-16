@@ -692,6 +692,14 @@ pub async fn resume_queue(
     let txn = conn.begin().await?;
     ensure_state(&txn, conversation_id).await?;
     verify_revision(&txn, conversation_id, expected_revision).await?;
+    let (_, paused_reason) = state_row(&txn, conversation_id).await?;
+    if paused_reason.as_deref().is_some_and(|reason| {
+        reason.starts_with(crate::db::service::collaboration_interrupt_service::PAUSE_REASON_PREFIX)
+    }) {
+        return Err(validation(
+            "Queue is waiting for the interrupted turn to finish",
+        ));
+    }
     txn.execute(statement(
         "UPDATE conversation_prompt_queue_state \
          SET paused_reason = NULL, revision = revision + 1, updated_at = CURRENT_TIMESTAMP \
@@ -914,6 +922,12 @@ pub(crate) async fn mark_dispatch_started(
                     "Collaboration delivery is no longer eligible for dispatch",
                 ));
             }
+            crate::db::service::collaboration_interrupt_service::mark_origin_dispatching(
+                &txn,
+                item.conversation_id,
+                event_id,
+            )
+            .await?;
         }
         bump_revision(&txn, item.conversation_id).await?;
     }
@@ -969,6 +983,12 @@ pub(crate) async fn accept_claim(
                 "Collaboration delivery is no longer being embedded",
             ));
         }
+        crate::db::service::collaboration_interrupt_service::mark_origin_completed(
+            &txn,
+            item.conversation_id,
+            event_id,
+        )
+        .await?;
     }
     bump_revision(&txn, item.conversation_id).await?;
     txn.commit().await?;
@@ -1011,6 +1031,12 @@ pub(crate) async fn release_claim_busy(
                 "Collaboration delivery is no longer being embedded",
             ));
         }
+        crate::db::service::collaboration_interrupt_service::mark_origin_ready(
+            &txn,
+            item.conversation_id,
+            event_id,
+        )
+        .await?;
     }
     bump_revision(&txn, item.conversation_id).await?;
     txn.commit().await?;
@@ -1042,6 +1068,13 @@ pub(crate) async fn pause_dispatch_unknown(
     if result.rows_affected() > 0 {
         if let Some(event_id) = item.origin_event_id.as_deref() {
             crate::db::service::collaboration_service::mark_origin_failed(
+                &txn,
+                item.conversation_id,
+                event_id,
+                UNKNOWN_DISPATCH_REASON,
+            )
+            .await?;
+            crate::db::service::collaboration_interrupt_service::mark_origin_failed(
                 &txn,
                 item.conversation_id,
                 event_id,
@@ -1088,6 +1121,13 @@ pub(crate) async fn fail_claim(
     }
     if let Some(event_id) = item.origin_event_id.as_deref() {
         crate::db::service::collaboration_service::mark_origin_failed(
+            &txn,
+            item.conversation_id,
+            event_id,
+            reason,
+        )
+        .await?;
+        crate::db::service::collaboration_interrupt_service::mark_origin_failed(
             &txn,
             item.conversation_id,
             event_id,
@@ -1163,6 +1203,13 @@ pub(crate) async fn recover_expired_claims(
             .await?;
         for event_id in &uncertain_origins {
             crate::db::service::collaboration_service::mark_origin_failed(
+                &txn,
+                conversation_id,
+                event_id,
+                UNKNOWN_DISPATCH_REASON,
+            )
+            .await?;
+            crate::db::service::collaboration_interrupt_service::mark_origin_failed(
                 &txn,
                 conversation_id,
                 event_id,

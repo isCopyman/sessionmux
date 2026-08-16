@@ -11,9 +11,9 @@ use crate::db::error::DbError;
 use crate::db::service::prompt_queue_service;
 use crate::models::{
     CollaborationDeliveryHint, CollaborationDeliveryState, CollaborationDeliveryView,
-    CollaborationFeed, CollaborationInvocationPolicy, CollaborationSendResult,
-    CollaborationSessionSnapshot, CollaborationUrgency, PromptQueueDraft, PromptQueueItemState,
-    SendCollaborationMessageInput,
+    CollaborationFeed, CollaborationInterruptState, CollaborationInvocationPolicy,
+    CollaborationSendResult, CollaborationSessionSnapshot, CollaborationUrgency, PromptQueueDraft,
+    PromptQueueItemState, SendCollaborationMessageInput,
 };
 
 const MAX_BODY_BYTES: usize = 1_000_000;
@@ -153,7 +153,8 @@ const DELIVERY_SELECT: &str = "SELECT d.id, d.event_id, d.target_conversation_id
             d.target_folder_path_snapshot, d.invocation_policy, d.delivery_hint, \
             d.state, d.ui_seen_at, d.embedded_turn_ref, d.attempts, d.error, \
             q.id AS queue_item_id, q.state AS queue_state, \
-            q.paused_reason AS queue_paused_reason, \
+            q.paused_reason AS queue_paused_reason, i.id AS interrupt_operation_id, \
+            i.state AS interrupt_state, i.error AS interrupt_error, \
             d.created_at, d.updated_at, e.source_conversation_id, \
             e.source_title_snapshot, e.source_agent_type_snapshot, \
             e.source_folder_path_snapshot, e.source_backend_snapshot, e.body, \
@@ -162,7 +163,10 @@ const DELIVERY_SELECT: &str = "SELECT d.id, d.event_id, d.target_conversation_id
      JOIN collaboration_event e ON e.id = d.event_id \
      LEFT JOIN conversation_prompt_queue_item q \
        ON q.origin_event_id = d.event_id \
-      AND q.conversation_id = d.target_conversation_id ";
+       AND q.conversation_id = d.target_conversation_id \
+     LEFT JOIN collaboration_interrupt_operation i \
+       ON i.event_id = d.event_id \
+      AND i.target_conversation_id = d.target_conversation_id ";
 
 fn parse_delivery(row: &QueryResult) -> Result<CollaborationDeliveryView, DbError> {
     let invocation_raw: String = row.try_get("", "invocation_policy")?;
@@ -185,6 +189,14 @@ fn parse_delivery(row: &QueryResult) -> Result<CollaborationDeliveryView, DbErro
     let urgency = CollaborationUrgency::parse(&urgency_raw)
         .ok_or_else(|| validation(format!("Unknown urgency: {urgency_raw}")))?;
     let expects_reply: i64 = row.try_get("", "expects_reply")?;
+    let interrupt_state = row
+        .try_get::<Option<String>>("", "interrupt_state")?
+        .map(|value| {
+            CollaborationInterruptState::parse(&value).ok_or_else(|| {
+                validation(format!("Unknown collaboration interrupt state: {value}"))
+            })
+        })
+        .transpose()?;
 
     Ok(CollaborationDeliveryView {
         id: row.try_get("", "id")?,
@@ -217,6 +229,9 @@ fn parse_delivery(row: &QueryResult) -> Result<CollaborationDeliveryView, DbErro
         embedded_turn_ref: row.try_get("", "embedded_turn_ref")?,
         attempts: row.try_get("", "attempts")?,
         error: row.try_get("", "error")?,
+        interrupt_operation_id: row.try_get("", "interrupt_operation_id")?,
+        interrupt_state,
+        interrupt_error: row.try_get("", "interrupt_error")?,
         created_at: parse_timestamp(row, "created_at")?,
         updated_at: parse_timestamp(row, "updated_at")?,
     })

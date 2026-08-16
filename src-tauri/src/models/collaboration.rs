@@ -86,6 +86,35 @@ pub enum CollaborationDeliveryState {
     Failed,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CollaborationInterruptState {
+    Requested,
+    Cancelling,
+    TerminalObserved,
+    WaitingForTerminal,
+    Ready,
+    Dispatching,
+    Completed,
+    Failed,
+}
+
+impl CollaborationInterruptState {
+    pub(crate) fn parse(value: &str) -> Option<Self> {
+        match value {
+            "requested" => Some(Self::Requested),
+            "cancelling" => Some(Self::Cancelling),
+            "terminal_observed" => Some(Self::TerminalObserved),
+            "waiting_for_terminal" => Some(Self::WaitingForTerminal),
+            "ready" => Some(Self::Ready),
+            "dispatching" => Some(Self::Dispatching),
+            "completed" => Some(Self::Completed),
+            "failed" => Some(Self::Failed),
+            _ => None,
+        }
+    }
+}
+
 impl CollaborationDeliveryState {
     pub(crate) fn parse(value: &str) -> Option<Self> {
         match value {
@@ -134,6 +163,9 @@ pub struct CollaborationDeliveryView {
     pub embedded_turn_ref: Option<String>,
     pub attempts: i32,
     pub error: Option<String>,
+    pub interrupt_operation_id: Option<String>,
+    pub interrupt_state: Option<CollaborationInterruptState>,
+    pub interrupt_error: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -186,6 +218,53 @@ pub struct CollaborationSendResult {
     pub deliveries: Vec<CollaborationDeliveryView>,
     pub affected_conversation_ids: Vec<i32>,
     pub deduplicated: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InterruptCollaborationInput {
+    pub event_id: String,
+    pub target_conversation_id: i32,
+    pub client_dedupe_id: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CollaborationInterruptOperationView {
+    pub id: String,
+    pub event_id: String,
+    pub target_conversation_id: i32,
+    pub client_dedupe_id: String,
+    pub reason: String,
+    pub state: CollaborationInterruptState,
+    pub connection_id_snapshot: Option<String>,
+    pub error: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CollaborationInterruptResult {
+    pub operation: CollaborationInterruptOperationView,
+    pub deduplicated: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SendAndInterruptCollaborationInput {
+    pub message: SendCollaborationMessageInput,
+    pub interrupt_client_dedupe_id: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SendAndInterruptCollaborationResult {
+    pub message: CollaborationSendResult,
+    pub interrupt: Option<CollaborationInterruptResult>,
+    pub interrupt_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -40,6 +40,22 @@ export function SessionCommunicationBanner({
   if (!hydrated || total === 0) return null
 
   const invocationState = (delivery: CollaborationDelivery) => {
+    switch (delivery.interruptState) {
+      case "requested":
+      case "cancelling":
+      case "terminal_observed":
+      case "waiting_for_terminal":
+        return t("stateStoppingCurrentTask")
+      case "ready":
+        return t("stateQueuedAfterStop")
+      case "failed":
+        return t("stateStopFailed")
+      case "dispatching":
+      case "completed":
+      case null:
+      case undefined:
+        break
+    }
     switch (delivery.state) {
       case "queued":
         if (delivery.queueState !== "paused") return t("stateQueued")
@@ -148,6 +164,11 @@ export function SessionCommunicationBanner({
                             {delivery.error}
                           </p>
                         ) : null}
+                        {delivery.interruptError ? (
+                          <p className="mt-1 break-words text-[11px] text-destructive">
+                            {delivery.interruptError}
+                          </p>
+                        ) : null}
                       </div>
                       <div className="flex shrink-0 items-center">
                         {(delivery.state === "failed" ||
@@ -228,6 +249,11 @@ export function SessionCommunicationBanner({
                     {delivery.error ? (
                       <p className="mt-1 break-words text-[11px] text-destructive">
                         {delivery.error}
+                      </p>
+                    ) : null}
+                    {delivery.interruptError ? (
+                      <p className="mt-1 break-words text-[11px] text-destructive">
+                        {delivery.interruptError}
                       </p>
                     ) : null}
                   </article>

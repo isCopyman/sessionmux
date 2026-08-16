@@ -17,7 +17,10 @@ import {
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Textarea } from "@/components/ui/textarea"
-import { sendCollaborationMessage } from "@/lib/api"
+import {
+  sendAndInterruptCollaborationMessage,
+  sendCollaborationMessage,
+} from "@/lib/api"
 import { formatConversationTitle } from "@/lib/conversation-title"
 import { getAgentLabel } from "@/lib/custom-agents"
 import { randomUUID } from "@/lib/utils"
@@ -48,6 +51,7 @@ export function SessionMessageComposerDialog({
     useState<CollaborationInvocationPolicy>("store_only")
   const [deliveryHint, setDeliveryHint] =
     useState<CollaborationDeliveryHint>("default")
+  const [interruptCurrentTask, setInterruptCurrentTask] = useState(false)
   const [sending, setSending] = useState(false)
 
   const folderById = useMemo(
@@ -84,6 +88,7 @@ export function SessionMessageComposerDialog({
   const canSend =
     sourceConversationId != null &&
     selected.size > 0 &&
+    (!interruptCurrentTask || selected.size === 1) &&
     body.trim().length > 0 &&
     !bodyTooLarge &&
     !sending
@@ -94,6 +99,7 @@ export function SessionMessageComposerDialog({
     setBody("")
     setInvocationPolicy("store_only")
     setDeliveryHint("default")
+    setInterruptCurrentTask(false)
   }
 
   const setOpen = (next: boolean) => {
@@ -103,6 +109,11 @@ export function SessionMessageComposerDialog({
 
   const toggleTarget = (conversationId: number) => {
     setSelected((current) => {
+      if (interruptCurrentTask) {
+        return current.has(conversationId)
+          ? new Set()
+          : new Set([conversationId])
+      }
       const next = new Set(current)
       if (next.has(conversationId)) next.delete(conversationId)
       else if (next.size < 16) next.add(conversationId)
@@ -114,6 +125,33 @@ export function SessionMessageComposerDialog({
     if (!canSend || sourceConversationId == null) return
     setSending(true)
     try {
+      if (interruptCurrentTask) {
+        const targetConversationId = [...selected][0]
+        const result = await sendAndInterruptCollaborationMessage({
+          message: {
+            sourceConversationId,
+            targetConversationIds: [targetConversationId],
+            body,
+            clientDedupeId: randomUUID(),
+            invocationPolicy: "invoke_when_idle",
+            deliveryHint: "default",
+            expectsReply: false,
+            urgency: "normal",
+          },
+          interruptClientDedupeId: randomUUID(),
+          reason: "User explicitly requested stop current task and send",
+        })
+        if (result.interruptError || !result.interrupt) {
+          toast.warning(t("interruptUnavailableQueued"))
+        } else if (result.interrupt.operation.state === "failed") {
+          toast.warning(t("interruptFailedQueued"))
+        } else {
+          toast.success(t("interruptRequested"))
+        }
+        reset()
+        onOpenChange(false)
+        return
+      }
       const result = await sendCollaborationMessage({
         sourceConversationId,
         targetConversationIds: [...selected],
@@ -155,16 +193,18 @@ export function SessionMessageComposerDialog({
           <DialogDescription>
             {invocationPolicy === "store_only"
               ? t("storeOnlyDescription")
-              : deliveryHint === "steer_if_supported"
-                ? t("steerIfSupportedDescription")
-                : t("invokeWhenIdleDescription")}
+              : interruptCurrentTask
+                ? t("interruptDescription")
+                : deliveryHint === "steer_if_supported"
+                  ? t("steerIfSupportedDescription")
+                  : t("invokeWhenIdleDescription")}
           </DialogDescription>
         </DialogHeader>
 
         <div
           role="radiogroup"
           aria-label={t("deliveryMode")}
-          className="grid grid-cols-3 gap-1 rounded-lg bg-muted p-1"
+          className="grid grid-cols-2 gap-1 rounded-lg bg-muted p-1 sm:grid-cols-4"
         >
           <Button
             type="button"
@@ -175,6 +215,7 @@ export function SessionMessageComposerDialog({
             onClick={() => {
               setInvocationPolicy("store_only")
               setDeliveryHint("default")
+              setInterruptCurrentTask(false)
             }}
           >
             {t("deliverOnly")}
@@ -184,11 +225,13 @@ export function SessionMessageComposerDialog({
             role="radio"
             aria-checked={
               invocationPolicy === "invoke_when_idle" &&
-              deliveryHint === "default"
+              deliveryHint === "default" &&
+              !interruptCurrentTask
             }
             variant={
               invocationPolicy === "invoke_when_idle" &&
-              deliveryHint === "default"
+              deliveryHint === "default" &&
+              !interruptCurrentTask
                 ? "secondary"
                 : "ghost"
             }
@@ -196,6 +239,7 @@ export function SessionMessageComposerDialog({
             onClick={() => {
               setInvocationPolicy("invoke_when_idle")
               setDeliveryHint("default")
+              setInterruptCurrentTask(false)
             }}
           >
             {t("invokeWhenIdle")}
@@ -211,9 +255,28 @@ export function SessionMessageComposerDialog({
             onClick={() => {
               setInvocationPolicy("invoke_when_idle")
               setDeliveryHint("steer_if_supported")
+              setInterruptCurrentTask(false)
             }}
           >
             {t("steerIfSupported")}
+          </Button>
+          <Button
+            type="button"
+            role="radio"
+            aria-checked={interruptCurrentTask}
+            variant={interruptCurrentTask ? "secondary" : "ghost"}
+            size="sm"
+            onClick={() => {
+              setInvocationPolicy("invoke_when_idle")
+              setDeliveryHint("default")
+              setInterruptCurrentTask(true)
+              setSelected((current) => {
+                const first = current.values().next().value
+                return first == null ? new Set() : new Set([first])
+              })
+            }}
+          >
+            {t("interruptCurrentTask")}
           </Button>
         </div>
 
