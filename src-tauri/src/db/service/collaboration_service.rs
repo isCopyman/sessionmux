@@ -2665,6 +2665,76 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rename_does_not_change_delivery_identity_or_reply_routing() {
+        let (db, source, target, _) = seeded_memory().await;
+        db.conn
+            .execute(Statement::from_sql_and_values(
+                DbBackend::Sqlite,
+                "UPDATE conversation SET title = 'Before A' WHERE id = ?",
+                vec![source.into()],
+            ))
+            .await
+            .unwrap();
+        db.conn
+            .execute(Statement::from_sql_and_values(
+                DbBackend::Sqlite,
+                "UPDATE conversation SET title = 'Before B' WHERE id = ?",
+                vec![target.into()],
+            ))
+            .await
+            .unwrap();
+
+        let mut request = input(source, vec![target], "rename-stable-id", "please review");
+        request.expects_reply = true;
+        let sent = send(&db.conn, request).await.unwrap();
+        assert_eq!(sent.deliveries[0].target.conversation_id, target);
+        assert_eq!(sent.deliveries[0].target.title.as_deref(), Some("Before B"));
+
+        db.conn
+            .execute(Statement::from_sql_and_values(
+                DbBackend::Sqlite,
+                "UPDATE conversation SET title = 'After A' WHERE id = ?",
+                vec![source.into()],
+            ))
+            .await
+            .unwrap();
+        db.conn
+            .execute(Statement::from_sql_and_values(
+                DbBackend::Sqlite,
+                "UPDATE conversation SET title = 'After B' WHERE id = ?",
+                vec![target.into()],
+            ))
+            .await
+            .unwrap();
+
+        let mut reply = input(target, vec![source], "rename-stable-reply", "done");
+        reply.reply_to_event_id = Some(sent.event_id.clone());
+        let answered = send(&db.conn, reply).await.unwrap();
+        assert_eq!(answered.deliveries[0].target.conversation_id, source);
+
+        let source_feed = feed(&db.conn, source, None).await.unwrap();
+        let outbound = source_feed
+            .outbound
+            .iter()
+            .find(|item| item.event_id == sent.event_id)
+            .expect("original outbound delivery");
+        assert_eq!(outbound.target.conversation_id, target);
+        assert_eq!(outbound.target.title.as_deref(), Some("Before B"));
+        assert!(outbound.reply_received);
+        assert_eq!(
+            outbound.obligation_state,
+            CollaborationObligationState::Resolved
+        );
+
+        let target_feed = feed(&db.conn, target, None).await.unwrap();
+        assert_eq!(
+            target_feed.inbound[0].source.title.as_deref(),
+            Some("Before A")
+        );
+        assert_eq!(target_feed.inbound[0].source.conversation_id, source);
+    }
+
+    #[tokio::test]
     async fn event_and_unread_survive_database_reopen() {
         let dir = tempfile::tempdir().expect("temp dir");
         let db = fresh_disk_db(dir.path()).await;
