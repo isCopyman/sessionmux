@@ -176,6 +176,15 @@ pub enum AcpEvent {
         #[serde(skip_serializing_if = "Option::is_none", default)]
         parent_tool_use_id: Option<String>,
     },
+    /// A durable fork identity was committed. The live connection moves from
+    /// immutable C1/S1 to new C2/S2; other Views of C1 must stay on C1/S1.
+    ConversationForked {
+        original_conversation_id: i32,
+        forked_conversation_id: i32,
+        original_session_id: String,
+        forked_session_id: String,
+        folder_id: i32,
+    },
     /// Backend has transitioned the conversation row's `status` column.
     /// Emitted by `send_prompt_linked` (`InProgress`) and the lifecycle
     /// subscriber on `TurnComplete` (`PendingReview`). The frontend mirrors
@@ -1236,7 +1245,7 @@ pub struct AvailableCommandInfo {
 
 /// Internal reply shape from the connection loop back to `manager.fork_session`
 /// — protocol-only, before any DB writes. The manager combines this with the
-/// freshly-created sibling row id to produce the wire-level `ForkResultInfo`.
+/// committed C2 row and explicit View handoff to produce `ForkResultInfo`.
 #[derive(Debug, Clone)]
 pub struct ForkProtocolResult {
     pub forked_session_id: String,
@@ -1245,13 +1254,25 @@ pub struct ForkProtocolResult {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ForkViewHandoffInfo {
+    pub from_conversation_id: i32,
+    pub to_conversation_id: i32,
+    /// True only after the connection loop attached S2 and applied the ordered
+    /// `ConversationForked` -> `SessionStarted` pair.
+    pub connection_rebound: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub activation_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ForkResultInfo {
     pub forked_session_id: String,
     pub original_session_id: String,
-    /// DB id of the sibling conversation row that backend created to preserve
-    /// the pre-fork (S1) history. The current connection's conversation row
-    /// (still bound in `SessionState`) gets re-pointed to S2 in the same call.
-    pub sibling_conversation_id: i32,
+    pub original_conversation_id: i32,
+    pub forked_conversation_id: i32,
+    pub forked_conversation: crate::models::DbConversationSummary,
+    pub active_view_handoff: ForkViewHandoffInfo,
 }
 
 #[cfg(test)]

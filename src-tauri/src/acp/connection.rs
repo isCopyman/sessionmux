@@ -312,6 +312,7 @@ pub enum ConnectionCommand {
     Fork {
         reply:
             tokio::sync::oneshot::Sender<Result<crate::acp::types::ForkProtocolResult, AcpError>>,
+        activation: tokio::sync::oneshot::Receiver<ForkActivation>,
     },
     /// Inject a live-feedback note into the RUNNING turn over the ACP
     /// `_session/steering` extension (native push channel — see
@@ -326,6 +327,20 @@ pub enum ConnectionCommand {
         reply: tokio::sync::oneshot::Sender<Result<SteerOutcome, AcpError>>,
     },
     Disconnect,
+}
+
+/// Manager decision after `session/fork` returned successfully. The connection
+/// may attach S2 only after the manager has durably created C2.
+pub enum ForkActivation {
+    Commit {
+        original_conversation_id: i32,
+        forked_conversation_id: i32,
+        folder_id: i32,
+        ack: tokio::sync::oneshot::Sender<Result<(), String>>,
+    },
+    Abort {
+        reason: String,
+    },
 }
 
 /// Sentinel string embedded in a `sacp::Error` when the Initialize
@@ -6463,6 +6478,7 @@ struct ForkExitInfo {
     fork_models_raw: Option<serde_json::Value>,
     original_session_id: String,
     reply: tokio::sync::oneshot::Sender<Result<crate::acp::types::ForkProtocolResult, AcpError>>,
+    activation: tokio::sync::oneshot::Receiver<ForkActivation>,
     connection: ConnectionTo<Agent>,
 }
 
@@ -6509,18 +6525,47 @@ async fn handle_fork_or_exit(
     let new_sid = fork_resp.session_id.0.to_string();
 
     tracing::info!(
-        "[ACP] Fork transition: attaching to forked session {} (original: {})",
+        "[ACP] Fork transition prepared: forked session {} (original: {})",
         new_sid, fork_info.original_session_id
     );
 
-    // Reply protocol-level result to manager.fork_session, which will combine
-    // it with the freshly-created sibling row id to produce the wire ForkResultInfo.
+    // Expose S2 to the manager, then wait at the durable C2 activation barrier.
+    // Attaching before the commit would transiently create the invalid C1/S2
+    // pair and let SessionStarted overwrite C1's immutable native identity.
+    let original_session_id = fork_info.original_session_id.clone();
     let _ = fork_info
         .reply
         .send(Ok(crate::acp::types::ForkProtocolResult {
             forked_session_id: new_sid.clone(),
-            original_session_id: fork_info.original_session_id,
+            original_session_id: original_session_id.clone(),
         }));
+
+    let (original_conversation_id, forked_conversation_id, folder_id, activation_ack) =
+        match fork_info.activation.await {
+            Ok(ForkActivation::Commit {
+                original_conversation_id,
+                forked_conversation_id,
+                folder_id,
+                ack,
+            }) => (
+                original_conversation_id,
+                forked_conversation_id,
+                folder_id,
+                ack,
+            ),
+            Ok(ForkActivation::Abort { reason }) => {
+                tracing::warn!(
+                    "[ACP] Fork transition aborted before attach (forked_session_id={}): {}",
+                    new_sid,
+                    reason
+                );
+                return Err(sacp::Error::internal_error().data(reason));
+            }
+            Err(_) => {
+                return Err(sacp::Error::internal_error()
+                    .data("fork activation channel closed before commit"));
+            }
+        };
 
     // Build a NewSessionResponse from the ForkSessionResponse so we can
     // attach directly — the forked session is already live on this process.
@@ -6537,7 +6582,13 @@ async fn handle_fork_or_exit(
     // Opportunistic: grok may carry per-model effort data on a fork response.
     let grok_model_specs =
         (agent_type == AgentType::Grok).then(|| parse_grok_model_specs(fork_models_raw.as_ref()));
-    let mut session = cx.attach_session(new_resp, Default::default())?;
+    let mut session = match cx.attach_session(new_resp, Default::default()) {
+        Ok(session) => session,
+        Err(error) => {
+            let _ = activation_ack.send(Err(error.to_string()));
+            return Err(error);
+        }
+    };
 
     // A fork is a new session id, hence a new transcript file. Its history
     // starts empty and accumulates from the fork point — the pre-fork turns
@@ -6546,11 +6597,24 @@ async fn handle_fork_or_exit(
     emit_with_state(
         state,
         emitter,
+        AcpEvent::ConversationForked {
+            original_conversation_id,
+            forked_conversation_id,
+            original_session_id,
+            forked_session_id: new_sid.clone(),
+            folder_id,
+        },
+    )
+    .await;
+    emit_with_state(
+        state,
+        emitter,
         AcpEvent::SessionStarted {
             session_id: new_sid.clone(),
         },
     )
     .await;
+    let _ = activation_ack.send(Ok(()));
     emit_session_modes(state, emitter, session.modes()).await;
     apply_and_emit_session_config_options(
         &cx,
@@ -8012,7 +8076,7 @@ async fn run_conversation_loop<'a>(
                     inj.broker.cancel_by_parent_turn(conn_id).await;
                 }
             }
-            Some(ConnectionCommand::Fork { reply }) => {
+            Some(ConnectionCommand::Fork { reply, activation }) => {
                 if !supports_fork {
                     let _ = reply.send(Err(AcpError::protocol(
                         "This agent does not support session/fork".to_string(),
@@ -8037,6 +8101,7 @@ async fn run_conversation_loop<'a>(
                             fork_models_raw,
                             original_session_id: sid.0.to_string(),
                             reply,
+                            activation,
                             connection: cx,
                         }));
                     }

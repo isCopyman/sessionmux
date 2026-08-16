@@ -10,6 +10,7 @@ import type {
   AgentTranscriptEntry,
   ConversationTurnsPage,
   DbConversationDetail,
+  DbConversationSummary,
   MessageTurn,
   PlanEntryInfo,
   SessionStats,
@@ -410,6 +411,18 @@ type Action =
       type: "MIGRATE_CONVERSATION"
       fromConversationId: number
       toConversationId: number
+    }
+  | {
+      /**
+       * Clone the settled UI/history cache from immutable C1 into newly-created
+       * C2 while RETAINING C1 for any other open View. Unlike draft migration,
+       * this never moves queue/mailbox facts or an in-flight Turn.
+       */
+      type: "FORK_CONVERSATION"
+      fromConversationId: number
+      toConversationId: number
+      forkedSessionId: string
+      summary?: DbConversationSummary
     }
   | {
       type: "SET_PENDING_CLEANUP"
@@ -2209,6 +2222,80 @@ function reducer(
       }
     }
 
+    case "FORK_CONVERSATION": {
+      if (action.fromConversationId === action.toConversationId) return state
+      const from = state.byConversationId.get(action.fromConversationId)
+      const existing = state.byConversationId.get(action.toConversationId)
+      const base = from ?? createEmptySession(action.fromConversationId)
+      const sourceSummary = base.detail?.summary ?? null
+      const forkedSummary =
+        action.summary ??
+        (sourceSummary
+          ? {
+              ...sourceSummary,
+              id: action.toConversationId,
+              title: sourceSummary.title
+                ? `[Fork] ${sourceSummary.title.replace(/^\[Fork\]\s*/, "")}`
+                : null,
+              title_locked: sourceSummary.title != null,
+              external_id: action.forkedSessionId,
+              status: "pending_review",
+              message_count: 0,
+              child_count: 0,
+              archived_at: null,
+              pinned_at: null,
+              parent_id: null,
+              parent_tool_use_id: null,
+              delegation_call_id: null,
+            }
+          : null)
+      const cloned: ConversationRuntimeSession = {
+        ...base,
+        ...(existing ?? {}),
+        conversationId: action.toConversationId,
+        dbConversationId: action.toConversationId,
+        externalId: action.forkedSessionId,
+        detail: (() => {
+          const detail = existing?.detail ?? base.detail
+          return detail && forkedSummary
+            ? { ...detail, summary: forkedSummary }
+            : detail
+        })(),
+        detailLoading: false,
+        detailError: null,
+        // Fork is admitted only while idle. Settled history may be cloned, but
+        // transient ownership, sync anchors, and pending background mutations
+        // remain facts of C1 and must never make C2 look mid-turn.
+        pendingBackgroundSettlements: [],
+        optimisticTurns: [],
+        liveMessage: null,
+        syncState: "idle",
+        activeTurnToken: null,
+        lastTurnOwned: false,
+        liveOwnsActiveTurn: false,
+        delegationKickoffText: null,
+        historyAssistantBaseline: null,
+        batchBoundaryIndex: null,
+        batchBoundaryPrefixHash: null,
+        loadingOlderTurns: false,
+        olderTurnsPrependEpoch: 0,
+        pendingCleanup: false,
+        acpLoadError: null,
+      }
+
+      const nextByConversationId = new Map(state.byConversationId)
+      nextByConversationId.set(action.toConversationId, cloned)
+      const nextExternalIndex = new Map(state.conversationIdByExternalId)
+      if (base.externalId) {
+        nextExternalIndex.set(base.externalId, action.fromConversationId)
+      }
+      nextExternalIndex.set(action.forkedSessionId, action.toConversationId)
+      return {
+        byConversationId: nextByConversationId,
+        conversationIdByExternalId: nextExternalIndex,
+      }
+    }
+
     case "PATCH_TURN_METADATA": {
       const current = state.byConversationId.get(action.conversationId)
       if (!current || current.localTurns.length === 0) return state
@@ -2373,6 +2460,12 @@ export interface RuntimeActions {
   migrateConversation: (
     fromConversationId: number,
     toConversationId: number
+  ) => void
+  forkConversation: (
+    fromConversationId: number,
+    toConversationId: number,
+    forkedSessionId: string,
+    summary?: DbConversationSummary
   ) => void
   setPendingCleanup: (conversationId: number, pendingCleanup: boolean) => void
   setAcpLoadError: (conversationId: number, error: string | null) => void
@@ -3509,6 +3602,19 @@ export const useConversationRuntimeStore = create<ConversationRuntimeStore>()((
         type: "MIGRATE_CONVERSATION",
         fromConversationId,
         toConversationId,
+      }),
+    forkConversation: (
+      fromConversationId,
+      toConversationId,
+      forkedSessionId,
+      summary
+    ) =>
+      dispatch({
+        type: "FORK_CONVERSATION",
+        fromConversationId,
+        toConversationId,
+        forkedSessionId,
+        summary,
       }),
     setPendingCleanup: (conversationId, pendingCleanup) =>
       dispatch({ type: "SET_PENDING_CLEANUP", conversationId, pendingCleanup }),

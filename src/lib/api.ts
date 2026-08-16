@@ -320,7 +320,15 @@ export async function acpCancel(connectionId: string): Promise<void> {
 export interface ForkResult {
   forkedSessionId: string
   originalSessionId: string
-  siblingConversationId: number
+  originalConversationId: number
+  forkedConversationId: number
+  forkedConversation: DbConversationSummary
+  activeViewHandoff: {
+    fromConversationId: number
+    toConversationId: number
+    connectionRebound: boolean
+    activationError?: string | null
+  }
 }
 
 export async function acpFork(

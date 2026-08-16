@@ -954,6 +954,16 @@ impl SessionState {
                 self.conversation_id = Some(*conversation_id);
                 self.folder_id = Some(*folder_id);
             }
+            AcpEvent::ConversationForked {
+                forked_conversation_id,
+                folder_id,
+                ..
+            } => {
+                // C2 already exists durably. Rebind before SessionStarted(S2)
+                // so observers never see or persist the invalid C1/S2 pair.
+                self.conversation_id = Some(*forked_conversation_id);
+                self.folder_id = Some(*folder_id);
+            }
             AcpEvent::PlanUpdate { entries } => {
                 // Replace any existing Plan block, then append at end.
                 // Mirrors the frontend's PLAN_UPDATE reducer semantic: there
@@ -2151,6 +2161,37 @@ mod tests {
         let snap = s.to_snapshot();
         assert_eq!(snap.conversation_id, Some(42));
         assert_eq!(snap.folder_id, Some(7));
+    }
+
+    #[test]
+    fn conversation_forked_rebinds_owner_before_session_started_without_touching_other_view() {
+        let mut owner = fresh_state();
+        owner.conversation_id = Some(42);
+        owner.folder_id = Some(7);
+        owner.external_id = Some("session-S1".into());
+
+        let mut other_view = fresh_state();
+        other_view.conversation_id = Some(42);
+        other_view.folder_id = Some(7);
+        other_view.external_id = Some("session-S1".into());
+
+        owner.apply_event(&AcpEvent::ConversationForked {
+            original_conversation_id: 42,
+            forked_conversation_id: 84,
+            original_session_id: "session-S1".into(),
+            forked_session_id: "session-S2".into(),
+            folder_id: 7,
+        });
+        assert_eq!(owner.conversation_id, Some(84));
+        assert_eq!(owner.external_id.as_deref(), Some("session-S1"));
+        owner.apply_event(&AcpEvent::SessionStarted {
+            session_id: "session-S2".into(),
+        });
+        assert_eq!(owner.conversation_id, Some(84));
+        assert_eq!(owner.external_id.as_deref(), Some("session-S2"));
+
+        assert_eq!(other_view.conversation_id, Some(42));
+        assert_eq!(other_view.external_id.as_deref(), Some("session-S1"));
     }
 
     #[test]

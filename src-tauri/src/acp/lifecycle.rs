@@ -65,6 +65,7 @@ fn is_lifecycle_relevant(event: &AcpEvent) -> bool {
         AcpEvent::SessionStarted { .. }
             | AcpEvent::TurnComplete { .. }
             | AcpEvent::ConversationLinked { .. }
+            | AcpEvent::ConversationForked { .. }
             | AcpEvent::StatusChanged {
                 status: ConnectionStatus::Disconnected
             }
@@ -380,8 +381,9 @@ async fn try_cache_link(
     manager: &ConnectionManager,
     connection_id: &str,
     conversation_id: i32,
+    allow_rebind: bool,
 ) {
-    if cache.contains_key(connection_id) {
+    if cache.contains_key(connection_id) && !allow_rebind {
         return;
     }
     // The connection is necessarily still in the manager at this point —
@@ -1433,7 +1435,27 @@ async fn connection_worker_loop(
             AcpEvent::ConversationLinked {
                 conversation_id, ..
             } => {
-                try_cache_link(&mut cache, &manager, &connection_id, *conversation_id).await;
+                try_cache_link(
+                    &mut cache,
+                    &manager,
+                    &connection_id,
+                    *conversation_id,
+                    false,
+                )
+                .await;
+            }
+            AcpEvent::ConversationForked {
+                forked_conversation_id,
+                ..
+            } => {
+                try_cache_link(
+                    &mut cache,
+                    &manager,
+                    &connection_id,
+                    *forked_conversation_id,
+                    true,
+                )
+                .await;
             }
             AcpEvent::StatusChanged {
                 status: ConnectionStatus::Disconnected,
@@ -2067,7 +2089,22 @@ mod tests {
         connection_id: &str,
         conversation_id: i32,
     ) {
-        try_cache_link(cache, manager, connection_id, conversation_id).await;
+        try_cache_link(cache, manager, connection_id, conversation_id, false).await;
+    }
+
+    #[tokio::test]
+    async fn conversation_fork_rebinds_terminal_cache_to_c2() {
+        let mgr = ConnectionManager::new();
+        mgr.connections.lock().await.insert(
+            "c-fork".to_string(),
+            fake_connection_with_state("c-fork", Some(1)),
+        );
+        let mut cache = HashMap::new();
+        try_cache_link(&mut cache, &mgr, "c-fork", 1, false).await;
+        assert_eq!(cache.get("c-fork").unwrap().conversation_id, 1);
+
+        try_cache_link(&mut cache, &mgr, "c-fork", 2, true).await;
+        assert_eq!(cache.get("c-fork").unwrap().conversation_id, 2);
     }
 
     #[tokio::test]
@@ -2334,6 +2371,13 @@ mod tests {
             folder_id: 1,
             parent_conversation_id: None,
             parent_tool_use_id: None,
+        }));
+        assert!(is_lifecycle_relevant(&AcpEvent::ConversationForked {
+            original_conversation_id: 1,
+            forked_conversation_id: 2,
+            original_session_id: "s1".into(),
+            forked_session_id: "s2".into(),
+            folder_id: 1,
         }));
         assert!(is_lifecycle_relevant(&AcpEvent::StatusChanged {
             status: ConnectionStatus::Disconnected,

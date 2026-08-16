@@ -2023,6 +2023,14 @@ export type AcpEvent =
       folder_id: number
     }
   | {
+      type: "conversation_forked"
+      original_conversation_id: number
+      forked_conversation_id: number
+      original_session_id: string
+      forked_session_id: string
+      folder_id: number
+    }
+  | {
       type: "conversation_status_changed"
       conversation_id: number
       status: ConversationStatus

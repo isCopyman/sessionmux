@@ -110,6 +110,7 @@ import {
   type AgentType,
   type ContentBlock,
   type ConversationStatus,
+  type DbConversationSummary,
   type EventEnvelope,
   type MessageTurn,
   type PlanApprovalAnswer,
@@ -333,16 +334,16 @@ const ConversationTabView = memo(function ConversationTabView({
     setAcpLoadError,
     setDbConversationId,
     setExternalId,
+    forkConversation,
     setLiveMessage,
     setPendingCleanup,
     setSyncState,
   } = useConversationRuntimeActions()
   const acpActions = useAcpActions()
 
-  // Stable runtime session key — set once at mount, never changes.
-  // For new conversations this is a virtual (negative) ID; for existing
-  // conversations opened from the sidebar it equals the real DB ID.
-  const [effectiveConversationId] = useState(
+  // Stable across ordinary tab changes. A successful immutable fork is the one
+  // deliberate exception: the initiating View hands off from C1 to new C2.
+  const [effectiveConversationId, setEffectiveConversationId] = useState(
     () =>
       runtimeConversationId ??
       conversationId ??
@@ -423,6 +424,25 @@ const ConversationTabView = memo(function ConversationTabView({
   const prepareChatDirPendingRef = useRef(false)
   const sessionIdRef = useRef<string | null>(null)
   const syncCancelRef = useRef<(() => void) | null>(null)
+  const retainRuntimeOnForkRef = useRef<number | null>(null)
+  const viewerForkRecoveryRef = useRef<{
+    originalConversationId: number
+    originalSessionId: string
+    forkedSessionId: string
+  } | null>(null)
+  const pendingForkSendRef = useRef<{
+    draft: PromptDraft
+    modeId: string | null
+    targetConversationId: number | null
+    forkedSessionId: string | null
+    connectionRebound: boolean | null
+    activationError: string | null
+  } | null>(null)
+  const activeForkHandoffRef = useRef<{
+    originalConversationId: number
+    targetConversationId: number
+    sourceRuntimeId: number
+  } | null>(null)
 
   useEffect(() => {
     dbConvIdRef.current = dbConversationId
@@ -670,6 +690,139 @@ const ConversationTabView = memo(function ConversationTabView({
   useEffect(() => {
     isViewerRef.current = conn.isViewer
   }, [conn.isViewer])
+  const forkConnectionId = conn.connectionId
+  const reconnectForkViewer = conn.connect
+  const disconnectForkViewer = conn.disconnect
+
+  const handoffForkView = useCallback(
+    (args: {
+      originalConversationId: number
+      forkedConversationId: number
+      forkedSessionId: string
+      folderId: number
+      summary?: DbConversationSummary
+    }) => {
+      const prior = activeForkHandoffRef.current
+      const sourceRuntimeId =
+        prior?.originalConversationId === args.originalConversationId &&
+        prior.targetConversationId === args.forkedConversationId
+          ? prior.sourceRuntimeId
+          : effectiveConversationId
+      const currentDbId = dbConvIdRef.current
+      if (
+        currentDbId !== args.originalConversationId &&
+        currentDbId !== args.forkedConversationId
+      ) {
+        return false
+      }
+
+      activeForkHandoffRef.current = {
+        originalConversationId: args.originalConversationId,
+        targetConversationId: args.forkedConversationId,
+        sourceRuntimeId,
+      }
+      retainRuntimeOnForkRef.current = sourceRuntimeId
+      forkConversation(
+        sourceRuntimeId,
+        args.forkedConversationId,
+        args.forkedSessionId,
+        args.summary
+      )
+      if (args.summary) {
+        useAppWorkspaceStore.getState().applyConversationUpsert(args.summary)
+      }
+
+      const sourceTitle = ownTab?.title?.replace(/^\[Fork\]\s*/, "") ?? ""
+      const forkedTitle =
+        args.summary?.title ??
+        (sourceTitle.length > 0
+          ? `[Fork] ${sourceTitle}`
+          : (ownTab?.title ?? ""))
+      bindConversationTab(
+        tabId,
+        args.forkedConversationId,
+        args.summary?.agent_type ?? selectedAgent,
+        forkedTitle,
+        args.forkedConversationId,
+        args.folderId,
+        ownTab?.workingDir ?? workingDirForConnection
+      )
+      dbConvIdRef.current = args.forkedConversationId
+      sessionIdRef.current = args.forkedSessionId
+      setEffectiveConversationId(args.forkedConversationId)
+      return true
+    },
+    [
+      bindConversationTab,
+      effectiveConversationId,
+      forkConversation,
+      ownTab?.title,
+      ownTab?.workingDir,
+      selectedAgent,
+      tabId,
+      workingDirForConnection,
+    ]
+  )
+
+  useAcpEvent(
+    useCallback(
+      (envelope: EventEnvelope) => {
+        if (envelope.type !== "conversation_forked") return
+        if (envelope.connection_id !== forkConnectionId) return
+
+        if (isViewerRef.current) {
+          // Another View was watching C1 through the owner's connection. It
+          // must stay C1: suppress the S2 SessionStarted projection, detach,
+          // then resume the immutable S1 identity on its own connection.
+          viewerForkRecoveryRef.current = {
+            originalConversationId: envelope.original_conversation_id,
+            originalSessionId: envelope.original_session_id,
+            forkedSessionId: envelope.forked_session_id,
+          }
+          setExternalId(effectiveConversationId, envelope.original_session_id)
+          sessionIdRef.current = envelope.original_session_id
+          void (async () => {
+            try {
+              await disconnectForkViewer()
+              await reconnectForkViewer(
+                selectedAgentRef.current,
+                workingDirForConnection,
+                envelope.original_session_id,
+                envelope.original_conversation_id
+              )
+            } catch (error) {
+              console.error(
+                "[ConversationTabView] recover C1 viewer after fork",
+                error
+              )
+            }
+          })()
+          return
+        }
+
+        handoffForkView({
+          originalConversationId: envelope.original_conversation_id,
+          forkedConversationId: envelope.forked_conversation_id,
+          forkedSessionId: envelope.forked_session_id,
+          folderId: envelope.folder_id,
+        })
+        const pending = pendingForkSendRef.current
+        if (pending) {
+          pending.targetConversationId = envelope.forked_conversation_id
+          pending.forkedSessionId = envelope.forked_session_id
+        }
+      },
+      [
+        disconnectForkViewer,
+        effectiveConversationId,
+        forkConnectionId,
+        handoffForkView,
+        reconnectForkViewer,
+        setExternalId,
+        workingDirForConnection,
+      ]
+    )
+  )
   const isConnecting = connStatus === "connecting"
   // The tab's connection is keyed by a stable tabId, but agent switching is
   // async — and for a not-installed target, connect()'s preflight throws BEFORE
@@ -751,8 +904,14 @@ const ConversationTabView = memo(function ConversationTabView({
     : (autoConnectError ?? agentConnectError)
 
   useEffect(() => {
-    if (connSessionId) {
-      sessionIdRef.current = connSessionId
+    if (!connSessionId) return
+    const recovery = viewerForkRecoveryRef.current
+    // A viewer of C1 observes the owner's ordered fork events too, but it must
+    // not adopt S2. Keep S1 until its detach+resume recovery finishes.
+    if (recovery && connSessionId === recovery.forkedSessionId) return
+    sessionIdRef.current = connSessionId
+    if (recovery && connSessionId === recovery.originalSessionId) {
+      viewerForkRecoveryRef.current = null
     }
   }, [connSessionId])
 
@@ -857,6 +1016,8 @@ const ConversationTabView = memo(function ConversationTabView({
 
   useEffect(() => {
     if (!connSessionId) return
+    const recovery = viewerForkRecoveryRef.current
+    if (recovery && connSessionId === recovery.forkedSessionId) return
     setExternalId(effectiveConversationId, connSessionId)
   }, [connSessionId, effectiveConversationId, setExternalId])
 
@@ -906,6 +1067,10 @@ const ConversationTabView = memo(function ConversationTabView({
         isReparentUnmount(useTabStore.getState(), tabId, groupId) ||
         shouldRetainWorkbenchRuntimeOnUnmount(workbenchId, tabId)
       ) {
+        return
+      }
+      if (retainRuntimeOnForkRef.current === effectiveConversationId) {
+        retainRuntimeOnForkRef.current = null
         return
       }
       if (connStatusRef.current === "prompting" && !isViewerRef.current) {
@@ -1212,37 +1377,58 @@ const ConversationTabView = memo(function ConversationTabView({
         mqEnqueue(draft, selectedModeIdArg ?? null)
         return
       }
+      pendingForkSendRef.current = {
+        draft,
+        modeId: selectedModeIdArg ?? null,
+        targetConversationId: null,
+        forkedSessionId: null,
+        connectionRebound: null,
+        activationError: null,
+      }
       try {
-        // Backend performs all DB writes in one transaction-shaped call:
-        // - current row: external_id=S2, title="[Fork] ..."
-        // - sibling row: created with external_id=S1, status=pending_review
+        // Backend keeps C1/S1 immutable, creates C2/S2, then activates the
+        // connection only after C2 commits. The explicit response contains the
+        // complete handoff; the ordered conversation_forked event performs the
+        // same transition early and makes this path idempotent.
         // Pass (conversationId, folderId) so a conversation opened from history
         // — whose connection resumed via session_id but isn't row-linked until
         // its first prompt — is adopted by the backend before forking (a
         // fork-send forks BEFORE that prompt). No-op once already linked. Use
         // the real persisted DB id (`dbConvIdRef`, same as the send path below),
         // NOT the runtime key `effectiveConversationId` which can be virtual.
-        const { forkedSessionId } = await acpFork(
+        const result = await acpFork(
           connectionId,
           dbConvIdRef.current,
           folderId
         )
-        // Update runtime session id to S2 (frontend in-memory state only)
-        sessionIdRef.current = forkedSessionId
-        setExternalId(effectiveConversationId, forkedSessionId)
-
-        // NOTE: a fork is a transcript discontinuity — the row's session flips
-        // S1→S2, and S2 is a COPY of S1's transcript plus the turns to come.
-        // The pre-fork history is NOT re-surfaced here: the backend background
-        // watcher correctly excludes the fork-copied prefix from the out-of-turn
-        // overlay (see `baseline_offset_since`), so `detail.turns` (S1 parse) +
-        // the new local turns render each exchange exactly once. No detail
-        // refetch is needed or wanted — an early one races the forked turn and
-        // can drop the just-sent message.
-        refreshConversations()
-        // Send the message on the forked session (S2)
-        handleSend(draft, selectedModeIdArg)
+        handoffForkView({
+          originalConversationId: result.originalConversationId,
+          forkedConversationId: result.forkedConversationId,
+          forkedSessionId: result.forkedSessionId,
+          folderId: result.forkedConversation.folder_id,
+          summary: result.forkedConversation,
+        })
+        const pending = pendingForkSendRef.current
+        if (pending) {
+          pending.targetConversationId = result.forkedConversationId
+          pending.forkedSessionId = result.forkedSessionId
+          pending.connectionRebound = result.activeViewHandoff.connectionRebound
+          pending.activationError =
+            result.activeViewHandoff.activationError ?? null
+        }
       } catch (err) {
+        // The ordered event may already have handed the View to durable C2 even
+        // if the request transport disappeared before its response arrived.
+        // In that case leave the draft pending for the S2 SessionStarted edge;
+        // never fall back and accidentally send it to immutable C1.
+        if (pendingForkSendRef.current?.targetConversationId != null) {
+          console.warn(
+            "[ConversationTabView] fork response unavailable after durable handoff",
+            err
+          )
+          return
+        }
+        pendingForkSendRef.current = null
         // Busy (a turn is in flight, e.g. another co-controlling client started
         // one): NOT a fork failure — silently re-queue, like a normal bounce.
         // It sends after the current turn.
@@ -1271,14 +1457,51 @@ const ConversationTabView = memo(function ConversationTabView({
       connStatus,
       mqGetQueueLength,
       mqEnqueue,
-      effectiveConversationId,
       folderId,
-      handleSend,
-      refreshConversations,
-      setExternalId,
+      handoffForkView,
       t,
     ]
   )
+
+  // Sending immediately from handleForkSend would reuse the callback closure
+  // that still targets C1. Wait for React to render the C2 handoff, then use the
+  // newly-bound queue/send functions. A failed activation still preserves C2;
+  // its draft is durably queued there and a later reconnect can flush it.
+  useEffect(() => {
+    const pending = pendingForkSendRef.current
+    if (!pending || pending.targetConversationId == null) return
+    if (
+      effectiveConversationId !== pending.targetConversationId ||
+      dbConversationId !== pending.targetConversationId
+    ) {
+      return
+    }
+    if (pending.connectionRebound === false) {
+      pendingForkSendRef.current = null
+      if (pending.activationError) {
+        toast.error(t("forkSessionFailed", { error: pending.activationError }))
+      }
+      mqEnqueue(pending.draft, pending.modeId)
+      return
+    }
+    if (
+      !connectionReady ||
+      !pending.forkedSessionId ||
+      connSessionId !== pending.forkedSessionId
+    ) {
+      return
+    }
+    pendingForkSendRef.current = null
+    handleSend(pending.draft, pending.modeId)
+  }, [
+    connectionReady,
+    connSessionId,
+    dbConversationId,
+    effectiveConversationId,
+    handleSend,
+    mqEnqueue,
+    t,
+  ])
 
   const handleOpenAgentsSettings = useCallback(() => {
     openSettingsWindow("agents", { agentType: selectedAgent }).catch((err) => {
