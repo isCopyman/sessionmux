@@ -5044,6 +5044,13 @@
     "stateNeedsReply": "Réponse requise",
     "stateReplied": "Répondu",
     "stateAwaitingReply": "En attente de réponse",
-    "stateReplyReceived": "Réponse reçue"
+    "stateReplyReceived": "Réponse reçue",
+    "noReplyNeeded": "Aucune réponse requise",
+    "worklistFilterLabel": "Liste des messages de session",
+    "worklistFilterAll": "Tous les états de message",
+    "worklistUnread": "Non lus ({count})",
+    "worklistNeedsReply": "Réponse requise ({count})",
+    "worklistAwaitingReply": "En attente de réponse ({count})",
+    "worklistFailed": "Échecs ({count})"
   }
 }

@@ -5044,6 +5044,13 @@
     "stateNeedsReply": "يتطلب ردًا",
     "stateReplied": "تم الرد",
     "stateAwaitingReply": "بانتظار الرد",
-    "stateReplyReceived": "تم استلام الرد"
+    "stateReplyReceived": "تم استلام الرد",
+    "noReplyNeeded": "لا حاجة إلى رد",
+    "worklistFilterLabel": "قائمة عمل رسائل الجلسة",
+    "worklistFilterAll": "كل حالات الرسائل",
+    "worklistUnread": "غير مقروءة ({count})",
+    "worklistNeedsReply": "تحتاج إلى رد ({count})",
+    "worklistAwaitingReply": "بانتظار رد ({count})",
+    "worklistFailed": "فشلت ({count})"
   }
 }

@@ -1125,6 +1125,7 @@ impl TaskEngine {
                 Some(wt.folder_id),
                 Some(conversation_id),
                 None,
+                false,
             )
             .await
         {

@@ -36,9 +36,16 @@ function overview(
 ): CollaborationUnreadOverview {
   return {
     totalUnreadCount: entries.reduce((total, [, count]) => total + count, 0),
+    totalNeedsReplyCount: 0,
+    totalAwaitingReplyCount: 0,
+    totalFailedCount: 0,
     sessions: entries.map(([conversationId, unreadCount]) => ({
       conversationId,
+      revision: 1,
       unreadCount,
+      needsReplyCount: 0,
+      awaitingReplyCount: 0,
+      failedCount: 0,
     })),
   }
 }

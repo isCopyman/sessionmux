@@ -342,6 +342,18 @@ pub async fn collaboration_mark_seen_core(
     Ok(result.feed)
 }
 
+pub async fn collaboration_resolve_core(
+    conn: &sea_orm::DatabaseConnection,
+    emitter: &EventEmitter,
+    conversation_id: i32,
+    delivery_id: String,
+) -> Result<CollaborationFeed, AppCommandError> {
+    let result =
+        collaboration_service::resolve_obligation(conn, conversation_id, &delivery_id).await?;
+    publish(emitter, result.affected_conversation_ids);
+    Ok(result.feed)
+}
+
 pub async fn collaboration_dismiss_core(
     conn: &sea_orm::DatabaseConnection,
     emitter: &EventEmitter,
@@ -776,6 +788,23 @@ pub async fn collaboration_mark_seen(
         &EventEmitter::Tauri(app),
         conversation_id,
         delivery_ids,
+    )
+    .await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn collaboration_resolve(
+    conversation_id: i32,
+    delivery_id: String,
+    db: tauri::State<'_, AppDatabase>,
+    app: tauri::AppHandle,
+) -> Result<CollaborationFeed, AppCommandError> {
+    collaboration_resolve_core(
+        &db.conn,
+        &EventEmitter::Tauri(app),
+        conversation_id,
+        delivery_id,
     )
     .await
 }

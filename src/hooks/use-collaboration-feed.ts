@@ -6,6 +6,7 @@ import {
   getCollaborationFeed,
   getPromptQueue,
   markCollaborationSeen,
+  resolveCollaborationObligation,
   restoreCollaborationDelivery,
   retryPromptQueueItem,
 } from "@/lib/api"
@@ -28,6 +29,7 @@ export interface UseCollaborationFeedReturn {
   error: unknown
   reload: () => Promise<void>
   markSeen: (deliveryIds: string[]) => Promise<void>
+  resolve: (deliveryId: string) => Promise<void>
   dismiss: (deliveryId: string) => Promise<void>
   restore: (deliveryId: string) => Promise<void>
   retry: (queueItemId: string) => Promise<void>
@@ -140,6 +142,21 @@ export function useCollaborationFeed(
     [applyFeed, reload]
   )
 
+  const resolve = useCallback(
+    async (deliveryId: string) => {
+      const id = conversationIdRef.current
+      if (id == null) return
+      try {
+        applyFeed(await resolveCollaborationObligation(id, deliveryId))
+      } catch (nextError) {
+        console.error("[collaboration] resolve obligation:", nextError)
+        setError(nextError)
+        await reload()
+      }
+    },
+    [applyFeed, reload]
+  )
+
   const retry = useCallback(
     async (queueItemId: string) => {
       const id = conversationIdRef.current
@@ -183,6 +200,7 @@ export function useCollaborationFeed(
     error,
     reload,
     markSeen,
+    resolve,
     dismiss,
     restore,
     retry,

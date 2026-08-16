@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import {
   ArrowUpRight,
   ChevronDown,
@@ -29,8 +29,7 @@ interface SessionCommunicationBannerProps {
   conversationId: number | null
 }
 
-interface SessionCommunicationBannerViewProps
-  extends SessionCommunicationBannerProps {
+interface SessionCommunicationBannerViewProps extends SessionCommunicationBannerProps {
   collaboration: UseCollaborationFeedReturn
 }
 
@@ -73,8 +72,25 @@ export function SessionCommunicationBannerView({
     [conversations]
   )
   const { openTab } = useTabActions()
-  const { feed, hydrated, markSeen, dismiss, restore, retry } = collaboration
+  const { feed, hydrated, markSeen, resolve, dismiss, restore, retry } =
+    collaboration
   const total = feed.inbound.length + feed.outbound.length
+  const unreadIds = useMemo(
+    () =>
+      feed.inbound
+        .filter(
+          (delivery) =>
+            delivery.attentionState === "unread" &&
+            delivery.state !== "dismissed"
+        )
+        .map((delivery) => delivery.id),
+    [feed.inbound]
+  )
+
+  useEffect(() => {
+    if (expanded && unreadIds.length > 0) void markSeen(unreadIds)
+  }, [expanded, markSeen, unreadIds])
+
   if (!hydrated || total === 0) return null
 
   const invocationState = (delivery: CollaborationDelivery) => {
@@ -117,20 +133,17 @@ export function SessionCommunicationBannerView({
     delivery: CollaborationDelivery,
     direction: "inbound" | "outbound"
   ) => {
-    if (!delivery.expectsReply) return null
-    if (direction === "inbound") {
-      return delivery.replyReceived ? t("stateReplied") : t("stateNeedsReply")
+    if (delivery.obligationState === "none") return null
+    if (delivery.obligationState === "resolved") {
+      if (!delivery.replyReceived) return t("noReplyNeeded")
+      return direction === "inbound"
+        ? t("stateReplied")
+        : t("stateReplyReceived")
     }
-    return delivery.replyReceived
-      ? t("stateReplyReceived")
+    return direction === "inbound"
+      ? t("stateNeedsReply")
       : t("stateAwaitingReply")
   }
-
-  const unreadIds = feed.inbound
-    .filter(
-      (delivery) => delivery.uiSeenAt == null && delivery.state !== "dismissed"
-    )
-    .map((delivery) => delivery.id)
 
   const openSession = (targetConversationId: number) => {
     const conversation = conversationById.get(targetConversationId)
@@ -149,7 +162,7 @@ export function SessionCommunicationBannerView({
       <div className="mx-auto max-w-3xl px-4 py-1.5">
         <button
           type="button"
-          onClick={() => setExpanded((value) => !value)}
+          onClick={() => setExpanded((current) => !current)}
           className="flex w-full items-center gap-2 rounded-md px-1 py-1 text-left text-xs transition-colors hover:bg-muted/50"
         >
           <MessageSquareMore className="h-4 w-4 text-muted-foreground" />
@@ -173,19 +186,6 @@ export function SessionCommunicationBannerView({
 
         {expanded ? (
           <div className="space-y-3 pb-2 pt-1">
-            {unreadIds.length > 0 ? (
-              <div className="flex justify-end">
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="h-7 text-xs"
-                  onClick={() => void markSeen(unreadIds)}
-                >
-                  {t("markAllRead")}
-                </Button>
-              </div>
-            ) : null}
-
             {feed.inbound.length > 0 ? (
               <div className="space-y-1.5">
                 <p className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
@@ -211,14 +211,14 @@ export function SessionCommunicationBannerView({
                           <span className="text-muted-foreground">
                             {delivery.source.agentType || t("unknownHarness")}
                           </span>
-                          {delivery.uiSeenAt == null &&
+                          {delivery.attentionState === "unread" &&
                           delivery.state !== "dismissed" ? (
                             <span className="h-1.5 w-1.5 rounded-full bg-primary" />
                           ) : null}
                           {replyState(delivery, "inbound") ? (
                             <span
                               className={
-                                delivery.replyReceived
+                                delivery.obligationState === "resolved"
                                   ? "rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground"
                                   : "rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-400"
                               }
@@ -245,6 +245,17 @@ export function SessionCommunicationBannerView({
                         ) : null}
                       </div>
                       <div className="flex shrink-0 items-center">
+                        {delivery.obligationState === "awaiting_reply" ? (
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="ghost"
+                            className="h-7 px-2 text-[11px]"
+                            onClick={() => void resolve(delivery.id)}
+                          >
+                            {t("noReplyNeeded")}
+                          </Button>
+                        ) : null}
                         {conversationById.has(
                           delivery.source.conversationId
                         ) ? (
@@ -351,22 +362,24 @@ export function SessionCommunicationBannerView({
                             })}
                           </span>
                           <span className="text-muted-foreground">
-                            {delivery.state === "queued" ||
-                            delivery.state === "embedding" ||
-                            delivery.state === "embedded"
-                              ? invocationState(delivery)
-                              : delivery.state === "failed"
-                                ? t("stateFailed")
-                                : delivery.state === "dismissed"
-                                  ? t("stateDismissedByTarget")
-                                  : delivery.uiSeenAt
-                                    ? t("stateSeen")
-                                    : t("stateDelivered")}
+                            {delivery.state === "failed"
+                              ? t("stateFailed")
+                              : delivery.state === "dismissed"
+                                ? t("stateDismissedByTarget")
+                                : delivery.attentionState === "opened"
+                                  ? t("stateSeen")
+                                  : t("stateDelivered")}
                           </span>
+                          {delivery.state !== "failed" &&
+                          delivery.state !== "dismissed" ? (
+                            <span className="text-muted-foreground">
+                              {invocationState(delivery)}
+                            </span>
+                          ) : null}
                           {replyState(delivery, "outbound") ? (
                             <span
                               className={
-                                delivery.replyReceived
+                                delivery.obligationState === "resolved"
                                   ? "rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground"
                                   : "rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-400"
                               }
@@ -437,11 +450,30 @@ export function SessionPendingContextBar({
 }: SessionPendingContextBarProps) {
   const t = useTranslations("Collaboration")
   const [expanded, setExpanded] = useState(false)
-  const { feed, hydrated, dismiss } = collaboration
-  const pending = feed.inbound.filter(
-    (delivery) =>
-      delivery.invocationPolicy === "store_only" && delivery.state === "pending"
+  const { feed, hydrated, markSeen, dismiss } = collaboration
+  const pending = useMemo(
+    () =>
+      feed.inbound.filter(
+        (delivery) =>
+          delivery.invocationPolicy === "store_only" &&
+          delivery.state === "pending"
+      ),
+    [feed.inbound]
   )
+
+  const pendingUnreadIds = useMemo(
+    () =>
+      pending
+        .filter((delivery) => delivery.attentionState === "unread")
+        .map((delivery) => delivery.id),
+    [pending]
+  )
+
+  useEffect(() => {
+    if (expanded && pendingUnreadIds.length > 0) {
+      void markSeen(pendingUnreadIds)
+    }
+  }, [expanded, markSeen, pendingUnreadIds])
 
   if (!hydrated || pending.length === 0) return null
 
@@ -457,7 +489,7 @@ export function SessionPendingContextBar({
           size="sm"
           variant="ghost"
           className="h-6 shrink-0 px-2 text-[11px]"
-          onClick={() => setExpanded((value) => !value)}
+          onClick={() => setExpanded((current) => !current)}
           aria-expanded={expanded}
         >
           {expanded ? t("pendingContextHide") : t("pendingContextReview")}

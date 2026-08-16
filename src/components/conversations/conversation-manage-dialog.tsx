@@ -23,6 +23,7 @@ import {
   FolderTree,
   ListChecks,
   Loader2,
+  MessageSquareMore,
   MessageSquareText,
   PanelTopOpen,
   PanelRightOpen,
@@ -128,6 +129,7 @@ import { cn } from "@/lib/utils"
 import { formatConversationTitle } from "@/lib/conversation-title"
 import { toErrorMessage } from "@/lib/app-error"
 import { ConversationStatusDot } from "@/components/conversations/conversation-status-dot"
+import { useCollaborationUnreadOverview } from "@/hooks/use-collaboration-unread-overview"
 
 export type CollectionFilter = "all" | "unclassified" | number
 
@@ -162,6 +164,12 @@ type WorkbenchFilter = "all" | "unopened" | number
 type SessionSearchScope = "all" | "metadata" | "content"
 
 type SessionStatusFilter = ConversationStatus | "all" | "archived"
+type CollaborationFilter =
+  | "all"
+  | "unread"
+  | "needs_reply"
+  | "awaiting_reply"
+  | "failed"
 
 interface CollectionOption {
   item: CollectionInfo
@@ -621,6 +629,9 @@ export function ConversationManageDialog({
   const t = useTranslations("Folder.sidebar.manageConversations")
   const tCommon = useTranslations("Folder.common")
   const tStatus = useTranslations("Folder.statusLabels")
+  const tCollaboration = useTranslations("Collaboration")
+  const { overview: collaborationOverview, statusByConversation } =
+    useCollaborationUnreadOverview()
 
   const refreshConversations = useAppWorkspaceStore(
     (s) => s.refreshConversations
@@ -651,6 +662,8 @@ export function ConversationManageDialog({
   )
   const [agentFilter, setAgentFilter] = useState<AgentType | "all">("all")
   const [statusFilter, setStatusFilter] = useState<SessionStatusFilter>("all")
+  const [collaborationFilter, setCollaborationFilter] =
+    useState<CollaborationFilter>("all")
   const [rows, setRows] = useState<DbConversationSummary[]>([])
   const [contentSnippets, setContentSnippets] = useState<Map<number, string>>(
     new Map()
@@ -754,6 +767,7 @@ export function ConversationManageDialog({
       setCollectionFilter(initialCollection ?? "all")
       setAgentFilter("all")
       setStatusFilter("all")
+      setCollaborationFilter("all")
       setSelected(new Map())
       setConfirmDelete(false)
       setError(null)
@@ -1115,21 +1129,40 @@ export function ConversationManageDialog({
     }
 
     if (collectionFilter === "unclassified") {
-      return matched.filter((row) => !collectionRefByConversation.has(row.id))
-    }
-    if (collectionScopeIds) {
-      return matched.filter((row) => {
+      matched = matched.filter(
+        (row) => !collectionRefByConversation.has(row.id)
+      )
+    } else if (collectionScopeIds) {
+      matched = matched.filter((row) => {
         const ref = collectionRefByConversation.get(row.id)
         return ref ? collectionScopeIds.has(ref.collection_id) : false
+      })
+    }
+
+    if (collaborationFilter !== "all") {
+      matched = matched.filter((row) => {
+        const status = statusByConversation.get(row.id)
+        switch (collaborationFilter) {
+          case "unread":
+            return (status?.unreadCount ?? 0) > 0
+          case "needs_reply":
+            return (status?.needsReplyCount ?? 0) > 0
+          case "awaiting_reply":
+            return (status?.awaitingReplyCount ?? 0) > 0
+          case "failed":
+            return (status?.failedCount ?? 0) > 0
+        }
       })
     }
     return matched
   }, [
     branchFilter,
+    collaborationFilter,
     collectionFilter,
     collectionRefByConversation,
     collectionScopeIds,
     rows,
+    statusByConversation,
     workbenchFilter,
     workbenchRefsByConversation,
   ])
@@ -1404,7 +1437,8 @@ export function ConversationManageDialog({
     collectionFilter !== "all" ||
     workbenchFilter !== "all" ||
     agentFilter !== "all" ||
-    statusFilter !== "all"
+    statusFilter !== "all" ||
+    collaborationFilter !== "all"
 
   return (
     <>
@@ -1462,7 +1496,7 @@ export function ConversationManageDialog({
                 {t("contentSearchUnavailable")}
               </p>
             )}
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-7">
               <FolderSelect
                 folders={folderOptions}
                 value={scopeFolderId}
@@ -1662,6 +1696,47 @@ export function ConversationManageDialog({
                   </SelectItem>
                 </SelectContent>
               </Select>
+              <Select
+                value={collaborationFilter}
+                onValueChange={(value) =>
+                  setCollaborationFilter(value as CollaborationFilter)
+                }
+              >
+                <SelectTrigger
+                  className={FACET_SELECT_TRIGGER_CLASS}
+                  aria-label={tCollaboration("worklistFilterLabel")}
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">
+                    <span className="flex items-center gap-2">
+                      <MessageSquareMore className="h-3.5 w-3.5 text-muted-foreground" />
+                      {tCollaboration("worklistFilterAll")}
+                    </span>
+                  </SelectItem>
+                  <SelectItem value="unread">
+                    {tCollaboration("worklistUnread", {
+                      count: collaborationOverview.totalUnreadCount,
+                    })}
+                  </SelectItem>
+                  <SelectItem value="needs_reply">
+                    {tCollaboration("worklistNeedsReply", {
+                      count: collaborationOverview.totalNeedsReplyCount,
+                    })}
+                  </SelectItem>
+                  <SelectItem value="awaiting_reply">
+                    {tCollaboration("worklistAwaitingReply", {
+                      count: collaborationOverview.totalAwaitingReplyCount,
+                    })}
+                  </SelectItem>
+                  <SelectItem value="failed">
+                    {tCollaboration("worklistFailed", {
+                      count: collaborationOverview.totalFailedCount,
+                    })}
+                  </SelectItem>
+                </SelectContent>
+              </Select>
             </div>
           </div>
 
@@ -1724,6 +1799,7 @@ export function ConversationManageDialog({
                         collectionRefByConversation.get(conv.id)
                           ?.collection_id ?? -1
                       )
+                      const collaboration = statusByConversation.get(conv.id)
                       return (
                         <div
                           key={conv.id}
@@ -1803,6 +1879,44 @@ export function ConversationManageDialog({
                             >
                               <PanelsTopLeft className="h-3 w-3" />
                               {refs.length}
+                            </span>
+                          ) : null}
+                          {collaboration ? (
+                            <span className="flex shrink-0 items-center gap-1 text-[10px] tabular-nums">
+                              {collaboration.unreadCount > 0 ? (
+                                <span
+                                  className="rounded-full bg-primary/10 px-1.5 py-0.5 text-primary"
+                                  title={tCollaboration("unreadCount", {
+                                    count: collaboration.unreadCount,
+                                  })}
+                                >
+                                  {collaboration.unreadCount}
+                                </span>
+                              ) : null}
+                              {collaboration.needsReplyCount > 0 ? (
+                                <span
+                                  className="rounded-full bg-amber-500/10 px-1.5 py-0.5 text-amber-700 dark:text-amber-400"
+                                  title={tCollaboration("stateNeedsReply")}
+                                >
+                                  {collaboration.needsReplyCount}
+                                </span>
+                              ) : null}
+                              {collaboration.awaitingReplyCount > 0 ? (
+                                <span
+                                  className="rounded-full bg-violet-500/10 px-1.5 py-0.5 text-violet-700 dark:text-violet-400"
+                                  title={tCollaboration("stateAwaitingReply")}
+                                >
+                                  {collaboration.awaitingReplyCount}
+                                </span>
+                              ) : null}
+                              {collaboration.failedCount > 0 ? (
+                                <span
+                                  className="rounded-full bg-destructive/10 px-1.5 py-0.5 text-destructive"
+                                  title={tCollaboration("stateFailed")}
+                                >
+                                  {collaboration.failedCount}
+                                </span>
+                              ) : null}
                             </span>
                           ) : null}
                           {showFolderColumn ? (

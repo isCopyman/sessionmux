@@ -2110,6 +2110,16 @@ export async function markCollaborationSeen(
   })
 }
 
+export async function resolveCollaborationObligation(
+  conversationId: number,
+  deliveryId: string
+): Promise<CollaborationFeed> {
+  return getTransport().call("collaboration_resolve", {
+    conversationId,
+    deliveryId,
+  })
+}
+
 export async function dismissCollaborationDelivery(
   conversationId: number,
   deliveryId: string

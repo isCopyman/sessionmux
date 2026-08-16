@@ -28,7 +28,7 @@ use sacp::{
     SessionMessage, UntypedMessage,
 };
 use sacp_tokio::AcpAgent;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{mpsc, oneshot, RwLock};
 
 use crate::acp::background_watch;
 use crate::acp::error::AcpError;
@@ -295,6 +295,11 @@ pub enum ConnectionCommand {
         /// prompt actually being processed. `None` for delegation children,
         /// empty prompts, unbound conversations, and non-linked senders.
         user_message: Option<(String, Vec<UserMessageBlock>)>,
+        /// Optional acknowledgement returned only after the connection loop
+        /// has handed the request to sacp's outbound transport. Mailbox
+        /// delivery uses this boundary so an item merely admitted to Codeg's
+        /// internal mpsc is not reported as received by the Agent.
+        dispatch_ack: Option<oneshot::Sender<()>>,
     },
     SetMode {
         mode_id: String,
@@ -7109,6 +7114,7 @@ async fn run_conversation_loop<'a>(
             Some(ConnectionCommand::Prompt {
                 blocks,
                 user_message,
+                dispatch_ack,
             }) => {
                 // Fingerprint the outgoing prompt for the background watcher's
                 // foreground/out-of-turn classifier BEFORE the blocks are
@@ -7228,11 +7234,11 @@ async fn run_conversation_loop<'a>(
                 let stderr_mark = stderr_tail.mark();
                 // Use Box::pin (heap) instead of tokio::pin! (stack) so the
                 // future can be moved into a background task on cancel.
-                let mut prompt_response = Box::pin(
-                    cx.clone()
-                        .send_request_to(Agent, prompt_request)
-                        .block_task(),
-                );
+                let sent_request = cx.clone().send_request_to(Agent, prompt_request);
+                if let Some(dispatch_ack) = dispatch_ack {
+                    let _ = dispatch_ack.send(());
+                }
+                let mut prompt_response = Box::pin(sent_request.block_task());
                 let mut tracked_terminal_tool_calls: HashMap<String, TrackedTerminalToolCall> =
                     HashMap::new();
                 let mut terminal_poll_interval = tokio::time::interval(

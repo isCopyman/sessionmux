@@ -6,17 +6,22 @@ import { onTransportReconnect, subscribe } from "@/lib/platform"
 import type {
   CollaborationChanged,
   CollaborationUnreadOverview,
+  CollaborationUnreadSession,
 } from "@/lib/types"
 import { COLLABORATION_CHANGED_EVENT } from "./use-collaboration-feed"
 
 const EMPTY_OVERVIEW: CollaborationUnreadOverview = {
   totalUnreadCount: 0,
+  totalNeedsReplyCount: 0,
+  totalAwaitingReplyCount: 0,
+  totalFailedCount: 0,
   sessions: [],
 }
 
 export interface UseCollaborationUnreadOverviewReturn {
   overview: CollaborationUnreadOverview
   unreadByConversation: ReadonlyMap<number, number>
+  statusByConversation: ReadonlyMap<number, CollaborationUnreadSession>
   hydrated: boolean
   error: unknown
   reload: () => Promise<void>
@@ -93,5 +98,20 @@ export function useCollaborationUnreadOverview(): UseCollaborationUnreadOverview
     return counts
   }, [overview])
 
-  return { overview, unreadByConversation, hydrated, error, reload }
+  const statusByConversation = useMemo(
+    () =>
+      new Map(
+        overview.sessions.map((session) => [session.conversationId, session])
+      ),
+    [overview]
+  )
+
+  return {
+    overview,
+    unreadByConversation,
+    statusByConversation,
+    hydrated,
+    error,
+    reload,
+  }
 }

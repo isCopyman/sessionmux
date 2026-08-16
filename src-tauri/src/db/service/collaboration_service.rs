@@ -10,8 +10,9 @@ use crate::acp::types::PromptInputBlock;
 use crate::db::error::DbError;
 use crate::db::service::prompt_queue_service;
 use crate::models::{
-    CollaborationDeliveryHint, CollaborationDeliveryState, CollaborationDeliveryView,
-    CollaborationFeed, CollaborationInterruptState, CollaborationInvocationPolicy,
+    CollaborationAgentReceiptKind, CollaborationAttentionState, CollaborationDeliveryHint,
+    CollaborationDeliveryState, CollaborationDeliveryView, CollaborationFeed,
+    CollaborationInterruptState, CollaborationInvocationPolicy, CollaborationObligationState,
     CollaborationSendResult, CollaborationSessionSnapshot, CollaborationUnreadOverview,
     CollaborationUnreadSession, CollaborationUrgency, PromptQueueDraft, PromptQueueItemState,
     SendCollaborationMessageInput,
@@ -167,8 +168,11 @@ async fn revision<C: ConnectionTrait>(conn: &C, conversation_id: i32) -> Result<
 
 const DELIVERY_SELECT: &str = "SELECT d.id, d.event_id, d.target_conversation_id, \
             d.target_title_snapshot, d.target_agent_type_snapshot, \
-            d.target_folder_path_snapshot, d.invocation_policy, d.delivery_hint, \
-            d.state, d.ui_seen_at, d.embedded_turn_ref, d.attempts, d.error, \
+             d.target_folder_path_snapshot, d.invocation_policy, d.delivery_hint, \
+             d.state, d.attention_state, d.opened_at, d.agent_received_at, \
+             d.agent_receipt_kind, d.agent_receipt_ref, d.obligation_state, \
+             d.obligation_created_at, d.obligation_resolved_at, \
+             d.ui_seen_at, d.embedded_turn_ref, d.attempts, d.error, \
             q.id AS queue_item_id, q.state AS queue_state, \
             q.paused_reason AS queue_paused_reason, i.id AS interrupt_operation_id, \
             i.state AS interrupt_state, i.error AS interrupt_error, \
@@ -211,6 +215,19 @@ fn parse_delivery(row: &QueryResult) -> Result<CollaborationDeliveryView, DbErro
         .ok_or_else(|| validation(format!("Unknown urgency: {urgency_raw}")))?;
     let expects_reply: i64 = row.try_get("", "expects_reply")?;
     let reply_received: i64 = row.try_get("", "reply_received")?;
+    let attention_raw: String = row.try_get("", "attention_state")?;
+    let attention_state = CollaborationAttentionState::parse(&attention_raw)
+        .ok_or_else(|| validation(format!("Unknown attention state: {attention_raw}")))?;
+    let agent_receipt_kind = row
+        .try_get::<Option<String>>("", "agent_receipt_kind")?
+        .map(|value| {
+            CollaborationAgentReceiptKind::parse(&value)
+                .ok_or_else(|| validation(format!("Unknown Agent receipt kind: {value}")))
+        })
+        .transpose()?;
+    let obligation_raw: String = row.try_get("", "obligation_state")?;
+    let obligation_state = CollaborationObligationState::parse(&obligation_raw)
+        .ok_or_else(|| validation(format!("Unknown obligation state: {obligation_raw}")))?;
     let interrupt_state = row
         .try_get::<Option<String>>("", "interrupt_state")?
         .map(|value| {
@@ -248,6 +265,14 @@ fn parse_delivery(row: &QueryResult) -> Result<CollaborationDeliveryView, DbErro
         queue_item_id: row.try_get("", "queue_item_id")?,
         queue_state,
         queue_paused_reason: row.try_get("", "queue_paused_reason")?,
+        attention_state,
+        opened_at: parse_optional_timestamp(row, "opened_at")?,
+        agent_received_at: parse_optional_timestamp(row, "agent_received_at")?,
+        agent_receipt_kind,
+        agent_receipt_ref: row.try_get("", "agent_receipt_ref")?,
+        obligation_state,
+        obligation_created_at: parse_optional_timestamp(row, "obligation_created_at")?,
+        obligation_resolved_at: parse_optional_timestamp(row, "obligation_resolved_at")?,
         ui_seen_at: parse_optional_timestamp(row, "ui_seen_at")?,
         embedded_turn_ref: row.try_get("", "embedded_turn_ref")?,
         attempts: row.try_get("", "attempts")?,
@@ -424,7 +449,7 @@ fn prompt_draft_from_delivery_row(row: &QueryResult) -> Result<PromptQueueDraft,
     let source_agent_type: String = row.try_get("", "source_agent_type_snapshot")?;
     let source_folder_path: Option<String> = row.try_get("", "source_folder_path_snapshot")?;
     let reply_to_event_id: Option<String> = row.try_get("", "reply_to_event_id")?;
-    let expects_reply: i64 = row.try_get("", "expects_reply")?;
+    let expects_reply: i64 = row.try_get("", "effective_expects_reply")?;
     let metadata = serde_json::json!({
         "version": ENVELOPE_VERSION,
         "eventId": event_id,
@@ -462,7 +487,9 @@ pub(crate) async fn prompt_draft_for_origin<C: ConnectionTrait>(
     let row = conn
         .query_one(statement(
             "SELECT d.id AS delivery_id, e.id AS event_id, e.body, e.reply_to_event_id, \
-                    e.expects_reply, e.source_conversation_id, e.source_title_snapshot, \
+                    CASE WHEN d.obligation_state = 'awaiting_reply' THEN 1 ELSE 0 END \
+                        AS effective_expects_reply, \
+                    e.source_conversation_id, e.source_title_snapshot, \
                     e.source_agent_type_snapshot, e.source_folder_path_snapshot \
              FROM collaboration_delivery d \
              JOIN collaboration_event e ON e.id = d.event_id \
@@ -514,7 +541,9 @@ pub(crate) async fn claim_pending_store_only_for_turn(
         .query_all(statement(
             &format!(
                 "SELECT d.id AS delivery_id, e.id AS event_id, e.body, e.reply_to_event_id, \
-                        e.expects_reply, e.source_conversation_id, e.source_title_snapshot, \
+                        CASE WHEN d.obligation_state = 'awaiting_reply' THEN 1 ELSE 0 END \
+                            AS effective_expects_reply, \
+                        e.source_conversation_id, e.source_title_snapshot, \
                         e.source_agent_type_snapshot, e.source_folder_path_snapshot \
                  FROM collaboration_delivery d \
                  JOIN collaboration_event e ON e.id = d.event_id \
@@ -612,23 +641,30 @@ async fn transition_store_only_batch(
                AND embedded_turn_ref = ?"
         } else {
             "UPDATE collaboration_delivery \
-             SET state = 'embedded', error = NULL, updated_at = CURRENT_TIMESTAMP \
+             SET state = 'embedded', error = NULL, \
+                 agent_received_at = COALESCE(agent_received_at, CURRENT_TIMESTAMP), \
+                 agent_receipt_kind = COALESCE(agent_receipt_kind, 'managed_acp'), \
+                 agent_receipt_ref = COALESCE(agent_receipt_ref, ?), \
+                 updated_at = CURRENT_TIMESTAMP \
              WHERE event_id = ? AND target_conversation_id = ? \
                AND invocation_policy = 'store_only' AND state = 'embedding' \
                AND embedded_turn_ref = ?"
         };
-        let changed = txn
-            .execute(statement(
-                sql,
-                vec![
-                    event_id.clone().into(),
-                    target_conversation_id.into(),
-                    batch.turn_ref.clone().into(),
-                ],
-            ))
-            .await?
-            .rows_affected()
-            == 1;
+        let values = if clear_turn_ref {
+            vec![
+                event_id.clone().into(),
+                target_conversation_id.into(),
+                batch.turn_ref.clone().into(),
+            ]
+        } else {
+            vec![
+                batch.turn_ref.clone().into(),
+                event_id.clone().into(),
+                target_conversation_id.into(),
+                batch.turn_ref.clone().into(),
+            ]
+        };
+        let changed = txn.execute(statement(sql, values)).await?.rows_affected() == 1;
         if changed {
             changed_any = true;
             participants.insert(source);
@@ -787,9 +823,13 @@ pub(crate) async fn mark_origin_embedded(
         .execute(statement(
             "UPDATE collaboration_delivery \
              SET state = 'embedded', embedded_turn_ref = ?, error = NULL, \
-                 updated_at = CURRENT_TIMESTAMP \
+                 agent_received_at = COALESCE(agent_received_at, CURRENT_TIMESTAMP), \
+                 agent_receipt_kind = COALESCE(agent_receipt_kind, 'managed_acp'), \
+                 agent_receipt_ref = COALESCE(agent_receipt_ref, ?), \
+                  updated_at = CURRENT_TIMESTAMP \
              WHERE event_id = ? AND target_conversation_id = ? AND state = 'embedding'",
             vec![
+                turn_ref.into(),
                 turn_ref.into(),
                 event_id.into(),
                 target_conversation_id.into(),
@@ -860,6 +900,7 @@ pub(crate) async fn auto_reply_for_completed_turn(
                AND d.state = 'embedded' \
                AND d.invocation_policy = 'invoke_when_idle' \
                AND e.expects_reply = 1 \
+               AND d.obligation_state = 'awaiting_reply' \
                AND NOT EXISTS ( \
                    SELECT 1 FROM collaboration_event reply \
                    WHERE reply.reply_to_event_id = e.id \
@@ -1128,6 +1169,21 @@ async fn send_with_initially_inactive_targets_guarded(
         ));
     }
 
+    // A reply clears only the obligation owned by this exact recipient of the
+    // parent event. Fan-out siblings remain independently awaiting a reply.
+    if let Some(reply_to_event_id) = input.reply_to_event_id.as_deref() {
+        txn.execute(statement(
+            "UPDATE collaboration_delivery \
+             SET obligation_state = 'resolved', \
+                 obligation_resolved_at = COALESCE(obligation_resolved_at, CURRENT_TIMESTAMP), \
+                 updated_at = CURRENT_TIMESTAMP \
+             WHERE event_id = ? AND target_conversation_id = ? \
+               AND obligation_state = 'awaiting_reply'",
+            vec![reply_to_event_id.into(), source.id.into()],
+        ))
+        .await?;
+    }
+
     let mut affected = BTreeSet::from([source.id]);
     ensure_state(&txn, source.id).await?;
     bump_revision(&txn, source.id).await?;
@@ -1156,12 +1212,20 @@ async fn send_with_initially_inactive_targets_guarded(
             ),
         };
         let delivery_id = uuid::Uuid::new_v4().to_string();
+        let obligation_state = if input.expects_reply && target.is_some() {
+            CollaborationObligationState::AwaitingReply
+        } else {
+            CollaborationObligationState::None
+        };
         txn.execute(statement(
             "INSERT INTO collaboration_delivery \
-             (id, event_id, target_conversation_id, target_title_snapshot, \
-              target_agent_type_snapshot, target_folder_path_snapshot, invocation_policy, \
-              delivery_hint, state, attempts, error, created_at, updated_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+              (id, event_id, target_conversation_id, target_title_snapshot, \
+               target_agent_type_snapshot, target_folder_path_snapshot, invocation_policy, \
+               delivery_hint, state, obligation_state, obligation_created_at, \
+               attempts, error, created_at, updated_at) \
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \
+                      CASE WHEN ? = 1 THEN CURRENT_TIMESTAMP ELSE NULL END, \
+                      0, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
             vec![
                 delivery_id.clone().into(),
                 event_id.clone().into(),
@@ -1172,6 +1236,8 @@ async fn send_with_initially_inactive_targets_guarded(
                 input.invocation_policy.as_str().into(),
                 input.delivery_hint.as_str().into(),
                 state.into(),
+                obligation_state.as_str().into(),
+                (input.expects_reply as i32).into(),
                 error.into(),
             ],
         ))
@@ -1235,7 +1301,7 @@ async fn feed_on<C: ConnectionTrait>(
     let count_row = conn
         .query_one(statement(
             "SELECT COUNT(*) AS count FROM collaboration_delivery \
-             WHERE target_conversation_id = ? AND ui_seen_at IS NULL \
+             WHERE target_conversation_id = ? AND attention_state = 'unread' \
                AND state <> 'dismissed'",
             vec![conversation_id.into()],
         ))
@@ -1265,37 +1331,85 @@ pub async fn feed(
     feed_on(conn, conversation_id, limit.unwrap_or(DEFAULT_FEED_LIMIT)).await
 }
 
-/// Return unread collaboration counts for every live Session. This is a
-/// dedicated projection because read state belongs to collaboration, not the
-/// Harness-owned conversation index.
+/// Return actionable collaboration counts for every live Session. This is a
+/// dedicated projection because mailbox lifecycle belongs to collaboration,
+/// not the Harness-owned conversation index.
 pub async fn unread_overview(
     conn: &DatabaseConnection,
 ) -> Result<CollaborationUnreadOverview, DbError> {
     let rows = conn
         .query_all(statement(
-            "SELECT d.target_conversation_id, COUNT(*) AS unread_count \
-             FROM collaboration_delivery d \
-             JOIN conversation c ON c.id = d.target_conversation_id \
-             WHERE c.deleted_at IS NULL AND d.ui_seen_at IS NULL \
-               AND d.state <> 'dismissed' \
-             GROUP BY d.target_conversation_id \
-             ORDER BY d.target_conversation_id",
+            "SELECT c.id AS conversation_id, COALESCE(s.revision, 0) AS revision, \
+             (SELECT COUNT(*) FROM collaboration_delivery d \
+                WHERE d.target_conversation_id = c.id \
+                  AND d.attention_state = 'unread' AND d.state <> 'dismissed') AS unread_count, \
+             (SELECT COUNT(*) FROM collaboration_delivery d \
+                WHERE d.target_conversation_id = c.id \
+                  AND d.obligation_state = 'awaiting_reply') AS needs_reply_count, \
+             (SELECT COUNT(*) FROM collaboration_delivery d \
+                JOIN collaboration_event e ON e.id = d.event_id \
+                WHERE e.source_conversation_id = c.id \
+                  AND d.obligation_state = 'awaiting_reply') AS awaiting_reply_count, \
+             (SELECT COUNT(*) FROM collaboration_delivery d \
+                JOIN collaboration_event e ON e.id = d.event_id \
+                WHERE d.state = 'failed' \
+                  AND (d.target_conversation_id = c.id OR e.source_conversation_id = c.id)) AS failed_count \
+             FROM conversation c \
+             LEFT JOIN conversation_collaboration_state s ON s.conversation_id = c.id \
+             WHERE c.deleted_at IS NULL \
+             ORDER BY c.id",
             vec![],
         ))
         .await?;
     let mut total_unread_count = 0_u32;
+    let mut total_needs_reply_count = 0_u32;
+    let mut total_awaiting_reply_count = 0_u32;
     let mut sessions = Vec::with_capacity(rows.len());
     for row in rows {
-        let raw_count: i64 = row.try_get("", "unread_count")?;
-        let unread_count = u32::try_from(raw_count.max(0)).unwrap_or(u32::MAX);
+        let count = |column| -> Result<u32, DbError> {
+            let raw: i64 = row.try_get("", column)?;
+            Ok(u32::try_from(raw.max(0)).unwrap_or(u32::MAX))
+        };
+        let unread_count = count("unread_count")?;
+        let needs_reply_count = count("needs_reply_count")?;
+        let awaiting_reply_count = count("awaiting_reply_count")?;
+        let failed_count = count("failed_count")?;
         total_unread_count = total_unread_count.saturating_add(unread_count);
-        sessions.push(CollaborationUnreadSession {
-            conversation_id: row.try_get("", "target_conversation_id")?,
-            unread_count,
-        });
+        total_needs_reply_count = total_needs_reply_count.saturating_add(needs_reply_count);
+        total_awaiting_reply_count =
+            total_awaiting_reply_count.saturating_add(awaiting_reply_count);
+        if unread_count > 0 || needs_reply_count > 0 || awaiting_reply_count > 0 || failed_count > 0
+        {
+            sessions.push(CollaborationUnreadSession {
+                conversation_id: row.try_get("", "conversation_id")?,
+                revision: row.try_get("", "revision")?,
+                unread_count,
+                needs_reply_count,
+                awaiting_reply_count,
+                failed_count,
+            });
+        }
     }
+    let total_failed_count = conn
+        .query_one(statement(
+            "SELECT COUNT(*) AS count FROM collaboration_delivery d \
+             JOIN collaboration_event e ON e.id = d.event_id \
+             WHERE d.state = 'failed' AND EXISTS ( \
+                 SELECT 1 FROM conversation c \
+                 WHERE c.deleted_at IS NULL \
+                   AND (c.id = d.target_conversation_id OR c.id = e.source_conversation_id) \
+             )",
+            vec![],
+        ))
+        .await?
+        .ok_or_else(|| validation("Could not count failed Session messages"))?
+        .try_get::<i64>("", "count")?;
+    let total_failed_count = u32::try_from(total_failed_count.max(0)).unwrap_or(u32::MAX);
     Ok(CollaborationUnreadOverview {
         total_unread_count,
+        total_needs_reply_count,
+        total_awaiting_reply_count,
+        total_failed_count,
         sessions,
     })
 }
@@ -1370,8 +1484,12 @@ pub async fn mark_seen(
         let result = txn
             .execute(statement(
                 "UPDATE collaboration_delivery \
-                 SET ui_seen_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP \
-                 WHERE id = ? AND target_conversation_id = ? AND ui_seen_at IS NULL",
+                 SET attention_state = 'opened', \
+                     opened_at = COALESCE(opened_at, CURRENT_TIMESTAMP), \
+                     ui_seen_at = COALESCE(ui_seen_at, CURRENT_TIMESTAMP), \
+                     updated_at = CURRENT_TIMESTAMP \
+                 WHERE id = ? AND target_conversation_id = ? \
+                   AND attention_state = 'unread'",
                 vec![delivery_id.into(), conversation_id.into()],
             ))
             .await?;
@@ -1379,6 +1497,40 @@ pub async fn mark_seen(
     }
     let affected = if changed {
         bump_live_participants(&txn, participants).await?
+    } else {
+        vec![]
+    };
+    txn.commit().await?;
+    Ok(CollaborationMutationResult {
+        feed: feed(conn, conversation_id, None).await?,
+        affected_conversation_ids: affected,
+    })
+}
+
+/// Resolve an inbound reply obligation without sending a reply. The update is
+/// scoped to one target delivery, so a fan-out recipient cannot clear sibling
+/// recipients' work.
+pub async fn resolve_obligation(
+    conn: &DatabaseConnection,
+    conversation_id: i32,
+    delivery_id: &str,
+) -> Result<CollaborationMutationResult, DbError> {
+    require_live_session(conn, conversation_id).await?;
+    let txn = conn.begin().await?;
+    let (source_id, _) = delivery_participants(&txn, delivery_id, conversation_id).await?;
+    let result = txn
+        .execute(statement(
+            "UPDATE collaboration_delivery \
+             SET obligation_state = 'resolved', \
+                 obligation_resolved_at = COALESCE(obligation_resolved_at, CURRENT_TIMESTAMP), \
+                 updated_at = CURRENT_TIMESTAMP \
+             WHERE id = ? AND target_conversation_id = ? \
+               AND obligation_state = 'awaiting_reply'",
+            vec![delivery_id.into(), conversation_id.into()],
+        ))
+        .await?;
+    let affected = if result.rows_affected() > 0 {
+        bump_live_participants(&txn, [source_id, conversation_id]).await?
     } else {
         vec![]
     };
@@ -1400,7 +1552,9 @@ pub async fn dismiss(
     let result = txn
         .execute(statement(
             "UPDATE collaboration_delivery \
-             SET state = 'dismissed', ui_seen_at = COALESCE(ui_seen_at, CURRENT_TIMESTAMP), \
+             SET state = 'dismissed', attention_state = 'opened', \
+                 opened_at = COALESCE(opened_at, CURRENT_TIMESTAMP), \
+                 ui_seen_at = COALESCE(ui_seen_at, CURRENT_TIMESTAMP), \
                  updated_at = CURRENT_TIMESTAMP \
              WHERE id = ? AND target_conversation_id = ? AND state = 'pending'",
             vec![delivery_id.into(), conversation_id.into()],
@@ -1584,6 +1738,9 @@ mod tests {
         assert!(feed.inbound.iter().all(|delivery| {
             delivery.state == CollaborationDeliveryState::Embedded
                 && delivery.embedded_turn_ref.as_deref() == Some("optimistic-natural")
+                && delivery.agent_receipt_kind == Some(CollaborationAgentReceiptKind::ManagedAcp)
+                && delivery.agent_receipt_ref.as_deref() == Some("optimistic-natural")
+                && delivery.agent_received_at.is_some()
                 && delivery.attempts == 1
         }));
     }
@@ -1684,10 +1841,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(
-            batch.event_ids.len(),
-            MAX_STORE_ONLY_DELIVERIES_PER_TURN
-        );
+        assert_eq!(batch.event_ids.len(), MAX_STORE_ONLY_DELIVERIES_PER_TURN);
         let feed = feed(&db.conn, target, None).await.unwrap();
         assert_eq!(
             feed.inbound
@@ -1854,6 +2008,16 @@ mod tests {
             .expect("second target delivery");
         assert!(delivery_a.reply_received);
         assert!(!delivery_b.reply_received);
+        assert_eq!(
+            delivery_a.obligation_state,
+            CollaborationObligationState::Resolved
+        );
+        assert!(delivery_a.obligation_resolved_at.is_some());
+        assert_eq!(
+            delivery_b.obligation_state,
+            CollaborationObligationState::AwaitingReply
+        );
+        assert!(delivery_b.obligation_resolved_at.is_none());
 
         let recipient_feed = feed(&db.conn, target_a, None).await.unwrap();
         assert!(recipient_feed.inbound[0].reply_received);
@@ -2063,12 +2227,9 @@ mod tests {
     #[tokio::test]
     async fn missing_target_is_a_failed_delivery_without_harming_live_targets() {
         let (db, source, target_a, _) = seeded_memory().await;
-        let sent = send(
-            &db.conn,
-            input(source, vec![target_a, 999_999], "partial", "hello"),
-        )
-        .await
-        .unwrap();
+        let mut request = input(source, vec![target_a, 999_999], "partial", "hello");
+        request.expects_reply = true;
+        let sent = send(&db.conn, request).await.unwrap();
         assert_eq!(sent.deliveries.len(), 2);
         let live = sent
             .deliveries
@@ -2083,6 +2244,11 @@ mod tests {
         assert_eq!(live.state, CollaborationDeliveryState::Pending);
         assert_eq!(missing.state, CollaborationDeliveryState::Failed);
         assert_eq!(missing.error.as_deref(), Some("target_not_found"));
+        assert_eq!(
+            missing.obligation_state,
+            CollaborationObligationState::None,
+            "an unreachable target cannot owe a reply"
+        );
     }
 
     #[tokio::test]
@@ -2101,7 +2267,17 @@ mod tests {
             marked.feed.inbound[0].state,
             CollaborationDeliveryState::Pending
         );
+        assert_eq!(
+            marked.feed.inbound[0].attention_state,
+            CollaborationAttentionState::Opened
+        );
+        assert!(marked.feed.inbound[0].opened_at.is_some());
         assert!(marked.feed.inbound[0].ui_seen_at.is_some());
+        assert!(marked.feed.inbound[0].agent_received_at.is_none());
+        assert_eq!(
+            marked.feed.inbound[0].obligation_state,
+            CollaborationObligationState::None
+        );
         let repeated = mark_seen(&db.conn, target, vec![delivery_id])
             .await
             .unwrap();
@@ -2126,38 +2302,169 @@ mod tests {
 
         let overview = unread_overview(&db.conn).await.unwrap();
         assert_eq!(overview.total_unread_count, 2);
-        assert_eq!(
-            overview.sessions,
-            vec![
-                CollaborationUnreadSession {
-                    conversation_id: target_a,
-                    unread_count: 1,
-                },
-                CollaborationUnreadSession {
-                    conversation_id: target_b,
-                    unread_count: 1,
-                },
-            ]
-        );
+        assert_eq!(overview.total_needs_reply_count, 0);
+        assert_eq!(overview.total_awaiting_reply_count, 0);
+        assert_eq!(overview.total_failed_count, 1);
+        let status = |conversation_id| {
+            overview
+                .sessions
+                .iter()
+                .find(|session| session.conversation_id == conversation_id)
+                .expect("actionable Session")
+        };
+        assert_eq!(status(source).failed_count, 1);
+        assert_eq!(status(target_a).unread_count, 1);
+        assert_eq!(status(target_b).unread_count, 1);
 
         let delivery_a = sent
             .deliveries
             .iter()
             .find(|delivery| delivery.target.conversation_id == target_a)
             .unwrap();
+        db.conn
+            .execute(statement(
+                "UPDATE collaboration_delivery SET state = 'failed', error = 'transport' \
+                 WHERE id = ?",
+                vec![delivery_a.id.clone().into()],
+            ))
+            .await
+            .unwrap();
+        let with_live_failure = unread_overview(&db.conn).await.unwrap();
+        assert_eq!(
+            with_live_failure.total_failed_count, 2,
+            "one live-to-live failure is one delivery even though both Session rows surface it"
+        );
+        let live_failure_status = |conversation_id| {
+            with_live_failure
+                .sessions
+                .iter()
+                .find(|session| session.conversation_id == conversation_id)
+                .expect("actionable Session")
+        };
+        assert_eq!(live_failure_status(source).failed_count, 2);
+        assert_eq!(live_failure_status(target_a).failed_count, 1);
+
         mark_seen(&db.conn, target_a, vec![delivery_a.id.clone()])
             .await
             .unwrap();
-        assert_eq!(
-            unread_overview(&db.conn).await.unwrap(),
-            CollaborationUnreadOverview {
-                total_unread_count: 1,
-                sessions: vec![CollaborationUnreadSession {
-                    conversation_id: target_b,
-                    unread_count: 1,
-                }],
-            }
+        let after = unread_overview(&db.conn).await.unwrap();
+        assert_eq!(after.total_unread_count, 1);
+        assert_eq!(after.total_failed_count, 2);
+        assert!(after
+            .sessions
+            .iter()
+            .any(|session| session.conversation_id == target_b && session.unread_count == 1));
+        assert!(!after.sessions.iter().any(|session| {
+            session.conversation_id == target_a
+                && session.unread_count > 0
+                && session.needs_reply_count == 0
+                && session.awaiting_reply_count == 0
+                && session.failed_count == 0
+        }));
+    }
+
+    #[tokio::test]
+    async fn no_reply_needed_resolves_only_the_owned_fanout_delivery() {
+        let (db, source, target_a, target_b) = seeded_memory().await;
+        let mut request = input(
+            source,
+            vec![target_a, target_b],
+            "manual-fanout-resolution",
+            "reply only if needed",
         );
+        request.expects_reply = true;
+        let sent = send(&db.conn, request).await.unwrap();
+        let delivery_a = sent
+            .deliveries
+            .iter()
+            .find(|delivery| delivery.target.conversation_id == target_a)
+            .unwrap();
+
+        let resolved = resolve_obligation(&db.conn, target_a, &delivery_a.id)
+            .await
+            .unwrap();
+        assert_eq!(
+            resolved.feed.inbound[0].obligation_state,
+            CollaborationObligationState::Resolved
+        );
+        let source_feed = feed(&db.conn, source, None).await.unwrap();
+        assert_eq!(
+            source_feed
+                .outbound
+                .iter()
+                .find(|delivery| delivery.target.conversation_id == target_a)
+                .unwrap()
+                .obligation_state,
+            CollaborationObligationState::Resolved
+        );
+        assert_eq!(
+            source_feed
+                .outbound
+                .iter()
+                .find(|delivery| delivery.target.conversation_id == target_b)
+                .unwrap()
+                .obligation_state,
+            CollaborationObligationState::AwaitingReply
+        );
+
+        let repeated = resolve_obligation(&db.conn, target_a, &delivery_a.id)
+            .await
+            .unwrap();
+        assert!(repeated.affected_conversation_ids.is_empty());
+        assert!(resolve_obligation(&db.conn, target_b, &delivery_a.id)
+            .await
+            .is_err());
+
+        let claimed = claim_pending_store_only_for_turn(&db.conn, target_a, "waived-turn")
+            .await
+            .unwrap()
+            .expect("the message remains available as context");
+        let envelope = claimed
+            .blocks
+            .iter()
+            .find_map(|block| match block {
+                PromptInputBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .expect("text envelope");
+        assert!(envelope.contains("\"expectsReply\":false"));
+    }
+
+    #[tokio::test]
+    async fn no_reply_needed_prevents_turn_completion_from_auto_replying() {
+        let (db, source, target, _) = seeded_memory().await;
+        let mut request =
+            invoke_input(source, vec![target], "waived-auto-reply", "reply if needed");
+        request.expects_reply = true;
+        let sent = send(&db.conn, request).await.unwrap();
+        let delivery_id = sent.deliveries[0].id.clone();
+        db.conn
+            .execute(statement(
+                "UPDATE collaboration_delivery \
+                 SET state = 'embedded', embedded_turn_ref = 'waived-message' \
+                 WHERE id = ?",
+                vec![delivery_id.clone().into()],
+            ))
+            .await
+            .unwrap();
+        resolve_obligation(&db.conn, target, &delivery_id)
+            .await
+            .unwrap();
+
+        assert!(auto_reply_for_completed_turn(
+            &db.conn,
+            target,
+            "waived-message",
+            "This must stay in the local Session only."
+        )
+        .await
+        .unwrap()
+        .is_none());
+        assert!(feed(&db.conn, source, None)
+            .await
+            .unwrap()
+            .inbound
+            .is_empty());
     }
 
     #[tokio::test]

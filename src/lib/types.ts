@@ -1177,6 +1177,12 @@ export type CollaborationDeliveryState =
   | "embedded"
   | "dismissed"
   | "failed"
+export type CollaborationAttentionState = "unread" | "opened"
+export type CollaborationAgentReceiptKind = "managed_acp" | "legacy_embedded"
+export type CollaborationObligationState =
+  | "none"
+  | "awaiting_reply"
+  | "resolved"
 export type CollaborationInterruptState =
   | "requested"
   | "cancelling"
@@ -1211,7 +1217,17 @@ export interface CollaborationDelivery {
   queueItemId?: string | null
   queueState?: PromptQueueItemState | null
   queuePausedReason?: string | null
+  attentionState: CollaborationAttentionState
+  openedAt?: string | null
+  agentReceivedAt?: string | null
+  agentReceiptKind?: CollaborationAgentReceiptKind | null
+  agentReceiptRef?: string | null
+  obligationState: CollaborationObligationState
+  obligationCreatedAt?: string | null
+  obligationResolvedAt?: string | null
+  /** @deprecated Compatibility alias for openedAt. */
   uiSeenAt?: string | null
+  /** @deprecated Compatibility alias for agentReceiptRef. */
   embeddedTurnRef?: string | null
   attempts: number
   error?: string | null
@@ -1232,11 +1248,18 @@ export interface CollaborationFeed {
 
 export interface CollaborationUnreadSession {
   conversationId: number
+  revision: number
   unreadCount: number
+  needsReplyCount: number
+  awaitingReplyCount: number
+  failedCount: number
 }
 
 export interface CollaborationUnreadOverview {
   totalUnreadCount: number
+  totalNeedsReplyCount: number
+  totalAwaitingReplyCount: number
+  totalFailedCount: number
   sessions: CollaborationUnreadSession[]
 }
 

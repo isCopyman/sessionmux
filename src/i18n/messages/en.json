@@ -5044,6 +5044,13 @@
     "stateNeedsReply": "Reply required",
     "stateReplied": "Replied",
     "stateAwaitingReply": "Waiting for reply",
-    "stateReplyReceived": "Reply received"
+    "stateReplyReceived": "Reply received",
+    "noReplyNeeded": "No reply needed",
+    "worklistFilterLabel": "Session message worklist",
+    "worklistFilterAll": "All message states",
+    "worklistUnread": "Unread ({count})",
+    "worklistNeedsReply": "Needs reply ({count})",
+    "worklistAwaitingReply": "Awaiting reply ({count})",
+    "worklistFailed": "Failed ({count})"
   }
 }

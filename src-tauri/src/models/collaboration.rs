@@ -88,6 +88,67 @@ pub enum CollaborationDeliveryState {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+pub enum CollaborationAttentionState {
+    Unread,
+    Opened,
+}
+
+impl CollaborationAttentionState {
+    pub(crate) fn parse(value: &str) -> Option<Self> {
+        match value {
+            "unread" => Some(Self::Unread),
+            "opened" => Some(Self::Opened),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CollaborationAgentReceiptKind {
+    ManagedAcp,
+    LegacyEmbedded,
+}
+
+impl CollaborationAgentReceiptKind {
+    pub(crate) fn parse(value: &str) -> Option<Self> {
+        match value {
+            "managed_acp" => Some(Self::ManagedAcp),
+            "legacy_embedded" => Some(Self::LegacyEmbedded),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CollaborationObligationState {
+    None,
+    AwaitingReply,
+    Resolved,
+}
+
+impl CollaborationObligationState {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::AwaitingReply => "awaiting_reply",
+            Self::Resolved => "resolved",
+        }
+    }
+
+    pub(crate) fn parse(value: &str) -> Option<Self> {
+        match value {
+            "none" => Some(Self::None),
+            "awaiting_reply" => Some(Self::AwaitingReply),
+            "resolved" => Some(Self::Resolved),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum CollaborationInterruptState {
     Requested,
     Cancelling,
@@ -163,6 +224,16 @@ pub struct CollaborationDeliveryView {
     pub queue_item_id: Option<String>,
     pub queue_state: Option<PromptQueueItemState>,
     pub queue_paused_reason: Option<String>,
+    pub attention_state: CollaborationAttentionState,
+    pub opened_at: Option<DateTime<Utc>>,
+    pub agent_received_at: Option<DateTime<Utc>>,
+    pub agent_receipt_kind: Option<CollaborationAgentReceiptKind>,
+    pub agent_receipt_ref: Option<String>,
+    pub obligation_state: CollaborationObligationState,
+    pub obligation_created_at: Option<DateTime<Utc>>,
+    pub obligation_resolved_at: Option<DateTime<Utc>>,
+    /// Compatibility aliases retained while existing clients migrate to the
+    /// explicit mailbox lifecycle fields above.
     pub ui_seen_at: Option<DateTime<Utc>>,
     pub embedded_turn_ref: Option<String>,
     pub attempts: i32,
@@ -188,13 +259,20 @@ pub struct CollaborationFeed {
 #[serde(rename_all = "camelCase")]
 pub struct CollaborationUnreadSession {
     pub conversation_id: i32,
+    pub revision: i64,
     pub unread_count: u32,
+    pub needs_reply_count: u32,
+    pub awaiting_reply_count: u32,
+    pub failed_count: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CollaborationUnreadOverview {
     pub total_unread_count: u32,
+    pub total_needs_reply_count: u32,
+    pub total_awaiting_reply_count: u32,
+    pub total_failed_count: u32,
     pub sessions: Vec<CollaborationUnreadSession>,
 }
 
