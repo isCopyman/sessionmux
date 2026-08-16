@@ -21,7 +21,10 @@ vi.mock("@/lib/platform", () => ({
   onTransportReconnect: vi.fn(() => () => {}),
 }))
 
-import { useCollaborationTimeline } from "./use-collaboration-timeline"
+import {
+  resolveCollaborationTimelineId,
+  useCollaborationTimeline,
+} from "./use-collaboration-timeline"
 
 function projection(
   conversationId: number,
@@ -36,7 +39,21 @@ beforeEach(() => {
   api.get.mockImplementation((id: number) => Promise.resolve(projection(id, 1)))
 })
 
+describe("resolveCollaborationTimelineId", () => {
+  it("prefers the bound DB id over a draft runtime key", () => {
+    expect(resolveCollaborationTimelineId(-7, 288)).toBe(288)
+    expect(resolveCollaborationTimelineId(288, 288)).toBe(288)
+    expect(resolveCollaborationTimelineId(-7, null)).toBe(-7)
+    expect(resolveCollaborationTimelineId(288, null)).toBe(288)
+  })
+})
+
 describe("useCollaborationTimeline", () => {
+  it("does not fetch a timeline for a draft virtual Session id", async () => {
+    renderHook(() => useCollaborationTimeline(-42))
+    await waitFor(() => expect(api.get).not.toHaveBeenCalled())
+  })
+
   it("refetches every open view from the shared revision event", async () => {
     const first = renderHook(() => useCollaborationTimeline(7))
     const second = renderHook(() => useCollaborationTimeline(7))

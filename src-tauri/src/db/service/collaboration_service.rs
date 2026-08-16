@@ -494,16 +494,65 @@ pub(crate) async fn prompt_draft_for_origin<C: ConnectionTrait>(
              FROM collaboration_delivery d \
              JOIN collaboration_event e ON e.id = d.event_id \
              WHERE d.event_id = ? AND d.target_conversation_id = ? \
-               AND d.invocation_policy = 'invoke_when_idle'",
+               AND d.state NOT IN ('dismissed', 'failed')",
             vec![event_id.into(), target_conversation_id.into()],
         ))
         .await?
         .ok_or_else(|| {
             validation(format!(
-                "Queued collaboration event {event_id} has no delivery for Session {target_conversation_id}"
+                "Collaboration event {event_id} has no delivery for Session {target_conversation_id}"
             ))
         })?;
     prompt_draft_from_delivery_row(&row)
+}
+
+/// Mark a single Session message as already injected (steer or a started
+/// turn). The next ordinary human prompt must not attach the same letter
+/// again via `claim_pending_store_only_for_turn`.
+pub(crate) async fn mark_session_message_injected(
+    conn: &DatabaseConnection,
+    target_conversation_id: i32,
+    event_id: &str,
+    receipt_ref: &str,
+) -> Result<Vec<i32>, DbError> {
+    if receipt_ref.trim().is_empty() || receipt_ref.len() > MAX_DEDUPE_ID_BYTES {
+        return Err(validation(format!(
+            "Collaboration receipt reference must contain between 1 and {MAX_DEDUPE_ID_BYTES} bytes"
+        )));
+    }
+    let txn = conn.begin().await?;
+    let changed = txn
+        .execute(statement(
+            "UPDATE collaboration_delivery \
+             SET state = 'embedded', \
+                 embedded_turn_ref = COALESCE(embedded_turn_ref, ?), \
+                 agent_received_at = COALESCE(agent_received_at, CURRENT_TIMESTAMP), \
+                 agent_receipt_kind = COALESCE(agent_receipt_kind, 'managed_acp'), \
+                 agent_receipt_ref = COALESCE(agent_receipt_ref, ?), \
+                 updated_at = CURRENT_TIMESTAMP \
+             WHERE event_id = ? AND target_conversation_id = ? \
+               AND state IN ('pending', 'queued', 'embedding')",
+            vec![
+                receipt_ref.into(),
+                receipt_ref.into(),
+                event_id.into(),
+                target_conversation_id.into(),
+            ],
+        ))
+        .await?
+        .rows_affected()
+        > 0;
+    if !changed {
+        txn.commit().await?;
+        return Ok(Vec::new());
+    }
+    let mut participants = BTreeSet::from([target_conversation_id]);
+    if let Ok(source) = source_for_origin(&txn, target_conversation_id, event_id).await {
+        participants.insert(source);
+    }
+    let affected = bump_live_participants(&txn, participants).await?;
+    txn.commit().await?;
+    Ok(affected)
 }
 
 /// Atomically reserve the oldest `store_only` deliveries for a Session's next
@@ -1449,10 +1498,9 @@ async fn delivery_participants_by_event(
     ))
 }
 
-/// Project only inbound collaboration facts that are already part of the
-/// Harness transcript. `state = embedded` alone is intentionally insufficient:
-/// an explicit Agent receipt and a stable Turn reference are both required so
-/// pending or partially-transitioned deliveries can never leak into history.
+/// Project inbound Session messages into the target conversation timeline.
+/// Pending deliveries appear immediately; embedded ones stay anchored to the
+/// turn that consumed them.
 pub async fn timeline_projection(
     conn: &DatabaseConnection,
     conversation_id: i32,
@@ -1462,11 +1510,7 @@ pub async fn timeline_projection(
         .query_all(statement(
             &format!(
                 "{DELIVERY_SELECT} WHERE d.target_conversation_id = ? \
-                 AND d.state = 'embedded' \
-                 AND d.agent_received_at IS NOT NULL \
-                 AND d.agent_receipt_kind IS NOT NULL \
-                 AND d.agent_receipt_ref IS NOT NULL \
-                 AND d.embedded_turn_ref IS NOT NULL \
+                 AND d.state <> 'dismissed' \
                  ORDER BY d.created_at ASC, d.id ASC"
             ),
             vec![conversation_id.into()],
@@ -2006,20 +2050,20 @@ mod tests {
 
         let projected = timeline_projection(&db.conn, target_a).await.unwrap();
         assert_eq!(projected.conversation_id, target_a);
-        assert_eq!(projected.inbound.len(), 1);
-        assert_eq!(projected.inbound[0].id, target_a_delivery.id);
-        assert_eq!(
-            projected.inbound[0].embedded_turn_ref.as_deref(),
-            Some("turn-a")
-        );
-        assert!(projected.inbound[0].agent_received_at.is_some());
+        let embedded = projected
+            .inbound
+            .iter()
+            .find(|delivery| delivery.id == target_a_delivery.id)
+            .expect("embedded delivery");
+        assert_eq!(embedded.embedded_turn_ref.as_deref(), Some("turn-a"));
+        assert!(embedded.agent_received_at.is_some());
         assert!(projected
             .inbound
             .iter()
-            .all(|delivery| delivery.event_id != pending.event_id));
+            .any(|delivery| delivery.event_id == pending.event_id));
 
         let sibling = timeline_projection(&db.conn, target_b).await.unwrap();
-        assert!(sibling.inbound.is_empty());
+        assert_eq!(sibling.inbound.len(), 1);
     }
 
     #[tokio::test]
@@ -2189,6 +2233,55 @@ mod tests {
                 .count(),
             MAX_STORE_ONLY_DELIVERIES_PER_TURN
         );
+    }
+
+    #[tokio::test]
+    async fn store_only_event_resolves_to_the_same_envelope_as_invoke() {
+        let (db, source, target, _) = seeded_memory().await;
+        let sent = send(
+            &db.conn,
+            input(source, vec![target], "store-draft", "wake the other Session"),
+        )
+        .await
+        .unwrap();
+        let draft = prompt_draft_for_origin(&db.conn, target, &sent.event_id)
+            .await
+            .expect("store_only deliveries must be injectable");
+        let PromptInputBlock::Text { text } = &draft.blocks[0] else {
+            panic!("store_only draft must be one text envelope");
+        };
+        assert!(text.contains("--- message ---\nwake the other Session\n"));
+        assert!(text.contains(&sent.event_id));
+    }
+
+    #[tokio::test]
+    async fn injected_store_only_mail_is_not_claimed_again() {
+        let (db, source, target, _) = seeded_memory().await;
+        let sent = send(
+            &db.conn,
+            input(source, vec![target], "inject-once", "do not double"),
+        )
+        .await
+        .unwrap();
+        let affected = mark_session_message_injected(
+            &db.conn,
+            target,
+            &sent.event_id,
+            "steer-inject-once",
+        )
+        .await
+        .unwrap();
+        assert!(affected.contains(&target));
+        assert!(
+            claim_pending_store_only_for_turn(&db.conn, target, "next-human-turn")
+                .await
+                .unwrap()
+                .is_none(),
+            "already-injected mail must not ride the next ordinary turn"
+        );
+        let projected = timeline_projection(&db.conn, target).await.unwrap();
+        assert_eq!(projected.inbound[0].state, CollaborationDeliveryState::Embedded);
+        assert!(projected.inbound[0].agent_received_at.is_some());
     }
 
     #[tokio::test]

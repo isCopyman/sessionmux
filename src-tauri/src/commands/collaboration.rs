@@ -21,9 +21,8 @@ use crate::models::{
     CollaborationChanged, CollaborationDeliveryHint, CollaborationDeliveryState, CollaborationFeed,
     CollaborationInterruptResult, CollaborationInterruptState, CollaborationInvocationPolicy,
     CollaborationSendResult, CollaborationTimelineProjection, CollaborationUnreadOverview,
-    CollaborationUrgency, InterruptCollaborationInput, PromptQueueItemState,
-    SendAndInterruptCollaborationInput, SendAndInterruptCollaborationResult,
-    SendCollaborationMessageInput,
+    CollaborationUrgency, InterruptCollaborationInput, SendAndInterruptCollaborationInput,
+    SendAndInterruptCollaborationResult, SendCollaborationMessageInput,
 };
 use crate::prompt_queue::PromptQueueHandle;
 use crate::web::event_bridge::{
@@ -121,19 +120,31 @@ pub async fn collaboration_send_core(
     conn: &sea_orm::DatabaseConnection,
     emitter: &EventEmitter,
     prompt_queue: &PromptQueueHandle,
-    input: SendCollaborationMessageInput,
+    mut input: SendCollaborationMessageInput,
 ) -> Result<CollaborationSendResult, AppCommandError> {
+    // Session-message V1: persist, then insert now. No mailbox queue, no
+    // reply obligation, no deliver-only vs invoke choice for the model.
+    input.invocation_policy = CollaborationInvocationPolicy::StoreOnly;
+    input.delivery_hint = CollaborationDeliveryHint::Default;
+    input.expects_reply = false;
     let result = persist_collaboration_message(conn, prompt_queue, input).await?;
     publish_persisted_message(emitter, &result);
-    for delivery in result.deliveries.iter().filter(|delivery| {
-        delivery.invocation_policy == CollaborationInvocationPolicy::InvokeWhenIdle
-            && delivery.state == CollaborationDeliveryState::Queued
-    }) {
-        let conversation_id = delivery.target.conversation_id;
-        let snapshot = prompt_queue_service::snapshot(conn, conversation_id).await?;
-        emit_event(emitter, PROMPT_QUEUE_CHANGED_EVENT, snapshot);
-        if delivery.queue_state != Some(PromptQueueItemState::Paused) {
-            prompt_queue.wake(conversation_id);
+    if !result.deduplicated {
+        let mut injected = false;
+        for delivery in result.deliveries.iter().filter(|delivery| {
+            delivery.state != CollaborationDeliveryState::Failed
+                && delivery.state != CollaborationDeliveryState::Dismissed
+        }) {
+            injected |= prompt_queue
+                .deliver_session_message_now(
+                    conn,
+                    delivery.target.conversation_id,
+                    &result.event_id,
+                )
+                .await;
+        }
+        if injected {
+            publish_persisted_message(emitter, &result);
         }
     }
     Ok(result)
@@ -549,23 +560,6 @@ impl SessionCollaborationAccess for DbSessionCollaboration {
                 "Session collaboration is disabled in Codeg settings.",
             );
         }
-        let invocation_policy = match spec.delivery_mode {
-            SessionMessageDeliveryMode::DeliverOnly => CollaborationInvocationPolicy::StoreOnly,
-            SessionMessageDeliveryMode::Queue => CollaborationInvocationPolicy::InvokeWhenIdle,
-        };
-        let chain_depth = match collaboration_service::child_chain_depth(
-            &self.db.conn,
-            spec.reply_to_event_id.as_deref(),
-        )
-        .await
-        {
-            Ok(depth) => depth,
-            Err(err) => {
-                return SessionSendOutcome::rejected(Some(source_session_id), err.to_string())
-            }
-        };
-        let reply_budget_exhausted =
-            spec.expects_reply && chain_depth >= collaboration_service::MAX_AGENT_REPLY_CHAIN_DEPTH;
         let result = collaboration_send_core(
             &self.db.conn,
             &self.emitter,
@@ -575,13 +569,9 @@ impl SessionCollaborationAccess for DbSessionCollaboration {
                 target_conversation_ids: spec.target_session_ids,
                 body: spec.content,
                 client_dedupe_id: spec.client_dedupe_id,
-                invocation_policy,
-                delivery_hint: if spec.steer_if_supported {
-                    CollaborationDeliveryHint::SteerIfSupported
-                } else {
-                    CollaborationDeliveryHint::Default
-                },
-                expects_reply: spec.expects_reply && !reply_budget_exhausted,
+                invocation_policy: CollaborationInvocationPolicy::StoreOnly,
+                delivery_hint: CollaborationDeliveryHint::Default,
+                expects_reply: false,
                 urgency: CollaborationUrgency::Normal,
                 reply_to_event_id: spec.reply_to_event_id,
             },
@@ -604,12 +594,7 @@ impl SessionCollaborationAccess for DbSessionCollaboration {
                     })
                     .collect(),
                 deduplicated: result.deduplicated,
-                note: reply_budget_exhausted.then(|| {
-                    format!(
-                        "Reply-chain safety limit ({}) reached. The message was delivered, but no further reply was requested.",
-                        collaboration_service::MAX_AGENT_REPLY_CHAIN_DEPTH
-                    )
-                }),
+                note: None,
             },
             Err(err) => SessionSendOutcome::rejected(Some(source_session_id), err.to_string()),
         }
@@ -991,11 +976,12 @@ mod tests {
     use super::*;
     use crate::acp::connection::ConnectionCommand;
     use crate::acp::internal_bus::EventBusMetrics;
-    use crate::acp::InternalEventBus;
     use crate::acp::session_collaboration::SessionInboxFilter;
+    use crate::acp::InternalEventBus;
     use crate::db::test_helpers::{fresh_in_memory_db, seed_conversation, seed_folder};
     use crate::models::{
         AgentType, CollaborationDeliveryHint, CollaborationInvocationPolicy, CollaborationUrgency,
+        PromptQueueItemState,
     };
     use crate::web::event_bridge::WebEventBroadcaster;
     use sea_orm::{ConnectionTrait, DbBackend, Statement};
@@ -1144,18 +1130,11 @@ mod tests {
         .expect("deliver without starting target");
 
         let delivery = &result.deliveries[0];
-        assert_eq!(delivery.state, CollaborationDeliveryState::Queued);
-        assert_eq!(delivery.queue_state, Some(PromptQueueItemState::Paused));
-        assert_eq!(
-            delivery.queue_paused_reason.as_deref(),
-            Some(collaboration_service::INACTIVE_TARGET_CONFIRMATION_REASON)
-        );
+        assert_eq!(delivery.state, CollaborationDeliveryState::Pending);
         let queue = prompt_queue_service::snapshot(&db.conn, target)
             .await
             .expect("queue snapshot");
-        assert_eq!(queue.items.len(), 1);
-        assert_eq!(queue.items[0].state, PromptQueueItemState::Paused);
-        assert_eq!(queue.items[0].id, delivery.id);
+        assert!(queue.items.is_empty());
     }
 
     #[tokio::test]
@@ -1281,7 +1260,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn agent_send_reuses_event_and_durable_origin_queue() {
+    async fn agent_send_reuses_event_without_enqueuing() {
         let db = fresh_in_memory_db().await;
         let folder = seed_folder(&db, "/tmp/codeg-agent-send").await;
         let source = seed_conversation(&db, folder, AgentType::Codex).await;
@@ -1299,41 +1278,34 @@ mod tests {
 
         let sent = access.send_message(source, spec.clone()).await;
         assert!(sent.accepted);
-        assert_eq!(sent.deliveries[0].state, "queued");
+        assert_eq!(sent.deliveries[0].state, "pending");
         let event_id = sent.event_id.clone().unwrap();
-        let queue = prompt_queue_service::snapshot(&db.conn, target)
+        assert!(prompt_queue_service::snapshot(&db.conn, target)
             .await
-            .unwrap();
-        assert_eq!(queue.items.len(), 1);
-        assert_eq!(
-            queue.items[0].origin_event_id.as_deref(),
-            Some(event_id.as_str())
-        );
-        assert!(queue.items[0].draft.is_none());
-        assert_eq!(
-            collaboration_service::feed(&db.conn, target, None)
-                .await
-                .unwrap()
-                .inbound[0]
-                .delivery_hint,
-            CollaborationDeliveryHint::SteerIfSupported
-        );
+            .unwrap()
+            .items
+            .is_empty());
+        let inbound = collaboration_service::feed(&db.conn, target, None)
+            .await
+            .unwrap()
+            .inbound
+            .remove(0);
+        assert_eq!(inbound.event_id, event_id);
+        assert!(!inbound.expects_reply);
+        assert_eq!(inbound.delivery_hint, CollaborationDeliveryHint::Default);
 
         let replay = access.send_message(source, spec).await;
         assert!(replay.accepted && replay.deduplicated);
         assert_eq!(replay.event_id, Some(event_id));
-        assert_eq!(
-            prompt_queue_service::snapshot(&db.conn, target)
-                .await
-                .unwrap()
-                .items
-                .len(),
-            1
-        );
+        assert!(prompt_queue_service::snapshot(&db.conn, target)
+            .await
+            .unwrap()
+            .items
+            .is_empty());
     }
 
     #[tokio::test]
-    async fn agent_reply_chain_keeps_delivering_but_stops_requesting_at_the_budget() {
+    async fn agent_reply_chain_still_delivers_without_reply_debt() {
         let db = fresh_in_memory_db().await;
         let folder = seed_folder(&db, "/tmp/codeg-agent-reply-budget").await;
         let first = seed_conversation(&db, folder, AgentType::Codex).await;
@@ -1368,16 +1340,8 @@ mod tests {
                 .iter()
                 .find(|delivery| delivery.event_id == event_id)
                 .expect("target sees the delivered event");
-            if depth < collaboration_service::MAX_AGENT_REPLY_CHAIN_DEPTH {
-                assert!(inbound.expects_reply);
-                assert!(sent.note.is_none());
-            } else {
-                assert!(!inbound.expects_reply);
-                assert!(sent
-                    .note
-                    .as_deref()
-                    .is_some_and(|note| note.contains("safety limit")));
-            }
+            assert!(!inbound.expects_reply);
+            assert!(sent.note.is_none());
 
             let row = db
                 .conn
@@ -1551,13 +1515,12 @@ mod tests {
             .await;
         assert!(listed.available);
         assert_eq!(listed.unread_count, 1);
-        assert_eq!(listed.awaiting_reply_count, 1);
+        assert_eq!(listed.awaiting_reply_count, 0);
         assert_eq!(listed.items.len(), 1);
         assert_eq!(listed.items[0].event_id, sent.event_id);
         assert!(listed.items[0].unread);
-        assert!(listed.items[0].expects_reply);
+        assert!(!listed.items[0].expects_reply);
         assert!(listed.items[0].preview.contains("please review claim 3"));
-        assert!(!listed.items[0].preview.contains("<<<CODEG_SESSION_MESSAGE"));
 
         let opened = access.read_message(target, sent.event_id.clone()).await;
         assert!(opened.available);
@@ -1566,20 +1529,11 @@ mod tests {
             Some("please review claim 3 in the methods section")
         );
         assert!(!opened.unread);
-        assert!(opened.expects_reply);
 
         let unread = access
             .list_inbox(target, SessionInboxFilter::Unread, 20)
             .await;
         assert_eq!(unread.unread_count, 0);
         assert!(unread.items.is_empty());
-
-        let still_open = access
-            .list_inbox(target, SessionInboxFilter::Open, 20)
-            .await;
-        assert_eq!(still_open.unread_count, 0);
-        assert_eq!(still_open.awaiting_reply_count, 1);
-        assert_eq!(still_open.items.len(), 1);
-        assert!(!still_open.items[0].unread);
     }
 }

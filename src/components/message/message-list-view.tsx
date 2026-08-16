@@ -88,7 +88,10 @@ import {
 } from "@/lib/conversation-find-highlight"
 import { CollaborationMessageCard } from "./collaboration-message-card"
 import { stripProjectedCollaborationEnvelopes } from "./collaboration-message-envelope"
-import { useCollaborationTimeline } from "@/hooks/use-collaboration-timeline"
+import {
+  resolveCollaborationTimelineId,
+  useCollaborationTimeline,
+} from "@/hooks/use-collaboration-timeline"
 
 interface MessageListViewProps {
   conversationId: number
@@ -218,22 +221,18 @@ export function applyCollaborationTimelineProjection(
 ): ThreadRenderItem[] {
   const byTurn = new Map<string, CollaborationDelivery[]>()
   for (const delivery of deliveries) {
-    if (
-      delivery.state !== "embedded" ||
-      !delivery.embeddedTurnRef ||
-      !delivery.agentReceivedAt ||
-      !delivery.agentReceiptKind ||
-      !delivery.agentReceiptRef
-    ) {
-      continue
-    }
+    if (delivery.state === "dismissed") continue
+    if (!delivery.embeddedTurnRef) continue
     const existing = byTurn.get(delivery.embeddedTurnRef)
     if (existing) existing.push(delivery)
     else byTurn.set(delivery.embeddedTurnRef, [delivery])
   }
-  if (byTurn.size === 0) return items
+  if (byTurn.size === 0 && deliveries.every((d) => d.state === "dismissed")) {
+    return items
+  }
 
   const projected: ThreadRenderItem[] = []
+  const used = new Set<string>()
   for (const item of items) {
     if (item.kind !== "turn" || item.group.role !== "user") {
       projected.push(item)
@@ -249,6 +248,7 @@ export function applyCollaborationTimelineProjection(
       deliveriesForTurn.map((delivery) => delivery.eventId)
     )
     for (const delivery of deliveriesForTurn) {
+      used.add(delivery.id)
       projected.push({
         key: `collaboration-${delivery.id}`,
         kind: "collaboration",
@@ -268,6 +268,14 @@ export function applyCollaborationTimelineProjection(
       ? { ...item, group: { ...item.group, parts } }
       : item
     if (!isEmptyTurnItem(nextItem)) projected.push(nextItem)
+  }
+  for (const delivery of deliveries) {
+    if (delivery.state === "dismissed" || used.has(delivery.id)) continue
+    projected.push({
+      key: `collaboration-${delivery.id}`,
+      kind: "collaboration",
+      delivery,
+    })
   }
   return projected
 }
@@ -737,7 +745,9 @@ export function MessageListView({
   const timelineTurns = useConversationRuntimeStore((s) =>
     selectTimelineTurns(s, conversationId)
   )
-  const collaborationTimeline = useCollaborationTimeline(conversationId)
+  const collaborationTimeline = useCollaborationTimeline(
+    resolveCollaborationTimelineId(conversationId, session?.dbConversationId)
+  )
 
   // Reverse infinite scroll: older history exists above the loaded window
   // (windowed detail with a non-zero offset). Legacy full responses never

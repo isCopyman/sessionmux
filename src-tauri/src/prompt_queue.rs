@@ -23,9 +23,7 @@ use crate::db::service::{
     collaboration_interrupt_service, collaboration_service, prompt_queue_service,
 };
 use crate::db::AppDatabase;
-use crate::models::{
-    AgentType, CollaborationChanged, CollaborationDeliveryHint, PromptQueueSnapshot,
-};
+use crate::models::{AgentType, CollaborationChanged, PromptQueueSnapshot};
 use crate::parsers::path_eq_for_matching;
 use crate::web::event_bridge::{
     emit_event, EventEmitter, COLLABORATION_CHANGED_EVENT, PROMPT_QUEUE_CHANGED_EVENT,
@@ -75,6 +73,212 @@ impl PromptQueueHandle {
         };
         let is_connected = state.read().await.status == ConnectionStatus::Connected;
         Ok(is_connected)
+    }
+
+    /// Persist-then-insert for Session messages. Steer into the current turn
+    /// when that channel exists; otherwise start a new turn. A missing or busy
+    /// runtime without steering keeps the durable row for the next ordinary
+    /// turn. This does not enqueue a follow-up.
+    /// Returns true when the letter was injected (steer or a started turn).
+    pub async fn deliver_session_message_now(
+        &self,
+        conn: &sea_orm::DatabaseConnection,
+        target_conversation_id: i32,
+        event_id: &str,
+    ) -> bool {
+        let Ok(Some(row)) = conversation::Entity::find_by_id(target_conversation_id)
+            .one(conn)
+            .await
+        else {
+            tracing::warn!(
+                conversation_id = target_conversation_id,
+                event_id,
+                "[session-message] deliver skipped: target Session is missing"
+            );
+            return false;
+        };
+        let Some((connection_id, state)) = active_connection_for_row(&self.manager, &row).await
+        else {
+            tracing::info!(
+                conversation_id = target_conversation_id,
+                event_id,
+                "[session-message] deliver parked: no live Harness connection"
+            );
+            return false;
+        };
+        let (status, turn_in_flight, native_steering_available) = {
+            let state = state.read().await;
+            (
+                state.status.clone(),
+                state.turn_in_flight,
+                state.native_steering_available,
+            )
+        };
+        if status != ConnectionStatus::Connected {
+            tracing::info!(
+                conversation_id = target_conversation_id,
+                event_id,
+                ?status,
+                "[session-message] deliver parked: Harness is not connected"
+            );
+            return false;
+        }
+
+        if turn_in_flight {
+            if !native_steering_available {
+                tracing::info!(
+                    conversation_id = target_conversation_id,
+                    event_id,
+                    "[session-message] deliver parked: turn in flight without native steering"
+                );
+                return false;
+            }
+            let draft = match collaboration_service::prompt_draft_for_origin(
+                conn,
+                target_conversation_id,
+                event_id,
+            )
+            .await
+            {
+                Ok(draft) => draft,
+                Err(err) => {
+                    tracing::warn!(
+                        conversation_id = target_conversation_id,
+                        event_id,
+                        "[session-message] steer draft failed: {err}"
+                    );
+                    return false;
+                }
+            };
+            let [crate::acp::types::PromptInputBlock::Text { text }] = draft.blocks.as_slice()
+            else {
+                tracing::warn!(
+                    conversation_id = target_conversation_id,
+                    event_id,
+                    "[session-message] steer skipped: draft is not a single text envelope"
+                );
+                return false;
+            };
+            return match self
+                .manager
+                .try_submit_native_feedback(&connection_id, text.clone())
+                .await
+            {
+                Ok(Some(_)) => {
+                    if let Err(err) = collaboration_service::mark_session_message_injected(
+                        conn,
+                        target_conversation_id,
+                        event_id,
+                        &format!("steer-{event_id}"),
+                    )
+                    .await
+                    {
+                        tracing::error!(
+                            conversation_id = target_conversation_id,
+                            event_id,
+                            "[session-message] steered but could not mark injected: {err}"
+                        );
+                    }
+                    true
+                }
+                Ok(None) => {
+                    tracing::info!(
+                        conversation_id = target_conversation_id,
+                        event_id,
+                        "[session-message] steer declined; leaving durable row for the next turn"
+                    );
+                    false
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        conversation_id = target_conversation_id,
+                        event_id,
+                        "[session-message] steer uncertain, not replaying: {err}"
+                    );
+                    false
+                }
+            };
+        }
+
+        let turn_ref = format!("session-msg-{event_id}");
+        let batch = match collaboration_service::claim_pending_store_only_for_turn(
+            conn,
+            target_conversation_id,
+            &turn_ref,
+        )
+        .await
+        {
+            Ok(Some(batch)) => batch,
+            Ok(None) => {
+                tracing::info!(
+                    conversation_id = target_conversation_id,
+                    event_id,
+                    "[session-message] idle inject found no pending store_only row"
+                );
+                return false;
+            }
+            Err(err) => {
+                tracing::warn!(
+                    conversation_id = target_conversation_id,
+                    event_id,
+                    "[session-message] idle claim failed: {err}"
+                );
+                return false;
+            }
+        };
+
+        let db = AppDatabase { conn: conn.clone() };
+        match self
+            .manager
+            .send_prompt_linked_with_message_id(
+                &db,
+                &connection_id,
+                batch.blocks.clone(),
+                Some(row.folder_id),
+                Some(row.id),
+                Some(turn_ref),
+                false,
+            )
+            .await
+        {
+            Ok(_) => {
+                if let Err(err) = collaboration_service::mark_store_only_batch_embedded(
+                    conn,
+                    target_conversation_id,
+                    &batch,
+                )
+                .await
+                {
+                    tracing::error!(
+                        conversation_id = target_conversation_id,
+                        event_id,
+                        "[session-message] prompt accepted but embed mark failed: {err}"
+                    );
+                }
+                true
+            }
+            Err(err) => {
+                tracing::warn!(
+                    conversation_id = target_conversation_id,
+                    event_id,
+                    "[session-message] idle inject failed: {err}"
+                );
+                if let Err(release_err) = collaboration_service::release_store_only_batch(
+                    conn,
+                    target_conversation_id,
+                    &batch,
+                )
+                .await
+                {
+                    tracing::error!(
+                        conversation_id = target_conversation_id,
+                        event_id,
+                        "[session-message] could not release failed inject: {release_err}"
+                    );
+                }
+                false
+            }
+        }
     }
 
     /// A non-running handle for handler-only tests. Queue mutations remain
@@ -158,12 +362,8 @@ impl PromptQueueRuntime {
                 "[prompt-queue] interrupt snapshot failed for {conversation_id}: {err}"
             ),
         }
-        match collaboration_service::origin_participants(
-            &self.db.conn,
-            conversation_id,
-            event_id,
-        )
-        .await
+        match collaboration_service::origin_participants(&self.db.conn, conversation_id, event_id)
+            .await
         {
             Ok(conversation_ids) if !conversation_ids.is_empty() => emit_event(
                 &self.emitter,
@@ -364,11 +564,8 @@ impl PromptQueueRuntime {
         {
             Ok(recoveries) => {
                 for recovery in recoveries {
-                    self.emit_interrupt_change(
-                        recovery.target_conversation_id,
-                        &recovery.event_id,
-                    )
-                    .await;
+                    self.emit_interrupt_change(recovery.target_conversation_id, &recovery.event_id)
+                        .await;
                 }
             }
             Err(err) => tracing::error!("[prompt-queue] interrupt recovery failed: {err}"),
@@ -382,9 +579,9 @@ impl PromptQueueRuntime {
                     self.process(id).await;
                 }
             }
-            Err(err) => tracing::error!(
-                "[prompt-queue] waiting interrupt reconciliation failed: {err}"
-            ),
+            Err(err) => {
+                tracing::error!("[prompt-queue] waiting interrupt reconciliation failed: {err}")
+            }
         }
         match prompt_queue_service::recover_expired_claims(&self.db.conn).await {
             Ok(snapshots) => {
@@ -523,40 +720,8 @@ impl PromptQueueRuntime {
             self.reconcile_interrupt_terminal(conversation_id).await;
         }
         if turn_in_flight {
-            match prompt_queue_service::head_is_collaboration_invoke(
-                &self.db.conn,
-                conversation_id,
-            )
-            .await
-            {
-                Ok(true) => {
-                    if native_steering_available {
-                        self.process_native_steer(&row, &connection_id).await;
-                    }
-                    let still_busy = match self.manager.get_state(&connection_id).await {
-                        Some(state) => state.read().await.turn_in_flight,
-                        None => false,
-                    };
-                    let still_collab = prompt_queue_service::head_is_collaboration_invoke(
-                        &self.db.conn,
-                        conversation_id,
-                    )
-                    .await
-                    .unwrap_or(false);
-                    if still_busy && still_collab {
-                        if let Err(err) =
-                            self.manager.cancel(&self.db.conn, &connection_id).await
-                        {
-                            tracing::warn!(
-                                "[prompt-queue] force-send cancel failed for {conversation_id}: {err}"
-                            );
-                        }
-                    }
-                }
-                Ok(false) => {}
-                Err(err) => tracing::error!(
-                    "[prompt-queue] collab-head lookup failed for {conversation_id}: {err}"
-                ),
+            if native_steering_available {
+                self.process_native_steer(&row, &connection_id).await;
             }
             return;
         }
@@ -919,8 +1084,8 @@ mod tests {
     };
     use crate::db::test_helpers::{fresh_in_memory_db, seed_conversation, seed_folder};
     use crate::models::{
-        CollaborationDeliveryHint, CollaborationDeliveryState, CollaborationInvocationPolicy,
-        CollaborationInterruptState, CollaborationUrgency, EnqueuePromptQueueItem,
+        CollaborationDeliveryHint, CollaborationDeliveryState, CollaborationInterruptState,
+        CollaborationInvocationPolicy, CollaborationUrgency, EnqueuePromptQueueItem,
         InterruptCollaborationInput, PromptQueueDraft, PromptQueueItemState,
         SendCollaborationMessageInput,
     };
@@ -1043,6 +1208,180 @@ mod tests {
         assert_eq!(snapshot.items[0].state, PromptQueueItemState::Queued);
         assert!(manager.list_connections().await.is_empty());
         worker.abort();
+    }
+
+    #[tokio::test]
+    async fn store_only_session_message_starts_an_idle_turn() {
+        let path = "/tmp/codeg-session-message-idle-inject";
+        let (db, folder_id, target, manager, bus) = setup(path).await;
+        let source = seed_conversation(&db, folder_id, AgentType::ClaudeCode).await;
+        let mut commands =
+            bind_live_connection(&manager, "active", path, folder_id, target).await;
+        let sent = collaboration_service::send(
+            &db.conn,
+            SendCollaborationMessageInput {
+                source_conversation_id: source,
+                target_conversation_ids: vec![target],
+                body: "PING idle".into(),
+                client_dedupe_id: "idle-inject".into(),
+                invocation_policy: CollaborationInvocationPolicy::StoreOnly,
+                delivery_hint: CollaborationDeliveryHint::Default,
+                expects_reply: false,
+                urgency: CollaborationUrgency::Normal,
+                reply_to_event_id: None,
+            },
+        )
+        .await
+        .expect("persist store_only");
+        let (handle, task) = build_prompt_queue_runtime(
+            db.conn.clone(),
+            manager.clone_ref(),
+            EventEmitter::Noop,
+            bus,
+        );
+        handle
+            .deliver_session_message_now(&db.conn, target, &sent.event_id)
+            .await;
+        drop(task);
+
+        let command = tokio::time::timeout(StdDuration::from_secs(2), commands.recv())
+            .await
+            .expect("idle inject timeout")
+            .expect("prompt command");
+        let ConnectionCommand::Prompt {
+            blocks,
+            dispatch_ack,
+            ..
+        } = command
+        else {
+            panic!("idle Session message must start a turn");
+        };
+        let PromptInputBlock::Text { text } = &blocks[0] else {
+            panic!("expected text envelope");
+        };
+        assert!(text.contains("PING idle"));
+        if let Some(ack) = dispatch_ack {
+            let _ = ack.send(());
+        }
+        wait_until(|| async {
+            collaboration_service::feed(&db.conn, target, None)
+                .await
+                .is_ok_and(|feed| feed.inbound[0].state == CollaborationDeliveryState::Embedded)
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn store_only_session_message_steers_a_busy_native_turn() {
+        let path = "/tmp/codeg-session-message-busy-steer";
+        let (db, folder_id, target, manager, bus) = setup(path).await;
+        let source = seed_conversation(&db, folder_id, AgentType::ClaudeCode).await;
+        let mut commands =
+            bind_live_connection(&manager, "active", path, folder_id, target).await;
+        let state = manager.get_state("active").await.expect("state");
+        {
+            let mut state = state.write().await;
+            state.turn_in_flight = true;
+            state.native_steering_available = true;
+        }
+        let sent = collaboration_service::send(
+            &db.conn,
+            SendCollaborationMessageInput {
+                source_conversation_id: source,
+                target_conversation_ids: vec![target],
+                body: "PING steer".into(),
+                client_dedupe_id: "busy-steer".into(),
+                invocation_policy: CollaborationInvocationPolicy::StoreOnly,
+                delivery_hint: CollaborationDeliveryHint::Default,
+                expects_reply: false,
+                urgency: CollaborationUrgency::Normal,
+                reply_to_event_id: None,
+            },
+        )
+        .await
+        .expect("persist store_only");
+        let (handle, task) = build_prompt_queue_runtime(
+            db.conn.clone(),
+            manager.clone_ref(),
+            EventEmitter::Noop,
+            bus,
+        );
+        let event_id = sent.event_id.clone();
+        let conn = db.conn.clone();
+        let deliver = tokio::spawn(async move {
+            handle
+                .deliver_session_message_now(&conn, target, &event_id)
+                .await;
+        });
+        let command = tokio::time::timeout(StdDuration::from_secs(2), commands.recv())
+            .await
+            .expect("steer timeout")
+            .expect("steer command");
+        let ConnectionCommand::Steer { text, reply } = command else {
+            panic!("busy Session message must steer");
+        };
+        assert!(text.contains("PING steer"));
+        reply.send(Ok(SteerOutcome::Injected)).expect("steer reply");
+        deliver.await.expect("deliver task");
+        drop(task);
+        wait_until(|| async {
+            collaboration_service::feed(&db.conn, target, None)
+                .await
+                .is_ok_and(|feed| feed.inbound[0].state == CollaborationDeliveryState::Embedded)
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn store_only_session_message_parks_when_busy_without_steer() {
+        let path = "/tmp/codeg-session-message-busy-park";
+        let (db, folder_id, target, manager, bus) = setup(path).await;
+        let source = seed_conversation(&db, folder_id, AgentType::ClaudeCode).await;
+        let mut commands =
+            bind_live_connection(&manager, "active", path, folder_id, target).await;
+        let state = manager.get_state("active").await.expect("state");
+        {
+            let mut state = state.write().await;
+            state.turn_in_flight = true;
+            state.native_steering_available = false;
+        }
+        let sent = collaboration_service::send(
+            &db.conn,
+            SendCollaborationMessageInput {
+                source_conversation_id: source,
+                target_conversation_ids: vec![target],
+                body: "PING park".into(),
+                client_dedupe_id: "busy-park".into(),
+                invocation_policy: CollaborationInvocationPolicy::StoreOnly,
+                delivery_hint: CollaborationDeliveryHint::Default,
+                expects_reply: false,
+                urgency: CollaborationUrgency::Normal,
+                reply_to_event_id: None,
+            },
+        )
+        .await
+        .expect("persist store_only");
+        let (handle, task) = build_prompt_queue_runtime(
+            db.conn.clone(),
+            manager.clone_ref(),
+            EventEmitter::Noop,
+            bus,
+        );
+        handle
+            .deliver_session_message_now(&db.conn, target, &sent.event_id)
+            .await;
+        drop(task);
+        assert!(
+            commands.try_recv().is_err(),
+            "busy-without-steer must not start or inject a turn"
+        );
+        let inbound = collaboration_service::feed(&db.conn, target, None)
+            .await
+            .unwrap()
+            .inbound
+            .remove(0);
+        assert_eq!(inbound.state, CollaborationDeliveryState::Pending);
+        assert!(inbound.agent_received_at.is_none());
     }
 
     #[tokio::test]
@@ -1403,13 +1742,14 @@ mod tests {
             .cancel(&db.conn, "active")
             .await
             .expect("enqueue cancel");
-        assert!(matches!(commands.recv().await, Some(ConnectionCommand::Cancel)));
-        let waiting = collaboration_interrupt_service::mark_cancel_enqueued(
-            &db.conn,
-            &prepared.operation.id,
-        )
-        .await
-        .expect("persist cancel acknowledgement");
+        assert!(matches!(
+            commands.recv().await,
+            Some(ConnectionCommand::Cancel)
+        ));
+        let waiting =
+            collaboration_interrupt_service::mark_cancel_enqueued(&db.conn, &prepared.operation.id)
+                .await
+                .expect("persist cancel acknowledgement");
         assert_eq!(
             waiting.state,
             CollaborationInterruptState::WaitingForTerminal
@@ -1526,12 +1866,8 @@ mod tests {
         collaboration_service::send(&db.conn, input)
             .await
             .expect("collaboration send");
-        let (_handle, task) = build_prompt_queue_runtime(
-            db.conn.clone(),
-            manager,
-            EventEmitter::Noop,
-            bus,
-        );
+        let (_handle, task) =
+            build_prompt_queue_runtime(db.conn.clone(), manager, EventEmitter::Noop, bus);
         let worker = tokio::spawn(task);
 
         let command = tokio::time::timeout(StdDuration::from_secs(2), commands.recv())
@@ -1577,17 +1913,14 @@ mod tests {
             state.turn_in_flight = true;
             state.native_steering_available = true;
         }
-        let mut input = collaboration_input(source, target, "steer-unknown", "never replay blindly");
+        let mut input =
+            collaboration_input(source, target, "steer-unknown", "never replay blindly");
         input.delivery_hint = CollaborationDeliveryHint::SteerIfSupported;
         collaboration_service::send(&db.conn, input)
             .await
             .expect("collaboration send");
-        let (_handle, task) = build_prompt_queue_runtime(
-            db.conn.clone(),
-            manager,
-            EventEmitter::Noop,
-            bus,
-        );
+        let (_handle, task) =
+            build_prompt_queue_runtime(db.conn.clone(), manager, EventEmitter::Noop, bus);
         let worker = tokio::spawn(task);
 
         let command = tokio::time::timeout(StdDuration::from_secs(2), commands.recv())
@@ -1620,7 +1953,10 @@ mod tests {
                 .state,
             CollaborationDeliveryState::Failed
         );
-        assert!(commands.try_recv().is_err(), "uncertain steer must not replay");
+        assert!(
+            commands.try_recv().is_err(),
+            "uncertain steer must not replay"
+        );
         worker.abort();
     }
 

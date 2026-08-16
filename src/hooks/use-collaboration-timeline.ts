@@ -15,6 +15,16 @@ const EMPTY_PROJECTION: CollaborationTimelineProjection = {
   inbound: [],
 }
 
+/** Persisted Session id for timeline fetch. Draft tabs keep a negative
+ * runtime key; Host collaboration rows use the bound DB id. */
+export function resolveCollaborationTimelineId(
+  conversationId: number | null,
+  dbConversationId?: number | null
+): number | null {
+  if (dbConversationId != null && dbConversationId > 0) return dbConversationId
+  return conversationId
+}
+
 export function useCollaborationTimeline(conversationId: number | null) {
   const [projection, setProjection] =
     useState<CollaborationTimelineProjection>(EMPTY_PROJECTION)
@@ -38,14 +48,22 @@ export function useCollaborationTimeline(conversationId: number | null) {
 
   const reload = useCallback(async () => {
     const id = conversationIdRef.current
-    if (id == null) return
+    // Draft tabs use a negative virtual id until the first prompt persists a
+    // real conversation. The Host has no row for those ids.
+    if (id == null || id <= 0) return
     const generation = generationRef.current
     try {
       const next = await getCollaborationTimelineProjection(id)
       if (generation === generationRef.current) applyProjection(next)
     } catch (error) {
       if (generation === generationRef.current) {
-        console.error("[collaboration] timeline projection:", error)
+        const detail =
+          error instanceof Error
+            ? error.message
+            : typeof error === "string"
+              ? error
+              : JSON.stringify(error)
+        console.error("[collaboration] timeline projection:", detail)
       }
     }
   }, [applyProjection])
