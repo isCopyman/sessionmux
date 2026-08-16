@@ -145,6 +145,35 @@ pub async fn update_title(
     Ok(())
 }
 
+/// Atomically apply a Host-Control-style manual rename within one execution
+/// folder. The predicate is evaluated by the database together with the write,
+/// so a concurrent delete or move cannot produce a successful but invisible
+/// rename. Internal loop/delegate rows are intentionally excluded.
+pub async fn update_title_if_live_in_folder(
+    conn: &DatabaseConnection,
+    conversation_id: i32,
+    folder_id: i32,
+    title: String,
+) -> Result<bool, DbError> {
+    use sea_orm::sea_query::Expr;
+    let result = conversation::Entity::update_many()
+        .col_expr(conversation::Column::Title, Expr::value(Some(title)))
+        .col_expr(conversation::Column::TitleLocked, Expr::value(true))
+        .col_expr(conversation::Column::UpdatedAt, Expr::value(Utc::now()))
+        .filter(conversation::Column::Id.eq(conversation_id))
+        .filter(conversation::Column::FolderId.eq(folder_id))
+        .filter(conversation::Column::DeletedAt.is_null())
+        .filter(
+            sea_orm::Condition::any()
+                .add(conversation::Column::Kind.eq(ConversationKind::Regular))
+                .add(conversation::Column::Kind.eq(ConversationKind::Chat)),
+        )
+        .filter(conversation::Column::ParentId.is_null())
+        .exec(conn)
+        .await?;
+    Ok(result.rows_affected == 1)
+}
+
 /// Auto-derive counterpart to [`update_title`]: write `title` ONLY when the row
 /// is not user-locked and the value actually changed. Never sets `title_locked`
 /// (the title stays eligible for future auto-refreshes, e.g. when an agent like

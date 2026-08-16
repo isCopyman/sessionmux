@@ -41,6 +41,28 @@ use crate::acp::chat_authoring::{NewAutomationSpec, NewWorkTaskSpec};
 use crate::acp::question::QuestionSpec;
 use crate::acp::session_collaboration::SessionMessageSpec;
 
+/// Discover the currently available progressive Host Control actions. Caller
+/// identity is intentionally absent: the listener derives it from `token`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokerHostControlHelpRequest {
+    pub token: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action: Option<String>,
+}
+
+/// Execute one action selected from the server-owned capability catalog.
+/// `request_id` is minted by the companion from the parent connection and MCP
+/// JSON-RPC id; it is not accepted from model arguments.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokerHostControlUseRequest {
+    pub token: String,
+    pub request_id: String,
+    pub action: String,
+    pub input: Value,
+}
+
 /// Pull the pending live-feedback notes for the parent session. Backs the
 /// `check_user_feedback` MCP tool. Authenticated by the same per-launch
 /// `token`; the listener resolves the parent connection from it and scopes the
@@ -157,6 +179,8 @@ pub struct BrokerCreateWorkTaskRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum BrokerMessage {
+    HostControlHelp(BrokerHostControlHelpRequest),
+    HostControlUse(BrokerHostControlUseRequest),
     Feedback(BrokerFeedbackRequest),
     CommitFeedback(BrokerCommitFeedbackRequest),
     Ask(BrokerAskRequest),
@@ -282,6 +306,20 @@ pub async fn client_session_round_trip(
     req: &BrokerSessionRequest,
 ) -> io::Result<BrokerResponse> {
     message_round_trip(socket_path, &BrokerMessage::SessionInfo(req.clone())).await
+}
+
+pub async fn client_host_control_help_round_trip(
+    socket_path: &str,
+    req: &BrokerHostControlHelpRequest,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::HostControlHelp(req.clone())).await
+}
+
+pub async fn client_host_control_use_round_trip(
+    socket_path: &str,
+    req: &BrokerHostControlUseRequest,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::HostControlUse(req.clone())).await
 }
 
 pub async fn client_list_sessions_round_trip(

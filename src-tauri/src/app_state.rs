@@ -41,6 +41,9 @@ pub struct AppState {
     /// Absolute path of the UDS / named pipe the companion connects to.
     /// PID-scoped so multiple codeg processes on the same host don't fight.
     pub codeg_mcp_socket_path: PathBuf,
+    /// Hot-swappable progressive Host Control feature/write policy. Shared by
+    /// MCP injection and the typed Host Core for execution-time rechecks.
+    pub host_control_config: crate::acp::host_control::HostControlRuntimeConfig,
     /// Hot-swappable live-feedback (`check_user_feedback`) enable flag. Shared
     /// with the codeg-mcp injection so MCP injection reads it, and updated by
     /// the feedback settings command on save. Populated at startup by
@@ -113,6 +116,7 @@ pub fn build_codeg_mcp_stack(
 ) -> (
     Arc<TokenRegistry>,
     PathBuf,
+    crate::acp::host_control::HostControlRuntimeConfig,
     crate::acp::feedback::FeedbackRuntimeConfig,
     crate::acp::question::QuestionRuntimeConfig,
     crate::acp::session_info::SessionInfoRuntimeConfig,
@@ -123,6 +127,7 @@ pub fn build_codeg_mcp_stack(
     use crate::acp::delegation::listener::default_socket_path;
     let tokens = Arc::new(TokenRegistry::default());
     let socket_path = default_socket_path(&std::env::temp_dir());
+    let host_control = crate::acp::host_control::HostControlRuntimeConfig::new();
     let feedback = crate::acp::feedback::FeedbackRuntimeConfig::new();
     let ask = crate::acp::question::QuestionRuntimeConfig::new();
     let sessions = crate::acp::session_info::SessionInfoRuntimeConfig::new();
@@ -134,6 +139,7 @@ pub fn build_codeg_mcp_stack(
     connection_manager.install_codeg_mcp(CodegMcpInjection {
         tokens: tokens.clone(),
         socket_path: socket_path.clone(),
+        host_control: host_control.clone(),
         feedback: feedback.clone(),
         ask: ask.clone(),
         sessions: sessions.clone(),
@@ -154,6 +160,7 @@ pub fn build_codeg_mcp_stack(
     (
         tokens,
         socket_path,
+        host_control,
         feedback,
         ask,
         sessions,
@@ -183,6 +190,7 @@ impl AppState {
         let (
             codeg_mcp_tokens,
             codeg_mcp_socket_path,
+            host_control_config,
             feedback_config,
             question_config,
             session_info_config,
@@ -209,6 +217,7 @@ impl AppState {
             pet_state: crate::pet_state_mapper::new_pet_state_handle(),
             codeg_mcp_tokens,
             codeg_mcp_socket_path,
+            host_control_config,
             feedback_config,
             question_config,
             session_info_config,

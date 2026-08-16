@@ -15,10 +15,14 @@ use crate::acp::chat_authoring::{AuthoringContext, AuthoringOutcome, ChatAuthori
 use crate::acp::delegation::transport::{
     read_frame, write_frame, BrokerAskRequest, BrokerCommitFeedbackRequest,
     BrokerCreateAutomationRequest, BrokerCreateWorkTaskRequest, BrokerFeedbackRequest,
-    BrokerListSessionsRequest, BrokerMessage, BrokerResponse, BrokerSendMessageRequest,
-    BrokerSessionRequest, BrokerTaskCompleteRequest, BrokerTaskProgressRequest,
+    BrokerHostControlHelpRequest, BrokerHostControlUseRequest, BrokerListSessionsRequest,
+    BrokerMessage, BrokerResponse, BrokerSendMessageRequest, BrokerSessionRequest,
+    BrokerTaskCompleteRequest, BrokerTaskProgressRequest,
 };
 use crate::acp::feedback::{PendingFeedback, SessionFeedbackAccess};
+use crate::acp::host_control::{
+    HostControlAccess, HostControlCaller, HostControlHelpOutcome, HostControlUseOutcome,
+};
 use crate::acp::question::{QuestionOutcome, SessionQuestionAccess};
 use crate::acp::session_collaboration::{
     SessionCollaborationAccess, SessionListOutcome, SessionSendOutcome,
@@ -44,6 +48,9 @@ pub trait ParentSessionLookup: Send + Sync {
 pub struct TokenEntry {
     pub parent_connection_id: String,
     pub working_dir: PathBuf,
+    /// Parent launch policy, bound by trusted connection code rather than MCP
+    /// arguments. The Host Control core checks this again on every write.
+    pub host_control_writes_allowed: bool,
 }
 
 #[derive(Default)]
@@ -75,6 +82,9 @@ impl TokenRegistry {
 pub struct HostBridgeListener {
     pub tokens: Arc<TokenRegistry>,
     pub parent_lookup: Arc<dyn ParentSessionLookup>,
+    /// Progressive Host Control catalog + typed action dispatcher. The
+    /// listener supplies its trusted caller context from the token entry.
+    pub host_control: Arc<dyn HostControlAccess>,
     /// Pulls pending live-feedback notes for the `check_user_feedback` tool.
     /// Shares the same `tokens` registry and parent-connection scoping as the
     /// other host bridge tools.
@@ -106,6 +116,7 @@ impl HostBridgeListener {
     pub fn new(
         tokens: Arc<TokenRegistry>,
         parent_lookup: Arc<dyn ParentSessionLookup>,
+        host_control: Arc<dyn HostControlAccess>,
         feedback: Arc<dyn SessionFeedbackAccess>,
         questions: Arc<dyn SessionQuestionAccess>,
         session_info: Arc<dyn SessionInfoAccess>,
@@ -116,6 +127,7 @@ impl HostBridgeListener {
         Arc::new(Self {
             tokens,
             parent_lookup,
+            host_control,
             feedback,
             questions,
             session_info,
@@ -201,6 +213,12 @@ impl HostBridgeListener {
     {
         let msg: BrokerMessage = read_frame(conn).await?;
         let resp = match msg {
+            BrokerMessage::HostControlHelp(req) => {
+                host_control_help_response(self.process_host_control_help(req).await)?
+            }
+            BrokerMessage::HostControlUse(req) => {
+                host_control_use_response(self.process_host_control_use(req).await)?
+            }
             BrokerMessage::Feedback(req) => {
                 // at-least-once delivery: READ pending notes (no mutation),
                 // WRITE the response, and COMMIT them delivered ONLY on a
@@ -330,6 +348,50 @@ impl HostBridgeListener {
     async fn feedback_target(&self, req: &BrokerFeedbackRequest) -> Option<String> {
         let entry = self.tokens.lookup(&req.token).await?;
         Some(entry.parent_connection_id)
+    }
+
+    /// Derive the Host Control caller exclusively from the opaque launch token
+    /// and its live parent connection. No source/current Session identity is
+    /// accepted on the MCP or broker request.
+    async fn host_control_caller(&self, token: &str) -> Option<HostControlCaller> {
+        let entry = self.tokens.lookup(token).await?;
+        let current_session_id = self
+            .parent_lookup
+            .current_conversation_id(&entry.parent_connection_id)
+            .await?;
+        Some(HostControlCaller {
+            current_session_id,
+            working_dir: entry.working_dir,
+            writes_allowed: entry.host_control_writes_allowed,
+        })
+    }
+
+    async fn process_host_control_help(
+        &self,
+        req: BrokerHostControlHelpRequest,
+    ) -> HostControlHelpOutcome {
+        let Some(caller) = self.host_control_caller(&req.token).await else {
+            return HostControlHelpOutcome::unavailable(
+                "This Codeg Session identity has expired or is not persistent. Resume the Session before using Host Control.",
+            );
+        };
+        self.host_control.help(caller, req.query, req.action).await
+    }
+
+    async fn process_host_control_use(
+        &self,
+        req: BrokerHostControlUseRequest,
+    ) -> HostControlUseOutcome {
+        let Some(caller) = self.host_control_caller(&req.token).await else {
+            return HostControlUseOutcome::rejected(
+                req.request_id,
+                req.action,
+                "This Codeg Session identity has expired or is not persistent. Resume the Session before using Host Control.",
+            );
+        };
+        self.host_control
+            .use_action(caller, req.request_id, req.action, req.input)
+            .await
     }
 
     /// Validate the token and resolve the `ask_user_question` target: the
@@ -546,6 +608,22 @@ fn session_send_response(outcome: SessionSendOutcome) -> std::io::Result<BrokerR
     })
 }
 
+fn host_control_help_response(outcome: HostControlHelpOutcome) -> std::io::Result<BrokerResponse> {
+    Ok(BrokerResponse {
+        outcome: serde_json::to_value(&outcome).map_err(|e| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, format!("encode: {e}"))
+        })?,
+    })
+}
+
+fn host_control_use_response(outcome: HostControlUseOutcome) -> std::io::Result<BrokerResponse> {
+    Ok(BrokerResponse {
+        outcome: serde_json::to_value(&outcome).map_err(|e| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, format!("encode: {e}"))
+        })?,
+    })
+}
+
 /// Serialize a [`TaskReportAck`] into a [`BrokerResponse`] for the
 /// `TaskProgress` / `TaskComplete` arms — the companion renders it into the
 /// tool result.
@@ -598,6 +676,46 @@ pub fn default_socket_path(_temp_dir: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Default)]
+    struct StubHostControl {
+        callers: tokio::sync::Mutex<Vec<HostControlCaller>>,
+    }
+
+    #[async_trait]
+    impl HostControlAccess for StubHostControl {
+        async fn help(
+            &self,
+            caller: HostControlCaller,
+            _query: Option<String>,
+            _action: Option<String>,
+        ) -> HostControlHelpOutcome {
+            self.callers.lock().await.push(caller);
+            HostControlHelpOutcome {
+                available: true,
+                ..Default::default()
+            }
+        }
+
+        async fn use_action(
+            &self,
+            caller: HostControlCaller,
+            request_id: String,
+            action: String,
+            _input: Value,
+        ) -> HostControlUseOutcome {
+            self.callers.lock().await.push(caller);
+            HostControlUseOutcome {
+                accepted: true,
+                request_id,
+                action,
+                stage: "read".to_string(),
+                replayed: false,
+                data: Value::Null,
+                note: None,
+            }
+        }
+    }
 
     struct StaticParentLookup(Option<i32>);
 
@@ -737,6 +855,7 @@ mod tests {
         HostBridgeListener::new(
             tokens,
             Arc::new(StaticParentLookup(parent_conversation)),
+            Arc::new(StubHostControl::default()),
             Arc::new(NoopFeedback),
             Arc::new(NoopQuestion),
             Arc::new(NoopSessionInfo),
@@ -750,6 +869,7 @@ mod tests {
         TokenEntry {
             parent_connection_id: parent.to_string(),
             working_dir: PathBuf::from("/workspace"),
+            host_control_writes_allowed: true,
         }
     }
 
@@ -787,6 +907,7 @@ mod tests {
                 TokenEntry {
                     parent_connection_id: "parent-conn".into(),
                     working_dir: PathBuf::from("/tmp"),
+                    host_control_writes_allowed: true,
                 },
             )
             .await;
@@ -836,6 +957,49 @@ mod tests {
         assert!(!outcome.available);
         assert!(outcome.note.unwrap().contains("expired"));
         assert!(collaboration.listed_by.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn host_control_identity_and_write_policy_come_from_token_parent() {
+        let host = Arc::new(StubHostControl::default());
+        let tokens = Arc::new(TokenRegistry::default());
+        tokens
+            .register(
+                "tok".into(),
+                TokenEntry {
+                    parent_connection_id: "parent-conn".into(),
+                    working_dir: PathBuf::from("/trusted/workspace"),
+                    host_control_writes_allowed: false,
+                },
+            )
+            .await;
+        let listener = HostBridgeListener::new(
+            tokens,
+            Arc::new(StaticParentLookup(Some(42))),
+            host.clone(),
+            Arc::new(NoopFeedback),
+            Arc::new(NoopQuestion),
+            Arc::new(NoopSessionInfo),
+            Arc::new(StubCollaboration::default()),
+            Arc::new(NoopTaskTools),
+            Arc::new(NoopAuthoring),
+        );
+
+        let outcome = listener
+            .process_host_control_use(BrokerHostControlUseRequest {
+                token: "tok".into(),
+                request_id: "mcp:parent-conn:7".into(),
+                action: "session.rename".into(),
+                input: serde_json::json!({ "title": "Trusted caller" }),
+            })
+            .await;
+
+        assert!(outcome.accepted);
+        let callers = host.callers.lock().await;
+        assert_eq!(callers.len(), 1);
+        assert_eq!(callers[0].current_session_id, 42);
+        assert_eq!(callers[0].working_dir, PathBuf::from("/trusted/workspace"));
+        assert!(!callers[0].writes_allowed);
     }
 
     #[test]

@@ -41,11 +41,13 @@ use crate::acp::chat_authoring::{
 use crate::acp::delegation::transport::{
     client_ask_round_trip, client_commit_feedback, client_create_automation_round_trip,
     client_create_work_task_round_trip, client_feedback_round_trip,
+    client_host_control_help_round_trip, client_host_control_use_round_trip,
     client_list_sessions_round_trip, client_send_message_round_trip, client_session_round_trip,
     client_task_complete_round_trip, client_task_progress_round_trip, BrokerAskRequest,
     BrokerCommitFeedbackRequest, BrokerCreateAutomationRequest, BrokerCreateWorkTaskRequest,
-    BrokerFeedbackRequest, BrokerListSessionsRequest, BrokerResponse, BrokerSendMessageRequest,
-    BrokerSessionRequest, BrokerTaskCompleteRequest, BrokerTaskProgressRequest,
+    BrokerFeedbackRequest, BrokerHostControlHelpRequest, BrokerHostControlUseRequest,
+    BrokerListSessionsRequest, BrokerResponse, BrokerSendMessageRequest, BrokerSessionRequest,
+    BrokerTaskCompleteRequest, BrokerTaskProgressRequest,
 };
 use crate::acp::question::parse_questions;
 use crate::acp::session_collaboration::{
@@ -119,6 +121,7 @@ pub fn err(id: Value, code: i64, message: impl Into<String>) -> JsonRpcResponse 
 /// rejected on `tools/call`.
 #[derive(Debug, Clone, Copy)]
 pub struct CompanionFeatures {
+    pub host_control: bool,
     pub feedback: bool,
     pub ask: bool,
     pub sessions: bool,
@@ -140,6 +143,7 @@ impl CompanionFeatures {
     pub fn parse(raw: Option<&str>) -> Self {
         let Some(s) = raw else {
             return Self {
+                host_control: false,
                 feedback: false,
                 ask: false,
                 sessions: false,
@@ -150,6 +154,7 @@ impl CompanionFeatures {
             };
         };
         let mut f = Self {
+            host_control: false,
             feedback: false,
             ask: false,
             sessions: false,
@@ -160,6 +165,7 @@ impl CompanionFeatures {
         };
         for tok in s.split(',').map(str::trim).filter(|t| !t.is_empty()) {
             match tok {
+                "host_control" => f.host_control = true,
                 "feedback" => f.feedback = true,
                 "ask" => f.ask = true,
                 "sessions" => f.sessions = true,
@@ -176,6 +182,7 @@ impl CompanionFeatures {
     /// Whether the named MCP tool is exposed under the enabled feature groups.
     pub fn allows_tool(&self, name: &str) -> bool {
         match name {
+            "codeg_help" | "codeg_use" => self.host_control,
             "check_user_feedback" => self.feedback,
             "ask_user_question" => self.ask,
             "get_session_info" => self.sessions,
@@ -385,6 +392,36 @@ async fn build_tools_call_spawn(
         return LineAction::Respond(err(id, -32602, format!("unknown tool: {name}")));
     }
     match name.as_str() {
+        "codeg_help" => {
+            let args = match parse_host_control_help(&arguments) {
+                Ok(args) => args,
+                Err(message) => return LineAction::Respond(err(id, -32602, message)),
+            };
+            let req = BrokerHostControlHelpRequest {
+                token: ctx.token.clone(),
+                query: args.query,
+                action: args.action,
+            };
+            let round_trip =
+                Box::pin(async move { client_host_control_help_round_trip(&socket, &req).await });
+            register_and_spawn(inflight, id, round_trip, render_host_control_help_result).await
+        }
+        "codeg_use" => {
+            let args = match parse_host_control_use(&arguments) {
+                Ok(args) => args,
+                Err(message) => return LineAction::Respond(err(id, -32602, message)),
+            };
+            let request_id = mcp_call_dedupe_id(&ctx.parent_connection_id, &id);
+            let req = BrokerHostControlUseRequest {
+                token: ctx.token.clone(),
+                request_id,
+                action: args.action,
+                input: args.input,
+            };
+            let round_trip =
+                Box::pin(async move { client_host_control_use_round_trip(&socket, &req).await });
+            register_and_spawn(inflight, id, round_trip, render_host_control_use_result).await
+        }
         "check_user_feedback" => {
             let req = BrokerFeedbackRequest {
                 token: ctx.token.clone(),
@@ -902,6 +939,160 @@ pub fn render_ask_result(outcome: &Value) -> Value {
     })
 }
 
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HostControlHelpArguments {
+    #[serde(default)]
+    query: Option<String>,
+    #[serde(default)]
+    action: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HostControlUseArguments {
+    action: String,
+    input: Value,
+}
+
+fn parse_host_control_help(arguments: &Value) -> Result<HostControlHelpArguments, String> {
+    let value = if arguments.is_null() {
+        json!({})
+    } else {
+        arguments.clone()
+    };
+    let mut parsed: HostControlHelpArguments = serde_json::from_value(value)
+        .map_err(|error| format!("codeg_help arguments are invalid: {error}"))?;
+    parsed.query = normalize_bounded_optional(parsed.query, 200, "codeg_help `query`")?;
+    parsed.action = normalize_bounded_optional(parsed.action, 96, "codeg_help `action`")?;
+    if let Some(action) = parsed.action.as_deref() {
+        validate_action_name(action)?;
+    }
+    Ok(parsed)
+}
+
+fn parse_host_control_use(arguments: &Value) -> Result<HostControlUseArguments, String> {
+    let mut parsed: HostControlUseArguments = serde_json::from_value(arguments.clone())
+        .map_err(|error| format!("codeg_use arguments are invalid: {error}"))?;
+    parsed.action = parsed.action.trim().to_string();
+    validate_action_name(&parsed.action)?;
+    if !parsed.input.is_object() {
+        return Err("codeg_use requires `input` to be a JSON object".to_string());
+    }
+    Ok(parsed)
+}
+
+fn normalize_bounded_optional(
+    value: Option<String>,
+    max_chars: usize,
+    label: &str,
+) -> Result<Option<String>, String> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    if trimmed.chars().count() > max_chars {
+        return Err(format!("{label} must be at most {max_chars} characters"));
+    }
+    Ok(Some(trimmed.to_string()))
+}
+
+fn validate_action_name(action: &str) -> Result<(), String> {
+    if action.is_empty() || action.chars().count() > 96 {
+        return Err("Host Control `action` must contain 1 to 96 characters".to_string());
+    }
+    if !action.bytes().all(|byte| {
+        byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'_')
+    }) {
+        return Err(
+            "Host Control `action` may contain only lowercase letters, digits, dots, and underscores"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+pub fn render_host_control_help_result(outcome: &Value) -> Value {
+    let available = outcome
+        .get("available")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let text = if !available {
+        outcome
+            .get("note")
+            .and_then(Value::as_str)
+            .unwrap_or("Codeg Host Control is unavailable for this Session.")
+            .to_string()
+    } else {
+        let capabilities = outcome
+            .get("capabilities")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        if capabilities.is_empty() {
+            "No Host Control action matched this request. Call codeg_help without filters to list available actions."
+                .to_string()
+        } else {
+            let mut lines = vec![
+                "Available Codeg Host Control actions (call codeg_use with one action and its input):"
+                    .to_string(),
+            ];
+            for capability in capabilities {
+                let action = capability
+                    .get("action")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown");
+                let description = capability
+                    .get("description")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                lines.push(format!("- {action}: {description}"));
+            }
+            lines.join("\n")
+        }
+    };
+    json!({
+        "content": [{ "type": "text", "text": text }],
+        "isError": false,
+        "structuredContent": outcome.clone(),
+    })
+}
+
+pub fn render_host_control_use_result(outcome: &Value) -> Value {
+    let accepted = outcome
+        .get("accepted")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let action = outcome
+        .get("action")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let stage = outcome
+        .get("stage")
+        .and_then(Value::as_str)
+        .unwrap_or(if accepted { "accepted" } else { "rejected" });
+    let replayed = outcome
+        .get("replayed")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let text = outcome
+        .get("note")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            let replay = if replayed { " (idempotent replay)" } else { "" };
+            format!("Host Control action {action}: {stage}{replay}.")
+        });
+    json!({
+        "content": [{ "type": "text", "text": text }],
+        "isError": false,
+        "structuredContent": outcome.clone(),
+    })
+}
+
 /// Read a required non-empty string argument, trimmed. `Err` carries the
 /// `-32602` message the dispatcher returns verbatim.
 fn required_string(arguments: &Value, field: &str, tool: &str) -> Result<String, String> {
@@ -1408,6 +1599,7 @@ mod tests {
 
     fn all_features() -> CompanionFeatures {
         CompanionFeatures {
+            host_control: true,
             feedback: true,
             ask: true,
             sessions: true,
@@ -1420,10 +1612,24 @@ mod tests {
 
     fn collaboration_features() -> CompanionFeatures {
         CompanionFeatures {
+            host_control: false,
             feedback: false,
             ask: false,
             sessions: false,
             collaboration: true,
+            tasks: false,
+            automations: false,
+            taskboard: false,
+        }
+    }
+
+    fn host_control_features() -> CompanionFeatures {
+        CompanionFeatures {
+            host_control: true,
+            feedback: false,
+            ask: false,
+            sessions: false,
+            collaboration: false,
             tasks: false,
             automations: false,
             taskboard: false,
@@ -1482,6 +1688,8 @@ mod tests {
         assert_eq!(
             names,
             vec![
+                "codeg_help",
+                "codeg_use",
                 "check_user_feedback",
                 "ask_user_question",
                 "get_session_info",
@@ -1496,6 +1704,72 @@ mod tests {
         assert!(!TOOL_SCHEMA_JSON.contains("delegate_to_agent"));
         assert!(!TOOL_SCHEMA_JSON.contains("get_delegation_status"));
         assert!(!TOOL_SCHEMA_JSON.contains("cancel_delegation"));
+    }
+
+    #[tokio::test]
+    async fn tools_list_can_expose_only_the_progressive_host_control_gateway() {
+        let action = dispatch_line(
+            &ctx(host_control_features()),
+            Arc::new(InflightCalls::new()),
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}"#,
+        )
+        .await;
+        let response = response(action).await;
+        let result = response.result.unwrap();
+        let names: Vec<&str> = result["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect();
+        assert_eq!(names, vec!["codeg_help", "codeg_use"]);
+    }
+
+    #[tokio::test]
+    async fn host_control_rejects_model_owned_identity_and_request_fields() {
+        for (name, arguments) in [
+            (
+                "codeg_help",
+                serde_json::json!({ "action": "session.list", "self_session_id": 42 }),
+            ),
+            (
+                "codeg_use",
+                serde_json::json!({
+                    "action": "session.rename",
+                    "input": { "title": "x" },
+                    "request_id": "model-owned"
+                }),
+            ),
+        ] {
+            let line = serde_json::json!({
+                "jsonrpc": "2.0", "id": 7, "method": "tools/call",
+                "params": { "name": name, "arguments": arguments }
+            })
+            .to_string();
+            let LineAction::Respond(response) = dispatch_line(
+                &ctx(host_control_features()),
+                Arc::new(InflightCalls::new()),
+                &line,
+            )
+            .await
+            else {
+                panic!("identity/request fields must fail before broker I/O");
+            };
+            assert_eq!(response.error.expect("invalid arguments").code, -32602);
+        }
+    }
+
+    #[test]
+    fn host_control_feature_and_request_id_are_owned_outside_model_arguments() {
+        let parsed = CompanionFeatures::parse(Some("host_control"));
+        assert!(parsed.host_control);
+        assert!(parsed.allows_tool("codeg_help"));
+        assert!(parsed.allows_tool("codeg_use"));
+        assert!(!parsed.allows_tool("list_sessions"));
+
+        let first = mcp_call_dedupe_id("parent-1", &serde_json::json!(7));
+        assert_eq!(first, mcp_call_dedupe_id("parent-1", &serde_json::json!(7)));
+        assert_ne!(first, mcp_call_dedupe_id("parent-2", &serde_json::json!(7)));
     }
 
     #[tokio::test]
