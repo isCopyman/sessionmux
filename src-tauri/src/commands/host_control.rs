@@ -104,6 +104,24 @@ impl DbSessionHostControl {
         }
     }
 
+    /// Same catalog/dispatcher as production, with ACP spawn isolated for
+    /// public-path integration tests.
+    #[cfg(any(test, feature = "test-utils"))]
+    pub fn new_for_tests(db: Arc<AppDatabase>, emitter: EventEmitter) -> Self {
+        let session_lifecycle =
+            SessionHostControlProvider::isolated_for_tests(Arc::clone(&db), emitter.clone());
+        let organization = OrganizationHostControl::new(db.clone(), emitter.clone());
+        Self {
+            db,
+            emitter,
+            chat_channel_manager: ChatChannelManager::new(),
+            config: HostControlRuntimeConfig::new(),
+            session_lifecycle,
+            organization,
+            writes: Mutex::new(IdempotencyCache::default()),
+        }
+    }
+
     async fn caller_scope(
         &self,
         caller: &HostControlCaller,

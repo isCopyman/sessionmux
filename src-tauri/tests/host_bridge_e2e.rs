@@ -18,8 +18,9 @@ use codeg_lib::acp::delegation::listener::{
     HostBridgeListener, ParentSessionLookup, TokenEntry, TokenRegistry,
 };
 use codeg_lib::acp::delegation::transport::{
-    client_host_control_use_round_trip, client_send_message_round_trip,
-    BrokerHostControlUseRequest, BrokerResponse, BrokerSendMessageRequest,
+    client_host_control_help_round_trip, client_host_control_use_round_trip,
+    client_send_message_round_trip, BrokerHostControlHelpRequest, BrokerHostControlUseRequest,
+    BrokerResponse, BrokerSendMessageRequest,
 };
 use codeg_lib::acp::feedback::{PendingFeedback, SessionFeedbackAccess};
 use codeg_lib::acp::host_control::{
@@ -552,4 +553,327 @@ async fn real_host_bridge_round_trips_reply_status_through_host_core() {
 
     task.abort();
     cleanup_endpoint(&endpoint).await;
+}
+
+struct LiveParent(tokio::sync::RwLock<std::collections::HashMap<String, i32>>);
+
+#[async_trait]
+impl ParentSessionLookup for LiveParent {
+    async fn current_conversation_id(&self, parent_connection_id: &str) -> Option<i32> {
+        self.0.read().await.get(parent_connection_id).copied()
+    }
+}
+
+async fn host_use(
+    endpoint: &str,
+    token: &str,
+    request_id: &str,
+    action: &str,
+    input: Value,
+) -> BrokerResponse {
+    host_control_round_trip_with_retry(
+        endpoint,
+        &BrokerHostControlUseRequest {
+            token: token.to_string(),
+            request_id: request_id.to_string(),
+            action: action.to_string(),
+            input,
+        },
+    )
+    .await
+    .unwrap_or_else(|error| panic!("{action} failed: {error}"))
+}
+
+/// One public Skill+MCP path: codeg_help/codeg_use create/rename/organize/place,
+/// then send_message / reply_to, with source identity from the host token.
+#[tokio::test]
+async fn public_mcp_creates_organizes_and_replies_through_host_core() {
+    use codeg_lib::acp::session_collaboration::{
+        SessionCollaborationConfig, SessionCollaborationRuntimeConfig,
+    };
+    use codeg_lib::commands::collaboration::{
+        collaboration_feed_core, DbSessionCollaboration,
+    };
+    use codeg_lib::commands::host_control::DbSessionHostControl;
+    use codeg_lib::db::test_helpers::{fresh_in_memory_db, seed_conversation, seed_folder};
+    use codeg_lib::db::AppDatabase;
+    use codeg_lib::models::{AgentType, CollaborationObligationState};
+    use codeg_lib::prompt_queue::PromptQueueHandle;
+    use codeg_lib::web::event_bridge::EventEmitter;
+
+    let cwd = std::env::temp_dir().join(format!(
+        "codeg-public-mcp-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or_default()
+    ));
+    std::fs::create_dir_all(&cwd).expect("public-path cwd");
+    let cwd_text = cwd.to_string_lossy().into_owned();
+
+    let db = fresh_in_memory_db().await;
+    let folder = seed_folder(&db, &cwd_text).await;
+    let session_a = seed_conversation(&db, folder, AgentType::Codex).await;
+
+    let db = Arc::new(AppDatabase {
+        conn: db.conn.clone(),
+    });
+    let host_control = Arc::new(DbSessionHostControl::new_for_tests(
+        Arc::clone(&db),
+        EventEmitter::Noop,
+    ));
+    let collab_config = SessionCollaborationRuntimeConfig::new();
+    collab_config
+        .set(SessionCollaborationConfig { enabled: true })
+        .await;
+    let collaboration = Arc::new(DbSessionCollaboration::new(
+        Arc::clone(&db),
+        EventEmitter::Noop,
+        PromptQueueHandle::disconnected_for_test(),
+        collab_config,
+    ));
+
+    let tokens = Arc::new(TokenRegistry::default());
+    tokens
+        .register(
+            "token-a".to_string(),
+            TokenEntry {
+                parent_connection_id: "conn-a".to_string(),
+                working_dir: cwd.clone(),
+                host_control_writes_allowed: true,
+            },
+        )
+        .await;
+    tokens
+        .register(
+            "token-b".to_string(),
+            TokenEntry {
+                parent_connection_id: "conn-b".to_string(),
+                working_dir: cwd.clone(),
+                host_control_writes_allowed: true,
+            },
+        )
+        .await;
+    let parents = Arc::new(LiveParent(tokio::sync::RwLock::new(
+        std::collections::HashMap::from([("conn-a".to_string(), session_a)]),
+    )));
+
+    let endpoint = unique_endpoint("public-mcp-loop");
+    let task = {
+        let listener = HostBridgeListener::new(
+            tokens,
+            parents.clone(),
+            host_control,
+            Arc::new(NoFeedback),
+            Arc::new(NoQuestions),
+            Arc::new(NoSessionInfo),
+            collaboration,
+            Arc::new(NoTaskTools),
+            Arc::new(NoAuthoring),
+        );
+        let endpoint = endpoint.clone();
+        tokio::spawn(async move { listener.run(endpoint).await })
+    };
+    let endpoint_text = endpoint.to_string_lossy().to_string();
+
+    let help = client_host_control_help_round_trip(
+        &endpoint_text,
+        &BrokerHostControlHelpRequest {
+            token: "token-a".to_string(),
+            query: Some("session.create".to_string()),
+            action: Some("session.create".to_string()),
+        },
+    )
+    .await;
+    let help = match help {
+        Ok(help) => help,
+        Err(_) => {
+            let mut last = None;
+            for _ in 0..50 {
+                match client_host_control_help_round_trip(
+                    &endpoint_text,
+                    &BrokerHostControlHelpRequest {
+                        token: "token-a".to_string(),
+                        query: Some("session.create".to_string()),
+                        action: Some("session.create".to_string()),
+                    },
+                )
+                .await
+                {
+                    Ok(help) => {
+                        last = Some(help);
+                        break;
+                    }
+                    Err(error) => {
+                        last = None;
+                        let _ = error;
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                    }
+                }
+            }
+            last.expect("codeg_help over host bridge")
+        }
+    };
+    assert_eq!(help.outcome["available"], true);
+    assert!(help.outcome["capabilities"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .any(|capability| capability["action"] == "session.create"));
+
+    let created = host_use(
+        &endpoint_text,
+        "token-a",
+        "create-b",
+        "session.create",
+        json!({
+            "harness": "claude_code",
+            "title": "Session B"
+        }),
+    )
+    .await;
+    assert_eq!(created.outcome["accepted"], true, "{created:?}");
+    let session_b = created.outcome["data"]["session_id"]
+        .as_i64()
+        .expect("create returns session_id") as i32;
+    assert_ne!(session_b, session_a);
+    parents
+        .0
+        .write()
+        .await
+        .insert("conn-b".to_string(), session_b);
+
+    let renamed = host_use(
+        &endpoint_text,
+        "token-a",
+        "rename-b",
+        "session.rename",
+        json!({
+            "session_id": session_b,
+            "title": "Reviewer B"
+        }),
+    )
+    .await;
+    assert_eq!(renamed.outcome["accepted"], true, "{renamed:?}");
+    assert_eq!(renamed.outcome["data"]["title"], "Reviewer B");
+
+    let collection = host_use(
+        &endpoint_text,
+        "token-a",
+        "create-collection",
+        "collection.create",
+        json!({ "name": "Public path review" }),
+    )
+    .await;
+    assert_eq!(collection.outcome["accepted"], true, "{collection:?}");
+    let collection_id = collection.outcome["data"]["collection"]["id"]
+        .as_i64()
+        .expect("collection id") as i32;
+    let added = host_use(
+        &endpoint_text,
+        "token-a",
+        "add-b-collection",
+        "collection.add_session",
+        json!({
+            "collection_id": collection_id,
+            "session_id": session_b
+        }),
+    )
+    .await;
+    assert_eq!(added.outcome["accepted"], true, "{added:?}");
+
+    let workbench = host_use(
+        &endpoint_text,
+        "token-a",
+        "create-workbench",
+        "workbench.create",
+        json!({ "name": "Public path bench" }),
+    )
+    .await;
+    assert_eq!(workbench.outcome["accepted"], true, "{workbench:?}");
+    let workbench_id = workbench.outcome["data"]["workbench"]["id"]
+        .as_i64()
+        .expect("workbench id") as i32;
+    let placed = host_use(
+        &endpoint_text,
+        "token-a",
+        "place-b",
+        "workbench.place_session",
+        json!({
+            "workbench_id": workbench_id,
+            "session_id": session_b,
+            "placement": "right"
+        }),
+    )
+    .await;
+    assert_eq!(placed.outcome["accepted"], true, "{placed:?}");
+    assert_eq!(placed.outcome["stage"], "ui_requested");
+    assert_eq!(placed.outcome["data"]["placement"], "right");
+
+    let outbound = send_message_round_trip_with_retry(
+        &endpoint_text,
+        &BrokerSendMessageRequest {
+            token: "token-a".to_string(),
+            spec: SessionMessageSpec {
+                target_session_ids: vec![session_b],
+                content: "Please review this change.".to_string(),
+                delivery_mode: SessionMessageDeliveryMode::DeliverOnly,
+                steer_if_supported: false,
+                expects_reply: true,
+                reply_to_event_id: None,
+                client_dedupe_id: "public-a-to-b".to_string(),
+            },
+        },
+    )
+    .await
+    .expect("A send_message");
+    assert_eq!(outbound.outcome["accepted"], true);
+    assert_eq!(outbound.outcome["source_session_id"], session_a);
+    let event_id = outbound.outcome["event_id"]
+        .as_str()
+        .expect("event_id")
+        .to_string();
+
+    let feed_a = collaboration_feed_core(&db.conn, session_a, None)
+        .await
+        .expect("A outbox");
+    assert_eq!(
+        feed_a.outbound[0].obligation_state,
+        CollaborationObligationState::AwaitingReply
+    );
+    assert!(!feed_a.outbound[0].reply_received);
+
+    let reply = send_message_round_trip_with_retry(
+        &endpoint_text,
+        &BrokerSendMessageRequest {
+            token: "token-b".to_string(),
+            spec: SessionMessageSpec {
+                target_session_ids: vec![session_a],
+                content: "Reviewed.".to_string(),
+                delivery_mode: SessionMessageDeliveryMode::DeliverOnly,
+                steer_if_supported: false,
+                expects_reply: false,
+                reply_to_event_id: Some(event_id.clone()),
+                client_dedupe_id: "public-b-reply".to_string(),
+            },
+        },
+    )
+    .await
+    .expect("B reply_to");
+    assert_eq!(reply.outcome["accepted"], true);
+    assert_eq!(reply.outcome["source_session_id"], session_b);
+
+    let feed_a = collaboration_feed_core(&db.conn, session_a, None)
+        .await
+        .expect("A outbox after reply");
+    assert!(feed_a.outbound[0].reply_received);
+    assert_eq!(
+        feed_a.outbound[0].obligation_state,
+        CollaborationObligationState::Resolved
+    );
+
+    task.abort();
+    cleanup_endpoint(&endpoint).await;
+    let _ = std::fs::remove_dir_all(&cwd);
 }

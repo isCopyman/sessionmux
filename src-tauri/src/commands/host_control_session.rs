@@ -414,7 +414,7 @@ impl SessionHostControlProvider {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-utils"))]
     fn new_with_runtime(
         db: Arc<AppDatabase>,
         emitter: EventEmitter,
@@ -426,6 +426,13 @@ impl SessionHostControlProvider {
             runtime,
             writes: Mutex::new(IdempotencyRegistry::default()),
         }
+    }
+
+    /// Public-path tests still go through Host Core; only the ACP spawn is
+    /// isolated so the suite does not require a live Harness binary.
+    #[cfg(any(test, feature = "test-utils"))]
+    pub(crate) fn isolated_for_tests(db: Arc<AppDatabase>, emitter: EventEmitter) -> Self {
+        Self::new_with_runtime(db, emitter, Arc::new(IsolatedHostSessionRuntime))
     }
 
     pub(crate) fn handles(action: &str) -> bool {
@@ -1229,6 +1236,33 @@ fn verify_requested_options(
         }
     }
     Ok(())
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+struct IsolatedHostSessionRuntime;
+
+#[cfg(any(test, feature = "test-utils"))]
+#[async_trait]
+impl HostSessionRuntime for IsolatedHostSessionRuntime {
+    async fn create_session(&self, spec: CreateSessionSpec) -> Result<CreatedRuntime, String> {
+        Ok(CreatedRuntime {
+            connection_id: format!("isolated-{}", spec.conversation_id),
+            native_session_id: Some(format!("native-{}", spec.conversation_id)),
+            actual_model: spec.model.clone(),
+            prompt: InitialPromptStage::NotRequested,
+            runtime_active: true,
+            identity_persisted: false,
+            setup_error: None,
+        })
+    }
+
+    async fn cancel_turn(&self, _conversation_id: i32) -> Result<CancelTurnRuntimeResult, String> {
+        Ok(CancelTurnRuntimeResult::NoActiveRuntime)
+    }
+
+    async fn stop_session(&self, _conversation_id: i32) -> Result<StopSessionRuntimeResult, String> {
+        Ok(StopSessionRuntimeResult::AlreadyStopped)
+    }
 }
 
 fn write_fingerprint(action: &str, input: &Value) -> String {
