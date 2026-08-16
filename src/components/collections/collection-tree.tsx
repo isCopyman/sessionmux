@@ -82,6 +82,7 @@ import { toErrorMessage } from "@/lib/app-error"
 import { cn } from "@/lib/utils"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { useCollectionStore } from "@/stores/collection-store"
+import { useOrganizationRevisionStore } from "@/stores/organization-revision-store"
 import type { SidebarSortMode } from "@/lib/sidebar-view-mode-storage"
 import { useTabStore } from "@/contexts/tab-context"
 
@@ -209,6 +210,9 @@ export function CollectionTree({
   const activeFolderId = useAppWorkspaceStore((state) => state.activeFolderId)
   const activeTabId = useTabStore((state) => state.activeTabId)
   const tabs = useTabStore((state) => state.tabs)
+  const organizationRevision = useOrganizationRevisionStore(
+    (state) => state.revision
+  )
 
   const [expanded, setExpanded] = useState<Set<number>>(new Set())
   const [collapsedPaths, setCollapsedPaths] = useState<Set<number>>(new Set())
@@ -298,7 +302,7 @@ export function CollectionTree({
     return () => {
       cancelled = true
     }
-  }, [conversationIdsKey, refreshKey, showSessions, t])
+  }, [conversationIdsKey, organizationRevision, refreshKey, showSessions, t])
 
   const children = useMemo(() => orderedChildren(items), [items])
   const collectionById = useMemo(

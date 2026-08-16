@@ -59,6 +59,7 @@ import type {
 import { cn } from "@/lib/utils"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { useWorkbenchStore } from "@/stores/workbench-store"
+import { useOrganizationRevisionStore } from "@/stores/organization-revision-store"
 
 type EditorState =
   | { mode: "create" }
@@ -160,6 +161,9 @@ export function WorkbenchTree({
   const openTab = useTabStore((state) => state.openTab)
   const conversations = useAppWorkspaceStore((state) => state.conversations)
   const { openConversations } = useWorkbenchRoute()
+  const organizationRevision = useOrganizationRevisionStore(
+    (state) => state.revision
+  )
 
   const [expanded, setExpanded] = useState<Set<number>>(new Set())
   const [snapshots, setSnapshots] = useState<Map<number, OpenedTab[]>>(
@@ -214,7 +218,14 @@ export function WorkbenchTree({
     }
     // Switching flushes the old Workbench and mounts a new one, so refresh the
     // inactive snapshots whenever the active identity changes.
-  }, [activeWorkbenchId, hydrated, items, t, workbenchIdsKey])
+  }, [
+    activeWorkbenchId,
+    hydrated,
+    items,
+    organizationRevision,
+    t,
+    workbenchIdsKey,
+  ])
 
   const conversationById = useMemo(
     () =>

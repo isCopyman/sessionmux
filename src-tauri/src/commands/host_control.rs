@@ -25,6 +25,7 @@ use crate::commands::conversations::{
     emit_conversation_upsert, list_all_conversations_core,
     sync_conversation_title_to_channels_core,
 };
+use crate::commands::host_control_organization::OrganizationHostControl;
 use crate::db::entities::conversation::ConversationKind;
 use crate::db::service::conversation_service;
 use crate::db::AppDatabase;
@@ -68,6 +69,7 @@ pub struct DbSessionHostControl {
     emitter: EventEmitter,
     chat_channel_manager: ChatChannelManager,
     config: HostControlRuntimeConfig,
+    organization: OrganizationHostControl,
     /// Held across a write so concurrent replays cannot both pass the lookup.
     writes: Mutex<IdempotencyCache>,
 }
@@ -79,11 +81,13 @@ impl DbSessionHostControl {
         chat_channel_manager: ChatChannelManager,
         config: HostControlRuntimeConfig,
     ) -> Self {
+        let organization = OrganizationHostControl::new(db.clone(), emitter.clone());
         Self {
             db,
             emitter,
             chat_channel_manager,
             config,
+            organization,
             writes: Mutex::new(IdempotencyCache::default()),
         }
     }
@@ -225,6 +229,7 @@ impl DbSessionHostControl {
                 result_stages: vec!["persisted".to_string()],
             });
         }
+        capabilities.extend(OrganizationHostControl::capabilities(writes_allowed));
         capabilities
     }
 
@@ -502,6 +507,23 @@ impl HostControlAccess for DbSessionHostControl {
                         .await
                 }
             }
+            _ if OrganizationHostControl::access_for(&action).is_some() => {
+                if matches!(
+                    OrganizationHostControl::access_for(&action),
+                    Some(HostControlAccessLevel::Write)
+                ) && (!config.writes_enabled || !caller.writes_allowed)
+                {
+                    HostControlUseOutcome::rejected(
+                        request_id,
+                        action,
+                        "This Session's live Host policy does not allow Host Control writes.",
+                    )
+                } else {
+                    self.organization
+                        .use_action(&caller, request_id, action, input)
+                        .await
+                }
+            }
             _ => HostControlUseOutcome::rejected(
                 request_id,
                 action,
@@ -598,17 +620,33 @@ mod tests {
         let (host, _, caller_id, _) = fixture().await;
         let read_only = host.help(caller(caller_id, false), None, None).await;
         assert!(read_only.available);
-        assert_eq!(read_only.capabilities.len(), 2);
+        assert_eq!(read_only.capabilities.len(), 4);
         assert!(read_only
             .capabilities
             .iter()
             .all(|capability| capability.access == HostControlAccessLevel::Read));
+        assert!(read_only
+            .capabilities
+            .iter()
+            .any(|capability| capability.action == "collection.list"));
+        assert!(read_only
+            .capabilities
+            .iter()
+            .any(|capability| capability.action == "workbench.list"));
 
         let writable = host.help(caller(caller_id, true), None, None).await;
         assert!(writable
             .capabilities
             .iter()
             .any(|capability| capability.action == "session.rename"));
+        assert!(writable
+            .capabilities
+            .iter()
+            .any(|capability| capability.action == "collection.add_session"));
+        assert!(writable
+            .capabilities
+            .iter()
+            .any(|capability| capability.action == "workbench.add_session"));
     }
 
     #[tokio::test]

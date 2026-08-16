@@ -96,6 +96,7 @@ import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { useTabStore } from "@/stores/tab-store"
 import { useWorkbenchStore } from "@/stores/workbench-store"
 import { useCollectionStore } from "@/stores/collection-store"
+import { useOrganizationRevisionStore } from "@/stores/organization-revision-store"
 import { useTabActions } from "@/contexts/tab-context"
 import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
 import {
@@ -648,6 +649,9 @@ export function ConversationManageDialog({
   const collections = useCollectionStore((s) => s.items)
   const collectionsHydrated = useCollectionStore((s) => s.hydrated)
   const hydrateCollections = useCollectionStore((s) => s.hydrate)
+  const organizationRevision = useOrganizationRevisionStore(
+    (state) => state.revision
+  )
 
   const [search, setSearch] = useState("")
   const [searchScope, setSearchScope] = useState<SessionSearchScope>("all")
@@ -949,7 +953,7 @@ export function ConversationManageDialog({
     return () => {
       cancelled = true
     }
-  }, [open, rows])
+  }, [open, organizationRevision, rows])
 
   useEffect(() => {
     if (!open || rows.length === 0) {
@@ -977,7 +981,7 @@ export function ConversationManageDialog({
     return () => {
       cancelled = true
     }
-  }, [open, rows])
+  }, [open, organizationRevision, rows])
 
   const collectionOptions = useMemo(
     () => flattenCollections(collections),

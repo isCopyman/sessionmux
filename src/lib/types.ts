@@ -523,6 +523,17 @@ export interface TabsChanged {
 
 export const TABS_CHANGED_EVENT = "tabs://changed"
 
+/** Invalidation for server-owned Collection and Workbench metadata changed by
+ * a headless Host Control caller. Clients refetch the affected organization
+ * store; this event never asks them to mount or focus a Workbench. */
+export interface OrganizationChanged {
+  entity: "collection" | "collection_membership" | "workbench"
+  id: number
+  origin: "host-control" | string
+}
+
+export const ORGANIZATION_CHANGED_EVENT = "organization://changed"
+
 /** Response of `list_opened_tabs`: the persisted set + current workspace tab
  *  version (clients seed their compare-and-set / echo logic from it). */
 export interface OpenedTabsSnapshot {
