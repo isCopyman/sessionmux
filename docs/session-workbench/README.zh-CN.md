@@ -26,6 +26,7 @@ Session Center、可选内容全文检索、单窗口拖边吸附，以及 Colle
 - [Session Center、全文检索与打开行为子 RFC](./SESSION-DISCOVERY-OPENING-RFC.zh-CN.md)：全局会话管理、ctx 可选全文检索、默认打开决策和 Focus 语义。
 - [Workbench 层级、多窗口与 Session 多视图同步子 RFC](./WORKBENCH-LAYOUT-SYNC-RFC.zh-CN.md)：顶层工作台标签、物理窗口、视图/运行时边界与同步规则。
 - [Session 历史能力子 RFC](./SESSION-HISTORY-CAPABILITIES-RFC.zh-CN.md)：Fork、旧消息编辑、Rewind、文件检查点及各 Harness 的能力降级。
+- [Session Runtime 生命周期 RFC](./SESSION-RUNTIME-LIFECYCLE-RFC.zh-CN.md)：统一 Session/ACP/Turn、PromptQueue、Mailbox、Dispatcher、崩溃恢复与未来等待点的事实和拟议语义。
 - [群聊面板与 Session 协作 RFC](./GROUP-CONVERSATION-RFC.zh-CN.md)：Room 作为内容面板、Session 成员、共享/私聊边界、显式目标、上下文摄入和协作链限制。
 - [AgentBus 协作子 RFC](./AGENTBUS-COLLABORATION-RFC.zh-CN.md)：Codeg 原生 Delivery Router、跨 App/主机 AgentBus、`wait` 降级与未来受管 CLI Gateway。
 - [GitHub Issue 与需求追踪](./ISSUE-TRACKER.zh-CN.md)：已提交问题、状态、RFC 条目和实施里程碑的对应关系。

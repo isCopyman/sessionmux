@@ -3,7 +3,7 @@
 > 状态：部分实现。内部 direct 通信主干已落地；完整 mailbox lifecycle、Timeline、统一 Dispatcher、附件、跨 Backend 与 Room 仍为拟议
 > 更新时间：2026-08-16
 > 上位产品需求：[产品需求与使用场景](./PRODUCT-SPEC.zh-CN.md#410-联系其他-backend-或-codeg-管理边界之外的-agent)
-> 相邻设计：[AgentBus 协作子 RFC](./AGENTBUS-COLLABORATION-RFC.zh-CN.md)、[群聊面板与 Session 协作 RFC](./GROUP-CONVERSATION-RFC.zh-CN.md)
+> 相邻设计：[Session Runtime 生命周期 RFC](./SESSION-RUNTIME-LIFECYCLE-RFC.zh-CN.md)、[AgentBus 协作子 RFC](./AGENTBUS-COLLABORATION-RFC.zh-CN.md)、[群聊面板与 Session 协作 RFC](./GROUP-CONVERSATION-RFC.zh-CN.md)
 
 > 证据范围：本文所称“现有实现”以 2026-08-16 当前 Codeg `codex/session-workbench-foundation` 分支源码为准，并在关键结论旁给出
 > 源码或上游协议链接；所称“拟议”“应新增”仍是设计，不表示当前版本已经提供。编码前需重新
@@ -284,10 +284,11 @@ Mailbox 需要分别记录：
 判定空闲后仍发生竞争时，消息返回队首而不是丢失或重复启动。
 
 这里的“复用”是指共用后端的 Session prompt 串行器、能力门控和原子发送权，不是把跨 Session
-Delivery 直接塞进当前 `useMessageQueue()`。同 Session 的用户 follow-up 队列保存 PromptDraft；
-跨 Session 协作层另外保存来源、目标、reply-to、调用策略和投递审计。两类记录可以在进入 Harness
-前汇入同一有序执行入口，但不能互相冒充。follow-up 队列的持久化、多窗口同步、失败暂停和原子
-claim 见 [Workbench 层级、多窗口与 Session 多视图同步 RFC](./WORKBENCH-LAYOUT-SYNC-RFC.zh-CN.md#71-后续消息队列也是共享-session-状态)。
+Delivery 正文复制成前端 `useMessageQueue()` 草稿。同 Session 的用户 follow-up 保存 PromptDraft；
+跨 Session 协作层另外保存来源、目标、reply-to、调用策略和投递审计。当前后端队列已经允许以
+`origin_event_id` 保存 mailbox 执行引用，并与 PromptDraft 互斥；两类正文事实仍然分离，只在进入
+Harness 前汇入同一有序入口。当前持久化、claim/lease、崩溃恢复和跨层状态边界见
+[Session Runtime 生命周期 RFC](./SESSION-RUNTIME-LIFECYCLE-RFC.zh-CN.md#5-用户-promptqueue-生命周期)。
 
 ### 6.1 两个存储模型，一个 Session Dispatcher
 
@@ -333,8 +334,8 @@ mailbox Delivery 独占触发且目标唯一可判定的 Turn，才允许兜底�
 只修改 execution rank，不修改 event 正文、Attention 或 Obligation。
 
 这里的“唯一投递权”同时约束不同 Adapter、同一 Backend 的多个窗口和多个客户端。入站 Delivery
-是持久共享状态，不能照搬当前每窗口内存态的出站队列 effect；连接就绪后的自动派发也必须由后端
-原子认领，而不是让每个可见窗口各自判断一次。
+和 PromptQueue 已经是后端持久共享状态；后续 execution-plan projection 也必须继续由后端原子
+认领，不能退回到让每个可见窗口各自判断一次的旧式 effect。
 
 已关闭 Session 默认不因一条 Agent 消息自动冷启动。否则一次 fan-out 可能未经用户同意启动多个
 CLI、消耗 Token 并触发工具权限。后续可为特定 Session 或发送者建立显式自动恢复策略。
