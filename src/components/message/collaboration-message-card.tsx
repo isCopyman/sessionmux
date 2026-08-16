@@ -1,73 +1,37 @@
 "use client"
 
-import { useMemo, useState } from "react"
-import { ArrowUpRight, Bot, Eye, MessageSquareMore } from "lucide-react"
+import { useMemo } from "react"
+import { ArrowUpRight, MessageSquareMore } from "lucide-react"
 import { useTranslations } from "next-intl"
 
 import { MessageContent } from "@/components/ai-elements/message"
 import { Button } from "@/components/ui/button"
 import { useTabActions } from "@/contexts/tab-context"
 import { formatConversationTitle } from "@/lib/conversation-title"
-import { markCollaborationSeen } from "@/lib/api"
 import type { CollaborationDelivery } from "@/lib/types"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { ContentPartsRenderer } from "./content-parts-renderer"
 
-function statusClass(active: boolean) {
-  return active
-    ? "rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-400"
-    : "rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground"
-}
-
 export function CollaborationMessageCard({
   delivery,
-  currentConversationId,
 }: {
   delivery: CollaborationDelivery
-  currentConversationId: number
+  currentConversationId?: number
 }) {
   const t = useTranslations("Collaboration")
-  const [optimisticallySeenDeliveryId, setOptimisticallySeenDeliveryId] =
-    useState<string | null>(null)
   const conversations = useAppWorkspaceStore((state) => state.conversations)
   const sourceConversation = conversations.find(
     (conversation) => conversation.id === delivery.source.conversationId
   )
   const { openTab } = useTabActions()
-  const sourceName =
-    delivery.source.title?.trim() ||
-    t("untitled", { id: delivery.source.conversationId })
+  const sourceName = `Session ${delivery.source.conversationId}`
   const bodyParts = useMemo(
     () => [{ type: "text" as const, text: delivery.body }],
     [delivery.body]
   )
-  const replyState =
-    delivery.obligationState === "awaiting_reply"
-      ? t("stateNeedsReply")
-      : delivery.obligationState === "resolved"
-        ? delivery.replyReceived
-          ? t("stateReplied")
-          : t("noReplyNeeded")
-        : null
-  const isUnread =
-    !delivery.agentReceivedAt && delivery.state !== "dismissed"
-
-  const markSeenFromExplicitAction = () => {
-    if (optimisticallySeenDeliveryId === delivery.id) return
-    setOptimisticallySeenDeliveryId(delivery.id)
-    void markCollaborationSeen(currentConversationId, [delivery.id]).catch(
-      (error) => {
-        setOptimisticallySeenDeliveryId((current) =>
-          current === delivery.id ? null : current
-        )
-        console.error("[collaboration] mark timeline card seen:", error)
-      }
-    )
-  }
 
   const openSource = () => {
     if (!sourceConversation) return
-    markSeenFromExplicitAction()
     openTab(
       sourceConversation.folder_id,
       sourceConversation.id,
@@ -94,29 +58,10 @@ export function CollaborationMessageCard({
               </span>
               <span className="truncate text-muted-foreground">
                 {delivery.source.agentType || t("unknownHarness")}
-                {delivery.source.folderPath
-                  ? ` · ${delivery.source.folderPath}`
+                {delivery.source.title?.trim()
+                  ? ` · ${formatConversationTitle(delivery.source.title)}`
                   : ""}
               </span>
-            </div>
-            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-              <span className={statusClass(isUnread)}>
-                <Eye className="mr-1 inline h-3 w-3" />
-                {isUnread ? t("unreadCount", { count: 1 }) : t("stateSeen")}
-              </span>
-              <span className={statusClass(false)}>
-                <Bot className="mr-1 inline h-3 w-3" />
-                {t("stateEmbedded")}
-              </span>
-              {replyState ? (
-                <span
-                  className={statusClass(
-                    delivery.obligationState === "awaiting_reply"
-                  )}
-                >
-                  {replyState}
-                </span>
-              ) : null}
             </div>
           </div>
           <div className="flex shrink-0 items-center">

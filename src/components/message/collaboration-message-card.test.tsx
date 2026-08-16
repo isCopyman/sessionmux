@@ -73,7 +73,7 @@ beforeEach(() => {
 })
 
 describe("CollaborationMessageCard", () => {
-  it("shows distinct lifecycle facts and keeps navigation without a human reply", () => {
+  it("renders the source and body and can open that Session", () => {
     render(
       <CollaborationMessageCard
         delivery={delivery()}
@@ -81,20 +81,14 @@ describe("CollaborationMessageCard", () => {
       />
     )
 
-    expect(screen.getByText("transcriptFrom:Reviewer")).toBeInTheDocument()
+    expect(screen.getByText("transcriptFrom:Session 1")).toBeInTheDocument()
     expect(screen.getByText("Please check the proof.")).toBeInTheDocument()
-    expect(screen.getByText("stateSeen")).toBeInTheDocument()
-    expect(screen.getByText("stateEmbedded")).toBeInTheDocument()
-    expect(screen.getByText("stateNeedsReply")).toBeInTheDocument()
-    expect(api.markCollaborationSeen).not.toHaveBeenCalled()
-
-    fireEvent.click(screen.getByRole("button", { name: "openSession" }))
-    expect(tabs.openTab).toHaveBeenCalledWith(10, 1, "codex", true, "Reviewer")
-    expect(api.markCollaborationSeen).toHaveBeenCalledWith(2, ["delivery-1"])
-    expect(screen.getByText("stateSeen")).toBeInTheDocument()
+    expect(screen.queryByText("stateNeedsReply")).not.toBeInTheDocument()
     expect(
       screen.queryByRole("button", { name: "reply" })
     ).not.toBeInTheDocument()
-    expect(screen.queryByTestId("reply-dialog")).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole("button", { name: "openSession" }))
+    expect(tabs.openTab).toHaveBeenCalledWith(10, 1, "codex", true, "Reviewer")
   })
 })
