@@ -1198,6 +1198,9 @@ export interface CollaborationDelivery {
   invocationPolicy: CollaborationInvocationPolicy
   deliveryHint: CollaborationDeliveryHint
   state: CollaborationDeliveryState
+  queueItemId?: string | null
+  queueState?: PromptQueueItemState | null
+  queuePausedReason?: string | null
   uiSeenAt?: string | null
   embeddedTurnRef?: string | null
   attempts: number

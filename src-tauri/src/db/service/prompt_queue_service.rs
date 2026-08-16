@@ -293,6 +293,7 @@ pub(crate) async fn enqueue_origin_in_transaction(
     item_id: &str,
     origin_event_id: &str,
     client_dedupe_id: &str,
+    initial_pause_reason: Option<&str>,
 ) -> Result<bool, DbError> {
     validate_id("Queue item id", item_id)?;
     validate_id("Queue origin event id", origin_event_id)?;
@@ -336,17 +337,23 @@ pub(crate) async fn enqueue_origin_in_transaction(
         .await?
         .expect("aggregate always returns one row")
         .try_get("", "next_position")?;
+    let (state, paused_reason) = match initial_pause_reason {
+        Some(reason) => ("paused", Some(reason)),
+        None => ("queued", None),
+    };
     txn.execute(statement(
         "INSERT INTO conversation_prompt_queue_item \
          (id, conversation_id, position, draft_json, origin_event_id, mode_id, state, \
-          client_dedupe_id, attempts, created_at, updated_at) \
-         VALUES (?, ?, ?, NULL, ?, NULL, 'queued', ?, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+          client_dedupe_id, attempts, paused_reason, created_at, updated_at) \
+         VALUES (?, ?, ?, NULL, ?, NULL, ?, ?, 0, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
         vec![
             item_id.into(),
             conversation_id.into(),
             position.into(),
             origin_event_id.into(),
+            state.into(),
             client_dedupe_id.into(),
+            paused_reason.into(),
         ],
     ))
     .await?;
@@ -569,12 +576,9 @@ pub async fn retry_item(
     verify_revision(&txn, conversation_id, expected_revision).await?;
     let row = txn
         .query_one(statement(
-            "UPDATE conversation_prompt_queue_item \
-             SET state = 'queued', paused_reason = NULL, claimed_by = NULL, \
-                 claim_expires_at = NULL, dispatch_started_at = NULL, \
-                 updated_at = CURRENT_TIMESTAMP \
-             WHERE id = ? AND conversation_id = ? AND state = 'paused' \
-             RETURNING origin_event_id",
+            "SELECT origin_event_id, paused_reason \
+             FROM conversation_prompt_queue_item \
+             WHERE id = ? AND conversation_id = ? AND state = 'paused'",
             vec![id.into(), conversation_id.into()],
         ))
         .await?;
@@ -582,16 +586,42 @@ pub async fn retry_item(
         return Err(validation("Queued prompt is not paused"));
     };
     let origin_event_id: Option<String> = row.try_get("", "origin_event_id")?;
-    if let Some(event_id) = origin_event_id.as_deref() {
-        let changed = crate::db::service::collaboration_service::retry_origin(
+    let paused_reason: Option<String> = row.try_get("", "paused_reason")?;
+    let (next_id, next_dedupe_id) = if let Some(event_id) = origin_event_id.as_deref() {
+        let allow_queued = paused_reason.as_deref()
+            == Some(crate::db::service::collaboration_service::INACTIVE_TARGET_CONFIRMATION_REASON);
+        let identity = crate::db::service::collaboration_service::prepare_origin_retry_with_queued_confirmation(
             &txn,
             conversation_id,
             event_id,
+            allow_queued,
         )
         .await?;
-        if !changed {
+        let Some(identity) = identity else {
             return Err(validation("Collaboration delivery is not retryable"));
-        }
+        };
+        (identity.queue_item_id, identity.queue_dedupe_id)
+    } else {
+        let retry_id = uuid::Uuid::new_v4().to_string();
+        (retry_id.clone(), retry_id)
+    };
+    let changed = txn
+        .execute(statement(
+            "UPDATE conversation_prompt_queue_item \
+             SET id = ?, client_dedupe_id = ?, state = 'queued', paused_reason = NULL, \
+                 claimed_by = NULL, claim_expires_at = NULL, dispatch_started_at = NULL, \
+                 updated_at = CURRENT_TIMESTAMP \
+             WHERE id = ? AND conversation_id = ? AND state = 'paused'",
+            vec![
+                next_id.into(),
+                next_dedupe_id.into(),
+                id.into(),
+                conversation_id.into(),
+            ],
+        ))
+        .await?;
+    if changed.rows_affected() != 1 {
+        return Err(validation("Queued prompt changed before retry"));
     }
     txn.execute(statement(
         "UPDATE conversation_prompt_queue_state \
@@ -1315,7 +1345,11 @@ mod tests {
             .expect("retry");
         assert!(retried.paused_reason.is_none());
         assert_eq!(retried.items[0].state, PromptQueueItemState::Queued);
-        assert_eq!(retried.items[0].id, "head");
+        assert_ne!(retried.items[0].id, "head");
+        assert_eq!(
+            retried.items[0].client_dedupe_id, retried.items[0].id,
+            "a deliberate retry is a new user-message attempt"
+        );
     }
 
     #[tokio::test]
@@ -1437,6 +1471,115 @@ mod tests {
                 .expect("claim after recovery")
                 .is_none(),
             "an unknown cross-Session dispatch must never replay automatically"
+        );
+    }
+
+    #[tokio::test]
+    async fn collaboration_retry_gets_a_new_message_identity() {
+        let (db, target) = seeded_memory().await;
+        let target_row = conversation::Entity::find_by_id(target)
+            .one(&db.conn)
+            .await
+            .unwrap()
+            .unwrap();
+        let source = seed_conversation(&db, target_row.folder_id, AgentType::ClaudeCode).await;
+        let sent = collaboration_service::send(
+            &db.conn,
+            SendCollaborationMessageInput {
+                source_conversation_id: source,
+                target_conversation_ids: vec![target],
+                body: "retry with a new turn identity".to_string(),
+                client_dedupe_id: "collaboration-retry-identity".to_string(),
+                invocation_policy: CollaborationInvocationPolicy::InvokeWhenIdle,
+                delivery_hint: CollaborationDeliveryHint::Default,
+                expects_reply: false,
+                urgency: CollaborationUrgency::Normal,
+                reply_to_event_id: None,
+            },
+        )
+        .await
+        .expect("send collaboration");
+        let delivery_id = sent.deliveries[0].id.clone();
+        let (claim, _) = claim_head(&db.conn, target, "worker", Duration::seconds(30))
+            .await
+            .expect("claim")
+            .expect("head");
+        assert_eq!(claim.id, delivery_id);
+        assert!(
+            mark_dispatch_started(&db.conn, &claim, Duration::seconds(30))
+                .await
+                .expect("mark dispatch")
+        );
+        let paused = fail_claim(&db.conn, &claim, "harness rejected")
+            .await
+            .expect("pause");
+
+        let retried = retry_item(&db.conn, target, &delivery_id, paused.revision)
+            .await
+            .expect("retry");
+        assert_eq!(retried.items[0].id, format!("{delivery_id}#2"));
+        assert_eq!(
+            retried.items[0].client_dedupe_id,
+            format!("{delivery_id}:2")
+        );
+        let (retry_claim, _) = claim_head(&db.conn, target, "retry-worker", Duration::seconds(30))
+            .await
+            .expect("claim retry")
+            .expect("retry head");
+        assert_eq!(retry_claim.id, format!("{delivery_id}#2"));
+    }
+
+    #[tokio::test]
+    async fn inactive_collaboration_starts_only_after_explicit_confirmation() {
+        let (db, target) = seeded_memory().await;
+        let target_row = conversation::Entity::find_by_id(target)
+            .one(&db.conn)
+            .await
+            .unwrap()
+            .unwrap();
+        let source = seed_conversation(&db, target_row.folder_id, AgentType::ClaudeCode).await;
+        let sent = collaboration_service::send_with_initially_inactive_targets(
+            &db.conn,
+            SendCollaborationMessageInput {
+                source_conversation_id: source,
+                target_conversation_ids: vec![target],
+                body: "wait for an explicit start".to_string(),
+                client_dedupe_id: "inactive-collaboration-confirmation".to_string(),
+                invocation_policy: CollaborationInvocationPolicy::InvokeWhenIdle,
+                delivery_hint: CollaborationDeliveryHint::Default,
+                expects_reply: false,
+                urgency: CollaborationUrgency::Normal,
+                reply_to_event_id: None,
+            },
+            &std::collections::HashSet::from([target]),
+        )
+        .await
+        .expect("deliver paused collaboration");
+        let delivery_id = sent.deliveries[0].id.clone();
+        let paused = snapshot(&db.conn, target).await.expect("paused snapshot");
+        assert_eq!(paused.items[0].state, PromptQueueItemState::Paused);
+        assert!(
+            claim_head(&db.conn, target, "worker", Duration::seconds(30))
+                .await
+                .expect("paused claim")
+                .is_none()
+        );
+
+        let confirmed = retry_item(&db.conn, target, &delivery_id, paused.revision)
+            .await
+            .expect("explicit confirmation");
+        let confirmed_id = format!("{delivery_id}#1");
+        assert_eq!(confirmed.items[0].id, confirmed_id);
+        assert_eq!(confirmed.items[0].state, PromptQueueItemState::Queued);
+        let delivery = &collaboration_service::feed(&db.conn, target, None)
+            .await
+            .expect("delivery feed")
+            .inbound[0];
+        assert_eq!(delivery.state, CollaborationDeliveryState::Queued);
+        assert_eq!(delivery.queue_state, Some(PromptQueueItemState::Queued));
+        assert_eq!(
+            delivery.queue_item_id.as_deref(),
+            Some(confirmed_id.as_str())
         );
     }
 

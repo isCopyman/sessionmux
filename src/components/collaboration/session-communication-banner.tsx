@@ -40,7 +40,9 @@ export function SessionCommunicationBanner({
   const invocationState = (delivery: CollaborationDelivery) => {
     switch (delivery.state) {
       case "queued":
-        return t("stateQueued")
+        return delivery.queueState === "paused"
+          ? t("stateAwaitingResumeConfirmation")
+          : t("stateQueued")
       case "embedding":
         return t("stateEmbedding")
       case "embedded":
@@ -145,7 +147,9 @@ export function SessionCommunicationBanner({
                         ) : null}
                       </div>
                       <div className="flex shrink-0 items-center">
-                        {delivery.state === "failed" &&
+                        {(delivery.state === "failed" ||
+                          (delivery.state === "queued" &&
+                            delivery.queueState === "paused")) &&
                         delivery.invocationPolicy === "invoke_when_idle" ? (
                           <Button
                             type="button"
@@ -154,7 +158,9 @@ export function SessionCommunicationBanner({
                             className="h-7 w-7"
                             title={t("retry")}
                             aria-label={t("retry")}
-                            onClick={() => void retry(delivery.id)}
+                            onClick={() =>
+                              void retry(delivery.queueItemId || delivery.id)
+                            }
                           >
                             <RotateCcw className="h-3.5 w-3.5" />
                           </Button>

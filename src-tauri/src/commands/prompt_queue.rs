@@ -99,15 +99,27 @@ pub async fn prompt_queue_retry_core(
     id: String,
     expected_revision: i64,
 ) -> Result<PromptQueueSnapshot, AppCommandError> {
-    let snapshot =
-        prompt_queue_service::retry_item(conn, conversation_id, &id, expected_revision).await?;
-    publish(emitter, &snapshot);
-    if let Some(event_id) = snapshot
+    let before = prompt_queue_service::snapshot(conn, conversation_id).await?;
+    let retry_item = before
         .items
         .iter()
         .find(|item| item.id == id)
-        .and_then(|item| item.origin_event_id.as_deref())
+        .ok_or_else(|| AppCommandError::configuration_invalid("Queued prompt was not found"))?;
+    let origin_event_id = retry_item.origin_event_id.clone();
+    if retry_item.paused_reason.as_deref()
+        == Some(collaboration_service::INACTIVE_TARGET_CONFIRMATION_REASON)
+        && !runtime
+            .is_session_runtime_active(conn, conversation_id)
+            .await?
     {
+        return Err(AppCommandError::configuration_invalid(
+            "Open the target Session before starting this delivered message",
+        ));
+    }
+    let snapshot =
+        prompt_queue_service::retry_item(conn, conversation_id, &id, expected_revision).await?;
+    publish(emitter, &snapshot);
+    if let Some(event_id) = origin_event_id.as_deref() {
         let conversation_ids =
             collaboration_service::origin_participants(conn, conversation_id, event_id).await?;
         if !conversation_ids.is_empty() {

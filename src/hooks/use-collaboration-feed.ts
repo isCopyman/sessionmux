@@ -28,7 +28,7 @@ export interface UseCollaborationFeedReturn {
   reload: () => Promise<void>
   markSeen: (deliveryIds: string[]) => Promise<void>
   dismiss: (deliveryId: string) => Promise<void>
-  retry: (deliveryId: string) => Promise<void>
+  retry: (queueItemId: string) => Promise<void>
 }
 
 export function useCollaborationFeed(
@@ -139,17 +139,17 @@ export function useCollaborationFeed(
   )
 
   const retry = useCallback(
-    async (deliveryId: string) => {
+    async (queueItemId: string) => {
       const id = conversationIdRef.current
       if (id == null) return
       try {
         const queue = await getPromptQueue(id)
-        if (!queue.items.some((item) => item.id === deliveryId)) {
+        if (!queue.items.some((item) => item.id === queueItemId)) {
           throw new Error(
             "The failed delivery is no longer in the Session queue"
           )
         }
-        await retryPromptQueueItem(id, deliveryId, queue.revision)
+        await retryPromptQueueItem(id, queueItemId, queue.revision)
         await reload()
       } catch (nextError) {
         console.error("[collaboration] retry:", nextError)

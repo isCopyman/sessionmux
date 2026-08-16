@@ -54,6 +54,9 @@ function delivery(
     invocationPolicy: "store_only",
     deliveryHint: "default",
     state: "pending",
+    queueItemId: null,
+    queueState: null,
+    queuePausedReason: null,
     uiSeenAt: null,
     embeddedTurnRef: null,
     attempts: 0,
@@ -109,6 +112,8 @@ describe("SessionCommunicationBanner", () => {
         delivery({
           invocationPolicy: "invoke_when_idle",
           state: "failed",
+          queueItemId: "delivery-1#2",
+          queueState: "paused",
           error: "dispatch_outcome_unknown",
         }),
       ],
@@ -116,6 +121,32 @@ describe("SessionCommunicationBanner", () => {
     }
     render(<SessionCommunicationBanner conversationId={2} />)
     fireEvent.click(screen.getByRole("button", { name: /panelTitle/ }))
+    fireEvent.click(screen.getByRole("button", { name: "retry" }))
+    expect(hook.retry).toHaveBeenCalledWith("delivery-1#2")
+  })
+
+  it("requires confirmation before starting a delivered message in a resumed session", () => {
+    hook.feed = {
+      conversationId: 2,
+      revision: 2,
+      unreadCount: 1,
+      inbound: [
+        delivery({
+          invocationPolicy: "invoke_when_idle",
+          state: "queued",
+          queueItemId: "delivery-1",
+          queueState: "paused",
+          queuePausedReason:
+            "collaboration_target_inactive_confirmation_required",
+        }),
+      ],
+      outbound: [],
+    }
+    render(<SessionCommunicationBanner conversationId={2} />)
+    fireEvent.click(screen.getByRole("button", { name: /panelTitle/ }))
+    expect(
+      screen.getByText("stateAwaitingResumeConfirmation")
+    ).toBeInTheDocument()
     fireEvent.click(screen.getByRole("button", { name: "retry" }))
     expect(hook.retry).toHaveBeenCalledWith("delivery-1")
   })

@@ -32,14 +32,45 @@ const DISPATCH_LEASE_SECS: i64 = 300;
 const LEASE_SWEEP_SECS: u64 = 15;
 const ACCEPT_RETRY_DELAYS_MS: [u64; 3] = [25, 75, 200];
 
-#[derive(Clone)]
 pub struct PromptQueueHandle {
     wake_tx: mpsc::UnboundedSender<i32>,
+    manager: ConnectionManager,
+}
+
+impl Clone for PromptQueueHandle {
+    fn clone(&self) -> Self {
+        Self {
+            wake_tx: self.wake_tx.clone(),
+            manager: self.manager.clone_ref(),
+        }
+    }
 }
 
 impl PromptQueueHandle {
     pub fn wake(&self, conversation_id: i32) {
         let _ = self.wake_tx.send(conversation_id);
+    }
+
+    /// Whether this Session currently has a connected Harness runtime. Busy is
+    /// still active: its collaboration delivery may safely wait in FIFO. A
+    /// missing runtime means a cross-Session request must require confirmation
+    /// instead of automatically running when the user later opens the Session.
+    pub async fn is_session_runtime_active(
+        &self,
+        conn: &sea_orm::DatabaseConnection,
+        conversation_id: i32,
+    ) -> Result<bool, crate::db::error::DbError> {
+        let Some(row) = conversation::Entity::find_by_id(conversation_id)
+            .one(conn)
+            .await?
+        else {
+            return Ok(false);
+        };
+        let Some((_, state)) = active_connection_for_row(&self.manager, &row).await else {
+            return Ok(false);
+        };
+        let is_connected = state.read().await.status == ConnectionStatus::Connected;
+        Ok(is_connected)
     }
 
     /// A non-running handle for handler-only tests. Queue mutations remain
@@ -48,8 +79,31 @@ impl PromptQueueHandle {
     pub fn disconnected_for_test() -> Self {
         let (wake_tx, wake_rx) = mpsc::unbounded_channel();
         drop(wake_rx);
-        Self { wake_tx }
+        Self {
+            wake_tx,
+            manager: ConnectionManager::new(),
+        }
     }
+}
+
+async fn active_connection_for_row(
+    manager: &ConnectionManager,
+    row: &conversation::Model,
+) -> Option<(String, Arc<tokio::sync::RwLock<crate::acp::SessionState>>)> {
+    let id = if let Some(id) = manager.find_connection_by_conversation_id(row.id).await {
+        Some(id)
+    } else if let (Some(external_id), Some(agent_type)) = (
+        row.external_id.as_deref(),
+        AgentType::from_wire(&row.agent_type),
+    ) {
+        manager
+            .find_connection_by_external_id(external_id, agent_type)
+            .await
+    } else {
+        None
+    }?;
+    let state = manager.get_state(&id).await?;
+    Some((id, state))
 }
 
 fn emit_snapshot(emitter: &EventEmitter, snapshot: PromptQueueSnapshot) {
@@ -66,7 +120,10 @@ pub fn build_prompt_queue_runtime(
     // events emitted between construction and spawn are buffered, not lost.
     let bus_rx = bus.subscribe();
     let (wake_tx, wake_rx) = mpsc::unbounded_channel();
-    let handle = PromptQueueHandle { wake_tx };
+    let handle = PromptQueueHandle {
+        wake_tx,
+        manager: manager.clone_ref(),
+    };
     let runtime = PromptQueueRuntime {
         db: AppDatabase { conn: db_conn },
         manager,
@@ -208,24 +265,7 @@ impl PromptQueueRuntime {
         &self,
         row: &conversation::Model,
     ) -> Option<(String, Arc<tokio::sync::RwLock<crate::acp::SessionState>>)> {
-        let id = if let Some(id) = self
-            .manager
-            .find_connection_by_conversation_id(row.id)
-            .await
-        {
-            Some(id)
-        } else if let (Some(external_id), Some(agent_type)) = (
-            row.external_id.as_deref(),
-            AgentType::from_wire(&row.agent_type),
-        ) {
-            self.manager
-                .find_connection_by_external_id(external_id, agent_type)
-                .await
-        } else {
-            None
-        }?;
-        let state = self.manager.get_state(&id).await?;
-        Some((id, state))
+        active_connection_for_row(&self.manager, row).await
     }
 
     async fn process(&self, conversation_id: i32) {

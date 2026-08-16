@@ -18,7 +18,7 @@ use crate::db::AppDatabase;
 use crate::models::{
     CollaborationChanged, CollaborationDeliveryHint, CollaborationDeliveryState, CollaborationFeed,
     CollaborationInvocationPolicy, CollaborationSendResult, CollaborationUrgency,
-    SendCollaborationMessageInput,
+    PromptQueueItemState, SendCollaborationMessageInput,
 };
 use crate::prompt_queue::PromptQueueHandle;
 use crate::web::event_bridge::{
@@ -90,7 +90,23 @@ pub async fn collaboration_send_core(
     prompt_queue: &PromptQueueHandle,
     input: SendCollaborationMessageInput,
 ) -> Result<CollaborationSendResult, AppCommandError> {
-    let result = collaboration_service::send(conn, input).await?;
+    let mut inactive_target_ids = std::collections::HashSet::new();
+    if input.invocation_policy == CollaborationInvocationPolicy::InvokeWhenIdle {
+        for target_id in &input.target_conversation_ids {
+            if !prompt_queue
+                .is_session_runtime_active(conn, *target_id)
+                .await?
+            {
+                inactive_target_ids.insert(*target_id);
+            }
+        }
+    }
+    let result = collaboration_service::send_with_initially_inactive_targets(
+        conn,
+        input,
+        &inactive_target_ids,
+    )
+    .await?;
     if !result.deduplicated {
         publish(emitter, result.affected_conversation_ids.clone());
     }
@@ -101,9 +117,9 @@ pub async fn collaboration_send_core(
         let conversation_id = delivery.target.conversation_id;
         let snapshot = prompt_queue_service::snapshot(conn, conversation_id).await?;
         emit_event(emitter, PROMPT_QUEUE_CHANGED_EVENT, snapshot);
-        // Waking is intentionally best effort. A closed Session retains the
-        // durable item and a later SessionStarted event wakes it again.
-        prompt_queue.wake(conversation_id);
+        if delivery.queue_state != Some(PromptQueueItemState::Paused) {
+            prompt_queue.wake(conversation_id);
+        }
     }
     Ok(result)
 }
@@ -570,6 +586,46 @@ mod tests {
         .expect("dedupe");
         assert!(replay.deduplicated);
         assert!(receiver.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn inactive_target_receives_message_without_automatic_agent_start() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-inactive-collaboration-target").await;
+        let source = seed_conversation(&db, folder, AgentType::Codex).await;
+        let target = seed_conversation(&db, folder, AgentType::ClaudeCode).await;
+        let result = collaboration_send_core(
+            &db.conn,
+            &EventEmitter::Noop,
+            &PromptQueueHandle::disconnected_for_test(),
+            SendCollaborationMessageInput {
+                source_conversation_id: source,
+                target_conversation_ids: vec![target],
+                body: "review after I open your session".to_string(),
+                client_dedupe_id: "inactive-target-confirmation".to_string(),
+                invocation_policy: CollaborationInvocationPolicy::InvokeWhenIdle,
+                delivery_hint: CollaborationDeliveryHint::Default,
+                expects_reply: false,
+                urgency: CollaborationUrgency::Normal,
+                reply_to_event_id: None,
+            },
+        )
+        .await
+        .expect("deliver without starting target");
+
+        let delivery = &result.deliveries[0];
+        assert_eq!(delivery.state, CollaborationDeliveryState::Queued);
+        assert_eq!(delivery.queue_state, Some(PromptQueueItemState::Paused));
+        assert_eq!(
+            delivery.queue_paused_reason.as_deref(),
+            Some(collaboration_service::INACTIVE_TARGET_CONFIRMATION_REASON)
+        );
+        let queue = prompt_queue_service::snapshot(&db.conn, target)
+            .await
+            .expect("queue snapshot");
+        assert_eq!(queue.items.len(), 1);
+        assert_eq!(queue.items[0].state, PromptQueueItemState::Paused);
+        assert_eq!(queue.items[0].id, delivery.id);
     }
 
     #[tokio::test]

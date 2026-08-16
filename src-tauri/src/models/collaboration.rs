@@ -1,6 +1,8 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use super::prompt_queue::PromptQueueItemState;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CollaborationInvocationPolicy {
@@ -122,6 +124,12 @@ pub struct CollaborationDeliveryView {
     pub invocation_policy: CollaborationInvocationPolicy,
     pub delivery_hint: CollaborationDeliveryHint,
     pub state: CollaborationDeliveryState,
+    /// Current execution-queue projection for `invoke_when_idle` deliveries.
+    /// The delivery state remains the communication fact; these optional
+    /// fields explain whether its pending Harness turn is queued or paused.
+    pub queue_item_id: Option<String>,
+    pub queue_state: Option<PromptQueueItemState>,
+    pub queue_paused_reason: Option<String>,
     pub ui_seen_at: Option<DateTime<Utc>>,
     pub embedded_turn_ref: Option<String>,
     pub attempts: i32,

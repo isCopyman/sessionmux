@@ -12,7 +12,7 @@ use crate::db::service::prompt_queue_service;
 use crate::models::{
     CollaborationDeliveryHint, CollaborationDeliveryState, CollaborationDeliveryView,
     CollaborationFeed, CollaborationInvocationPolicy, CollaborationSendResult,
-    CollaborationSessionSnapshot, CollaborationUrgency, PromptQueueDraft,
+    CollaborationSessionSnapshot, CollaborationUrgency, PromptQueueDraft, PromptQueueItemState,
     SendCollaborationMessageInput,
 };
 
@@ -21,6 +21,8 @@ const MAX_TARGETS: usize = 16;
 const MAX_DEDUPE_ID_BYTES: usize = 200;
 const DEFAULT_FEED_LIMIT: u32 = 100;
 const MAX_FEED_LIMIT: u32 = 500;
+pub const INACTIVE_TARGET_CONFIRMATION_REASON: &str =
+    "collaboration_target_inactive_confirmation_required";
 
 /// Versioned, transcript-safe envelope persisted by every Harness when Codeg
 /// invokes a Session on behalf of another Session. The UUID-scoped closing
@@ -150,12 +152,17 @@ const DELIVERY_SELECT: &str = "SELECT d.id, d.event_id, d.target_conversation_id
             d.target_title_snapshot, d.target_agent_type_snapshot, \
             d.target_folder_path_snapshot, d.invocation_policy, d.delivery_hint, \
             d.state, d.ui_seen_at, d.embedded_turn_ref, d.attempts, d.error, \
+            q.id AS queue_item_id, q.state AS queue_state, \
+            q.paused_reason AS queue_paused_reason, \
             d.created_at, d.updated_at, e.source_conversation_id, \
             e.source_title_snapshot, e.source_agent_type_snapshot, \
             e.source_folder_path_snapshot, e.source_backend_snapshot, e.body, \
             e.reply_to_event_id, e.expects_reply, e.urgency \
      FROM collaboration_delivery d \
-     JOIN collaboration_event e ON e.id = d.event_id ";
+     JOIN collaboration_event e ON e.id = d.event_id \
+     LEFT JOIN conversation_prompt_queue_item q \
+       ON q.origin_event_id = d.event_id \
+      AND q.conversation_id = d.target_conversation_id ";
 
 fn parse_delivery(row: &QueryResult) -> Result<CollaborationDeliveryView, DbError> {
     let invocation_raw: String = row.try_get("", "invocation_policy")?;
@@ -167,6 +174,13 @@ fn parse_delivery(row: &QueryResult) -> Result<CollaborationDeliveryView, DbErro
     let state_raw: String = row.try_get("", "state")?;
     let state = CollaborationDeliveryState::parse(&state_raw)
         .ok_or_else(|| validation(format!("Unknown delivery state: {state_raw}")))?;
+    let queue_state = row
+        .try_get::<Option<String>>("", "queue_state")?
+        .map(|value| {
+            PromptQueueItemState::parse(&value)
+                .ok_or_else(|| validation(format!("Unknown prompt queue state: {value}")))
+        })
+        .transpose()?;
     let urgency_raw: String = row.try_get("", "urgency")?;
     let urgency = CollaborationUrgency::parse(&urgency_raw)
         .ok_or_else(|| validation(format!("Unknown urgency: {urgency_raw}")))?;
@@ -196,6 +210,9 @@ fn parse_delivery(row: &QueryResult) -> Result<CollaborationDeliveryView, DbErro
         invocation_policy,
         delivery_hint,
         state,
+        queue_item_id: row.try_get("", "queue_item_id")?,
+        queue_state,
+        queue_paused_reason: row.try_get("", "queue_paused_reason")?,
         ui_seen_at: parse_optional_timestamp(row, "ui_seen_at")?,
         embedded_turn_ref: row.try_get("", "embedded_turn_ref")?,
         attempts: row.try_get("", "attempts")?,
@@ -545,26 +562,62 @@ pub(crate) async fn mark_origin_failed(
     Ok(changed)
 }
 
-pub(crate) async fn retry_origin(
+pub(crate) struct OriginRetryIdentity {
+    pub queue_item_id: String,
+    pub queue_dedupe_id: String,
+}
+
+/// Prepare one new execution attempt for a delivery. Each attempt gets a new
+/// queue/message id so viewers cannot mistake a real retry for a replay of the
+/// prior user turn. `allow_queued` is reserved for an initially-paused inactive
+/// target; ordinary retries must come from the failed delivery state.
+pub(crate) async fn prepare_origin_retry_with_queued_confirmation(
     txn: &DatabaseTransaction,
     target_conversation_id: i32,
     event_id: &str,
-) -> Result<bool, DbError> {
-    let changed = txn
-        .execute(statement(
-            "UPDATE collaboration_delivery \
-             SET state = 'queued', embedded_turn_ref = NULL, error = NULL, \
-                 updated_at = CURRENT_TIMESTAMP \
-             WHERE event_id = ? AND target_conversation_id = ? AND state = 'failed'",
+    allow_queued: bool,
+) -> Result<Option<OriginRetryIdentity>, DbError> {
+    let Some(row) = txn
+        .query_one(statement(
+            "SELECT id, state, attempts FROM collaboration_delivery \
+             WHERE event_id = ? AND target_conversation_id = ?",
             vec![event_id.into(), target_conversation_id.into()],
         ))
         .await?
-        .rows_affected()
-        == 1;
-    if changed {
-        bump_origin_participants(txn, target_conversation_id, event_id).await?;
+    else {
+        return Ok(None);
+    };
+    let delivery_id: String = row.try_get("", "id")?;
+    let state: String = row.try_get("", "state")?;
+    let attempts: i32 = row.try_get("", "attempts")?;
+    match state.as_str() {
+        "failed" => {
+            let changed = txn
+                .execute(statement(
+                    "UPDATE collaboration_delivery \
+                     SET state = 'queued', embedded_turn_ref = NULL, error = NULL, \
+                         updated_at = CURRENT_TIMESTAMP \
+                     WHERE id = ? AND state = 'failed'",
+                    vec![delivery_id.clone().into()],
+                ))
+                .await?
+                .rows_affected()
+                == 1;
+            if !changed {
+                return Ok(None);
+            }
+        }
+        "queued" if allow_queued => {}
+        _ => return Ok(None),
     }
-    Ok(changed)
+    let next_attempt = attempts
+        .checked_add(1)
+        .ok_or_else(|| validation("Collaboration delivery attempt counter overflowed"))?;
+    bump_origin_participants(txn, target_conversation_id, event_id).await?;
+    Ok(Some(OriginRetryIdentity {
+        queue_item_id: format!("{delivery_id}#{next_attempt}"),
+        queue_dedupe_id: format!("{delivery_id}:{next_attempt}"),
+    }))
 }
 
 /// Persist one immutable event and all per-target deliveries atomically.
@@ -576,6 +629,18 @@ pub(crate) async fn retry_origin(
 pub async fn send(
     conn: &DatabaseConnection,
     input: SendCollaborationMessageInput,
+) -> Result<CollaborationSendResult, DbError> {
+    send_with_initially_inactive_targets(conn, input, &HashSet::new()).await
+}
+
+/// Persist a collaboration event while preventing an inactive target from
+/// unexpectedly spending tokens the next time the user merely opens it.
+/// Ordinary same-Session follow-ups retain their existing resume behavior;
+/// only cross-Session invocation rows named here start paused.
+pub(crate) async fn send_with_initially_inactive_targets(
+    conn: &DatabaseConnection,
+    input: SendCollaborationMessageInput,
+    inactive_target_ids: &HashSet<i32>,
 ) -> Result<CollaborationSendResult, DbError> {
     let target_ids = validate_input(&input)?;
     let txn = conn.begin().await?;
@@ -697,12 +762,16 @@ pub async fn send(
         .await?;
         if target.is_some() {
             if input.invocation_policy == CollaborationInvocationPolicy::InvokeWhenIdle {
+                let pause_reason = inactive_target_ids
+                    .contains(&target_id)
+                    .then_some(INACTIVE_TARGET_CONFIRMATION_REASON);
                 prompt_queue_service::enqueue_origin_in_transaction(
                     &txn,
                     target_id,
                     &delivery_id,
                     &event_id,
                     &delivery_id,
+                    pause_reason,
                 )
                 .await?;
             }
