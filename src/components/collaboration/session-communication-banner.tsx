@@ -9,6 +9,7 @@ import {
   MessageSquareMore,
   Reply,
   RotateCcw,
+  Send,
   X,
 } from "lucide-react"
 import { useTranslations } from "next-intl"
@@ -60,6 +61,7 @@ export function SessionCommunicationBannerView({
 }: SessionCommunicationBannerViewProps) {
   const t = useTranslations("Collaboration")
   const [expanded, setExpanded] = useState(false)
+  const [composing, setComposing] = useState(false)
   const [replyingTo, setReplyingTo] = useState<CollaborationDelivery | null>(
     null
   )
@@ -91,7 +93,52 @@ export function SessionCommunicationBannerView({
     if (expanded && unreadIds.length > 0) void markSeen(unreadIds)
   }, [expanded, markSeen, unreadIds])
 
-  if (!hydrated || total === 0) return null
+  const composerOpen = composing || replyingTo != null
+  const composer =
+    conversationId != null && composerOpen ? (
+      <SessionMessageComposerDialog
+        key={replyingTo?.eventId ?? "compose"}
+        sourceConversationId={conversationId}
+        initialTargetConversationId={replyingTo?.source.conversationId ?? null}
+        replyToEventId={replyingTo?.eventId ?? null}
+        open
+        onOpenChange={(open) => {
+          if (!open) {
+            setReplyingTo(null)
+            setComposing(false)
+          }
+        }}
+      />
+    ) : null
+
+  if (!hydrated || conversationId == null) return null
+
+  if (total === 0) {
+    return (
+      <section
+        data-collaboration-banner=""
+        className="border-b border-border/60 bg-background/80 backdrop-blur-sm"
+      >
+        <div className="mx-auto flex max-w-3xl items-center gap-2 px-4 py-1.5">
+          <MessageSquareMore className="h-4 w-4 text-muted-foreground" />
+          <span className="text-xs font-medium">{t("panelTitle")}</span>
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            className="ml-auto h-7 px-2 text-[11px]"
+            data-collaboration-compose=""
+            aria-label={t("sendMenu")}
+            onClick={() => setComposing(true)}
+          >
+            <Send className="h-3.5 w-3.5" />
+            {t("sendMenu")}
+          </Button>
+        </div>
+        {composer}
+      </section>
+    )
+  }
 
   const invocationState = (delivery: CollaborationDelivery) => {
     switch (delivery.interruptState) {
@@ -158,31 +205,49 @@ export function SessionCommunicationBannerView({
   }
 
   return (
-    <section className="border-b border-border/60 bg-background/80 backdrop-blur-sm">
+    <section
+      data-collaboration-banner=""
+      className="border-b border-border/60 bg-background/80 backdrop-blur-sm"
+    >
       <div className="mx-auto max-w-3xl px-4 py-1.5">
-        <button
-          type="button"
-          onClick={() => setExpanded((current) => !current)}
-          className="flex w-full items-center gap-2 rounded-md px-1 py-1 text-left text-xs transition-colors hover:bg-muted/50"
-        >
-          <MessageSquareMore className="h-4 w-4 text-muted-foreground" />
-          <span className="font-medium">{t("panelTitle")}</span>
-          <span className="text-muted-foreground">
-            {t("messageCount", { count: total })}
-          </span>
-          {feed.unreadCount > 0 ? (
-            <span className="rounded-full bg-primary px-1.5 py-0.5 text-[10px] font-medium text-primary-foreground">
-              {t("unreadCount", { count: feed.unreadCount })}
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={() => setExpanded((current) => !current)}
+            className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-1 py-1 text-left text-xs transition-colors hover:bg-muted/50"
+          >
+            <MessageSquareMore className="h-4 w-4 text-muted-foreground" />
+            <span className="font-medium">{t("panelTitle")}</span>
+            <span className="text-muted-foreground">
+              {t("messageCount", { count: total })}
             </span>
-          ) : null}
-          <span className="ml-auto text-muted-foreground">
-            {expanded ? (
-              <ChevronUp className="h-4 w-4" />
-            ) : (
-              <ChevronDown className="h-4 w-4" />
-            )}
-          </span>
-        </button>
+            {feed.unreadCount > 0 ? (
+              <span className="rounded-full bg-primary px-1.5 py-0.5 text-[10px] font-medium text-primary-foreground">
+                {t("unreadCount", { count: feed.unreadCount })}
+              </span>
+            ) : null}
+            <span className="ml-auto text-muted-foreground">
+              {expanded ? (
+                <ChevronUp className="h-4 w-4" />
+              ) : (
+                <ChevronDown className="h-4 w-4" />
+              )}
+            </span>
+          </button>
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            className="h-7 shrink-0 px-2 text-[11px]"
+            data-collaboration-compose=""
+            aria-label={t("sendMenu")}
+            title={t("sendMenu")}
+            onClick={() => setComposing(true)}
+          >
+            <Send className="h-3.5 w-3.5" />
+            {t("send")}
+          </Button>
+        </div>
 
         {expanded ? (
           <div className="space-y-3 pb-2 pt-1">
@@ -425,18 +490,7 @@ export function SessionCommunicationBannerView({
           </div>
         ) : null}
       </div>
-      {replyingTo && conversationId != null ? (
-        <SessionMessageComposerDialog
-          key={replyingTo.eventId}
-          sourceConversationId={conversationId}
-          initialTargetConversationId={replyingTo.source.conversationId}
-          replyToEventId={replyingTo.eventId}
-          open
-          onOpenChange={(open) => {
-            if (!open) setReplyingTo(null)
-          }}
-        />
-      ) : null}
+      {composer}
     </section>
   )
 }

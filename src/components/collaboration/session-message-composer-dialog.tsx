@@ -223,7 +223,10 @@ export function SessionMessageComposerDialog({
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogContent className="flex max-h-[min(42rem,85vh)] max-w-xl flex-col overflow-hidden">
+      <DialogContent
+        data-collaboration-composer=""
+        className="flex max-h-[min(42rem,85vh)] max-w-xl flex-col overflow-hidden"
+      >
         <DialogHeader>
           <DialogTitle>{t("sendTitle")}</DialogTitle>
           <DialogDescription>
@@ -350,6 +353,7 @@ export function SessionMessageComposerDialog({
                   <button
                     key={conversation.id}
                     type="button"
+                    data-collaboration-target={conversation.id}
                     onClick={() => toggleTarget(conversation.id)}
                     disabled={replyToEventId != null}
                     className="flex w-full items-center gap-3 px-3 py-2 text-left transition-colors enabled:hover:bg-muted/60"
@@ -404,6 +408,7 @@ export function SessionMessageComposerDialog({
             placeholder={t("bodyPlaceholder")}
             rows={5}
             autoFocus
+            data-collaboration-body=""
           />
           <div className="flex justify-between text-xs text-muted-foreground">
             <span>{t("selectedCount", { count: selected.size })}</span>
@@ -440,7 +445,11 @@ export function SessionMessageComposerDialog({
           >
             {t("cancel")}
           </Button>
-          <Button onClick={handleSend} disabled={!canSend}>
+          <Button
+            onClick={handleSend}
+            disabled={!canSend}
+            data-collaboration-submit=""
+          >
             {sending ? (
               <Loader2 className="h-4 w-4 animate-spin" />
             ) : (

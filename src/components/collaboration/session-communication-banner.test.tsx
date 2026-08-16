@@ -141,6 +141,45 @@ beforeEach(() => {
 })
 
 describe("SessionCommunicationBanner", () => {
+  it("lets the user start a Session message when this Session has no mail yet", () => {
+    hook.feed = {
+      conversationId: 2,
+      revision: 1,
+      unreadCount: 0,
+      inbound: [],
+      outbound: [],
+    }
+    render(<SessionCommunicationBanner conversationId={2} />)
+
+    expect(screen.getByText("panelTitle")).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "sendMenu" }))
+    expect(replyDialog.props).toEqual(
+      expect.objectContaining({
+        sourceConversationId: 2,
+        initialTargetConversationId: null,
+        replyToEventId: null,
+        open: true,
+      })
+    )
+  })
+
+  it("opens a new Session message without expanding the existing mail list", () => {
+    render(<SessionCommunicationBanner conversationId={2} />)
+    fireEvent.click(screen.getByRole("button", { name: "sendMenu" }))
+
+    expect(
+      screen.queryByText("The evidence does not support the last sentence.")
+    ).not.toBeInTheDocument()
+    expect(replyDialog.props).toEqual(
+      expect.objectContaining({
+        sourceConversationId: 2,
+        initialTargetConversationId: null,
+        replyToEventId: null,
+        open: true,
+      })
+    )
+  })
+
   it("shows communication outside the native transcript and marks it read", () => {
     render(<SessionCommunicationBanner conversationId={2} />)
     expect(

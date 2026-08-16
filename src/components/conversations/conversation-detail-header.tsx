@@ -81,10 +81,10 @@ interface ConversationDetailHeaderProps {
 
 /**
  * Conversation detail header (desktop only): the owning folder name + the
- * conversation title on the left; an overflow (⋯) menu on the right. A single
- * instance renders fixed above the tile scroll area, scoped to the ACTIVE
- * conversation, so it never scrolls horizontally when many conversations are
- * tiled.
+ * conversation title on the left; a Session-to-Session send action and an
+ * overflow (⋯) menu on the right. A single instance renders fixed above the
+ * tile scroll area, scoped to the ACTIVE conversation, so it never scrolls
+ * horizontally when many conversations are tiled.
  *
  * The ⋯ menu mirrors the sidebar conversation card's right-click menu (new /
  * rename / pin / details / status / delete) so the two entry points stay
@@ -264,6 +264,17 @@ export const ConversationDetailHeader = memo(function ConversationDetailHeader({
         </span>
       </div>
       <div className="flex shrink-0 items-center">
+        <button
+          type="button"
+          disabled={!persisted}
+          className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-muted-foreground/60 transition-colors hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+          aria-label={tCollaboration("sendMenu")}
+          title={tCollaboration("sendMenu")}
+          data-collaboration-send=""
+          onClick={() => setMessageComposerOpen(true)}
+        >
+          <Send className="h-4 w-4" />
+        </button>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button
