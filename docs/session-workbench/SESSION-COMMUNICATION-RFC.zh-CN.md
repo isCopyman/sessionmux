@@ -1,7 +1,7 @@
 # Codeg Session 间通信与调用策略 RFC
 
 > 状态：部分实现。内部 direct 通信主干已落地；完整 mailbox lifecycle、Timeline、统一 Dispatcher、附件、跨 Backend 与 Room 仍为拟议
-> 更新时间：2026-08-16
+> 更新时间：2026-08-17
 > 上位产品需求：[产品需求与使用场景](./PRODUCT-SPEC.zh-CN.md#410-联系其他-backend-或-codeg-管理边界之外的-agent)
 > 相邻设计：[Session Runtime 生命周期 RFC](./SESSION-RUNTIME-LIFECYCLE-RFC.zh-CN.md)、[AgentBus 协作子 RFC](./AGENTBUS-COLLABORATION-RFC.zh-CN.md)、[群聊面板与 Session 协作 RFC](./GROUP-CONVERSATION-RFC.zh-CN.md)
 
@@ -128,6 +128,46 @@ Attention、Obligation 和 receipt 仍是同一 Delivery 的生命周期投影�
 同一 mailbox revision；任意窗口的操作都由后端落库、提升 revision 并广播，前端不能各自维护
 一份权威未读或回复债务。
 
+### 3.5 Agent Mailbox 与可选的 Human Mailbox
+
+协作信箱的权威消费者是 **目标 Agent / 目标 Session**，不是坐在 UI 前的人。人打开往来条、点进
+Session 或把一条信标成“我看过了”，**不得**把该 Delivery 从 Agent 未读变成已消费，也不得清偿
+`awaiting_reply`，更不得启动或停止 `reply_due_at`。
+
+因此必须拆开两套投影：
+
+| 投影 | 消费者 | 什么叫“看过 / 消费” | 什么叫“欠回复” |
+|---|---|---|---|
+| **Agent Mailbox** | 目标 Session 的 Agent | 正文进入该 Session 的一次真实 Turn（`agent_received_at` / `embedded_turn_ref`） | `expects_reply=true` 且尚无 linked reply |
+| **Human Mailbox**（可选附加面） | 使用 Codeg 的人类 | 人在 Human Inbox 中打开或明确确认 | 仅当这封信的目标就是人类，而不是某个 Agent Session |
+
+当前 V1 UI 仍会在人展开往来时写下 `ui_seen_at`。这只是人类界面的兼容投影，**不是** Agent
+Mailbox 的消费证据。后续 mailbox 批次必须把“人看过”从 Agent 未读/已读未回里拿出去；daemon
+提醒 Agent 侧未读或已读未回，只能看 Agent receipt 和 Obligation，不能看人有没有点开。
+
+**Human Mailbox 是额外设计，不是 Session 往来的替代品。** 它可以作为宿主级收件箱存在：人查看
+Agent 写给自己的信、确认任务结果、或作为工作流里的人工节点。它不把人伪装成又一个 Harness
+Session，也不让人打开某个 Agent 的信就替那个 Agent 签收。
+
+Agent 可以向稳定的人类地址发信，作为正规工作流，而不是旁路通知：
+
+```text
+target = human   （别名 user）
+```
+
+语义：
+
+- `human` / `user` 是 Codeg 宿主上的保留地址，不是某个 `conversation_id`，也不是 AgentBus role；
+- 投递进入 Human Mailbox，默认 `store_only`：显示给人，不因此启动任何一个 Session 的模型；
+- 发送方仍必须显式选择 `expects_reply`。需要人拍板时，人类回复会作为 linked reply 写回来源
+  Session，且默认不再自动叫醒来源 Agent；
+- `list_sessions` 可以返回这一条保留地址（单独分组、不可与重名 Session 混淆），但不能把人类
+  收件箱列举成普通可 Resume Session；
+- 普通 Session 地址与 `human` 互斥：一封 Delivery 要么给某个 Session，要么给人类。
+
+人仍然可以旁观任一 Session 的往来（监督、排错、手动代发），但旁观只增加 Human Mailbox 或调试
+视图里的副本状态，不改 Agent Mailbox 的未读、已读未回和回复债。
+
 ## 4. 寻址与身份
 
 ### 4.1 名字只用于选择
@@ -149,6 +189,15 @@ backend_ref + conversation_id
 
 Fork 产生的两个可继续对象必须拥有两个独立 Conversation Address。稳定的是每个 Conversation
 自身的地址，不是父子会话共用一个地址；`forked_from` 等谱系只用于发现和理解关系。
+
+### 4.3 人类是保留地址，不是又一个 Session
+
+除 Session Address 外，当前 Backend 承认一个宿主级保留地址：`human`（别名 `user`）。它表示
+“写给正在使用这个 Codeg 的人”，见 [3.5](#35-agent-mailbox-与可选的-human-mailbox)。
+
+选择器里必须把这一项与普通 Session 分开显示，禁止用会话标题、`@名字` 或 role 字符串去猜它。
+发送协议在目标字段上要么是正整数 `conversation_id` 列表，要么是显式的 `human`/`user`，不能把
+`"human"` 解析成某个碰巧叫这个名字的 Conversation。
 
 ## 5. 调用策略与回复义务
 
@@ -248,14 +297,18 @@ Steering 也不是无条件的“立刻看见”。正在执行的外部工具�
 
 Mailbox 需要分别记录：
 
-- `unread_due_at`：消息已对目标可见但人类尚未打开；
+- `unread_due_at`：消息已对**目标 Agent Mailbox** 可见，但目标 Agent 尚未产生 receipt
+  （人有没有在 UI 里点开，都不算数）；写给 `human`/`user` 的信则用 Human Mailbox 自己的打开
+  时钟，不与 Agent 未读混用；
 - `reply_due_at`：明确要求回复且正文已经真正进入 Agent 上下文，但尚无 linked reply。
+  目标是人类时，从人在 Human Inbox 中打开或确认之后才开始，仍然不能用“路过某个 Session
+  页面”冒充。
 
 二者的起点不同：
 
 1. `unread_due_at` 从 Delivery 成为目标 mailbox 可见项开始；
 2. `reply_due_at` 只能从首次 `agent_received_at`（普通 Turn embedded 或未来 checkpoint injected）
-   开始，不能从 `ui_seen_at/opened_at` 开始；
+   开始，不能从人在 Session UI 中的 `ui_seen_at/opened_at` 开始；
 3. `expects_reply=false` 永远不创建 `awaiting_reply` 和 `reply_due_at`；
    明确的 `awaiting_ack` 可复用这条 obligation due 时钟，但只有发送协议显式要求 ACK 时才建立；
 4. linked reply 通过 `reply_to_event_id` 精确清偿对应目标 Delivery，不因来源 Session 收到任意新消息
@@ -541,8 +594,11 @@ Gemini/OpenCode 可接受的提示或工具指导格式。不同适配器可以�
   “逾期/失败”，不把 Delivery/Attention/Obligation 的全部内部字段堆进 Composer；
 - Composer 第一版只暴露“需要回复”“重要/紧急”“停止当前任务并发送”等少数动作，deadline、
   cooldown 与升级策略通过内部预设映射；
-- `opened` 只更新人类 Attention。UI 不显示“Agent 已读”，除非存在 `embedded_turn_ref` 或等价的
-  checkpoint receipt；即使存在 receipt，也只能写“已进入 Agent 上下文”，不能声称 Agent 已理解。
+- 人打开某个 Session 的往来**不改变**该 Session Agent Mailbox 的未读或回复债；可选的 Human
+  Inbox 只处理目标为 `human`/`user` 的信，见 [3.5](#35-agent-mailbox-与可选的-human-mailbox)；
+- `opened` 若仍写入，只表示人类旁观过，UI 不得把它显示成 Agent 已读。只有
+  `embedded_turn_ref` 或等价 checkpoint receipt 才能写“已进入 Agent 上下文”，且不能声称
+  Agent 已理解。
 
 当前实现已有会话顶部的 `SessionCommunicationBannerView` 往来摘要和 Composer 上方的
 `SessionPendingContextBar`，可以显示 pending 正文、逐条排除与恢复。未来 UI 分成三个不重叠的入口：
@@ -863,7 +919,10 @@ transcript 对账，以及同一 Session 多视图 revision 的真实端到端�
 - `none / awaiting_reply / resolved` 先覆盖真实已有语义；只有出现明确 ACK 请求协议后才启用
   `awaiting_ack`；
 - 分离 `unread_due_at` 与 `reply_due_at`，no-reply 不产生回复债务；
-- UI 投影“未读 / 待我确认或回复 / 等待对方回复 / 逾期或失败”；
+- UI 投影“未读 / 待我确认或回复 / 等待对方回复 / 逾期或失败”，且必须标明是 Agent Mailbox
+  还是可选 Human Mailbox；
+- 人打开 Session 往来不得回填 Agent receipt，也不得启动 `reply_due_at`；
+- 增加保留地址 `human`/`user` 的投递与 Human Inbox 投影，不把人类建成可 Resume Session；
 - 迁移、重命名、linked reply 精确清偿、多 View revision 和崩溃恢复测试。
 
 ### 后续独立批次：V1.2 Conversation Timeline Projection
@@ -949,7 +1008,8 @@ V1 至少证明：
 
 V1.1/V1.4 mailbox lifecycle 还必须证明：
 
-15. 人类在 UI 打开消息只改变 Attention，不产生 `agent_received_at`，也不启动 reply timer；
+15. 人类打开某个 Session 的往来不改变该 Agent Mailbox 的未读、已读未回或 `reply_due_at`；
+    人打开只影响可选 Human Mailbox，且仅当该 Delivery 的目标是 `human`/`user`；
 16. 只有普通 Turn embedded 或未来 checkpoint receipt 能证明正文进入 Agent 上下文；
 17. `expects_reply=false` 在打开、摄入、提醒和重启后都不会产生 awaiting_reply；
 18. linked reply 只清偿 `reply_to_event_id` 对应目标 Delivery，多目标 fan-out 不会串债；
