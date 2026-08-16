@@ -2,6 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::acp::types::PromptInputBlock;
+use crate::models::CollaborationDeliveryHint;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -87,6 +88,10 @@ pub(crate) struct ClaimedPromptQueueItem {
     /// Cross-Session collaboration event materialized into this execution
     /// queue item. `None` keeps ordinary same-Session follow-ups unchanged.
     pub origin_event_id: Option<String>,
+    /// Present only for cross-Session deliveries. The queue remains the owner;
+    /// this hint merely allows a best-effort native steer while the target is
+    /// busy and never changes ordinary same-Session follow-up behavior.
+    pub delivery_hint: Option<CollaborationDeliveryHint>,
     pub mode_id: Option<String>,
     pub claimed_by: String,
 }

@@ -2298,6 +2298,48 @@ impl ConnectionManager {
         Ok(item)
     }
 
+    /// Try the proven native `_session/steering` channel without falling back
+    /// to the MCP pull-based feedback path.
+    ///
+    /// Cross-Session delivery uses this narrower contract: `Some` means the
+    /// adapter consumed the immutable collaboration envelope; `None` means it
+    /// definitely did not and the durable prompt queue still owns it. A real
+    /// transport/protocol error remains an error because consumption may be
+    /// uncertain and the caller must pause rather than replay blindly.
+    pub(crate) async fn try_submit_native_feedback(
+        &self,
+        conn_id: &str,
+        text: String,
+    ) -> Result<Option<FeedbackItem>, AcpError> {
+        let trimmed = text.trim();
+        if trimmed.is_empty() || trimmed.chars().count() > MAX_FEEDBACK_CHARS {
+            return Ok(None);
+        }
+        let text = trimmed.to_string();
+        let (state, cmd_tx, emitter) = {
+            let connections = self.connections.lock().await;
+            let Some(conn) = connections.get(conn_id) else {
+                return Ok(None);
+            };
+            (
+                conn.state.clone(),
+                conn.cmd_tx.clone(),
+                conn.emitter.clone(),
+            )
+        };
+        {
+            let state = state.read().await;
+            if !state.native_steering_available || !state.turn_in_flight {
+                return Ok(None);
+            }
+        }
+        match Self::submit_feedback_native(conn_id, state, cmd_tx, emitter, text).await {
+            Ok(item) => Ok(Some(item)),
+            Err(AcpError::NoActiveTurn) => Ok(None),
+            Err(err) => Err(err),
+        }
+    }
+
     /// Native `_session/steering` delivery — the push half of
     /// [`Self::submit_feedback`], cancellation-shielded.
     ///

@@ -710,6 +710,30 @@ async fn build_tools_call_spawn(
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .map(str::to_string);
+            let steer_if_supported = match arguments
+                .get("delivery_hint")
+                .and_then(|value| value.as_str())
+                .unwrap_or("default")
+            {
+                "default" => false,
+                "steer_if_supported" => true,
+                _ => {
+                    return LineAction::Respond(err(
+                        id,
+                        -32602,
+                        "send_message `delivery_hint` must be default or steer_if_supported",
+                    ))
+                }
+            };
+            if steer_if_supported
+                && delivery_mode == SessionMessageDeliveryMode::DeliverOnly
+            {
+                return LineAction::Respond(err(
+                    id,
+                    -32602,
+                    "send_message `steer_if_supported` requires delivery_mode=queue",
+                ));
+            }
             let client_dedupe_id = mcp_call_dedupe_id(&ctx.parent_connection_id, &id);
             let req = BrokerSendMessageRequest {
                 token: ctx.token.clone(),
@@ -717,6 +741,7 @@ async fn build_tools_call_spawn(
                     target_session_ids,
                     content,
                     delivery_mode,
+                    steer_if_supported,
                     expects_reply: arguments
                         .get("expects_reply")
                         .and_then(|value| value.as_bool())
@@ -2721,6 +2746,7 @@ mod tests {
                 "target_session_ids": [7, "8", 7],
                 "content": "Please review this.",
                 "delivery_mode": "queue",
+                "delivery_hint": "steer_if_supported",
                 "expects_reply": true,
                 "reply_to_event_id": "event-1"
             } }
@@ -2736,6 +2762,8 @@ mod tests {
             json!({ "target_session_ids": ["bad"], "content": "x" }),
             json!({ "target_session_ids": [7], "content": " " }),
             json!({ "target_session_ids": [7], "content": "x", "delivery_mode": "interrupt" }),
+            json!({ "target_session_ids": [7], "content": "x", "delivery_hint": "interrupt" }),
+            json!({ "target_session_ids": [7], "content": "x", "delivery_mode": "deliver_only", "delivery_hint": "steer_if_supported" }),
         ] {
             let line = json!({
                 "jsonrpc": "2.0", "id": 42, "method": "tools/call",

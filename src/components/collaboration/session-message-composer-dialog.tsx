@@ -23,6 +23,7 @@ import { getAgentLabel } from "@/lib/custom-agents"
 import { randomUUID } from "@/lib/utils"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import type { CollaborationInvocationPolicy } from "@/lib/types"
+import type { CollaborationDeliveryHint } from "@/lib/types"
 
 const MAX_BODY_BYTES = 1_000_000
 
@@ -45,6 +46,8 @@ export function SessionMessageComposerDialog({
   const [body, setBody] = useState("")
   const [invocationPolicy, setInvocationPolicy] =
     useState<CollaborationInvocationPolicy>("store_only")
+  const [deliveryHint, setDeliveryHint] =
+    useState<CollaborationDeliveryHint>("default")
   const [sending, setSending] = useState(false)
 
   const folderById = useMemo(
@@ -90,6 +93,7 @@ export function SessionMessageComposerDialog({
     setSelected(new Set())
     setBody("")
     setInvocationPolicy("store_only")
+    setDeliveryHint("default")
   }
 
   const setOpen = (next: boolean) => {
@@ -116,7 +120,7 @@ export function SessionMessageComposerDialog({
         body,
         clientDedupeId: randomUUID(),
         invocationPolicy,
-        deliveryHint: "default",
+        deliveryHint,
         expectsReply: false,
         urgency: "normal",
       })
@@ -151,14 +155,16 @@ export function SessionMessageComposerDialog({
           <DialogDescription>
             {invocationPolicy === "store_only"
               ? t("storeOnlyDescription")
-              : t("invokeWhenIdleDescription")}
+              : deliveryHint === "steer_if_supported"
+                ? t("steerIfSupportedDescription")
+                : t("invokeWhenIdleDescription")}
           </DialogDescription>
         </DialogHeader>
 
         <div
           role="radiogroup"
           aria-label={t("deliveryMode")}
-          className="grid grid-cols-2 gap-1 rounded-lg bg-muted p-1"
+          className="grid grid-cols-3 gap-1 rounded-lg bg-muted p-1"
         >
           <Button
             type="button"
@@ -166,21 +172,48 @@ export function SessionMessageComposerDialog({
             aria-checked={invocationPolicy === "store_only"}
             variant={invocationPolicy === "store_only" ? "secondary" : "ghost"}
             size="sm"
-            onClick={() => setInvocationPolicy("store_only")}
+            onClick={() => {
+              setInvocationPolicy("store_only")
+              setDeliveryHint("default")
+            }}
           >
             {t("deliverOnly")}
           </Button>
           <Button
             type="button"
             role="radio"
-            aria-checked={invocationPolicy === "invoke_when_idle"}
+            aria-checked={
+              invocationPolicy === "invoke_when_idle" &&
+              deliveryHint === "default"
+            }
             variant={
-              invocationPolicy === "invoke_when_idle" ? "secondary" : "ghost"
+              invocationPolicy === "invoke_when_idle" &&
+              deliveryHint === "default"
+                ? "secondary"
+                : "ghost"
             }
             size="sm"
-            onClick={() => setInvocationPolicy("invoke_when_idle")}
+            onClick={() => {
+              setInvocationPolicy("invoke_when_idle")
+              setDeliveryHint("default")
+            }}
           >
             {t("invokeWhenIdle")}
+          </Button>
+          <Button
+            type="button"
+            role="radio"
+            aria-checked={deliveryHint === "steer_if_supported"}
+            variant={
+              deliveryHint === "steer_if_supported" ? "secondary" : "ghost"
+            }
+            size="sm"
+            onClick={() => {
+              setInvocationPolicy("invoke_when_idle")
+              setDeliveryHint("steer_if_supported")
+            }}
+          >
+            {t("steerIfSupported")}
           </Button>
         </div>
 

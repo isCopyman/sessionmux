@@ -70,6 +70,11 @@ pub struct SessionMessageSpec {
     pub target_session_ids: Vec<i32>,
     pub content: String,
     pub delivery_mode: SessionMessageDeliveryMode,
+    /// Best-effort, non-destructive hint. The Host may inject into a currently
+    /// running turn only through a proven native steering channel; otherwise
+    /// the durable message remains queued for the next ordinary turn.
+    #[serde(default)]
+    pub steer_if_supported: bool,
     pub expects_reply: bool,
     pub reply_to_event_id: Option<String>,
     /// Companion-generated from the parent connection + MCP request id. The

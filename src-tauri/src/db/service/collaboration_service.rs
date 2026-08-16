@@ -329,10 +329,10 @@ fn validate_input(input: &SendCollaborationMessageInput) -> Result<Vec<i32>, DbE
             "client_dedupe_id must contain between 1 and {MAX_DEDUPE_ID_BYTES} bytes"
         )));
     }
-    if input.delivery_hint != CollaborationDeliveryHint::Default {
-        return Err(validation(
-            "steer_if_supported is not available in the store-only collaboration slice",
-        ));
+    if input.delivery_hint == CollaborationDeliveryHint::SteerIfSupported
+        && input.invocation_policy != CollaborationInvocationPolicy::InvokeWhenIdle
+    {
+        return Err(validation("steer_if_supported requires invoke_when_idle"));
     }
 
     let targets: BTreeSet<i32> = input.target_conversation_ids.iter().copied().collect();
@@ -414,6 +414,29 @@ If expectsReply is true, send the finished response with Codeg's send_message to
         blocks: vec![PromptInputBlock::Text { text }],
         display_text: format!("From {source_label}: {body}"),
     })
+}
+
+pub(crate) async fn delivery_hint_for_origin<C: ConnectionTrait>(
+    conn: &C,
+    target_conversation_id: i32,
+    event_id: &str,
+) -> Result<CollaborationDeliveryHint, DbError> {
+    let row = conn
+        .query_one(statement(
+            "SELECT delivery_hint FROM collaboration_delivery \
+             WHERE event_id = ? AND target_conversation_id = ? \
+               AND invocation_policy = 'invoke_when_idle'",
+            vec![event_id.into(), target_conversation_id.into()],
+        ))
+        .await?
+        .ok_or_else(|| {
+            validation(format!(
+                "Queued collaboration event {event_id} has no delivery hint for Session {target_conversation_id}"
+            ))
+        })?;
+    let raw: String = row.try_get("", "delivery_hint")?;
+    CollaborationDeliveryHint::parse(&raw)
+        .ok_or_else(|| validation(format!("Invalid collaboration delivery hint: {raw}")))
 }
 
 async fn source_for_origin<C: ConnectionTrait>(
@@ -1319,7 +1342,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rejects_self_send_and_unimplemented_steer_hint() {
+    async fn rejects_self_send_and_store_only_steer_hint() {
         let (db, source, target, _) = seeded_memory().await;
         assert!(send(&db.conn, input(source, vec![source], "self", "no"))
             .await
@@ -1327,5 +1350,13 @@ mod tests {
         let mut steer = input(source, vec![target], "steer", "later");
         steer.delivery_hint = CollaborationDeliveryHint::SteerIfSupported;
         assert!(send(&db.conn, steer).await.is_err());
+
+        let mut invoke = invoke_input(source, vec![target], "steer-invoke", "now if safe");
+        invoke.delivery_hint = CollaborationDeliveryHint::SteerIfSupported;
+        let sent = send(&db.conn, invoke).await.expect("steer hint is durable");
+        assert_eq!(
+            sent.deliveries[0].delivery_hint,
+            CollaborationDeliveryHint::SteerIfSupported
+        );
     }
 }

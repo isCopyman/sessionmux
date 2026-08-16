@@ -187,6 +187,40 @@ pub async fn snapshot(
     snapshot_on(conn, conversation_id).await
 }
 
+/// Whether the current FIFO head is a collaboration delivery that explicitly
+/// requests best-effort steering. This is only a cheap busy-path gate; the
+/// subsequent atomic claim materializes and re-validates the same hint.
+pub(crate) async fn head_requests_native_steer<C: ConnectionTrait>(
+    conn: &C,
+    conversation_id: i32,
+) -> Result<bool, DbError> {
+    let row = conn
+        .query_one(statement(
+            "SELECT d.delivery_hint FROM conversation_prompt_queue_item q \
+             JOIN collaboration_delivery d \
+               ON d.event_id = q.origin_event_id \
+              AND d.target_conversation_id = q.conversation_id \
+             WHERE q.id = ( \
+               SELECT id FROM conversation_prompt_queue_item \
+               WHERE conversation_id = ? AND state = 'queued' \
+               ORDER BY position ASC, created_at ASC, id ASC LIMIT 1 \
+             ) AND q.conversation_id = ? AND q.state = 'queued' \
+               AND d.invocation_policy = 'invoke_when_idle' \
+               AND d.delivery_hint = 'steer_if_supported' \
+               AND NOT EXISTS ( \
+                 SELECT 1 FROM conversation_prompt_queue_state s \
+                 WHERE s.conversation_id = ? AND s.paused_reason IS NOT NULL \
+               )",
+            vec![
+                conversation_id.into(),
+                conversation_id.into(),
+                conversation_id.into(),
+            ],
+        ))
+        .await?;
+    Ok(row.is_some())
+}
+
 pub(crate) async fn collaboration_dispatch_enabled<C: ConnectionTrait>(
     conn: &C,
 ) -> Result<bool, DbError> {
@@ -802,11 +836,23 @@ pub(crate) async fn claim_head(
         }
     };
     bump_revision(&txn, conversation_id).await?;
+    let delivery_hint = match origin_event_id.as_deref() {
+        Some(event_id) => Some(
+            crate::db::service::collaboration_service::delivery_hint_for_origin(
+                &txn,
+                conversation_id,
+                event_id,
+            )
+            .await?,
+        ),
+        None => None,
+    };
     let claimed = ClaimedPromptQueueItem {
         id,
         conversation_id,
         draft,
         origin_event_id,
+        delivery_hint,
         mode_id: row.try_get("", "mode_id")?,
         claimed_by: worker_id.to_string(),
     };

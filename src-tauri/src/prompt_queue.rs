@@ -21,7 +21,9 @@ use crate::acp::InternalEventBus;
 use crate::db::entities::{conversation, folder};
 use crate::db::service::{collaboration_service, prompt_queue_service};
 use crate::db::AppDatabase;
-use crate::models::{AgentType, CollaborationChanged, PromptQueueSnapshot};
+use crate::models::{
+    AgentType, CollaborationChanged, CollaborationDeliveryHint, PromptQueueSnapshot,
+};
 use crate::parsers::path_eq_for_matching;
 use crate::web::event_bridge::{
     emit_event, EventEmitter, COLLABORATION_CHANGED_EVENT, PROMPT_QUEUE_CHANGED_EVENT,
@@ -368,11 +370,35 @@ impl PromptQueueRuntime {
             // and wakes this worker.
             return;
         };
-        {
+        let (status, turn_in_flight, native_steering_available) = {
             let state = state.read().await;
-            if state.status != ConnectionStatus::Connected || state.turn_in_flight {
-                return;
+            (
+                state.status.clone(),
+                state.turn_in_flight,
+                state.native_steering_available,
+            )
+        };
+        if status != ConnectionStatus::Connected {
+            return;
+        }
+        if turn_in_flight {
+            if native_steering_available {
+                match prompt_queue_service::head_requests_native_steer(
+                    &self.db.conn,
+                    conversation_id,
+                )
+                .await
+                {
+                    Ok(true) => {
+                        self.process_native_steer(&row, &connection_id).await;
+                    }
+                    Ok(false) => {}
+                    Err(err) => tracing::error!(
+                        "[prompt-queue] steer-head lookup failed for {conversation_id}: {err}"
+                    ),
+                }
             }
+            return;
         }
 
         let claimed = match prompt_queue_service::claim_head(
@@ -511,6 +537,148 @@ impl PromptQueueRuntime {
         }
     }
 
+    async fn process_native_steer(&self, row: &conversation::Model, connection_id: &str) {
+        let claimed = match prompt_queue_service::claim_head(
+            &self.db.conn,
+            row.id,
+            &self.worker_id,
+            Duration::seconds(CLAIM_LEASE_SECS),
+        )
+        .await
+        {
+            Ok(Some((item, snapshot))) => {
+                emit_snapshot(&self.emitter, snapshot);
+                item
+            }
+            Ok(None) => return,
+            Err(err) => {
+                tracing::error!("[prompt-queue] steer claim failed for {}: {err}", row.id);
+                return;
+            }
+        };
+        if claimed.delivery_hint != Some(CollaborationDeliveryHint::SteerIfSupported)
+            || claimed.origin_event_id.is_none()
+        {
+            self.release_busy(&claimed).await;
+            return;
+        }
+        if self.freeze_claim_if_collaboration_disabled(&claimed).await {
+            return;
+        }
+
+        let (status, turn_in_flight, native_steering_available, actual_cwd) =
+            match self.manager.get_state(connection_id).await {
+                Some(state) => {
+                    let state = state.read().await;
+                    (
+                        state.status.clone(),
+                        state.turn_in_flight,
+                        state.native_steering_available,
+                        state
+                            .working_dir
+                            .as_ref()
+                            .map(|path| path.to_string_lossy().into_owned()),
+                    )
+                }
+                None => {
+                    self.release_busy(&claimed).await;
+                    return;
+                }
+            };
+        if status != ConnectionStatus::Connected || !turn_in_flight || !native_steering_available {
+            self.release_busy(&claimed).await;
+            return;
+        }
+
+        let expected_cwd = if let Some(origin) = row.origin_cwd.clone() {
+            Some(origin)
+        } else {
+            match folder::Entity::find_by_id(row.folder_id)
+                .one(&self.db.conn)
+                .await
+            {
+                Ok(folder) => folder.map(|folder| folder.path),
+                Err(err) => {
+                    self.fail(
+                        &claimed,
+                        &format!("Could not resolve Session working directory: {err}"),
+                    )
+                    .await;
+                    return;
+                }
+            }
+        };
+        let cwd_matches = match (actual_cwd.as_deref(), expected_cwd.as_deref()) {
+            (Some(actual), Some(expected)) => path_eq_for_matching(actual, expected),
+            (None, None) => true,
+            _ => false,
+        };
+        if !cwd_matches {
+            self.fail(
+                &claimed,
+                "The active Harness is running in a different working directory",
+            )
+            .await;
+            return;
+        }
+
+        let steer_text = match claimed.draft.blocks.as_slice() {
+            [crate::acp::types::PromptInputBlock::Text { text }] => text.clone(),
+            _ => {
+                self.release_busy(&claimed).await;
+                return;
+            }
+        };
+        match prompt_queue_service::mark_dispatch_started(
+            &self.db.conn,
+            &claimed,
+            Duration::seconds(DISPATCH_LEASE_SECS),
+        )
+        .await
+        {
+            Ok(true) => self.emit_origin_change(&claimed).await,
+            Ok(false) => {
+                if !self.freeze_claim_if_collaboration_disabled(&claimed).await {
+                    self.release_busy(&claimed).await;
+                }
+                return;
+            }
+            Err(err) => {
+                tracing::error!(
+                    "[prompt-queue] could not mark steer dispatch for {}: {err}",
+                    claimed.id
+                );
+                self.release_busy(&claimed).await;
+                return;
+            }
+        }
+
+        match self
+            .manager
+            .try_submit_native_feedback(connection_id, steer_text)
+            .await
+        {
+            Ok(Some(_)) => self.accept_after_dispatch(&claimed).await,
+            Ok(None) => self.release_busy(&claimed).await,
+            Err(err) => {
+                tracing::error!(
+                    "[prompt-queue] native steer outcome is uncertain for {}: {err}",
+                    claimed.id
+                );
+                match prompt_queue_service::pause_dispatch_unknown(&self.db.conn, &claimed).await {
+                    Ok(snapshot) => {
+                        emit_snapshot(&self.emitter, snapshot);
+                        self.emit_origin_change(&claimed).await;
+                    }
+                    Err(pause_err) => tracing::error!(
+                        "[prompt-queue] could not pause uncertain steer {}: {pause_err}",
+                        claimed.id
+                    ),
+                }
+            }
+        }
+    }
+
     async fn accept_after_dispatch(
         &self,
         item: &crate::models::prompt_queue::ClaimedPromptQueueItem,
@@ -573,7 +741,7 @@ impl PromptQueueRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::acp::connection::ConnectionCommand;
+    use crate::acp::connection::{ConnectionCommand, SteerOutcome};
     use crate::acp::internal_bus::EventBusMetrics;
     use crate::acp::types::{EventEnvelope, PromptInputBlock};
     use crate::db::service::{collaboration_service, prompt_queue_service};
@@ -857,6 +1025,212 @@ mod tests {
                 .is_ok_and(|feed| feed.inbound[0].state == CollaborationDeliveryState::Embedded)
         })
         .await;
+        worker.abort();
+    }
+
+    #[tokio::test]
+    async fn steer_hint_uses_proven_native_channel_and_consumes_queue_once() {
+        let path = "/tmp/codeg-collaboration-native-steer";
+        let (db, folder_id, target, manager, bus) = setup(path).await;
+        let source = seed_conversation(&db, folder_id, AgentType::ClaudeCode).await;
+        let mut commands = bind_live_connection(&manager, "active", path, folder_id, target).await;
+        let state = manager.get_state("active").await.expect("state");
+        {
+            let mut state = state.write().await;
+            state.turn_in_flight = true;
+            state.native_steering_available = true;
+        }
+        let mut input = collaboration_input(source, target, "native-steer", "correct the premise");
+        input.delivery_hint = CollaborationDeliveryHint::SteerIfSupported;
+        collaboration_service::send(&db.conn, input)
+            .await
+            .expect("collaboration send");
+        let (_handle, task) =
+            build_prompt_queue_runtime(db.conn.clone(), manager, EventEmitter::Noop, bus);
+        let worker = tokio::spawn(task);
+
+        let command = tokio::time::timeout(StdDuration::from_secs(2), commands.recv())
+            .await
+            .expect("steer timeout")
+            .expect("steer command");
+        let ConnectionCommand::Steer { text, reply } = command else {
+            panic!("expected native steer command");
+        };
+        assert!(text.contains("external collaboration content"));
+        assert!(text.contains("--- message ---\ncorrect the premise\n"));
+        reply.send(Ok(SteerOutcome::Injected)).expect("steer reply");
+
+        wait_until(|| async {
+            collaboration_service::feed(&db.conn, target, None)
+                .await
+                .is_ok_and(|feed| feed.inbound[0].state == CollaborationDeliveryState::Embedded)
+        })
+        .await;
+        assert!(prompt_queue_service::snapshot(&db.conn, target)
+            .await
+            .unwrap()
+            .items
+            .is_empty());
+        assert!(commands.try_recv().is_err(), "native steer must not replay");
+        worker.abort();
+    }
+
+    #[tokio::test]
+    async fn native_prompt_required_keeps_the_collaboration_message_queued() {
+        let path = "/tmp/codeg-collaboration-steer-prompt-required";
+        let (db, folder_id, target, manager, bus) = setup(path).await;
+        let source = seed_conversation(&db, folder_id, AgentType::ClaudeCode).await;
+        let mut commands = bind_live_connection(&manager, "active", path, folder_id, target).await;
+        let state = manager.get_state("active").await.expect("state");
+        {
+            let mut state = state.write().await;
+            state.turn_in_flight = true;
+            state.native_steering_available = true;
+        }
+        let mut input = collaboration_input(source, target, "steer-race", "keep ownership");
+        input.delivery_hint = CollaborationDeliveryHint::SteerIfSupported;
+        collaboration_service::send(&db.conn, input)
+            .await
+            .expect("collaboration send");
+        let (_handle, task) = build_prompt_queue_runtime(
+            db.conn.clone(),
+            manager,
+            EventEmitter::Noop,
+            bus,
+        );
+        let worker = tokio::spawn(task);
+
+        let command = tokio::time::timeout(StdDuration::from_secs(2), commands.recv())
+            .await
+            .expect("steer timeout")
+            .expect("steer command");
+        let ConnectionCommand::Steer { reply, .. } = command else {
+            panic!("expected native steer command");
+        };
+        reply
+            .send(Ok(SteerOutcome::PromptRequired))
+            .expect("steer reply");
+
+        wait_until(|| async {
+            prompt_queue_service::snapshot(&db.conn, target)
+                .await
+                .is_ok_and(|snapshot| {
+                    snapshot.items.len() == 1
+                        && snapshot.items[0].state == PromptQueueItemState::Queued
+                })
+        })
+        .await;
+        assert_eq!(
+            collaboration_service::feed(&db.conn, target, None)
+                .await
+                .unwrap()
+                .inbound[0]
+                .state,
+            CollaborationDeliveryState::Queued
+        );
+        worker.abort();
+    }
+
+    #[tokio::test]
+    async fn uncertain_native_steer_pauses_instead_of_replaying() {
+        let path = "/tmp/codeg-collaboration-steer-unknown";
+        let (db, folder_id, target, manager, bus) = setup(path).await;
+        let source = seed_conversation(&db, folder_id, AgentType::ClaudeCode).await;
+        let mut commands = bind_live_connection(&manager, "active", path, folder_id, target).await;
+        let state = manager.get_state("active").await.expect("state");
+        {
+            let mut state = state.write().await;
+            state.turn_in_flight = true;
+            state.native_steering_available = true;
+        }
+        let mut input = collaboration_input(source, target, "steer-unknown", "never replay blindly");
+        input.delivery_hint = CollaborationDeliveryHint::SteerIfSupported;
+        collaboration_service::send(&db.conn, input)
+            .await
+            .expect("collaboration send");
+        let (_handle, task) = build_prompt_queue_runtime(
+            db.conn.clone(),
+            manager,
+            EventEmitter::Noop,
+            bus,
+        );
+        let worker = tokio::spawn(task);
+
+        let command = tokio::time::timeout(StdDuration::from_secs(2), commands.recv())
+            .await
+            .expect("steer timeout")
+            .expect("steer command");
+        let ConnectionCommand::Steer { reply, .. } = command else {
+            panic!("expected native steer command");
+        };
+        reply
+            .send(Err(AcpError::protocol("steer response was lost")))
+            .expect("steer reply");
+
+        wait_until(|| async {
+            prompt_queue_service::snapshot(&db.conn, target)
+                .await
+                .is_ok_and(|snapshot| {
+                    snapshot.items.len() == 1
+                        && snapshot.items[0].state == PromptQueueItemState::Paused
+                        && snapshot.items[0].paused_reason.as_deref()
+                            == Some("dispatch_outcome_unknown")
+                })
+        })
+        .await;
+        assert_eq!(
+            collaboration_service::feed(&db.conn, target, None)
+                .await
+                .unwrap()
+                .inbound[0]
+                .state,
+            CollaborationDeliveryState::Failed
+        );
+        assert!(commands.try_recv().is_err(), "uncertain steer must not replay");
+        worker.abort();
+    }
+
+    #[tokio::test]
+    async fn unsupported_native_steer_stays_durably_queued_without_mcp_pull() {
+        let path = "/tmp/codeg-collaboration-steer-fallback";
+        let (db, folder_id, target, manager, bus) = setup(path).await;
+        let source = seed_conversation(&db, folder_id, AgentType::ClaudeCode).await;
+        let mut commands = bind_live_connection(&manager, "active", path, folder_id, target).await;
+        let state = manager.get_state("active").await.expect("state");
+        {
+            let mut state = state.write().await;
+            state.turn_in_flight = true;
+            state.native_steering_available = false;
+            state.feedback_tool_available = true;
+        }
+        let mut input =
+            collaboration_input(source, target, "steer-fallback", "do not fake a steer");
+        input.delivery_hint = CollaborationDeliveryHint::SteerIfSupported;
+        collaboration_service::send(&db.conn, input)
+            .await
+            .expect("collaboration send");
+        let (_handle, task) =
+            build_prompt_queue_runtime(db.conn.clone(), manager, EventEmitter::Noop, bus);
+        let worker = tokio::spawn(task);
+
+        tokio::time::sleep(StdDuration::from_millis(100)).await;
+        assert!(
+            commands.try_recv().is_err(),
+            "MCP pull feedback must never impersonate native steering"
+        );
+        let queue = prompt_queue_service::snapshot(&db.conn, target)
+            .await
+            .expect("queue");
+        assert_eq!(queue.items.len(), 1);
+        assert_eq!(queue.items[0].state, PromptQueueItemState::Queued);
+        assert_eq!(
+            collaboration_service::feed(&db.conn, target, None)
+                .await
+                .unwrap()
+                .inbound[0]
+                .state,
+            CollaborationDeliveryState::Queued
+        );
         worker.abort();
     }
 

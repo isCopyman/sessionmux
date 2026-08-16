@@ -173,7 +173,7 @@
   },
   {
     "name": "send_message",
-    "description": "Send a durable message from this persistent Session to one or more existing Codeg Sessions by stable numeric id. This is Session-to-Session communication, not delegation: the target keeps its own full conversation and receives only this message plus source metadata. Default delivery_mode is queue: persist first, then let the target's EXISTING runtime process it when idle; Codeg never cold-starts a closed Session. deliver_only persists and displays the message without starting a target turn. A queued or delivered result does NOT mean the target has read, completed, or answered it. For a request that needs an answer, keep expects_reply true (the default). To answer an inbound collaboration envelope, target only its sourceConversationId and set reply_to_event_id to that envelope's eventId. Use expects_reply false for FYI/notifications. Do not invent names, parse plain-text @ mentions yourself, or send to the calling Session.",
+    "description": "Send a durable message from this persistent Session to one or more existing Codeg Sessions by stable numeric id. This is Session-to-Session communication, not delegation: the target keeps its own full conversation and receives only this message plus source metadata. Default delivery_mode is queue: persist first, then let the target's EXISTING runtime process it when idle; Codeg never cold-starts a closed Session. deliver_only persists and displays the message without starting a target turn. delivery_hint=steer_if_supported is non-destructive: Codeg injects only through a proven native steering channel, otherwise the same durable message remains queued. A queued or delivered result does NOT mean the target has read, completed, or answered it. For a request that needs an answer, keep expects_reply true (the default). To answer an inbound collaboration envelope, target only its sourceConversationId and set reply_to_event_id to that envelope's eventId. Use expects_reply false for FYI/notifications. Do not invent names, parse plain-text @ mentions yourself, or send to the calling Session.",
     "inputSchema": {
       "type": "object",
       "required": ["target_session_ids", "content"],
@@ -194,6 +194,11 @@
           "type": "string",
           "enum": ["queue", "deliver_only"],
           "description": "queue (default): persist and enqueue for the target's existing runtime when idle. deliver_only: persist/display only, with no automatic Agent turn."
+        },
+        "delivery_hint": {
+          "type": "string",
+          "enum": ["default", "steer_if_supported"],
+          "description": "Optional non-destructive hint for queue mode. steer_if_supported tries proven native steering only while the target is busy; unsupported, stale, oversized, or idle cases remain in the durable queue. It never interrupts the target."
         },
         "expects_reply": {
           "type": "boolean",

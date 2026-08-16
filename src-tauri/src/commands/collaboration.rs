@@ -334,7 +334,11 @@ impl SessionCollaborationAccess for DbSessionCollaboration {
                 body: spec.content,
                 client_dedupe_id: spec.client_dedupe_id,
                 invocation_policy,
-                delivery_hint: CollaborationDeliveryHint::Default,
+                delivery_hint: if spec.steer_if_supported {
+                    CollaborationDeliveryHint::SteerIfSupported
+                } else {
+                    CollaborationDeliveryHint::Default
+                },
                 expects_reply: spec.expects_reply,
                 urgency: CollaborationUrgency::Normal,
                 reply_to_event_id: spec.reply_to_event_id,
@@ -685,6 +689,7 @@ mod tests {
             target_session_ids: vec![target],
             content: "check the argument".into(),
             delivery_mode: SessionMessageDeliveryMode::Queue,
+            steer_if_supported: true,
             expects_reply: true,
             reply_to_event_id: None,
             client_dedupe_id: "mcp:agent-send".into(),
@@ -703,6 +708,14 @@ mod tests {
             Some(event_id.as_str())
         );
         assert!(queue.items[0].draft.is_none());
+        assert_eq!(
+            collaboration_service::feed(&db.conn, target, None)
+                .await
+                .unwrap()
+                .inbound[0]
+                .delivery_hint,
+            CollaborationDeliveryHint::SteerIfSupported
+        );
 
         let replay = access.send_message(source, spec).await;
         assert!(replay.accepted && replay.deduplicated);
@@ -738,6 +751,7 @@ mod tests {
                     target_session_ids: vec![target],
                     content: "must not land".into(),
                     delivery_mode: SessionMessageDeliveryMode::Queue,
+                    steer_if_supported: false,
                     expects_reply: true,
                     reply_to_event_id: None,
                     client_dedupe_id: "mcp:disabled".into(),

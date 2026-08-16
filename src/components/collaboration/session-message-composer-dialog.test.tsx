@@ -143,7 +143,36 @@ describe("SessionMessageComposerDialog", () => {
 
     await waitFor(() => expect(api.send).toHaveBeenCalledTimes(1))
     expect(api.send).toHaveBeenCalledWith(
-      expect.objectContaining({ invocationPolicy: "invoke_when_idle" })
+      expect.objectContaining({
+        invocationPolicy: "invoke_when_idle",
+        deliveryHint: "default",
+      })
+    )
+  })
+
+  it("can request non-destructive native steering with durable queue fallback", async () => {
+    render(
+      <SessionMessageComposerDialog
+        sourceConversationId={1}
+        open
+        onOpenChange={onOpenChange}
+      />
+    )
+    fireEvent.click(screen.getByRole("radio", { name: "steerIfSupported" }))
+    fireEvent.click(screen.getByRole("button", { name: /Reviewer/ }))
+    fireEvent.change(screen.getByPlaceholderText("bodyPlaceholder"), {
+      target: {
+        value: "Use this correction if the current turn can accept it",
+      },
+    })
+    fireEvent.click(screen.getByRole("button", { name: /^send$/ }))
+
+    await waitFor(() => expect(api.send).toHaveBeenCalledTimes(1))
+    expect(api.send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        invocationPolicy: "invoke_when_idle",
+        deliveryHint: "steer_if_supported",
+      })
     )
   })
 })

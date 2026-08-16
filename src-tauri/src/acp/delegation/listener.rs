@@ -2127,6 +2127,7 @@ mod tests {
                     content: "review".into(),
                     delivery_mode:
                         crate::acp::session_collaboration::SessionMessageDeliveryMode::Queue,
+                    steer_if_supported: false,
                     expects_reply: true,
                     reply_to_event_id: None,
                     client_dedupe_id: "mcp:test".into(),
