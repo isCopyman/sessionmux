@@ -13,9 +13,9 @@ use crate::models::{
     CollaborationAgentReceiptKind, CollaborationAttentionState, CollaborationDeliveryHint,
     CollaborationDeliveryState, CollaborationDeliveryView, CollaborationFeed,
     CollaborationInterruptState, CollaborationInvocationPolicy, CollaborationObligationState,
-    CollaborationSendResult, CollaborationSessionSnapshot, CollaborationUnreadOverview,
-    CollaborationUnreadSession, CollaborationUrgency, PromptQueueDraft, PromptQueueItemState,
-    SendCollaborationMessageInput,
+    CollaborationSendResult, CollaborationSessionSnapshot, CollaborationTimelineProjection,
+    CollaborationUnreadOverview, CollaborationUnreadSession, CollaborationUrgency,
+    PromptQueueDraft, PromptQueueItemState, SendCollaborationMessageInput,
 };
 
 const MAX_BODY_BYTES: usize = 1_000_000;
@@ -1331,6 +1331,39 @@ pub async fn feed(
     feed_on(conn, conversation_id, limit.unwrap_or(DEFAULT_FEED_LIMIT)).await
 }
 
+/// Project only inbound collaboration facts that are already part of the
+/// Harness transcript. `state = embedded` alone is intentionally insufficient:
+/// an explicit Agent receipt and a stable Turn reference are both required so
+/// pending or partially-transitioned deliveries can never leak into history.
+pub async fn timeline_projection(
+    conn: &DatabaseConnection,
+    conversation_id: i32,
+) -> Result<CollaborationTimelineProjection, DbError> {
+    require_live_session(conn, conversation_id).await?;
+    let rows = conn
+        .query_all(statement(
+            &format!(
+                "{DELIVERY_SELECT} WHERE d.target_conversation_id = ? \
+                 AND d.state = 'embedded' \
+                 AND d.agent_received_at IS NOT NULL \
+                 AND d.agent_receipt_kind IS NOT NULL \
+                 AND d.agent_receipt_ref IS NOT NULL \
+                 AND d.embedded_turn_ref IS NOT NULL \
+                 ORDER BY d.created_at ASC, d.id ASC"
+            ),
+            vec![conversation_id.into()],
+        ))
+        .await?;
+    Ok(CollaborationTimelineProjection {
+        conversation_id,
+        revision: revision(conn, conversation_id).await?,
+        inbound: rows
+            .iter()
+            .map(parse_delivery)
+            .collect::<Result<Vec<_>, _>>()?,
+    })
+}
+
 /// Return actionable collaboration counts for every live Session. This is a
 /// dedicated projection because mailbox lifecycle belongs to collaboration,
 /// not the Harness-owned conversation index.
@@ -1688,6 +1721,82 @@ mod tests {
             .try_get("", "count")
             .unwrap();
         assert_eq!(queued, 0, "store_only must not wake or enqueue the Harness");
+    }
+
+    #[tokio::test]
+    async fn timeline_projection_requires_exact_target_embedding_and_agent_receipt() {
+        let (db, source, target_a, target_b) = seeded_memory().await;
+        let fanout = send(
+            &db.conn,
+            input(
+                source,
+                vec![target_a, target_b],
+                "timeline-fanout",
+                "project me once",
+            ),
+        )
+        .await
+        .unwrap();
+        let pending = send(
+            &db.conn,
+            input(source, vec![target_a], "timeline-pending", "still pending"),
+        )
+        .await
+        .unwrap();
+        let partial = send(
+            &db.conn,
+            input(
+                source,
+                vec![target_a],
+                "timeline-partial",
+                "embedded without receipt",
+            ),
+        )
+        .await
+        .unwrap();
+
+        let target_a_delivery = fanout
+            .deliveries
+            .iter()
+            .find(|delivery| delivery.target.conversation_id == target_a)
+            .unwrap();
+        db.conn
+            .execute(statement(
+                "UPDATE collaboration_delivery \
+                 SET state = 'embedded', embedded_turn_ref = 'turn-a', \
+                     agent_received_at = CURRENT_TIMESTAMP, \
+                     agent_receipt_kind = 'managed_acp', agent_receipt_ref = 'turn-a' \
+                 WHERE id = ?",
+                vec![target_a_delivery.id.clone().into()],
+            ))
+            .await
+            .unwrap();
+        db.conn
+            .execute(statement(
+                "UPDATE collaboration_delivery \
+                 SET state = 'embedded', embedded_turn_ref = 'turn-partial' \
+                 WHERE event_id = ? AND target_conversation_id = ?",
+                vec![partial.event_id.into(), target_a.into()],
+            ))
+            .await
+            .unwrap();
+
+        let projected = timeline_projection(&db.conn, target_a).await.unwrap();
+        assert_eq!(projected.conversation_id, target_a);
+        assert_eq!(projected.inbound.len(), 1);
+        assert_eq!(projected.inbound[0].id, target_a_delivery.id);
+        assert_eq!(
+            projected.inbound[0].embedded_turn_ref.as_deref(),
+            Some("turn-a")
+        );
+        assert!(projected.inbound[0].agent_received_at.is_some());
+        assert!(projected
+            .inbound
+            .iter()
+            .all(|delivery| delivery.event_id != pending.event_id));
+
+        let sibling = timeline_projection(&db.conn, target_b).await.unwrap();
+        assert!(sibling.inbound.is_empty());
     }
 
     #[tokio::test]

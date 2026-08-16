@@ -102,6 +102,7 @@ import type {
   PromptDraft,
   PromptQueueSnapshot,
   CollaborationFeed,
+  CollaborationTimelineProjection,
   CollaborationUnreadOverview,
   CollaborationSendResult,
   CollaborationInterruptResult,
@@ -2093,6 +2094,14 @@ export async function getCollaborationFeed(
   return getTransport().call("collaboration_feed", {
     conversationId,
     limit: limit ?? null,
+  })
+}
+
+export async function getCollaborationTimelineProjection(
+  conversationId: number
+): Promise<CollaborationTimelineProjection> {
+  return getTransport().call("collaboration_timeline_projection", {
+    conversationId,
   })
 }
 

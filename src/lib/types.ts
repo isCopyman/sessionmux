@@ -1246,6 +1246,12 @@ export interface CollaborationFeed {
   outbound: CollaborationDelivery[]
 }
 
+export interface CollaborationTimelineProjection {
+  conversationId: number
+  revision: number
+  inbound: CollaborationDelivery[]
+}
+
 export interface CollaborationUnreadSession {
   conversationId: number
   revision: number

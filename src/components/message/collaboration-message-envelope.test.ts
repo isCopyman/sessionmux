@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest"
 
-import { parseCollaborationMessageEnvelope } from "./collaboration-message-envelope"
+import {
+  parseCollaborationMessageEnvelope,
+  stripProjectedCollaborationEnvelopes,
+} from "./collaboration-message-envelope"
 
 const EVENT_ID = "b80f5bea-2dd6-41b5-8a07-b68d49fe269a"
 
@@ -59,5 +62,21 @@ describe("parseCollaborationMessageEnvelope", () => {
     expect(
       parseCollaborationMessageEnvelope(`preface\n${envelope()}\nafterword`)
     ).toBeNull()
+  })
+
+  it("strips only complete envelopes backed by a projected event", () => {
+    const mixed = `${envelope()}\nordinary user prompt`
+    expect(
+      stripProjectedCollaborationEnvelopes(mixed, new Set([EVENT_ID]))
+    ).toBe("ordinary user prompt")
+    expect(
+      stripProjectedCollaborationEnvelopes(mixed, new Set(["another-event"]))
+    ).toBe(mixed)
+    expect(
+      stripProjectedCollaborationEnvelopes(
+        envelope().slice(0, -8),
+        new Set([EVENT_ID])
+      )
+    ).toBe(envelope().slice(0, -8))
   })
 })
