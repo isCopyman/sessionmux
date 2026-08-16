@@ -29,6 +29,7 @@ import {
   PanelRightOpen,
   PanelBottomOpen,
   PanelsTopLeft,
+  Plus,
   Search,
   Square,
   Trash2,
@@ -68,6 +69,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import {
@@ -106,6 +108,10 @@ import {
   listAllConversations,
   listConversationCollectionRefs,
   listConversationWorkbenchRefs,
+  listOpenedTabs,
+  listWorkbenchTabs,
+  saveOpenedTabs,
+  saveWorkbenchTabs,
   searchSessionContent,
   updateConversationArchive,
   updateConversationStatus,
@@ -118,6 +124,7 @@ import type {
   ConversationStatus,
   DbConversationSummary,
   MessageTurn,
+  OpenedTab,
 } from "@/lib/types"
 import { ALL_AGENT_TYPES, STATUS_ORDER } from "@/lib/types"
 import { getAgentLabel } from "@/lib/custom-agents"
@@ -161,6 +168,104 @@ type BranchFilter =
 const ALL_BRANCHES: BranchFilter = { kind: "all" }
 
 type WorkbenchFilter = "all" | "unopened" | number
+
+const SESSION_CENTER_TAB_ORIGIN = "session-center"
+
+function conversationIdsInTabs(items: OpenedTab[]): Set<number> {
+  const ids = new Set<number>()
+  for (const item of items) {
+    if (item.conversation_id != null) ids.add(item.conversation_id)
+  }
+  return ids
+}
+
+function appendConversationTabs(
+  existing: OpenedTab[],
+  conversations: DbConversationSummary[]
+): { items: OpenedTab[]; added: number; skipped: number } {
+  const present = conversationIdsInTabs(existing)
+  const toAdd = conversations.filter(
+    (conversation) => !present.has(conversation.id)
+  )
+  const skipped = conversations.length - toAdd.length
+  if (toAdd.length === 0) {
+    return { items: existing, added: 0, skipped }
+  }
+  const nextPosition =
+    existing.length === 0
+      ? 0
+      : Math.max(...existing.map((item) => item.position)) + 1
+  return {
+    items: [
+      ...existing,
+      ...toAdd.map((conversation, index) => ({
+        id: 0,
+        folder_id: conversation.folder_id,
+        conversation_id: conversation.id,
+        agent_type: conversation.agent_type,
+        position: nextPosition + index,
+        is_active: false,
+        is_pinned: true,
+      })),
+    ],
+    added: toAdd.length,
+    skipped,
+  }
+}
+
+async function listTabsForWorkbench(workbenchId: number) {
+  return workbenchId === 1 ? listOpenedTabs() : listWorkbenchTabs(workbenchId)
+}
+
+async function saveTabsForWorkbench(
+  workbenchId: number,
+  items: OpenedTab[],
+  expectedVersion: number
+) {
+  return workbenchId === 1
+    ? saveOpenedTabs(items, expectedVersion, SESSION_CENTER_TAB_ORIGIN)
+    : saveWorkbenchTabs(
+        workbenchId,
+        items,
+        expectedVersion,
+        SESSION_CENTER_TAB_ORIGIN
+      )
+}
+
+async function appendConversationsToWorkbench(
+  workbenchId: number,
+  conversations: DbConversationSummary[]
+): Promise<{ added: number; skipped: number }> {
+  const snapshot = await listTabsForWorkbench(workbenchId)
+  let planned = appendConversationTabs(snapshot.items, conversations)
+  if (planned.added === 0) {
+    return { added: 0, skipped: planned.skipped }
+  }
+
+  let outcome = await saveTabsForWorkbench(
+    workbenchId,
+    planned.items,
+    snapshot.version
+  )
+  if (outcome.accepted) {
+    return { added: planned.added, skipped: planned.skipped }
+  }
+
+  planned = appendConversationTabs(outcome.tabs, conversations)
+  if (planned.added === 0) {
+    return { added: 0, skipped: planned.skipped }
+  }
+
+  outcome = await saveTabsForWorkbench(
+    workbenchId,
+    planned.items,
+    outcome.version
+  )
+  if (!outcome.accepted) {
+    throw new Error("Workbench changed concurrently; please retry")
+  }
+  return { added: planned.added, skipped: planned.skipped }
+}
 
 type SessionSearchScope = "all" | "metadata" | "content"
 
@@ -630,6 +735,7 @@ export function ConversationManageDialog({
   const t = useTranslations("Folder.sidebar.manageConversations")
   const tCommon = useTranslations("Folder.common")
   const tStatus = useTranslations("Folder.statusLabels")
+  const tWorkbench = useTranslations("Folder.workbench")
   const tCollaboration = useTranslations("Collaboration")
   const { overview: collaborationOverview, statusByConversation } =
     useCollaborationUnreadOverview()
@@ -646,6 +752,8 @@ export function ConversationManageDialog({
   const workbenches = useWorkbenchStore((s) => s.items)
   const workbenchesHydrated = useWorkbenchStore((s) => s.hydrated)
   const hydrateWorkbenches = useWorkbenchStore((s) => s.hydrate)
+  const createOnly = useWorkbenchStore((s) => s.createOnly)
+  const reopenAndSwitch = useWorkbenchStore((s) => s.reopenAndSwitch)
   const collections = useCollectionStore((s) => s.items)
   const collectionsHydrated = useCollectionStore((s) => s.hydrated)
   const hydrateCollections = useCollectionStore((s) => s.hydrate)
@@ -1309,28 +1417,170 @@ export function ConversationManageDialog({
     ]
   )
 
-  const handleBulkOpen = useCallback(() => {
-    if (selectedConversations.length === 0) return
-    setBulkOpening(true)
-    try {
-      openConversations()
-      for (const conversation of selectedConversations) {
-        openTab(
-          conversation.folder_id,
-          conversation.id,
-          conversation.agent_type,
-          true,
-          formatConversationTitle(conversation.title)
-        )
+  const activeWorkbenchName =
+    workbenches.find((workbench) => workbench.id === activeWorkbenchId)?.name ??
+    t("currentWorkbench")
+
+  const notifyAddedToWorkbench = useCallback(
+    (opts: {
+      workbenchId: number
+      workbenchName: string
+      added: number
+      skipped: number
+      stayInDialog: boolean
+    }) => {
+      const message =
+        opts.added === 0
+          ? t("toastAlreadyInWorkbench", { workbench: opts.workbenchName })
+          : opts.skipped > 0
+            ? t("toastAddedWithSkipped", {
+                added: opts.added,
+                skipped: opts.skipped,
+                workbench: opts.workbenchName,
+              })
+            : t("toastAddedToWorkbench", {
+                count: opts.added,
+                workbench: opts.workbenchName,
+              })
+      toast.success(
+        message,
+        opts.stayInDialog && opts.added > 0
+          ? {
+              action: {
+                label: t("openWorkbench"),
+                onClick: () => {
+                  onOpenChange(false)
+                  void reopenAndSwitch(opts.workbenchId).catch((error) => {
+                    toast.error(
+                      t("toastOpFailed", {
+                        message: toErrorMessage(error),
+                      })
+                    )
+                  })
+                },
+              },
+            }
+          : undefined
+      )
+    },
+    [onOpenChange, reopenAndSwitch, t]
+  )
+
+  const handleAddSelectedToWorkbench = useCallback(
+    async (target: "current" | "new" | number, split?: "right" | "down") => {
+      if (selectedConversations.length === 0) return
+      if (split) {
+        const only = selectedConversations[0]
+        if (!only || selectedConversations.length !== 1) return
+        await openConversation(only, activeWorkbenchId, split)
+        return
       }
-      toast.success(t("toastOpened", { count: selectedConversations.length }))
-      onOpenChange(false)
-    } catch (error) {
-      toast.error(t("toastOpFailed", { message: toErrorMessage(error) }))
-    } finally {
-      setBulkOpening(false)
-    }
-  }, [onOpenChange, openConversations, openTab, selectedConversations, t])
+
+      setBulkOpening(true)
+      try {
+        let workbenchId = activeWorkbenchId
+        let workbenchName = activeWorkbenchName
+        if (target === "new") {
+          const created = await createOnly(
+            tWorkbench("defaultName", {
+              number: workbenches.length + 1,
+            })
+          )
+          workbenchId = created.id
+          workbenchName = created.name
+        } else if (target !== "current") {
+          workbenchId = target
+          workbenchName =
+            workbenches.find((workbench) => workbench.id === target)?.name ??
+            String(target)
+        }
+
+        const stayInDialog = workbenchId !== activeWorkbenchId
+        if (!stayInDialog) {
+          const present = new Set(
+            activeWorkbenchTabs
+              .map((tab) => tab.conversationId)
+              .filter((id): id is number => id != null)
+          )
+          const toAdd = selectedConversations.filter(
+            (conversation) => !present.has(conversation.id)
+          )
+          const skipped = selectedConversations.length - toAdd.length
+          if (toAdd.length === 0) {
+            notifyAddedToWorkbench({
+              workbenchId,
+              workbenchName,
+              added: 0,
+              skipped,
+              stayInDialog: false,
+            })
+            return
+          }
+          openConversations()
+          for (const conversation of toAdd) {
+            openTab(
+              conversation.folder_id,
+              conversation.id,
+              conversation.agent_type,
+              true,
+              formatConversationTitle(conversation.title)
+            )
+          }
+          notifyAddedToWorkbench({
+            workbenchId,
+            workbenchName,
+            added: toAdd.length,
+            skipped,
+            stayInDialog: false,
+          })
+          onOpenChange(false)
+          return
+        }
+
+        const result = await appendConversationsToWorkbench(
+          workbenchId,
+          selectedConversations
+        )
+        if (result.added > 0) {
+          try {
+            const refs = await listConversationWorkbenchRefs(
+              rows.map((row) => row.id)
+            )
+            setWorkbenchRefs(refs)
+          } catch {
+            // Ownership chips can stay stale until the next fetch.
+          }
+        }
+        notifyAddedToWorkbench({
+          workbenchId,
+          workbenchName,
+          added: result.added,
+          skipped: result.skipped,
+          stayInDialog: true,
+        })
+      } catch (error) {
+        toast.error(t("toastOpFailed", { message: toErrorMessage(error) }))
+      } finally {
+        setBulkOpening(false)
+      }
+    },
+    [
+      activeWorkbenchId,
+      activeWorkbenchName,
+      activeWorkbenchTabs,
+      createOnly,
+      notifyAddedToWorkbench,
+      onOpenChange,
+      openConversation,
+      openConversations,
+      openTab,
+      rows,
+      selectedConversations,
+      t,
+      tWorkbench,
+      workbenches,
+    ]
+  )
 
   const handleBulkDelete = useCallback(async () => {
     if (selectedConversations.length === 0) return
@@ -2197,28 +2447,29 @@ export function ConversationManageDialog({
               {t("selectedCount", { count: selectedCount })}
             </span>
             <div className="grid w-full grid-cols-2 gap-2 md:flex md:w-auto md:flex-wrap md:items-center">
-              <div className="flex min-w-0">
+              <div className="col-span-2 flex min-w-0 md:col-span-1">
                 <Button
                   size="sm"
                   variant="default"
                   disabled={
-                    !previewConversation ||
+                    selectedCount === 0 ||
                     pending ||
+                    bulkOpening ||
                     openingWorkbenchId !== null
                   }
                   className="min-w-0 flex-1 rounded-r-none"
-                  onClick={() =>
-                    previewConversation &&
-                    void openConversation(previewConversation)
-                  }
+                  onClick={() => void handleAddSelectedToWorkbench("current")}
                 >
-                  {openingWorkbenchId === activeWorkbenchId ? (
+                  {bulkOpening ? (
                     <Loader2 className="mr-1 h-3.5 w-3.5 shrink-0 animate-spin" />
                   ) : (
-                    <PanelTopOpen className="mr-1 h-3.5 w-3.5 shrink-0" />
+                    <PanelsTopLeft className="mr-1 h-3.5 w-3.5 shrink-0" />
                   )}
                   <span className="truncate">
-                    {t("openInCurrentWorkbench")}
+                    {t("addSelectedToWorkbench", {
+                      workbench: activeWorkbenchName,
+                      count: selectedCount,
+                    })}
                   </span>
                 </Button>
                 <DropdownMenu>
@@ -2227,65 +2478,80 @@ export function ConversationManageDialog({
                       size="sm"
                       variant="default"
                       disabled={
-                        !previewConversation ||
+                        selectedCount === 0 ||
                         pending ||
+                        bulkOpening ||
                         openingWorkbenchId !== null
                       }
                       className="rounded-l-none border-l border-primary-foreground/25 px-2"
-                      aria-label={t("chooseOpenPosition")}
+                      aria-label={t("chooseAddTarget")}
                     >
                       <ChevronDown className="h-3.5 w-3.5" />
                     </Button>
                   </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end">
+                  <DropdownMenuContent align="end" className="min-w-56">
+                    {selectedCount === 1 ? (
+                      <>
+                        <DropdownMenuItem
+                          onSelect={() =>
+                            void handleAddSelectedToWorkbench("current")
+                          }
+                        >
+                          <PanelTopOpen className="h-4 w-4" />
+                          {t("openInCurrentPane")}
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          onSelect={() =>
+                            void handleAddSelectedToWorkbench(
+                              "current",
+                              "right"
+                            )
+                          }
+                        >
+                          <PanelRightOpen className="h-4 w-4" />
+                          {t("openRight")}
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          onSelect={() =>
+                            void handleAddSelectedToWorkbench("current", "down")
+                          }
+                        >
+                          <PanelBottomOpen className="h-4 w-4" />
+                          {t("openDown")}
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                      </>
+                    ) : null}
+                    {workbenches.map((workbench) => (
+                      <DropdownMenuItem
+                        key={workbench.id}
+                        onSelect={() =>
+                          void handleAddSelectedToWorkbench(
+                            workbench.id === activeWorkbenchId
+                              ? "current"
+                              : workbench.id
+                          )
+                        }
+                      >
+                        <PanelsTopLeft className="h-4 w-4" />
+                        <span className="truncate">{workbench.name}</span>
+                        {workbench.id === activeWorkbenchId ? (
+                          <span className="opacity-60">
+                            · {t("currentWorkbench")}
+                          </span>
+                        ) : null}
+                      </DropdownMenuItem>
+                    ))}
+                    <DropdownMenuSeparator />
                     <DropdownMenuItem
-                      onSelect={() =>
-                        previewConversation &&
-                        void openConversation(
-                          previewConversation,
-                          activeWorkbenchId,
-                          "right"
-                        )
-                      }
+                      onSelect={() => void handleAddSelectedToWorkbench("new")}
                     >
-                      <PanelRightOpen className="h-4 w-4" />
-                      {t("openRight")}
-                    </DropdownMenuItem>
-                    <DropdownMenuItem
-                      onSelect={() =>
-                        previewConversation &&
-                        void openConversation(
-                          previewConversation,
-                          activeWorkbenchId,
-                          "down"
-                        )
-                      }
-                    >
-                      <PanelBottomOpen className="h-4 w-4" />
-                      {t("openDown")}
+                      <Plus className="h-4 w-4" />
+                      {t("createNewWorkbench")}
                     </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
               </div>
-
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={
-                  selectedCount === 0 ||
-                  pending ||
-                  bulkOpening ||
-                  openingWorkbenchId !== null
-                }
-                onClick={handleBulkOpen}
-              >
-                {bulkOpening ? (
-                  <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <PanelsTopLeft className="mr-1 h-3.5 w-3.5" />
-                )}
-                {t("addSelectedToWorkbench", { count: selectedCount })}
-              </Button>
 
               {/* Set status */}
               <DropdownMenu>

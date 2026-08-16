@@ -149,4 +149,25 @@ describe("workbench window views", () => {
     expect(useWorkbenchStore.getState().recentlyClosedIds).toEqual([])
     expect(h.switchWorkbench).toHaveBeenCalledWith(2)
   })
+
+  it("creates a Workbench without switching the window", async () => {
+    h.createWorkbench.mockResolvedValue(workbench(3, "Scratch"))
+    useWorkbenchStore.setState({
+      items: [workbench(1, "Main")],
+      openIds: [1],
+      recentlyClosedIds: [],
+      hydrated: true,
+      loading: false,
+      refreshQueued: false,
+    })
+
+    const created = await useWorkbenchStore.getState().createOnly("Scratch")
+
+    expect(created.id).toBe(3)
+    expect(h.switchWorkbench).not.toHaveBeenCalled()
+    expect(useWorkbenchStore.getState().items.map((item) => item.id)).toEqual([
+      1, 3,
+    ])
+    expect(useWorkbenchStore.getState().openIds).toEqual([1])
+  })
 })

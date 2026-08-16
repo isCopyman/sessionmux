@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 import { ConversationManageDialog } from "./conversation-manage-dialog"
 import enMessages from "@/i18n/messages/en.json"
 import type { DbConversationSummary, FolderDetail } from "@/lib/types"
+import { toast } from "sonner"
 
 const h = vi.hoisted(() => ({
   listAll: vi.fn(),
@@ -24,6 +25,12 @@ const h = vi.hoisted(() => ({
   activeWorkbenchId: 1,
   activeWorkbenchTabs: [] as Array<{ conversationId: number | null }>,
   hydrateWorkbenches: vi.fn(),
+  createOnly: vi.fn(),
+  reopenAndSwitch: vi.fn(),
+  listOpenedTabs: vi.fn(),
+  listWorkbenchTabs: vi.fn(),
+  saveOpenedTabs: vi.fn(),
+  saveWorkbenchTabs: vi.fn(),
   hydrateCollections: vi.fn(),
   collections: [
     {
@@ -88,6 +95,10 @@ vi.mock("@/lib/api", () => ({
   deleteConversation: h.deleteConv,
   updateConversationStatus: h.updateStatus,
   updateConversationArchive: h.updateArchive,
+  listOpenedTabs: h.listOpenedTabs,
+  listWorkbenchTabs: h.listWorkbenchTabs,
+  saveOpenedTabs: h.saveOpenedTabs,
+  saveWorkbenchTabs: h.saveWorkbenchTabs,
 }))
 
 vi.mock("@/contexts/tab-context", () => ({
@@ -116,6 +127,8 @@ vi.mock("@/stores/workbench-store", () => ({
       items: h.workbenches,
       hydrated: true,
       hydrate: h.hydrateWorkbenches,
+      createOnly: h.createOnly,
+      reopenAndSwitch: h.reopenAndSwitch,
     }),
 }))
 
@@ -302,6 +315,27 @@ describe("ConversationManageDialog", () => {
       prefix_hash_before_index: "0",
     })
     h.switchWorkbench.mockResolvedValue(undefined)
+    h.reopenAndSwitch.mockResolvedValue(undefined)
+    h.createOnly.mockResolvedValue({
+      id: 3,
+      name: "Workbench 3",
+      position: 2,
+      is_pinned: false,
+      created_at: "2026-06-01T00:00:00.000Z",
+      updated_at: "2026-06-01T00:00:00.000Z",
+    })
+    h.listOpenedTabs.mockResolvedValue({ items: [], version: 1 })
+    h.listWorkbenchTabs.mockResolvedValue({ items: [], version: 1 })
+    h.saveOpenedTabs.mockResolvedValue({
+      accepted: true,
+      version: 2,
+      tabs: [],
+    })
+    h.saveWorkbenchTabs.mockResolvedValue({
+      accepted: true,
+      version: 2,
+      tabs: [],
+    })
     h.activeWorkbenchId = 1
     h.activeWorkbenchTabs = []
     h.collaborationSessions = []
@@ -824,7 +858,11 @@ describe("ConversationManageDialog", () => {
 
     await user.click(screen.getByRole("button", { name: "Select on main" }))
     await user.click(screen.getByRole("button", { name: "Select on feature" }))
-    await user.click(screen.getByRole("button", { name: "Add selected (2)" }))
+    await user.click(
+      screen.getByRole("button", {
+        name: "Add selected sessions to Main (2)",
+      })
+    )
 
     expect(h.openConversations).toHaveBeenCalledTimes(1)
     expect(h.openTab).toHaveBeenNthCalledWith(
@@ -843,6 +881,161 @@ describe("ConversationManageDialog", () => {
       true,
       "on feature"
     )
+    expect(h.saveWorkbenchTabs).not.toHaveBeenCalled()
+    expect(h.switchWorkbench).not.toHaveBeenCalled()
+  })
+
+  it("skips sessions already open in the current workbench", async () => {
+    h.activeWorkbenchTabs = [{ conversationId: 1 }]
+    const user = renderDialog()
+    await screen.findByText("on main")
+
+    await user.click(screen.getByRole("button", { name: "Select on main" }))
+    await user.click(screen.getByRole("button", { name: "Select on feature" }))
+    await user.click(
+      screen.getByRole("button", {
+        name: "Add selected sessions to Main (2)",
+      })
+    )
+
+    expect(h.openTab).toHaveBeenCalledTimes(1)
+    expect(h.openTab).toHaveBeenCalledWith(
+      1,
+      2,
+      "claude_code",
+      true,
+      "on feature"
+    )
+    expect(toast.success).toHaveBeenCalledWith(
+      "Added 1 session(s) to Main, skipped 1 already open",
+      undefined
+    )
+  })
+
+  it("adds checked sessions to another workbench without switching", async () => {
+    const user = renderDialog()
+    await screen.findByText("on main")
+
+    await user.click(screen.getByRole("button", { name: "Select on main" }))
+    await user.click(screen.getByRole("button", { name: "Select on feature" }))
+    await user.click(screen.getByRole("button", { name: "Choose workbench" }))
+    await user.click(screen.getByRole("menuitem", { name: "Review" }))
+
+    await waitFor(() => expect(h.listWorkbenchTabs).toHaveBeenCalledWith(2))
+    expect(h.saveWorkbenchTabs).toHaveBeenCalledWith(
+      2,
+      [
+        {
+          id: 0,
+          folder_id: 1,
+          conversation_id: 1,
+          agent_type: "claude_code",
+          position: 0,
+          is_active: false,
+          is_pinned: true,
+        },
+        {
+          id: 0,
+          folder_id: 1,
+          conversation_id: 2,
+          agent_type: "claude_code",
+          position: 1,
+          is_active: false,
+          is_pinned: true,
+        },
+      ],
+      1,
+      "session-center"
+    )
+    expect(h.openTab).not.toHaveBeenCalled()
+    expect(h.switchWorkbench).not.toHaveBeenCalled()
+    expect(h.openConversations).not.toHaveBeenCalled()
+    expect(toast.success).toHaveBeenCalledWith(
+      "Added 2 session(s) to Review",
+      expect.objectContaining({
+        action: expect.objectContaining({ label: "Open workbench" }),
+      })
+    )
+  })
+
+  it("opens the target workbench from the added toast", async () => {
+    const user = renderDialog()
+    await screen.findByText("on main")
+
+    await user.click(screen.getByRole("button", { name: "Select on main" }))
+    await user.click(screen.getByRole("button", { name: "Choose workbench" }))
+    await user.click(screen.getByRole("menuitem", { name: "Review" }))
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalled())
+    const options = vi.mocked(toast.success).mock.calls[0]?.[1] as {
+      action: { onClick: () => void }
+    }
+    options.action.onClick()
+
+    await waitFor(() => expect(h.reopenAndSwitch).toHaveBeenCalledWith(2))
+  })
+
+  it("creates a workbench in the background and adds the selection there", async () => {
+    const user = renderDialog()
+    await screen.findByText("on main")
+
+    await user.click(screen.getByRole("button", { name: "Select on main" }))
+    await user.click(screen.getByRole("button", { name: "Choose workbench" }))
+    await user.click(screen.getByRole("menuitem", { name: "New workbench…" }))
+
+    await waitFor(() =>
+      expect(h.createOnly).toHaveBeenCalledWith("Workbench 3")
+    )
+    expect(h.saveWorkbenchTabs).toHaveBeenCalledWith(
+      3,
+      [
+        {
+          id: 0,
+          folder_id: 1,
+          conversation_id: 1,
+          agent_type: "claude_code",
+          position: 0,
+          is_active: false,
+          is_pinned: true,
+        },
+      ],
+      1,
+      "session-center"
+    )
+    expect(h.switchWorkbench).not.toHaveBeenCalled()
+    expect(h.openTab).not.toHaveBeenCalled()
+  })
+
+  it("does not persist tabs that already exist on the target workbench", async () => {
+    h.listWorkbenchTabs.mockResolvedValue({
+      items: [
+        {
+          id: 9,
+          folder_id: 1,
+          conversation_id: 1,
+          agent_type: "claude_code",
+          position: 0,
+          is_active: true,
+          is_pinned: true,
+        },
+      ],
+      version: 4,
+    })
+    const user = renderDialog()
+    await screen.findByText("on main")
+
+    await user.click(screen.getByRole("button", { name: "Select on main" }))
+    await user.click(screen.getByRole("button", { name: "Choose workbench" }))
+    await user.click(screen.getByRole("menuitem", { name: "Review" }))
+
+    await waitFor(() =>
+      expect(toast.success).toHaveBeenCalledWith(
+        "Selected sessions are already in Review",
+        undefined
+      )
+    )
+    expect(h.saveWorkbenchTabs).not.toHaveBeenCalled()
+    expect(h.switchWorkbench).not.toHaveBeenCalled()
   })
 
   it("offers a compact-screen path back from preview to the list", async () => {
@@ -859,27 +1052,22 @@ describe("ConversationManageDialog", () => {
     expect(h.openConversations).not.toHaveBeenCalled()
   })
 
-  it("opens the previewed session in the current workbench", async () => {
+  it("opens a session into the current workbench on double-click", async () => {
     const user = renderDialog()
     await screen.findByText("on main")
 
-    await user.click(screen.getByText("on main"))
-    await user.click(
-      screen.getByRole("button", { name: "Open in current workbench" })
-    )
+    await user.dblClick(screen.getByText("on main"))
 
     expect(h.openConversations).toHaveBeenCalledTimes(1)
     expect(h.openTab).toHaveBeenCalledWith(1, 1, "claude_code", true, "on main")
   })
 
-  it("opens the previewed session directly in a right-hand pane", async () => {
+  it("opens the checked session directly in a right-hand pane", async () => {
     const user = renderDialog()
     await screen.findByText("on main")
 
-    await user.click(screen.getByText("on main"))
-    await user.click(
-      screen.getByRole("button", { name: "Choose where to open" })
-    )
+    await user.click(screen.getByRole("button", { name: "Select on main" }))
+    await user.click(screen.getByRole("button", { name: "Choose workbench" }))
     await user.click(
       screen.getByRole("menuitem", { name: "Open to the right" })
     )

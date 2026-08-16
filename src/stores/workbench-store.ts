@@ -29,6 +29,8 @@ interface WorkbenchStoreState {
   refreshQueued: boolean
   hydrate: () => Promise<void>
   createAndSwitch: (name: string) => Promise<WorkbenchInfo>
+  /** Persist a Workbench without switching this window to it. */
+  createOnly: (name: string) => Promise<WorkbenchInfo>
   duplicateAndSwitch: (id: number, name: string) => Promise<WorkbenchInfo>
   rename: (id: number, name: string) => Promise<void>
   setPinned: (id: number, isPinned: boolean) => Promise<void>
@@ -105,9 +107,14 @@ export const useWorkbenchStore = create<WorkbenchStoreState>()((set, get) => ({
     }
   },
 
-  createAndSwitch: async (name) => {
+  createOnly: async (name) => {
     const created = await createWorkbenchApi(name)
     set({ items: ordered([...get().items, created]) })
+    return created
+  },
+
+  createAndSwitch: async (name) => {
+    const created = await get().createOnly(name)
     await useTabStore.getState().switchWorkbench(created.id)
     get().ensureOpen(created.id)
 
