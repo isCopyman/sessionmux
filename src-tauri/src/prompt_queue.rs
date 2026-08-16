@@ -123,6 +123,24 @@ impl PromptQueueHandle {
             );
             return false;
         }
+        match collaboration_service::session_message_is_pending(
+            conn,
+            target_conversation_id,
+            event_id,
+        )
+        .await
+        {
+            Ok(true) => {}
+            Ok(false) => return false,
+            Err(err) => {
+                tracing::warn!(
+                    conversation_id = target_conversation_id,
+                    event_id,
+                    "[session-message] pending check failed: {err}"
+                );
+                return false;
+            }
+        }
 
         if turn_in_flight {
             if !native_steering_available {
@@ -736,6 +754,8 @@ impl PromptQueueRuntime {
         if turn_in_flight {
             if native_steering_available {
                 self.process_native_steer(&row, &connection_id).await;
+                self.deliver_parked_session_messages(conversation_id)
+                    .await;
             }
             return;
         }
@@ -752,7 +772,13 @@ impl PromptQueueRuntime {
                 emit_snapshot(&self.emitter, snapshot);
                 item
             }
-            Ok(None) => return,
+            Ok(None) => {
+                // Mailbox idle-start without inbox: a letter parked during a
+                // long turn (or before this connection came up) starts now.
+                self.deliver_parked_session_messages(conversation_id)
+                    .await;
+                return;
+            }
             Err(err) => {
                 tracing::error!("[prompt-queue] claim failed for {conversation_id}: {err}");
                 return;
@@ -885,6 +911,40 @@ impl PromptQueueRuntime {
                 }
             }
             Err(err) => self.fail(&claimed, &err.to_string()).await,
+        }
+    }
+
+    async fn deliver_parked_session_messages(&self, conversation_id: i32) {
+        let event_id = match collaboration_service::oldest_pending_store_only_event_id(
+            &self.db.conn,
+            conversation_id,
+        )
+        .await
+        {
+            Ok(Some(event_id)) => event_id,
+            Ok(None) => return,
+            Err(err) => {
+                tracing::warn!(
+                    conversation_id,
+                    "[session-message] could not list parked mail: {err}"
+                );
+                return;
+            }
+        };
+        let (wake_tx, wake_rx) = mpsc::unbounded_channel();
+        drop(wake_rx);
+        let injected = PromptQueueHandle {
+            wake_tx,
+            manager: self.manager.clone_ref(),
+        }
+        .deliver_session_message_now(&self.db.conn, conversation_id, &event_id)
+        .await;
+        if injected {
+            tracing::info!(
+                conversation_id,
+                event_id,
+                "[session-message] parked letter injected after the Session went idle"
+            );
         }
     }
 
@@ -1396,6 +1456,128 @@ mod tests {
             .remove(0);
         assert_eq!(inbound.state, CollaborationDeliveryState::Pending);
         assert!(inbound.agent_received_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn parked_store_only_starts_after_turn_complete() {
+        let path = "/tmp/codeg-session-message-idle-wakeup";
+        let (db, folder_id, target, manager, bus) = setup(path).await;
+        let source = seed_conversation(&db, folder_id, AgentType::ClaudeCode).await;
+        let mut commands =
+            bind_live_connection(&manager, "active", path, folder_id, target).await;
+        let state = manager.get_state("active").await.expect("state");
+        {
+            let mut state = state.write().await;
+            state.turn_in_flight = true;
+            state.native_steering_available = false;
+        }
+        let sent = collaboration_service::send(
+            &db.conn,
+            SendCollaborationMessageInput {
+                source_conversation_id: source,
+                target_conversation_ids: vec![target],
+                body: "PING after long task".into(),
+                client_dedupe_id: "idle-wakeup".into(),
+                invocation_policy: CollaborationInvocationPolicy::StoreOnly,
+                delivery_hint: CollaborationDeliveryHint::Default,
+                expects_reply: false,
+                urgency: CollaborationUrgency::Normal,
+                reply_to_event_id: None,
+            },
+        )
+        .await
+        .expect("persist store_only");
+        let (handle, task) = build_prompt_queue_runtime(
+            db.conn.clone(),
+            manager.clone_ref(),
+            EventEmitter::Noop,
+            bus.clone(),
+        );
+        let worker = tokio::spawn(task);
+        handle
+            .deliver_session_message_now(&db.conn, target, &sent.event_id)
+            .await;
+        assert!(
+            commands.try_recv().is_err(),
+            "busy-without-steer must park until the long turn ends"
+        );
+
+        state.write().await.turn_in_flight = false;
+        bus.send(Arc::new(EventEnvelope {
+            seq: 1,
+            connection_id: "active".into(),
+            payload: AcpEvent::TurnComplete {
+                session_id: "native-session".into(),
+                stop_reason: "end_turn".into(),
+                agent_type: "codex".into(),
+            },
+        }));
+        let command = tokio::time::timeout(StdDuration::from_secs(2), commands.recv())
+            .await
+            .expect("idle wakeup timeout")
+            .expect("prompt after TurnComplete");
+        let ConnectionCommand::Prompt { blocks, dispatch_ack, .. } = command else {
+            panic!("parked Session message must start a turn once idle");
+        };
+        let PromptInputBlock::Text { text } = &blocks[0] else {
+            panic!("expected text envelope");
+        };
+        assert!(text.contains("PING after long task"));
+        if let Some(ack) = dispatch_ack {
+            let _ = ack.send(());
+        }
+        worker.abort();
+    }
+
+    #[tokio::test]
+    async fn already_injected_session_message_is_not_delivered_again() {
+        let path = "/tmp/codeg-session-message-no-replay";
+        let (db, folder_id, target, manager, bus) = setup(path).await;
+        let source = seed_conversation(&db, folder_id, AgentType::ClaudeCode).await;
+        let mut commands =
+            bind_live_connection(&manager, "active", path, folder_id, target).await;
+        let state = manager.get_state("active").await.expect("state");
+        {
+            let mut state = state.write().await;
+            state.turn_in_flight = true;
+            state.native_steering_available = true;
+        }
+        let sent = collaboration_service::send(
+            &db.conn,
+            SendCollaborationMessageInput {
+                source_conversation_id: source,
+                target_conversation_ids: vec![target],
+                body: "already consumed".into(),
+                client_dedupe_id: "no-replay".into(),
+                invocation_policy: CollaborationInvocationPolicy::StoreOnly,
+                delivery_hint: CollaborationDeliveryHint::Default,
+                expects_reply: false,
+                urgency: CollaborationUrgency::Normal,
+                reply_to_event_id: None,
+            },
+        )
+        .await
+        .expect("persist");
+        collaboration_service::mark_session_message_injected(
+            &db.conn,
+            target,
+            &sent.event_id,
+            "steer-already",
+        )
+        .await
+        .expect("mark injected");
+        let (handle, task) = build_prompt_queue_runtime(
+            db.conn.clone(),
+            manager.clone_ref(),
+            EventEmitter::Noop,
+            bus,
+        );
+        let injected = handle
+            .deliver_session_message_now(&db.conn, target, &sent.event_id)
+            .await;
+        drop(task);
+        assert!(!injected, "embedded mail must not be steered again");
+        assert!(commands.try_recv().is_err());
     }
 
     #[tokio::test]

@@ -506,6 +506,48 @@ pub(crate) async fn prompt_draft_for_origin<C: ConnectionTrait>(
     prompt_draft_from_delivery_row(&row)
 }
 
+/// Oldest parked Session letter waiting on this target. Used to start a
+/// turn after `TurnComplete` / resume — mailbox idle-start without inbox.
+pub(crate) async fn oldest_pending_store_only_event_id<C: ConnectionTrait>(
+    conn: &C,
+    target_conversation_id: i32,
+) -> Result<Option<String>, DbError> {
+    let Some(row) = conn
+        .query_one(statement(
+            "SELECT d.event_id \
+             FROM collaboration_delivery d \
+             WHERE d.target_conversation_id = ? \
+               AND d.invocation_policy = 'store_only' AND d.state = 'pending' \
+             ORDER BY d.created_at ASC, d.id ASC LIMIT 1",
+            vec![target_conversation_id.into()],
+        ))
+        .await?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(row.try_get("", "event_id")?))
+}
+
+pub(crate) async fn session_message_is_pending<C: ConnectionTrait>(
+    conn: &C,
+    target_conversation_id: i32,
+    event_id: &str,
+) -> Result<bool, DbError> {
+    let Some(row) = conn
+        .query_one(statement(
+            "SELECT 1 AS found FROM collaboration_delivery \
+             WHERE event_id = ? AND target_conversation_id = ? \
+               AND state = 'pending'",
+            vec![event_id.into(), target_conversation_id.into()],
+        ))
+        .await?
+    else {
+        return Ok(false);
+    };
+    let found: i64 = row.try_get("", "found")?;
+    Ok(found != 0)
+}
+
 /// Mark a single Session message as already injected (steer or a started
 /// turn). The next ordinary human prompt must not attach the same letter
 /// again via `claim_pending_store_only_for_turn`.
@@ -2250,6 +2292,13 @@ mod tests {
         let PromptInputBlock::Text { text } = &draft.blocks[0] else {
             panic!("store_only draft must be one text envelope");
         };
+        assert_eq!(
+            oldest_pending_store_only_event_id(&db.conn, target)
+                .await
+                .unwrap()
+                .as_deref(),
+            Some(sent.event_id.as_str())
+        );
         assert!(text.contains("--- message ---\nwake the other Session\n"));
         assert!(text.contains(&sent.event_id));
         assert!(
