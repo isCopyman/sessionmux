@@ -134,6 +134,21 @@ pub struct BrokerSendMessageRequest {
     pub spec: SessionMessageSpec,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokerListInboxRequest {
+    pub token: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filter: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokerReadMessageRequest {
+    pub token: String,
+    pub event_id: String,
+}
+
 /// Report a progress milestone for the work task driving the parent session.
 /// Backs the `task_progress` MCP tool. Authenticated by the per-launch `token`;
 /// the listener resolves the parent connection from it and the task engine maps
@@ -187,6 +202,8 @@ pub enum BrokerMessage {
     SessionInfo(BrokerSessionRequest),
     ListSessions(BrokerListSessionsRequest),
     SendMessage(BrokerSendMessageRequest),
+    ListInbox(BrokerListInboxRequest),
+    ReadMessage(BrokerReadMessageRequest),
     TaskProgress(BrokerTaskProgressRequest),
     TaskComplete(BrokerTaskCompleteRequest),
     CreateAutomation(BrokerCreateAutomationRequest),
@@ -334,6 +351,20 @@ pub async fn client_send_message_round_trip(
     req: &BrokerSendMessageRequest,
 ) -> io::Result<BrokerResponse> {
     message_round_trip(socket_path, &BrokerMessage::SendMessage(req.clone())).await
+}
+
+pub async fn client_list_inbox_round_trip(
+    socket_path: &str,
+    req: &BrokerListInboxRequest,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::ListInbox(req.clone())).await
+}
+
+pub async fn client_read_message_round_trip(
+    socket_path: &str,
+    req: &BrokerReadMessageRequest,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::ReadMessage(req.clone())).await
 }
 
 /// Dispatch a `task_progress` report and read back the `{ recorded }` ack.

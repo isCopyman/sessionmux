@@ -1,11 +1,10 @@
 "use client"
 
 import { useMemo, useState } from "react"
-import { ArrowUpRight, Bot, Eye, MessageSquareMore, Reply } from "lucide-react"
+import { ArrowUpRight, Bot, Eye, MessageSquareMore } from "lucide-react"
 import { useTranslations } from "next-intl"
 
 import { MessageContent } from "@/components/ai-elements/message"
-import { SessionMessageComposerDialog } from "@/components/collaboration/session-message-composer-dialog"
 import { Button } from "@/components/ui/button"
 import { useTabActions } from "@/contexts/tab-context"
 import { formatConversationTitle } from "@/lib/conversation-title"
@@ -28,7 +27,6 @@ export function CollaborationMessageCard({
   currentConversationId: number
 }) {
   const t = useTranslations("Collaboration")
-  const [replyOpen, setReplyOpen] = useState(false)
   const [optimisticallySeenDeliveryId, setOptimisticallySeenDeliveryId] =
     useState<string | null>(null)
   const conversations = useAppWorkspaceStore((state) => state.conversations)
@@ -52,11 +50,10 @@ export function CollaborationMessageCard({
           : t("noReplyNeeded")
         : null
   const isUnread =
-    delivery.attentionState === "unread" &&
-    optimisticallySeenDeliveryId !== delivery.id
+    !delivery.agentReceivedAt && delivery.state !== "dismissed"
 
   const markSeenFromExplicitAction = () => {
-    if (!isUnread) return
+    if (optimisticallySeenDeliveryId === delivery.id) return
     setOptimisticallySeenDeliveryId(delivery.id)
     void markCollaborationSeen(currentConversationId, [delivery.id]).catch(
       (error) => {
@@ -81,7 +78,6 @@ export function CollaborationMessageCard({
   }
 
   return (
-    <>
       <article
         className="w-full rounded-lg border border-primary/20 bg-primary/[0.035] px-4 py-3"
         data-conversation-search-content
@@ -136,34 +132,11 @@ export function CollaborationMessageCard({
             >
               <ArrowUpRight className="h-3.5 w-3.5" />
             </Button>
-            <Button
-              type="button"
-              size="icon"
-              variant="ghost"
-              className="h-7 w-7"
-              title={t("reply")}
-              aria-label={t("reply")}
-              disabled={!sourceConversation}
-              onClick={() => {
-                markSeenFromExplicitAction()
-                setReplyOpen(true)
-              }}
-            >
-              <Reply className="h-3.5 w-3.5" />
-            </Button>
           </div>
         </header>
         <MessageContent className="mt-2">
           <ContentPartsRenderer parts={bodyParts} role="assistant" />
         </MessageContent>
       </article>
-      <SessionMessageComposerDialog
-        sourceConversationId={currentConversationId}
-        open={replyOpen}
-        onOpenChange={setReplyOpen}
-        initialTargetConversationId={delivery.source.conversationId}
-        replyToEventId={delivery.eventId}
-      />
-    </>
   )
 }

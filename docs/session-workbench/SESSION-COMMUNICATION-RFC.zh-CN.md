@@ -174,27 +174,13 @@ target = human   （别名 user）
 不复制正文，也不把点击「我看过了」写成某个 Agent Session 的 receipt。需要人回复的信，人在
 Human Inbox 或往来里写出回复后，才清偿该 Delivery。
 
-### 3.6 Session 勿扰
+### 3.6 Session 勿扰（以后，bonus）
 
-长时间独占当前 Turn、又没有真正后台任务时（例如必须占着 ACP 连接的训练、大下载），空闲后
-自动处理仍可能在它刚喘口气时再开一轮。因此每个受管 Session 可以进入 **勿扰**：
+第一版不做勿扰。长任务 / Goal 挡信靠 [6.4](#64-v1-系统提醒能注入就注入不能就打断发送)
+的注入或打断发送，不靠对方设开关。开关本身也不一定可靠：Agent 可能忘了设、设了忘解、或
+在不该挡的时候挡系统提醒。
 
-| | 系统推送（提醒 Turn、空闲唤醒、催办 digest） | Agent 主动读 inbox / `list_sessions` / `send_message` | 人看往来、给人发信 |
-|---|---|---|---|
-| 普通 | 允许 | 允许 | 允许 |
-| 勿扰 | **禁止** | **允许** | 允许 |
-
-勿扰不是隐身，也不是把信扔掉。Mailbox 里的未读和已读未回继续长着，只是 daemon 先不敲门。
-Agent 随时可以自己拉 inbox。人仍可在 UI 里看信，也可对这个 Session 点「停止当前任务并发送」；
-普通提醒和紧急催办默认**不**破勿扰，否则开关没有意义。
-
-约束：
-
-- Agent 可以给自己设，人也可以在该 Session 上设；
-- 必须带截止时间（例如 30 分钟、2 小时、到本次任务结束），到期自动解除，禁止永久勿扰；
-- 设/解勿扰要写入可审计状态，发送方 UI 可显示「对方勿扰至 xx:xx」；
-- 目标忙碌或勿扰时，reminder 扫描可以标 overdue，但不增加 `repeat_count`，恢复普通状态后再发
-  一条受 cooldown 约束的摘要。
+以后若再加，只作为尽量少敲门的可选抑制，不能当成投递保证，也不能挡住人手动「停止并发送」。
 
 ## 4. 寻址与身份
 
@@ -343,10 +329,10 @@ Mailbox 需要分别记录：
    就批量清偿；
 5. 重复打开、重连或多窗口查看不能后推 deadline；两个时间戳都只允许首次建立或显式策略修订。
 
-期限采用持久 wall-clock timestamp，目标离线、关闭、busy 或勿扰时不反复暂停、重算时间轴。Router
-将“已经到期”与“现在适合提醒”分开：不可达、忙碌或勿扰时可以显示 overdue，但不发送提醒、
-不增加重复次数；重新可达且空闲、且未勿扰后再进行一次受 cooldown 约束的提醒。逾期时长本身
-不产生 cancel 权。
+期限采用持久 wall-clock timestamp，目标离线或关闭时不反复暂停、重算时间轴。Router 将“已经
+到期”与“现在适合提醒”分开：关掉或离线可以显示 overdue、暂不推送；忙碌不算“不适合提醒”——
+到期后按 [6.4](#64-v1-系统提醒能注入就注入不能就打断发送) 注入或打断发送。逾期本身不另外
+发明一种 cancel 权；打断发送就是这条提醒通道。
 
 ### 5.6 提醒时间用系统预设，不做成每封信一个闹钟
 
@@ -462,9 +448,14 @@ overdue awaiting_reply > awaiting_ack > unread
 ```
 
 每个 obligation/reminder item 至少记录 `last_reminded_at`、`repeat_count` 和稳定去重键；目标还需有
-digest cooldown。只有实际成功展示或注入提醒才增加 repeat count，离线、busy、失败或被 cooldown
-跳过不计数。达到最大重复次数以后，默认通知发送者或显示给用户处理，不自动提升为 interrupt。
-“自动停止当前任务并发送”必须来自单独、显式、可审计的预授权策略。
+digest cooldown。只有实际成功展示、注入或完成一次强制发送才增加 repeat count。离线、失败或
+被 cooldown 跳过不计数。忙碌**不能**再当成“跳过、等这一轮自己结束”：长任务或 Goal
+可能永不结束，信就永远进不了模型。
+
+V1 系统提醒在忙碌时的通道只有两条：`native_steering_available` 则 `_session/steering` 注入；
+否则走与人点「停止当前任务并发送」相同的 persist → `session/cancel` → 再发。这是宿主提醒
+通道，不是 Agent 工具，也不要求发送者预授权。第一版没有勿扰。达到最大重复次数以后，
+通知发送者或交给用户，不再连催。
 
 系统生成的 reminder/escalation 自身固定 `expects_reply=false`，并排除在 unread/reply reminder
 扫描之外，防止 Agent 对提醒做 ACK、ACK 又生成新提醒的循环。相同目标在一个 cooldown 窗口内的
@@ -486,24 +477,28 @@ digest cooldown。只有实际成功展示或注入提醒才增加 repeat count�
 Web / 服务器模式没有原生悬浮窗时，降级为页面内横幅和浏览器通知（若用户授权），不能假装
 已经 Desktop 提醒过。
 
-### 6.4 提醒分两段：跑着用 Hook，空闲时由 Codeg 开一轮
+### 6.4 V1 系统提醒：能注入就注入，不能就打断发送
 
-若提醒只等「下次有人说话」，信可能永远进不了 Agent。已裁决的通道是：
+若提醒只等「下次有人说话」或「这一轮自己结束」，信可能永远进不了 Agent：长工具、训练、
+Goal 都可以占住唯一一轮。第一版**不装 Hook**，系统提醒（有新消息 / 未读 / 已读未回）
+推送时只走下面的通道：
 
 | 目标状态 | 通道 | 不是什么 |
 |---|---|---|
-| 正在跑一轮 | session-scoped Hook / checkpoint 注入**短提醒** | 不是 interrupt，不重发正文 |
-| 已连接且空闲 / 休息 | Codeg **强制开一轮**（`session/prompt` / Prompt Queue） | 不是冷启动已关闭的 Session |
-| 勿扰 | 不推送；Agent 仍可拉 inbox | 不是把信删掉 |
+| 正在跑一轮，且 `native_steering_available` | `_session/steering` 注入 | 不重发正文 |
+| 正在跑一轮，不能注入 | 打断当前轮，再发（`queue` 原信或催办摘要） | 人不再点「停止并发送」 |
+| 已连接且空闲 / 休息 | 立刻开一轮 | 不是冷启动已关闭的 Session |
 | 已关闭 | 不自动 Resume；提醒人 | 不是偷偷 `session/new` |
 | 写给 human | Desktop 悬浮窗 | 不是开某个 Session |
 
-Hook 在这里是**运行中的必要喊话**，不是可有可无的玩具：长工具 / 训练占着唯一一轮时，没有
-Hook 就只能等本轮自己结束。但它仍然叫不醒已经 idle 或关掉的 Session，所以空闲启动必须由
-Codeg 自己做。
+勿扰不在第一版。以后若加，也只是 bonus，见 [3.6](#36-session-勿扰以后bonus)。
 
-约束与 [9.2](#92-本-rfc-新增什么) 中 Claude Hook adapter 相同：只装 session-scoped Hook，不改
-用户全局配置；与 Router 共用 Delivery claim；`Stop` 只在真正 idle 之前续一次。决策函数见
+人在**当前** Session 输入框里说话仍然入队，那是人跟自己的 Agent 续写，不是 mailbox 提醒。
+系统提醒更凶，是因为跨 Session 的信没有「等我做完再看」的保证。
+
+时钟（系统预设）只决定**何时**第一次推、以及 cooldown。到期仍卡在同一轮，就注入或打断，
+不把「等 turn 结束」写成通道。Claude Hook / `check_user_feedback` 拉取仍是以后的可选优化，
+见 [9.3](#93-发送端与接收端能力不同)。决策函数见
 [`collaboration_reminder.rs`](../../src-tauri/src/acp/collaboration_reminder.rs)。
 
 ## 7. 上下文、重放与幂等
@@ -563,10 +558,10 @@ Codeg SQLite 继续作为 mailbox event、Delivery、Attention、Obligation、re
 
 ## 8. 第一版工具和 UI
 
-### 8.1 通信能力的语义工具保持两个
+### 8.1 通信能力的语义工具：寻址、投递、信箱
 
 ```text
-list_sessions(query?, collection?, backend?)
+list_sessions(query?, limit?)
 
 send_message(
   targets: [session_address, ...],
@@ -580,12 +575,17 @@ send_message(
   context_refs?: [...],
   client_dedupe_id: string
 )
+
+list_inbox(filter?, limit?)
+
+read_message(event_id)
 ```
 
-这里的“两个”指基础 Collaboration capability 内的公开语义，不表示它们必须永久出现在每个
-Session 的 `tools/list`。`targets` 可接受多个目标，但第一版将它展开为互相隔离的 direct
-Delivery。工具不接受会话标题作为最终地址；标题只用于 `list_sessions` 返回候选。第一版不增加
-`wait`、`recv`、`room_context`、`room_read` 或 `room_search`。
+前两个是寻址和投递；后两个是收件方 Agent 自己的信箱。`list_inbox` 只给预览，不算已读。
+`read_message` 打开全文并标记 Agent 已读，不回信、不清债。人打开往来不算 Agent 已读。
+`targets` 可接受多个目标，但第一版将它展开为互相隔离的 direct Delivery。工具不接受会话标题
+作为最终地址；标题只用于 `list_sessions` 返回候选。第一版不增加 `wait`、`recv`、
+`room_context`、`room_read` 或 `room_search`。
 
 `delivery_hint=steer_if_supported` 是非破坏性提示：能力不成立或 turn 已结束时回队，返回结果必须
 写明真实路径；它只对 `invoke_when_idle` 有效，`store_only` 始终不启动或改变当前 turn。停止目标
@@ -614,14 +614,15 @@ Codeg 不把完整协作协议和全部工具 Schema 永久追加到每个 Sessi
 `--features` 决定哪些工具出现在启动时的 `tools/list`，并在 `tools/call` 再次校验，见
 [`CompanionFeatures`](../../src-tauri/src/acp/delegation/companion.rs#L141) 与
 [`tools/list` / `tools/call` 分发](../../src-tauri/src/acp/delegation/companion.rs#L380)。当前
-`collaboration` 组和 `list_sessions` / `send_message` 已沿用这一宿主工具面；进一步把粗粒度启动
-开关收敛成按需 capability 仍是拟议优化。Skill 补充工具 Schema 不适合承载的协作策略与例子。
+`collaboration` 组和 `list_sessions` / `send_message` / `list_inbox` / `read_message` 已沿用这一
+宿主工具面；进一步把粗粒度启动开关收敛成按需 capability 仍是拟议优化。Skill 补充工具 Schema
+不适合承载的协作策略与例子。
 
 发送端的模型可见指导分为四层，但只有一条正式执行路径：
 
 1. **极小 MCP capability gateway。** 每个支持 MCP 的受管 Harness 只需常驻帮助、能力发现和
-   能力调用入口。协作能力未触发时，不必承担完整 `list_sessions`/`send_message` Schema。
-2. **Collaboration capability。** `list_sessions` 和 `send_message` 的名称、描述与输入 Schema 说明单次调用
+   能力调用入口。协作能力未触发时，不必承担完整 `list_sessions`/`send_message`/`list_inbox`/`read_message` Schema。
+2. **Collaboration capability。** `list_sessions`、`send_message`、`list_inbox` 和 `read_message` 的名称、描述与输入 Schema 说明单次调用
    做什么、参数如何填写、返回值代表什么。工具只接受稳定 Session Address；会话名、角色名和
    `@` 文本先由列表或 UI 选择器解析，不能直接充当最终地址。
 3. **极小常驻规则。** 每个受管 Harness 始终知道自己可以联系其他 Session、跨会话消息不是用户
@@ -632,7 +633,7 @@ Codeg 不把完整协作协议和全部工具 Schema 永久追加到每个 Sessi
    示例，并启用所需 capability；它不负责传输消息，也不直接修改协作数据库。
 
 动态工具刷新只能作为优化，不能成为正确性的前提。支持 MCP `tools/list_changed` 且 Harness 真能
-热刷新的情况下，启用能力后可展开两个语义工具；否则由常驻 gateway 直接执行
+热刷新的情况下，启用能力后可展开协作语义工具；否则由常驻 gateway 直接执行
 `capability_use(capability="collaboration", tool="send_message", arguments=...)`。UI 发送则直接调用
 同一个 Collaboration Core，不经过 MCP。CCCC 已采用类似折中：普通 Actor 保留小型核心，其他
 内置工具可通过 `cccc_capability_use` 一步启用并调用；它还专门为会缓存 Schema 的客户端保留固定
@@ -769,7 +770,7 @@ Codeg 当前不是只在设置页记录 MCP，而是已经把这条能力用于�
 | companion 实现 MCP `tools/list`、`tools/call` 和取消 | [`codeg-mcp` 入口](../../src-tauri/src/bin/codeg_mcp.rs#L1)、[companion 协议](../../src-tauri/src/acp/delegation/companion.rs#L1) | Agent 发信可以是结构化 Tool Call，不解析普通回答文本 |
 | companion 使用每次启动的 token 和父 ACP connection | [`CompanionContext`](../../src-tauri/src/acp/delegation/companion.rs#L215)、[内部传输身份](../../src-tauri/src/acp/delegation/transport.rs#L62) | Server 从可信连接反查发送者；模型不填写或冒充 `from_session` |
 | 工具已经按功能组独立开关 | [`CompanionFeatures`](../../src-tauri/src/acp/delegation/companion.rs#L141) | 当前已有独立 `collaboration` 组，不与创建新 Agent 的 `delegation` 混义 |
-| 已有结构化 Session 通信工具 | [`list_sessions` / `send_message` 分发](../../src-tauri/src/acp/delegation/companion.rs#L615) | 当前已按稳定 Session ID 列举和投递；未来只扩展 lifecycle，不另建通信通道 |
+| 已有结构化 Session 通信工具 | [`list_sessions` / `send_message` / `list_inbox` / `read_message` 分发](../../src-tauri/src/acp/delegation/companion.rs) | 当前已按稳定 Session ID 列举、投递，并提供 Agent 信箱；未来只扩展 lifecycle，不另建通信通道 |
 
 现有实际链路是：
 
@@ -789,7 +790,7 @@ Agent 打开 Terminal 执行 `codeg send`；`codeg-mcp` 是随 Codeg 一起发�
 #### 受管 Agent 只通过 Host 绑定的 MCP Caller Context
 
 受管 Session 的唯一正式 Agent 路径是 `Skill + codeg-mcp`：Skill 教 Agent 何时联系既有 Session，
-MCP 提供结构化 `list_sessions`/`send_message`，companion token 让后端反查真实来源。模型不填写自己
+MCP 提供结构化 `list_sessions`/`send_message`/`list_inbox`/`read_message`，companion token 让后端反查真实来源。模型不填写自己
 的 Session ID，也不存在可伪造的 `from` 参数。
 
 环境变量若需要，只用于 Codeg 启动/托管 MCP 或 Harness 时注入 ambient backend、connection、
@@ -806,7 +807,7 @@ token/connection 绑定。Codeg 不为不支持 MCP 的 Harness 再建立 CLI fa
 以下 direct 主干已经实现：
 
 - `CompanionFeatures` 已有独立 `collaboration` 开关；
-- 同一个 `codeg-mcp` 已提供 `list_sessions`、`send_message`，关闭设置时 Schema 和直接伪造调用都会
+- 同一个 `codeg-mcp` 已提供 `list_sessions`、`send_message`、`list_inbox`、`read_message`，关闭设置时 Schema 和直接伪造调用都会
   被拒绝；
 - 内部 transport/listener 已有对应 request/response variant；
 - Codeg 后端根据 companion token 对应的 `parent_connection_id` 解析真实发送 Conversation，模型
@@ -1002,7 +1003,6 @@ transcript 对账，以及同一 Session 多视图 revision 的真实端到端�
 - 人打开 Session 往来不得回填 Agent receipt，也不得启动 `reply_due_at`；
 - 增加保留地址 `human`/`user` 的投递与 Human Inbox 投影，不把人类建成可 Resume Session；
 - Desktop 对写给人类的未读 / 已读未回使用悬浮窗或通知条，不启动 Session Turn；
-- Session 勿扰：抑制系统推送，保留主动读 inbox；必须带截止时间；
 - 提醒时限用系统预设（见 [5.6](#56-提醒时间用系统预设不做成每封信一个闹钟)），Composer
   第一版不暴露分钟数；
 - 迁移、重命名、linked reply 精确清偿、多 View revision 和崩溃恢复测试。
@@ -1032,16 +1032,16 @@ transcript 对账，以及同一 Session 多视图 revision 的真实端到端�
 - 同一个 Session 只有一个运行锁、Dispatcher 和可恢复的原子 claim/lease；
 - 统一“接下来”视图显示用户 follow-up、Session 消息和 background work 的来源与真实顺序；
 - `store_only` 按 oldest-first 和条数/字节预算附加到下一条自然 Prompt，用户正文最后；
-- `invoke_when_idle` 不得隐式越过用户队列；提升和 interrupt 只能由显式操作或可审计预授权触发；
+- `invoke_when_idle` 不得隐式越过用户队列；人的 follow-up 仍按 FIFO。系统提醒在不能注入时走宿主 interrupt，见 [6.4](#64-v1-系统提醒能注入就注入不能就打断发送)；
 - 多封 mailbox 批量摄入时仍分别保留 event identity 和回复义务，禁止一次普通回答批量清偿。
 
 ### 后续独立批次：V1.4 Reminder/escalation engine
 
 - 后端扫描到期 mailbox，按 target 生成 cooldown/digest，而不是复制正文重新投递；
 - 每项最大提醒次数、稳定去重键、失败恢复和重启续扫；
-- 离线 / busy / 勿扰时不增加提醒次数，恢复可达且未勿扰后再提醒；
-- Agent 提醒走空闲 Turn 或队列；人类提醒走 Desktop 悬浮窗 / 通知，不启动模型；
-- 默认再次提醒或通知发送者，绝不因逾期自动 cancel；
+- 离线 / 已关闭时不增加提醒次数，恢复可达后再提醒；忙碌不算“跳过”；
+- Agent 提醒走强制通道：能 native steer 就注入，否则 persist → cancel → 发送；空闲则 `session/prompt`；不装 Hook；不做勿扰；人类提醒走 Desktop 悬浮窗 / 通知，不启动模型；
+- 达到最大次数后通知发送者，不再连催；
 - reminder/escalation 自身不创建 reply obligation，防止催促循环。
 
 ### V1.5：能力增强与跨 Backend
@@ -1097,9 +1097,9 @@ V1.1/V1.4 mailbox lifecycle 还必须证明：
 17. `expects_reply=false` 在打开、摄入、提醒和重启后都不会产生 awaiting_reply；
 18. linked reply 只清偿 `reply_to_event_id` 对应目标 Delivery，多目标 fan-out 不会串债；
 19. unread 与 reply deadline 各有稳定起点，重复打开、重连和多窗口查看不会后推期限；
-20. 离线或 busy 时不发送 reminder、不增加 repeat count；恢复可达后受 cooldown 控制地合并提醒；
+20. 离线或已关闭时暂不推 reminder、不增加 repeat count；忙碌到期则注入或打断发送，不算跳过；
 21. reminder/escalation 始终引用原 event_id，不复制正文，不产生新的 reply obligation；
-22. 达到最大提醒次数默认通知发送者或用户，不自动 cancel；重启后扫描器不会重复发送同一轮
+22. 达到最大提醒次数后通知发送者或用户，不再连催；重启后扫描器不会重复发送同一轮
     digest，多个窗口显示相同 revision 和 lifecycle 状态。
 
 V1.2 Timeline Projection 还必须证明：

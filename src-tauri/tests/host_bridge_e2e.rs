@@ -119,6 +119,30 @@ impl SessionCollaborationAccess for RecordingCollaboration {
             ..Default::default()
         }
     }
+
+    async fn list_inbox(
+        &self,
+        caller_session_id: i32,
+        _filter: codeg_lib::acp::session_collaboration::SessionInboxFilter,
+        _limit: u32,
+    ) -> codeg_lib::acp::session_collaboration::SessionInboxOutcome {
+        codeg_lib::acp::session_collaboration::SessionInboxOutcome {
+            available: true,
+            caller_session_id: Some(caller_session_id),
+            ..Default::default()
+        }
+    }
+
+    async fn read_message(
+        &self,
+        caller_session_id: i32,
+        _event_id: String,
+    ) -> codeg_lib::acp::session_collaboration::SessionMessageReadOutcome {
+        codeg_lib::acp::session_collaboration::SessionMessageReadOutcome::unavailable(
+            Some(caller_session_id),
+            "not used",
+        )
+    }
 }
 
 struct NoFeedback;

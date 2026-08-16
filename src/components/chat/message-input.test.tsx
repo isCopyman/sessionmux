@@ -741,13 +741,13 @@ describe("MessageInput native steering (insert into current turn)", () => {
   })
 })
 
-describe("MessageInput send to @ Sessions", () => {
+describe("MessageInput @ Sessions", () => {
   afterEach(() => {
     cleanup()
     composerHandle.current = null
   })
 
-  it("keeps the Session send action while the current Agent is prompting", async () => {
+  it("treats @ Session tokens as references and does not offer human mail send", async () => {
     renderInput({
       sourceConversationId: 1,
       isPrompting: true,
@@ -776,10 +776,9 @@ describe("MessageInput send to @ Sessions", () => {
         .run()
     })
 
+    expect(serializeDocToText(editor.state.doc)).toContain("codeg://session/2")
     expect(
-      await screen.findByRole("button", {
-        name: "Send to 1 selected sessions",
-      })
-    ).toBeTruthy()
+      screen.queryByRole("button", { name: /Send to .* selected sessions/ })
+    ).not.toBeInTheDocument()
   })
 })

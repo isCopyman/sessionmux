@@ -34,8 +34,9 @@ the idempotency key outside model-controlled arguments.
   token-derived current Session; include it only when the user clearly named a
   different target Session.
 - `session.create`: create a real persistent Session in the caller's current
-  cwd, optionally with a first Prompt. It stays in the background unless the
-  user later opens it.
+  cwd, optionally with a first Prompt and optional `collection_id`. Placement
+  happens after the Session exists; a Collection miss keeps the Session.
+  It stays in the background unless the user later opens it.
 - `session.cancel_turn`: cancel only the active Turn and keep the Session/runtime.
 - `session.stop`: stop the managed runtime while preserving Session identity and
   native history for resume.

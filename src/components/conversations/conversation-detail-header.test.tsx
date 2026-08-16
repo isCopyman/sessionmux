@@ -51,11 +51,6 @@ vi.mock("@/stores/conversation-runtime-store", () => ({
 vi.mock("./session-details-dialog", () => ({
   SessionDetailsDialog: () => null,
 }))
-vi.mock("@/components/collaboration/session-message-composer-dialog", () => ({
-  SessionMessageComposerDialog: () => (
-    <div data-testid="session-message-composer" />
-  ),
-}))
 // The header now embeds the folder picker (self-contained, store-driven); stub
 // it so these tests exercise only the header's own menu/dialog logic.
 vi.mock("@/components/chat/conversation-context-bar", () => ({
@@ -141,22 +136,12 @@ describe("ConversationDetailHeader dialog target snapshot", () => {
     expect(h.updateConversationTitle).not.toHaveBeenCalledWith(2, "renamed")
   })
 
-  it("opens the Session message composer from the visible header send action", async () => {
-    const user = userEvent.setup({ pointerEventsCheck: 0 })
-    const { getByLabelText, getByTestId, queryByTestId } = render(
+  it("does not offer a human Session-mail send action in the header", () => {
+    const { queryByLabelText, queryByTestId } = render(
       withIntl(<ConversationDetailHeader {...A} />)
     )
 
+    expect(queryByLabelText("Send to another session")).toBeNull()
     expect(queryByTestId("session-message-composer")).toBeNull()
-    await user.click(getByLabelText("Send to another session"))
-    expect(getByTestId("session-message-composer")).toBeTruthy()
-  })
-
-  it("keeps Session messaging disabled until the conversation is persisted", () => {
-    const { getByLabelText } = render(
-      withIntl(<ConversationDetailHeader {...A} conversationId={null} />)
-    )
-
-    expect(getByLabelText("Send to another session")).toBeDisabled()
   })
 })

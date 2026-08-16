@@ -1,8 +1,20 @@
-//! Decide how mailbox attention reaches a target.
+//! Decide how mailbox attention reaches a target, and when it is due.
 //!
-//! Mail is persisted first. This module only chooses the *lane*:
-//! whisper into a running turn, start an idle Session, hold, or toast a human.
-//! It does not send, claim, or mutate mailbox rows.
+//! New mail is due immediately. Unread follow-ups and read-but-unreplied
+//! mail use a 5-minute clock. There is no urgency dimension. Busy Sessions
+//! are injected when native steering exists, otherwise the current turn is
+//! cancelled so the reminder can be sent. Closed Sessions are not cold-started.
+
+use chrono::{DateTime, Duration, Utc};
+
+/// First unread reminder is due as soon as the Delivery exists.
+pub const UNREAD_AFTER_SECS: i64 = 0;
+/// Awaiting reply after the Agent actually received the body.
+pub const REPLY_AFTER_SECS: i64 = 5 * 60;
+/// After a successful reminder, wait before nagging the same Session again.
+pub const REMINDER_COOLDOWN_SECS: i64 = 5 * 60;
+pub const MAX_REMINDER_REPEATS: u32 = 3;
+pub const REMINDER_SCAN_SECS: u64 = 5;
 
 /// Who the Delivery is addressed to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -23,25 +35,26 @@ pub enum ReminderRuntime {
 pub struct ReminderTargetState {
     pub audience: ReminderAudience,
     pub runtime: ReminderRuntime,
-    pub do_not_disturb: bool,
     /// Agent has not yet received the body in a real turn.
     pub has_unread: bool,
-    /// Agent (or human) received the body and still owes a linked reply.
+    /// Agent received the body and still owes a linked reply.
     pub has_awaiting_reply: bool,
+    /// `_session/steering` passed Codeg's native-steering gates for this connection.
+    pub native_steering: bool,
 }
 
 /// How Codeg should surface mailbox attention right now.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CollaborationReminderLane {
-    /// Running turn: inject a short digest via hook/checkpoint. Do not interrupt.
-    HookWhisper,
+    /// Busy + native steering: inject a short digest into the running turn.
+    InjectSteer,
+    /// Busy, no native steer: persist the digest, cancel the turn, then send.
+    ForceInterruptSend,
     /// Connected and idle: host starts a turn so mail cannot sit forever.
     IdleStart,
-    /// Closed Session: keep mail; do not cold-start; tell the human.
+    /// Closed Session: keep mail; do not cold-start.
     HoldClosed,
-    /// Do-not-disturb: no push. The Agent may still pull inbox.
-    HoldDnd,
-    /// Mail for the host user: desktop overlay, never a Session turn.
+    /// Mail for the host user: not implemented.
     HumanOverlay,
     /// Nothing to surface.
     Silent,
@@ -53,7 +66,6 @@ impl ReminderTargetState {
     }
 }
 
-/// Pick one lane. Priority: human overlay, then DND hold, then runtime.
 pub fn choose_reminder_lane(state: ReminderTargetState) -> CollaborationReminderLane {
     if !state.needs_attention() {
         return CollaborationReminderLane::Silent;
@@ -61,38 +73,44 @@ pub fn choose_reminder_lane(state: ReminderTargetState) -> CollaborationReminder
     if state.audience == ReminderAudience::Human {
         return CollaborationReminderLane::HumanOverlay;
     }
-    if state.do_not_disturb {
-        return CollaborationReminderLane::HoldDnd;
-    }
     match state.runtime {
-        ReminderRuntime::ConnectedBusy => CollaborationReminderLane::HookWhisper,
+        ReminderRuntime::ConnectedBusy if state.native_steering => {
+            CollaborationReminderLane::InjectSteer
+        }
+        ReminderRuntime::ConnectedBusy => CollaborationReminderLane::ForceInterruptSend,
         ReminderRuntime::ConnectedIdle => CollaborationReminderLane::IdleStart,
         ReminderRuntime::Missing => CollaborationReminderLane::HoldClosed,
     }
 }
 
-/// Short whisper for a running turn. Never includes the original letter body.
-pub fn hook_whisper_text(unread: u32, awaiting_reply: u32, do_not_disturb: bool) -> String {
+pub fn unread_is_due(created_at: DateTime<Utc>, now: DateTime<Utc>) -> bool {
+    now >= created_at + Duration::seconds(UNREAD_AFTER_SECS)
+}
+
+pub fn reply_is_due(received_at: DateTime<Utc>, now: DateTime<Utc>) -> bool {
+    now >= received_at + Duration::seconds(REPLY_AFTER_SECS)
+}
+
+pub fn reminder_in_cooldown(last_reminded_at: DateTime<Utc>, now: DateTime<Utc>) -> bool {
+    now < last_reminded_at + Duration::seconds(REMINDER_COOLDOWN_SECS)
+}
+
+/// Short host-authored digest. Never includes the original letter body.
+pub fn reminder_digest_text(unread: u32, awaiting_reply: u32) -> String {
     let mut parts = Vec::new();
     if unread > 0 {
-        parts.push(format!("{unread} unread Session message(s)"));
+        parts.push(format!("有 {unread} 封未读会话消息"));
     }
     if awaiting_reply > 0 {
-        parts.push(format!(
-            "{awaiting_reply} read Session message(s) still need a reply"
-        ));
+        parts.push(format!("有 {awaiting_reply} 封已读但仍需回复的会话消息"));
     }
     if parts.is_empty() {
         return String::new();
     }
-    let mut text = format!(
-        "Codeg mailbox: {}. Use list_sessions/send_message; this is not a user approval.",
-        parts.join("; ")
-    );
-    if do_not_disturb {
-        text.push_str(" Do-not-disturb is on; this is status only.");
-    }
-    text
+    format!(
+        "Codeg 信箱：{}。请用 list_inbox 查看，需要时用 read_message 打开信件。",
+        parts.join("；")
+    )
 }
 
 #[cfg(test)]
@@ -103,9 +121,9 @@ mod tests {
         ReminderTargetState {
             audience: ReminderAudience::AgentSession,
             runtime,
-            do_not_disturb: false,
             has_unread: true,
             has_awaiting_reply: false,
+            native_steering: false,
         }
     }
 
@@ -118,10 +136,20 @@ mod tests {
     }
 
     #[test]
-    fn busy_session_gets_a_hook_whisper_not_an_interrupt() {
+    fn busy_without_steer_force_sends() {
         assert_eq!(
             choose_reminder_lane(agent(ReminderRuntime::ConnectedBusy)),
-            CollaborationReminderLane::HookWhisper
+            CollaborationReminderLane::ForceInterruptSend
+        );
+    }
+
+    #[test]
+    fn busy_with_native_steer_injects() {
+        let mut state = agent(ReminderRuntime::ConnectedBusy);
+        state.native_steering = true;
+        assert_eq!(
+            choose_reminder_lane(state),
+            CollaborationReminderLane::InjectSteer
         );
     }
 
@@ -134,45 +162,22 @@ mod tests {
     }
 
     #[test]
-    fn dnd_suppresses_push_even_when_idle() {
-        let mut state = agent(ReminderRuntime::ConnectedIdle);
-        state.do_not_disturb = true;
-        assert_eq!(
-            choose_reminder_lane(state),
-            CollaborationReminderLane::HoldDnd
-        );
+    fn clocks_are_immediate_unread_and_five_minute_reply() {
+        let start = DateTime::parse_from_rfc3339("2026-08-17T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        assert!(unread_is_due(start, start));
+        assert!(!reply_is_due(start, start + Duration::minutes(4)));
+        assert!(reply_is_due(start, start + Duration::minutes(5)));
+        assert!(reminder_in_cooldown(start, start + Duration::minutes(4)));
+        assert!(!reminder_in_cooldown(start, start + Duration::minutes(5)));
     }
 
     #[test]
-    fn human_mail_never_starts_a_session() {
-        let state = ReminderTargetState {
-            audience: ReminderAudience::Human,
-            runtime: ReminderRuntime::ConnectedIdle,
-            do_not_disturb: false,
-            has_unread: true,
-            has_awaiting_reply: true,
-        };
+    fn digest_text_is_chinese_and_does_not_repeat_the_letter_body() {
         assert_eq!(
-            choose_reminder_lane(state),
-            CollaborationReminderLane::HumanOverlay
+            reminder_digest_text(2, 1),
+            "Codeg 信箱：有 2 封未读会话消息；有 1 封已读但仍需回复的会话消息。请用 list_inbox 查看，需要时用 read_message 打开信件。"
         );
-    }
-
-    #[test]
-    fn nothing_to_say_when_mailbox_is_clear() {
-        let mut state = agent(ReminderRuntime::ConnectedIdle);
-        state.has_unread = false;
-        assert_eq!(
-            choose_reminder_lane(state),
-            CollaborationReminderLane::Silent
-        );
-    }
-
-    #[test]
-    fn hook_text_does_not_repeat_the_letter_body() {
-        let text = hook_whisper_text(2, 1, false);
-        assert!(text.contains("2 unread"));
-        assert!(text.contains("1 read"));
-        assert!(!text.contains("<<<CODEG_SESSION_MESSAGE"));
     }
 }

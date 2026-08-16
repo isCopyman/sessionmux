@@ -7,9 +7,7 @@ import {
   ChevronUp,
   Inbox,
   MessageSquareMore,
-  Reply,
   RotateCcw,
-  Send,
   X,
 } from "lucide-react"
 import { useTranslations } from "next-intl"
@@ -22,8 +20,6 @@ import {
 import { formatConversationTitle } from "@/lib/conversation-title"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import type { CollaborationDelivery } from "@/lib/types"
-import { SessionMessageComposerDialog } from "./session-message-composer-dialog"
-
 const COLLABORATION_DISABLED_REASON = "session_collaboration_disabled"
 
 interface SessionCommunicationBannerProps {
@@ -61,10 +57,6 @@ export function SessionCommunicationBannerView({
 }: SessionCommunicationBannerViewProps) {
   const t = useTranslations("Collaboration")
   const [expanded, setExpanded] = useState(false)
-  const [composing, setComposing] = useState(false)
-  const [replyingTo, setReplyingTo] = useState<CollaborationDelivery | null>(
-    null
-  )
   const conversations = useAppWorkspaceStore((state) => state.conversations)
   const conversationById = useMemo(
     () =>
@@ -74,8 +66,7 @@ export function SessionCommunicationBannerView({
     [conversations]
   )
   const { openTab } = useTabActions()
-  const { feed, hydrated, markSeen, resolve, dismiss, restore, retry } =
-    collaboration
+  const { feed, hydrated, markSeen, dismiss, restore, retry } = collaboration
   const total = feed.inbound.length + feed.outbound.length
   const unreadIds = useMemo(
     () =>
@@ -92,24 +83,6 @@ export function SessionCommunicationBannerView({
   useEffect(() => {
     if (expanded && unreadIds.length > 0) void markSeen(unreadIds)
   }, [expanded, markSeen, unreadIds])
-
-  const composerOpen = composing || replyingTo != null
-  const composer =
-    conversationId != null && composerOpen ? (
-      <SessionMessageComposerDialog
-        key={replyingTo?.eventId ?? "compose"}
-        sourceConversationId={conversationId}
-        initialTargetConversationId={replyingTo?.source.conversationId ?? null}
-        replyToEventId={replyingTo?.eventId ?? null}
-        open
-        onOpenChange={(open) => {
-          if (!open) {
-            setReplyingTo(null)
-            setComposing(false)
-          }
-        }}
-      />
-    ) : null
 
   if (!hydrated || conversationId == null || total === 0) return null
 
@@ -207,19 +180,6 @@ export function SessionCommunicationBannerView({
               )}
             </span>
           </button>
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost"
-            className="h-7 shrink-0 px-2 text-[11px]"
-            data-collaboration-compose=""
-            aria-label={t("sendMenu")}
-            title={t("sendMenu")}
-            onClick={() => setComposing(true)}
-          >
-            <Send className="h-3.5 w-3.5" />
-            {t("send")}
-          </Button>
         </div>
 
         {expanded ? (
@@ -249,7 +209,7 @@ export function SessionCommunicationBannerView({
                           <span className="text-muted-foreground">
                             {delivery.source.agentType || t("unknownHarness")}
                           </span>
-                          {delivery.attentionState === "unread" &&
+                          {!delivery.agentReceivedAt &&
                           delivery.state !== "dismissed" ? (
                             <span className="h-1.5 w-1.5 rounded-full bg-primary" />
                           ) : null}
@@ -288,46 +248,22 @@ export function SessionCommunicationBannerView({
                         ) : null}
                       </div>
                       <div className="flex shrink-0 items-center">
-                        {delivery.obligationState === "awaiting_reply" ? (
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="ghost"
-                            className="h-7 px-2 text-[11px]"
-                            onClick={() => void resolve(delivery.id)}
-                          >
-                            {t("noReplyNeeded")}
-                          </Button>
-                        ) : null}
                         {conversationById.has(
                           delivery.source.conversationId
                         ) ? (
-                          <>
-                            <Button
-                              type="button"
-                              size="icon"
-                              variant="ghost"
-                              className="h-7 w-7"
-                              title={t("openSession")}
-                              aria-label={t("openSession")}
-                              onClick={() =>
-                                openSession(delivery.source.conversationId)
-                              }
-                            >
-                              <ArrowUpRight className="h-3.5 w-3.5" />
-                            </Button>
-                            <Button
-                              type="button"
-                              size="icon"
-                              variant="ghost"
-                              className="h-7 w-7"
-                              title={t("reply")}
-                              aria-label={t("reply")}
-                              onClick={() => setReplyingTo(delivery)}
-                            >
-                              <Reply className="h-3.5 w-3.5" />
-                            </Button>
-                          </>
+                          <Button
+                            type="button"
+                            size="icon"
+                            variant="ghost"
+                            className="h-7 w-7"
+                            title={t("openSession")}
+                            aria-label={t("openSession")}
+                            onClick={() =>
+                              openSession(delivery.source.conversationId)
+                            }
+                          >
+                            <ArrowUpRight className="h-3.5 w-3.5" />
+                          </Button>
                         ) : null}
                         {(delivery.state === "failed" ||
                           (delivery.state === "queued" &&
@@ -490,7 +426,6 @@ export function SessionCommunicationBannerView({
           </div>
         ) : null}
       </div>
-      {composer}
     </section>
   )
 }

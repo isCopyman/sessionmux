@@ -187,16 +187,16 @@ pub async fn snapshot(
     snapshot_on(conn, conversation_id).await
 }
 
-/// Whether the current FIFO head is a collaboration delivery that explicitly
-/// requests best-effort steering. This is only a cheap busy-path gate; the
-/// subsequent atomic claim materializes and re-validates the same hint.
-pub(crate) async fn head_requests_native_steer<C: ConnectionTrait>(
+/// Whether the current FIFO head is a collaboration `invoke_when_idle`
+/// delivery. Those items force-deliver: inject if native steering exists,
+/// otherwise cancel the current turn.
+pub(crate) async fn head_is_collaboration_invoke<C: ConnectionTrait>(
     conn: &C,
     conversation_id: i32,
 ) -> Result<bool, DbError> {
     let row = conn
         .query_one(statement(
-            "SELECT d.delivery_hint FROM conversation_prompt_queue_item q \
+            "SELECT d.id FROM conversation_prompt_queue_item q \
              JOIN collaboration_delivery d \
                ON d.event_id = q.origin_event_id \
               AND d.target_conversation_id = q.conversation_id \
@@ -206,7 +206,6 @@ pub(crate) async fn head_requests_native_steer<C: ConnectionTrait>(
                ORDER BY position ASC, created_at ASC, id ASC LIMIT 1 \
              ) AND q.conversation_id = ? AND q.state = 'queued' \
                AND d.invocation_policy = 'invoke_when_idle' \
-               AND d.delivery_hint = 'steer_if_supported' \
                AND NOT EXISTS ( \
                  SELECT 1 FROM conversation_prompt_queue_state s \
                  WHERE s.conversation_id = ? AND s.paused_reason IS NOT NULL \

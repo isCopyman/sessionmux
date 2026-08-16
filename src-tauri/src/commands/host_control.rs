@@ -469,6 +469,56 @@ impl DbSessionHostControl {
         );
         outcome
     }
+
+    async fn place_created_session_in_collection(
+        &self,
+        caller: &HostControlCaller,
+        request_id: String,
+        input: Value,
+        mut outcome: HostControlUseOutcome,
+    ) -> HostControlUseOutcome {
+        let Some(collection_id) = input.get("collection_id").and_then(Value::as_i64) else {
+            return outcome;
+        };
+        let Some(session_id) = outcome.data.get("session_id").and_then(Value::as_i64) else {
+            return outcome;
+        };
+        let placed = self
+            .organization
+            .use_action(
+                caller,
+                format!("{request_id}:collection.add_session"),
+                "collection.add_session".to_string(),
+                json!({
+                    "collection_id": collection_id,
+                    "session_id": session_id,
+                }),
+            )
+            .await;
+        if let Some(data) = outcome.data.as_object_mut() {
+            if placed.accepted {
+                data.insert("collection_id".to_string(), json!(collection_id));
+                data.insert(
+                    "collection_placement".to_string(),
+                    json!("persisted"),
+                );
+            } else {
+                data.insert("collection_id".to_string(), Value::Null);
+                data.insert(
+                    "collection_placement".to_string(),
+                    json!("failed"),
+                );
+            }
+        }
+        if !placed.accepted {
+            let created = outcome.note.take().unwrap_or_default();
+            let reason = placed.note.unwrap_or_else(|| "unknown error".to_string());
+            outcome.note = Some(format!(
+                "{created} Collection placement failed and the Session was kept: {reason}"
+            ));
+        }
+        outcome
+    }
 }
 
 #[async_trait]
@@ -546,9 +596,18 @@ impl HostControlAccess for DbSessionHostControl {
                         "This Session's live Host policy does not allow Host Control writes.",
                     )
                 } else {
-                    self.session_lifecycle
-                        .dispatch(&caller, request_id, action, input)
-                        .await
+                    let place_collection = action == "session.create"
+                        && input.get("collection_id").and_then(Value::as_i64).is_some();
+                    let mut outcome = self
+                        .session_lifecycle
+                        .dispatch(&caller, request_id.clone(), action, input.clone())
+                        .await;
+                    if place_collection && outcome.accepted {
+                        outcome = self
+                            .place_created_session_in_collection(&caller, request_id, input, outcome)
+                            .await;
+                    }
+                    outcome
                 }
             }
             _ if OrganizationHostControl::access_for(&action).is_some() => {
@@ -880,5 +939,86 @@ mod tests {
             .await;
         let help = host.help(caller(caller_id, true), None, None).await;
         assert!(!help.available);
+    }
+
+    #[tokio::test]
+    async fn create_can_assign_a_primary_collection_without_deleting_on_placement_failure() {
+        let cwd = std::env::current_dir().unwrap();
+        let db = Arc::new(fresh_in_memory_db().await);
+        let folder = seed_folder(&db, &cwd.to_string_lossy()).await;
+        let caller_id = seed_conversation(&db, folder, AgentType::Codex).await;
+        let host = DbSessionHostControl::new_for_tests(db, EventEmitter::Noop);
+        let caller = HostControlCaller {
+            current_session_id: caller_id,
+            working_dir: cwd,
+            writes_allowed: true,
+        };
+
+        let collection = host
+            .use_action(
+                caller.clone(),
+                "create-collection".into(),
+                "collection.create".into(),
+                json!({ "name": "Reviews" }),
+            )
+            .await;
+        assert!(collection.accepted);
+        let collection_id = collection.data["collection"]["id"].as_i64().unwrap();
+
+        let created = host
+            .use_action(
+                caller.clone(),
+                "create-in-collection".into(),
+                "session.create".into(),
+                json!({
+                    "harness": "codex",
+                    "title": "Reviewer",
+                    "collection_id": collection_id,
+                }),
+            )
+            .await;
+        assert!(created.accepted);
+        assert_eq!(created.data["collection_id"], collection_id);
+        assert_eq!(created.data["collection_placement"], "persisted");
+        let session_id = created.data["session_id"].as_i64().unwrap();
+
+        let listed = host
+            .use_action(
+                caller.clone(),
+                "list-after-create".into(),
+                "collection.list".into(),
+                json!({}),
+            )
+            .await;
+        let memberships = listed.data["collections"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["collection_id"] == collection_id)
+            .and_then(|item| item["session_ids"].as_array().cloned())
+            .unwrap();
+        assert!(memberships.iter().any(|id| *id == session_id));
+
+        let kept = host
+            .use_action(
+                caller,
+                "create-missing-collection".into(),
+                "session.create".into(),
+                json!({
+                    "harness": "codex",
+                    "title": "Orphan",
+                    "collection_id": 9_999_999,
+                }),
+            )
+            .await;
+        assert!(kept.accepted);
+        assert!(kept.data["collection_id"].is_null());
+        assert_eq!(kept.data["collection_placement"], "failed");
+        assert!(conversation_service::get_by_id(
+            &host.db.conn,
+            kept.data["session_id"].as_i64().unwrap() as i32
+        )
+        .await
+        .is_ok());
     }
 }

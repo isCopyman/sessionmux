@@ -18,6 +18,7 @@ pub mod app_state;
 pub mod automation;
 pub mod backgrounds;
 pub mod chat_channel;
+pub mod collaboration_reminder_runtime;
 pub mod commands;
 pub mod db;
 pub mod folder_links;
@@ -328,8 +329,22 @@ mod tauri_app {
                             .inner()
                             .clone(),
                     );
+                    let reminder_queue = handle.clone();
                     app.manage(handle);
                     tauri::async_runtime::spawn(task);
+                    let reminder_conn = app.state::<db::AppDatabase>().conn.clone();
+                    let reminder_manager = app.state::<ConnectionManager>().clone_ref();
+                    let reminder_emitter = web::event_bridge::EventEmitter::Tauri(
+                        app.handle().clone(),
+                    );
+                    tauri::async_runtime::spawn(
+                        crate::collaboration_reminder_runtime::reminder_sweep_task(
+                            reminder_conn,
+                            reminder_manager,
+                            reminder_queue,
+                            reminder_emitter,
+                        ),
+                    );
                 }
 
                 // Restore and apply saved system proxy settings before any network operation.

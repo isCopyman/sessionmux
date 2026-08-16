@@ -15,9 +15,10 @@ use crate::acp::chat_authoring::{AuthoringContext, AuthoringOutcome, ChatAuthori
 use crate::acp::delegation::transport::{
     read_frame, write_frame, BrokerAskRequest, BrokerCommitFeedbackRequest,
     BrokerCreateAutomationRequest, BrokerCreateWorkTaskRequest, BrokerFeedbackRequest,
-    BrokerHostControlHelpRequest, BrokerHostControlUseRequest, BrokerListSessionsRequest,
-    BrokerMessage, BrokerResponse, BrokerSendMessageRequest, BrokerSessionRequest,
-    BrokerTaskCompleteRequest, BrokerTaskProgressRequest,
+    BrokerHostControlHelpRequest, BrokerHostControlUseRequest, BrokerListInboxRequest,
+    BrokerListSessionsRequest, BrokerMessage, BrokerReadMessageRequest, BrokerResponse,
+    BrokerSendMessageRequest, BrokerSessionRequest, BrokerTaskCompleteRequest,
+    BrokerTaskProgressRequest,
 };
 use crate::acp::feedback::{PendingFeedback, SessionFeedbackAccess};
 use crate::acp::host_control::{
@@ -25,7 +26,8 @@ use crate::acp::host_control::{
 };
 use crate::acp::question::{QuestionOutcome, SessionQuestionAccess};
 use crate::acp::session_collaboration::{
-    SessionCollaborationAccess, SessionListOutcome, SessionSendOutcome,
+    SessionCollaborationAccess, SessionInboxFilter, SessionInboxOutcome, SessionListOutcome,
+    SessionMessageReadOutcome, SessionSendOutcome,
 };
 use crate::acp::session_info::{SessionInfo, SessionInfoAccess};
 use crate::acp::work_task_tools::{TaskReportAck, WorkTaskToolAccess};
@@ -321,6 +323,12 @@ impl HostBridgeListener {
             BrokerMessage::SendMessage(req) => {
                 session_send_response(self.process_send_message(req).await)?
             }
+            BrokerMessage::ListInbox(req) => {
+                session_inbox_response(self.process_list_inbox(req).await)?
+            }
+            BrokerMessage::ReadMessage(req) => {
+                session_read_response(self.process_read_message(req).await)?
+            }
             BrokerMessage::TaskProgress(req) => {
                 task_ack_response(self.process_task_progress(req).await)?
             }
@@ -487,6 +495,63 @@ impl HostBridgeListener {
             .await
     }
 
+    async fn process_list_inbox(&self, req: BrokerListInboxRequest) -> SessionInboxOutcome {
+        let Some(entry) = self.tokens.lookup(&req.token).await else {
+            return SessionInboxOutcome::unavailable(
+                None,
+                "This Codeg Session identity has expired. Resume the Session before reading mail.",
+            );
+        };
+        let Some(caller_session_id) = self
+            .parent_lookup
+            .current_conversation_id(&entry.parent_connection_id)
+            .await
+        else {
+            return SessionInboxOutcome::unavailable(
+                None,
+                "The calling connection is not bound to a persistent Codeg Session.",
+            );
+        };
+        let filter = req
+            .filter
+            .as_deref()
+            .and_then(SessionInboxFilter::parse)
+            .unwrap_or(SessionInboxFilter::Open);
+        self.collaboration
+            .list_inbox(
+                caller_session_id,
+                filter,
+                req.limit
+                    .unwrap_or(crate::acp::session_collaboration::DEFAULT_INBOX_LIMIT),
+            )
+            .await
+    }
+
+    async fn process_read_message(
+        &self,
+        req: BrokerReadMessageRequest,
+    ) -> SessionMessageReadOutcome {
+        let Some(entry) = self.tokens.lookup(&req.token).await else {
+            return SessionMessageReadOutcome::unavailable(
+                None,
+                "This Codeg Session identity has expired. Resume the Session before reading mail.",
+            );
+        };
+        let Some(caller_session_id) = self
+            .parent_lookup
+            .current_conversation_id(&entry.parent_connection_id)
+            .await
+        else {
+            return SessionMessageReadOutcome::unavailable(
+                None,
+                "The calling connection is not bound to a persistent Codeg Session.",
+            );
+        };
+        self.collaboration
+            .read_message(caller_session_id, req.event_id)
+            .await
+    }
+
     /// Validate the token and hand the progress report to the task engine,
     /// which resolves the parent connection to its owning task + generation.
     async fn process_task_progress(&self, req: BrokerTaskProgressRequest) -> TaskReportAck {
@@ -601,6 +666,22 @@ fn session_list_response(outcome: SessionListOutcome) -> std::io::Result<BrokerR
 }
 
 fn session_send_response(outcome: SessionSendOutcome) -> std::io::Result<BrokerResponse> {
+    Ok(BrokerResponse {
+        outcome: serde_json::to_value(&outcome).map_err(|e| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, format!("encode: {e}"))
+        })?,
+    })
+}
+
+fn session_inbox_response(outcome: SessionInboxOutcome) -> std::io::Result<BrokerResponse> {
+    Ok(BrokerResponse {
+        outcome: serde_json::to_value(&outcome).map_err(|e| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, format!("encode: {e}"))
+        })?,
+    })
+}
+
+fn session_read_response(outcome: SessionMessageReadOutcome) -> std::io::Result<BrokerResponse> {
     Ok(BrokerResponse {
         outcome: serde_json::to_value(&outcome).map_err(|e| {
             std::io::Error::new(std::io::ErrorKind::InvalidData, format!("encode: {e}"))
@@ -730,19 +811,11 @@ mod tests {
 
     #[async_trait]
     impl SessionFeedbackAccess for NoopFeedback {
-        async fn read_pending_feedback(
-            &self,
-            _parent_connection_id: &str,
-        ) -> Vec<PendingFeedback> {
+        async fn read_pending_feedback(&self, _parent_connection_id: &str) -> Vec<PendingFeedback> {
             Vec::new()
         }
 
-        async fn commit_feedback_delivered(
-            &self,
-            _parent_connection_id: &str,
-            _ids: Vec<String>,
-        ) {
-        }
+        async fn commit_feedback_delivered(&self, _parent_connection_id: &str, _ids: Vec<String>) {}
     }
 
     struct NoopQuestion;
@@ -776,6 +849,8 @@ mod tests {
         listed_by: tokio::sync::Mutex<Vec<i32>>,
         sent_by:
             tokio::sync::Mutex<Vec<(i32, crate::acp::session_collaboration::SessionMessageSpec)>>,
+        inbox_by: tokio::sync::Mutex<Vec<(i32, SessionInboxFilter, u32)>>,
+        read_by: tokio::sync::Mutex<Vec<(i32, String)>>,
     }
 
     #[async_trait]
@@ -806,13 +881,51 @@ mod tests {
                 ..Default::default()
             }
         }
+
+        async fn list_inbox(
+            &self,
+            caller_session_id: i32,
+            filter: crate::acp::session_collaboration::SessionInboxFilter,
+            limit: u32,
+        ) -> crate::acp::session_collaboration::SessionInboxOutcome {
+            self.inbox_by
+                .lock()
+                .await
+                .push((caller_session_id, filter, limit));
+            crate::acp::session_collaboration::SessionInboxOutcome {
+                available: true,
+                caller_session_id: Some(caller_session_id),
+                ..Default::default()
+            }
+        }
+
+        async fn read_message(
+            &self,
+            caller_session_id: i32,
+            event_id: String,
+        ) -> crate::acp::session_collaboration::SessionMessageReadOutcome {
+            self.read_by
+                .lock()
+                .await
+                .push((caller_session_id, event_id.clone()));
+            crate::acp::session_collaboration::SessionMessageReadOutcome {
+                available: true,
+                caller_session_id: Some(caller_session_id),
+                event_id: Some(event_id),
+                ..Default::default()
+            }
+        }
     }
 
     struct NoopTaskTools;
 
     #[async_trait]
     impl WorkTaskToolAccess for NoopTaskTools {
-        async fn report_progress(&self, _parent_connection_id: &str, _message: &str) -> TaskReportAck {
+        async fn report_progress(
+            &self,
+            _parent_connection_id: &str,
+            _message: &str,
+        ) -> TaskReportAck {
             TaskReportAck::rejected("not used")
         }
 
@@ -935,6 +1048,51 @@ mod tests {
         assert_eq!(sent.len(), 1);
         assert_eq!(sent[0].0, 42);
         assert_eq!(sent[0].1.target_session_ids, vec![7]);
+    }
+
+    #[tokio::test]
+    async fn collaboration_inbox_identity_comes_from_token_parent() {
+        let collaboration = Arc::new(StubCollaboration::default());
+        let tokens = Arc::new(TokenRegistry::default());
+        tokens
+            .register(
+                "tok".into(),
+                TokenEntry {
+                    parent_connection_id: "parent-conn".into(),
+                    working_dir: PathBuf::from("/tmp"),
+                    host_control_writes_allowed: true,
+                },
+            )
+            .await;
+        let listener = collaboration_listener(tokens, collaboration.clone(), Some(42));
+
+        let listed = listener
+            .process_list_inbox(BrokerListInboxRequest {
+                token: "tok".into(),
+                filter: Some("unread".into()),
+                limit: Some(8),
+            })
+            .await;
+        assert!(listed.available);
+        assert_eq!(listed.caller_session_id, Some(42));
+        let inbox = collaboration.inbox_by.lock().await;
+        assert_eq!(inbox.len(), 1);
+        assert_eq!(inbox[0].0, 42);
+        assert_eq!(inbox[0].1, SessionInboxFilter::Unread);
+        assert_eq!(inbox[0].2, 8);
+        drop(inbox);
+
+        let opened = listener
+            .process_read_message(BrokerReadMessageRequest {
+                token: "tok".into(),
+                event_id: "event-1".into(),
+            })
+            .await;
+        assert!(opened.available);
+        assert_eq!(opened.caller_session_id, Some(42));
+        assert_eq!(opened.event_id.as_deref(), Some("event-1"));
+        let read = collaboration.read_by.lock().await;
+        assert_eq!(read.as_slice(), &[(42, "event-1".to_string())]);
     }
 
     #[tokio::test]

@@ -42,17 +42,19 @@ use crate::acp::delegation::transport::{
     client_ask_round_trip, client_commit_feedback, client_create_automation_round_trip,
     client_create_work_task_round_trip, client_feedback_round_trip,
     client_host_control_help_round_trip, client_host_control_use_round_trip,
-    client_list_sessions_round_trip, client_send_message_round_trip, client_session_round_trip,
-    client_task_complete_round_trip, client_task_progress_round_trip, BrokerAskRequest,
-    BrokerCommitFeedbackRequest, BrokerCreateAutomationRequest, BrokerCreateWorkTaskRequest,
-    BrokerFeedbackRequest, BrokerHostControlHelpRequest, BrokerHostControlUseRequest,
-    BrokerListSessionsRequest, BrokerResponse, BrokerSendMessageRequest, BrokerSessionRequest,
-    BrokerTaskCompleteRequest, BrokerTaskProgressRequest,
+    client_list_inbox_round_trip, client_list_sessions_round_trip, client_read_message_round_trip,
+    client_send_message_round_trip, client_session_round_trip, client_task_complete_round_trip,
+    client_task_progress_round_trip, BrokerAskRequest, BrokerCommitFeedbackRequest,
+    BrokerCreateAutomationRequest, BrokerCreateWorkTaskRequest, BrokerFeedbackRequest,
+    BrokerHostControlHelpRequest, BrokerHostControlUseRequest, BrokerListInboxRequest,
+    BrokerListSessionsRequest, BrokerReadMessageRequest, BrokerResponse, BrokerSendMessageRequest,
+    BrokerSessionRequest, BrokerTaskCompleteRequest, BrokerTaskProgressRequest,
 };
 use crate::acp::question::parse_questions;
 use crate::acp::session_collaboration::{
-    SessionMessageDeliveryMode, SessionMessageSpec, DEFAULT_SESSION_LIST_LIMIT,
-    MAX_SESSION_LIST_LIMIT, MAX_SESSION_MESSAGE_TARGETS,
+    SessionInboxFilter, SessionMessageDeliveryMode, SessionMessageSpec, DEFAULT_INBOX_LIMIT,
+    DEFAULT_SESSION_LIST_LIMIT, MAX_INBOX_LIMIT, MAX_SESSION_LIST_LIMIT,
+    MAX_SESSION_MESSAGE_TARGETS,
 };
 use crate::acp::session_info::MAX_SESSION_MESSAGES;
 use crate::models::AutomationAction;
@@ -186,7 +188,7 @@ impl CompanionFeatures {
             "check_user_feedback" => self.feedback,
             "ask_user_question" => self.ask,
             "get_session_info" => self.sessions,
-            "list_sessions" | "send_message" => self.collaboration,
+            "list_sessions" | "send_message" | "list_inbox" | "read_message" => self.collaboration,
             "task_progress" | "task_complete" => self.tasks,
             "create_automation" => self.automations,
             "create_work_task" => self.taskboard,
@@ -579,6 +581,43 @@ async fn build_tools_call_spawn(
             let round_trip =
                 Box::pin(async move { client_send_message_round_trip(&socket, &req).await });
             register_and_spawn(inflight, id, round_trip, render_session_send_result).await
+        }
+        "list_inbox" => {
+            let filter = match parse_inbox_filter(&arguments) {
+                Ok(filter) => filter,
+                Err(message) => return LineAction::Respond(err(id, -32602, message)),
+            };
+            let limit = parse_inbox_limit(&arguments);
+            let req = BrokerListInboxRequest {
+                token: ctx.token.clone(),
+                filter,
+                limit: Some(limit),
+            };
+            let round_trip =
+                Box::pin(async move { client_list_inbox_round_trip(&socket, &req).await });
+            register_and_spawn(inflight, id, round_trip, render_session_inbox_result).await
+        }
+        "read_message" => {
+            let event_id = arguments
+                .get("event_id")
+                .and_then(|value| value.as_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string);
+            let Some(event_id) = event_id else {
+                return LineAction::Respond(err(
+                    id,
+                    -32602,
+                    "read_message requires a non-empty `event_id` string",
+                ));
+            };
+            let req = BrokerReadMessageRequest {
+                token: ctx.token.clone(),
+                event_id,
+            };
+            let round_trip =
+                Box::pin(async move { client_read_message_round_trip(&socket, &req).await });
+            register_and_spawn(inflight, id, round_trip, render_session_read_result).await
         }
         "task_progress" => {
             let message = arguments
@@ -1252,6 +1291,35 @@ fn parse_session_list_limit(arguments: &Value) -> u32 {
         .clamp(1, u64::from(MAX_SESSION_LIST_LIMIT)) as u32
 }
 
+fn parse_inbox_limit(arguments: &Value) -> u32 {
+    let Some(value) = arguments.get("limit") else {
+        return DEFAULT_INBOX_LIMIT;
+    };
+    let parsed = value
+        .as_u64()
+        .or_else(|| value.as_str().and_then(|raw| raw.trim().parse().ok()));
+    parsed
+        .unwrap_or(u64::from(DEFAULT_INBOX_LIMIT))
+        .clamp(1, u64::from(MAX_INBOX_LIMIT)) as u32
+}
+
+fn parse_inbox_filter(arguments: &Value) -> Result<Option<String>, String> {
+    let Some(value) = arguments.get("filter") else {
+        return Ok(None);
+    };
+    let Some(raw) = value
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Err("list_inbox `filter` must be open, unread, awaiting_reply, or all".to_string());
+    };
+    if SessionInboxFilter::parse(raw).is_none() {
+        return Err("list_inbox `filter` must be open, unread, awaiting_reply, or all".to_string());
+    }
+    Ok(Some(raw.to_string()))
+}
+
 fn parse_target_session_ids(arguments: &Value) -> Result<Vec<i32>, String> {
     let values = arguments
         .get("target_session_ids")
@@ -1346,6 +1414,137 @@ pub fn render_session_list_result(outcome: &Value) -> Value {
             }
             lines.join("\n")
         }
+    };
+    json!({
+        "content": [{ "type": "text", "text": text }],
+        "isError": false,
+        "structuredContent": outcome.clone(),
+    })
+}
+
+pub fn render_session_inbox_result(outcome: &Value) -> Value {
+    let available = outcome
+        .get("available")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let text = if !available {
+        outcome
+            .get("note")
+            .and_then(Value::as_str)
+            .unwrap_or("Session collaboration is unavailable.")
+            .to_string()
+    } else {
+        let unread = outcome
+            .get("unread_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        let awaiting = outcome
+            .get("awaiting_reply_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        let items = outcome
+            .get("items")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        if items.is_empty() {
+            format!("Inbox is empty. Unread: {unread}. Awaiting reply: {awaiting}.")
+        } else {
+            let mut lines = vec![format!(
+                "Inbox: {unread} unread, {awaiting} awaiting reply. Open a letter with read_message(event_id)."
+            )];
+            for item in items {
+                let event_id = item
+                    .get("event_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown");
+                let from_id = item
+                    .get("from_session_id")
+                    .and_then(Value::as_i64)
+                    .unwrap_or_default();
+                let from_title = item
+                    .get("from_title")
+                    .and_then(Value::as_str)
+                    .unwrap_or("Untitled Session");
+                let preview = item.get("preview").and_then(Value::as_str).unwrap_or("");
+                let mut flags = Vec::new();
+                if item.get("unread").and_then(Value::as_bool).unwrap_or(false) {
+                    flags.push("unread");
+                }
+                if item
+                    .get("expects_reply")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                {
+                    flags.push("needs reply");
+                }
+                let flag_text = if flags.is_empty() {
+                    String::new()
+                } else {
+                    format!(" [{}]", flags.join(", "))
+                };
+                lines.push(format!(
+                    "- {event_id} from {from_id} {from_title}{flag_text}: {preview}"
+                ));
+            }
+            if outcome
+                .get("truncated")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                lines.push("Results were truncated; raise `limit` or change `filter`.".to_string());
+            }
+            lines.join("\n")
+        }
+    };
+    json!({
+        "content": [{ "type": "text", "text": text }],
+        "isError": false,
+        "structuredContent": outcome.clone(),
+    })
+}
+
+pub fn render_session_read_result(outcome: &Value) -> Value {
+    let available = outcome
+        .get("available")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let text = if !available {
+        outcome
+            .get("note")
+            .and_then(Value::as_str)
+            .unwrap_or("The letter was not found.")
+            .to_string()
+    } else {
+        let event_id = outcome
+            .get("event_id")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        let from_id = outcome
+            .get("from_session_id")
+            .and_then(Value::as_i64)
+            .unwrap_or_default();
+        let from_title = outcome
+            .get("from_title")
+            .and_then(Value::as_str)
+            .unwrap_or("Untitled Session");
+        let body = outcome.get("body").and_then(Value::as_str).unwrap_or("");
+        let expects_reply = outcome
+            .get("expects_reply")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let mut lines = vec![
+            format!("Opened letter {event_id} from {from_id} {from_title}."),
+            "Opening this letter marks it read for the Agent mailbox.".to_string(),
+        ];
+        if expects_reply {
+            lines.push(format!(
+                "This letter expects a reply. Use send_message with target_session_ids=[{from_id}], reply_to_event_id={event_id}, expects_reply=false."
+            ));
+        }
+        lines.push("--- message ---".to_string());
+        lines.push(body.to_string());
+        lines.join("\n")
     };
     json!({
         "content": [{ "type": "text", "text": text }],
@@ -1695,6 +1894,8 @@ mod tests {
                 "get_session_info",
                 "list_sessions",
                 "send_message",
+                "list_inbox",
+                "read_message",
                 "create_automation",
                 "create_work_task",
                 "task_progress",
@@ -1788,7 +1989,15 @@ mod tests {
             .iter()
             .filter_map(|tool| tool["name"].as_str())
             .collect();
-        assert_eq!(names, vec!["list_sessions", "send_message"]);
+        assert_eq!(
+            names,
+            vec![
+                "list_sessions",
+                "send_message",
+                "list_inbox",
+                "read_message"
+            ]
+        );
     }
 
     #[tokio::test]
@@ -1829,6 +2038,61 @@ mod tests {
             LineAction::Spawn(_)
         ));
 
+        let inbox = serde_json::json!({
+            "jsonrpc": "2.0", "id": 43, "method": "tools/call",
+            "params": { "name": "list_inbox", "arguments": {
+                "filter": "unread",
+                "limit": 10
+            }}
+        })
+        .to_string();
+        assert!(matches!(
+            dispatch_line(
+                &ctx(collaboration_features()),
+                Arc::new(InflightCalls::new()),
+                &inbox,
+            )
+            .await,
+            LineAction::Spawn(_)
+        ));
+
+        let read = serde_json::json!({
+            "jsonrpc": "2.0", "id": 44, "method": "tools/call",
+            "params": { "name": "read_message", "arguments": { "event_id": "event-1" } }
+        })
+        .to_string();
+        assert!(matches!(
+            dispatch_line(
+                &ctx(collaboration_features()),
+                Arc::new(InflightCalls::new()),
+                &read,
+            )
+            .await,
+            LineAction::Spawn(_)
+        ));
+
+        for (name, arguments) in [
+            ("list_inbox", serde_json::json!({ "filter": "urgent" })),
+            ("read_message", serde_json::json!({ "event_id": " " })),
+            ("read_message", serde_json::json!({})),
+        ] {
+            let line = serde_json::json!({
+                "jsonrpc": "2.0", "id": 45, "method": "tools/call",
+                "params": { "name": name, "arguments": arguments }
+            })
+            .to_string();
+            let action = dispatch_line(
+                &ctx(collaboration_features()),
+                Arc::new(InflightCalls::new()),
+                &line,
+            )
+            .await;
+            let LineAction::Respond(response) = action else {
+                panic!("invalid inbox call must fail before spawning");
+            };
+            assert_eq!(response.error.expect("invalid inbox call").code, -32602);
+        }
+
         for arguments in [
             serde_json::json!({ "target_session_ids": [], "content": "x" }),
             serde_json::json!({ "target_session_ids": ["bad"], "content": "x" }),
@@ -1858,9 +2122,18 @@ mod tests {
     #[test]
     fn collaboration_mcp_dedupe_key_is_stable_per_parent_and_request() {
         let first = mcp_call_dedupe_id("parent-1", &serde_json::json!(41));
-        assert_eq!(first, mcp_call_dedupe_id("parent-1", &serde_json::json!(41)));
-        assert_ne!(first, mcp_call_dedupe_id("parent-1", &serde_json::json!(42)));
-        assert_ne!(first, mcp_call_dedupe_id("parent-2", &serde_json::json!(41)));
+        assert_eq!(
+            first,
+            mcp_call_dedupe_id("parent-1", &serde_json::json!(41))
+        );
+        assert_ne!(
+            first,
+            mcp_call_dedupe_id("parent-1", &serde_json::json!(42))
+        );
+        assert_ne!(
+            first,
+            mcp_call_dedupe_id("parent-2", &serde_json::json!(41))
+        );
         assert!(first.starts_with("mcp:"));
     }
 
@@ -1895,6 +2168,37 @@ mod tests {
         assert!(text.contains("event-1"));
         assert!(text.contains("queued"));
         assert!(text.contains("does not mean"));
+
+        let inbox = render_session_inbox_result(&serde_json::json!({
+            "available": true,
+            "unread_count": 1,
+            "awaiting_reply_count": 1,
+            "items": [{
+                "event_id": "event-1",
+                "from_session_id": 7,
+                "from_title": "Reviewer",
+                "preview": "please review",
+                "unread": true,
+                "expects_reply": true
+            }],
+            "truncated": false
+        }));
+        let inbox_text = inbox["content"][0]["text"].as_str().unwrap();
+        assert!(inbox_text.contains("event-1"));
+        assert!(inbox_text.contains("read_message"));
+        assert!(!inbox_text.contains("please review the entire thesis"));
+
+        let opened = render_session_read_result(&serde_json::json!({
+            "available": true,
+            "event_id": "event-1",
+            "from_session_id": 7,
+            "from_title": "Reviewer",
+            "body": "please review claim 3",
+            "expects_reply": true
+        }));
+        let opened_text = opened["content"][0]["text"].as_str().unwrap();
+        assert!(opened_text.contains("please review claim 3"));
+        assert!(opened_text.contains("reply_to_event_id=event-1"));
     }
 
     #[test]
@@ -1908,6 +2212,8 @@ mod tests {
         assert!(parsed.ask);
         assert!(parsed.sessions);
         assert!(parsed.collaboration);
+        assert!(parsed.allows_tool("list_inbox"));
+        assert!(parsed.allows_tool("read_message"));
         assert!(parsed.tasks);
         assert!(parsed.automations);
         assert!(parsed.taskboard);

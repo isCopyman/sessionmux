@@ -1,12 +1,11 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
-const api = vi.hoisted(() => ({ send: vi.fn(), sendInterrupt: vi.fn() }))
+const api = vi.hoisted(() => ({ send: vi.fn() }))
 const onOpenChange = vi.fn()
 
 vi.mock("@/lib/api", () => ({
   sendCollaborationMessage: api.send,
-  sendAndInterruptCollaborationMessage: api.sendInterrupt,
 }))
 vi.mock("sonner", () => ({
   toast: { success: vi.fn(), warning: vi.fn(), error: vi.fn() },
@@ -81,14 +80,6 @@ beforeEach(() => {
       { id: "d2", state: "pending" },
       { id: "d3", state: "pending" },
     ],
-  })
-  api.sendInterrupt.mockResolvedValue({
-    message: { eventId: "event-1", deliveries: [] },
-    interrupt: {
-      deduplicated: false,
-      operation: { id: "interrupt-1", state: "waiting_for_terminal" },
-    },
-    interruptError: null,
   })
 })
 
@@ -225,66 +216,6 @@ describe("SessionMessageComposerDialog", () => {
     )
   })
 
-  it("can request non-destructive native steering with durable queue fallback", async () => {
-    render(
-      <SessionMessageComposerDialog
-        sourceConversationId={1}
-        open
-        onOpenChange={onOpenChange}
-      />
-    )
-    fireEvent.click(screen.getByRole("radio", { name: "steerIfSupported" }))
-    fireEvent.click(screen.getByRole("button", { name: /Reviewer/ }))
-    fireEvent.change(screen.getByPlaceholderText("bodyPlaceholder"), {
-      target: {
-        value: "Use this correction if the current turn can accept it",
-      },
-    })
-    fireEvent.click(screen.getByRole("button", { name: /^send$/ }))
-
-    await waitFor(() => expect(api.send).toHaveBeenCalledTimes(1))
-    expect(api.send).toHaveBeenCalledWith(
-      expect.objectContaining({
-        invocationPolicy: "invoke_when_idle",
-        deliveryHint: "steer_if_supported",
-      })
-    )
-  })
-
-  it("persists one target before requesting a separate stop operation", async () => {
-    render(
-      <SessionMessageComposerDialog
-        sourceConversationId={1}
-        open
-        onOpenChange={onOpenChange}
-      />
-    )
-    fireEvent.click(screen.getByRole("button", { name: /Reviewer/ }))
-    fireEvent.click(screen.getByRole("button", { name: /Researcher/ }))
-    fireEvent.click(screen.getByRole("radio", { name: "interruptCurrentTask" }))
-    fireEvent.click(screen.getByRole("checkbox", { name: "requestReply" }))
-    fireEvent.change(screen.getByPlaceholderText("bodyPlaceholder"), {
-      target: { value: "Stop and review this correction" },
-    })
-    fireEvent.click(screen.getByRole("button", { name: /^send$/ }))
-    expect(api.sendInterrupt).not.toHaveBeenCalled()
-    fireEvent.click(screen.getByRole("button", { name: "interruptConfirm" }))
-
-    await waitFor(() => expect(api.sendInterrupt).toHaveBeenCalledTimes(1))
-    expect(api.send).not.toHaveBeenCalled()
-    expect(api.sendInterrupt).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: expect.objectContaining({
-          targetConversationIds: [2],
-          invocationPolicy: "invoke_when_idle",
-          deliveryHint: "default",
-          expectsReply: true,
-        }),
-        interruptClientDedupeId: expect.any(String),
-      })
-    )
-  })
-
   it("disambiguates two Sessions that share a title with their stable ids", () => {
     store.conversations.push({
       id: 4,
@@ -346,29 +277,5 @@ describe("SessionMessageComposerDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: /^send$/ }))
 
     await waitFor(() => expect(onSent).toHaveBeenCalledWith({ count: 2 }))
-  })
-
-  it("can mark a Session message urgent without changing delivery policy", async () => {
-    render(
-      <SessionMessageComposerDialog
-        sourceConversationId={1}
-        open
-        onOpenChange={onOpenChange}
-      />
-    )
-    fireEvent.click(screen.getByRole("button", { name: /Reviewer/ }))
-    fireEvent.click(screen.getByRole("checkbox", { name: "markUrgent" }))
-    fireEvent.change(screen.getByPlaceholderText("bodyPlaceholder"), {
-      target: { value: "This is time-sensitive" },
-    })
-    fireEvent.click(screen.getByRole("button", { name: /^send$/ }))
-
-    await waitFor(() => expect(api.send).toHaveBeenCalledTimes(1))
-    expect(api.send).toHaveBeenCalledWith(
-      expect.objectContaining({
-        invocationPolicy: "store_only",
-        urgency: "urgent",
-      })
-    )
   })
 })

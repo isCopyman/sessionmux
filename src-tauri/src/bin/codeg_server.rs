@@ -298,6 +298,12 @@ async fn async_main() -> ExitCode {
         update_state: codeg_lib::app_state::default_update_state(),
     });
     tokio::spawn(prompt_queue_task);
+    tokio::spawn(codeg_lib::collaboration_reminder_runtime::reminder_sweep_task(
+        state.db.conn.clone(),
+        state.connection_manager.clone_ref(),
+        state.prompt_queue.clone(),
+        state.emitter.clone(),
+    ));
 
     // Logging phase 3: wire the emitter so the Logs viewer's live tail
     // (`logs://appended`) reaches WS clients.

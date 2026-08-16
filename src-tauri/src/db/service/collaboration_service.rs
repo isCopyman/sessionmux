@@ -1301,7 +1301,7 @@ async fn feed_on<C: ConnectionTrait>(
     let count_row = conn
         .query_one(statement(
             "SELECT COUNT(*) AS count FROM collaboration_delivery \
-             WHERE target_conversation_id = ? AND attention_state = 'unread' \
+             WHERE target_conversation_id = ? AND agent_received_at IS NULL \
                AND state <> 'dismissed'",
             vec![conversation_id.into()],
         ))
@@ -1329,6 +1329,124 @@ pub async fn feed(
     limit: Option<u32>,
 ) -> Result<CollaborationFeed, DbError> {
     feed_on(conn, conversation_id, limit.unwrap_or(DEFAULT_FEED_LIMIT)).await
+}
+
+pub async fn list_inbox(
+    conn: &DatabaseConnection,
+    conversation_id: i32,
+    filter: crate::acp::session_collaboration::SessionInboxFilter,
+    limit: u32,
+) -> Result<Vec<crate::models::CollaborationDeliveryView>, DbError> {
+    require_live_session(conn, conversation_id).await?;
+    let limit = limit.clamp(1, crate::acp::session_collaboration::MAX_INBOX_LIMIT) as i64;
+    let filter_sql = match filter {
+        crate::acp::session_collaboration::SessionInboxFilter::Open => {
+            "AND (d.agent_received_at IS NULL OR d.obligation_state = 'awaiting_reply')"
+        }
+        crate::acp::session_collaboration::SessionInboxFilter::Unread => {
+            "AND d.agent_received_at IS NULL"
+        }
+        crate::acp::session_collaboration::SessionInboxFilter::AwaitingReply => {
+            "AND d.obligation_state = 'awaiting_reply'"
+        }
+        crate::acp::session_collaboration::SessionInboxFilter::All => "",
+    };
+    let rows = conn
+        .query_all(statement(
+            &format!(
+                "{DELIVERY_SELECT} WHERE d.target_conversation_id = ? \
+                 AND d.state <> 'dismissed' {filter_sql} \
+                 ORDER BY d.created_at DESC, d.id DESC LIMIT ?"
+            ),
+            vec![conversation_id.into(), limit.into()],
+        ))
+        .await?;
+    rows.iter().map(parse_delivery).collect()
+}
+
+pub async fn get_inbound_message(
+    conn: &DatabaseConnection,
+    conversation_id: i32,
+    event_id: &str,
+) -> Result<crate::models::CollaborationDeliveryView, DbError> {
+    require_live_session(conn, conversation_id).await?;
+    let row = conn
+        .query_one(statement(
+            &format!(
+                "{DELIVERY_SELECT} WHERE d.target_conversation_id = ? \
+                 AND d.event_id = ? AND d.state <> 'dismissed' LIMIT 1"
+            ),
+            vec![conversation_id.into(), event_id.into()],
+        ))
+        .await?
+        .ok_or_else(|| {
+            DbError::NotFound(format!(
+                "Inbox message {event_id} was not found for Session {conversation_id}"
+            ))
+        })?;
+    parse_delivery(&row)
+}
+
+pub async fn mark_agent_read(
+    conn: &DatabaseConnection,
+    conversation_id: i32,
+    event_id: &str,
+) -> Result<CollaborationMutationResult, DbError> {
+    require_live_session(conn, conversation_id).await?;
+    let txn = conn.begin().await?;
+    let changed = txn
+        .execute(statement(
+            "UPDATE collaboration_delivery \
+             SET agent_received_at = COALESCE(agent_received_at, CURRENT_TIMESTAMP), \
+                 agent_receipt_kind = COALESCE(agent_receipt_kind, 'managed_acp'), \
+                 agent_receipt_ref = COALESCE(agent_receipt_ref, 'inbox_read'), \
+                 updated_at = CURRENT_TIMESTAMP \
+             WHERE target_conversation_id = ? AND event_id = ? \
+               AND state <> 'dismissed'",
+            vec![conversation_id.into(), event_id.into()],
+        ))
+        .await?
+        .rows_affected()
+        > 0;
+    if !changed {
+        txn.commit().await?;
+        return Err(DbError::NotFound(format!(
+            "Inbox message {event_id} was not found for Session {conversation_id}"
+        )));
+    }
+    let mut participants = HashSet::from([conversation_id]);
+    if let Ok((source_id, _)) =
+        delivery_participants_by_event(&txn, conversation_id, event_id).await
+    {
+        participants.insert(source_id);
+    }
+    let affected = bump_live_participants(&txn, participants).await?;
+    txn.commit().await?;
+    Ok(CollaborationMutationResult {
+        feed: feed(conn, conversation_id, None).await?,
+        affected_conversation_ids: affected,
+    })
+}
+
+async fn delivery_participants_by_event(
+    txn: &DatabaseTransaction,
+    target_conversation_id: i32,
+    event_id: &str,
+) -> Result<(i32, i32), DbError> {
+    let row = txn
+        .query_one(statement(
+            "SELECT e.source_conversation_id, d.target_conversation_id \
+             FROM collaboration_delivery d \
+             JOIN collaboration_event e ON e.id = d.event_id \
+             WHERE d.event_id = ? AND d.target_conversation_id = ?",
+            vec![event_id.into(), target_conversation_id.into()],
+        ))
+        .await?
+        .ok_or_else(|| DbError::NotFound(format!("Collaboration event {event_id}")))?;
+    Ok((
+        row.try_get("", "source_conversation_id")?,
+        row.try_get("", "target_conversation_id")?,
+    ))
 }
 
 /// Project only inbound collaboration facts that are already part of the
@@ -1375,7 +1493,7 @@ pub async fn unread_overview(
             "SELECT c.id AS conversation_id, COALESCE(s.revision, 0) AS revision, \
              (SELECT COUNT(*) FROM collaboration_delivery d \
                 WHERE d.target_conversation_id = c.id \
-                  AND d.attention_state = 'unread' AND d.state <> 'dismissed') AS unread_count, \
+                  AND d.agent_received_at IS NULL AND d.state <> 'dismissed') AS unread_count, \
              (SELECT COUNT(*) FROM collaboration_delivery d \
                 WHERE d.target_conversation_id = c.id \
                   AND d.obligation_state = 'awaiting_reply') AS needs_reply_count, \
@@ -1445,6 +1563,111 @@ pub async fn unread_overview(
         total_failed_count,
         sessions,
     })
+}
+
+#[derive(Debug, Clone)]
+pub struct ReminderTargetSnapshot {
+    pub conversation_id: i32,
+    pub overdue_unread: u32,
+    pub overdue_reply: u32,
+    pub reminder_repeat_count: u32,
+    pub reminder_last_at: Option<DateTime<Utc>>,
+}
+
+/// Sessions whose Agent mailbox is overdue for a host reminder.
+pub async fn list_overdue_reminder_targets(
+    conn: &DatabaseConnection,
+) -> Result<Vec<ReminderTargetSnapshot>, DbError> {
+    use crate::acp::collaboration_reminder::{
+        reminder_in_cooldown, MAX_REMINDER_REPEATS, REPLY_AFTER_SECS, UNREAD_AFTER_SECS,
+    };
+
+    let rows = conn
+        .query_all(statement(
+            &format!(
+                "SELECT d.target_conversation_id AS conversation_id, \
+                 SUM(CASE WHEN d.agent_received_at IS NULL AND d.state <> 'dismissed' \
+                      AND d.created_at <= datetime('now', '-{UNREAD_AFTER_SECS} seconds') \
+                      THEN 1 ELSE 0 END) AS overdue_unread, \
+                 SUM(CASE WHEN d.obligation_state = 'awaiting_reply' \
+                      AND COALESCE(d.agent_received_at, d.created_at) \
+                        <= datetime('now', '-{REPLY_AFTER_SECS} seconds') \
+                      THEN 1 ELSE 0 END) AS overdue_reply, \
+                 COALESCE(s.reminder_repeat_count, 0) AS reminder_repeat_count, \
+                 s.reminder_last_at AS reminder_last_at \
+                 FROM collaboration_delivery d \
+                 JOIN collaboration_event e ON e.id = d.event_id \
+                 JOIN conversation c ON c.id = d.target_conversation_id \
+                  AND c.deleted_at IS NULL \
+                 LEFT JOIN conversation_collaboration_state s \
+                   ON s.conversation_id = d.target_conversation_id \
+                 GROUP BY d.target_conversation_id \
+                 HAVING overdue_unread > 0 OR overdue_reply > 0"
+            ),
+            vec![],
+        ))
+        .await?;
+
+    let now = Utc::now();
+    let mut targets = Vec::new();
+    for row in rows {
+        let count = |column| -> Result<u32, DbError> {
+            let raw: i64 = row.try_get("", column)?;
+            Ok(u32::try_from(raw.max(0)).unwrap_or(u32::MAX))
+        };
+        let reminder_repeat_count = count("reminder_repeat_count")?;
+        if reminder_repeat_count >= MAX_REMINDER_REPEATS {
+            continue;
+        }
+        let reminder_last_at = parse_optional_timestamp(&row, "reminder_last_at")?;
+        if reminder_last_at.is_some_and(|at| reminder_in_cooldown(at, now)) {
+            continue;
+        }
+        targets.push(ReminderTargetSnapshot {
+            conversation_id: row.try_get("", "conversation_id")?,
+            overdue_unread: count("overdue_unread")?,
+            overdue_reply: count("overdue_reply")?,
+            reminder_repeat_count,
+            reminder_last_at,
+        });
+    }
+    Ok(targets)
+}
+
+pub async fn record_successful_reminder(
+    conn: &DatabaseConnection,
+    conversation_id: i32,
+) -> Result<(), DbError> {
+    let txn = conn.begin().await?;
+    ensure_state(&txn, conversation_id).await?;
+    txn.execute(statement(
+        "UPDATE conversation_collaboration_state \
+         SET reminder_last_at = CURRENT_TIMESTAMP, \
+             reminder_repeat_count = reminder_repeat_count + 1, \
+             updated_at = CURRENT_TIMESTAMP \
+         WHERE conversation_id = ?",
+        vec![conversation_id.into()],
+    ))
+    .await?;
+    txn.commit().await?;
+    Ok(())
+}
+
+pub async fn reset_idle_reminder_cursors(conn: &DatabaseConnection) -> Result<(), DbError> {
+    conn.execute(statement(
+        "UPDATE conversation_collaboration_state \
+         SET reminder_last_at = NULL, reminder_repeat_count = 0, \
+             updated_at = CURRENT_TIMESTAMP \
+         WHERE (reminder_last_at IS NOT NULL OR reminder_repeat_count > 0) \
+           AND conversation_id NOT IN ( \
+             SELECT DISTINCT target_conversation_id FROM collaboration_delivery \
+             WHERE state <> 'dismissed' \
+               AND (agent_received_at IS NULL OR obligation_state = 'awaiting_reply') \
+           )",
+        vec![],
+    ))
+    .await?;
+    Ok(())
 }
 
 pub struct CollaborationMutationResult {
@@ -2371,7 +2594,10 @@ mod tests {
         let marked = mark_seen(&db.conn, target, vec![delivery_id.clone()])
             .await
             .unwrap();
-        assert_eq!(marked.feed.unread_count, 0);
+        assert_eq!(
+            marked.feed.unread_count, 1,
+            "a human opening the feed must not consume Agent unread"
+        );
         assert_eq!(
             marked.feed.inbound[0].state,
             CollaborationDeliveryState::Pending
@@ -2457,7 +2683,10 @@ mod tests {
             .await
             .unwrap();
         let after = unread_overview(&db.conn).await.unwrap();
-        assert_eq!(after.total_unread_count, 1);
+        assert_eq!(
+            after.total_unread_count, 2,
+            "human mark_seen must not clear Agent unread on either target"
+        );
         assert_eq!(after.total_failed_count, 2);
         assert!(after
             .sessions
@@ -2540,6 +2769,54 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn agent_inbox_filters_and_read_do_not_clear_reply_debt() {
+        use crate::acp::session_collaboration::SessionInboxFilter;
+        let (db, source, target, other) = seeded_memory().await;
+        let mut request = input(source, vec![target], "inbox-letter", "please review");
+        request.expects_reply = true;
+        let sent = send(&db.conn, request).await.unwrap();
+        let fyi = send(
+            &db.conn,
+            input(source, vec![target], "inbox-fyi", "just so you know"),
+        )
+        .await
+        .unwrap();
+
+        let open = list_inbox(&db.conn, target, SessionInboxFilter::Open, 20)
+            .await
+            .unwrap();
+        assert_eq!(open.len(), 2);
+        assert!(open.iter().all(|item| item.agent_received_at.is_none()));
+
+        mark_agent_read(&db.conn, target, &fyi.event_id)
+            .await
+            .unwrap();
+        let unread = list_inbox(&db.conn, target, SessionInboxFilter::Unread, 20)
+            .await
+            .unwrap();
+        assert_eq!(unread.len(), 1);
+        assert_eq!(unread[0].event_id, sent.event_id);
+
+        mark_agent_read(&db.conn, target, &sent.event_id)
+            .await
+            .unwrap();
+        let awaiting = list_inbox(&db.conn, target, SessionInboxFilter::AwaitingReply, 20)
+            .await
+            .unwrap();
+        assert_eq!(awaiting.len(), 1);
+        assert_eq!(awaiting[0].event_id, sent.event_id);
+        assert!(awaiting[0].agent_received_at.is_some());
+
+        let letter = get_inbound_message(&db.conn, target, &sent.event_id)
+            .await
+            .unwrap();
+        assert_eq!(letter.body, "please review");
+        assert!(get_inbound_message(&db.conn, other, &sent.event_id)
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
     async fn no_reply_needed_prevents_turn_completion_from_auto_replying() {
         let (db, source, target, _) = seeded_memory().await;
         let mut request =
@@ -2615,7 +2892,10 @@ mod tests {
 
         dismiss(&db.conn, target, delivery_id).await.unwrap();
         let restored = restore(&db.conn, target, delivery_id).await.unwrap();
-        assert_eq!(restored.feed.unread_count, 0);
+        assert_eq!(
+            restored.feed.unread_count, 1,
+            "restored mail is still unread until the Agent receives it"
+        );
         assert_eq!(
             restored.feed.inbound[0].state,
             CollaborationDeliveryState::Pending
@@ -2861,5 +3141,32 @@ mod tests {
         assert_eq!(first_body, resumed_body);
         assert!(resumed_text.contains("\"eventId\":"));
         assert!(resumed_text.contains(&sent.event_id));
+    }
+
+    #[tokio::test]
+    async fn overdue_reminder_ignores_human_seen_and_respects_clock() {
+        let (db, source, target, _) = seeded_memory().await;
+        let sent = send(&db.conn, input(source, vec![target], "due", "hello"))
+            .await
+            .unwrap();
+        let immediately = list_overdue_reminder_targets(&db.conn).await.unwrap();
+        assert_eq!(immediately.len(), 1, "new unread mail is due immediately");
+        assert_eq!(immediately[0].conversation_id, target);
+
+        mark_seen(&db.conn, target, vec![sent.deliveries[0].id.clone()])
+            .await
+            .unwrap();
+        let after_human_open = list_overdue_reminder_targets(&db.conn).await.unwrap();
+        assert_eq!(after_human_open.len(), 1);
+        assert_eq!(after_human_open[0].overdue_unread, 1);
+
+        record_successful_reminder(&db.conn, target).await.unwrap();
+        assert!(
+            list_overdue_reminder_targets(&db.conn)
+                .await
+                .unwrap()
+                .is_empty(),
+            "cooldown after a successful reminder must suppress the next scan"
+        );
     }
 }

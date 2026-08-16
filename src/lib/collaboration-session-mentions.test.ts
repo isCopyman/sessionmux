@@ -1,10 +1,8 @@
 import { describe, expect, it } from "vitest"
 
 import {
-  canSendCollaborationFromComposer,
   sessionIdsFromPromptBlocks,
   sessionIdsFromText,
-  stripSessionMentions,
 } from "./collaboration-session-mentions"
 
 describe("collaboration session mentions", () => {
@@ -38,28 +36,4 @@ describe("collaboration session mentions", () => {
     ).toEqual([2, 4])
   })
 
-  it("keeps @ Session send available while the current Agent is prompting", () => {
-    expect(
-      canSendCollaborationFromComposer({
-        sourceConversationId: 1,
-        mentionedSessionIds: [2],
-        isEditingQueueItem: false,
-      })
-    ).toBe(true)
-    expect(
-      canSendCollaborationFromComposer({
-        sourceConversationId: 1,
-        mentionedSessionIds: [2],
-        isEditingQueueItem: true,
-      })
-    ).toBe(false)
-  })
-
-  it("strips Session badges so the delivery body is the user's words", () => {
-    expect(
-      stripSessionMentions(
-        "Please review this claim [Reviewer](codeg://session/9)\n\nkeep the path src/lib/foo.ts"
-      )
-    ).toBe("Please review this claim\n\nkeep the path src/lib/foo.ts")
-  })
 })

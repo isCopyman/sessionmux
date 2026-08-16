@@ -147,7 +147,7 @@ Resume 的 Session。所谓“子 Agent”只是这个 Session 的来源关系�
 其次。该分类是导入和投影规则，不要求继续向 `conversation` 主行堆叠一个同时承担来源、展示和
 生命周期的 `is_subagent` 字段。
 
-截至 2026-08-16，已实施的 `session.create` 接受：
+截至 2026-08-17，已实施的 `session.create` 接受：
 
 ```text
 harness
@@ -158,7 +158,12 @@ model?
 mode_id?
 config_values?
 initial_prompt?
+collection_id?
 ```
+
+`collection_id` 在 Session 持久化成功后再做一次 `collection.add_session`；放置失败不删 Session，
+返回里会写明 `collection_placement=failed`。父子 `relation` / `session.promote` 仍未做：带
+`parent_id` 的 Session 目前不能当 Host Control 调用方。
 
 它会创建 Codeg Conversation、启动真实 ACP/native Session、持久化原生 Resume identity，并可选
 启动第一条 Prompt；默认后台创建，不打开 UI、不抢焦点。当前安全边界仍要求 `folder_id` 和 `cwd`

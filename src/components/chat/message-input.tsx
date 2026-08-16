@@ -14,7 +14,6 @@ import {
   GitFork,
   MessageSquareText,
   Scissors,
-  MessagesSquare,
   Send,
   Square,
   TextSelect,
@@ -107,7 +106,6 @@ import {
   composerLeafText,
   docToPromptBlocks,
   serializeDocToDisplayText,
-  serializeDocToText,
 } from "@/components/chat/composer/to-prompt-blocks"
 import { isEmbeddedReferenceUri } from "@/components/chat/composer/reference-uri"
 import {
@@ -130,12 +128,7 @@ import { ComposerAddMenu } from "@/components/chat/composer/composer-add-menu"
 import { ComposerImageThumbnails } from "@/components/chat/composer/composer-image-thumbnails"
 import { useComposerAttachments } from "@/components/chat/composer/use-composer-attachments"
 import { useComposerShortcuts } from "@/components/chat/composer/use-composer-shortcuts"
-import { SessionMessageComposerDialog } from "@/components/collaboration/session-message-composer-dialog"
-import {
-  canSendCollaborationFromComposer,
-  sessionIdsFromEditor,
-  stripSessionMentions,
-} from "@/lib/collaboration-session-mentions"
+
 
 /**
  * Payload pushed into the composer from outside (e.g. a welcome-page quick
@@ -170,7 +163,8 @@ interface MessageInputProps {
   promptCapabilities: PromptCapabilitiesInfo
   attachmentTabId?: string | null
   draftStorageKey?: string | null
-  /** Persisted Session this composer belongs to; required to send `@` Session mail. */
+  /** Persisted Session this composer belongs to. Kept for callers; `@` Session
+   *  tokens are references for the Agent, not a human mail send. */
   sourceConversationId?: number | null
   isActive?: boolean
   /** Paint the flowing active-session gradient on the composer border. Set only
@@ -296,7 +290,7 @@ export function MessageInput({
   promptCapabilities,
   attachmentTabId,
   draftStorageKey,
-  sourceConversationId = null,
+  sourceConversationId: _sourceConversationId = null,
   isActive = false,
   showActiveFlow = false,
   onEnqueue,
@@ -315,7 +309,6 @@ export function MessageInput({
 }: MessageInputProps) {
   const t = useTranslations("Folder.chat.messageInput")
   const tQueue = useTranslations("Folder.chat.messageQueue")
-  const tCollaboration = useTranslations("Collaboration")
   // Kept as a separate binding from `t` so its call sites — exclusively
   // upload / attachment toasts — read as a single coherent group when
   // scanning the file. Same namespace, no extra runtime cost.
@@ -339,9 +332,6 @@ export function MessageInput({
   // The editor owns the content now; this mirror of its empty state drives the
   // send button and `hasSendableContent`.
   const [composerEmpty, setComposerEmpty] = useState(true)
-  const [mentionedSessionIds, setMentionedSessionIds] = useState<number[]>([])
-  const [sessionSendOpen, setSessionSendOpen] = useState(false)
-  const [sessionSendBody, setSessionSendBody] = useState("")
   // Flips true once the RichComposer's async (immediatelyRender:false) editor has
   // mounted, so the hydration effect can use the imperative handle.
   const [composerReady, setComposerReady] = useState(false)
@@ -349,8 +339,7 @@ export function MessageInput({
   const syncComposerEmpty = useCallback(() => {
     const ed = editorRef.current?.getEditor()
     setComposerEmpty(ed ? isComposerEmpty(ed) : true)
-    setMentionedSessionIds(sessionIdsFromEditor(ed, sourceConversationId))
-  }, [sourceConversationId])
+  }, [])
 
   // Attachments (images → thumbnail strip, files → inline badges) and the "+"
   // menu's insertable shortcuts. Both are shared with the to-do task composers,
@@ -642,19 +631,6 @@ export function MessageInput({
 
   const handleComposerReady = useCallback(() => {
     setComposerReady(true)
-  }, [])
-
-  const canSendToSessions = canSendCollaborationFromComposer({
-    sourceConversationId,
-    mentionedSessionIds,
-    isEditingQueueItem,
-  })
-
-  const handleSendToSessions = useCallback(() => {
-    const editor = editorRef.current?.getEditor()
-    const text = editor ? serializeDocToText(editor.state.doc) : ""
-    setSessionSendBody(stripSessionMentions(text))
-    setSessionSendOpen(true)
   }, [])
 
   const availableModes = useMemo(() => modes ?? [], [modes])
@@ -1914,24 +1890,6 @@ export function MessageInput({
                   )}
                 </div>
                 <div className="flex shrink-0 items-center gap-1">
-                  {canSendToSessions ? (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="icon"
-                      className="h-8 w-8"
-                      title={tCollaboration("sendToMentionedSessions", {
-                        count: mentionedSessionIds.length,
-                      })}
-                      aria-label={tCollaboration("sendToMentionedSessions", {
-                        count: mentionedSessionIds.length,
-                      })}
-                      data-collaboration-composer-send=""
-                      onClick={handleSendToSessions}
-                    >
-                      <MessagesSquare className="size-4" />
-                    </Button>
-                  ) : null}
                   {actionButtons}
                 </div>
               </div>
@@ -2049,22 +2007,6 @@ export function MessageInput({
           initialPath={defaultPath ?? undefined}
         />
       )}
-      {sessionSendOpen && sourceConversationId != null ? (
-        <SessionMessageComposerDialog
-          key={mentionedSessionIds.join(",")}
-          sourceConversationId={sourceConversationId}
-          initialTargetConversationIds={mentionedSessionIds}
-          initialBody={sessionSendBody}
-          open
-          onOpenChange={setSessionSendOpen}
-          onSent={() => {
-            resetComposer()
-            if (effectiveDraftStorageKey) {
-              clearMessageInputDraftV2(effectiveDraftStorageKey)
-            }
-          }}
-        />
-      ) : null}
     </div>
   )
 }

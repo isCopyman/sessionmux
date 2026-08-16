@@ -16,6 +16,18 @@ use tokio::sync::RwLock;
 pub const DEFAULT_SESSION_LIST_LIMIT: u32 = 50;
 pub const MAX_SESSION_LIST_LIMIT: u32 = 200;
 pub const MAX_SESSION_MESSAGE_TARGETS: usize = 16;
+pub const DEFAULT_INBOX_LIMIT: u32 = 20;
+pub const MAX_INBOX_LIMIT: u32 = 50;
+pub const INBOX_PREVIEW_CHARS: usize = 160;
+
+pub fn inbox_preview(body: &str) -> String {
+    let collapsed = body.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut preview: String = collapsed.chars().take(INBOX_PREVIEW_CHARS).collect();
+    if collapsed.chars().count() > INBOX_PREVIEW_CHARS {
+        preview.push('…');
+    }
+    preview
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -103,6 +115,106 @@ pub struct SessionSendOutcome {
     pub note: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionInboxFilter {
+    Open,
+    Unread,
+    AwaitingReply,
+    All,
+}
+
+impl SessionInboxFilter {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "open" => Some(Self::Open),
+            "unread" => Some(Self::Unread),
+            "awaiting_reply" => Some(Self::AwaitingReply),
+            "all" => Some(Self::All),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionInboxItem {
+    pub event_id: String,
+    pub delivery_id: String,
+    pub from_session_id: i32,
+    pub from_title: Option<String>,
+    pub from_agent_type: Option<String>,
+    pub preview: String,
+    pub unread: bool,
+    pub expects_reply: bool,
+    pub obligation_state: String,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SessionInboxOutcome {
+    pub available: bool,
+    pub caller_session_id: Option<i32>,
+    pub unread_count: u32,
+    pub awaiting_reply_count: u32,
+    pub items: Vec<SessionInboxItem>,
+    pub truncated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+impl SessionInboxOutcome {
+    pub fn unavailable(caller_session_id: Option<i32>, note: impl Into<String>) -> Self {
+        Self {
+            available: false,
+            caller_session_id,
+            unread_count: 0,
+            awaiting_reply_count: 0,
+            items: Vec::new(),
+            truncated: false,
+            note: Some(note.into()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SessionMessageReadOutcome {
+    pub available: bool,
+    pub caller_session_id: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delivery_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from_session_id: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from_title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from_agent_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
+    pub expects_reply: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reply_to_event_id: Option<String>,
+    pub unread: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub obligation_state: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+impl SessionMessageReadOutcome {
+    pub fn unavailable(caller_session_id: Option<i32>, note: impl Into<String>) -> Self {
+        Self {
+            available: false,
+            caller_session_id,
+            note: Some(note.into()),
+            ..Default::default()
+        }
+    }
+}
+
 impl SessionSendOutcome {
     pub fn rejected(source_session_id: Option<i32>, note: impl Into<String>) -> Self {
         Self {
@@ -130,6 +242,19 @@ pub trait SessionCollaborationAccess: Send + Sync {
         source_session_id: i32,
         spec: SessionMessageSpec,
     ) -> SessionSendOutcome;
+
+    async fn list_inbox(
+        &self,
+        caller_session_id: i32,
+        filter: SessionInboxFilter,
+        limit: u32,
+    ) -> SessionInboxOutcome;
+
+    async fn read_message(
+        &self,
+        caller_session_id: i32,
+        event_id: String,
+    ) -> SessionMessageReadOutcome;
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -165,6 +290,36 @@ impl SessionCollaborationRuntimeConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inbox_preview_collapses_whitespace_and_caps_length() {
+        assert_eq!(inbox_preview("  hello   world  "), "hello world");
+        let long = "word ".repeat(80);
+        let preview = inbox_preview(&long);
+        assert!(preview.chars().count() <= INBOX_PREVIEW_CHARS + 1);
+        assert!(preview.ends_with('…'));
+    }
+
+    #[test]
+    fn inbox_filter_parses_known_wires_only() {
+        assert_eq!(
+            SessionInboxFilter::parse("open"),
+            Some(SessionInboxFilter::Open)
+        );
+        assert_eq!(
+            SessionInboxFilter::parse("unread"),
+            Some(SessionInboxFilter::Unread)
+        );
+        assert_eq!(
+            SessionInboxFilter::parse("awaiting_reply"),
+            Some(SessionInboxFilter::AwaitingReply)
+        );
+        assert_eq!(
+            SessionInboxFilter::parse("all"),
+            Some(SessionInboxFilter::All)
+        );
+        assert_eq!(SessionInboxFilter::parse("urgent"), None);
+    }
 
     #[tokio::test]
     async fn runtime_config_round_trips() {

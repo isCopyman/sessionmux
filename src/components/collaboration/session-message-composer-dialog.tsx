@@ -6,16 +6,6 @@ import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 import { AgentIcon } from "@/components/agent-icon"
 import { ConversationStatusDot } from "@/components/conversations/conversation-status-dot"
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
@@ -29,10 +19,7 @@ import {
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Textarea } from "@/components/ui/textarea"
-import {
-  sendAndInterruptCollaborationMessage,
-  sendCollaborationMessage,
-} from "@/lib/api"
+import { sendCollaborationMessage } from "@/lib/api"
 import { formatConversationTitle } from "@/lib/conversation-title"
 import { getAgentLabel } from "@/lib/custom-agents"
 import { randomUUID } from "@/lib/utils"
@@ -41,7 +28,6 @@ import { STATUS_ORDER } from "@/lib/types"
 import type {
   CollaborationDeliveryHint,
   CollaborationInvocationPolicy,
-  CollaborationUrgency,
   ConversationStatus,
 } from "@/lib/types"
 
@@ -92,10 +78,7 @@ export function SessionMessageComposerDialog({
     useState<CollaborationInvocationPolicy>("store_only")
   const [deliveryHint, setDeliveryHint] =
     useState<CollaborationDeliveryHint>("default")
-  const [interruptCurrentTask, setInterruptCurrentTask] = useState(false)
   const [expectsReply, setExpectsReply] = useState(false)
-  const [urgency, setUrgency] = useState<CollaborationUrgency>("normal")
-  const [confirmInterrupt, setConfirmInterrupt] = useState(false)
   const [sending, setSending] = useState(false)
 
   const folderById = useMemo(
@@ -156,7 +139,6 @@ export function SessionMessageComposerDialog({
   const canSend =
     sourceConversationId != null &&
     selected.size > 0 &&
-    (!interruptCurrentTask || selected.size === 1) &&
     body.trim().length > 0 &&
     !bodyTooLarge &&
     !sending
@@ -167,10 +149,7 @@ export function SessionMessageComposerDialog({
     setBody(initialBody)
     setInvocationPolicy("store_only")
     setDeliveryHint("default")
-    setInterruptCurrentTask(false)
     setExpectsReply(false)
-    setUrgency("normal")
-    setConfirmInterrupt(false)
   }
 
   const setOpen = (next: boolean) => {
@@ -181,11 +160,6 @@ export function SessionMessageComposerDialog({
   const toggleTarget = (conversationId: number) => {
     if (replyToEventId != null) return
     setSelected((current) => {
-      if (interruptCurrentTask) {
-        return current.has(conversationId)
-          ? new Set()
-          : new Set([conversationId])
-      }
       const next = new Set(current)
       if (next.has(conversationId)) next.delete(conversationId)
       else if (next.size < 16) next.add(conversationId)
@@ -193,44 +167,10 @@ export function SessionMessageComposerDialog({
     })
   }
 
-  const handleSend = async (options?: { confirmedInterrupt?: boolean }) => {
+  const handleSend = async () => {
     if (!canSend || sourceConversationId == null) return
-    if (interruptCurrentTask && !options?.confirmedInterrupt) {
-      setConfirmInterrupt(true)
-      return
-    }
-    setConfirmInterrupt(false)
     setSending(true)
     try {
-      if (interruptCurrentTask) {
-        const targetConversationId = [...selected][0]
-        const result = await sendAndInterruptCollaborationMessage({
-          message: {
-            sourceConversationId,
-            targetConversationIds: [targetConversationId],
-            body,
-            clientDedupeId: randomUUID(),
-            invocationPolicy: "invoke_when_idle",
-            deliveryHint: "default",
-            expectsReply,
-            urgency,
-            replyToEventId,
-          },
-          interruptClientDedupeId: randomUUID(),
-          reason: "User explicitly requested stop current task and send",
-        })
-        if (result.interruptError || !result.interrupt) {
-          toast.warning(t("interruptUnavailableQueued"))
-        } else if (result.interrupt.operation.state === "failed") {
-          toast.warning(t("interruptFailedQueued"))
-        } else {
-          toast.success(t("interruptRequested"))
-        }
-        onSent?.({ count: 1 })
-        reset()
-        onOpenChange(false)
-        return
-      }
       const result = await sendCollaborationMessage({
         sourceConversationId,
         targetConversationIds: [...selected],
@@ -239,7 +179,7 @@ export function SessionMessageComposerDialog({
         invocationPolicy,
         deliveryHint,
         expectsReply,
-        urgency,
+        urgency: "normal",
         replyToEventId,
       })
       const failed = result.deliveries.filter(
@@ -277,18 +217,14 @@ export function SessionMessageComposerDialog({
           <DialogDescription>
             {invocationPolicy === "store_only"
               ? t("storeOnlyDescription")
-              : interruptCurrentTask
-                ? t("interruptDescription")
-                : deliveryHint === "steer_if_supported"
-                  ? t("steerIfSupportedDescription")
-                  : t("invokeWhenIdleDescription")}
+              : t("invokeWhenIdleDescription")}
           </DialogDescription>
         </DialogHeader>
 
         <div
           role="radiogroup"
           aria-label={t("deliveryMode")}
-          className="grid grid-cols-2 gap-1 rounded-lg bg-muted p-1 sm:grid-cols-4"
+          className="grid grid-cols-2 gap-1 rounded-lg bg-muted p-1"
         >
           <Button
             type="button"
@@ -299,7 +235,6 @@ export function SessionMessageComposerDialog({
             onClick={() => {
               setInvocationPolicy("store_only")
               setDeliveryHint("default")
-              setInterruptCurrentTask(false)
             }}
           >
             {t("deliverOnly")}
@@ -307,60 +242,17 @@ export function SessionMessageComposerDialog({
           <Button
             type="button"
             role="radio"
-            aria-checked={
-              invocationPolicy === "invoke_when_idle" &&
-              deliveryHint === "default" &&
-              !interruptCurrentTask
-            }
+            aria-checked={invocationPolicy === "invoke_when_idle"}
             variant={
-              invocationPolicy === "invoke_when_idle" &&
-              deliveryHint === "default" &&
-              !interruptCurrentTask
-                ? "secondary"
-                : "ghost"
+              invocationPolicy === "invoke_when_idle" ? "secondary" : "ghost"
             }
             size="sm"
             onClick={() => {
               setInvocationPolicy("invoke_when_idle")
               setDeliveryHint("default")
-              setInterruptCurrentTask(false)
             }}
           >
             {t("invokeWhenIdle")}
-          </Button>
-          <Button
-            type="button"
-            role="radio"
-            aria-checked={deliveryHint === "steer_if_supported"}
-            variant={
-              deliveryHint === "steer_if_supported" ? "secondary" : "ghost"
-            }
-            size="sm"
-            onClick={() => {
-              setInvocationPolicy("invoke_when_idle")
-              setDeliveryHint("steer_if_supported")
-              setInterruptCurrentTask(false)
-            }}
-          >
-            {t("steerIfSupported")}
-          </Button>
-          <Button
-            type="button"
-            role="radio"
-            aria-checked={interruptCurrentTask}
-            variant={interruptCurrentTask ? "secondary" : "ghost"}
-            size="sm"
-            onClick={() => {
-              setInvocationPolicy("invoke_when_idle")
-              setDeliveryHint("default")
-              setInterruptCurrentTask(true)
-              setSelected((current) => {
-                const first = current.values().next().value
-                return first == null ? new Set() : new Set([first])
-              })
-            }}
-          >
-            {t("interruptCurrentTask")}
           </Button>
         </div>
 
@@ -487,23 +379,6 @@ export function SessionMessageComposerDialog({
           </span>
         </label>
 
-        <label className="flex cursor-pointer items-start gap-2.5 rounded-md border px-3 py-2.5">
-          <Checkbox
-            checked={urgency === "urgent"}
-            onCheckedChange={(checked) =>
-              setUrgency(checked === true ? "urgent" : "normal")
-            }
-            aria-label={t("markUrgent")}
-            className="mt-0.5"
-          />
-          <span className="min-w-0">
-            <span className="block text-sm font-medium">{t("markUrgent")}</span>
-            <span className="block text-xs text-muted-foreground">
-              {t("markUrgentDescription")}
-            </span>
-          </span>
-        </label>
-
         <DialogFooter>
           <Button
             variant="outline"
@@ -526,32 +401,6 @@ export function SessionMessageComposerDialog({
           </Button>
         </DialogFooter>
       </DialogContent>
-      <AlertDialog
-        open={confirmInterrupt}
-        onOpenChange={(open) => {
-          if (!open && !sending) setConfirmInterrupt(false)
-        }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>{t("interruptConfirmTitle")}</AlertDialogTitle>
-            <AlertDialogDescription>
-              {t("interruptConfirmDescription")}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={sending}>
-              {t("cancel")}
-            </AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => void handleSend({ confirmedInterrupt: true })}
-              disabled={sending}
-            >
-              {t("interruptConfirm")}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </Dialog>
   )
 }

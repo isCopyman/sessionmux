@@ -183,6 +183,41 @@
     }
   },
   {
+    "name": "list_inbox",
+    "description": "List this Session's Agent mailbox. Default filter is open: unread letters plus letters that still expect a reply. Results are newest first and include a short preview only — call read_message with event_id to open a letter. Listing does not mark mail as read. A human opening the Session or the 往来 strip never consumes this mailbox.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "filter": {
+          "type": "string",
+          "enum": ["open", "unread", "awaiting_reply", "all"],
+          "description": "open (default): unread or still expecting a reply. unread: Agent has not opened the letter. awaiting_reply: reply obligation is still open. all: every non-dismissed inbound letter."
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50,
+          "description": "Maximum letters to return. Defaults to 20; raise only if you must page."
+        }
+      }
+    }
+  },
+  {
+    "name": "read_message",
+    "description": "Open one inbound Agent mailbox letter by event_id and return its full body. Opening marks the letter read for this Agent so unread reminders stop. It does not send a reply and does not clear a reply obligation. If expects_reply is true, answer with send_message targeting from_session_id and setting reply_to_event_id. Do not invent event ids.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["event_id"],
+      "properties": {
+        "event_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The event_id from list_inbox or from a collaboration reminder/envelope."
+        }
+      }
+    }
+  },
+  {
     "name": "create_automation",
     "description": "Save a codeg Automation: a reusable job — a prompt plus a target project — that codeg runs on a cron schedule (or on demand) without anyone present. Use it when the user asks for work that should REPEAT or happen at a TIME rather than right now: 'every morning', 'each Monday', 'nightly', 'every 30 minutes', 'before standup', 'set up a recurring …'. Do NOT use it for work the user wants done in this conversation — just do that work. Each run starts a fresh headless session in its own worktree with no memory of this chat, so `prompt` must be completely self-contained: state the goal, the relevant paths, and what a finished run looks like. Creating an automation does not run it now; the tool returns the id and the next fire time so you can tell the user when it will first go off. The user can edit, disable, run, or delete it on the Automations page.",
     "inputSchema": {

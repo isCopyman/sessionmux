@@ -8,7 +8,6 @@ const workspace = vi.hoisted(() => ({
     { id: 1, folder_id: 10, title: "Reviewer", agent_type: "codex" },
   ],
 }))
-const replyDialog = vi.hoisted(() => ({ props: null as unknown }))
 const api = vi.hoisted(() => ({ markCollaborationSeen: vi.fn() }))
 
 vi.mock("next-intl", () => ({
@@ -21,12 +20,6 @@ vi.mock("@/contexts/tab-context", () => ({
 vi.mock("@/stores/app-workspace-store", () => ({
   useAppWorkspaceStore: (selector: (state: typeof workspace) => unknown) =>
     selector(workspace),
-}))
-vi.mock("@/components/collaboration/session-message-composer-dialog", () => ({
-  SessionMessageComposerDialog: (props: unknown) => {
-    replyDialog.props = props
-    return <div data-testid="reply-dialog" />
-  },
 }))
 vi.mock("@/lib/api", () => api)
 vi.mock("./content-parts-renderer", () => ({
@@ -77,11 +70,10 @@ function delivery(): CollaborationDelivery {
 beforeEach(() => {
   vi.clearAllMocks()
   api.markCollaborationSeen.mockResolvedValue({})
-  replyDialog.props = null
 })
 
 describe("CollaborationMessageCard", () => {
-  it("shows distinct lifecycle facts and keeps navigation/reply linked", () => {
+  it("shows distinct lifecycle facts and keeps navigation without a human reply", () => {
     render(
       <CollaborationMessageCard
         delivery={delivery()}
@@ -91,7 +83,7 @@ describe("CollaborationMessageCard", () => {
 
     expect(screen.getByText("transcriptFrom:Reviewer")).toBeInTheDocument()
     expect(screen.getByText("Please check the proof.")).toBeInTheDocument()
-    expect(screen.getByText("unreadCount")).toBeInTheDocument()
+    expect(screen.getByText("stateSeen")).toBeInTheDocument()
     expect(screen.getByText("stateEmbedded")).toBeInTheDocument()
     expect(screen.getByText("stateNeedsReply")).toBeInTheDocument()
     expect(api.markCollaborationSeen).not.toHaveBeenCalled()
@@ -100,31 +92,9 @@ describe("CollaborationMessageCard", () => {
     expect(tabs.openTab).toHaveBeenCalledWith(10, 1, "codex", true, "Reviewer")
     expect(api.markCollaborationSeen).toHaveBeenCalledWith(2, ["delivery-1"])
     expect(screen.getByText("stateSeen")).toBeInTheDocument()
-
-    fireEvent.click(screen.getByRole("button", { name: "reply" }))
-    expect(replyDialog.props).toEqual(
-      expect.objectContaining({
-        sourceConversationId: 2,
-        initialTargetConversationId: 1,
-        replyToEventId: "event-1",
-        open: true,
-      })
-    )
-    expect(api.markCollaborationSeen).toHaveBeenCalledTimes(1)
-  })
-
-  it("marks an unread delivery seen when reply is the first explicit action", () => {
-    render(
-      <CollaborationMessageCard
-        delivery={delivery()}
-        currentConversationId={2}
-      />
-    )
-
-    expect(api.markCollaborationSeen).not.toHaveBeenCalled()
-    fireEvent.click(screen.getByRole("button", { name: "reply" }))
-
-    expect(api.markCollaborationSeen).toHaveBeenCalledWith(2, ["delivery-1"])
-    expect(screen.getByText("stateSeen")).toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "reply" })
+    ).not.toBeInTheDocument()
+    expect(screen.queryByTestId("reply-dialog")).not.toBeInTheDocument()
   })
 })

@@ -523,21 +523,40 @@ impl PromptQueueRuntime {
             self.reconcile_interrupt_terminal(conversation_id).await;
         }
         if turn_in_flight {
-            if native_steering_available {
-                match prompt_queue_service::head_requests_native_steer(
-                    &self.db.conn,
-                    conversation_id,
-                )
-                .await
-                {
-                    Ok(true) => {
+            match prompt_queue_service::head_is_collaboration_invoke(
+                &self.db.conn,
+                conversation_id,
+            )
+            .await
+            {
+                Ok(true) => {
+                    if native_steering_available {
                         self.process_native_steer(&row, &connection_id).await;
                     }
-                    Ok(false) => {}
-                    Err(err) => tracing::error!(
-                        "[prompt-queue] steer-head lookup failed for {conversation_id}: {err}"
-                    ),
+                    let still_busy = match self.manager.get_state(&connection_id).await {
+                        Some(state) => state.read().await.turn_in_flight,
+                        None => false,
+                    };
+                    let still_collab = prompt_queue_service::head_is_collaboration_invoke(
+                        &self.db.conn,
+                        conversation_id,
+                    )
+                    .await
+                    .unwrap_or(false);
+                    if still_busy && still_collab {
+                        if let Err(err) =
+                            self.manager.cancel(&self.db.conn, &connection_id).await
+                        {
+                            tracing::warn!(
+                                "[prompt-queue] force-send cancel failed for {conversation_id}: {err}"
+                            );
+                        }
+                    }
                 }
+                Ok(false) => {}
+                Err(err) => tracing::error!(
+                    "[prompt-queue] collab-head lookup failed for {conversation_id}: {err}"
+                ),
             }
             return;
         }
@@ -709,9 +728,7 @@ impl PromptQueueRuntime {
                 return;
             }
         };
-        if claimed.delivery_hint != Some(CollaborationDeliveryHint::SteerIfSupported)
-            || claimed.origin_event_id.is_none()
-        {
+        if claimed.origin_event_id.is_none() {
             self.release_busy(&claimed).await;
             return;
         }

@@ -157,21 +157,13 @@ describe("SessionCommunicationBanner", () => {
     ).not.toBeInTheDocument()
   })
 
-  it("opens a new Session message without expanding the existing mail list", () => {
+  it("does not offer a human compose action on the Agent mailbox strip", () => {
     render(<SessionCommunicationBanner conversationId={2} />)
-    fireEvent.click(screen.getByRole("button", { name: "sendMenu" }))
 
     expect(
-      screen.queryByText("The evidence does not support the last sentence.")
+      screen.queryByRole("button", { name: "sendMenu" })
     ).not.toBeInTheDocument()
-    expect(replyDialog.props).toEqual(
-      expect.objectContaining({
-        sourceConversationId: 2,
-        initialTargetConversationId: null,
-        replyToEventId: null,
-        open: true,
-      })
-    )
+    expect(screen.queryByTestId("reply-dialog")).not.toBeInTheDocument()
   })
 
   it("shows communication outside the native transcript and marks it read", () => {
@@ -214,7 +206,7 @@ describe("SessionCommunicationBanner", () => {
     expect(hook.markSeen).toHaveBeenCalledWith(["delivery-2"])
   })
 
-  it("opens the stable source Session and starts a reply linked to the event", () => {
+  it("opens the stable source Session without letting a human reply for the Agent", () => {
     render(<SessionCommunicationBanner conversationId={2} />)
     fireEvent.click(screen.getByRole("button", { name: /panelTitle/ }))
 
@@ -227,16 +219,10 @@ describe("SessionCommunicationBanner", () => {
       "Logic reviewer"
     )
 
-    fireEvent.click(screen.getByRole("button", { name: "reply" }))
-    expect(screen.getByTestId("reply-dialog")).toBeInTheDocument()
-    expect(replyDialog.props).toEqual(
-      expect.objectContaining({
-        sourceConversationId: 2,
-        initialTargetConversationId: 1,
-        replyToEventId: "event-1",
-        open: true,
-      })
-    )
+    expect(
+      screen.queryByRole("button", { name: "reply" })
+    ).not.toBeInTheDocument()
+    expect(screen.queryByTestId("reply-dialog")).not.toBeInTheDocument()
   })
 
   it("shows whether an explicit reply obligation is still open", () => {
@@ -292,7 +278,7 @@ describe("SessionCommunicationBanner", () => {
     expect(screen.getByText("stateAwaitingReply")).toBeInTheDocument()
   })
 
-  it("clears only the selected inbound obligation when no reply is needed", () => {
+  it("does not let a human waive an Agent reply obligation", () => {
     hook.feed = {
       conversationId: 2,
       revision: 2,
@@ -304,8 +290,10 @@ describe("SessionCommunicationBanner", () => {
     }
     render(<SessionCommunicationBanner conversationId={2} />)
     fireEvent.click(screen.getByRole("button", { name: /panelTitle/ }))
-    fireEvent.click(screen.getByRole("button", { name: "noReplyNeeded" }))
-    expect(hook.resolve).toHaveBeenCalledWith("delivery-1")
+    expect(
+      screen.queryByRole("button", { name: "noReplyNeeded" })
+    ).not.toBeInTheDocument()
+    expect(hook.resolve).not.toHaveBeenCalled()
   })
 
   it("labels a waived obligation separately from a real reply", () => {

@@ -9,7 +9,6 @@ import {
   Pencil,
   Pin,
   PinOff,
-  Send,
   SquarePen,
   Trash2,
 } from "lucide-react"
@@ -63,7 +62,6 @@ import {
   type ActiveSessionDetails,
 } from "./active-session-details"
 import { SessionDetailsDialog } from "./session-details-dialog"
-import { SessionMessageComposerDialog } from "@/components/collaboration/session-message-composer-dialog"
 
 interface ConversationDetailHeaderProps {
   tabId: string
@@ -81,8 +79,8 @@ interface ConversationDetailHeaderProps {
 
 /**
  * Conversation detail header (desktop only): the owning folder name + the
- * conversation title on the left; a Session-to-Session send action and an
- * overflow (⋯) menu on the right. A single instance renders fixed above the
+ * conversation title on the left; an overflow (⋯) menu on the right. A
+ * single instance renders fixed above the
  * tile scroll area, scoped to the ACTIVE conversation, so it never scrolls
  * horizontally when many conversations are tiled.
  *
@@ -107,7 +105,6 @@ export const ConversationDetailHeader = memo(function ConversationDetailHeader({
   const tConv = useTranslations("Folder.conversation")
   const tStatus = useTranslations("Folder.statusLabels")
   const tDetails = useTranslations("Folder.sessionDetails")
-  const tCollaboration = useTranslations("Collaboration")
   const { closeTab, openNewConversationTab } = useTabActions()
   const updateConversationLocal = useAppWorkspaceStore(
     (s) => s.updateConversationLocal
@@ -131,7 +128,6 @@ export const ConversationDetailHeader = memo(function ConversationDetailHeader({
   )
 
   const [details, setDetails] = useState<ActiveSessionDetails | null>(null)
-  const [messageComposerOpen, setMessageComposerOpen] = useState(false)
   // Snapshot the action target when a dialog OPENS. The header is a SINGLE
   // instance reused across active tabs (see conversation-detail-panel), and the
   // global tab-switch / close-tab shortcuts still fire while a dialog is open —
@@ -264,17 +260,6 @@ export const ConversationDetailHeader = memo(function ConversationDetailHeader({
         </span>
       </div>
       <div className="flex shrink-0 items-center">
-        <button
-          type="button"
-          disabled={!persisted}
-          className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-muted-foreground/60 transition-colors hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
-          aria-label={tCollaboration("sendMenu")}
-          title={tCollaboration("sendMenu")}
-          data-collaboration-send=""
-          onClick={() => setMessageComposerOpen(true)}
-        >
-          <Send className="h-4 w-4" />
-        </button>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button
@@ -313,13 +298,6 @@ export const ConversationDetailHeader = memo(function ConversationDetailHeader({
             >
               <Info className="h-4 w-4" />
               {tDetails("menuLabel")}
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              disabled={!persisted}
-              onSelect={() => setMessageComposerOpen(true)}
-            >
-              <Send className="h-4 w-4" />
-              {tCollaboration("sendMenu")}
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuSub>
@@ -416,13 +394,6 @@ export const ConversationDetailHeader = memo(function ConversationDetailHeader({
           model={details.model}
         />
       )}
-      {messageComposerOpen ? (
-        <SessionMessageComposerDialog
-          sourceConversationId={conversationId}
-          open
-          onOpenChange={setMessageComposerOpen}
-        />
-      ) : null}
     </div>
   )
 })

@@ -494,6 +494,12 @@ impl SessionHostControlProvider {
                             "type": "string",
                             "maxLength": MAX_PROMPT_CHARS,
                             "description": "Optional first user prompt. Creation without this still persists the native Session identity."
+                        },
+                        "collection_id": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": i32::MAX,
+                            "description": "Optional primary Collection in the caller's Path scope. Placement runs after the Session exists; a placement failure does not delete the Session."
                         }
                     }
                 }),
@@ -798,6 +804,7 @@ impl SessionHostControlProvider {
                 "setup_error": runtime.setup_error,
                 "opened": false,
                 "focused": false,
+                "requested_collection_id": params.collection_id,
             }),
             note: Some(note),
         }
@@ -1078,6 +1085,8 @@ struct SessionCreateInput {
     config_values: BTreeMap<String, String>,
     #[serde(default)]
     initial_prompt: Option<String>,
+    #[serde(default)]
+    collection_id: Option<i32>,
 }
 
 #[derive(Debug, Deserialize)]

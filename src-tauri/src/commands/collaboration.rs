@@ -614,6 +614,130 @@ impl SessionCollaborationAccess for DbSessionCollaboration {
             Err(err) => SessionSendOutcome::rejected(Some(source_session_id), err.to_string()),
         }
     }
+
+    async fn list_inbox(
+        &self,
+        caller_session_id: i32,
+        filter: crate::acp::session_collaboration::SessionInboxFilter,
+        limit: u32,
+    ) -> crate::acp::session_collaboration::SessionInboxOutcome {
+        use crate::acp::session_collaboration::{
+            inbox_preview, SessionInboxItem, SessionInboxOutcome, MAX_INBOX_LIMIT,
+        };
+        if !self.config.is_enabled().await {
+            return SessionInboxOutcome::unavailable(
+                Some(caller_session_id),
+                "Session collaboration is disabled in Codeg settings.",
+            );
+        }
+        let items = match collaboration_service::list_inbox(
+            &self.db.conn,
+            caller_session_id,
+            filter,
+            limit.clamp(1, MAX_INBOX_LIMIT),
+        )
+        .await
+        {
+            Ok(items) => items,
+            Err(err) => {
+                return SessionInboxOutcome::unavailable(Some(caller_session_id), err.to_string())
+            }
+        };
+        let feed = match collaboration_service::feed(&self.db.conn, caller_session_id, None).await {
+            Ok(feed) => feed,
+            Err(err) => {
+                return SessionInboxOutcome::unavailable(Some(caller_session_id), err.to_string())
+            }
+        };
+        let awaiting_reply_count = feed
+            .inbound
+            .iter()
+            .filter(|item| {
+                item.obligation_state == crate::models::CollaborationObligationState::AwaitingReply
+            })
+            .count() as u32;
+        SessionInboxOutcome {
+            available: true,
+            caller_session_id: Some(caller_session_id),
+            unread_count: feed.unread_count,
+            awaiting_reply_count,
+            truncated: items.len() as u32 >= limit.clamp(1, MAX_INBOX_LIMIT),
+            items: items
+                .into_iter()
+                .map(|item| SessionInboxItem {
+                    event_id: item.event_id,
+                    delivery_id: item.id,
+                    from_session_id: item.source.conversation_id,
+                    from_title: item.source.title,
+                    from_agent_type: item.source.agent_type,
+                    preview: inbox_preview(&item.body),
+                    unread: item.agent_received_at.is_none(),
+                    expects_reply: item.expects_reply,
+                    obligation_state: item.obligation_state.as_str().to_string(),
+                    created_at: item.created_at,
+                })
+                .collect(),
+            note: None,
+        }
+    }
+
+    async fn read_message(
+        &self,
+        caller_session_id: i32,
+        event_id: String,
+    ) -> crate::acp::session_collaboration::SessionMessageReadOutcome {
+        use crate::acp::session_collaboration::SessionMessageReadOutcome;
+        if !self.config.is_enabled().await {
+            return SessionMessageReadOutcome::unavailable(
+                Some(caller_session_id),
+                "Session collaboration is disabled in Codeg settings.",
+            );
+        }
+        let item = match collaboration_service::get_inbound_message(
+            &self.db.conn,
+            caller_session_id,
+            &event_id,
+        )
+        .await
+        {
+            Ok(item) => item,
+            Err(err) => {
+                return SessionMessageReadOutcome::unavailable(
+                    Some(caller_session_id),
+                    err.to_string(),
+                )
+            }
+        };
+        let marked = if let Ok(changed) =
+            collaboration_service::mark_agent_read(&self.db.conn, caller_session_id, &event_id)
+                .await
+        {
+            publish(&self.emitter, changed.affected_conversation_ids);
+            true
+        } else {
+            false
+        };
+        SessionMessageReadOutcome {
+            available: true,
+            caller_session_id: Some(caller_session_id),
+            event_id: Some(item.event_id),
+            delivery_id: Some(item.id),
+            from_session_id: Some(item.source.conversation_id),
+            from_title: item.source.title,
+            from_agent_type: item.source.agent_type,
+            body: Some(item.body),
+            expects_reply: item.expects_reply,
+            reply_to_event_id: item.reply_to_event_id,
+            unread: if marked {
+                false
+            } else {
+                item.agent_received_at.is_none()
+            },
+            obligation_state: Some(item.obligation_state.as_str().to_string()),
+            created_at: Some(item.created_at),
+            note: None,
+        }
+    }
 }
 
 pub async fn load_session_collaboration_settings(
@@ -868,6 +992,7 @@ mod tests {
     use crate::acp::connection::ConnectionCommand;
     use crate::acp::internal_bus::EventBusMetrics;
     use crate::acp::InternalEventBus;
+    use crate::acp::session_collaboration::SessionInboxFilter;
     use crate::db::test_helpers::{fresh_in_memory_db, seed_conversation, seed_folder};
     use crate::models::{
         AgentType, CollaborationDeliveryHint, CollaborationInvocationPolicy, CollaborationUrgency,
@@ -1393,5 +1518,68 @@ mod tests {
             .expect("restored queue");
         assert_eq!(restored.items[0].state, PromptQueueItemState::Queued);
         assert!(restored.items[0].paused_reason.is_none());
+    }
+
+    #[tokio::test]
+    async fn agent_inbox_lists_preview_and_read_marks_agent_received() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-agent-inbox").await;
+        let source = seed_conversation(&db, folder, AgentType::Codex).await;
+        let target = seed_conversation(&db, folder, AgentType::ClaudeCode).await;
+        let access = enabled_agent_access(&db, EventEmitter::Noop).await;
+        let sent = collaboration_send_core(
+            &db.conn,
+            &EventEmitter::Noop,
+            &PromptQueueHandle::disconnected_for_test(),
+            SendCollaborationMessageInput {
+                source_conversation_id: source,
+                target_conversation_ids: vec![target],
+                body: "please review claim 3 in the methods section".to_string(),
+                client_dedupe_id: "agent-inbox-letter".to_string(),
+                invocation_policy: CollaborationInvocationPolicy::StoreOnly,
+                delivery_hint: CollaborationDeliveryHint::Default,
+                expects_reply: true,
+                urgency: CollaborationUrgency::Normal,
+                reply_to_event_id: None,
+            },
+        )
+        .await
+        .expect("send");
+
+        let listed = access
+            .list_inbox(target, SessionInboxFilter::Open, 20)
+            .await;
+        assert!(listed.available);
+        assert_eq!(listed.unread_count, 1);
+        assert_eq!(listed.awaiting_reply_count, 1);
+        assert_eq!(listed.items.len(), 1);
+        assert_eq!(listed.items[0].event_id, sent.event_id);
+        assert!(listed.items[0].unread);
+        assert!(listed.items[0].expects_reply);
+        assert!(listed.items[0].preview.contains("please review claim 3"));
+        assert!(!listed.items[0].preview.contains("<<<CODEG_SESSION_MESSAGE"));
+
+        let opened = access.read_message(target, sent.event_id.clone()).await;
+        assert!(opened.available);
+        assert_eq!(
+            opened.body.as_deref(),
+            Some("please review claim 3 in the methods section")
+        );
+        assert!(!opened.unread);
+        assert!(opened.expects_reply);
+
+        let unread = access
+            .list_inbox(target, SessionInboxFilter::Unread, 20)
+            .await;
+        assert_eq!(unread.unread_count, 0);
+        assert!(unread.items.is_empty());
+
+        let still_open = access
+            .list_inbox(target, SessionInboxFilter::Open, 20)
+            .await;
+        assert_eq!(still_open.unread_count, 0);
+        assert_eq!(still_open.awaiting_reply_count, 1);
+        assert_eq!(still_open.items.len(), 1);
+        assert!(!still_open.items[0].unread);
     }
 }
