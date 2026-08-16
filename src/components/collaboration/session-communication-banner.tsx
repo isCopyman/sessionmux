@@ -111,34 +111,7 @@ export function SessionCommunicationBannerView({
       />
     ) : null
 
-  if (!hydrated || conversationId == null) return null
-
-  if (total === 0) {
-    return (
-      <section
-        data-collaboration-banner=""
-        className="border-b border-border/60 bg-background/80 backdrop-blur-sm"
-      >
-        <div className="mx-auto flex max-w-3xl items-center gap-2 px-4 py-1.5">
-          <MessageSquareMore className="h-4 w-4 text-muted-foreground" />
-          <span className="text-xs font-medium">{t("panelTitle")}</span>
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost"
-            className="ml-auto h-7 px-2 text-[11px]"
-            data-collaboration-compose=""
-            aria-label={t("sendMenu")}
-            onClick={() => setComposing(true)}
-          >
-            <Send className="h-3.5 w-3.5" />
-            {t("sendMenu")}
-          </Button>
-        </div>
-        {composer}
-      </section>
-    )
-  }
+  if (!hydrated || conversationId == null || total === 0) return null
 
   const invocationState = (delivery: CollaborationDelivery) => {
     switch (delivery.interruptState) {

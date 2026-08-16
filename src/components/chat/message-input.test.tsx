@@ -740,3 +740,46 @@ describe("MessageInput native steering (insert into current turn)", () => {
     expect(serializeDocToText(editor.state.doc)).toContain("keep me")
   })
 })
+
+describe("MessageInput send to @ Sessions", () => {
+  afterEach(() => {
+    cleanup()
+    composerHandle.current = null
+  })
+
+  it("keeps the Session send action while the current Agent is prompting", async () => {
+    renderInput({
+      sourceConversationId: 1,
+      isPrompting: true,
+      disabled: true,
+      onCancel: vi.fn(),
+      onEnqueue: vi.fn(),
+    })
+    await waitFor(
+      () => expect(composerHandle.current?.getEditor()).toBeTruthy(),
+      { timeout: 5000 }
+    )
+    const editor = composerHandle.current?.getEditor()
+    if (!editor) throw new Error("composer editor not mounted")
+
+    act(() => {
+      editor
+        .chain()
+        .insertContent("ask ")
+        .insertReference({
+          refType: "session",
+          id: "2",
+          label: "Buzz",
+          uri: "codeg://session/2",
+          meta: null,
+        })
+        .run()
+    })
+
+    expect(
+      await screen.findByRole("button", {
+        name: "Send to 1 selected sessions",
+      })
+    ).toBeTruthy()
+  })
+})

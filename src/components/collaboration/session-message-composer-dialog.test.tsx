@@ -331,6 +331,23 @@ describe("SessionMessageComposerDialog", () => {
     )
   })
 
+  it("tells the host after a structured send so the source composer can clear", async () => {
+    const onSent = vi.fn()
+    render(
+      <SessionMessageComposerDialog
+        sourceConversationId={1}
+        initialTargetConversationIds={[2]}
+        initialBody="Please compare these claims"
+        open
+        onOpenChange={onOpenChange}
+        onSent={onSent}
+      />
+    )
+    fireEvent.click(screen.getByRole("button", { name: /^send$/ }))
+
+    await waitFor(() => expect(onSent).toHaveBeenCalledWith({ count: 2 }))
+  })
+
   it("can mark a Session message urgent without changing delivery policy", async () => {
     render(
       <SessionMessageComposerDialog

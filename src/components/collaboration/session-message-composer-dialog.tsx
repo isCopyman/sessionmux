@@ -59,6 +59,8 @@ interface SessionMessageComposerDialogProps {
   initialBody?: string
   /** Immutable collaboration event being answered, when this is a reply. */
   replyToEventId?: string | null
+  /** Fired after the event is persisted, including a partial fan-out. */
+  onSent?: (info: { count: number }) => void
 }
 
 export function SessionMessageComposerDialog({
@@ -69,6 +71,7 @@ export function SessionMessageComposerDialog({
   initialTargetConversationIds = [],
   initialBody = "",
   replyToEventId = null,
+  onSent,
 }: SessionMessageComposerDialogProps) {
   const t = useTranslations("Collaboration")
   const tStatus = useTranslations("Folder.statusLabels")
@@ -223,6 +226,7 @@ export function SessionMessageComposerDialog({
         } else {
           toast.success(t("interruptRequested"))
         }
+        onSent?.({ count: 1 })
         reset()
         onOpenChange(false)
         return
@@ -251,6 +255,7 @@ export function SessionMessageComposerDialog({
       } else {
         toast.success(t("sendSuccess", { count: result.deliveries.length }))
       }
+      onSent?.({ count: result.deliveries.length })
       reset()
       onOpenChange(false)
     } catch (error) {

@@ -132,6 +132,7 @@ import { useComposerAttachments } from "@/components/chat/composer/use-composer-
 import { useComposerShortcuts } from "@/components/chat/composer/use-composer-shortcuts"
 import { SessionMessageComposerDialog } from "@/components/collaboration/session-message-composer-dialog"
 import {
+  canSendCollaborationFromComposer,
   sessionIdsFromEditor,
   stripSessionMentions,
 } from "@/lib/collaboration-session-mentions"
@@ -643,11 +644,11 @@ export function MessageInput({
     setComposerReady(true)
   }, [])
 
-  const canSendToSessions =
-    sourceConversationId != null &&
-    mentionedSessionIds.length > 0 &&
-    !isEditingQueueItem &&
-    !isPrompting
+  const canSendToSessions = canSendCollaborationFromComposer({
+    sourceConversationId,
+    mentionedSessionIds,
+    isEditingQueueItem,
+  })
 
   const handleSendToSessions = useCallback(() => {
     const editor = editorRef.current?.getEditor()
@@ -2056,6 +2057,12 @@ export function MessageInput({
           initialBody={sessionSendBody}
           open
           onOpenChange={setSessionSendOpen}
+          onSent={() => {
+            resetComposer()
+            if (effectiveDraftStorageKey) {
+              clearMessageInputDraftV2(effectiveDraftStorageKey)
+            }
+          }}
         />
       ) : null}
     </div>

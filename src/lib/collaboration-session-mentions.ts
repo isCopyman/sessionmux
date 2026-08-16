@@ -56,6 +56,19 @@ export function sessionIdsFromEditor(
   return [...ids]
 }
 
+/** `@` Session mail stays available while the current Agent is prompting. */
+export function canSendCollaborationFromComposer(input: {
+  sourceConversationId: number | null
+  mentionedSessionIds: readonly number[]
+  isEditingQueueItem: boolean
+}): boolean {
+  return (
+    input.sourceConversationId != null &&
+    input.mentionedSessionIds.length > 0 &&
+    !input.isEditingQueueItem
+  )
+}
+
 /** Body sent to other Sessions: keep the user's words, drop Session badges. */
 export function stripSessionMentions(text: string): string {
   return text

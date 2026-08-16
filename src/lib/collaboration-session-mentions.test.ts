@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import {
+  canSendCollaborationFromComposer,
   sessionIdsFromPromptBlocks,
   sessionIdsFromText,
   stripSessionMentions,
@@ -35,6 +36,23 @@ describe("collaboration session mentions", () => {
         1
       )
     ).toEqual([2, 4])
+  })
+
+  it("keeps @ Session send available while the current Agent is prompting", () => {
+    expect(
+      canSendCollaborationFromComposer({
+        sourceConversationId: 1,
+        mentionedSessionIds: [2],
+        isEditingQueueItem: false,
+      })
+    ).toBe(true)
+    expect(
+      canSendCollaborationFromComposer({
+        sourceConversationId: 1,
+        mentionedSessionIds: [2],
+        isEditingQueueItem: true,
+      })
+    ).toBe(false)
   })
 
   it("strips Session badges so the delivery body is the user's words", () => {

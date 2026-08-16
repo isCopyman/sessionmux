@@ -141,7 +141,7 @@ beforeEach(() => {
 })
 
 describe("SessionCommunicationBanner", () => {
-  it("lets the user start a Session message when this Session has no mail yet", () => {
+  it("hides the communication strip until this Session has mail", () => {
     hook.feed = {
       conversationId: 2,
       revision: 1,
@@ -151,16 +151,10 @@ describe("SessionCommunicationBanner", () => {
     }
     render(<SessionCommunicationBanner conversationId={2} />)
 
-    expect(screen.getByText("panelTitle")).toBeInTheDocument()
-    fireEvent.click(screen.getByRole("button", { name: "sendMenu" }))
-    expect(replyDialog.props).toEqual(
-      expect.objectContaining({
-        sourceConversationId: 2,
-        initialTargetConversationId: null,
-        replyToEventId: null,
-        open: true,
-      })
-    )
+    expect(screen.queryByText("panelTitle")).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "sendMenu" })
+    ).not.toBeInTheDocument()
   })
 
   it("opens a new Session message without expanding the existing mail list", () => {
