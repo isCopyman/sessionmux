@@ -6,6 +6,7 @@ import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 import { AgentIcon } from "@/components/agent-icon"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import {
   Dialog,
   DialogContent,
@@ -63,6 +64,7 @@ export function SessionMessageComposerDialog({
   const [deliveryHint, setDeliveryHint] =
     useState<CollaborationDeliveryHint>("default")
   const [interruptCurrentTask, setInterruptCurrentTask] = useState(false)
+  const [expectsReply, setExpectsReply] = useState(false)
   const [sending, setSending] = useState(false)
 
   const folderById = useMemo(
@@ -124,6 +126,7 @@ export function SessionMessageComposerDialog({
     setInvocationPolicy("store_only")
     setDeliveryHint("default")
     setInterruptCurrentTask(false)
+    setExpectsReply(false)
   }
 
   const setOpen = (next: boolean) => {
@@ -160,7 +163,7 @@ export function SessionMessageComposerDialog({
             clientDedupeId: randomUUID(),
             invocationPolicy: "invoke_when_idle",
             deliveryHint: "default",
-            expectsReply: false,
+            expectsReply,
             urgency: "normal",
             replyToEventId,
           },
@@ -185,7 +188,7 @@ export function SessionMessageComposerDialog({
         clientDedupeId: randomUUID(),
         invocationPolicy,
         deliveryHint,
-        expectsReply: false,
+        expectsReply,
         urgency: "normal",
         replyToEventId,
       })
@@ -391,6 +394,23 @@ export function SessionMessageComposerDialog({
             </span>
           </div>
         </div>
+
+        <label className="flex cursor-pointer items-start gap-2.5 rounded-md border px-3 py-2.5">
+          <Checkbox
+            checked={expectsReply}
+            onCheckedChange={(checked) => setExpectsReply(checked === true)}
+            aria-label={t("requestReply")}
+            className="mt-0.5"
+          />
+          <span className="min-w-0">
+            <span className="block text-sm font-medium">
+              {t("requestReply")}
+            </span>
+            <span className="block text-xs text-muted-foreground">
+              {t("requestReplyDescription")}
+            </span>
+          </span>
+        </label>
 
         <DialogFooter>
           <Button

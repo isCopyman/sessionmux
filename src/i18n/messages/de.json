@@ -5070,6 +5070,8 @@
     "selectedCount": "{count} selected",
     "bodyTooLarge": "Message is too large",
     "bodySize": "{size} bytes",
+    "requestReply": "Antwort anfordern",
+    "requestReplyDescription": "Die Zielsitzung soll ihr Ergebnis hierher senden. Die Antwort startet diesen Agenten nicht automatisch.",
     "cancel": "Cancel",
     "send": "Send",
     "sendPartial": "Sent to {sent}; {failed} delivery failed",

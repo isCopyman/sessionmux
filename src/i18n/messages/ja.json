@@ -5070,6 +5070,8 @@
     "selectedCount": "{count} selected",
     "bodyTooLarge": "Message is too large",
     "bodySize": "{size} bytes",
+    "requestReply": "返信を依頼",
+    "requestReplyDescription": "対象セッションに結果をここへ返すよう依頼します。返信によって現在のエージェントが自動起動することはありません。",
     "cancel": "Cancel",
     "send": "Send",
     "sendPartial": "Sent to {sent}; {failed} delivery failed",

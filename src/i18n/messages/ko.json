@@ -5070,6 +5070,8 @@
     "selectedCount": "{count} selected",
     "bodyTooLarge": "Message is too large",
     "bodySize": "{size} bytes",
+    "requestReply": "답장 요청",
+    "requestReplyDescription": "대상 세션이 결과를 이곳으로 보내도록 요청합니다. 답장이 현재 에이전트를 자동으로 시작하지는 않습니다.",
     "cancel": "Cancel",
     "send": "Send",
     "sendPartial": "Sent to {sent}; {failed} delivery failed",

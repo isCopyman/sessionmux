@@ -116,6 +116,7 @@ describe("SessionMessageComposerDialog", () => {
         clientDedupeId: expect.any(String),
         invocationPolicy: "store_only",
         deliveryHint: "default",
+        expectsReply: false,
       })
     )
     expect(onOpenChange).toHaveBeenCalledWith(false)
@@ -195,6 +196,30 @@ describe("SessionMessageComposerDialog", () => {
     )
   })
 
+  it("can establish an explicit reply obligation without auto-waking the source", async () => {
+    render(
+      <SessionMessageComposerDialog
+        sourceConversationId={1}
+        open
+        onOpenChange={onOpenChange}
+      />
+    )
+    fireEvent.click(screen.getByRole("button", { name: /Reviewer/ }))
+    fireEvent.click(screen.getByRole("checkbox", { name: "requestReply" }))
+    fireEvent.change(screen.getByPlaceholderText("bodyPlaceholder"), {
+      target: { value: "Review this and report the result" },
+    })
+    fireEvent.click(screen.getByRole("button", { name: /^send$/ }))
+
+    await waitFor(() => expect(api.send).toHaveBeenCalledTimes(1))
+    expect(api.send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        targetConversationIds: [2],
+        expectsReply: true,
+      })
+    )
+  })
+
   it("can request non-destructive native steering with durable queue fallback", async () => {
     render(
       <SessionMessageComposerDialog
@@ -232,6 +257,7 @@ describe("SessionMessageComposerDialog", () => {
     fireEvent.click(screen.getByRole("button", { name: /Reviewer/ }))
     fireEvent.click(screen.getByRole("button", { name: /Researcher/ }))
     fireEvent.click(screen.getByRole("radio", { name: "interruptCurrentTask" }))
+    fireEvent.click(screen.getByRole("checkbox", { name: "requestReply" }))
     fireEvent.change(screen.getByPlaceholderText("bodyPlaceholder"), {
       target: { value: "Stop and review this correction" },
     })
@@ -245,6 +271,7 @@ describe("SessionMessageComposerDialog", () => {
           targetConversationIds: [2],
           invocationPolicy: "invoke_when_idle",
           deliveryHint: "default",
+          expectsReply: true,
         }),
         interruptClientDedupeId: expect.any(String),
       })

@@ -5067,6 +5067,8 @@
     "selectedCount": "已选择 {count} 个",
     "bodyTooLarge": "消息内容过大",
     "bodySize": "{size} 字节",
+    "requestReply": "需要回复",
+    "requestReplyDescription": "要求目标 Session 把结果发回这里；回复只会显示，不会自动启动当前 Agent。",
     "cancel": "取消",
     "send": "发送",
     "sendPartial": "已送达 {sent} 个，{failed} 个失败",

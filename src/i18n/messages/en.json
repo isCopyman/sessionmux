@@ -5067,6 +5067,8 @@
     "selectedCount": "{count} selected",
     "bodyTooLarge": "Message is too large",
     "bodySize": "{size} bytes",
+    "requestReply": "Request a reply",
+    "requestReplyDescription": "Ask the target Session to send its result back here. The reply will be shown without automatically starting this agent.",
     "cancel": "Cancel",
     "send": "Send",
     "sendPartial": "Sent to {sent}; {failed} delivery failed",
