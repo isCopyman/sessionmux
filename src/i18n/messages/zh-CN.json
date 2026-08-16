@@ -5097,6 +5097,8 @@
     "stateEmbedded": "已加入 Agent 会话",
     "dismiss": "忽略",
     "retry": "重试",
+    "openSession": "打开会话",
+    "reply": "回复",
     "stateFailed": "投递失败",
     "stateDismissedByTarget": "目标已忽略",
     "stateSeen": "已读",

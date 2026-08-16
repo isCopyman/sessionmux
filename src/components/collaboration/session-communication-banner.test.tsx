@@ -8,6 +8,24 @@ const hook = vi.hoisted(() => ({
   retry: vi.fn(),
   feed: null as unknown,
 }))
+const tabs = vi.hoisted(() => ({ openTab: vi.fn() }))
+const workspace = vi.hoisted(() => ({
+  conversations: [
+    {
+      id: 1,
+      folder_id: 10,
+      title: "Logic reviewer",
+      agent_type: "codex",
+    },
+    {
+      id: 2,
+      folder_id: 10,
+      title: "Writer",
+      agent_type: "claude_code",
+    },
+  ],
+}))
+const replyDialog = vi.hoisted(() => ({ props: null as unknown }))
 
 vi.mock("next-intl", () => ({
   useTranslations: () => (key: string, values?: Record<string, unknown>) =>
@@ -23,6 +41,19 @@ vi.mock("@/hooks/use-collaboration-feed", () => ({
     dismiss: hook.dismiss,
     retry: hook.retry,
   }),
+}))
+vi.mock("@/contexts/tab-context", () => ({
+  useTabActions: () => tabs,
+}))
+vi.mock("@/stores/app-workspace-store", () => ({
+  useAppWorkspaceStore: (selector: (state: typeof workspace) => unknown) =>
+    selector(workspace),
+}))
+vi.mock("./session-message-composer-dialog", () => ({
+  SessionMessageComposerDialog: (props: unknown) => {
+    replyDialog.props = props
+    return <div data-testid="reply-dialog" />
+  },
 }))
 
 import { SessionCommunicationBanner } from "./session-communication-banner"
@@ -69,6 +100,21 @@ function delivery(
 
 beforeEach(() => {
   vi.clearAllMocks()
+  workspace.conversations = [
+    {
+      id: 1,
+      folder_id: 10,
+      title: "Logic reviewer",
+      agent_type: "codex",
+    },
+    {
+      id: 2,
+      folder_id: 10,
+      title: "Writer",
+      agent_type: "claude_code",
+    },
+  ]
+  replyDialog.props = null
   hook.feed = {
     conversationId: 2,
     revision: 1,
@@ -94,6 +140,47 @@ describe("SessionCommunicationBanner", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "markAllRead" }))
     expect(hook.markSeen).toHaveBeenCalledWith(["delivery-1"])
+  })
+
+  it("opens the stable source Session and starts a reply linked to the event", () => {
+    render(<SessionCommunicationBanner conversationId={2} />)
+    fireEvent.click(screen.getByRole("button", { name: /panelTitle/ }))
+
+    fireEvent.click(screen.getByRole("button", { name: "openSession" }))
+    expect(tabs.openTab).toHaveBeenCalledWith(
+      10,
+      1,
+      "codex",
+      true,
+      "Logic reviewer"
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "reply" }))
+    expect(screen.getByTestId("reply-dialog")).toBeInTheDocument()
+    expect(replyDialog.props).toEqual(
+      expect.objectContaining({
+        sourceConversationId: 2,
+        initialTargetConversationId: 1,
+        replyToEventId: "event-1",
+        open: true,
+      })
+    )
+  })
+
+  it("keeps a deleted or unavailable source readable without offering broken actions", () => {
+    workspace.conversations = workspace.conversations.filter(
+      (conversation) => conversation.id !== 1
+    )
+    render(<SessionCommunicationBanner conversationId={2} />)
+    fireEvent.click(screen.getByRole("button", { name: /panelTitle/ }))
+
+    expect(screen.getByText("from:Logic reviewer")).toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "openSession" })
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "reply" })
+    ).not.toBeInTheDocument()
   })
 
   it("dismisses a pending inbound delivery without deleting it from the feed", () => {

@@ -5097,6 +5097,8 @@
     "stateEmbedded": "Added to the agent session",
     "dismiss": "Dismiss",
     "retry": "Retry",
+    "openSession": "Sitzung öffnen",
+    "reply": "Antworten",
     "stateFailed": "Delivery failed",
     "stateDismissedByTarget": "Dismissed by target",
     "stateSeen": "Seen",

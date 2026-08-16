@@ -1,18 +1,24 @@
 "use client"
 
-import { useState } from "react"
+import { useMemo, useState } from "react"
 import {
+  ArrowUpRight,
   ChevronDown,
   ChevronUp,
   Inbox,
   MessageSquareMore,
+  Reply,
   RotateCcw,
   X,
 } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { Button } from "@/components/ui/button"
+import { useTabActions } from "@/contexts/tab-context"
 import { useCollaborationFeed } from "@/hooks/use-collaboration-feed"
+import { formatConversationTitle } from "@/lib/conversation-title"
+import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import type { CollaborationDelivery } from "@/lib/types"
+import { SessionMessageComposerDialog } from "./session-message-composer-dialog"
 
 const COLLABORATION_DISABLED_REASON = "session_collaboration_disabled"
 
@@ -34,6 +40,18 @@ export function SessionCommunicationBanner({
 }: SessionCommunicationBannerProps) {
   const t = useTranslations("Collaboration")
   const [expanded, setExpanded] = useState(false)
+  const [replyingTo, setReplyingTo] = useState<CollaborationDelivery | null>(
+    null
+  )
+  const conversations = useAppWorkspaceStore((state) => state.conversations)
+  const conversationById = useMemo(
+    () =>
+      new Map(
+        conversations.map((conversation) => [conversation.id, conversation])
+      ),
+    [conversations]
+  )
+  const { openTab } = useTabActions()
   const { feed, hydrated, markSeen, dismiss, retry } =
     useCollaborationFeed(conversationId)
   const total = feed.inbound.length + feed.outbound.length
@@ -80,6 +98,18 @@ export function SessionCommunicationBanner({
       (delivery) => delivery.uiSeenAt == null && delivery.state !== "dismissed"
     )
     .map((delivery) => delivery.id)
+
+  const openSession = (targetConversationId: number) => {
+    const conversation = conversationById.get(targetConversationId)
+    if (!conversation) return
+    openTab(
+      conversation.folder_id,
+      conversation.id,
+      conversation.agent_type,
+      true,
+      formatConversationTitle(conversation.title) || undefined
+    )
+  }
 
   return (
     <section className="border-b border-border/60 bg-background/80 backdrop-blur-sm">
@@ -171,6 +201,36 @@ export function SessionCommunicationBanner({
                         ) : null}
                       </div>
                       <div className="flex shrink-0 items-center">
+                        {conversationById.has(
+                          delivery.source.conversationId
+                        ) ? (
+                          <>
+                            <Button
+                              type="button"
+                              size="icon"
+                              variant="ghost"
+                              className="h-7 w-7"
+                              title={t("openSession")}
+                              aria-label={t("openSession")}
+                              onClick={() =>
+                                openSession(delivery.source.conversationId)
+                              }
+                            >
+                              <ArrowUpRight className="h-3.5 w-3.5" />
+                            </Button>
+                            <Button
+                              type="button"
+                              size="icon"
+                              variant="ghost"
+                              className="h-7 w-7"
+                              title={t("reply")}
+                              aria-label={t("reply")}
+                              onClick={() => setReplyingTo(delivery)}
+                            >
+                              <Reply className="h-3.5 w-3.5" />
+                            </Button>
+                          </>
+                        ) : null}
                         {(delivery.state === "failed" ||
                           (delivery.state === "queued" &&
                             delivery.queueState === "paused" &&
@@ -221,41 +281,61 @@ export function SessionCommunicationBanner({
                     key={delivery.id}
                     className="rounded-lg border bg-muted/30 px-3 py-2 text-sm"
                   >
-                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
-                      <span className="font-medium">
-                        {t("to", {
-                          name: participantLabel(delivery.target, (values) =>
-                            t("untitled", values)
-                          ),
-                        })}
-                      </span>
-                      <span className="text-muted-foreground">
-                        {delivery.state === "queued" ||
-                        delivery.state === "embedding" ||
-                        delivery.state === "embedded"
-                          ? invocationState(delivery)
-                          : delivery.state === "failed"
-                            ? t("stateFailed")
-                            : delivery.state === "dismissed"
-                              ? t("stateDismissedByTarget")
-                              : delivery.uiSeenAt
-                                ? t("stateSeen")
-                                : t("stateDelivered")}
-                      </span>
+                    <div className="flex items-start gap-2">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
+                          <span className="font-medium">
+                            {t("to", {
+                              name: participantLabel(
+                                delivery.target,
+                                (values) => t("untitled", values)
+                              ),
+                            })}
+                          </span>
+                          <span className="text-muted-foreground">
+                            {delivery.state === "queued" ||
+                            delivery.state === "embedding" ||
+                            delivery.state === "embedded"
+                              ? invocationState(delivery)
+                              : delivery.state === "failed"
+                                ? t("stateFailed")
+                                : delivery.state === "dismissed"
+                                  ? t("stateDismissedByTarget")
+                                  : delivery.uiSeenAt
+                                    ? t("stateSeen")
+                                    : t("stateDelivered")}
+                          </span>
+                        </div>
+                        <p className="mt-1 whitespace-pre-wrap break-words leading-relaxed">
+                          {delivery.body}
+                        </p>
+                        {delivery.error ? (
+                          <p className="mt-1 break-words text-[11px] text-destructive">
+                            {delivery.error}
+                          </p>
+                        ) : null}
+                        {delivery.interruptError ? (
+                          <p className="mt-1 break-words text-[11px] text-destructive">
+                            {delivery.interruptError}
+                          </p>
+                        ) : null}
+                      </div>
+                      {conversationById.has(delivery.target.conversationId) ? (
+                        <Button
+                          type="button"
+                          size="icon"
+                          variant="ghost"
+                          className="h-7 w-7 shrink-0"
+                          title={t("openSession")}
+                          aria-label={t("openSession")}
+                          onClick={() =>
+                            openSession(delivery.target.conversationId)
+                          }
+                        >
+                          <ArrowUpRight className="h-3.5 w-3.5" />
+                        </Button>
+                      ) : null}
                     </div>
-                    <p className="mt-1 whitespace-pre-wrap break-words leading-relaxed">
-                      {delivery.body}
-                    </p>
-                    {delivery.error ? (
-                      <p className="mt-1 break-words text-[11px] text-destructive">
-                        {delivery.error}
-                      </p>
-                    ) : null}
-                    {delivery.interruptError ? (
-                      <p className="mt-1 break-words text-[11px] text-destructive">
-                        {delivery.interruptError}
-                      </p>
-                    ) : null}
                   </article>
                 ))}
               </div>
@@ -263,6 +343,18 @@ export function SessionCommunicationBanner({
           </div>
         ) : null}
       </div>
+      {replyingTo && conversationId != null ? (
+        <SessionMessageComposerDialog
+          key={replyingTo.eventId}
+          sourceConversationId={conversationId}
+          initialTargetConversationId={replyingTo.source.conversationId}
+          replyToEventId={replyingTo.eventId}
+          open
+          onOpenChange={(open) => {
+            if (!open) setReplyingTo(null)
+          }}
+        />
+      ) : null}
     </section>
   )
 }

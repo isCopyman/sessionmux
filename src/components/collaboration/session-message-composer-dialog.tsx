@@ -34,18 +34,29 @@ interface SessionMessageComposerDialogProps {
   sourceConversationId: number | null
   open: boolean
   onOpenChange: (open: boolean) => void
+  /** Stable Session id preselected by a contextual reply action. */
+  initialTargetConversationId?: number | null
+  /** Immutable collaboration event being answered, when this is a reply. */
+  replyToEventId?: string | null
 }
 
 export function SessionMessageComposerDialog({
   sourceConversationId,
   open,
   onOpenChange,
+  initialTargetConversationId = null,
+  replyToEventId = null,
 }: SessionMessageComposerDialogProps) {
   const t = useTranslations("Collaboration")
   const conversations = useAppWorkspaceStore((state) => state.conversations)
   const folders = useAppWorkspaceStore((state) => state.folders)
   const [query, setQuery] = useState("")
-  const [selected, setSelected] = useState<Set<number>>(new Set())
+  const [selected, setSelected] = useState<Set<number>>(
+    () =>
+      new Set(
+        initialTargetConversationId == null ? [] : [initialTargetConversationId]
+      )
+  )
   const [body, setBody] = useState("")
   const [invocationPolicy, setInvocationPolicy] =
     useState<CollaborationInvocationPolicy>("store_only")
@@ -64,7 +75,9 @@ export function SessionMessageComposerDialog({
       .filter(
         (conversation) =>
           conversation.id !== sourceConversationId &&
-          conversation.kind !== "loop"
+          conversation.kind !== "loop" &&
+          (replyToEventId == null ||
+            conversation.id === initialTargetConversationId)
       )
       .filter((conversation) => {
         if (!normalized) return true
@@ -81,7 +94,14 @@ export function SessionMessageComposerDialog({
         (a, b) =>
           new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
       )
-  }, [conversations, folderById, query, sourceConversationId])
+  }, [
+    conversations,
+    folderById,
+    initialTargetConversationId,
+    query,
+    replyToEventId,
+    sourceConversationId,
+  ])
 
   const bodyBytes = useMemo(() => new Blob([body]).size, [body])
   const bodyTooLarge = bodyBytes > MAX_BODY_BYTES
@@ -95,7 +115,11 @@ export function SessionMessageComposerDialog({
 
   const reset = () => {
     setQuery("")
-    setSelected(new Set())
+    setSelected(
+      new Set(
+        initialTargetConversationId == null ? [] : [initialTargetConversationId]
+      )
+    )
     setBody("")
     setInvocationPolicy("store_only")
     setDeliveryHint("default")
@@ -108,6 +132,7 @@ export function SessionMessageComposerDialog({
   }
 
   const toggleTarget = (conversationId: number) => {
+    if (replyToEventId != null) return
     setSelected((current) => {
       if (interruptCurrentTask) {
         return current.has(conversationId)
@@ -137,6 +162,7 @@ export function SessionMessageComposerDialog({
             deliveryHint: "default",
             expectsReply: false,
             urgency: "normal",
+            replyToEventId,
           },
           interruptClientDedupeId: randomUUID(),
           reason: "User explicitly requested stop current task and send",
@@ -161,6 +187,7 @@ export function SessionMessageComposerDialog({
         deliveryHint,
         expectsReply: false,
         urgency: "normal",
+        replyToEventId,
       })
       const failed = result.deliveries.filter(
         (delivery) => delivery.state === "failed"
@@ -280,18 +307,20 @@ export function SessionMessageComposerDialog({
           </Button>
         </div>
 
-        <div className="relative">
-          <Search
-            aria-hidden="true"
-            className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
-          />
-          <Input
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder={t("targetSearchPlaceholder")}
-            className="pl-8"
-          />
-        </div>
+        {replyToEventId == null ? (
+          <div className="relative">
+            <Search
+              aria-hidden="true"
+              className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
+            />
+            <Input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder={t("targetSearchPlaceholder")}
+              className="pl-8"
+            />
+          </div>
+        ) : null}
 
         <ScrollArea className="min-h-32 flex-1 rounded-md border" y="scroll">
           <div className="divide-y">
@@ -308,7 +337,8 @@ export function SessionMessageComposerDialog({
                     key={conversation.id}
                     type="button"
                     onClick={() => toggleTarget(conversation.id)}
-                    className="flex w-full items-center gap-3 px-3 py-2 text-left transition-colors hover:bg-muted/60"
+                    disabled={replyToEventId != null}
+                    className="flex w-full items-center gap-3 px-3 py-2 text-left transition-colors enabled:hover:bg-muted/60"
                   >
                     <span
                       aria-hidden="true"

@@ -121,6 +121,40 @@ describe("SessionMessageComposerDialog", () => {
     expect(onOpenChange).toHaveBeenCalledWith(false)
   })
 
+  it("locks a contextual reply to the original source Session and preserves the event link", async () => {
+    render(
+      <SessionMessageComposerDialog
+        sourceConversationId={1}
+        initialTargetConversationId={2}
+        replyToEventId="event-original"
+        open
+        onOpenChange={onOpenChange}
+      />
+    )
+
+    expect(screen.getByText("Reviewer")).toBeInTheDocument()
+    expect(screen.queryByText("Researcher")).not.toBeInTheDocument()
+    expect(
+      screen.queryByPlaceholderText("targetSearchPlaceholder")
+    ).not.toBeInTheDocument()
+    expect(screen.getByRole("button", { name: /Reviewer/ })).toBeDisabled()
+
+    fireEvent.change(screen.getByPlaceholderText("bodyPlaceholder"), {
+      target: { value: "That resolves the concern" },
+    })
+    fireEvent.click(screen.getByRole("button", { name: /^send$/ }))
+
+    await waitFor(() => expect(api.send).toHaveBeenCalledTimes(1))
+    expect(api.send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceConversationId: 1,
+        targetConversationIds: [2],
+        body: "That resolves the concern",
+        replyToEventId: "event-original",
+      })
+    )
+  })
+
   it("searches by folder and keeps send disabled without a target", () => {
     render(
       <SessionMessageComposerDialog

@@ -5097,6 +5097,8 @@
     "stateEmbedded": "Added to the agent session",
     "dismiss": "Dismiss",
     "retry": "Retry",
+    "openSession": "セッションを開く",
+    "reply": "返信",
     "stateFailed": "Delivery failed",
     "stateDismissedByTarget": "Dismissed by target",
     "stateSeen": "Seen",

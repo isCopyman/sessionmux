@@ -5097,6 +5097,8 @@
     "stateEmbedded": "Added to the agent session",
     "dismiss": "Dismiss",
     "retry": "Retry",
+    "openSession": "세션 열기",
+    "reply": "답장",
     "stateFailed": "Delivery failed",
     "stateDismissedByTarget": "Dismissed by target",
     "stateSeen": "Seen",
