@@ -9,6 +9,8 @@ vi.mock("@/lib/api", () => ({
   setQuestionSettings: vi.fn(),
   getSessionInfoSettings: vi.fn(),
   setSessionInfoSettings: vi.fn(),
+  getSessionCollaborationSettings: vi.fn(),
+  setSessionCollaborationSettings: vi.fn(),
   getChatAuthoringSettings: vi.fn(),
   setChatAuthoringSettings: vi.fn(),
 }))
@@ -26,10 +28,12 @@ import {
   getChatAuthoringSettings,
   getFeedbackSettings,
   getQuestionSettings,
+  getSessionCollaborationSettings,
   getSessionInfoSettings,
   setChatAuthoringSettings,
   setFeedbackSettings,
   setQuestionSettings,
+  setSessionCollaborationSettings,
   setSessionInfoSettings,
 } from "@/lib/api"
 import { primeFeedbackEnabled } from "@/hooks/use-feedback-enabled"
@@ -40,6 +44,8 @@ const mockGetQuestion = vi.mocked(getQuestionSettings)
 const mockSetQuestion = vi.mocked(setQuestionSettings)
 const mockGetSessionInfo = vi.mocked(getSessionInfoSettings)
 const mockSetSessionInfo = vi.mocked(setSessionInfoSettings)
+const mockGetCollaboration = vi.mocked(getSessionCollaborationSettings)
+const mockSetCollaboration = vi.mocked(setSessionCollaborationSettings)
 const mockGetChat = vi.mocked(getChatAuthoringSettings)
 const mockSetChat = vi.mocked(setChatAuthoringSettings)
 const mockPrime = vi.mocked(primeFeedbackEnabled)
@@ -48,6 +54,7 @@ const LABELS = {
   feedback: "Live Feedback",
   question: "Ask user question",
   sessionInfo: "Get session info",
+  collaboration: "Session collaboration",
   automations: "Create automations",
   workTasks: "Create to-do tasks",
 } as const
@@ -66,6 +73,7 @@ function primeBackend(
     feedback?: boolean
     question?: boolean
     sessionInfo?: boolean
+    collaboration?: boolean
     automations?: boolean
     workTasks?: boolean
   } = {}
@@ -74,12 +82,14 @@ function primeBackend(
     feedback = false,
     question = true,
     sessionInfo = true,
+    collaboration = true,
     automations = false,
     workTasks = false,
   } = overrides
   mockGetFeedback.mockResolvedValue({ enabled: feedback })
   mockGetQuestion.mockResolvedValue({ enabled: question })
   mockGetSessionInfo.mockResolvedValue({ enabled: sessionInfo })
+  mockGetCollaboration.mockResolvedValue({ enabled: collaboration })
   mockGetChat.mockResolvedValue({
     automations_enabled: automations,
     work_tasks_enabled: workTasks,
@@ -87,6 +97,7 @@ function primeBackend(
   mockSetFeedback.mockImplementation(async (next) => next)
   mockSetQuestion.mockImplementation(async (next) => next)
   mockSetSessionInfo.mockImplementation(async (next) => next)
+  mockSetCollaboration.mockImplementation(async (next) => next)
   mockSetChat.mockImplementation(async (next) => next)
 }
 
@@ -111,6 +122,10 @@ describe("AgentToolsSettingsSection", () => {
     expect(screen.getByLabelText(LABELS.sessionInfo)).toHaveAttribute(
       "data-state",
       "unchecked"
+    )
+    expect(screen.getByLabelText(LABELS.collaboration)).toHaveAttribute(
+      "data-state",
+      "checked"
     )
     expect(screen.getByLabelText(LABELS.automations)).toHaveAttribute(
       "data-state",
@@ -137,6 +152,7 @@ describe("AgentToolsSettingsSection", () => {
     // them back would republish state the user didn't ask to change.
     expect(mockSetFeedback).not.toHaveBeenCalled()
     expect(mockSetSessionInfo).not.toHaveBeenCalled()
+    expect(mockSetCollaboration).not.toHaveBeenCalled()
     expect(mockSetChat).not.toHaveBeenCalled()
   })
 
@@ -158,6 +174,21 @@ describe("AgentToolsSettingsSection", () => {
     expect(mockSetFeedback).toHaveBeenCalledWith({ enabled: true })
     // Open conversations show/hide the feedback bar off this cached flag.
     expect(mockPrime).toHaveBeenCalledWith(true)
+  })
+
+  it("persists the Session collaboration capability independently", async () => {
+    primeBackend()
+
+    renderWithIntl()
+
+    fireEvent.click(await screen.findByLabelText(LABELS.collaboration))
+    fireEvent.click(screen.getByRole("button", { name: "Save" }))
+
+    await waitFor(() => {
+      expect(mockSetCollaboration).toHaveBeenCalledWith({ enabled: false })
+    })
+    expect(mockSetSessionInfo).not.toHaveBeenCalled()
+    expect(mockSetChat).not.toHaveBeenCalled()
   })
 
   it("keeps Save inert until something actually changes", async () => {

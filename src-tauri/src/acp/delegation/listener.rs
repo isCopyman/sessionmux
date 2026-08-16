@@ -18,15 +18,18 @@ use tokio::sync::RwLock;
 use crate::acp::delegation::broker::{DelegationBroker, StatusWait};
 use crate::acp::delegation::transport::{
     read_frame, write_frame, BrokerAskRequest, BrokerCancelRequest, BrokerCancelTaskRequest,
-    BrokerCommitFeedbackRequest, BrokerFeedbackRequest, BrokerMessage, BrokerRequest,
-    BrokerCreateAutomationRequest, BrokerCreateWorkTaskRequest, BrokerResponse,
-    BrokerSessionRequest, BrokerStatusRequest, BrokerTaskCompleteRequest,
+    BrokerCommitFeedbackRequest, BrokerCreateAutomationRequest, BrokerCreateWorkTaskRequest,
+    BrokerFeedbackRequest, BrokerListSessionsRequest, BrokerMessage, BrokerRequest, BrokerResponse,
+    BrokerSendMessageRequest, BrokerSessionRequest, BrokerStatusRequest, BrokerTaskCompleteRequest,
     BrokerTaskProgressRequest,
 };
 use crate::acp::delegation::types::{DelegationRequest, DelegationTaskReport, TaskStatus};
 use crate::acp::feedback::{PendingFeedback, SessionFeedbackAccess};
 use crate::acp::question::{QuestionOutcome, SessionQuestionAccess};
 use crate::acp::chat_authoring::{AuthoringContext, AuthoringOutcome, ChatAuthoringAccess};
+use crate::acp::session_collaboration::{
+    SessionCollaborationAccess, SessionListOutcome, SessionSendOutcome,
+};
 use crate::acp::session_info::{SessionInfo, SessionInfoAccess};
 use crate::acp::work_task_tools::{TaskReportAck, WorkTaskToolAccess};
 use crate::models::AgentType;
@@ -99,6 +102,10 @@ pub struct DelegationListener {
     /// other arms this is NOT parent-scoped — it looks any non-deleted session up
     /// by its codeg conversation id (still token-gated against an invalid caller).
     pub session_info: Arc<dyn SessionInfoAccess>,
+    /// Stable Session address lookup and persistent cross-Session delivery.
+    /// The listener derives the source from the token's parent connection; the
+    /// access implementation re-checks the write capability at call time.
+    pub collaboration: Arc<dyn SessionCollaborationAccess>,
     /// Records work-task reports (`task_progress` / `task_complete`) against the
     /// task the parent connection is executing. Same token → parent-connection
     /// scoping as the delegation arms.
@@ -119,6 +126,7 @@ impl DelegationListener {
         feedback: Arc<dyn SessionFeedbackAccess>,
         questions: Arc<dyn SessionQuestionAccess>,
         session_info: Arc<dyn SessionInfoAccess>,
+        collaboration: Arc<dyn SessionCollaborationAccess>,
         tasks: Arc<dyn WorkTaskToolAccess>,
         authoring: Arc<dyn ChatAuthoringAccess>,
     ) -> Arc<Self> {
@@ -129,6 +137,7 @@ impl DelegationListener {
             feedback,
             questions,
             session_info,
+            collaboration,
             tasks,
             authoring,
         })
@@ -328,6 +337,12 @@ impl DelegationListener {
                 // and there is nothing to tear down on cancel.
                 session_response(self.process_session_info(req).await)?
             }
+            BrokerMessage::ListSessions(req) => {
+                session_list_response(self.process_list_sessions(req).await)?
+            }
+            BrokerMessage::SendMessage(req) => {
+                session_send_response(self.process_send_message(req).await)?
+            }
             BrokerMessage::TaskProgress(req) => {
                 task_ack_response(self.process_task_progress(req).await)?
             }
@@ -519,6 +534,55 @@ impl DelegationListener {
             .await
     }
 
+    async fn process_list_sessions(&self, req: BrokerListSessionsRequest) -> SessionListOutcome {
+        let Some(entry) = self.tokens.lookup(&req.token).await else {
+            return SessionListOutcome::unavailable(
+                None,
+                "This Codeg Session identity has expired. Resume the Session before listing peers.",
+            );
+        };
+        let Some(caller_session_id) = self
+            .parent_lookup
+            .current_conversation_id(&entry.parent_connection_id)
+            .await
+        else {
+            return SessionListOutcome::unavailable(
+                None,
+                "The calling connection is not bound to a persistent Codeg Session.",
+            );
+        };
+        self.collaboration
+            .list_sessions(
+                caller_session_id,
+                req.query,
+                req.limit
+                    .unwrap_or(crate::acp::session_collaboration::DEFAULT_SESSION_LIST_LIMIT),
+            )
+            .await
+    }
+
+    async fn process_send_message(&self, req: BrokerSendMessageRequest) -> SessionSendOutcome {
+        let Some(entry) = self.tokens.lookup(&req.token).await else {
+            return SessionSendOutcome::rejected(
+                None,
+                "This Codeg Session identity has expired. Resume the Session before sending.",
+            );
+        };
+        let Some(source_session_id) = self
+            .parent_lookup
+            .current_conversation_id(&entry.parent_connection_id)
+            .await
+        else {
+            return SessionSendOutcome::rejected(
+                None,
+                "The calling connection is not bound to a persistent Codeg Session.",
+            );
+        };
+        self.collaboration
+            .send_message(source_session_id, req.spec)
+            .await
+    }
+
     /// Validate the token and hand the progress report to the task engine,
     /// which resolves the parent connection to its owning task + generation.
     async fn process_task_progress(&self, req: BrokerTaskProgressRequest) -> TaskReportAck {
@@ -706,6 +770,22 @@ fn ask_response(outcome: &QuestionOutcome) -> std::io::Result<BrokerResponse> {
 fn session_response(info: SessionInfo) -> std::io::Result<BrokerResponse> {
     Ok(BrokerResponse {
         outcome: serde_json::to_value(&info).map_err(|e| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, format!("encode: {e}"))
+        })?,
+    })
+}
+
+fn session_list_response(outcome: SessionListOutcome) -> std::io::Result<BrokerResponse> {
+    Ok(BrokerResponse {
+        outcome: serde_json::to_value(&outcome).map_err(|e| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, format!("encode: {e}"))
+        })?,
+    })
+}
+
+fn session_send_response(outcome: SessionSendOutcome) -> std::io::Result<BrokerResponse> {
+    Ok(BrokerResponse {
+        outcome: serde_json::to_value(&outcome).map_err(|e| {
             std::io::Error::new(std::io::ErrorKind::InvalidData, format!("encode: {e}"))
         })?,
     })
@@ -952,6 +1032,42 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct StubCollaboration {
+        listed_by: tokio::sync::Mutex<Vec<i32>>,
+        sent_by:
+            tokio::sync::Mutex<Vec<(i32, crate::acp::session_collaboration::SessionMessageSpec)>>,
+    }
+    #[async_trait]
+    impl SessionCollaborationAccess for StubCollaboration {
+        async fn list_sessions(
+            &self,
+            caller_session_id: i32,
+            _query: Option<String>,
+            _limit: u32,
+        ) -> SessionListOutcome {
+            self.listed_by.lock().await.push(caller_session_id);
+            SessionListOutcome {
+                available: true,
+                caller_session_id: Some(caller_session_id),
+                ..Default::default()
+            }
+        }
+
+        async fn send_message(
+            &self,
+            source_session_id: i32,
+            spec: crate::acp::session_collaboration::SessionMessageSpec,
+        ) -> SessionSendOutcome {
+            self.sent_by.lock().await.push((source_session_id, spec));
+            SessionSendOutcome {
+                accepted: true,
+                source_session_id: Some(source_session_id),
+                ..Default::default()
+            }
+        }
+    }
+
     /// No-engine stub: every report is rejected, mirroring a process without a
     /// running task engine.
     struct StubTaskTools;
@@ -1041,6 +1157,7 @@ mod tests {
             Arc::new(StubFeedback::default()),
             Arc::new(StubQuestion::default()),
             Arc::new(StubSessionInfo::default()),
+            Arc::new(StubCollaboration::default()),
             Arc::new(StubTaskTools),
             Arc::new(StubAuthoring::default()),
         )
@@ -1063,6 +1180,7 @@ mod tests {
             feedback,
             Arc::new(StubQuestion::default()),
             Arc::new(StubSessionInfo::default()),
+            Arc::new(StubCollaboration::default()),
             Arc::new(StubTaskTools),
             Arc::new(StubAuthoring::default()),
         )
@@ -1086,6 +1204,7 @@ mod tests {
             Arc::new(StubFeedback::default()),
             questions,
             Arc::new(StubSessionInfo::default()),
+            Arc::new(StubCollaboration::default()),
             Arc::new(StubTaskTools),
             Arc::new(StubAuthoring::default()),
         )
@@ -1108,6 +1227,29 @@ mod tests {
             Arc::new(StubFeedback::default()),
             Arc::new(StubQuestion::default()),
             session_info,
+            Arc::new(StubCollaboration::default()),
+            Arc::new(StubTaskTools),
+            Arc::new(StubAuthoring::default()),
+        )
+    }
+
+    fn make_collaboration_listener(
+        tokens: Arc<TokenRegistry>,
+        collaboration: Arc<StubCollaboration>,
+        parent_conversation: Option<i32>,
+    ) -> Arc<DelegationListener> {
+        let broker = Arc::new(DelegationBroker::new(
+            Arc::new(MockSpawner::new()) as Arc<dyn ConnectionSpawner>,
+            Arc::new(AlwaysRootLookup) as Arc<dyn ConversationDepthLookup>,
+        ));
+        DelegationListener::new(
+            broker,
+            tokens,
+            Arc::new(StaticParentLookup(parent_conversation)),
+            Arc::new(StubFeedback::default()),
+            Arc::new(StubQuestion::default()),
+            Arc::new(StubSessionInfo::default()),
+            collaboration,
             Arc::new(StubTaskTools),
             Arc::new(StubAuthoring::default()),
         )
@@ -1132,6 +1274,7 @@ mod tests {
             Arc::new(StubFeedback::default()),
             Arc::new(StubQuestion::default()),
             Arc::new(StubSessionInfo::default()),
+            Arc::new(StubCollaboration::default()),
             Arc::new(StubTaskTools),
             authoring,
         )
@@ -1962,6 +2105,62 @@ mod tests {
         assert!(session_info.calls.lock().await.is_empty());
     }
 
+    #[tokio::test]
+    async fn collaboration_source_identity_comes_from_token_parent() {
+        let collaboration = Arc::new(StubCollaboration::default());
+        let tokens = Arc::new(TokenRegistry::default());
+        tokens
+            .register(
+                "tok".into(),
+                TokenEntry {
+                    parent_connection_id: "parent-conn".into(),
+                    working_dir: PathBuf::from("/tmp"),
+                },
+            )
+            .await;
+        let listener = make_collaboration_listener(tokens, collaboration.clone(), Some(42));
+        let outcome = listener
+            .process_send_message(BrokerSendMessageRequest {
+                token: "tok".into(),
+                spec: crate::acp::session_collaboration::SessionMessageSpec {
+                    target_session_ids: vec![7],
+                    content: "review".into(),
+                    delivery_mode:
+                        crate::acp::session_collaboration::SessionMessageDeliveryMode::Queue,
+                    expects_reply: true,
+                    reply_to_event_id: None,
+                    client_dedupe_id: "mcp:test".into(),
+                },
+            })
+            .await;
+        assert!(outcome.accepted);
+        assert_eq!(outcome.source_session_id, Some(42));
+        let sent = collaboration.sent_by.lock().await;
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].0, 42);
+        assert_eq!(sent[0].1.target_session_ids, vec![7]);
+    }
+
+    #[tokio::test]
+    async fn collaboration_expired_token_never_reaches_host_core() {
+        let collaboration = Arc::new(StubCollaboration::default());
+        let listener = make_collaboration_listener(
+            Arc::new(TokenRegistry::default()),
+            collaboration.clone(),
+            Some(42),
+        );
+        let outcome = listener
+            .process_list_sessions(BrokerListSessionsRequest {
+                token: "expired".into(),
+                query: None,
+                limit: None,
+            })
+            .await;
+        assert!(!outcome.available);
+        assert!(outcome.note.unwrap().contains("expired"));
+        assert!(collaboration.listed_by.lock().await.is_empty());
+    }
+
     /// A valid token resolves the caller's conversation + working dir and hands
     /// both down as the [`AuthoringContext`], so the impl can default the target
     /// project to the project this chat is in.
@@ -2310,5 +2509,4 @@ mod tests {
         assert_eq!(resp.outcome["declined"], true);
         assert!(questions.registered.lock().await.is_empty());
     }
-
 }

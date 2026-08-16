@@ -98,6 +98,14 @@ pub fn build_router(
             post(handlers::session_info::set_session_info_settings),
         )
         .route(
+            "/get_session_collaboration_settings",
+            post(handlers::collaboration::get_settings),
+        )
+        .route(
+            "/set_session_collaboration_settings",
+            post(handlers::collaboration::set_settings),
+        )
+        .route(
             "/get_chat_authoring_settings",
             post(handlers::chat_authoring::get_chat_authoring_settings),
         )

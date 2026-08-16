@@ -3333,6 +3333,11 @@ pub struct DelegationInjection {
     /// is on, and the companion's `--features` lists `sessions` to expose the
     /// `get_session_info` tool. No teardown handle (the lookup is stateless).
     pub sessions: crate::acp::session_info::SessionInfoRuntimeConfig,
+    /// Hot-swappable Session-to-Session communication capability. The Host
+    /// Core re-checks it on every send, and injection withholds the whole tool
+    /// group under the restricted host-tools policy because a queued message
+    /// can cause another Session to execute.
+    pub collaboration: crate::acp::session_collaboration::SessionCollaborationRuntimeConfig,
     /// Hot-swappable chat-authoring flags (`create_automation` /
     /// `create_work_task`). Read at injection time like the others so the
     /// companion's `--features` lists `automations` / `taskboard`. Unlike the
@@ -3436,7 +3441,7 @@ fn is_executable_file(path: &Path) -> bool {
 /// `delegate_to_agent`, which is the right degradation when codeg-mcp didn't
 /// make it into the install.
 /// Which tool groups a companion launch should expose. A struct rather than a
-/// positional bool list: the groups keep growing and seven adjacent `bool`s at a
+/// positional bool list: the groups keep growing and eight adjacent `bool`s at a
 /// call site is a silent argument-swap waiting to happen.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct CompanionFeatureFlags {
@@ -3444,6 +3449,7 @@ struct CompanionFeatureFlags {
     feedback: bool,
     ask: bool,
     sessions: bool,
+    collaboration: bool,
     /// Per-spawn (task-engine launches only), not a settings toggle — on its own
     /// it still injects the companion so a task session always has its reporting
     /// tools.
@@ -3472,6 +3478,9 @@ fn companion_features_arg(flags: CompanionFeatureFlags) -> Option<String> {
     }
     if flags.sessions {
         features.push("sessions");
+    }
+    if flags.collaboration {
+        features.push("collaboration");
     }
     if flags.tasks {
         features.push("tasks");
@@ -3528,6 +3537,7 @@ async fn inject_codeg_mcp(
         feedback: feedback_enabled,
         ask: injection.ask.is_enabled().await,
         sessions: injection.sessions.is_enabled().await,
+        collaboration: injection.collaboration.is_enabled().await && host_tools.hosts_channels(),
         tasks: tasks_enabled,
         automations: authoring.automations_enabled,
         taskboard: authoring.work_tasks_enabled,
@@ -3538,7 +3548,7 @@ async fn inject_codeg_mcp(
         tracing::warn!(
             "[delegation][WARN] codeg-mcp companion binary not found (checked CODEG_MCP_BIN, \
              exe sibling, and PATH); skipping delegate_to_agent / check_user_feedback / \
-             ask_user_question / get_session_info tool injection for connection \
+             ask_user_question / get_session_info / Session collaboration tool injection for connection \
              {parent_connection_id}. Reinstall codeg or set CODEG_MCP_BIN to fix."
         );
         return None;
@@ -14926,6 +14936,8 @@ mod tests {
             feedback: crate::acp::feedback::FeedbackRuntimeConfig::new(),
             ask: crate::acp::question::QuestionRuntimeConfig::new(),
             sessions: crate::acp::session_info::SessionInfoRuntimeConfig::new(),
+            collaboration:
+                crate::acp::session_collaboration::SessionCollaborationRuntimeConfig::new(),
             authoring: crate::acp::chat_authoring::ChatAuthoringRuntimeConfig::new(),
             questions: Arc::new(NoQuestions)
                 as Arc<dyn crate::acp::question::SessionQuestionAccess>,
@@ -15058,7 +15070,7 @@ mod tests {
 
     // ─── companion_features_arg: inject/skip decision + --features value ──
     //
-    // The companion now carries two independently-toggled tool groups. It is
+    // The companion carries independently-toggled tool groups. It is
     // injected when EITHER is on, and the `--features` arg names exactly the
     // enabled groups so the companion hides the rest. Crucially, feedback alone
     // must still inject the companion (the historical delegation-only gate would
@@ -15087,6 +15099,11 @@ mod tests {
         assert_eq!(only(|f| f.ask = true), Some("ask".to_string()));
         // Sessions only — likewise injects the companion on its own.
         assert_eq!(only(|f| f.sessions = true), Some("sessions".to_string()));
+        // Collaboration only — list_sessions + send_message travel together.
+        assert_eq!(
+            only(|f| f.collaboration = true),
+            Some("collaboration".to_string())
+        );
         // Per-spawn tasks group: injects alone.
         assert_eq!(only(|f| f.tasks = true), Some("tasks".to_string()));
         // Each chat-authoring group injects the companion on its own too, so a
@@ -15103,11 +15120,15 @@ mod tests {
                 feedback: true,
                 ask: true,
                 sessions: true,
+                collaboration: true,
                 tasks: true,
                 automations: true,
                 taskboard: true,
             }),
-            Some("delegation,feedback,ask,sessions,tasks,automations,taskboard".to_string())
+            Some(
+                "delegation,feedback,ask,sessions,collaboration,tasks,automations,taskboard"
+                    .to_string()
+            )
         );
     }
 

@@ -83,6 +83,34 @@ impl codeg_lib::acp::session_info::SessionInfoAccess for NoSessionInfo {
     }
 }
 
+/// No-op Session collaboration access — delegation e2e does not exercise it.
+struct NoCollaboration;
+#[async_trait]
+impl codeg_lib::acp::session_collaboration::SessionCollaborationAccess for NoCollaboration {
+    async fn list_sessions(
+        &self,
+        caller_session_id: i32,
+        _query: Option<String>,
+        _limit: u32,
+    ) -> codeg_lib::acp::session_collaboration::SessionListOutcome {
+        codeg_lib::acp::session_collaboration::SessionListOutcome::unavailable(
+            Some(caller_session_id),
+            "not used",
+        )
+    }
+
+    async fn send_message(
+        &self,
+        source_session_id: i32,
+        _spec: codeg_lib::acp::session_collaboration::SessionMessageSpec,
+    ) -> codeg_lib::acp::session_collaboration::SessionSendOutcome {
+        codeg_lib::acp::session_collaboration::SessionSendOutcome::rejected(
+            Some(source_session_id),
+            "not used",
+        )
+    }
+}
+
 /// Task-tool stub: the e2e delegation tests never exercise the task arms.
 struct NoTaskTools;
 #[async_trait]
@@ -213,6 +241,8 @@ async fn end_to_end_named_pipe_happy_path() {
         Arc::new(NoFeedback) as Arc<dyn codeg_lib::acp::feedback::SessionFeedbackAccess>,
         Arc::new(NoQuestions) as Arc<dyn SessionQuestionAccess>,
         Arc::new(NoSessionInfo) as Arc<dyn codeg_lib::acp::session_info::SessionInfoAccess>,
+        Arc::new(NoCollaboration)
+            as Arc<dyn codeg_lib::acp::session_collaboration::SessionCollaborationAccess>,
         Arc::new(NoTaskTools) as Arc<dyn codeg_lib::acp::work_task_tools::WorkTaskToolAccess>,
         Arc::new(NoAuthoring) as Arc<dyn codeg_lib::acp::chat_authoring::ChatAuthoringAccess>,
     );
@@ -316,6 +346,8 @@ async fn end_to_end_named_pipe_back_to_back_requests() {
         Arc::new(NoFeedback) as Arc<dyn codeg_lib::acp::feedback::SessionFeedbackAccess>,
         Arc::new(NoQuestions) as Arc<dyn SessionQuestionAccess>,
         Arc::new(NoSessionInfo) as Arc<dyn codeg_lib::acp::session_info::SessionInfoAccess>,
+        Arc::new(NoCollaboration)
+            as Arc<dyn codeg_lib::acp::session_collaboration::SessionCollaborationAccess>,
         Arc::new(NoTaskTools) as Arc<dyn codeg_lib::acp::work_task_tools::WorkTaskToolAccess>,
         Arc::new(NoAuthoring) as Arc<dyn codeg_lib::acp::chat_authoring::ChatAuthoringAccess>,
     );

@@ -39,6 +39,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use tokio::sync::{oneshot, Mutex};
 
 use crate::acp::chat_authoring::{
@@ -47,14 +48,20 @@ use crate::acp::chat_authoring::{
 use crate::acp::delegation::transport::{
     client_ask_round_trip, client_cancel, client_cancel_task_round_trip, client_commit_feedback,
     client_create_automation_round_trip, client_create_work_task_round_trip,
-    client_feedback_round_trip, client_round_trip, client_session_round_trip,
-    client_status_round_trip, client_task_complete_round_trip, client_task_progress_round_trip,
-    BrokerAskRequest, BrokerCancelRequest, BrokerCancelTaskRequest, BrokerCommitFeedbackRequest,
+    client_feedback_round_trip, client_list_sessions_round_trip, client_round_trip,
+    client_send_message_round_trip, client_session_round_trip, client_status_round_trip,
+    client_task_complete_round_trip, client_task_progress_round_trip, BrokerAskRequest,
+    BrokerCancelRequest, BrokerCancelTaskRequest, BrokerCommitFeedbackRequest,
     BrokerCreateAutomationRequest, BrokerCreateWorkTaskRequest, BrokerFeedbackRequest,
-    BrokerRequest, BrokerResponse, BrokerSessionRequest, BrokerStatusRequest,
-    BrokerTaskCompleteRequest, BrokerTaskProgressRequest,
+    BrokerListSessionsRequest, BrokerRequest, BrokerResponse, BrokerSendMessageRequest,
+    BrokerSessionRequest, BrokerStatusRequest, BrokerTaskCompleteRequest,
+    BrokerTaskProgressRequest,
 };
 use crate::acp::question::parse_questions;
+use crate::acp::session_collaboration::{
+    SessionMessageDeliveryMode, SessionMessageSpec, DEFAULT_SESSION_LIST_LIMIT,
+    MAX_SESSION_LIST_LIMIT, MAX_SESSION_MESSAGE_TARGETS,
+};
 use crate::acp::session_info::MAX_SESSION_MESSAGES;
 use crate::models::AutomationAction;
 
@@ -145,6 +152,7 @@ pub struct CompanionFeatures {
     pub feedback: bool,
     pub ask: bool,
     pub sessions: bool,
+    pub collaboration: bool,
     /// Work-task reporting tools (`task_progress` / `task_complete`) — injected
     /// only into spawns launched by the task engine.
     pub tasks: bool,
@@ -156,7 +164,7 @@ pub struct CompanionFeatures {
 
 impl CompanionFeatures {
     /// Parse the comma-joined `--features` value (e.g.
-    /// `delegation,feedback,ask,sessions,automations,taskboard`). Unknown tokens
+    /// `delegation,feedback,ask,sessions,collaboration,automations,taskboard`). Unknown tokens
     /// are ignored. An absent
     /// value (`None`) defaults to delegation-only — backward compatible with a
     /// parent that predates feature gating (companion + listener ship together, so
@@ -168,6 +176,7 @@ impl CompanionFeatures {
                 feedback: false,
                 ask: false,
                 sessions: false,
+                collaboration: false,
                 tasks: false,
                 automations: false,
                 taskboard: false,
@@ -178,6 +187,7 @@ impl CompanionFeatures {
             feedback: false,
             ask: false,
             sessions: false,
+            collaboration: false,
             tasks: false,
             automations: false,
             taskboard: false,
@@ -188,6 +198,7 @@ impl CompanionFeatures {
                 "feedback" => f.feedback = true,
                 "ask" => f.ask = true,
                 "sessions" => f.sessions = true,
+                "collaboration" => f.collaboration = true,
                 "tasks" => f.tasks = true,
                 "automations" => f.automations = true,
                 "taskboard" => f.taskboard = true,
@@ -203,6 +214,7 @@ impl CompanionFeatures {
             "check_user_feedback" => self.feedback,
             "ask_user_question" => self.ask,
             "get_session_info" => self.sessions,
+            "list_sessions" | "send_message" => self.collaboration,
             "task_progress" | "task_complete" => self.tasks,
             "create_automation" => self.automations,
             "create_work_task" => self.taskboard,
@@ -641,6 +653,81 @@ async fn build_tools_call_spawn(
             let round_trip =
                 Box::pin(async move { client_session_round_trip(&socket, &req).await });
             register_and_spawn(inflight, id, None, round_trip, render_session_result).await
+        }
+        "list_sessions" => {
+            let query = arguments
+                .get("query")
+                .and_then(|value| value.as_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string);
+            let limit = parse_session_list_limit(&arguments);
+            let req = BrokerListSessionsRequest {
+                token: ctx.token.clone(),
+                query,
+                limit: Some(limit),
+            };
+            let round_trip =
+                Box::pin(async move { client_list_sessions_round_trip(&socket, &req).await });
+            register_and_spawn(inflight, id, None, round_trip, render_session_list_result).await
+        }
+        "send_message" => {
+            let target_session_ids = match parse_target_session_ids(&arguments) {
+                Ok(ids) => ids,
+                Err(message) => return LineAction::Respond(err(id, -32602, message)),
+            };
+            let content = arguments
+                .get("content")
+                .and_then(|value| value.as_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string);
+            let Some(content) = content else {
+                return LineAction::Respond(err(
+                    id,
+                    -32602,
+                    "send_message requires a non-empty `content` string",
+                ));
+            };
+            let delivery_mode = match arguments
+                .get("delivery_mode")
+                .and_then(|value| value.as_str())
+                .unwrap_or("queue")
+            {
+                "queue" => SessionMessageDeliveryMode::Queue,
+                "deliver_only" => SessionMessageDeliveryMode::DeliverOnly,
+                _ => {
+                    return LineAction::Respond(err(
+                        id,
+                        -32602,
+                        "send_message `delivery_mode` must be queue or deliver_only",
+                    ))
+                }
+            };
+            let reply_to_event_id = arguments
+                .get("reply_to_event_id")
+                .and_then(|value| value.as_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string);
+            let client_dedupe_id = mcp_call_dedupe_id(&ctx.parent_connection_id, &id);
+            let req = BrokerSendMessageRequest {
+                token: ctx.token.clone(),
+                spec: SessionMessageSpec {
+                    target_session_ids,
+                    content,
+                    delivery_mode,
+                    expects_reply: arguments
+                        .get("expects_reply")
+                        .and_then(|value| value.as_bool())
+                        .unwrap_or(true),
+                    reply_to_event_id,
+                    client_dedupe_id,
+                },
+            };
+            let round_trip =
+                Box::pin(async move { client_send_message_round_trip(&socket, &req).await });
+            register_and_spawn(inflight, id, None, round_trip, render_session_send_result).await
         }
         "task_progress" => {
             let message = arguments
@@ -1305,6 +1392,170 @@ fn parse_max_messages(arguments: &Value) -> u32 {
     }
 }
 
+fn parse_session_list_limit(arguments: &Value) -> u32 {
+    let Some(value) = arguments.get("limit") else {
+        return DEFAULT_SESSION_LIST_LIMIT;
+    };
+    let parsed = value
+        .as_u64()
+        .or_else(|| value.as_str().and_then(|raw| raw.trim().parse().ok()));
+    parsed
+        .unwrap_or(u64::from(DEFAULT_SESSION_LIST_LIMIT))
+        .clamp(1, u64::from(MAX_SESSION_LIST_LIMIT)) as u32
+}
+
+fn parse_target_session_ids(arguments: &Value) -> Result<Vec<i32>, String> {
+    let values = arguments
+        .get("target_session_ids")
+        .and_then(Value::as_array)
+        .ok_or_else(|| {
+            "send_message requires a non-empty `target_session_ids` array".to_string()
+        })?;
+    let mut ids = Vec::new();
+    for value in values {
+        let id = value
+            .as_i64()
+            .and_then(|raw| i32::try_from(raw).ok())
+            .or_else(|| {
+                value
+                    .as_str()
+                    .and_then(|raw| raw.trim().parse::<i32>().ok())
+            })
+            .filter(|id| *id > 0)
+            .ok_or_else(|| {
+                "send_message target_session_ids must contain positive integer Session ids"
+                    .to_string()
+            })?;
+        if !ids.contains(&id) {
+            ids.push(id);
+        }
+    }
+    if ids.is_empty() {
+        return Err("send_message requires at least one target Session".to_string());
+    }
+    if ids.len() > MAX_SESSION_MESSAGE_TARGETS {
+        return Err(format!(
+            "send_message supports at most {MAX_SESSION_MESSAGE_TARGETS} target Sessions"
+        ));
+    }
+    Ok(ids)
+}
+
+/// Stable for one MCP request (including a transport replay), opaque to the
+/// model, and safely below the collaboration event's dedupe-key limit.
+fn mcp_call_dedupe_id(parent_connection_id: &str, request_id: &Value) -> String {
+    let raw = format!("{parent_connection_id}:{}", request_id_key(request_id));
+    let digest = Sha256::digest(raw.as_bytes());
+    format!("mcp:{digest:x}")
+}
+
+pub fn render_session_list_result(outcome: &Value) -> Value {
+    let available = outcome
+        .get("available")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let text = if !available {
+        outcome
+            .get("note")
+            .and_then(Value::as_str)
+            .unwrap_or("Session collaboration is unavailable.")
+            .to_string()
+    } else {
+        let sessions = outcome
+            .get("sessions")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        if sessions.is_empty() {
+            "No matching persistent Sessions were found.".to_string()
+        } else {
+            let mut lines = vec![format!("Found {} Session(s):", sessions.len())];
+            for session in sessions {
+                let id = session
+                    .get("session_id")
+                    .and_then(Value::as_i64)
+                    .unwrap_or_default();
+                let title = session
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .unwrap_or("Untitled Session");
+                let agent = session
+                    .get("agent_type")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown");
+                let workspace = session
+                    .get("workspace_path")
+                    .and_then(Value::as_str)
+                    .unwrap_or("no workspace");
+                lines.push(format!("- {id}: {title} [{agent}] — {workspace}"));
+            }
+            if outcome
+                .get("truncated")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                lines.push("Results were truncated; narrow `query` to find more.".to_string());
+            }
+            lines.join("\n")
+        }
+    };
+    json!({
+        "content": [{ "type": "text", "text": text }],
+        "isError": false,
+        "structuredContent": outcome.clone(),
+    })
+}
+
+pub fn render_session_send_result(outcome: &Value) -> Value {
+    let accepted = outcome
+        .get("accepted")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let text = if accepted {
+        let event_id = outcome
+            .get("event_id")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        let deliveries = outcome
+            .get("deliveries")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let mut lines = vec![format!("Message accepted as event {event_id}.")];
+        for delivery in deliveries {
+            let id = delivery
+                .get("target_session_id")
+                .and_then(Value::as_i64)
+                .unwrap_or_default();
+            let title = delivery
+                .get("target_title")
+                .and_then(Value::as_str)
+                .unwrap_or("Untitled Session");
+            let state = delivery
+                .get("state")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown");
+            lines.push(format!("- {id}: {title} — {state}"));
+        }
+        lines.push(
+            "Delivery or queueing does not mean the target Agent has completed the request."
+                .to_string(),
+        );
+        lines.join("\n")
+    } else {
+        outcome
+            .get("note")
+            .and_then(Value::as_str)
+            .unwrap_or("The message was not accepted.")
+            .to_string()
+    };
+    json!({
+        "content": [{ "type": "text", "text": text }],
+        "isError": false,
+        "structuredContent": outcome.clone(),
+    })
+}
+
 /// Map the `get_session_info` round-trip outcome (a serialized
 /// [`crate::acp::session_info::SessionInfo`]) into an MCP `tools/call` result. A
 /// not-found result is surfaced as readable text with `isError: false` (the LLM
@@ -1536,6 +1787,7 @@ mod tests {
             feedback: false,
             ask: false,
             sessions: false,
+            collaboration: false,
             tasks: false,
             automations: false,
             taskboard: false,
@@ -2111,6 +2363,7 @@ mod tests {
         feedback: true,
         ask: false,
         sessions: false,
+        collaboration: false,
         tasks: false,
         automations: false,
         taskboard: false,
@@ -2120,6 +2373,7 @@ mod tests {
         feedback: true,
         ask: false,
         sessions: false,
+        collaboration: false,
         tasks: false,
         automations: false,
         taskboard: false,
@@ -2129,6 +2383,7 @@ mod tests {
         feedback: false,
         ask: true,
         sessions: false,
+        collaboration: false,
         tasks: false,
         automations: false,
         taskboard: false,
@@ -2138,6 +2393,17 @@ mod tests {
         feedback: false,
         ask: false,
         sessions: true,
+        collaboration: false,
+        tasks: false,
+        automations: false,
+        taskboard: false,
+    };
+    const COLLABORATION_ONLY: CompanionFeatures = CompanionFeatures {
+        delegation: false,
+        feedback: false,
+        ask: false,
+        sessions: false,
+        collaboration: true,
         tasks: false,
         automations: false,
         taskboard: false,
@@ -2161,14 +2427,18 @@ mod tests {
         assert!(!def.ask);
         assert!(!def.sessions);
         // Explicit list, whitespace + unknown tokens tolerated.
-        let all = CompanionFeatures::parse(Some(" delegation , feedback , ask , sessions ,bogus"));
-        assert!(all.delegation && all.feedback && all.ask && all.sessions);
+        let all = CompanionFeatures::parse(Some(
+            " delegation , feedback , ask , sessions , collaboration ,bogus",
+        ));
+        assert!(all.delegation && all.feedback && all.ask && all.sessions && all.collaboration);
         let fb = CompanionFeatures::parse(Some("feedback"));
         assert!(!fb.delegation && fb.feedback && !fb.ask);
         let ask = CompanionFeatures::parse(Some("ask"));
         assert!(!ask.delegation && !ask.feedback && ask.ask);
         let sessions = CompanionFeatures::parse(Some("sessions"));
         assert!(!sessions.delegation && !sessions.feedback && !sessions.ask && sessions.sessions);
+        let collaboration = CompanionFeatures::parse(Some("collaboration"));
+        assert!(collaboration.collaboration && !collaboration.sessions);
         // Empty string → nothing enabled.
         let none = CompanionFeatures::parse(Some(""));
         assert!(!none.delegation && !none.feedback && !none.ask && !none.sessions);
@@ -2421,6 +2691,102 @@ mod tests {
         assert!(e.message.contains("unknown tool"));
     }
 
+    // -- persistent Session collaboration ---------------------------------
+
+    #[tokio::test]
+    async fn tools_list_gates_session_collaboration_as_one_group() {
+        let list = r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#;
+        let names = list_tool_names(dispatch_with_features(COLLABORATION_ONLY, list).await);
+        assert_eq!(
+            names,
+            vec!["list_sessions".to_string(), "send_message".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn collaboration_calls_validate_before_spawning() {
+        let list = json!({
+            "jsonrpc": "2.0", "id": 40, "method": "tools/call",
+            "params": { "name": "list_sessions", "arguments": { "query": "review", "limit": 20 } }
+        })
+        .to_string();
+        assert!(matches!(
+            dispatch_with_features(COLLABORATION_ONLY, &list).await,
+            LineAction::Spawn(_)
+        ));
+
+        let send = json!({
+            "jsonrpc": "2.0", "id": 41, "method": "tools/call",
+            "params": { "name": "send_message", "arguments": {
+                "target_session_ids": [7, "8", 7],
+                "content": "Please review this.",
+                "delivery_mode": "queue",
+                "expects_reply": true,
+                "reply_to_event_id": "event-1"
+            } }
+        })
+        .to_string();
+        assert!(matches!(
+            dispatch_with_features(COLLABORATION_ONLY, &send).await,
+            LineAction::Spawn(_)
+        ));
+
+        for arguments in [
+            json!({ "target_session_ids": [], "content": "x" }),
+            json!({ "target_session_ids": ["bad"], "content": "x" }),
+            json!({ "target_session_ids": [7], "content": " " }),
+            json!({ "target_session_ids": [7], "content": "x", "delivery_mode": "interrupt" }),
+        ] {
+            let line = json!({
+                "jsonrpc": "2.0", "id": 42, "method": "tools/call",
+                "params": { "name": "send_message", "arguments": arguments }
+            })
+            .to_string();
+            let response = unwrap_respond(dispatch_with_features(COLLABORATION_ONLY, &line).await);
+            assert_eq!(response.error.expect("invalid call").code, -32602);
+        }
+    }
+
+    #[test]
+    fn collaboration_mcp_dedupe_key_is_stable_per_parent_and_request() {
+        let first = mcp_call_dedupe_id("parent-1", &json!(41));
+        assert_eq!(first, mcp_call_dedupe_id("parent-1", &json!(41)));
+        assert_ne!(first, mcp_call_dedupe_id("parent-1", &json!(42)));
+        assert_ne!(first, mcp_call_dedupe_id("parent-2", &json!(41)));
+        assert!(first.starts_with("mcp:"));
+    }
+
+    #[test]
+    fn collaboration_results_keep_delivery_distinct_from_completion() {
+        let list = render_session_list_result(&json!({
+            "available": true,
+            "sessions": [{
+                "session_id": 7,
+                "title": "Reviewer",
+                "agent_type": "claude_code",
+                "workspace_path": "D:/paper"
+            }],
+            "truncated": false
+        }));
+        assert!(list["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("7: Reviewer"));
+
+        let sent = render_session_send_result(&json!({
+            "accepted": true,
+            "event_id": "event-1",
+            "deliveries": [{
+                "target_session_id": 7,
+                "target_title": "Reviewer",
+                "state": "queued"
+            }]
+        }));
+        let text = sent["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("queued"));
+        assert!(text.contains("does not mean"));
+    }
+
     // -- chat authoring: feature gating + parsing + rendering ---------------
 
     const AUTOMATIONS_ONLY: CompanionFeatures = CompanionFeatures {
@@ -2428,6 +2794,7 @@ mod tests {
         feedback: false,
         ask: false,
         sessions: false,
+        collaboration: false,
         tasks: false,
         automations: true,
         taskboard: false,
@@ -2437,6 +2804,7 @@ mod tests {
         feedback: false,
         ask: false,
         sessions: false,
+        collaboration: false,
         tasks: false,
         automations: false,
         taskboard: true,

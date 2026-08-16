@@ -597,6 +597,7 @@ mod tauri_app {
                         feedback_config,
                         question_config,
                         session_info_config,
+                        session_collaboration_config,
                         chat_authoring_config,
                     ) = crate::app_state::build_delegation_stack(
                         &cm_state,
@@ -608,6 +609,7 @@ mod tauri_app {
                     app.manage(feedback_config.clone());
                     app.manage(question_config.clone());
                     app.manage(session_info_config.clone());
+                    app.manage(session_collaboration_config.clone());
                     app.manage(chat_authoring_config.clone());
                     app.manage(crate::commands::delegation::DelegationSocketPath(
                         socket_path.clone(),
@@ -620,6 +622,8 @@ mod tauri_app {
                     let feedback_for_init = feedback_config.clone();
                     let question_for_init = question_config.clone();
                     let session_info_for_init = session_info_config.clone();
+                    let session_collaboration_for_init =
+                        session_collaboration_config.clone();
                     let chat_authoring_for_init = chat_authoring_config.clone();
                     tauri::async_runtime::block_on(async move {
                         delegation_commands::apply_persisted_config(
@@ -640,6 +644,11 @@ mod tauri_app {
                         crate::commands::session_info::apply_persisted_session_info_config(
                             &db_for_init,
                             &session_info_for_init,
+                        )
+                        .await;
+                        crate::commands::collaboration::apply_persisted_session_collaboration_config(
+                            &db_for_init,
+                            &session_collaboration_for_init,
                         )
                         .await;
                         crate::commands::chat_authoring::apply_persisted_chat_authoring_config(
@@ -673,6 +682,20 @@ mod tauri_app {
                                 std::sync::Arc::new(db::AppDatabase {
                                     conn: db_conn.clone(),
                                 }),
+                            ),
+                        ),
+                        std::sync::Arc::new(
+                            crate::commands::collaboration::DbSessionCollaboration::new(
+                                std::sync::Arc::new(db::AppDatabase {
+                                    conn: db_conn.clone(),
+                                }),
+                                crate::web::event_bridge::EventEmitter::Tauri(
+                                    app.handle().clone(),
+                                ),
+                                app.state::<crate::prompt_queue::PromptQueueHandle>()
+                                    .inner()
+                                    .clone(),
+                                session_collaboration_config.clone(),
                             ),
                         ),
                         std::sync::Arc::new(crate::work_task::EngineWorkTaskTools),
@@ -1209,6 +1232,8 @@ mod tauri_app {
                 question_commands::set_question_settings,
                 session_info_commands::get_session_info_settings,
                 session_info_commands::set_session_info_settings,
+                collaboration_commands::get_session_collaboration_settings,
+                collaboration_commands::set_session_collaboration_settings,
                 chat_authoring_commands::get_chat_authoring_settings,
                 chat_authoring_commands::set_chat_authoring_settings,
                 version_control::detect_git,

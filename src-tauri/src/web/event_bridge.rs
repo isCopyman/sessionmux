@@ -170,6 +170,13 @@ pub const QUESTION_SETTINGS_CHANGED_EVENT: &str = "question-settings://changed";
 /// backend broadcast. Payload: `SessionInfoSettings` (`{ "enabled": bool }`).
 pub const SESSION_INFO_SETTINGS_CHANGED_EVENT: &str = "session-info-settings://changed";
 
+/// Global side-channel announcing whether managed Sessions may use Codeg's
+/// `list_sessions` / `send_message` collaboration tools. The Host Core also
+/// re-checks this flag on every write; this event only keeps settings surfaces
+/// and future status affordances synchronized across windows.
+pub const SESSION_COLLABORATION_SETTINGS_CHANGED_EVENT: &str =
+    "session-collaboration-settings://changed";
+
 /// Global side-channel announcing a chat-authoring enable/disable
 /// (`create_automation` / `create_work_task`). Same cross-window rationale as
 /// [`SESSION_INFO_SETTINGS_CHANGED_EVENT`]. Payload: `ChatAuthoringSettings`

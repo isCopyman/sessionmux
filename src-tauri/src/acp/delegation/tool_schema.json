@@ -153,6 +153,60 @@
     }
   },
   {
+    "name": "list_sessions",
+    "description": "Find other persistent Sessions managed by Codeg so you can address them by stable Session id. Use this when the user asks you to consult, notify, or collaborate with an existing Session but has not already supplied a codeg://session/<id> reference. Results exclude this calling Session and unsent drafts, and include the title, Harness, workspace, status, and last activity needed to disambiguate duplicate names. A title or role is only a human-facing selector; always pass the returned numeric session_id to send_message.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "Optional case-insensitive filter over title, Session id, Harness, workspace name, and workspace path. Omit for the most recently active Sessions."
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200,
+          "description": "Maximum results. Defaults to 50; narrow query instead of requesting a huge address book."
+        }
+      }
+    }
+  },
+  {
+    "name": "send_message",
+    "description": "Send a durable message from this persistent Session to one or more existing Codeg Sessions by stable numeric id. This is Session-to-Session communication, not delegation: the target keeps its own full conversation and receives only this message plus source metadata. Default delivery_mode is queue: persist first, then let the target's EXISTING runtime process it when idle; Codeg never cold-starts a closed Session. deliver_only persists and displays the message without starting a target turn. A queued or delivered result does NOT mean the target has read, completed, or answered it. For a request that needs an answer, keep expects_reply true (the default). To answer an inbound collaboration envelope, target only its sourceConversationId and set reply_to_event_id to that envelope's eventId. Use expects_reply false for FYI/notifications. Do not invent names, parse plain-text @ mentions yourself, or send to the calling Session.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["target_session_ids", "content"],
+      "properties": {
+        "target_session_ids": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": { "type": "integer", "minimum": 1 },
+          "description": "One or more stable numeric Session ids from a codeg://session/<id> reference or list_sessions."
+        },
+        "content": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The complete message the target Session needs. Only this content and source metadata are delivered; the target does not inherit your whole transcript."
+        },
+        "delivery_mode": {
+          "type": "string",
+          "enum": ["queue", "deliver_only"],
+          "description": "queue (default): persist and enqueue for the target's existing runtime when idle. deliver_only: persist/display only, with no automatic Agent turn."
+        },
+        "expects_reply": {
+          "type": "boolean",
+          "description": "Whether the target should send a linked reply after finishing. Defaults to true; set false for FYI/notifications."
+        },
+        "reply_to_event_id": {
+          "type": "string",
+          "description": "When replying to an inbound collaboration message, its eventId. A reply must target only that event's source Session. Omit for a new message."
+        }
+      }
+    }
+  },
+  {
     "name": "create_automation",
     "description": "Save a codeg Automation: a reusable job — a prompt plus a target project — that codeg runs on a cron schedule (or on demand) without anyone present. Use it when the user asks for work that should REPEAT or happen at a TIME rather than right now: 'every morning', 'each Monday', 'nightly', 'every 30 minutes', 'before standup', 'set up a recurring …'. Do NOT use it for work the user wants done in this conversation — just do that work. Each run starts a fresh headless session in its own worktree with no memory of this chat, so `prompt` must be completely self-contained: state the goal, the relevant paths, and what a finished run looks like. Creating an automation does not run it now; the tool returns the id and the next fire time so you can tell the user when it will first go off. The user can edit, disable, run, or delete it on the Automations page.",
     "inputSchema": {

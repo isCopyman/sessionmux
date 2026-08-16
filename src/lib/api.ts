@@ -4770,6 +4770,22 @@ export async function setSessionInfoSettings(
   return getTransport().call("set_session_info_settings", { settings })
 }
 
+// ─── Managed Session collaboration settings ──────────────────────────────
+
+export interface SessionCollaborationSettings {
+  enabled: boolean
+}
+
+export async function getSessionCollaborationSettings(): Promise<SessionCollaborationSettings> {
+  return getTransport().call("get_session_collaboration_settings")
+}
+
+export async function setSessionCollaborationSettings(
+  settings: SessionCollaborationSettings
+): Promise<SessionCollaborationSettings> {
+  return getTransport().call("set_session_collaboration_settings", { settings })
+}
+
 // ─── Create-from-chat (chat authoring) settings ────────────────────────────
 
 /** Mirror of Rust `ChatAuthoringSettings`. Both default OFF — these tools write

@@ -4322,6 +4322,8 @@
     "questionHint": "Let agents pause and ask you a multiple-choice question that appears above the conversation input box. The agent waits until you answer (or skip).",
     "sessionInfoLabel": "Get session info",
     "sessionInfoHint": "Let agents look up a session you reference in your message (a session badge) to read its title, agent, status, workspace, token usage, and recent messages.",
+    "collaborationLabel": "Session collaboration",
+    "collaborationHint": "Let agents find and send durable messages to other persistent Sessions by stable id. New messages are still rejected by the Host Core when this is off.",
     "automationsLabel": "Create automations",
     "automationsHint": "Save the conversation as an automation that runs on a schedule. Off by default — it goes on to start agents on its own.",
     "workTasksLabel": "Create to-do tasks",

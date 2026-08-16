@@ -835,6 +835,10 @@ pub(crate) async fn do_start_web_server_tauri(
             .state::<crate::acp::session_info::SessionInfoRuntimeConfig>()
             .inner()
             .clone(),
+        session_collaboration_config: app
+            .state::<crate::acp::session_collaboration::SessionCollaborationRuntimeConfig>()
+            .inner()
+            .clone(),
         // Reuse the same chat-authoring config handle desktop MCP injection and
         // the authoring write path read, so HTTP-side saves target the same flags.
         chat_authoring_config: app

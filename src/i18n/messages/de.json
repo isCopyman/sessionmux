@@ -4322,6 +4322,8 @@
     "questionHint": "Erlaubt Agenten, anzuhalten und dir eine Multiple-Choice-Frage zu stellen, die über dem Eingabefeld der Unterhaltung erscheint. Der Agent wartet, bis du antwortest (oder überspringst).",
     "sessionInfoLabel": "Sitzungsinformationen abrufen",
     "sessionInfoHint": "Erlaubt Agenten, eine in deiner Nachricht referenzierte Sitzung (ein Sitzungs-Badge) nachzuschlagen, um Titel, Agent, Status, Arbeitsbereich, Token-Verbrauch und letzte Nachrichten zu lesen.",
+    "collaborationLabel": "Sitzungszusammenarbeit",
+    "collaborationHint": "Agenten können dauerhafte Sitzungen per stabiler ID finden und ihnen zuverlässige Nachrichten senden.",
     "automationsLabel": "Automatisierungen erstellen",
     "automationsHint": "Speichert die Unterhaltung als Automatisierung, die nach Zeitplan läuft. Standardmäßig aus – sie startet danach selbst Agenten.",
     "workTasksLabel": "To-do-Aufgaben erstellen",

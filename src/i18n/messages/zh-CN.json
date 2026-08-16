@@ -4322,6 +4322,8 @@
     "questionHint": "允许智能体暂停并向你提出多选问题，问题会显示在会话输入框上方。智能体会一直等待，直到你作答（或跳过）。",
     "sessionInfoLabel": "获取会话信息",
     "sessionInfoHint": "允许智能体查询你在消息中提及的会话（会话徽章），读取其标题、智能体、状态、工作区、Token 用量和最近消息。",
+    "collaborationLabel": "会话协作",
+    "collaborationHint": "允许智能体按稳定会话 ID 查找并向其他长期会话发送可靠消息。关闭后，Host Core 也会拒绝新的发送调用。",
     "automationsLabel": "创建自动化",
     "automationsHint": "把对话保存为按计划运行的自动化。默认关闭——它之后会自行启动智能体。",
     "workTasksLabel": "创建待办任务",

@@ -4322,6 +4322,8 @@
     "questionHint": "Permite que os agentes pausem e façam uma pergunta de múltipla escolha que aparece acima da caixa de entrada da conversa. O agente aguarda até você responder (ou pular).",
     "sessionInfoLabel": "Obter informações da sessão",
     "sessionInfoHint": "Permite que os agentes consultem uma sessão mencionada na sua mensagem (um selo de sessão) para ler o título, agente, status, espaço de trabalho, uso de tokens e mensagens recentes.",
+    "collaborationLabel": "Colaboração entre sessões",
+    "collaborationHint": "Permite que agentes encontrem sessões persistentes por ID estável e enviem mensagens duráveis.",
     "automationsLabel": "Criar automações",
     "automationsHint": "Salva a conversa como uma automação que roda em um agendamento. Desativado por padrão — depois ela inicia agentes por conta própria.",
     "workTasksLabel": "Criar tarefas a fazer",

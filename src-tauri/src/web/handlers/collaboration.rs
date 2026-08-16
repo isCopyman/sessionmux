@@ -6,6 +6,7 @@ use serde::Deserialize;
 use crate::app_error::AppCommandError;
 use crate::app_state::AppState;
 use crate::commands::collaboration;
+use crate::commands::collaboration::SessionCollaborationSettings;
 use crate::models::{CollaborationFeed, CollaborationSendResult, SendCollaborationMessageInput};
 
 #[derive(Deserialize)]
@@ -32,6 +33,34 @@ pub struct MarkSeenParams {
 pub struct DismissParams {
     pub conversation_id: i32,
     pub delivery_id: String,
+}
+
+pub async fn get_settings(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Result<Json<SessionCollaborationSettings>, AppCommandError> {
+    Ok(Json(
+        collaboration::load_session_collaboration_settings(&state.db.conn).await,
+    ))
+}
+
+#[derive(Deserialize)]
+pub struct SetSettingsParams {
+    pub settings: SessionCollaborationSettings,
+}
+
+pub async fn set_settings(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<SetSettingsParams>,
+) -> Result<Json<SessionCollaborationSettings>, AppCommandError> {
+    Ok(Json(
+        collaboration::set_session_collaboration_settings_core(
+            &state.db.conn,
+            &state.session_collaboration_config,
+            &state.emitter,
+            params.settings,
+        )
+        .await?,
+    ))
 }
 
 pub async fn send(

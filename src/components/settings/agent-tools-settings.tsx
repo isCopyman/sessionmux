@@ -27,6 +27,7 @@ import {
   ListTodo,
   MessageSquare,
   MessageSquarePlus,
+  MessagesSquare,
   Wrench,
   type LucideIcon,
 } from "lucide-react"
@@ -43,10 +44,12 @@ import {
   getChatAuthoringSettings,
   getFeedbackSettings,
   getQuestionSettings,
+  getSessionCollaborationSettings,
   getSessionInfoSettings,
   setChatAuthoringSettings,
   setFeedbackSettings,
   setQuestionSettings,
+  setSessionCollaborationSettings,
   setSessionInfoSettings,
 } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
@@ -57,6 +60,7 @@ interface AgentToolValues {
   feedback: boolean
   question: boolean
   sessionInfo: boolean
+  collaboration: boolean
   automations: boolean
   workTasks: boolean
 }
@@ -71,6 +75,7 @@ const DEFAULTS: AgentToolValues = {
   feedback: false,
   question: true,
   sessionInfo: true,
+  collaboration: true,
   automations: false,
   workTasks: false,
 }
@@ -98,6 +103,13 @@ const TOOL_ROWS = [
     icon: MessageSquare,
     label: "sessionInfoLabel",
     hint: "sessionInfoHint",
+  },
+  {
+    key: "collaboration",
+    id: "agent-tools-session-collaboration",
+    icon: MessagesSquare,
+    label: "collaborationLabel",
+    hint: "collaborationHint",
   },
   {
     key: "automations",
@@ -134,10 +146,12 @@ export function AgentToolsSettingsSection() {
   useEffect(() => {
     let cancelled = false
     void (async () => {
-      const [feedback, question, sessionInfo, chat] = await Promise.allSettled([
+      const [feedback, question, sessionInfo, collaboration, chat] =
+        await Promise.allSettled([
         getFeedbackSettings(),
         getQuestionSettings(),
         getSessionInfoSettings(),
+        getSessionCollaborationSettings(),
         getChatAuthoringSettings(),
       ])
       if (cancelled) return
@@ -155,6 +169,9 @@ export function AgentToolsSettingsSection() {
       if (sessionInfo.status === "fulfilled")
         next.sessionInfo = sessionInfo.value.enabled
       else failures.push(toErrorMessage(sessionInfo.reason))
+      if (collaboration.status === "fulfilled")
+        next.collaboration = collaboration.value.enabled
+      else failures.push(toErrorMessage(collaboration.reason))
       if (chat.status === "fulfilled") {
         next.automations = chat.value.automations_enabled
         next.workTasks = chat.value.work_tasks_enabled
@@ -174,6 +191,7 @@ export function AgentToolsSettingsSection() {
     values.feedback !== baseline.feedback ||
     values.question !== baseline.question ||
     values.sessionInfo !== baseline.sessionInfo ||
+    values.collaboration !== baseline.collaboration ||
     values.automations !== baseline.automations ||
     values.workTasks !== baseline.workTasks
 
@@ -204,6 +222,13 @@ export function AgentToolsSettingsSection() {
           setSessionInfoSettings({ enabled: values.sessionInfo }).then(
             (applied) => ({ sessionInfo: applied.enabled })
           )
+        )
+      }
+      if (values.collaboration !== baseline.collaboration) {
+        writes.push(
+          setSessionCollaborationSettings({
+            enabled: values.collaboration,
+          }).then((applied) => ({ collaboration: applied.enabled }))
         )
       }
       if (

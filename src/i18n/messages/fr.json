@@ -4322,6 +4322,8 @@
     "questionHint": "Permet aux agents de s'interrompre et de vous poser une question à choix multiples affichée au-dessus de la zone de saisie de la conversation. L'agent attend votre réponse (ou que vous ignoriez).",
     "sessionInfoLabel": "Obtenir les infos de session",
     "sessionInfoHint": "Permet aux agents de consulter une session que vous mentionnez dans votre message (un badge de session) pour lire son titre, son agent, son statut, son espace de travail, sa consommation de jetons et ses messages récents.",
+    "collaborationLabel": "Collaboration entre sessions",
+    "collaborationHint": "Permet aux agents de trouver des sessions persistantes par identifiant stable et de leur envoyer des messages durables.",
     "automationsLabel": "Créer des automatisations",
     "automationsHint": "Enregistre la conversation comme une automatisation qui s'exécute selon un planning. Désactivé par défaut : elle démarre ensuite des agents d'elle-même.",
     "workTasksLabel": "Créer des tâches à faire",

@@ -1,15 +1,77 @@
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
+
+use crate::acp::session_collaboration::{
+    SessionAddress, SessionCollaborationAccess, SessionCollaborationConfig,
+    SessionCollaborationRuntimeConfig, SessionListOutcome, SessionMessageDeliveryMode,
+    SessionMessageDeliveryOutcome, SessionMessageSpec, SessionSendOutcome, MAX_SESSION_LIST_LIMIT,
+};
 use crate::app_error::AppCommandError;
-use crate::db::service::{collaboration_service, prompt_queue_service};
-#[cfg(feature = "tauri-runtime")]
+use crate::db::service::{
+    app_metadata_service, collaboration_service, conversation_service, folder_service,
+    prompt_queue_service,
+};
 use crate::db::AppDatabase;
 use crate::models::{
-    CollaborationChanged, CollaborationDeliveryState, CollaborationFeed,
-    CollaborationInvocationPolicy, CollaborationSendResult, SendCollaborationMessageInput,
+    CollaborationChanged, CollaborationDeliveryHint, CollaborationDeliveryState, CollaborationFeed,
+    CollaborationInvocationPolicy, CollaborationSendResult, CollaborationUrgency,
+    SendCollaborationMessageInput,
 };
 use crate::prompt_queue::PromptQueueHandle;
 use crate::web::event_bridge::{
     emit_event, EventEmitter, COLLABORATION_CHANGED_EVENT, PROMPT_QUEUE_CHANGED_EVENT,
+    SESSION_COLLABORATION_SETTINGS_CHANGED_EVENT,
 };
+
+pub const KEY_SESSION_COLLABORATION_ENABLED: &str = "session_collaboration.enabled";
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SessionCollaborationSettings {
+    pub enabled: bool,
+}
+
+impl Default for SessionCollaborationSettings {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
+}
+
+impl SessionCollaborationSettings {
+    fn into_runtime_config(self) -> SessionCollaborationConfig {
+        SessionCollaborationConfig {
+            enabled: self.enabled,
+        }
+    }
+}
+
+/// Production Host Core for the managed-agent collaboration tools. The caller
+/// id is supplied by the listener after token resolution; this type never
+/// accepts a source id from MCP arguments.
+pub struct DbSessionCollaboration {
+    db: Arc<AppDatabase>,
+    emitter: EventEmitter,
+    prompt_queue: PromptQueueHandle,
+    config: SessionCollaborationRuntimeConfig,
+}
+
+impl DbSessionCollaboration {
+    pub fn new(
+        db: Arc<AppDatabase>,
+        emitter: EventEmitter,
+        prompt_queue: PromptQueueHandle,
+        config: SessionCollaborationRuntimeConfig,
+    ) -> Self {
+        Self {
+            db,
+            emitter,
+            prompt_queue,
+            config,
+        }
+    }
+}
 
 fn publish(emitter: &EventEmitter, conversation_ids: Vec<i32>) {
     if conversation_ids.is_empty() {
@@ -78,6 +140,295 @@ pub async fn collaboration_dismiss_core(
     Ok(result.feed)
 }
 
+fn delivery_state_name(state: CollaborationDeliveryState) -> String {
+    match state {
+        CollaborationDeliveryState::Pending => "pending",
+        CollaborationDeliveryState::Queued => "queued",
+        CollaborationDeliveryState::Embedding => "embedding",
+        CollaborationDeliveryState::Embedded => "embedded",
+        CollaborationDeliveryState::Dismissed => "dismissed",
+        CollaborationDeliveryState::Failed => "failed",
+    }
+    .to_string()
+}
+
+#[async_trait]
+impl SessionCollaborationAccess for DbSessionCollaboration {
+    async fn list_sessions(
+        &self,
+        caller_session_id: i32,
+        query: Option<String>,
+        limit: u32,
+    ) -> SessionListOutcome {
+        if !self.config.is_enabled().await {
+            return SessionListOutcome::unavailable(
+                Some(caller_session_id),
+                "Session collaboration is disabled in Codeg settings.",
+            );
+        }
+
+        let mut rows = match conversation_service::list_all(
+            &self.db.conn,
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+            false,
+        )
+        .await
+        {
+            Ok(rows) => rows,
+            Err(err) => {
+                return SessionListOutcome::unavailable(
+                    Some(caller_session_id),
+                    format!("Could not list Sessions: {err}"),
+                )
+            }
+        };
+        let archived = match conversation_service::list_all(
+            &self.db.conn,
+            None,
+            None,
+            None,
+            None,
+            None,
+            true,
+            false,
+        )
+        .await
+        {
+            Ok(rows) => rows,
+            Err(err) => {
+                return SessionListOutcome::unavailable(
+                    Some(caller_session_id),
+                    format!("Could not list archived Sessions: {err}"),
+                )
+            }
+        };
+        rows.extend(archived);
+
+        // A draft without an underlying Harness session is not a stable
+        // address. The caller itself is omitted because self-delivery is
+        // rejected by the collaboration core.
+        let caller_exists = rows.iter().any(|row| row.id == caller_session_id);
+        if !caller_exists {
+            return SessionListOutcome::unavailable(
+                Some(caller_session_id),
+                "The calling Session is no longer available in Codeg.",
+            );
+        }
+
+        let folders = match folder_service::list_all_folder_details(&self.db.conn).await {
+            Ok(folders) => folders,
+            Err(err) => {
+                return SessionListOutcome::unavailable(
+                    Some(caller_session_id),
+                    format!("Could not resolve Session workspaces: {err}"),
+                )
+            }
+        };
+        let folders: HashMap<i32, (String, String)> = folders
+            .into_iter()
+            .map(|folder| (folder.id, (folder.name, folder.path)))
+            .collect();
+        let query = query
+            .map(|value| value.trim().to_lowercase())
+            .filter(|value| !value.is_empty());
+        let limit = limit.clamp(1, MAX_SESSION_LIST_LIMIT) as usize;
+        let mut sessions = rows
+            .into_iter()
+            .filter(|row| row.id != caller_session_id && row.external_id.is_some())
+            .filter_map(|row| {
+                let agent_type = row.agent_type.as_wire().into_owned();
+                let (workspace_name, workspace_path) = folders
+                    .get(&row.folder_id)
+                    .map(|(name, path)| (Some(name.clone()), Some(path.clone())))
+                    .unwrap_or((None, None));
+                if let Some(query) = query.as_deref() {
+                    let searchable = format!(
+                        "{} {} {} {} {}",
+                        row.id,
+                        row.title.as_deref().unwrap_or_default(),
+                        agent_type,
+                        workspace_name.as_deref().unwrap_or_default(),
+                        workspace_path.as_deref().unwrap_or_default(),
+                    )
+                    .to_lowercase();
+                    if !searchable.contains(query) {
+                        return None;
+                    }
+                }
+                Some(SessionAddress {
+                    session_id: row.id,
+                    title: row.title,
+                    agent_type,
+                    status: row.status,
+                    model: row.model,
+                    workspace_name,
+                    workspace_path,
+                    updated_at: row.updated_at,
+                    archived: row.archived_at.is_some(),
+                })
+            })
+            .collect::<Vec<_>>();
+        sessions.sort_by(|a, b| {
+            b.updated_at
+                .cmp(&a.updated_at)
+                .then_with(|| b.session_id.cmp(&a.session_id))
+        });
+        let truncated = sessions.len() > limit;
+        sessions.truncate(limit);
+        SessionListOutcome {
+            available: true,
+            caller_session_id: Some(caller_session_id),
+            sessions,
+            truncated,
+            note: None,
+        }
+    }
+
+    async fn send_message(
+        &self,
+        source_session_id: i32,
+        spec: SessionMessageSpec,
+    ) -> SessionSendOutcome {
+        // Host Core re-check: tools/list filtering in the companion is UX, not
+        // a security boundary. An old or replaced companion cannot write after
+        // the operator disables collaboration.
+        if !self.config.is_enabled().await {
+            return SessionSendOutcome::rejected(
+                Some(source_session_id),
+                "Session collaboration is disabled in Codeg settings.",
+            );
+        }
+        let invocation_policy = match spec.delivery_mode {
+            SessionMessageDeliveryMode::DeliverOnly => CollaborationInvocationPolicy::StoreOnly,
+            SessionMessageDeliveryMode::Queue => CollaborationInvocationPolicy::InvokeWhenIdle,
+        };
+        let result = collaboration_send_core(
+            &self.db.conn,
+            &self.emitter,
+            &self.prompt_queue,
+            SendCollaborationMessageInput {
+                source_conversation_id: source_session_id,
+                target_conversation_ids: spec.target_session_ids,
+                body: spec.content,
+                client_dedupe_id: spec.client_dedupe_id,
+                invocation_policy,
+                delivery_hint: CollaborationDeliveryHint::Default,
+                expects_reply: spec.expects_reply,
+                urgency: CollaborationUrgency::Normal,
+                reply_to_event_id: spec.reply_to_event_id,
+            },
+        )
+        .await;
+        match result {
+            Ok(result) => SessionSendOutcome {
+                accepted: true,
+                source_session_id: Some(source_session_id),
+                event_id: Some(result.event_id),
+                deliveries: result
+                    .deliveries
+                    .into_iter()
+                    .map(|delivery| SessionMessageDeliveryOutcome {
+                        target_session_id: delivery.target.conversation_id,
+                        target_title: delivery.target.title,
+                        target_agent_type: delivery.target.agent_type,
+                        state: delivery_state_name(delivery.state),
+                        error: delivery.error,
+                    })
+                    .collect(),
+                deduplicated: result.deduplicated,
+                note: None,
+            },
+            Err(err) => SessionSendOutcome::rejected(Some(source_session_id), err.to_string()),
+        }
+    }
+}
+
+pub async fn load_session_collaboration_settings(
+    conn: &sea_orm::DatabaseConnection,
+) -> SessionCollaborationSettings {
+    let mut settings = SessionCollaborationSettings::default();
+    if let Ok(Some(raw)) =
+        app_metadata_service::get_value(conn, KEY_SESSION_COLLABORATION_ENABLED).await
+    {
+        if let Ok(value) = raw.parse::<bool>() {
+            settings.enabled = value;
+        }
+    }
+    settings
+}
+
+pub async fn apply_persisted_session_collaboration_config(
+    conn: &sea_orm::DatabaseConnection,
+    config: &SessionCollaborationRuntimeConfig,
+) {
+    let settings = load_session_collaboration_settings(conn).await;
+    config.set(settings.into_runtime_config()).await;
+}
+
+pub async fn set_session_collaboration_settings_core(
+    conn: &sea_orm::DatabaseConnection,
+    config: &SessionCollaborationRuntimeConfig,
+    emitter: &EventEmitter,
+    desired: SessionCollaborationSettings,
+) -> Result<SessionCollaborationSettings, AppCommandError> {
+    app_metadata_service::upsert_value(
+        conn,
+        KEY_SESSION_COLLABORATION_ENABLED,
+        &desired.enabled.to_string(),
+    )
+    .await?;
+    config.set(desired.clone().into_runtime_config()).await;
+    emit_event(
+        emitter,
+        SESSION_COLLABORATION_SETTINGS_CHANGED_EVENT,
+        &desired,
+    );
+    Ok(desired)
+}
+
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn get_session_collaboration_settings(
+    #[cfg(feature = "tauri-runtime")] db: tauri::State<'_, AppDatabase>,
+) -> Result<SessionCollaborationSettings, AppCommandError> {
+    #[cfg(feature = "tauri-runtime")]
+    {
+        Ok(load_session_collaboration_settings(&db.conn).await)
+    }
+    #[cfg(not(feature = "tauri-runtime"))]
+    {
+        Err(AppCommandError::configuration_invalid("tauri-only command"))
+    }
+}
+
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn set_session_collaboration_settings(
+    #[cfg(feature = "tauri-runtime")] app: tauri::AppHandle,
+    #[cfg(feature = "tauri-runtime")] db: tauri::State<'_, AppDatabase>,
+    #[cfg(feature = "tauri-runtime")] config: tauri::State<'_, SessionCollaborationRuntimeConfig>,
+    settings: SessionCollaborationSettings,
+) -> Result<SessionCollaborationSettings, AppCommandError> {
+    #[cfg(feature = "tauri-runtime")]
+    {
+        set_session_collaboration_settings_core(
+            &db.conn,
+            &config,
+            &EventEmitter::Tauri(app),
+            settings,
+        )
+        .await
+    }
+    #[cfg(not(feature = "tauri-runtime"))]
+    {
+        let _ = settings;
+        Err(AppCommandError::configuration_invalid("tauri-only command"))
+    }
+}
+
 #[cfg(feature = "tauri-runtime")]
 #[tauri::command]
 pub async fn collaboration_send(
@@ -143,6 +494,24 @@ mod tests {
     use crate::web::event_bridge::WebEventBroadcaster;
     use std::sync::Arc;
 
+    async fn enabled_agent_access(
+        db: &AppDatabase,
+        emitter: EventEmitter,
+    ) -> DbSessionCollaboration {
+        let config = SessionCollaborationRuntimeConfig::new();
+        config
+            .set(SessionCollaborationConfig { enabled: true })
+            .await;
+        DbSessionCollaboration::new(
+            Arc::new(AppDatabase {
+                conn: db.conn.clone(),
+            }),
+            emitter,
+            PromptQueueHandle::disconnected_for_test(),
+            config,
+        )
+    }
+
     #[tokio::test]
     async fn send_broadcasts_one_targeted_invalidation_after_commit() {
         let db = fresh_in_memory_db().await;
@@ -201,5 +570,131 @@ mod tests {
         .expect("dedupe");
         assert!(replay.deduplicated);
         assert!(receiver.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn agent_address_book_excludes_self_and_unsent_drafts() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-agent-address-book").await;
+        let source = seed_conversation(&db, folder, AgentType::Codex).await;
+        let target = seed_conversation(&db, folder, AgentType::ClaudeCode).await;
+        let draft = seed_conversation(&db, folder, AgentType::Gemini).await;
+        conversation_service::update_external_id(&db.conn, source, "codex-source".into())
+            .await
+            .unwrap();
+        conversation_service::update_external_id(&db.conn, target, "claude-target".into())
+            .await
+            .unwrap();
+        let access = enabled_agent_access(&db, EventEmitter::Noop).await;
+
+        let result = access.list_sessions(source, None, 50).await;
+        assert!(result.available);
+        assert_eq!(result.caller_session_id, Some(source));
+        assert_eq!(result.sessions.len(), 1);
+        assert_eq!(result.sessions[0].session_id, target);
+        assert_eq!(result.sessions[0].agent_type, "claude_code");
+        assert_ne!(result.sessions[0].session_id, draft);
+    }
+
+    #[tokio::test]
+    async fn agent_send_reuses_event_and_durable_origin_queue() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-agent-send").await;
+        let source = seed_conversation(&db, folder, AgentType::Codex).await;
+        let target = seed_conversation(&db, folder, AgentType::ClaudeCode).await;
+        let access = enabled_agent_access(&db, EventEmitter::Noop).await;
+        let spec = SessionMessageSpec {
+            target_session_ids: vec![target],
+            content: "check the argument".into(),
+            delivery_mode: SessionMessageDeliveryMode::Queue,
+            expects_reply: true,
+            reply_to_event_id: None,
+            client_dedupe_id: "mcp:agent-send".into(),
+        };
+
+        let sent = access.send_message(source, spec.clone()).await;
+        assert!(sent.accepted);
+        assert_eq!(sent.deliveries[0].state, "queued");
+        let event_id = sent.event_id.clone().unwrap();
+        let queue = prompt_queue_service::snapshot(&db.conn, target)
+            .await
+            .unwrap();
+        assert_eq!(queue.items.len(), 1);
+        assert_eq!(
+            queue.items[0].origin_event_id.as_deref(),
+            Some(event_id.as_str())
+        );
+        assert!(queue.items[0].draft.is_none());
+
+        let replay = access.send_message(source, spec).await;
+        assert!(replay.accepted && replay.deduplicated);
+        assert_eq!(replay.event_id, Some(event_id));
+        assert_eq!(
+            prompt_queue_service::snapshot(&db.conn, target)
+                .await
+                .unwrap()
+                .items
+                .len(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn disabled_host_core_rejects_agent_send_without_persisting() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-agent-send-disabled").await;
+        let source = seed_conversation(&db, folder, AgentType::Codex).await;
+        let target = seed_conversation(&db, folder, AgentType::ClaudeCode).await;
+        let access = DbSessionCollaboration::new(
+            Arc::new(AppDatabase {
+                conn: db.conn.clone(),
+            }),
+            EventEmitter::Noop,
+            PromptQueueHandle::disconnected_for_test(),
+            SessionCollaborationRuntimeConfig::new(),
+        );
+        let result = access
+            .send_message(
+                source,
+                SessionMessageSpec {
+                    target_session_ids: vec![target],
+                    content: "must not land".into(),
+                    delivery_mode: SessionMessageDeliveryMode::Queue,
+                    expects_reply: true,
+                    reply_to_event_id: None,
+                    client_dedupe_id: "mcp:disabled".into(),
+                },
+            )
+            .await;
+        assert!(!result.accepted);
+        assert!(collaboration_service::feed(&db.conn, source, Some(10))
+            .await
+            .unwrap()
+            .outbound
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn collaboration_tool_setting_defaults_on_and_applies_off_live() {
+        let db = fresh_in_memory_db().await;
+        assert!(load_session_collaboration_settings(&db.conn).await.enabled);
+        let config = SessionCollaborationRuntimeConfig::new();
+        let broadcaster = Arc::new(WebEventBroadcaster::new());
+        let mut receiver = broadcaster.subscribe();
+        let emitter = EventEmitter::test_web_only(broadcaster);
+
+        let saved = set_session_collaboration_settings_core(
+            &db.conn,
+            &config,
+            &emitter,
+            SessionCollaborationSettings { enabled: false },
+        )
+        .await
+        .unwrap();
+        assert!(!saved.enabled);
+        assert!(!config.is_enabled().await);
+        assert!(!load_session_collaboration_settings(&db.conn).await.enabled);
+        let event = receiver.recv().await.unwrap();
+        assert_eq!(event.channel, SESSION_COLLABORATION_SETTINGS_CHANGED_EVENT);
     }
 }

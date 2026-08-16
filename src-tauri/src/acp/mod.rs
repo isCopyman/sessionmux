@@ -25,6 +25,7 @@ pub mod prompt_hydration;
 pub mod question;
 pub mod registry;
 pub mod remote_registry;
+pub mod session_collaboration;
 pub mod session_info;
 pub mod session_state;
 pub mod stderr_tail;

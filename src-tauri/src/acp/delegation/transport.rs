@@ -57,6 +57,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::acp::chat_authoring::{NewAutomationSpec, NewWorkTaskSpec};
 use crate::acp::question::QuestionSpec;
+use crate::acp::session_collaboration::SessionMessageSpec;
 
 /// One delegation call's worth of input forwarded from the companion to the
 /// main process. The main process re-validates `token` and maps
@@ -184,6 +185,26 @@ pub struct BrokerSessionRequest {
     pub max_messages: Option<u32>,
 }
 
+/// Search the stable Session address book from a managed Session. The main
+/// process derives the caller from `token`; the query only narrows human-facing
+/// candidates and never participates in delivery identity.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokerListSessionsRequest {
+    pub token: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+}
+
+/// Send one persistent communication event from the token's parent Session.
+/// `SessionMessageSpec` deliberately has no source field.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokerSendMessageRequest {
+    pub token: String,
+    pub spec: SessionMessageSpec,
+}
+
 /// Report a progress milestone for the work task driving the parent session.
 /// Backs the `task_progress` MCP tool. Authenticated by the per-launch `token`;
 /// the listener resolves the parent connection from it and the task engine maps
@@ -237,6 +258,8 @@ pub enum BrokerMessage {
     CommitFeedback(BrokerCommitFeedbackRequest),
     Ask(BrokerAskRequest),
     SessionInfo(BrokerSessionRequest),
+    ListSessions(BrokerListSessionsRequest),
+    SendMessage(BrokerSendMessageRequest),
     TaskProgress(BrokerTaskProgressRequest),
     TaskComplete(BrokerTaskCompleteRequest),
     CreateAutomation(BrokerCreateAutomationRequest),
@@ -388,6 +411,20 @@ pub async fn client_session_round_trip(
     req: &BrokerSessionRequest,
 ) -> io::Result<BrokerResponse> {
     message_round_trip(socket_path, &BrokerMessage::SessionInfo(req.clone())).await
+}
+
+pub async fn client_list_sessions_round_trip(
+    socket_path: &str,
+    req: &BrokerListSessionsRequest,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::ListSessions(req.clone())).await
+}
+
+pub async fn client_send_message_round_trip(
+    socket_path: &str,
+    req: &BrokerSendMessageRequest,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::SendMessage(req.clone())).await
 }
 
 /// Dispatch a `task_progress` report and read back the `{ recorded }` ack.
