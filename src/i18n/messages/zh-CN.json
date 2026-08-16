@@ -5082,6 +5082,7 @@
     "stateStoreOnly": "已送达，尚未交给 Agent",
     "stateQueued": "已排队，等待 Agent 空闲",
     "stateAwaitingResumeConfirmation": "等待你确认后再启动 Agent",
+    "statePausedBySettings": "会话协作已关闭，消息暂时冻结",
     "stateEmbedding": "正在交给 Agent",
     "stateEmbedded": "已加入 Agent 会话",
     "dismiss": "忽略",

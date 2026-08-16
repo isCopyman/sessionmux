@@ -5082,6 +5082,7 @@
     "stateStoreOnly": "Delivered; not yet shown to the agent",
     "stateQueued": "Queued for the agent",
     "stateAwaitingResumeConfirmation": "Waiting for confirmation before starting the agent",
+    "statePausedBySettings": "Paused while Session collaboration is turned off",
     "stateEmbedding": "Being handed to the agent",
     "stateEmbedded": "Added to the agent session",
     "dismiss": "Dismiss",

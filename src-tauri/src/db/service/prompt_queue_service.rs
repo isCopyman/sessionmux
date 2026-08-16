@@ -16,6 +16,14 @@ use crate::models::prompt_queue::{
 const MAX_QUEUE_ITEMS: usize = 1_000;
 const MAX_DISPLAY_TEXT_BYTES: usize = 1_000_000;
 const UNKNOWN_DISPATCH_REASON: &str = "dispatch_outcome_unknown";
+pub const SESSION_COLLABORATION_ENABLED_KEY: &str = "session_collaboration.enabled";
+pub const COLLABORATION_DISABLED_REASON: &str = "session_collaboration_disabled";
+
+#[derive(Debug)]
+pub(crate) struct CollaborationQueuePolicyChange {
+    pub snapshot: PromptQueueSnapshot,
+    pub origin_event_ids: Vec<String>,
+}
 
 fn statement(sql: &str, values: Vec<sea_orm::Value>) -> Statement {
     Statement::from_sql_and_values(DbBackend::Sqlite, sql, values)
@@ -177,6 +185,102 @@ pub async fn snapshot(
     conversation_id: i32,
 ) -> Result<PromptQueueSnapshot, DbError> {
     snapshot_on(conn, conversation_id).await
+}
+
+pub(crate) async fn collaboration_dispatch_enabled<C: ConnectionTrait>(
+    conn: &C,
+) -> Result<bool, DbError> {
+    let raw = crate::db::service::app_metadata_service::get_value_conn(
+        conn,
+        SESSION_COLLABORATION_ENABLED_KEY,
+    )
+    .await?;
+    Ok(raw
+        .as_deref()
+        .and_then(|value| value.parse::<bool>().ok())
+        .unwrap_or(true))
+}
+
+/// Converge durable cross-Session queue items with the live collaboration
+/// policy. Disabling freezes only collaboration-origin items that have not
+/// crossed the dispatch boundary; ordinary user follow-ups remain runnable.
+/// Enabling thaws only items frozen by this policy, preserving failures and
+/// explicit confirmation pauses.
+pub(crate) async fn reconcile_collaboration_dispatch_policy(
+    conn: &DatabaseConnection,
+    enabled: bool,
+) -> Result<Vec<CollaborationQueuePolicyChange>, DbError> {
+    let txn = conn.begin().await?;
+    let rows = if enabled {
+        txn.query_all(statement(
+            "SELECT conversation_id, origin_event_id FROM conversation_prompt_queue_item \
+             WHERE origin_event_id IS NOT NULL AND state = 'paused' AND paused_reason = ? \
+             ORDER BY conversation_id ASC, position ASC, created_at ASC, id ASC",
+            vec![COLLABORATION_DISABLED_REASON.into()],
+        ))
+        .await?
+    } else {
+        txn.query_all(statement(
+            "SELECT conversation_id, origin_event_id FROM conversation_prompt_queue_item \
+             WHERE origin_event_id IS NOT NULL AND (state = 'queued' OR \
+               (state = 'claimed' AND dispatch_started_at IS NULL)) \
+             ORDER BY conversation_id ASC, position ASC, created_at ASC, id ASC",
+            Vec::new(),
+        ))
+        .await?
+    };
+    if rows.is_empty() {
+        txn.commit().await?;
+        return Ok(Vec::new());
+    }
+
+    let mut origins_by_conversation = std::collections::BTreeMap::<i32, Vec<String>>::new();
+    for row in rows {
+        origins_by_conversation
+            .entry(row.try_get("", "conversation_id")?)
+            .or_default()
+            .push(row.try_get("", "origin_event_id")?);
+    }
+
+    for conversation_id in origins_by_conversation.keys().copied() {
+        ensure_state(&txn, conversation_id).await?;
+        let result = if enabled {
+            txn.execute(statement(
+                "UPDATE conversation_prompt_queue_item \
+                 SET state = 'queued', paused_reason = NULL, claimed_by = NULL, \
+                     claim_expires_at = NULL, dispatch_started_at = NULL, \
+                     updated_at = CURRENT_TIMESTAMP \
+                 WHERE conversation_id = ? AND origin_event_id IS NOT NULL \
+                   AND state = 'paused' AND paused_reason = ?",
+                vec![conversation_id.into(), COLLABORATION_DISABLED_REASON.into()],
+            ))
+            .await?
+        } else {
+            txn.execute(statement(
+                "UPDATE conversation_prompt_queue_item \
+                 SET state = 'paused', paused_reason = ?, claimed_by = NULL, \
+                     claim_expires_at = NULL, dispatch_started_at = NULL, \
+                     updated_at = CURRENT_TIMESTAMP \
+                 WHERE conversation_id = ? AND origin_event_id IS NOT NULL AND \
+                   (state = 'queued' OR (state = 'claimed' AND dispatch_started_at IS NULL))",
+                vec![COLLABORATION_DISABLED_REASON.into(), conversation_id.into()],
+            ))
+            .await?
+        };
+        if result.rows_affected() > 0 {
+            bump_revision(&txn, conversation_id).await?;
+        }
+    }
+    txn.commit().await?;
+
+    let mut changes = Vec::with_capacity(origins_by_conversation.len());
+    for (conversation_id, origin_event_ids) in origins_by_conversation {
+        changes.push(CollaborationQueuePolicyChange {
+            snapshot: snapshot_on(conn, conversation_id).await?,
+            origin_event_ids,
+        });
+    }
+    Ok(changes)
 }
 
 /// Admission guard shared by ordinary sends and the queue worker. When a
@@ -734,7 +838,10 @@ pub(crate) async fn mark_dispatch_started(
                AND NOT EXISTS ( \
                    SELECT 1 FROM conversation_prompt_queue_state s \
                    WHERE s.conversation_id = ? AND s.paused_reason IS NOT NULL \
-               )",
+               ) AND (? IS NULL OR NOT EXISTS ( \
+                   SELECT 1 FROM app_metadata m \
+                   WHERE m.key = ? AND m.value = 'false' AND m.deleted_at IS NULL \
+               ))",
             vec![
                 expires_at.into(),
                 item.id.clone().into(),
@@ -742,6 +849,8 @@ pub(crate) async fn mark_dispatch_started(
                 item.claimed_by.clone().into(),
                 now.into(),
                 item.conversation_id.into(),
+                item.origin_event_id.clone().into(),
+                SESSION_COLLABORATION_ENABLED_KEY.into(),
             ],
         ))
         .await?;
@@ -1580,6 +1689,146 @@ mod tests {
         assert_eq!(
             delivery.queue_item_id.as_deref(),
             Some(confirmed_id.as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn collaboration_policy_freezes_only_origin_items_and_thaws_them() {
+        let (db, target) = seeded_memory().await;
+        let target_row = conversation::Entity::find_by_id(target)
+            .one(&db.conn)
+            .await
+            .unwrap()
+            .unwrap();
+        let source = seed_conversation(&db, target_row.folder_id, AgentType::ClaudeCode).await;
+        let sent = collaboration_service::send(
+            &db.conn,
+            SendCollaborationMessageInput {
+                source_conversation_id: source,
+                target_conversation_ids: vec![target],
+                body: "freeze this cross-session request".to_string(),
+                client_dedupe_id: "collaboration-policy-freeze".to_string(),
+                invocation_policy: CollaborationInvocationPolicy::InvokeWhenIdle,
+                delivery_hint: CollaborationDeliveryHint::Default,
+                expects_reply: false,
+                urgency: CollaborationUrgency::Normal,
+                reply_to_event_id: None,
+            },
+        )
+        .await
+        .expect("send collaboration");
+        enqueue(
+            &db.conn,
+            input(
+                target,
+                "ordinary-follow-up",
+                "keep the user's own queue moving",
+            ),
+        )
+        .await
+        .expect("enqueue ordinary follow-up");
+
+        let frozen = reconcile_collaboration_dispatch_policy(&db.conn, false)
+            .await
+            .expect("freeze collaboration");
+        assert_eq!(frozen.len(), 1);
+        assert_eq!(frozen[0].origin_event_ids, vec![sent.event_id.clone()]);
+        let snapshot = &frozen[0].snapshot;
+        assert!(snapshot.paused_reason.is_none());
+        let origin = snapshot
+            .items
+            .iter()
+            .find(|item| item.origin_event_id.as_deref() == Some(sent.event_id.as_str()))
+            .expect("origin item");
+        assert_eq!(origin.state, PromptQueueItemState::Paused);
+        assert_eq!(
+            origin.paused_reason.as_deref(),
+            Some(COLLABORATION_DISABLED_REASON)
+        );
+
+        let (ordinary, _) = claim_head(&db.conn, target, "worker", Duration::seconds(30))
+            .await
+            .expect("claim ordinary item")
+            .expect("ordinary item remains runnable");
+        assert_eq!(ordinary.id, "ordinary-follow-up");
+        release_claim_busy(&db.conn, &ordinary)
+            .await
+            .expect("release ordinary item");
+
+        let thawed = reconcile_collaboration_dispatch_policy(&db.conn, true)
+            .await
+            .expect("thaw collaboration");
+        assert_eq!(thawed.len(), 1);
+        let origin = thawed[0]
+            .snapshot
+            .items
+            .iter()
+            .find(|item| item.origin_event_id.as_deref() == Some(sent.event_id.as_str()))
+            .expect("thawed origin item");
+        assert_eq!(origin.state, PromptQueueItemState::Queued);
+        assert!(origin.paused_reason.is_none());
+    }
+
+    #[tokio::test]
+    async fn collaboration_dispatch_boundary_obeys_persisted_policy() {
+        let (db, target) = seeded_memory().await;
+        let target_row = conversation::Entity::find_by_id(target)
+            .one(&db.conn)
+            .await
+            .unwrap()
+            .unwrap();
+        let source = seed_conversation(&db, target_row.folder_id, AgentType::ClaudeCode).await;
+        collaboration_service::send(
+            &db.conn,
+            SendCollaborationMessageInput {
+                source_conversation_id: source,
+                target_conversation_ids: vec![target],
+                body: "must stop before the harness".to_string(),
+                client_dedupe_id: "collaboration-policy-boundary".to_string(),
+                invocation_policy: CollaborationInvocationPolicy::InvokeWhenIdle,
+                delivery_hint: CollaborationDeliveryHint::Default,
+                expects_reply: false,
+                urgency: CollaborationUrgency::Normal,
+                reply_to_event_id: None,
+            },
+        )
+        .await
+        .expect("send collaboration");
+        let (claim, _) = claim_head(&db.conn, target, "worker", Duration::seconds(30))
+            .await
+            .expect("claim")
+            .expect("origin head");
+
+        crate::db::service::app_metadata_service::upsert_value(
+            &db.conn,
+            SESSION_COLLABORATION_ENABLED_KEY,
+            "false",
+        )
+        .await
+        .expect("disable collaboration");
+        assert!(
+            !mark_dispatch_started(&db.conn, &claim, Duration::seconds(30))
+                .await
+                .expect("dispatch boundary"),
+            "a disabled collaboration must not cross into the Harness"
+        );
+
+        let frozen = reconcile_collaboration_dispatch_policy(&db.conn, false)
+            .await
+            .expect("freeze claimed origin");
+        assert_eq!(
+            frozen[0].snapshot.items[0].state,
+            PromptQueueItemState::Paused
+        );
+        let delivery = &collaboration_service::feed(&db.conn, target, None)
+            .await
+            .expect("delivery feed")
+            .inbound[0];
+        assert_eq!(delivery.state, CollaborationDeliveryState::Queued);
+        assert_eq!(delivery.queue_state, Some(PromptQueueItemState::Paused));
+        assert_eq!(
+            delivery.queue_paused_reason.as_deref(),
+            Some(COLLABORATION_DISABLED_REASON)
         );
     }
 

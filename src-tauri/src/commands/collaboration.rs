@@ -26,7 +26,8 @@ use crate::web::event_bridge::{
     SESSION_COLLABORATION_SETTINGS_CHANGED_EVENT,
 };
 
-pub const KEY_SESSION_COLLABORATION_ENABLED: &str = "session_collaboration.enabled";
+pub const KEY_SESSION_COLLABORATION_ENABLED: &str =
+    prompt_queue_service::SESSION_COLLABORATION_ENABLED_KEY;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SessionCollaborationSettings {
@@ -390,6 +391,7 @@ pub async fn set_session_collaboration_settings_core(
     conn: &sea_orm::DatabaseConnection,
     config: &SessionCollaborationRuntimeConfig,
     emitter: &EventEmitter,
+    prompt_queue: &PromptQueueHandle,
     desired: SessionCollaborationSettings,
 ) -> Result<SessionCollaborationSettings, AppCommandError> {
     app_metadata_service::upsert_value(
@@ -399,6 +401,24 @@ pub async fn set_session_collaboration_settings_core(
     )
     .await?;
     config.set(desired.clone().into_runtime_config()).await;
+    let changes =
+        prompt_queue_service::reconcile_collaboration_dispatch_policy(conn, desired.enabled)
+            .await?;
+    let mut affected_conversation_ids = std::collections::BTreeSet::new();
+    for change in changes {
+        let target_conversation_id = change.snapshot.conversation_id;
+        emit_event(emitter, PROMPT_QUEUE_CHANGED_EVENT, change.snapshot);
+        for event_id in change.origin_event_ids {
+            affected_conversation_ids.extend(
+                collaboration_service::origin_participants(conn, target_conversation_id, &event_id)
+                    .await?,
+            );
+        }
+        if desired.enabled {
+            prompt_queue.wake(target_conversation_id);
+        }
+    }
+    publish(emitter, affected_conversation_ids.into_iter().collect());
     emit_event(
         emitter,
         SESSION_COLLABORATION_SETTINGS_CHANGED_EVENT,
@@ -426,6 +446,7 @@ pub async fn set_session_collaboration_settings(
     #[cfg(feature = "tauri-runtime")] app: tauri::AppHandle,
     #[cfg(feature = "tauri-runtime")] db: tauri::State<'_, AppDatabase>,
     #[cfg(feature = "tauri-runtime")] config: tauri::State<'_, SessionCollaborationRuntimeConfig>,
+    #[cfg(feature = "tauri-runtime")] prompt_queue: tauri::State<'_, PromptQueueHandle>,
     settings: SessionCollaborationSettings,
 ) -> Result<SessionCollaborationSettings, AppCommandError> {
     #[cfg(feature = "tauri-runtime")]
@@ -434,6 +455,7 @@ pub async fn set_session_collaboration_settings(
             &db.conn,
             &config,
             &EventEmitter::Tauri(app),
+            &prompt_queue,
             settings,
         )
         .await
@@ -743,6 +765,7 @@ mod tests {
             &db.conn,
             &config,
             &emitter,
+            &PromptQueueHandle::disconnected_for_test(),
             SessionCollaborationSettings { enabled: false },
         )
         .await
@@ -752,5 +775,67 @@ mod tests {
         assert!(!load_session_collaboration_settings(&db.conn).await.enabled);
         let event = receiver.recv().await.unwrap();
         assert_eq!(event.channel, SESSION_COLLABORATION_SETTINGS_CHANGED_EVENT);
+    }
+
+    #[tokio::test]
+    async fn collaboration_setting_freezes_and_restores_existing_dispatches() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-collaboration-policy").await;
+        let source = seed_conversation(&db, folder, AgentType::Codex).await;
+        let target = seed_conversation(&db, folder, AgentType::ClaudeCode).await;
+        collaboration_service::send(
+            &db.conn,
+            SendCollaborationMessageInput {
+                source_conversation_id: source,
+                target_conversation_ids: vec![target],
+                body: "wait until collaboration is enabled again".into(),
+                client_dedupe_id: "setting-policy-transition".into(),
+                invocation_policy: CollaborationInvocationPolicy::InvokeWhenIdle,
+                delivery_hint: CollaborationDeliveryHint::Default,
+                expects_reply: false,
+                urgency: CollaborationUrgency::Normal,
+                reply_to_event_id: None,
+            },
+        )
+        .await
+        .expect("seed queued collaboration");
+        let config = SessionCollaborationRuntimeConfig::new();
+        config
+            .set(SessionCollaborationConfig { enabled: true })
+            .await;
+        let queue = PromptQueueHandle::disconnected_for_test();
+
+        set_session_collaboration_settings_core(
+            &db.conn,
+            &config,
+            &EventEmitter::Noop,
+            &queue,
+            SessionCollaborationSettings { enabled: false },
+        )
+        .await
+        .expect("disable collaboration");
+        let frozen = prompt_queue_service::snapshot(&db.conn, target)
+            .await
+            .expect("frozen queue");
+        assert_eq!(frozen.items[0].state, PromptQueueItemState::Paused);
+        assert_eq!(
+            frozen.items[0].paused_reason.as_deref(),
+            Some(prompt_queue_service::COLLABORATION_DISABLED_REASON)
+        );
+
+        set_session_collaboration_settings_core(
+            &db.conn,
+            &config,
+            &EventEmitter::Noop,
+            &queue,
+            SessionCollaborationSettings { enabled: true },
+        )
+        .await
+        .expect("enable collaboration");
+        let restored = prompt_queue_service::snapshot(&db.conn, target)
+            .await
+            .expect("restored queue");
+        assert_eq!(restored.items[0].state, PromptQueueItemState::Queued);
+        assert!(restored.items[0].paused_reason.is_none());
     }
 }

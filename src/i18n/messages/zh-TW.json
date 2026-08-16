@@ -5082,6 +5082,7 @@
     "stateStoreOnly": "Delivered; not yet shown to the agent",
     "stateQueued": "Queued for the agent",
     "stateAwaitingResumeConfirmation": "等待你確認後再啟動 Agent",
+    "statePausedBySettings": "會話協作已關閉，訊息暫時凍結",
     "stateEmbedding": "Being handed to the agent",
     "stateEmbedded": "Added to the agent session",
     "dismiss": "Dismiss",

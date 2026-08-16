@@ -57,6 +57,7 @@ pub async fn set_settings(
             &state.db.conn,
             &state.session_collaboration_config,
             &state.emitter,
+            &state.prompt_queue,
             params.settings,
         )
         .await?,

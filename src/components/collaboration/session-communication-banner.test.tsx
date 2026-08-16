@@ -150,4 +150,29 @@ describe("SessionCommunicationBanner", () => {
     fireEvent.click(screen.getByRole("button", { name: "retry" }))
     expect(hook.retry).toHaveBeenCalledWith("delivery-1")
   })
+
+  it("shows a policy-frozen delivery without offering a misleading retry", () => {
+    hook.feed = {
+      conversationId: 2,
+      revision: 3,
+      unreadCount: 1,
+      inbound: [
+        delivery({
+          invocationPolicy: "invoke_when_idle",
+          state: "queued",
+          queueItemId: "delivery-1",
+          queueState: "paused",
+          queuePausedReason: "session_collaboration_disabled",
+        }),
+      ],
+      outbound: [],
+    }
+    render(<SessionCommunicationBanner conversationId={2} />)
+    fireEvent.click(screen.getByRole("button", { name: /panelTitle/ }))
+
+    expect(screen.getByText("statePausedBySettings")).toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "retry" })
+    ).not.toBeInTheDocument()
+  })
 })

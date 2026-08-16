@@ -195,7 +195,85 @@ impl PromptQueueRuntime {
         }
     }
 
+    async fn reconcile_collaboration_policy(&self) -> bool {
+        let enabled =
+            match prompt_queue_service::collaboration_dispatch_enabled(&self.db.conn).await {
+                Ok(enabled) => enabled,
+                Err(err) => {
+                    tracing::error!(
+                        "[prompt-queue] could not read Session collaboration policy: {err}"
+                    );
+                    return false;
+                }
+            };
+        match prompt_queue_service::reconcile_collaboration_dispatch_policy(&self.db.conn, enabled)
+            .await
+        {
+            Ok(changes) => {
+                for change in changes {
+                    let conversation_id = change.snapshot.conversation_id;
+                    emit_snapshot(&self.emitter, change.snapshot);
+                    let mut conversation_ids = std::collections::BTreeSet::new();
+                    for event_id in change.origin_event_ids {
+                        match collaboration_service::origin_participants(
+                            &self.db.conn,
+                            conversation_id,
+                            &event_id,
+                        )
+                        .await
+                        {
+                            Ok(ids) => conversation_ids.extend(ids),
+                            Err(err) => tracing::error!(
+                                "[prompt-queue] policy invalidation failed for {event_id}: {err}"
+                            ),
+                        }
+                    }
+                    if !conversation_ids.is_empty() {
+                        emit_event(
+                            &self.emitter,
+                            COLLABORATION_CHANGED_EVENT,
+                            CollaborationChanged {
+                                conversation_ids: conversation_ids.into_iter().collect(),
+                            },
+                        );
+                    }
+                }
+            }
+            Err(err) => {
+                tracing::error!("[prompt-queue] collaboration policy reconciliation failed: {err}")
+            }
+        }
+        enabled
+    }
+
+    async fn freeze_claim_if_collaboration_disabled(
+        &self,
+        item: &crate::models::prompt_queue::ClaimedPromptQueueItem,
+    ) -> bool {
+        if item.origin_event_id.is_none() {
+            return false;
+        }
+        match prompt_queue_service::collaboration_dispatch_enabled(&self.db.conn).await {
+            Ok(true) => false,
+            Ok(false) => {
+                let _ = self.reconcile_collaboration_policy().await;
+                true
+            }
+            Err(err) => {
+                tracing::error!(
+                    "[prompt-queue] could not verify collaboration policy for {}: {err}",
+                    item.id
+                );
+                // Fail closed for cross-Session work. The claim lease can be
+                // recovered after the policy store becomes readable again;
+                // sending despite an unknown operator policy cannot be undone.
+                true
+            }
+        }
+    }
+
     async fn recover_and_scan(&self) {
+        self.reconcile_collaboration_policy().await;
         match prompt_queue_service::recover_expired_claims(&self.db.conn).await {
             Ok(snapshots) => {
                 for snapshot in snapshots {
@@ -316,6 +394,10 @@ impl PromptQueueRuntime {
             }
         };
 
+        if self.freeze_claim_if_collaboration_disabled(&claimed).await {
+            return;
+        }
+
         // Re-check after the durable claim: a competing client may have begun a
         // turn in the small window between the idle snapshot and the claim.
         let (status, turn_in_flight, actual_cwd) =
@@ -390,6 +472,9 @@ impl PromptQueueRuntime {
         {
             Ok(true) => self.emit_origin_change(&claimed).await,
             Ok(false) => {
+                if self.freeze_claim_if_collaboration_disabled(&claimed).await {
+                    return;
+                }
                 tracing::warn!(
                     "[prompt-queue] claim {} expired before dispatch; prompt was not sent",
                     claimed.id

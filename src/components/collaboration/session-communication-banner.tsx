@@ -14,6 +14,8 @@ import { Button } from "@/components/ui/button"
 import { useCollaborationFeed } from "@/hooks/use-collaboration-feed"
 import type { CollaborationDelivery } from "@/lib/types"
 
+const COLLABORATION_DISABLED_REASON = "session_collaboration_disabled"
+
 interface SessionCommunicationBannerProps {
   conversationId: number | null
 }
@@ -40,9 +42,10 @@ export function SessionCommunicationBanner({
   const invocationState = (delivery: CollaborationDelivery) => {
     switch (delivery.state) {
       case "queued":
-        return delivery.queueState === "paused"
-          ? t("stateAwaitingResumeConfirmation")
-          : t("stateQueued")
+        if (delivery.queueState !== "paused") return t("stateQueued")
+        return delivery.queuePausedReason === COLLABORATION_DISABLED_REASON
+          ? t("statePausedBySettings")
+          : t("stateAwaitingResumeConfirmation")
       case "embedding":
         return t("stateEmbedding")
       case "embedded":
@@ -149,7 +152,9 @@ export function SessionCommunicationBanner({
                       <div className="flex shrink-0 items-center">
                         {(delivery.state === "failed" ||
                           (delivery.state === "queued" &&
-                            delivery.queueState === "paused")) &&
+                            delivery.queueState === "paused" &&
+                            delivery.queuePausedReason !==
+                              COLLABORATION_DISABLED_REASON)) &&
                         delivery.invocationPolicy === "invoke_when_idle" ? (
                           <Button
                             type="button"
