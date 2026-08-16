@@ -1418,6 +1418,40 @@ pub async fn dismiss(
     })
 }
 
+/// Put a previously dismissed `store_only` delivery back into the target
+/// Session's pending context. Read state stays untouched: restoring whether a
+/// message should reach the Agent is independent from pretending the human has
+/// not already seen it.
+pub async fn restore(
+    conn: &DatabaseConnection,
+    conversation_id: i32,
+    delivery_id: &str,
+) -> Result<CollaborationMutationResult, DbError> {
+    require_live_session(conn, conversation_id).await?;
+    let txn = conn.begin().await?;
+    let (source_id, _) = delivery_participants(&txn, delivery_id, conversation_id).await?;
+    let result = txn
+        .execute(statement(
+            "UPDATE collaboration_delivery \
+             SET state = 'pending', embedded_turn_ref = NULL, error = NULL, \
+                 updated_at = CURRENT_TIMESTAMP \
+             WHERE id = ? AND target_conversation_id = ? \
+               AND invocation_policy = 'store_only' AND state = 'dismissed'",
+            vec![delivery_id.into(), conversation_id.into()],
+        ))
+        .await?;
+    let affected = if result.rows_affected() > 0 {
+        bump_live_participants(&txn, [source_id, conversation_id]).await?
+    } else {
+        vec![]
+    };
+    txn.commit().await?;
+    Ok(CollaborationMutationResult {
+        feed: feed(conn, conversation_id, None).await?,
+        affected_conversation_ids: affected,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2145,6 +2179,42 @@ mod tests {
             source_feed.outbound[0].state,
             CollaborationDeliveryState::Dismissed
         );
+    }
+
+    #[tokio::test]
+    async fn dismissed_store_only_mail_can_return_to_future_context() {
+        let (db, source, target, _) = seeded_memory().await;
+        let sent = send(
+            &db.conn,
+            input(
+                source,
+                vec![target],
+                "restore-dismissed",
+                "include me later",
+            ),
+        )
+        .await
+        .unwrap();
+        let delivery_id = &sent.deliveries[0].id;
+
+        dismiss(&db.conn, target, delivery_id).await.unwrap();
+        let restored = restore(&db.conn, target, delivery_id).await.unwrap();
+        assert_eq!(restored.feed.unread_count, 0);
+        assert_eq!(
+            restored.feed.inbound[0].state,
+            CollaborationDeliveryState::Pending
+        );
+        assert!(restored.feed.inbound[0].ui_seen_at.is_some());
+
+        let claimed = claim_pending_store_only_for_turn(&db.conn, target, "next-human-turn")
+            .await
+            .unwrap()
+            .expect("restored delivery should be eligible for the next natural turn");
+        assert_eq!(claimed.event_ids, vec![sent.event_id]);
+        assert!(claimed.blocks.iter().any(|block| matches!(
+            block,
+            PromptInputBlock::Text { text } if text.contains("include me later")
+        )));
     }
 
     #[tokio::test]

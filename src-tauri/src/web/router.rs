@@ -1347,6 +1347,10 @@ pub fn build_router(
             "/collaboration_dismiss",
             post(handlers::collaboration::dismiss),
         )
+        .route(
+            "/collaboration_restore",
+            post(handlers::collaboration::restore),
+        )
         // ─── Automations ───
         .route(
             "/automation_list",

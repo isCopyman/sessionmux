@@ -1391,6 +1391,7 @@ mod tauri_app {
                 collaboration_commands::collaboration_unread_overview,
                 collaboration_commands::collaboration_mark_seen,
                 collaboration_commands::collaboration_dismiss,
+                collaboration_commands::collaboration_restore,
                 automation_commands::automation_list,
                 automation_commands::automation_get,
                 automation_commands::automation_runs,

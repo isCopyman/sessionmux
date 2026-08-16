@@ -6,6 +6,7 @@ import {
   getCollaborationFeed,
   getPromptQueue,
   markCollaborationSeen,
+  restoreCollaborationDelivery,
   retryPromptQueueItem,
 } from "@/lib/api"
 import { onTransportReconnect, subscribe } from "@/lib/platform"
@@ -28,6 +29,7 @@ export interface UseCollaborationFeedReturn {
   reload: () => Promise<void>
   markSeen: (deliveryIds: string[]) => Promise<void>
   dismiss: (deliveryId: string) => Promise<void>
+  restore: (deliveryId: string) => Promise<void>
   retry: (queueItemId: string) => Promise<void>
 }
 
@@ -160,5 +162,29 @@ export function useCollaborationFeed(
     [reload]
   )
 
-  return { feed, hydrated, error, reload, markSeen, dismiss, retry }
+  const restore = useCallback(
+    async (deliveryId: string) => {
+      const id = conversationIdRef.current
+      if (id == null) return
+      try {
+        applyFeed(await restoreCollaborationDelivery(id, deliveryId))
+      } catch (nextError) {
+        console.error("[collaboration] restore:", nextError)
+        setError(nextError)
+        await reload()
+      }
+    },
+    [applyFeed, reload]
+  )
+
+  return {
+    feed,
+    hydrated,
+    error,
+    reload,
+    markSeen,
+    dismiss,
+    restore,
+    retry,
+  }
 }

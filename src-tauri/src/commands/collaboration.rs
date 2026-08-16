@@ -353,6 +353,17 @@ pub async fn collaboration_dismiss_core(
     Ok(result.feed)
 }
 
+pub async fn collaboration_restore_core(
+    conn: &sea_orm::DatabaseConnection,
+    emitter: &EventEmitter,
+    conversation_id: i32,
+    delivery_id: String,
+) -> Result<CollaborationFeed, AppCommandError> {
+    let result = collaboration_service::restore(conn, conversation_id, &delivery_id).await?;
+    publish(emitter, result.affected_conversation_ids);
+    Ok(result.feed)
+}
+
 fn delivery_state_name(state: CollaborationDeliveryState) -> String {
     match state {
         CollaborationDeliveryState::Pending => "pending",
@@ -778,6 +789,23 @@ pub async fn collaboration_dismiss(
     app: tauri::AppHandle,
 ) -> Result<CollaborationFeed, AppCommandError> {
     collaboration_dismiss_core(
+        &db.conn,
+        &EventEmitter::Tauri(app),
+        conversation_id,
+        delivery_id,
+    )
+    .await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn collaboration_restore(
+    conversation_id: i32,
+    delivery_id: String,
+    db: tauri::State<'_, AppDatabase>,
+    app: tauri::AppHandle,
+) -> Result<CollaborationFeed, AppCommandError> {
+    collaboration_restore_core(
         &db.conn,
         &EventEmitter::Tauri(app),
         conversation_id,

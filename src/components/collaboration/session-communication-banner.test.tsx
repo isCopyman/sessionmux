@@ -1,10 +1,11 @@
 import { fireEvent, render, screen } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
-import type { CollaborationDelivery } from "@/lib/types"
+import type { CollaborationDelivery, CollaborationFeed } from "@/lib/types"
 
 const hook = vi.hoisted(() => ({
   markSeen: vi.fn(),
   dismiss: vi.fn(),
+  restore: vi.fn(),
   retry: vi.fn(),
   feed: null as unknown,
 }))
@@ -39,6 +40,7 @@ vi.mock("@/hooks/use-collaboration-feed", () => ({
     reload: vi.fn(),
     markSeen: hook.markSeen,
     dismiss: hook.dismiss,
+    restore: hook.restore,
     retry: hook.retry,
   }),
 }))
@@ -56,7 +58,10 @@ vi.mock("./session-message-composer-dialog", () => ({
   },
 }))
 
-import { SessionCommunicationBanner } from "./session-communication-banner"
+import {
+  SessionCommunicationBanner,
+  SessionPendingContextBar,
+} from "./session-communication-banner"
 
 function delivery(
   overrides: Partial<CollaborationDelivery> = {}
@@ -231,6 +236,52 @@ describe("SessionCommunicationBanner", () => {
     render(<SessionCommunicationBanner conversationId={2} />)
     fireEvent.click(screen.getByRole("button", { name: /panelTitle/ }))
     fireEvent.click(screen.getByRole("button", { name: "dismiss" }))
+    expect(hook.dismiss).toHaveBeenCalledWith("delivery-1")
+  })
+
+  it("restores a dismissed delivery to a future natural turn", () => {
+    hook.feed = {
+      conversationId: 2,
+      revision: 2,
+      unreadCount: 0,
+      inbound: [
+        delivery({
+          state: "dismissed",
+          uiSeenAt: "2026-08-16T00:01:00Z",
+        }),
+      ],
+      outbound: [],
+    }
+    render(<SessionCommunicationBanner conversationId={2} />)
+    fireEvent.click(screen.getByRole("button", { name: /panelTitle/ }))
+    fireEvent.click(screen.getByRole("button", { name: "restore" }))
+    expect(hook.restore).toHaveBeenCalledWith("delivery-1")
+  })
+
+  it("shows pending Session context beside the composer and lets the user exclude it", () => {
+    const collaboration = {
+      feed: hook.feed as CollaborationFeed,
+      hydrated: true,
+      error: null,
+      reload: vi.fn(),
+      markSeen: hook.markSeen,
+      dismiss: hook.dismiss,
+      restore: hook.restore,
+      retry: hook.retry,
+    }
+    render(<SessionPendingContextBar collaboration={collaboration} />)
+
+    expect(screen.getByText("pendingContextCount")).toBeInTheDocument()
+    expect(
+      screen.queryByText("The evidence does not support the last sentence.")
+    ).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: "pendingContextReview" }))
+    expect(
+      screen.getByText("The evidence does not support the last sentence.")
+    ).toBeInTheDocument()
+    fireEvent.click(
+      screen.getByRole("button", { name: "excludeFromNextTurn" })
+    )
     expect(hook.dismiss).toHaveBeenCalledWith("delivery-1")
   })
 

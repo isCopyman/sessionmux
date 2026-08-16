@@ -14,7 +14,10 @@ import {
 import { useTranslations } from "next-intl"
 import { Button } from "@/components/ui/button"
 import { useTabActions } from "@/contexts/tab-context"
-import { useCollaborationFeed } from "@/hooks/use-collaboration-feed"
+import {
+  useCollaborationFeed,
+  type UseCollaborationFeedReturn,
+} from "@/hooks/use-collaboration-feed"
 import { formatConversationTitle } from "@/lib/conversation-title"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import type { CollaborationDelivery } from "@/lib/types"
@@ -24,6 +27,11 @@ const COLLABORATION_DISABLED_REASON = "session_collaboration_disabled"
 
 interface SessionCommunicationBannerProps {
   conversationId: number | null
+}
+
+interface SessionCommunicationBannerViewProps
+  extends SessionCommunicationBannerProps {
+  collaboration: UseCollaborationFeedReturn
 }
 
 function participantLabel(
@@ -38,6 +46,19 @@ function participantLabel(
 export function SessionCommunicationBanner({
   conversationId,
 }: SessionCommunicationBannerProps) {
+  const collaboration = useCollaborationFeed(conversationId)
+  return (
+    <SessionCommunicationBannerView
+      conversationId={conversationId}
+      collaboration={collaboration}
+    />
+  )
+}
+
+export function SessionCommunicationBannerView({
+  conversationId,
+  collaboration,
+}: SessionCommunicationBannerViewProps) {
   const t = useTranslations("Collaboration")
   const [expanded, setExpanded] = useState(false)
   const [replyingTo, setReplyingTo] = useState<CollaborationDelivery | null>(
@@ -52,8 +73,7 @@ export function SessionCommunicationBanner({
     [conversations]
   )
   const { openTab } = useTabActions()
-  const { feed, hydrated, markSeen, dismiss, retry } =
-    useCollaborationFeed(conversationId)
+  const { feed, hydrated, markSeen, dismiss, restore, retry } = collaboration
   const total = feed.inbound.length + feed.outbound.length
   if (!hydrated || total === 0) return null
 
@@ -288,6 +308,20 @@ export function SessionCommunicationBanner({
                             <X className="h-3.5 w-3.5" />
                           </Button>
                         ) : null}
+                        {delivery.state === "dismissed" &&
+                        delivery.invocationPolicy === "store_only" ? (
+                          <Button
+                            type="button"
+                            size="icon"
+                            variant="ghost"
+                            className="h-7 w-7"
+                            title={t("restore")}
+                            aria-label={t("restore")}
+                            onClick={() => void restore(delivery.id)}
+                          >
+                            <RotateCcw className="h-3.5 w-3.5" />
+                          </Button>
+                        ) : null}
                       </div>
                     </div>
                   </article>
@@ -389,6 +423,76 @@ export function SessionCommunicationBanner({
             if (!open) setReplyingTo(null)
           }}
         />
+      ) : null}
+    </section>
+  )
+}
+
+interface SessionPendingContextBarProps {
+  collaboration: UseCollaborationFeedReturn
+}
+
+export function SessionPendingContextBar({
+  collaboration,
+}: SessionPendingContextBarProps) {
+  const t = useTranslations("Collaboration")
+  const [expanded, setExpanded] = useState(false)
+  const { feed, hydrated, dismiss } = collaboration
+  const pending = feed.inbound.filter(
+    (delivery) =>
+      delivery.invocationPolicy === "store_only" && delivery.state === "pending"
+  )
+
+  if (!hydrated || pending.length === 0) return null
+
+  return (
+    <section className="mb-2 rounded-lg border border-amber-500/30 bg-amber-500/5 text-xs">
+      <div className="flex items-center gap-2 px-3 py-2">
+        <Inbox className="h-3.5 w-3.5 shrink-0 text-amber-700 dark:text-amber-400" />
+        <span className="min-w-0 flex-1 font-medium">
+          {t("pendingContextCount", { count: pending.length })}
+        </span>
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          className="h-6 shrink-0 px-2 text-[11px]"
+          onClick={() => setExpanded((value) => !value)}
+          aria-expanded={expanded}
+        >
+          {expanded ? t("pendingContextHide") : t("pendingContextReview")}
+        </Button>
+      </div>
+      {expanded ? (
+        <div className="divide-y border-t border-amber-500/20">
+          {pending.map((delivery) => (
+            <div key={delivery.id} className="flex items-start gap-2 px-3 py-2">
+              <div className="min-w-0 flex-1">
+                <p className="font-medium">
+                  {t("from", {
+                    name: participantLabel(delivery.source, (values) =>
+                      t("untitled", values)
+                    ),
+                  })}
+                </p>
+                <p className="mt-0.5 max-h-10 overflow-hidden whitespace-pre-wrap break-words text-muted-foreground">
+                  {delivery.body}
+                </p>
+              </div>
+              <Button
+                type="button"
+                size="icon"
+                variant="ghost"
+                className="h-7 w-7 shrink-0"
+                title={t("excludeFromNextTurn")}
+                aria-label={t("excludeFromNextTurn")}
+                onClick={() => void dismiss(delivery.id)}
+              >
+                <X className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+          ))}
+        </div>
       ) : null}
     </section>
   )

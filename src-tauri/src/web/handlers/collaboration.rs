@@ -177,3 +177,18 @@ pub async fn dismiss(
         .await?,
     ))
 }
+
+pub async fn restore(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<DismissParams>,
+) -> Result<Json<CollaborationFeed>, AppCommandError> {
+    Ok(Json(
+        collaboration::collaboration_restore_core(
+            &state.db.conn,
+            &state.emitter,
+            params.conversation_id,
+            params.delivery_id,
+        )
+        .await?,
+    ))
+}

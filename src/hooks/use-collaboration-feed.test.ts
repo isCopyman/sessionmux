@@ -10,6 +10,7 @@ const api = vi.hoisted(() => ({
   get: vi.fn(),
   markSeen: vi.fn(),
   dismiss: vi.fn(),
+  restore: vi.fn(),
   getQueue: vi.fn(),
   retryQueueItem: vi.fn(),
 }))
@@ -18,6 +19,7 @@ vi.mock("@/lib/api", () => ({
   getCollaborationFeed: api.get,
   markCollaborationSeen: api.markSeen,
   dismissCollaborationDelivery: api.dismiss,
+  restoreCollaborationDelivery: api.restore,
   getPromptQueue: api.getQueue,
   retryPromptQueueItem: api.retryQueueItem,
 }))
@@ -139,12 +141,16 @@ describe("useCollaborationFeed", () => {
     })
   })
 
-  it("applies mark-seen and dismiss responses as authoritative snapshots", async () => {
+  it("applies mark-seen, dismiss, and restore responses as authoritative snapshots", async () => {
     const mail = delivery("mail")
     api.get.mockResolvedValue(feed(7, 1, [mail]))
     api.markSeen.mockResolvedValue(feed(7, 2, [delivery("mail", true)]))
     api.dismiss.mockResolvedValue({
       ...feed(7, 3, [{ ...delivery("mail", true), state: "dismissed" }]),
+      unreadCount: 0,
+    })
+    api.restore.mockResolvedValue({
+      ...feed(7, 4, [delivery("mail", true)]),
       unreadCount: 0,
     })
     const { result } = renderHook(() => useCollaborationFeed(7))
@@ -157,6 +163,11 @@ describe("useCollaborationFeed", () => {
     await act(async () => result.current.dismiss("mail"))
     expect(api.dismiss).toHaveBeenCalledWith(7, "mail")
     expect(result.current.feed.inbound[0].state).toBe("dismissed")
+
+    await act(async () => result.current.restore("mail"))
+    expect(api.restore).toHaveBeenCalledWith(7, "mail")
+    expect(result.current.feed.inbound[0].state).toBe("pending")
+    expect(result.current.feed.unreadCount).toBe(0)
   })
 
   it("does not let a slow old-Session response overwrite a new Session", async () => {

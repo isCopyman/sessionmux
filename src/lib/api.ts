@@ -2113,6 +2113,16 @@ export async function dismissCollaborationDelivery(
   })
 }
 
+export async function restoreCollaborationDelivery(
+  conversationId: number,
+  deliveryId: string
+): Promise<CollaborationFeed> {
+  return getTransport().call("collaboration_restore", {
+    conversationId,
+    deliveryId,
+  })
+}
+
 export async function listOpenFolderDetails(): Promise<FolderDetail[]> {
   return getTransport().call("list_open_folder_details")
 }

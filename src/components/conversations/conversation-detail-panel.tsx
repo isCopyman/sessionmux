@@ -56,7 +56,11 @@ import {
   type GoalControlValue,
 } from "@/components/message/goal-control-context"
 import { ConversationShell } from "@/components/chat/conversation-shell"
-import { SessionCommunicationBanner } from "@/components/collaboration/session-communication-banner"
+import {
+  SessionCommunicationBannerView,
+  SessionPendingContextBar,
+} from "@/components/collaboration/session-communication-banner"
+import { useCollaborationFeed } from "@/hooks/use-collaboration-feed"
 import { SessionConfigStaleBanner } from "@/components/chat/session-config-stale-banner"
 import { PiProjectTrustBanner } from "@/components/chat/pi-project-trust-banner"
 import { BackgroundTasksChip } from "@/components/chat/background-tasks-chip"
@@ -348,6 +352,7 @@ const ConversationTabView = memo(function ConversationTabView({
     number | null
   >(null)
   const dbConversationId = conversationId ?? createdConversationId
+  const collaboration = useCollaborationFeed(dbConversationId)
   const [draftAgentType, setDraftAgentType] = useState<AgentType>(agentType)
   const selectedAgent = conversationId != null ? agentType : draftAgentType
   // Seed from localStorage so the React state reflects the user's saved
@@ -1679,7 +1684,10 @@ const ConversationTabView = memo(function ConversationTabView({
             workingDir={workingDirForConnection}
           />
           <BackgroundTasksChip contextKey={tabId} />
-          <SessionCommunicationBanner conversationId={dbConversationId} />
+          <SessionCommunicationBannerView
+            conversationId={dbConversationId}
+            collaboration={collaboration}
+          />
         </>
       }
       status={connStatus}
@@ -1714,9 +1722,12 @@ const ConversationTabView = memo(function ConversationTabView({
       hideInput={isWelcomeMode || Boolean(acpLoadError)}
       composerBanner={acpLoadErrorBanner}
       feedbackList={
-        feedback.showList ? (
-          <FeedbackNotesDisplay notes={feedback.notes} />
-        ) : null
+        <>
+          <SessionPendingContextBar collaboration={collaboration} />
+          {feedback.showList ? (
+            <FeedbackNotesDisplay notes={feedback.notes} />
+          ) : null}
+        </>
       }
       onAddFeedback={feedback.featureEnabled ? feedback.openDialog : undefined}
       feedbackAddDisabled={!feedback.canSubmit}
