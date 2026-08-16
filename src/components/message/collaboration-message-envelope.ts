@@ -77,3 +77,43 @@ export function parseCollaborationMessageEnvelope(
     body: lines.slice(4, -1).join("\n"),
   }
 }
+
+/**
+ * Remove only complete, backend-authored envelopes whose immutable event id is
+ * already represented by a collaboration timeline card. Malformed, unknown,
+ * or unprojected text stays visible verbatim so this adapter cannot hide
+ * Harness history when the projection is incomplete.
+ */
+export function stripProjectedCollaborationEnvelopes(
+  text: string,
+  projectedEventIds: ReadonlySet<string>
+): string {
+  if (projectedEventIds.size === 0 || !text.includes(PREFIX)) return text
+  const lines = text.split("\n")
+  const retained: string[] = []
+  let index = 0
+
+  while (index < lines.length) {
+    const first = lines[index]
+    const eventId =
+      first.startsWith(PREFIX) && first.endsWith(">>>")
+        ? first.slice(PREFIX.length, -3)
+        : null
+    if (eventId && projectedEventIds.has(eventId)) {
+      const endMarker = `${END_PREFIX}${eventId}>>>`
+      const endIndex = lines.indexOf(endMarker, index + 1)
+      if (endIndex >= 0) {
+        const candidate = lines.slice(index, endIndex + 1).join("\n")
+        const parsed = parseCollaborationMessageEnvelope(candidate)
+        if (parsed?.eventId === eventId) {
+          index = endIndex + 1
+          continue
+        }
+      }
+    }
+    retained.push(first)
+    index += 1
+  }
+
+  return retained.join("\n")
+}

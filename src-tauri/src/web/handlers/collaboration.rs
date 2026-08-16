@@ -9,7 +9,7 @@ use crate::commands::collaboration;
 use crate::commands::collaboration::SessionCollaborationSettings;
 use crate::models::{
     CollaborationFeed, CollaborationInterruptResult, CollaborationSendResult,
-    CollaborationUnreadOverview, InterruptCollaborationInput,
+    CollaborationTimelineProjection, CollaborationUnreadOverview, InterruptCollaborationInput,
     SendAndInterruptCollaborationInput, SendAndInterruptCollaborationResult,
     SendCollaborationMessageInput,
 };
@@ -135,6 +135,19 @@ pub async fn feed(
             &state.db.conn,
             params.conversation_id,
             params.limit,
+        )
+        .await?,
+    ))
+}
+
+pub async fn timeline_projection(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<FeedParams>,
+) -> Result<Json<CollaborationTimelineProjection>, AppCommandError> {
+    Ok(Json(
+        collaboration::collaboration_timeline_projection_core(
+            &state.db.conn,
+            params.conversation_id,
         )
         .await?,
     ))

@@ -255,6 +255,17 @@ pub struct CollaborationFeed {
     pub outbound: Vec<CollaborationDeliveryView>,
 }
 
+/// Read-only projection of collaboration deliveries that have actually been
+/// embedded in this Session's Harness transcript. The delivery remains the
+/// single source of truth; clients place each item by `embedded_turn_ref`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CollaborationTimelineProjection {
+    pub conversation_id: i32,
+    pub revision: i64,
+    pub inbound: Vec<CollaborationDeliveryView>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CollaborationUnreadSession {

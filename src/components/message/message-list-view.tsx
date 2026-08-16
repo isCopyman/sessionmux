@@ -56,7 +56,12 @@ import {
   buildPlanKey,
   extractLatestPlanEntriesFromMessages,
 } from "@/lib/agent-plan"
-import type { AgentType, ConnectionStatus, MessageTurn } from "@/lib/types"
+import type {
+  AgentType,
+  CollaborationDelivery,
+  ConnectionStatus,
+  MessageTurn,
+} from "@/lib/types"
 import { copyTextToClipboard } from "@/lib/utils"
 import {
   VirtualizedMessageThread,
@@ -82,7 +87,8 @@ import {
   clearConversationFindHighlights,
 } from "@/lib/conversation-find-highlight"
 import { CollaborationMessageCard } from "./collaboration-message-card"
-import { parseCollaborationMessageEnvelope } from "./collaboration-message-envelope"
+import { stripProjectedCollaborationEnvelopes } from "./collaboration-message-envelope"
+import { useCollaborationTimeline } from "@/hooks/use-collaboration-timeline"
 
 interface MessageListViewProps {
   conversationId: number
@@ -158,6 +164,11 @@ export type ThreadRenderItem =
       kind: "typing"
     }
   | {
+      key: string
+      kind: "collaboration"
+      delivery: CollaborationDelivery
+    }
+  | {
       // A context-compaction event hoisted OUT of an assistant turn into its own
       // standalone timeline element. In history the compaction lands as its own
       // (assistant-role) turn between the reply that preceded `/compact` and the
@@ -193,6 +204,72 @@ export function singletonSourceTurns(turn: MessageTurn): MessageTurn[] {
     sourceTurnsSingletonCache.set(turn, cached)
   }
   return cached
+}
+
+/**
+ * Place authoritative inbound collaboration deliveries immediately before the
+ * persisted Harness Turn that embedded them. This function is deliberately
+ * defensive even though the backend projection already applies the lifecycle
+ * filter: pending or partially transitioned data must never become transcript.
+ */
+export function applyCollaborationTimelineProjection(
+  items: ThreadRenderItem[],
+  deliveries: CollaborationDelivery[]
+): ThreadRenderItem[] {
+  const byTurn = new Map<string, CollaborationDelivery[]>()
+  for (const delivery of deliveries) {
+    if (
+      delivery.state !== "embedded" ||
+      !delivery.embeddedTurnRef ||
+      !delivery.agentReceivedAt ||
+      !delivery.agentReceiptKind ||
+      !delivery.agentReceiptRef
+    ) {
+      continue
+    }
+    const existing = byTurn.get(delivery.embeddedTurnRef)
+    if (existing) existing.push(delivery)
+    else byTurn.set(delivery.embeddedTurnRef, [delivery])
+  }
+  if (byTurn.size === 0) return items
+
+  const projected: ThreadRenderItem[] = []
+  for (const item of items) {
+    if (item.kind !== "turn" || item.group.role !== "user") {
+      projected.push(item)
+      continue
+    }
+    const deliveriesForTurn = byTurn.get(item.group.id)
+    if (!deliveriesForTurn) {
+      projected.push(item)
+      continue
+    }
+
+    const eventIds = new Set(
+      deliveriesForTurn.map((delivery) => delivery.eventId)
+    )
+    for (const delivery of deliveriesForTurn) {
+      projected.push({
+        key: `collaboration-${delivery.id}`,
+        kind: "collaboration",
+        delivery,
+      })
+    }
+
+    let changed = false
+    const parts = item.group.parts.flatMap((part): AdaptedContentPart[] => {
+      if (part.type !== "text") return [part]
+      const text = stripProjectedCollaborationEnvelopes(part.text, eventIds)
+      if (text === part.text) return [part]
+      changed = true
+      return text.length > 0 ? [{ ...part, text }] : []
+    })
+    const nextItem = changed
+      ? { ...item, group: { ...item.group, parts } }
+      : item
+    if (!isEmptyTurnItem(nextItem)) projected.push(nextItem)
+  }
+  return projected
 }
 
 const CollapsibleSystemMessage = memo(function CollapsibleSystemMessage({
@@ -547,23 +624,6 @@ const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
     return <CollapsibleSystemMessage group={group} />
   }
 
-  const collaborationEnvelope =
-    group.role === "user" &&
-    group.images.length === 0 &&
-    group.resources.length === 0
-      ? parseCollaborationMessageEnvelope(extractTextFromParts(group.parts))
-      : null
-
-  if (collaborationEnvelope) {
-    return (
-      <div className={dimmed ? "opacity-70" : undefined}>
-        <Message from="assistant">
-          <CollaborationMessageCard envelope={collaborationEnvelope} />
-        </Message>
-      </div>
-    )
-  }
-
   return (
     <div className={dimmed ? "opacity-70" : undefined}>
       <Message from={group.role}>
@@ -677,6 +737,7 @@ export function MessageListView({
   const timelineTurns = useConversationRuntimeStore((s) =>
     selectTimelineTurns(s, conversationId)
   )
+  const collaborationTimeline = useCollaborationTimeline(conversationId)
 
   // Reverse infinite scroll: older history exists above the loaded window
   // (windowed detail with a non-zero offset). Legacy full responses never
@@ -802,7 +863,13 @@ export function MessageListView({
 
     // Collapse consecutive assistant turn render items into a single rendered
     // turn, so tool-groups straddling a turn boundary fold into one collapsible.
-    const items = mergeConsecutiveAssistantTurns(rawItems, mergedRunCache)
+    const items = mergeConsecutiveAssistantTurns(
+      applyCollaborationTimelineProjection(
+        rawItems,
+        collaborationTimeline.inbound
+      ),
+      mergedRunCache
+    )
 
     // Compute showStats, isRoleTransition, and previousUserIndex for each turn.
     // previousUserIndex points at the closest preceding user turn (used by the
@@ -857,6 +924,7 @@ export function MessageListView({
     turnAdapter,
     groupCache,
     mergedRunCache,
+    collaborationTimeline.inbound,
   ])
 
   const historicalPlanEntries = useMemo(
@@ -901,6 +969,15 @@ export function MessageListView({
         }
         case "typing":
           return <PendingTypingIndicator />
+        case "collaboration":
+          return (
+            <Message from="assistant">
+              <CollaborationMessageCard
+                delivery={item.delivery}
+                currentConversationId={conversationId}
+              />
+            </Message>
+          )
         case "compaction":
           // Chrome-less centered divider between turns (no avatar / stats footer).
           return (
@@ -912,7 +989,7 @@ export function MessageListView({
           return null
       }
     },
-    [userTurnHeader]
+    [conversationId, userTurnHeader]
   )
 
   const emptyState = useMemo(

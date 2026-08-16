@@ -1328,6 +1328,10 @@ pub fn build_router(
             post(handlers::collaboration::feed),
         )
         .route(
+            "/collaboration_timeline_projection",
+            post(handlers::collaboration::timeline_projection),
+        )
+        .route(
             "/collaboration_unread_overview",
             post(handlers::collaboration::unread_overview),
         )
