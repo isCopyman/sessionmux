@@ -150,6 +150,20 @@ enum HandshakeWaitOutcome {
     TimedOut,
 }
 
+/// Failure details for a Host-managed bound spawn. `native_session_id` is set
+/// once the Harness has created a native Session, even if a later persistence
+/// or readiness step fails. Callers must preserve the Codeg row in that case so
+/// the native Session never becomes an unreachable ghost.
+#[derive(Debug)]
+pub(crate) struct BoundAgentSpawnFailure {
+    pub(crate) error: AcpError,
+    pub(crate) connection_id: String,
+    pub(crate) native_session_id: Option<String>,
+    /// True after the connection spawn returned successfully. A later timeout
+    /// cannot prove that the Harness did not create its native Session.
+    pub(crate) native_creation_may_have_started: bool,
+}
+
 impl HandshakeWaitOutcome {
     fn as_str(self) -> &'static str {
         match self {
@@ -484,6 +498,7 @@ impl ConnectionManager {
             preferred_config_values,
             self.codeg_mcp_snapshot(),
             self.terminal_shell_config.clone(),
+            None,
         )
         .await?;
 
@@ -512,6 +527,142 @@ impl ConnectionManager {
         drop(dedup_lock);
 
         Ok(connection_id)
+    }
+
+    /// Start a brand-new ACP/native Session already bound to an existing
+    /// persistent Codeg Conversation row. Unlike the ordinary UI draft path,
+    /// this waits for `SessionStarted`, persists the native id synchronously,
+    /// and returns only when the stable Codeg/native identity pair exists.
+    ///
+    /// The caller owns creation/rollback of the Conversation row. Errors after
+    /// process spawn request a disconnect; if a native Session was already
+    /// created, the failure carries its id so the caller preserves an explicit,
+    /// resumable row instead of creating an unreachable native ghost.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn spawn_bound_agent(
+        &self,
+        db: &AppDatabase,
+        agent_type: AgentType,
+        working_dir: String,
+        runtime_env: BTreeMap<String, String>,
+        owner_window_label: String,
+        emitter: EventEmitter,
+        preferred_mode_id: Option<String>,
+        preferred_config_values: BTreeMap<String, String>,
+        conversation_id: i32,
+        folder_id: i32,
+    ) -> Result<(String, String), BoundAgentSpawnFailure> {
+        if self
+            .find_connection_by_conversation_id(conversation_id)
+            .await
+            .is_some()
+        {
+            return Err(BoundAgentSpawnFailure {
+                error: AcpError::protocol(format!(
+                    "conversation {conversation_id} already has an active runtime"
+                )),
+                connection_id: String::new(),
+                native_session_id: None,
+                native_creation_may_have_started: false,
+            });
+        }
+
+        let connection_id = uuid::Uuid::new_v4().to_string();
+        tracing::info!(
+            "[ACP] spawning host-managed connection id={} conversation={} agent={:?}",
+            connection_id,
+            conversation_id,
+            agent_type
+        );
+        let session_started_rx = spawn_agent_connection(
+            connection_id.clone(),
+            agent_type,
+            Some(working_dir),
+            None,
+            runtime_env,
+            owner_window_label,
+            emitter,
+            self.connections.clone(),
+            preferred_mode_id,
+            preferred_config_values,
+            self.codeg_mcp_snapshot(),
+            self.terminal_shell_config.clone(),
+            Some((conversation_id, folder_id)),
+        )
+        .await
+        .map_err(|error| BoundAgentSpawnFailure {
+            error,
+            connection_id: connection_id.clone(),
+            native_session_id: None,
+            native_creation_may_have_started: false,
+        })?;
+
+        let (handshake, elapsed) =
+            wait_for_session_started(session_started_rx, self.spawn_handshake_timeout).await;
+        tracing::info!(
+            "[ACP] host_managed_wait connection_id={} conversation_id={} outcome={} \
+             elapsed_ms={} timeout_ms={}",
+            connection_id,
+            conversation_id,
+            handshake.as_str(),
+            elapsed.as_millis(),
+            self.spawn_handshake_timeout.as_millis(),
+        );
+        if handshake != HandshakeWaitOutcome::Ready {
+            let native_session_id = match self.get_state(&connection_id).await {
+                Some(state) => state.read().await.external_id.clone(),
+                None => None,
+            };
+            let _ = self.disconnect(&connection_id).await;
+            let detail = match handshake {
+                HandshakeWaitOutcome::Aborted => {
+                    "the agent exited before creating its native Session"
+                }
+                HandshakeWaitOutcome::TimedOut => {
+                    "the agent did not confirm native Session creation before the timeout"
+                }
+                HandshakeWaitOutcome::Ready => unreachable!(),
+            };
+            return Err(BoundAgentSpawnFailure {
+                error: AcpError::protocol(detail),
+                connection_id,
+                native_session_id,
+                native_creation_may_have_started: true,
+            });
+        }
+
+        let native_session_id = match self.get_state(&connection_id).await {
+            Some(state) => state.read().await.external_id.clone(),
+            None => None,
+        };
+        let Some(native_session_id) = native_session_id else {
+            let _ = self.disconnect(&connection_id).await;
+            return Err(BoundAgentSpawnFailure {
+                error: AcpError::ProcessExited,
+                connection_id,
+                native_session_id: None,
+                native_creation_may_have_started: true,
+            });
+        };
+        if let Err(error) = conversation_service::update_external_id(
+            &db.conn,
+            conversation_id,
+            native_session_id.clone(),
+        )
+        .await
+        {
+            let _ = self.disconnect(&connection_id).await;
+            return Err(BoundAgentSpawnFailure {
+                error: AcpError::protocol(format!(
+                    "could not persist the native Session identity: {error}"
+                )),
+                connection_id,
+                native_session_id: Some(native_session_id),
+                native_creation_may_have_started: true,
+            });
+        }
+
+        Ok((connection_id, native_session_id))
     }
 
     /// Bump `last_activity_at` for a live connection so the idle sweep
@@ -2042,7 +2193,7 @@ impl ConnectionManager {
     /// from a clean "ready with no options" snapshot lets the UI tell the
     /// user "the agent never published its options — retry" instead of
     /// silently claiming the agent has nothing to configure.
-    async fn wait_for_session_options(
+    pub(crate) async fn wait_for_session_options(
         &self,
         conn_id: &str,
         timeout: Duration,
@@ -3858,8 +4009,8 @@ mod tests {
     async fn managed_chat_ingress_attaches_store_only_mail_through_generic_acp() {
         use crate::db::test_helpers;
         use crate::models::{
-            CollaborationDeliveryHint, CollaborationDeliveryState, CollaborationInvocationPolicy,
-            CollaborationUrgency, SendCollaborationMessageInput,
+            CollaborationDeliveryHint, CollaborationDeliveryState,
+            CollaborationInvocationPolicy, CollaborationUrgency, SendCollaborationMessageInput,
         };
 
         let db = test_helpers::fresh_in_memory_db().await;
@@ -4455,8 +4606,8 @@ mod tests {
     async fn lost_transport_ack_keeps_attached_mail_in_unknown_embedding_state() {
         use crate::db::test_helpers;
         use crate::models::{
-            CollaborationDeliveryHint, CollaborationDeliveryState,
-            CollaborationInvocationPolicy, CollaborationUrgency, SendCollaborationMessageInput,
+            CollaborationDeliveryHint, CollaborationDeliveryState, CollaborationInvocationPolicy,
+            CollaborationUrgency, SendCollaborationMessageInput,
         };
 
         let db = test_helpers::fresh_in_memory_db().await;

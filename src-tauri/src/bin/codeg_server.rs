@@ -368,6 +368,8 @@ async fn async_main() -> ExitCode {
                     state.emitter.clone(),
                     state.chat_channel_manager.clone_ref(),
                     host_control_config.clone(),
+                    state.connection_manager.clone_ref(),
+                    state.data_dir.clone(),
                 ),
             ),
             Arc::new(codeg_lib::acp::manager::ConnectionManagerFeedbackLookup {

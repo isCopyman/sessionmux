@@ -2,11 +2,11 @@
 //!
 //! This module owns the capability catalog and the typed Session action
 //! dispatcher. Tauri, HTTP, and the MCP companion must not reimplement these
-//! semantics. The first slice intentionally contains only Session list/get/
-//! rename; create is withheld until the existing lazy-row + ACP handshake can
-//! guarantee a persistent external Session identity with the initial prompt.
+//! semantics. Lifecycle operations are implemented in the sibling
+//! `host_control_session` provider so this catalog/dispatcher remains thin.
 
 use std::collections::{HashMap, VecDeque};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -20,11 +20,13 @@ use crate::acp::host_control::{
     HostControlHelpOutcome, HostControlRuntimeConfig, HostControlUseOutcome,
     HOST_CONTROL_CATALOG_VERSION,
 };
+use crate::acp::manager::ConnectionManager;
 use crate::chat_channel::manager::ChatChannelManager;
 use crate::commands::conversations::{
     emit_conversation_upsert, list_all_conversations_core,
     sync_conversation_title_to_channels_core,
 };
+use crate::commands::host_control_session::SessionHostControlProvider;
 use crate::db::entities::conversation::ConversationKind;
 use crate::db::service::conversation_service;
 use crate::db::AppDatabase;
@@ -68,6 +70,7 @@ pub struct DbSessionHostControl {
     emitter: EventEmitter,
     chat_channel_manager: ChatChannelManager,
     config: HostControlRuntimeConfig,
+    session_lifecycle: SessionHostControlProvider,
     /// Held across a write so concurrent replays cannot both pass the lookup.
     writes: Mutex<IdempotencyCache>,
 }
@@ -78,12 +81,21 @@ impl DbSessionHostControl {
         emitter: EventEmitter,
         chat_channel_manager: ChatChannelManager,
         config: HostControlRuntimeConfig,
+        connection_manager: ConnectionManager,
+        data_dir: PathBuf,
     ) -> Self {
+        let session_lifecycle = SessionHostControlProvider::new(
+            Arc::clone(&db),
+            emitter.clone(),
+            connection_manager,
+            data_dir,
+        );
         Self {
             db,
             emitter,
             chat_channel_manager,
             config,
+            session_lifecycle,
             writes: Mutex::new(IdempotencyCache::default()),
         }
     }
@@ -224,6 +236,7 @@ impl DbSessionHostControl {
                 }),
                 result_stages: vec!["persisted".to_string()],
             });
+            capabilities.extend(SessionHostControlProvider::capabilities());
         }
         capabilities
     }
@@ -502,6 +515,19 @@ impl HostControlAccess for DbSessionHostControl {
                         .await
                 }
             }
+            lifecycle_action if SessionHostControlProvider::handles(lifecycle_action) => {
+                if !config.writes_enabled || !caller.writes_allowed {
+                    HostControlUseOutcome::rejected(
+                        request_id,
+                        action,
+                        "This Session's live Host policy does not allow Host Control writes.",
+                    )
+                } else {
+                    self.session_lifecycle
+                        .dispatch(&caller, request_id, action, input)
+                        .await
+                }
+            }
             _ => HostControlUseOutcome::rejected(
                 request_id,
                 action,
@@ -581,6 +607,8 @@ mod tests {
             EventEmitter::Noop,
             ChatChannelManager::new(),
             config.clone(),
+            ConnectionManager::new(),
+            std::env::temp_dir(),
         );
         (host, config, caller, target)
     }

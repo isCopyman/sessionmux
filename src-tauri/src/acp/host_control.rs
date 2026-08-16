@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::RwLock;
 
-pub const HOST_CONTROL_CATALOG_VERSION: &str = "2026-08-16.v1";
+pub const HOST_CONTROL_CATALOG_VERSION: &str = "2026-08-16.v2";
 
 /// Trusted caller context derived from the companion token. This type is never
 /// part of an MCP tool schema and is never populated from model arguments.
