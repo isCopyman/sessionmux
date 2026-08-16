@@ -131,6 +131,94 @@ send_session_prompt / cancel_turn
 Session/来源关系。provider 特有选项通过能力探测和结构化 overrides 表达，不能伪造一个所有
 Harness 都能生效的统一模型字段。
 
+#### 3.1.1 `session.create` 是通用 Session 原语
+
+Host Control 不再定义独立的 `create_subagent` 或一次性 delegation 对象。无论是用户新建普通
+对话、Agent 临时找另一个 Harness 调研，还是创建长期协作者，底层都只创建一种真实、持久、可
+Resume 的 Session。所谓“子 Agent”只是这个 Session 的来源关系、默认展示位置和生命周期策略。
+
+截至 2026-08-16，已实施的 `session.create` 接受：
+
+```text
+harness
+folder_id?
+cwd?
+title?
+model?
+mode_id?
+config_values?
+initial_prompt?
+```
+
+它会创建 Codeg Conversation、启动真实 ACP/native Session、持久化原生 Resume identity，并可选
+启动第一条 Prompt；默认后台创建，不打开 UI、不抢焦点。当前安全边界仍要求 `folder_id` 和 `cwd`
+位于调用者绑定的 Path/cwd，思考强度等 provider 能力暂由 `mode_id/config_values` 表达。
+
+目标契约在保持上述字段兼容的前提下扩展为：
+
+```text
+SessionLaunchSpec
+├── harness
+├── title?
+├── model?
+├── reasoning_effort?           仅在 Harness 明确声明时出现
+├── permission_profile?
+├── profile?
+├── execution
+│   ├── cwd
+│   ├── folder_id?
+│   ├── mode                    cwd | existing_worktree | new_worktree | remote
+│   ├── worktree_ref?
+│   └── backend_ref?
+├── provider_options?           结构化且经 Harness capability 校验
+├── initial_prompt?
+├── start_policy?               create_only | run_initial_prompt
+├── context_seed?
+│   ├── mode                    none | summary | recent_turns | explicit_refs
+│   └── refs/count?
+├── relation?
+│   ├── kind                    spawned_child | related | handoff
+│   ├── parent_session_id?      默认可由可信 caller context 绑定
+│   ├── source_turn_ref?
+│   ├── role?
+│   └── task_name?
+└── placement?
+    ├── visibility              nested | top_level
+    ├── display_parent_id?
+    ├── collection_id?
+    ├── workbench_id?
+    └── open_mode               background | current_pane | split
+```
+
+`fork_session` 仍是独立动作，因为它必须调用 Harness 原生 Fork 或经过明确降级；不能通过
+`relation.kind` 假装复制了原生上下文。`reasoning_effort`、权限、Worktree 和远端等字段同样必须由
+`codeg_help` 返回的实时 Schema/Capability 决定；不支持时拒绝或省略，不能静默伪装成功。
+
+创建和第一条 Prompt 是一个可恢复 Saga，而不是含糊的布尔成功：至少区分 Session 已持久化、原生
+identity 已确认、初始 Turn 已启动、Prompt 投递结果未知、创建失败但需人工恢复等阶段。关系和
+Collection/Workbench 放置失败不得删除已经成功创建的 Session；返回稳定 Session ID 后可安全重试
+组织动作。
+
+#### 3.1.2 子 Session、归属与提级
+
+不要使用单个 `is_subagent` 布尔值同时表达历史来源和当前展示。至少区分：
+
+```text
+provenance              spawned_from_session_id / source_turn_ref，创建后不抹除
+relationship            spawned_child / related / handoff
+presentation            display_parent_id + nested/top_level，可变
+lifecycle_policy        independent / follow_parent，可变且需显式策略
+organization            Collection / Workbench 引用，可变
+```
+
+`session.promote` 的用户含义是“固定为普通顶层 Session”，内部只改变 presentation 和可选的组织位置；
+它不得更换 Session ID、原生 Session identity、transcript、runtime、Mailbox 或 provenance。反向的
+`session.demote` 也只是重新折叠展示。父 Session 可以协调子 Session，但不因此拥有删除权；子
+Session 可以继续被追问、Fork、加入其他 Workbench，并按权限联系其他 Session。
+
+子关系可递归形成协作树，但 fan-out、深度、并发和费用受 Host Policy 限制。默认临时子 Session
+嵌套且后台创建；只有用户明确要求或既有策略授权时才打开、聚焦或创建新 Worktree。
+
 Removal 批次删除旧 Schema、Broker/task_id、专属 UI 和设置；共享 companion、transport、可信 caller
 identity、`list_sessions/send_message` 等 Host bridge 必须保留。纯展示卡片/浮窗可抽成普通 Session
 activity primitive，但不得因此保留旧状态机。

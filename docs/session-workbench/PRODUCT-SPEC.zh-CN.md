@@ -437,9 +437,15 @@ SSH 只解决“怎样安全到达并启动一个 Codeg Backend”。Session 仍
 当当前 Session 需要一次独立调查、实现或审查时，用户或 Agent 可以选择另一个 Harness，并说明
 任务。Codeg 创建一个真实的新 Session，注入任务和用户明确选择的必要上下文，把它作为子会话
 嵌套在来源 Session 下，完成后把状态和必要结果回到来源处。旧 `delegate_to_agent` 三工具直接
-移除，不保留兼容入口；目标体验由未来普通 `create_session + send_message` 提供，不再创造一类
-脱离 Session 管理的 Agent/task 对象。开发期在 `create_session` 落地前，Agent 暂时不能主动新建
-Session，但现有 Session 间发送与用户在 UI 新建会话不受影响。
+移除，不保留兼容入口；目标体验由普通 `session.create + send_message` 提供，不再创造一类脱离
+Session 管理的 Agent/task 对象。当前 Host Control 已能在调用者同一 cwd 中选择 Harness、标题、
+模型、mode/provider 配置和可选首条 Prompt，创建真实持久 Session；父子关系、上下文种子、任意
+cwd/Worktree、创建时放入 Collection/Workbench 和默认嵌套展示仍按下一阶段契约补齐。
+
+例如用户可以对当前 Session 说：“在这个目录新建一个 Claude 会话，用可用的高思考模式审查这段
+实现，先放后台。”创建前界面或 Tool Result 应显示实际 Harness、模型/mode、cwd、权限和是否启动
+首条 Prompt；创建后返回稳定 Session ID。若 Harness 没有相应模型或思考选项，Codeg 明确拒绝该
+字段或让用户重选，不假装已经应用。
 
 父 Session 中的悬浮卡只负责快速查看状态、阻塞原因和结果摘要。点击主动作后，Codeg 把**同一个
 子 Session**作为普通内容标签加入当前 Workbench；用户在那里继续输入、Resume、Fork、搜索历史，
@@ -456,6 +462,11 @@ Session，但现有 Session 间发送与用户在 UI 新建会话不受影响。
 临时子 Session 默认嵌套，避免一次并行调研把侧栏变成大量顶层会话；固定为长期 Session 后仍保留
 “来源于哪次委派”的关系。系统不会自动删除子 Session 或把完整子对话复制进父 Session，父 Session
 只收到任务状态、必要结果和可跳转的来源引用。
+
+“固定为长期 Session”不是复制对话或把 `is_subagent` 改成 false，而是把同一个 Session 从父项下
+的折叠展示提升到顶层，并可选择放入 Collection 或当前 Workbench。它的 Session ID、原生会话、
+完整历史、运行状态和 Mailbox 全部保持不变；来源 Session 和创建 Turn 作为 provenance 继续可查。
+以后也可以把它重新折叠回父项，而不会丢失这段来源关系。
 
 当用户进一步要求“把这几个 Session 左右排开”“打开它刚才提到的文件”“切到审查工作台”时，
 Agent 可以调用 Codeg 的结构化工作台控制能力。此类操作默认不抢焦点、不关闭现有内容；只有用户
