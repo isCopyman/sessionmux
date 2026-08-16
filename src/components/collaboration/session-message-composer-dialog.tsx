@@ -6,6 +6,16 @@ import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 import { AgentIcon } from "@/components/agent-icon"
 import { ConversationStatusDot } from "@/components/conversations/conversation-status-dot"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
@@ -31,6 +41,7 @@ import { STATUS_ORDER } from "@/lib/types"
 import type {
   CollaborationDeliveryHint,
   CollaborationInvocationPolicy,
+  CollaborationUrgency,
   ConversationStatus,
 } from "@/lib/types"
 
@@ -71,6 +82,8 @@ export function SessionMessageComposerDialog({
     useState<CollaborationDeliveryHint>("default")
   const [interruptCurrentTask, setInterruptCurrentTask] = useState(false)
   const [expectsReply, setExpectsReply] = useState(false)
+  const [urgency, setUrgency] = useState<CollaborationUrgency>("normal")
+  const [confirmInterrupt, setConfirmInterrupt] = useState(false)
   const [sending, setSending] = useState(false)
 
   const folderById = useMemo(
@@ -133,6 +146,8 @@ export function SessionMessageComposerDialog({
     setDeliveryHint("default")
     setInterruptCurrentTask(false)
     setExpectsReply(false)
+    setUrgency("normal")
+    setConfirmInterrupt(false)
   }
 
   const setOpen = (next: boolean) => {
@@ -155,8 +170,13 @@ export function SessionMessageComposerDialog({
     })
   }
 
-  const handleSend = async () => {
+  const handleSend = async (options?: { confirmedInterrupt?: boolean }) => {
     if (!canSend || sourceConversationId == null) return
+    if (interruptCurrentTask && !options?.confirmedInterrupt) {
+      setConfirmInterrupt(true)
+      return
+    }
+    setConfirmInterrupt(false)
     setSending(true)
     try {
       if (interruptCurrentTask) {
@@ -170,7 +190,7 @@ export function SessionMessageComposerDialog({
             invocationPolicy: "invoke_when_idle",
             deliveryHint: "default",
             expectsReply,
-            urgency: "normal",
+            urgency,
             replyToEventId,
           },
           interruptClientDedupeId: randomUUID(),
@@ -195,7 +215,7 @@ export function SessionMessageComposerDialog({
         invocationPolicy,
         deliveryHint,
         expectsReply,
-        urgency: "normal",
+        urgency,
         replyToEventId,
       })
       const failed = result.deliveries.filter(
@@ -437,6 +457,23 @@ export function SessionMessageComposerDialog({
           </span>
         </label>
 
+        <label className="flex cursor-pointer items-start gap-2.5 rounded-md border px-3 py-2.5">
+          <Checkbox
+            checked={urgency === "urgent"}
+            onCheckedChange={(checked) =>
+              setUrgency(checked === true ? "urgent" : "normal")
+            }
+            aria-label={t("markUrgent")}
+            className="mt-0.5"
+          />
+          <span className="min-w-0">
+            <span className="block text-sm font-medium">{t("markUrgent")}</span>
+            <span className="block text-xs text-muted-foreground">
+              {t("markUrgentDescription")}
+            </span>
+          </span>
+        </label>
+
         <DialogFooter>
           <Button
             variant="outline"
@@ -446,7 +483,7 @@ export function SessionMessageComposerDialog({
             {t("cancel")}
           </Button>
           <Button
-            onClick={handleSend}
+            onClick={() => void handleSend()}
             disabled={!canSend}
             data-collaboration-submit=""
           >
@@ -459,6 +496,32 @@ export function SessionMessageComposerDialog({
           </Button>
         </DialogFooter>
       </DialogContent>
+      <AlertDialog
+        open={confirmInterrupt}
+        onOpenChange={(open) => {
+          if (!open && !sending) setConfirmInterrupt(false)
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("interruptConfirmTitle")}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t("interruptConfirmDescription")}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={sending}>
+              {t("cancel")}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => void handleSend({ confirmedInterrupt: true })}
+              disabled={sending}
+            >
+              {t("interruptConfirm")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Dialog>
   )
 }

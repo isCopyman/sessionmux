@@ -5051,6 +5051,12 @@
     "worklistUnread": "未读（{count}）",
     "worklistNeedsReply": "需要回复（{count}）",
     "worklistAwaitingReply": "等待回复（{count}）",
-    "worklistFailed": "失败（{count}）"
+    "worklistFailed": "失败（{count}）",
+    "markUrgent": "重要 / 紧急",
+    "markUrgentDescription": "只提高往来里的可见优先级，不会因此停止或唤醒目标 Agent。",
+    "interruptConfirmTitle": "停止当前任务并发送？",
+    "interruptConfirmDescription": "会先保存这条消息，再停止这一个目标当前正在运行的任务。停止失败时，已保存的消息仍会留在队列里。",
+    "interruptConfirm": "停止并发送",
+    "startProcessing": "启动处理"
   }
 }

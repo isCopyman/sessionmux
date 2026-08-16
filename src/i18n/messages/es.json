@@ -5051,6 +5051,12 @@
     "worklistUnread": "Sin leer ({count})",
     "worklistNeedsReply": "Necesita respuesta ({count})",
     "worklistAwaitingReply": "Esperando respuesta ({count})",
-    "worklistFailed": "Fallidos ({count})"
+    "worklistFailed": "Fallidos ({count})",
+    "markUrgent": "Important / urgent",
+    "markUrgentDescription": "Raises visibility in the mail list. It does not stop or start the target Agent.",
+    "interruptConfirmTitle": "Stop the current task and send?",
+    "interruptConfirmDescription": "The message is saved first, then this one target's running task is stopped. If the stop fails, the saved message stays queued.",
+    "interruptConfirm": "Stop and send",
+    "startProcessing": "Start processing"
   }
 }

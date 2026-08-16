@@ -357,19 +357,36 @@ export function SessionCommunicationBannerView({
                             delivery.queuePausedReason !==
                               COLLABORATION_DISABLED_REASON)) &&
                         delivery.invocationPolicy === "invoke_when_idle" ? (
-                          <Button
-                            type="button"
-                            size="icon"
-                            variant="ghost"
-                            className="h-7 w-7"
-                            title={t("retry")}
-                            aria-label={t("retry")}
-                            onClick={() =>
-                              void retry(delivery.queueItemId || delivery.id)
-                            }
-                          >
-                            <RotateCcw className="h-3.5 w-3.5" />
-                          </Button>
+                          delivery.state === "queued" &&
+                          delivery.queueState === "paused" ? (
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="ghost"
+                              className="h-7 px-2 text-[11px]"
+                              title={t("startProcessing")}
+                              aria-label={t("startProcessing")}
+                              onClick={() =>
+                                void retry(delivery.queueItemId || delivery.id)
+                              }
+                            >
+                              {t("startProcessing")}
+                            </Button>
+                          ) : (
+                            <Button
+                              type="button"
+                              size="icon"
+                              variant="ghost"
+                              className="h-7 w-7"
+                              title={t("retry")}
+                              aria-label={t("retry")}
+                              onClick={() =>
+                                void retry(delivery.queueItemId || delivery.id)
+                              }
+                            >
+                              <RotateCcw className="h-3.5 w-3.5" />
+                            </Button>
+                          )
                         ) : null}
                         {delivery.state === "pending" ? (
                           <Button

@@ -493,7 +493,7 @@ describe("SessionCommunicationBanner", () => {
     expect(
       screen.getByText("stateAwaitingResumeConfirmation")
     ).toBeInTheDocument()
-    fireEvent.click(screen.getByRole("button", { name: "retry" }))
+    fireEvent.click(screen.getByRole("button", { name: "startProcessing" }))
     expect(hook.retry).toHaveBeenCalledWith("delivery-1")
   })
 

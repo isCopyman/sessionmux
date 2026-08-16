@@ -2770,4 +2770,96 @@ mod tests {
             CollaborationDeliveryHint::SteerIfSupported
         );
     }
+
+    #[tokio::test]
+    async fn cross_harness_mail_freezes_source_and_target_agent_types() {
+        let (db, source, claude, gemini) = seeded_memory().await;
+        let sent = send(
+            &db.conn,
+            input(
+                source,
+                vec![claude, gemini],
+                "cross-harness",
+                "same question for two harnesses",
+            ),
+        )
+        .await
+        .unwrap();
+        assert_eq!(sent.deliveries.len(), 2);
+
+        let claude_in = feed(&db.conn, claude, None)
+            .await
+            .unwrap()
+            .inbound
+            .remove(0);
+        let gemini_in = feed(&db.conn, gemini, None)
+            .await
+            .unwrap()
+            .inbound
+            .remove(0);
+        assert_eq!(claude_in.source.agent_type.as_deref(), Some("codex"));
+        assert_eq!(claude_in.target.agent_type.as_deref(), Some("claude_code"));
+        assert_eq!(gemini_in.source.agent_type.as_deref(), Some("codex"));
+        assert_eq!(gemini_in.target.agent_type.as_deref(), Some("gemini"));
+        assert_eq!(claude_in.event_id, gemini_in.event_id);
+        assert_eq!(claude_in.body, gemini_in.body);
+
+        db.conn
+            .execute(Statement::from_sql_and_values(
+                DbBackend::Sqlite,
+                "UPDATE conversation SET agent_type = 'grok' WHERE id = ?",
+                vec![source.into()],
+            ))
+            .await
+            .unwrap();
+        let still_codex = feed(&db.conn, claude, None)
+            .await
+            .unwrap()
+            .inbound
+            .remove(0);
+        assert_eq!(still_codex.source.agent_type.as_deref(), Some("codex"));
+    }
+
+    #[tokio::test]
+    async fn resume_claim_repeats_the_same_collaboration_envelope() {
+        let (db, source, target, _) = seeded_memory().await;
+        let sent = send(
+            &db.conn,
+            input(source, vec![target], "resume-envelope", "keep this wording"),
+        )
+        .await
+        .unwrap();
+        let first = claim_pending_store_only_for_turn(&db.conn, target, "first-attempt")
+            .await
+            .unwrap()
+            .unwrap();
+        let PromptInputBlock::Text { text: first_text } = &first.blocks[0] else {
+            panic!("expected a text envelope");
+        };
+        assert!(first_text.contains("\"sourceAgentType\":\"codex\""));
+        assert!(first_text.contains("keep this wording"));
+        assert!(first_text.contains(&sent.event_id));
+        release_store_only_batch(&db.conn, target, &first)
+            .await
+            .unwrap();
+
+        let resumed = claim_pending_store_only_for_turn(&db.conn, target, "resume-attempt")
+            .await
+            .unwrap()
+            .expect("released mail must be claimable after resume");
+        let PromptInputBlock::Text { text: resumed_text } = &resumed.blocks[0] else {
+            panic!("expected a text envelope");
+        };
+        let first_body = first_text
+            .split_once("--- message ---")
+            .map(|(_, rest)| rest)
+            .unwrap();
+        let resumed_body = resumed_text
+            .split_once("--- message ---")
+            .map(|(_, rest)| rest)
+            .unwrap();
+        assert_eq!(first_body, resumed_body);
+        assert!(resumed_text.contains("\"eventId\":"));
+        assert!(resumed_text.contains(&sent.event_id));
+    }
 }

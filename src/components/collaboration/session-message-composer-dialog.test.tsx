@@ -267,6 +267,8 @@ describe("SessionMessageComposerDialog", () => {
       target: { value: "Stop and review this correction" },
     })
     fireEvent.click(screen.getByRole("button", { name: /^send$/ }))
+    expect(api.sendInterrupt).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole("button", { name: "interruptConfirm" }))
 
     await waitFor(() => expect(api.sendInterrupt).toHaveBeenCalledTimes(1))
     expect(api.send).not.toHaveBeenCalled()
@@ -279,6 +281,30 @@ describe("SessionMessageComposerDialog", () => {
           expectsReply: true,
         }),
         interruptClientDedupeId: expect.any(String),
+      })
+    )
+  })
+
+  it("can mark a Session message urgent without changing delivery policy", async () => {
+    render(
+      <SessionMessageComposerDialog
+        sourceConversationId={1}
+        open
+        onOpenChange={onOpenChange}
+      />
+    )
+    fireEvent.click(screen.getByRole("button", { name: /Reviewer/ }))
+    fireEvent.click(screen.getByRole("checkbox", { name: "markUrgent" }))
+    fireEvent.change(screen.getByPlaceholderText("bodyPlaceholder"), {
+      target: { value: "This is time-sensitive" },
+    })
+    fireEvent.click(screen.getByRole("button", { name: /^send$/ }))
+
+    await waitFor(() => expect(api.send).toHaveBeenCalledTimes(1))
+    expect(api.send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        invocationPolicy: "store_only",
+        urgency: "urgent",
       })
     )
   })
