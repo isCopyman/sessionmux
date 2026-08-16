@@ -171,6 +171,7 @@ pub async fn acp_prompt(
             params.folder_id,
             params.conversation_id,
             params.client_message_id,
+            false,
         )
         .await
         .map_err(|e| {

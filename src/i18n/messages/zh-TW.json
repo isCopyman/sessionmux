@@ -5044,6 +5044,13 @@
     "stateNeedsReply": "需要回覆",
     "stateReplied": "已回覆",
     "stateAwaitingReply": "等待回覆",
-    "stateReplyReceived": "已收到回覆"
+    "stateReplyReceived": "已收到回覆",
+    "noReplyNeeded": "無需回覆",
+    "worklistFilterLabel": "Session 訊息工作清單",
+    "worklistFilterAll": "全部訊息狀態",
+    "worklistUnread": "未讀（{count}）",
+    "worklistNeedsReply": "需要回覆（{count}）",
+    "worklistAwaitingReply": "等待回覆（{count}）",
+    "worklistFailed": "失敗（{count}）"
   }
 }

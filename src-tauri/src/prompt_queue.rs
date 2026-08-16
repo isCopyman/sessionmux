@@ -668,11 +668,24 @@ impl PromptQueueRuntime {
                 Some(row.folder_id),
                 Some(row.id),
                 Some(claimed.id.clone()),
+                claimed.origin_event_id.is_some(),
             )
             .await;
         match outcome {
             Ok(_) => self.accept_after_dispatch(&claimed).await,
             Err(AcpError::TurnInProgress) => self.release_busy(&claimed).await,
+            Err(AcpError::DispatchUncertain) => {
+                match prompt_queue_service::pause_dispatch_unknown(&self.db.conn, &claimed).await {
+                    Ok(snapshot) => {
+                        emit_snapshot(&self.emitter, snapshot);
+                        self.emit_origin_change(&claimed).await;
+                    }
+                    Err(err) => tracing::error!(
+                        "[prompt-queue] could not pause uncertain prompt {}: {err}",
+                        claimed.id
+                    ),
+                }
+            }
             Err(err) => self.fail(&claimed, &err.to_string()).await,
         }
     }
@@ -1035,6 +1048,7 @@ mod tests {
         let ConnectionCommand::Prompt {
             blocks,
             user_message,
+            dispatch_ack,
         } = command
         else {
             panic!("expected prompt command");
@@ -1044,6 +1058,7 @@ mod tests {
             user_message.as_ref().map(|(id, _)| id.as_str()),
             Some("stable-id")
         );
+        assert!(dispatch_ack.is_none());
         wait_until(|| async {
             prompt_queue_service::snapshot(&db.conn, conversation_id)
                 .await
@@ -1080,6 +1095,7 @@ mod tests {
         let ConnectionCommand::Prompt {
             blocks,
             user_message,
+            dispatch_ack,
         } = command
         else {
             panic!("expected prompt command");
@@ -1093,6 +1109,10 @@ mod tests {
             user_message.as_ref().map(|(id, _)| id.as_str()),
             Some(sent.deliveries[0].id.as_str())
         );
+        dispatch_ack
+            .expect("collaboration dispatch acknowledgement")
+            .send(())
+            .unwrap();
 
         wait_until(|| async {
             collaboration_service::feed(&db.conn, target, None)
@@ -1136,9 +1156,18 @@ mod tests {
             .await
             .expect("prompt timeout")
             .expect("prompt command");
-        let ConnectionCommand::Prompt { user_message, .. } = command else {
+        let ConnectionCommand::Prompt {
+            user_message,
+            dispatch_ack,
+            ..
+        } = command
+        else {
             panic!("expected prompt command");
         };
+        dispatch_ack
+            .expect("collaboration dispatch acknowledgement")
+            .send(())
+            .unwrap();
         let completed_message_id = user_message
             .map(|(id, _)| id)
             .expect("stable collaboration message id");
@@ -1213,9 +1242,18 @@ mod tests {
             .await
             .expect("prompt timeout")
             .expect("prompt command");
-        let ConnectionCommand::Prompt { user_message, .. } = command else {
+        let ConnectionCommand::Prompt {
+            user_message,
+            dispatch_ack,
+            ..
+        } = command
+        else {
             panic!("expected prompt command");
         };
+        dispatch_ack
+            .expect("collaboration dispatch acknowledgement")
+            .send(())
+            .unwrap();
         wait_until(|| async {
             collaboration_service::feed(&db.conn, target, None)
                 .await
@@ -1295,10 +1333,17 @@ mod tests {
                 agent_type: "codex".into(),
             },
         }));
-        tokio::time::timeout(StdDuration::from_secs(2), commands.recv())
+        let command = tokio::time::timeout(StdDuration::from_secs(2), commands.recv())
             .await
             .expect("queued prompt timeout")
             .expect("queued prompt");
+        let ConnectionCommand::Prompt { dispatch_ack, .. } = command else {
+            panic!("expected queued prompt");
+        };
+        dispatch_ack
+            .expect("collaboration dispatch acknowledgement")
+            .send(())
+            .unwrap();
         wait_until(|| async {
             collaboration_service::feed(&db.conn, target, None)
                 .await
@@ -1376,12 +1421,17 @@ mod tests {
                 agent_type: "codex".into(),
             },
         }));
-        assert!(matches!(
-            tokio::time::timeout(StdDuration::from_secs(2), commands.recv())
-                .await
-                .expect("next prompt timeout"),
-            Some(ConnectionCommand::Prompt { .. })
-        ));
+        let command = tokio::time::timeout(StdDuration::from_secs(2), commands.recv())
+            .await
+            .expect("next prompt timeout")
+            .expect("next prompt");
+        let ConnectionCommand::Prompt { dispatch_ack, .. } = command else {
+            panic!("expected next prompt");
+        };
+        dispatch_ack
+            .expect("collaboration dispatch acknowledgement")
+            .send(())
+            .unwrap();
         wait_until(|| async {
             collaboration_service::feed(&db.conn, target, None)
                 .await

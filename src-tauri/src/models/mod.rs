@@ -23,9 +23,10 @@ pub use automation::{
 #[allow(unused_imports)]
 pub use chat_channel::{ChannelStatusInfo, ChatChannelInfo, ChatChannelMessageLogInfo};
 pub use collaboration::{
-    CollaborationChanged, CollaborationDeliveryHint, CollaborationDeliveryState,
-    CollaborationDeliveryView, CollaborationFeed, CollaborationInterruptOperationView,
-    CollaborationInterruptResult, CollaborationInterruptState, CollaborationInvocationPolicy,
+    CollaborationAgentReceiptKind, CollaborationAttentionState, CollaborationChanged,
+    CollaborationDeliveryHint, CollaborationDeliveryState, CollaborationDeliveryView,
+    CollaborationFeed, CollaborationInterruptOperationView, CollaborationInterruptResult,
+    CollaborationInterruptState, CollaborationInvocationPolicy, CollaborationObligationState,
     CollaborationSendResult, CollaborationSessionSnapshot, CollaborationUnreadOverview,
     CollaborationUnreadSession, CollaborationUrgency, InterruptCollaborationInput,
     SendAndInterruptCollaborationInput, SendAndInterruptCollaborationResult,

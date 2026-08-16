@@ -557,6 +557,7 @@ impl AutomationEngine {
                 Some(cwd.folder_id),
                 Some(conversation_id),
                 None,
+                false,
             )
             .await
         {

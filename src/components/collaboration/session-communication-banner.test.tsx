@@ -4,6 +4,7 @@ import type { CollaborationDelivery, CollaborationFeed } from "@/lib/types"
 
 const hook = vi.hoisted(() => ({
   markSeen: vi.fn(),
+  resolve: vi.fn(),
   dismiss: vi.fn(),
   restore: vi.fn(),
   retry: vi.fn(),
@@ -39,6 +40,7 @@ vi.mock("@/hooks/use-collaboration-feed", () => ({
     error: null,
     reload: vi.fn(),
     markSeen: hook.markSeen,
+    resolve: hook.resolve,
     dismiss: hook.dismiss,
     restore: hook.restore,
     retry: hook.retry,
@@ -94,6 +96,14 @@ function delivery(
     queueItemId: null,
     queueState: null,
     queuePausedReason: null,
+    attentionState: "unread",
+    openedAt: null,
+    agentReceivedAt: null,
+    agentReceiptKind: null,
+    agentReceiptRef: null,
+    obligationState: "none",
+    obligationCreatedAt: null,
+    obligationResolvedAt: null,
     uiSeenAt: null,
     embeddedTurnRef: null,
     attempts: 0,
@@ -144,8 +154,31 @@ describe("SessionCommunicationBanner", () => {
     expect(screen.getByText("from:Logic reviewer")).toBeInTheDocument()
     expect(screen.getByText("stateStoreOnly")).toBeInTheDocument()
 
-    fireEvent.click(screen.getByRole("button", { name: "markAllRead" }))
     expect(hook.markSeen).toHaveBeenCalledWith(["delivery-1"])
+  })
+
+  it("marks newly arriving mail opened while the communication panel stays expanded", () => {
+    const view = render(<SessionCommunicationBanner conversationId={2} />)
+    fireEvent.click(screen.getByRole("button", { name: /panelTitle/ }))
+    hook.markSeen.mockClear()
+    hook.feed = {
+      conversationId: 2,
+      revision: 2,
+      unreadCount: 1,
+      inbound: [
+        delivery({
+          attentionState: "opened",
+          openedAt: "2026-08-16T00:01:00Z",
+          uiSeenAt: "2026-08-16T00:01:00Z",
+        }),
+        delivery({ id: "delivery-2", eventId: "event-2" }),
+      ],
+      outbound: [],
+    }
+
+    view.rerender(<SessionCommunicationBanner conversationId={2} />)
+
+    expect(hook.markSeen).toHaveBeenCalledWith(["delivery-2"])
   })
 
   it("opens the stable source Session and starts a reply linked to the event", () => {
@@ -178,13 +211,16 @@ describe("SessionCommunicationBanner", () => {
       conversationId: 2,
       revision: 2,
       unreadCount: 1,
-      inbound: [delivery({ expectsReply: true })],
+      inbound: [
+        delivery({ expectsReply: true, obligationState: "awaiting_reply" }),
+      ],
       outbound: [
         delivery({
           id: "delivery-outbound",
           eventId: "event-outbound",
           expectsReply: true,
           replyReceived: true,
+          obligationState: "resolved",
         }),
       ],
     }
@@ -200,12 +236,19 @@ describe("SessionCommunicationBanner", () => {
       conversationId: 2,
       revision: 2,
       unreadCount: 1,
-      inbound: [delivery({ expectsReply: true, replyReceived: true })],
+      inbound: [
+        delivery({
+          expectsReply: true,
+          replyReceived: true,
+          obligationState: "resolved",
+        }),
+      ],
       outbound: [
         delivery({
           id: "delivery-outbound",
           eventId: "event-outbound",
           expectsReply: true,
+          obligationState: "awaiting_reply",
         }),
       ],
     }
@@ -214,6 +257,44 @@ describe("SessionCommunicationBanner", () => {
 
     expect(screen.getByText("stateReplied")).toBeInTheDocument()
     expect(screen.getByText("stateAwaitingReply")).toBeInTheDocument()
+  })
+
+  it("clears only the selected inbound obligation when no reply is needed", () => {
+    hook.feed = {
+      conversationId: 2,
+      revision: 2,
+      unreadCount: 1,
+      inbound: [
+        delivery({ expectsReply: true, obligationState: "awaiting_reply" }),
+      ],
+      outbound: [],
+    }
+    render(<SessionCommunicationBanner conversationId={2} />)
+    fireEvent.click(screen.getByRole("button", { name: /panelTitle/ }))
+    fireEvent.click(screen.getByRole("button", { name: "noReplyNeeded" }))
+    expect(hook.resolve).toHaveBeenCalledWith("delivery-1")
+  })
+
+  it("labels a waived obligation separately from a real reply", () => {
+    hook.feed = {
+      conversationId: 2,
+      revision: 3,
+      unreadCount: 0,
+      inbound: [
+        delivery({
+          expectsReply: true,
+          attentionState: "opened",
+          obligationState: "resolved",
+          replyReceived: false,
+        }),
+      ],
+      outbound: [],
+    }
+    render(<SessionCommunicationBanner conversationId={2} />)
+    fireEvent.click(screen.getByRole("button", { name: /panelTitle/ }))
+
+    expect(screen.getByText("noReplyNeeded")).toBeInTheDocument()
+    expect(screen.queryByText("stateReplied")).not.toBeInTheDocument()
   })
 
   it("keeps a deleted or unavailable source readable without offering broken actions", () => {
@@ -247,6 +328,8 @@ describe("SessionCommunicationBanner", () => {
       inbound: [
         delivery({
           state: "dismissed",
+          attentionState: "opened",
+          openedAt: "2026-08-16T00:01:00Z",
           uiSeenAt: "2026-08-16T00:01:00Z",
         }),
       ],
@@ -265,6 +348,7 @@ describe("SessionCommunicationBanner", () => {
       error: null,
       reload: vi.fn(),
       markSeen: hook.markSeen,
+      resolve: hook.resolve,
       dismiss: hook.dismiss,
       restore: hook.restore,
       retry: hook.retry,
@@ -275,14 +359,55 @@ describe("SessionCommunicationBanner", () => {
     expect(
       screen.queryByText("The evidence does not support the last sentence.")
     ).not.toBeInTheDocument()
-    fireEvent.click(screen.getByRole("button", { name: "pendingContextReview" }))
+    fireEvent.click(
+      screen.getByRole("button", { name: "pendingContextReview" })
+    )
     expect(
       screen.getByText("The evidence does not support the last sentence.")
     ).toBeInTheDocument()
-    fireEvent.click(
-      screen.getByRole("button", { name: "excludeFromNextTurn" })
-    )
+    fireEvent.click(screen.getByRole("button", { name: "excludeFromNextTurn" }))
     expect(hook.dismiss).toHaveBeenCalledWith("delivery-1")
+  })
+
+  it("marks newly visible pending context opened without collapsing the panel", () => {
+    const collaboration = (feed: CollaborationFeed) => ({
+      feed,
+      hydrated: true,
+      error: null,
+      reload: vi.fn(),
+      markSeen: hook.markSeen,
+      resolve: hook.resolve,
+      dismiss: hook.dismiss,
+      restore: hook.restore,
+      retry: hook.retry,
+    })
+    const view = render(
+      <SessionPendingContextBar
+        collaboration={collaboration(hook.feed as CollaborationFeed)}
+      />
+    )
+    fireEvent.click(
+      screen.getByRole("button", { name: "pendingContextReview" })
+    )
+    hook.markSeen.mockClear()
+    const updatedFeed: CollaborationFeed = {
+      ...(hook.feed as CollaborationFeed),
+      revision: 2,
+      inbound: [
+        delivery({
+          attentionState: "opened",
+          openedAt: "2026-08-16T00:01:00Z",
+          uiSeenAt: "2026-08-16T00:01:00Z",
+        }),
+        delivery({ id: "delivery-2", eventId: "event-2" }),
+      ],
+    }
+
+    view.rerender(
+      <SessionPendingContextBar collaboration={collaboration(updatedFeed)} />
+    )
+
+    expect(hook.markSeen).toHaveBeenCalledWith(["delivery-2"])
   })
 
   it("offers an explicit retry when agent invocation failed", () => {

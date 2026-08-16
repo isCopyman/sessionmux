@@ -9,6 +9,7 @@ import type {
 const api = vi.hoisted(() => ({
   get: vi.fn(),
   markSeen: vi.fn(),
+  resolve: vi.fn(),
   dismiss: vi.fn(),
   restore: vi.fn(),
   getQueue: vi.fn(),
@@ -18,6 +19,7 @@ const api = vi.hoisted(() => ({
 vi.mock("@/lib/api", () => ({
   getCollaborationFeed: api.get,
   markCollaborationSeen: api.markSeen,
+  resolveCollaborationObligation: api.resolve,
   dismissCollaborationDelivery: api.dismiss,
   restoreCollaborationDelivery: api.restore,
   getPromptQueue: api.getQueue,
@@ -63,6 +65,14 @@ function delivery(id: string, seen = false): CollaborationDelivery {
     invocationPolicy: "store_only",
     deliveryHint: "default",
     state: "pending",
+    attentionState: seen ? "opened" : "unread",
+    openedAt: seen ? "2026-08-16T00:01:00Z" : null,
+    agentReceivedAt: null,
+    agentReceiptKind: null,
+    agentReceiptRef: null,
+    obligationState: "none",
+    obligationCreatedAt: null,
+    obligationResolvedAt: null,
     uiSeenAt: seen ? "2026-08-16T00:01:00Z" : null,
     embeddedTurnRef: null,
     attempts: 0,
@@ -80,7 +90,8 @@ function feed(
   return {
     conversationId,
     revision,
-    unreadCount: items.filter((item) => !item.uiSeenAt).length,
+    unreadCount: items.filter((item) => item.attentionState === "unread")
+      .length,
     inbound: items,
     outbound: [],
   }
@@ -141,16 +152,26 @@ describe("useCollaborationFeed", () => {
     })
   })
 
-  it("applies mark-seen, dismiss, and restore responses as authoritative snapshots", async () => {
+  it("applies attention, obligation, dismiss, and restore snapshots authoritatively", async () => {
     const mail = delivery("mail")
     api.get.mockResolvedValue(feed(7, 1, [mail]))
     api.markSeen.mockResolvedValue(feed(7, 2, [delivery("mail", true)]))
-    api.dismiss.mockResolvedValue({
-      ...feed(7, 3, [{ ...delivery("mail", true), state: "dismissed" }]),
+    api.restore.mockResolvedValue({
+      ...feed(7, 5, [delivery("mail", true)]),
       unreadCount: 0,
     })
-    api.restore.mockResolvedValue({
-      ...feed(7, 4, [delivery("mail", true)]),
+    api.resolve.mockResolvedValue({
+      ...feed(7, 3, [
+        {
+          ...delivery("mail", true),
+          obligationState: "resolved",
+          obligationResolvedAt: "2026-08-16T00:02:00Z",
+        },
+      ]),
+      unreadCount: 0,
+    })
+    api.dismiss.mockResolvedValue({
+      ...feed(7, 4, [{ ...delivery("mail", true), state: "dismissed" }]),
       unreadCount: 0,
     })
     const { result } = renderHook(() => useCollaborationFeed(7))
@@ -159,6 +180,10 @@ describe("useCollaborationFeed", () => {
     await act(async () => result.current.markSeen(["mail"]))
     expect(api.markSeen).toHaveBeenCalledWith(7, ["mail"])
     expect(result.current.feed.unreadCount).toBe(0)
+
+    await act(async () => result.current.resolve("mail"))
+    expect(api.resolve).toHaveBeenCalledWith(7, "mail")
+    expect(result.current.feed.inbound[0].obligationState).toBe("resolved")
 
     await act(async () => result.current.dismiss("mail"))
     expect(api.dismiss).toHaveBeenCalledWith(7, "mail")

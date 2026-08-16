@@ -1336,6 +1336,10 @@ pub fn build_router(
             post(handlers::collaboration::mark_seen),
         )
         .route(
+            "/collaboration_resolve",
+            post(handlers::collaboration::resolve),
+        )
+        .route(
             "/collaboration_dismiss",
             post(handlers::collaboration::dismiss),
         )

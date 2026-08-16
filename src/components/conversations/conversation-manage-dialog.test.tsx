@@ -61,6 +61,14 @@ const h = vi.hoisted(() => ({
   ],
   refreshConversations: vi.fn(),
   folders: [] as FolderDetail[],
+  collaborationSessions: [] as Array<{
+    conversationId: number
+    revision: number
+    unreadCount: number
+    needsReplyCount: number
+    awaitingReplyCount: number
+    failedCount: number
+  }>,
 }))
 
 // Inline SVG with a <title> would duplicate the agent label in text queries.
@@ -126,6 +134,40 @@ vi.mock("@/stores/app-workspace-store", () => ({
       allFolders: h.folders,
       refreshConversations: h.refreshConversations,
     }),
+}))
+
+vi.mock("@/hooks/use-collaboration-unread-overview", () => ({
+  useCollaborationUnreadOverview: () => {
+    const sessions = h.collaborationSessions
+    return {
+      overview: {
+        totalUnreadCount: sessions.reduce(
+          (sum, session) => sum + session.unreadCount,
+          0
+        ),
+        totalNeedsReplyCount: sessions.reduce(
+          (sum, session) => sum + session.needsReplyCount,
+          0
+        ),
+        totalAwaitingReplyCount: sessions.reduce(
+          (sum, session) => sum + session.awaitingReplyCount,
+          0
+        ),
+        totalFailedCount: sessions.reduce(
+          (sum, session) => sum + session.failedCount,
+          0
+        ),
+        sessions,
+      },
+      statusByConversation: new Map(
+        sessions.map((session) => [session.conversationId, session])
+      ),
+      unreadByConversation: new Map(),
+      hydrated: true,
+      error: null,
+      reload: vi.fn(),
+    }
+  },
 }))
 
 function folder(over: Partial<FolderDetail> & { id: number }): FolderDetail {
@@ -262,6 +304,7 @@ describe("ConversationManageDialog", () => {
     h.switchWorkbench.mockResolvedValue(undefined)
     h.activeWorkbenchId = 1
     h.activeWorkbenchTabs = []
+    h.collaborationSessions = []
   })
 
   it("shows each conversation's branch in place of its message count", async () => {
@@ -273,6 +316,29 @@ describe("ConversationManageDialog", () => {
     expect(screen.queryByText("12 msg")).toBeNull()
     // A conversation with no branch recorded reads as a dash, not a blank.
     expect(screen.getByTitle("No branch")).toBeTruthy()
+  })
+
+  it("filters the global worklist by per-Session reply obligation", async () => {
+    h.collaborationSessions = [
+      {
+        conversationId: 2,
+        revision: 4,
+        unreadCount: 0,
+        needsReplyCount: 1,
+        awaitingReplyCount: 0,
+        failedCount: 0,
+      },
+    ]
+    const user = renderDialog()
+    await screen.findByText("on main")
+
+    await user.click(
+      screen.getByRole("combobox", { name: "Session message worklist" })
+    )
+    await user.click(screen.getByRole("option", { name: "Needs reply (1)" }))
+
+    expect(screen.queryByText("on main")).toBeNull()
+    expect(screen.getByText("on feature")).toBeTruthy()
   })
 
   it("opens scoped to the folder it was invoked on, plus that folder's worktrees", async () => {

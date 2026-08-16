@@ -5044,6 +5044,13 @@
     "stateNeedsReply": "답변 필요",
     "stateReplied": "답변 완료",
     "stateAwaitingReply": "답변 대기 중",
-    "stateReplyReceived": "답변 받음"
+    "stateReplyReceived": "답변 받음",
+    "noReplyNeeded": "답변 필요 없음",
+    "worklistFilterLabel": "Session 메시지 작업 목록",
+    "worklistFilterAll": "모든 메시지 상태",
+    "worklistUnread": "읽지 않음({count})",
+    "worklistNeedsReply": "답변 필요({count})",
+    "worklistAwaitingReply": "답변 대기({count})",
+    "worklistFailed": "실패({count})"
   }
 }

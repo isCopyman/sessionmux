@@ -9285,6 +9285,7 @@ pub async fn acp_prompt(
             folder_id,
             conversation_id,
             client_message_id,
+            false,
         )
         .await
         .map(|_| ())

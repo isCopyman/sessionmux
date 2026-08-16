@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::Mutex;
+use tokio::sync::{oneshot, Mutex};
 
 use sea_orm::{
     ActiveModelTrait, ActiveValue::NotSet, ActiveValue::Set, DatabaseConnection, EntityTrait,
@@ -701,6 +701,7 @@ impl ConnectionManager {
         conn_id: &str,
         blocks: Vec<PromptInputBlock>,
         user_message: Option<(String, Vec<crate::acp::UserMessageBlock>)>,
+        confirm_transport_dispatch: bool,
     ) -> Result<(), AcpError> {
         // Reject an empty prompt BEFORE touching the concurrency gate. An empty
         // prompt produces no turn — and thus no `TurnComplete` to clear the gate
@@ -753,10 +754,20 @@ impl ConnectionManager {
             }
             s.turn_in_flight = true;
         }
+        let (dispatch_ack, dispatch_rx) = if confirm_transport_dispatch {
+            let (tx, rx) = oneshot::channel();
+            (Some(tx), Some(rx))
+        } else {
+            (None, None)
+        };
         permit.send(ConnectionCommand::Prompt {
             blocks,
             user_message,
+            dispatch_ack,
         });
+        if let Some(dispatch_rx) = dispatch_rx {
+            dispatch_rx.await.map_err(|_| AcpError::DispatchUncertain)?;
+        }
         Ok(())
     }
 
@@ -781,7 +792,7 @@ impl ConnectionManager {
     ) -> Result<(), AcpError> {
         let prompt_lock = self.clone_prompt_lock(conn_id).await?;
         let _guard = prompt_lock.lock_owned().await;
-        self.send_prompt_inner(conn_id, blocks, None).await
+        self.send_prompt_inner(conn_id, blocks, None, false).await
     }
 
     /// Queue-aware variant for host integrations that already have the
@@ -848,13 +859,28 @@ impl ConnectionManager {
             None
         };
 
-        let outcome = self.send_prompt_inner(conn_id, blocks, None).await;
+        let outcome = self
+            .send_prompt_inner(conn_id, blocks, None, claimed.is_some())
+            .await;
         if let (Some(conversation_id), Some(batch)) = (conversation_id, claimed.as_ref()) {
-            let transition = if outcome.is_ok() {
-                collaboration_service::mark_store_only_batch_embedded(db, conversation_id, batch)
+            let transition = match &outcome {
+                Ok(()) => {
+                    collaboration_service::mark_store_only_batch_embedded(
+                        db,
+                        conversation_id,
+                        batch,
+                    )
                     .await
-            } else {
-                collaboration_service::release_store_only_batch(db, conversation_id, batch).await
+                }
+                Err(AcpError::DispatchUncertain) => Ok(Vec::new()),
+                Err(_) => {
+                    collaboration_service::release_store_only_batch(
+                        db,
+                        conversation_id,
+                        batch,
+                    )
+                    .await
+                }
             };
             match transition {
                 Ok(affected) => publish_collaboration_change(&emitter, affected),
@@ -901,6 +927,7 @@ impl ConnectionManager {
             folder_id,
             conversation_id,
             None,
+            false,
         )
         .await
     }
@@ -922,6 +949,7 @@ impl ConnectionManager {
         folder_id: Option<i32>,
         conversation_id: Option<i32>,
         client_message_id: Option<String>,
+        require_transport_dispatch_confirmation: bool,
     ) -> Result<Option<i32>, AcpError> {
         // Reject an empty prompt up front, BEFORE any side effects: linking /
         // creating the conversation row, flipping it to InProgress, or emitting
@@ -1262,7 +1290,12 @@ impl ConnectionManager {
         // for a prompt that never reached the agent, so without this the
         // lifecycle subscriber's PendingReview write also never fires and the
         // row would be stuck until a follow-up `send_prompt_linked` re-flipped it.
-        match self.send_prompt_inner(conn_id, blocks, user_message).await {
+        let confirm_transport_dispatch =
+            require_transport_dispatch_confirmation || claimed_store_only.is_some();
+        match self
+            .send_prompt_inner(conn_id, blocks, user_message, confirm_transport_dispatch)
+            .await
+        {
             Ok(()) => {
                 if let (Some(cid), Some(batch)) =
                     (conversation_id_for_status, claimed_store_only.as_ref())
@@ -1295,7 +1328,10 @@ impl ConnectionManager {
             }
             Err(send_err) => {
                 if let Some(cid) = conversation_id_for_status {
-                    if let Some(batch) = claimed_store_only.as_ref() {
+                    if let Some(batch) = claimed_store_only
+                        .as_ref()
+                        .filter(|_| !matches!(&send_err, AcpError::DispatchUncertain))
+                    {
                         match collaboration_service::release_store_only_batch(&db.conn, cid, batch)
                             .await
                         {
@@ -3856,22 +3892,40 @@ mod tests {
             .await
             .conversation_id = Some(target);
 
-        mgr.send_prompt_queue_aware(
+        let send = mgr.send_prompt_queue_aware(
             &db.conn,
             conn_id,
             vec![PromptInputBlock::Text {
                 text: "message from managed chat".into(),
             }],
-        )
-        .await
-        .unwrap();
+        );
+        tokio::pin!(send);
+        let command = tokio::select! {
+            command = commands.recv() => command.expect("prompt command"),
+            result = &mut send => panic!("send completed before transport acknowledgement: {result:?}"),
+        };
         let crate::acp::connection::ConnectionCommand::Prompt {
             blocks,
             user_message,
-        } = commands.try_recv().unwrap()
+            dispatch_ack,
+        } = command
         else {
             panic!("expected prompt command");
         };
+        let before_ack = collaboration_service::feed(&db.conn, target, None)
+            .await
+            .unwrap()
+            .inbound
+            .into_iter()
+            .find(|delivery| delivery.event_id == sent.event_id)
+            .unwrap();
+        assert_eq!(before_ack.state, CollaborationDeliveryState::Embedding);
+        assert!(before_ack.agent_received_at.is_none());
+        dispatch_ack
+            .expect("mailbox dispatch must request acknowledgement")
+            .send(())
+            .unwrap();
+        send.await.unwrap();
         assert!(user_message.is_none());
         let text = blocks
             .iter()
@@ -3924,6 +3978,7 @@ mod tests {
                 text: "already admitted".into(),
             }],
             None,
+            false,
         )
         .await
         .expect("enqueue admitted prompt");
@@ -4170,6 +4225,7 @@ mod tests {
                     text: "filler".into(),
                 }],
                 user_message: None,
+                dispatch_ack: None,
             })
             .await
             .unwrap();
@@ -4182,6 +4238,7 @@ mod tests {
                 text: "blocked".into(),
             }],
             None,
+            false,
         );
         let res = tokio::time::timeout(std::time::Duration::from_millis(50), fut).await;
         assert!(
@@ -4224,6 +4281,7 @@ mod tests {
             Some(folder_id),
             None,
             Some("optimistic-abc".to_string()),
+            false,
         )
         .await
         .expect("send");
@@ -4273,6 +4331,7 @@ mod tests {
                 Some(folder_id),
                 Some(c1),
                 Some("stale-c1-view".into()),
+                false,
             )
             .await
             .expect_err("a stale C1 View must not send through C2's live connection");
@@ -4319,7 +4378,7 @@ mod tests {
             Some(PathBuf::from("/tmp/um-collaboration")),
         )
         .await;
-        mgr.send_prompt_linked_with_message_id(
+        let send = mgr.send_prompt_linked_with_message_id(
             &db,
             conn_id,
             vec![PromptInputBlock::Text {
@@ -4328,17 +4387,37 @@ mod tests {
             Some(folder_id),
             Some(target),
             Some("optimistic-cross-harness".to_string()),
-        )
-        .await
-        .expect("natural Gemini turn should be accepted through generic ACP");
+            false,
+        );
+        tokio::pin!(send);
+        let command = tokio::select! {
+            command = cmd_rx.recv() => command.expect("one prompt command"),
+            result = &mut send => panic!("send completed before transport acknowledgement: {result:?}"),
+        };
 
         let crate::acp::connection::ConnectionCommand::Prompt {
             blocks,
             user_message,
-        } = cmd_rx.try_recv().expect("one prompt command")
+            dispatch_ack,
+        } = command
         else {
             panic!("expected a prompt command");
         };
+        let before_ack = collaboration_service::feed(&db.conn, target, None)
+            .await
+            .unwrap()
+            .inbound
+            .into_iter()
+            .find(|delivery| delivery.event_id == sent.event_id)
+            .unwrap();
+        assert_eq!(before_ack.state, CollaborationDeliveryState::Embedding);
+        assert!(before_ack.agent_received_at.is_none());
+        dispatch_ack
+            .expect("attached mailbox content requires acknowledgement")
+            .send(())
+            .unwrap();
+        send.await
+            .expect("natural Gemini turn should be accepted through generic ACP");
         let harness_text = blocks
             .iter()
             .filter_map(|block| match block {
@@ -4370,6 +4449,76 @@ mod tests {
             delivery.embedded_turn_ref.as_deref(),
             Some("optimistic-cross-harness")
         );
+    }
+
+    #[tokio::test]
+    async fn lost_transport_ack_keeps_attached_mail_in_unknown_embedding_state() {
+        use crate::db::test_helpers;
+        use crate::models::{
+            CollaborationDeliveryHint, CollaborationDeliveryState,
+            CollaborationInvocationPolicy, CollaborationUrgency, SendCollaborationMessageInput,
+        };
+
+        let db = test_helpers::fresh_in_memory_db().await;
+        let folder_id = test_helpers::seed_folder(&db, "/tmp/um-collaboration-unknown").await;
+        let source = test_helpers::seed_conversation(&db, folder_id, AgentType::Codex).await;
+        let target = test_helpers::seed_conversation(&db, folder_id, AgentType::Gemini).await;
+        let sent = collaboration_service::send(
+            &db.conn,
+            SendCollaborationMessageInput {
+                source_conversation_id: source,
+                target_conversation_ids: vec![target],
+                body: "do not replay an uncertain delivery".into(),
+                client_dedupe_id: "cross-harness-unknown".into(),
+                invocation_policy: CollaborationInvocationPolicy::StoreOnly,
+                delivery_hint: CollaborationDeliveryHint::Default,
+                expects_reply: false,
+                urgency: CollaborationUrgency::Normal,
+                reply_to_event_id: None,
+            },
+        )
+        .await
+        .unwrap();
+        let mgr = ConnectionManager::new();
+        let conn_id = "conn-um-collaboration-unknown";
+        let mut cmd_rx = insert_live_connection(
+            &mgr,
+            conn_id,
+            AgentType::Gemini,
+            Some(PathBuf::from("/tmp/um-collaboration-unknown")),
+        )
+        .await;
+        let send = mgr.send_prompt_linked_with_message_id(
+            &db,
+            conn_id,
+            vec![PromptInputBlock::Text {
+                text: "my own question".into(),
+            }],
+            Some(folder_id),
+            Some(target),
+            Some("optimistic-unknown".into()),
+            false,
+        );
+        tokio::pin!(send);
+        let command = tokio::select! {
+            command = cmd_rx.recv() => command.expect("one prompt command"),
+            result = &mut send => panic!("send completed before transport acknowledgement: {result:?}"),
+        };
+        let ConnectionCommand::Prompt { dispatch_ack, .. } = command else {
+            panic!("expected prompt command");
+        };
+        drop(dispatch_ack);
+        assert!(matches!(send.await, Err(AcpError::DispatchUncertain)));
+
+        let delivery = collaboration_service::feed(&db.conn, target, None)
+            .await
+            .unwrap()
+            .inbound
+            .into_iter()
+            .find(|delivery| delivery.event_id == sent.event_id)
+            .unwrap();
+        assert_eq!(delivery.state, CollaborationDeliveryState::Embedding);
+        assert!(delivery.agent_received_at.is_none());
     }
 
     #[tokio::test]
@@ -4421,6 +4570,7 @@ mod tests {
                 Some(folder_id),
                 Some(target),
                 Some("optimistic-failed-cross-harness".to_string()),
+                false,
             )
             .await
             .is_err());

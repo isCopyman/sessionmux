@@ -10,6 +10,11 @@ pub enum AcpError {
     Protocol(String),
     #[error("agent process exited unexpectedly")]
     ProcessExited,
+    /// Codeg admitted the prompt to the connection loop, but lost the
+    /// transport acknowledgement. The request may already be in the ACP
+    /// transport, so callers must not silently replay it.
+    #[error("prompt dispatch outcome is unknown")]
+    DispatchUncertain,
     /// A prompt arrived while this connection already had a turn in flight.
     /// The connection loop processes one turn at a time; a second concurrent
     /// prompt (e.g. two co-controlling clients sending near-simultaneously)
@@ -103,6 +108,7 @@ impl AcpError {
             Self::InitializeTimeout => Some("initialize_timeout"),
             Self::ProbeTimedOut => Some("probe_timed_out"),
             Self::ProcessExited => Some("process_exited"),
+            Self::DispatchUncertain => Some("dispatch_uncertain"),
             Self::TurnInProgress => Some("turn_in_progress"),
             Self::NoActiveTurn => Some("no_active_turn"),
             Self::FeedbackDisabled => Some("feedback_disabled"),

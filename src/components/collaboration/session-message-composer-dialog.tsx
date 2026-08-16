@@ -5,6 +5,7 @@ import { Check, Loader2, Search, Send } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 import { AgentIcon } from "@/components/agent-icon"
+import { ConversationStatusDot } from "@/components/conversations/conversation-status-dot"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
@@ -26,8 +27,12 @@ import { formatConversationTitle } from "@/lib/conversation-title"
 import { getAgentLabel } from "@/lib/custom-agents"
 import { randomUUID } from "@/lib/utils"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
-import type { CollaborationInvocationPolicy } from "@/lib/types"
-import type { CollaborationDeliveryHint } from "@/lib/types"
+import { STATUS_ORDER } from "@/lib/types"
+import type {
+  CollaborationDeliveryHint,
+  CollaborationInvocationPolicy,
+  ConversationStatus,
+} from "@/lib/types"
 
 const MAX_BODY_BYTES = 1_000_000
 
@@ -49,6 +54,7 @@ export function SessionMessageComposerDialog({
   replyToEventId = null,
 }: SessionMessageComposerDialogProps) {
   const t = useTranslations("Collaboration")
+  const tStatus = useTranslations("Folder.statusLabels")
   const conversations = useAppWorkspaceStore((state) => state.conversations)
   const folders = useAppWorkspaceStore((state) => state.folders)
   const [query, setQuery] = useState("")
@@ -335,6 +341,11 @@ export function SessionMessageComposerDialog({
               candidates.map((conversation) => {
                 const checked = selected.has(conversation.id)
                 const folder = folderById.get(conversation.folder_id)
+                const runtimeStatus = STATUS_ORDER.includes(
+                  conversation.status as ConversationStatus
+                )
+                  ? (conversation.status as ConversationStatus)
+                  : null
                 return (
                   <button
                     key={conversation.id}
@@ -356,6 +367,15 @@ export function SessionMessageComposerDialog({
                     <AgentIcon
                       agentType={conversation.agent_type}
                       className="h-4 w-4 shrink-0"
+                    />
+                    <ConversationStatusDot
+                      status={runtimeStatus}
+                      size="sm"
+                      title={
+                        runtimeStatus
+                          ? tStatus(runtimeStatus)
+                          : conversation.status || undefined
+                      }
                     />
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-sm font-medium">

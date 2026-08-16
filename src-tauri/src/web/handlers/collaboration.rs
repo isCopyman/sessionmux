@@ -163,6 +163,21 @@ pub async fn mark_seen(
     ))
 }
 
+pub async fn resolve(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<DismissParams>,
+) -> Result<Json<CollaborationFeed>, AppCommandError> {
+    Ok(Json(
+        collaboration::collaboration_resolve_core(
+            &state.db.conn,
+            &state.emitter,
+            params.conversation_id,
+            params.delivery_id,
+        )
+        .await?,
+    ))
+}
+
 pub async fn dismiss(
     Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<DismissParams>,

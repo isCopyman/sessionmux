@@ -35,6 +35,7 @@ const store = {
       folder_id: 10,
       title: "Source",
       agent_type: "codex",
+      status: "in_progress" as const,
       kind: "regular",
       updated_at: "2026-08-16T03:00:00Z",
     },
@@ -43,6 +44,7 @@ const store = {
       folder_id: 10,
       title: "Reviewer",
       agent_type: "claude_code",
+      status: "pending_review" as const,
       kind: "regular",
       updated_at: "2026-08-16T02:00:00Z",
     },
@@ -51,6 +53,7 @@ const store = {
       folder_id: 11,
       title: "Researcher",
       agent_type: "gemini",
+      status: "completed" as const,
       kind: "regular",
       updated_at: "2026-08-16T01:00:00Z",
     },
@@ -100,6 +103,8 @@ describe("SessionMessageComposerDialog", () => {
     )
 
     expect(screen.queryByText("Source")).not.toBeInTheDocument()
+    expect(screen.getByTitle("pending_review")).toBeInTheDocument()
+    expect(screen.getByTitle("completed")).toBeInTheDocument()
     fireEvent.click(screen.getByRole("button", { name: /Reviewer/ }))
     fireEvent.click(screen.getByRole("button", { name: /Researcher/ }))
     fireEvent.change(screen.getByPlaceholderText("bodyPlaceholder"), {
