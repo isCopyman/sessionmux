@@ -202,6 +202,44 @@ describe("SidebarConversationCard pin action", () => {
   })
 })
 
+describe("SidebarConversationCard collaboration unread badge", () => {
+  it("shows the backend unread count instead of the relative time", () => {
+    const { getByLabelText, queryByText } = renderWithIntl(
+      <SidebarConversationCard
+        conversation={conv(7)}
+        isSelected={false}
+        timeLabel="5m"
+        unreadCount={3}
+        onSelect={onSelect}
+        onDoubleClick={onDoubleClick}
+        onRename={onRename}
+        onDelete={onDelete}
+        onStatusChange={onStatusChange}
+      />
+    )
+
+    expect(getByLabelText("3 unread")).not.toBeNull()
+    expect(queryByText("5m")).toBeNull()
+  })
+
+  it("caps the visible count while preserving the full accessible label", () => {
+    const { getByLabelText } = renderWithIntl(
+      <SidebarConversationCard
+        conversation={conv(8)}
+        isSelected={false}
+        unreadCount={120}
+        onSelect={onSelect}
+        onDoubleClick={onDoubleClick}
+        onRename={onRename}
+        onDelete={onDelete}
+        onStatusChange={onStatusChange}
+      />
+    )
+
+    expect(getByLabelText("120 unread").textContent).toBe("99+")
+  })
+})
+
 describe("SidebarConversationCard explicit pane placement", () => {
   beforeEach(() => {
     onOpenInSplit.mockClear()

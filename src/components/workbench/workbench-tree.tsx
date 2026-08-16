@@ -18,6 +18,7 @@ import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 import { AgentIcon } from "@/components/agent-icon"
 import { ConversationStatusDot } from "@/components/conversations/conversation-status-dot"
+import { CollaborationUnreadBadge } from "@/components/collaboration/collaboration-unread-badge"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -130,7 +131,11 @@ export function sortTreeSessions(sessions: TreeSession[]): TreeSession[] {
  * Session may appear under several Workbenches while retaining one semantic
  * home in the Collection tree below.
  */
-export function WorkbenchTree() {
+export function WorkbenchTree({
+  unreadByConversation = new Map(),
+}: {
+  unreadByConversation?: ReadonlyMap<number, number>
+}) {
   const t = useTranslations("Folder.workbench")
   const tConversation = useTranslations("Folder.conversationCard")
   const items = useWorkbenchStore((state) => state.items)
@@ -504,7 +509,18 @@ export function WorkbenchTree() {
                               />
                             ) : null}
                           </span>
-                          <span className="truncate">{session.title}</span>
+                          <span className="min-w-0 flex-1 truncate">
+                            {session.title}
+                          </span>
+                          <CollaborationUnreadBadge
+                            count={
+                              session.conversationId == null
+                                ? 0
+                                : (unreadByConversation.get(
+                                    session.conversationId
+                                  ) ?? 0)
+                            }
+                          />
                         </button>
                       )
                     })

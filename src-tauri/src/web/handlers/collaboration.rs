@@ -9,8 +9,9 @@ use crate::commands::collaboration;
 use crate::commands::collaboration::SessionCollaborationSettings;
 use crate::models::{
     CollaborationFeed, CollaborationInterruptResult, CollaborationSendResult,
-    InterruptCollaborationInput, SendAndInterruptCollaborationInput,
-    SendAndInterruptCollaborationResult, SendCollaborationMessageInput,
+    CollaborationUnreadOverview, InterruptCollaborationInput,
+    SendAndInterruptCollaborationInput, SendAndInterruptCollaborationResult,
+    SendCollaborationMessageInput,
 };
 
 #[derive(Deserialize)]
@@ -136,6 +137,14 @@ pub async fn feed(
             params.limit,
         )
         .await?,
+    ))
+}
+
+pub async fn unread_overview(
+    Extension(state): Extension<Arc<AppState>>,
+) -> Result<Json<CollaborationUnreadOverview>, AppCommandError> {
+    Ok(Json(
+        collaboration::collaboration_unread_overview_core(&state.db.conn).await?,
     ))
 }
 

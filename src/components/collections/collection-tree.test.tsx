@@ -268,6 +268,7 @@ function renderTree(
       direction: "right" | "down"
     ) => void
     onNewSession?: (rootFolderId: number) => void
+    unreadByConversation?: ReadonlyMap<number, number>
   } = {}
 ) {
   render(
@@ -366,6 +367,15 @@ describe("CollectionTree", () => {
       expect.objectContaining({ id: 102, title: "Loose notes" }),
       "right"
     )
+  })
+
+  it("shows unread collaboration on an inline Session", async () => {
+    renderTree(vi.fn(), {
+      showSessions: true,
+      unreadByConversation: new Map([[102, 3]]),
+    })
+
+    expect(await screen.findByLabelText("3 unread")).toBeTruthy()
   })
 
   it("moves a Session into a Collection without changing its Path", async () => {

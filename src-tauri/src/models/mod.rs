@@ -26,9 +26,10 @@ pub use collaboration::{
     CollaborationChanged, CollaborationDeliveryHint, CollaborationDeliveryState,
     CollaborationDeliveryView, CollaborationFeed, CollaborationInterruptOperationView,
     CollaborationInterruptResult, CollaborationInterruptState, CollaborationInvocationPolicy,
-    CollaborationSendResult, CollaborationSessionSnapshot, CollaborationUrgency,
-    InterruptCollaborationInput, SendAndInterruptCollaborationInput,
-    SendAndInterruptCollaborationResult, SendCollaborationMessageInput,
+    CollaborationSendResult, CollaborationSessionSnapshot, CollaborationUnreadOverview,
+    CollaborationUnreadSession, CollaborationUrgency, InterruptCollaborationInput,
+    SendAndInterruptCollaborationInput, SendAndInterruptCollaborationResult,
+    SendCollaborationMessageInput,
 };
 pub use conversation::{
     AgentConversationCount, AgentStats, ConversationDetail, ConversationSummary,

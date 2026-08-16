@@ -67,6 +67,7 @@ import {
 } from "@/components/ui/select"
 import { AgentIcon } from "@/components/agent-icon"
 import { ConversationStatusDot } from "@/components/conversations/conversation-status-dot"
+import { CollaborationUnreadBadge } from "@/components/collaboration/collaboration-unread-badge"
 import {
   assignConversationsToCollection,
   listConversationCollectionRefs,
@@ -128,6 +129,7 @@ interface CollectionTreeProps {
   ) => void
   /** Start a Session in the chosen canonical Path. */
   onNewSession?: (rootFolderId: number) => void
+  unreadByConversation?: ReadonlyMap<number, number>
 }
 
 function descendants(items: CollectionInfo[], id: number) {
@@ -186,6 +188,7 @@ export function CollectionTree({
   onOpenSession,
   onOpenSessionInSplit,
   onNewSession,
+  unreadByConversation = new Map(),
 }: CollectionTreeProps) {
   const t = useTranslations("Folder.sidebar.collections")
   const tSidebar = useTranslations("Folder.sidebar")
@@ -840,10 +843,13 @@ export function CollectionTree({
             className="absolute -bottom-0.5 -right-0.5 ring-1 ring-sidebar"
           />
         </span>
-        <span className="truncate">
+        <span className="min-w-0 flex-1 truncate">
           {formatConversationTitle(conversation.title) ||
             tConversation("untitledConversation")}
         </span>
+        <CollaborationUnreadBadge
+          count={unreadByConversation.get(conversation.id) ?? 0}
+        />
       </button>
     )
     if (!onOpenSessionInSplit) {

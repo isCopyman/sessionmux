@@ -220,6 +220,17 @@ describe("WorkbenchTree", () => {
     ).toContain("Evidence review")
   })
 
+  it("shows unread collaboration on an open or inactive Session reference", async () => {
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <WorkbenchTree unreadByConversation={new Map([[101, 2]])} />
+      </NextIntlClientProvider>
+    )
+
+    expect(await screen.findByLabelText("2 unread")).toBeTruthy()
+    await waitFor(() => expect(h.listWorkbenchTabs).toHaveBeenCalledWith(2))
+  })
+
   it("switches Workbench before focusing one of its Sessions", async () => {
     render(
       <NextIntlClientProvider locale="en" messages={enMessages}>

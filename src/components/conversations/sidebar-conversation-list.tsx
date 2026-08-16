@@ -734,6 +734,7 @@ export interface SidebarConversationListProps {
    *  `sectionOrder`. Defaults to off here; the Sidebar passes the user's
    *  preference, whose product default is ON. */
   showRecent?: boolean
+  unreadByConversation?: ReadonlyMap<number, number>
 }
 
 export function SidebarConversationList({
@@ -743,6 +744,7 @@ export function SidebarConversationList({
   sectionOrder = DEFAULT_SECTION_ORDER,
   showWorktrees = false,
   showRecent = false,
+  unreadByConversation = new Map(),
 }: SidebarConversationListProps & {
   ref?: Ref<SidebarConversationListHandle>
 }) {
@@ -2452,6 +2454,7 @@ export function SidebarConversationList({
           selectedConversation?.id === conv.id
         }
         isOpenInTab={openTabKeys.has(`${conv.agent_type}:${conv.id}`)}
+        unreadCount={unreadByConversation.get(conv.id) ?? 0}
         timeLabel={formatRelative(
           sortMode === "updated" ? conv.updated_at : conv.created_at,
           now

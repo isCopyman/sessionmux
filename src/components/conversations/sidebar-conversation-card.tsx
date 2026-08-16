@@ -55,6 +55,7 @@ import { Input } from "@/components/ui/input"
 import { ConversationStatusDot } from "./conversation-status-dot"
 import { SessionDetailsDialog } from "./session-details-dialog"
 import { AgentIcon } from "@/components/agent-icon"
+import { CollaborationUnreadBadge } from "@/components/collaboration/collaboration-unread-badge"
 
 /**
  * Horizontal indent added per delegation-nesting level. Chosen so a child's
@@ -108,6 +109,7 @@ interface SidebarConversationCardProps {
   conversation: DbConversationSummary
   isSelected: boolean
   isOpenInTab?: boolean
+  unreadCount?: number
   timeLabel?: string
   onSelect: (id: number, agentType: string, folderId: number) => void
   onDoubleClick?: (id: number, agentType: string, folderId: number) => void
@@ -137,6 +139,7 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
   conversation,
   isSelected,
   isOpenInTab = false,
+  unreadCount = 0,
   timeLabel,
   onSelect,
   onDoubleClick,
@@ -409,13 +412,14 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
               <div className="flex h-full shrink-0 items-center pr-[0.375rem]">
                 <span
                   className={cn(
-                    "flex items-center",
+                    "flex items-center gap-1.5",
                     // Roots swap the badge out for the hover actions; sub-sessions
                     // have no actions, so keep the badge (incl. the running
                     // spinner) visible on hover.
                     !isSubsession && "group-hover:hidden"
                   )}
                 >
+                  <CollaborationUnreadBadge count={unreadCount} />
                   {isRunning ? (
                     <span
                       className="relative inline-flex shrink-0 items-center justify-center"
@@ -442,7 +446,7 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                         {tSidebar("statusCancelledBadge")}
                       </span>
                     </span>
-                  ) : timeLabel ? (
+                  ) : unreadCount === 0 && timeLabel ? (
                     <span
                       className={cn(
                         "relative shrink-0 tabular-nums",

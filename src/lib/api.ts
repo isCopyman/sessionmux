@@ -103,6 +103,7 @@ import type {
   PromptDraft,
   PromptQueueSnapshot,
   CollaborationFeed,
+  CollaborationUnreadOverview,
   CollaborationSendResult,
   CollaborationInterruptResult,
   InterruptCollaborationInput,
@@ -2086,6 +2087,10 @@ export async function getCollaborationFeed(
     conversationId,
     limit: limit ?? null,
   })
+}
+
+export async function getCollaborationUnreadOverview(): Promise<CollaborationUnreadOverview> {
+  return getTransport().call("collaboration_unread_overview")
 }
 
 export async function markCollaborationSeen(

@@ -42,6 +42,7 @@ import { useIsMac } from "@/hooks/use-is-mac"
 import { usePlatform } from "@/hooks/use-platform"
 import { useZoomLevel } from "@/hooks/use-appearance"
 import { useShortcutSettings } from "@/hooks/use-shortcut-settings"
+import { useCollaborationUnreadOverview } from "@/hooks/use-collaboration-unread-overview"
 import { formatShortcutLabel } from "@/lib/keyboard-shortcuts"
 import { isDesktop } from "@/lib/platform"
 import { leftChromeReserve } from "@/lib/window-chrome"
@@ -72,6 +73,7 @@ import { WorkbenchTree } from "@/components/workbench/workbench-tree"
 import { ConversationManageDialog } from "@/components/conversations/conversation-manage-dialog"
 import { CollectionTree } from "@/components/collections/collection-tree"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
+import { CollaborationUnreadBadge } from "@/components/collaboration/collaboration-unread-badge"
 
 // Keyboard-shortcut hint at the trailing edge of the New chat / Search rows.
 // Mirrors the folder count badge exactly — same chip (0.9375rem height,
@@ -145,6 +147,8 @@ export function Sidebar() {
   const { setOpen: setSearchOpen } = useSearchDialog()
   const { unseenFailures } = useAutomationsView()
   const { attentionCount } = useTasksView()
+  const { overview: collaborationUnread, unreadByConversation } =
+    useCollaborationUnreadOverview()
   const { routeId, setRoute, openConversations } = useWorkbenchRoute()
   const isMac = useIsMac()
   const { isMac: platformIsMac } = usePlatform()
@@ -526,7 +530,7 @@ export function Sidebar() {
           the list below. Each row is a `group` so its shortcut hint reveals on
           hover / keyboard focus. */}
       <div className="flex shrink-0 flex-col gap-0.5 px-1.5 pt-1.5">
-        <WorkbenchTree />
+        <WorkbenchTree unreadByConversation={unreadByConversation} />
         <SidebarNavButton
           icon={SquarePen}
           label={t("newChat")}
@@ -556,6 +560,12 @@ export function Sidebar() {
             setSessionCenterCollection(null)
             setSessionCenterOpen(true)
           }}
+          trailing={
+            <CollaborationUnreadBadge
+              count={collaborationUnread.totalUnreadCount}
+              className="ml-auto"
+            />
+          }
         />
         {/* Both route rows close the mobile Sheet on the way out, like tapping a
             conversation card (handled by the list wrapper below) — otherwise the
@@ -607,6 +617,7 @@ export function Sidebar() {
           onOpenSession={handleOpenCollectionSession}
           onOpenSessionInSplit={handleOpenCollectionSessionInSplit}
           onNewSession={handleNewSessionAtPath}
+          unreadByConversation={unreadByConversation}
           onOpenScope={(scope) => {
             setSessionCenterCollection(scope)
             setSessionCenterOpen(true)
@@ -634,6 +645,7 @@ export function Sidebar() {
             showRecent={showRecent}
             sortMode={sortMode}
             sectionOrder={sectionOrder}
+            unreadByConversation={unreadByConversation}
           />
         </div>
       )}

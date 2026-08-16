@@ -20,9 +20,9 @@ use crate::db::AppDatabase;
 use crate::models::{
     CollaborationChanged, CollaborationDeliveryHint, CollaborationDeliveryState, CollaborationFeed,
     CollaborationInterruptResult, CollaborationInterruptState, CollaborationInvocationPolicy,
-    CollaborationSendResult, CollaborationUrgency, InterruptCollaborationInput,
-    PromptQueueItemState, SendAndInterruptCollaborationInput, SendAndInterruptCollaborationResult,
-    SendCollaborationMessageInput,
+    CollaborationSendResult, CollaborationUnreadOverview, CollaborationUrgency,
+    InterruptCollaborationInput, PromptQueueItemState, SendAndInterruptCollaborationInput,
+    SendAndInterruptCollaborationResult, SendCollaborationMessageInput,
 };
 use crate::prompt_queue::PromptQueueHandle;
 use crate::web::event_bridge::{
@@ -204,6 +204,14 @@ pub async fn collaboration_feed_core(
     limit: Option<u32>,
 ) -> Result<CollaborationFeed, AppCommandError> {
     collaboration_service::feed(conn, conversation_id, limit)
+        .await
+        .map_err(AppCommandError::from)
+}
+
+pub async fn collaboration_unread_overview_core(
+    conn: &sea_orm::DatabaseConnection,
+) -> Result<CollaborationUnreadOverview, AppCommandError> {
+    collaboration_service::unread_overview(conn)
         .await
         .map_err(AppCommandError::from)
 }
@@ -716,6 +724,14 @@ pub async fn collaboration_feed(
     db: tauri::State<'_, AppDatabase>,
 ) -> Result<CollaborationFeed, AppCommandError> {
     collaboration_feed_core(&db.conn, conversation_id, limit).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn collaboration_unread_overview(
+    db: tauri::State<'_, AppDatabase>,
+) -> Result<CollaborationUnreadOverview, AppCommandError> {
+    collaboration_unread_overview_core(&db.conn).await
 }
 
 #[cfg(feature = "tauri-runtime")]

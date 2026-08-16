@@ -1388,6 +1388,7 @@ mod tauri_app {
                 collaboration_commands::collaboration_interrupt,
                 collaboration_commands::collaboration_send_interrupt,
                 collaboration_commands::collaboration_feed,
+                collaboration_commands::collaboration_unread_overview,
                 collaboration_commands::collaboration_mark_seen,
                 collaboration_commands::collaboration_dismiss,
                 automation_commands::automation_list,

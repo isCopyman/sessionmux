@@ -1229,6 +1229,16 @@ export interface CollaborationFeed {
   outbound: CollaborationDelivery[]
 }
 
+export interface CollaborationUnreadSession {
+  conversationId: number
+  unreadCount: number
+}
+
+export interface CollaborationUnreadOverview {
+  totalUnreadCount: number
+  sessions: CollaborationUnreadSession[]
+}
+
 export interface SendCollaborationMessageInput {
   sourceConversationId: number
   targetConversationIds: number[]

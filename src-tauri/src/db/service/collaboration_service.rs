@@ -12,8 +12,9 @@ use crate::db::service::prompt_queue_service;
 use crate::models::{
     CollaborationDeliveryHint, CollaborationDeliveryState, CollaborationDeliveryView,
     CollaborationFeed, CollaborationInterruptState, CollaborationInvocationPolicy,
-    CollaborationSendResult, CollaborationSessionSnapshot, CollaborationUrgency, PromptQueueDraft,
-    PromptQueueItemState, SendCollaborationMessageInput,
+    CollaborationSendResult, CollaborationSessionSnapshot, CollaborationUnreadOverview,
+    CollaborationUnreadSession, CollaborationUrgency, PromptQueueDraft, PromptQueueItemState,
+    SendCollaborationMessageInput,
 };
 
 const MAX_BODY_BYTES: usize = 1_000_000;
@@ -887,6 +888,41 @@ pub async fn feed(
     feed_on(conn, conversation_id, limit.unwrap_or(DEFAULT_FEED_LIMIT)).await
 }
 
+/// Return unread collaboration counts for every live Session. This is a
+/// dedicated projection because read state belongs to collaboration, not the
+/// Harness-owned conversation index.
+pub async fn unread_overview(
+    conn: &DatabaseConnection,
+) -> Result<CollaborationUnreadOverview, DbError> {
+    let rows = conn
+        .query_all(statement(
+            "SELECT d.target_conversation_id, COUNT(*) AS unread_count \
+             FROM collaboration_delivery d \
+             JOIN conversation c ON c.id = d.target_conversation_id \
+             WHERE c.deleted_at IS NULL AND d.ui_seen_at IS NULL \
+               AND d.state <> 'dismissed' \
+             GROUP BY d.target_conversation_id \
+             ORDER BY d.target_conversation_id",
+            vec![],
+        ))
+        .await?;
+    let mut total_unread_count = 0_u32;
+    let mut sessions = Vec::with_capacity(rows.len());
+    for row in rows {
+        let raw_count: i64 = row.try_get("", "unread_count")?;
+        let unread_count = u32::try_from(raw_count.max(0)).unwrap_or(u32::MAX);
+        total_unread_count = total_unread_count.saturating_add(unread_count);
+        sessions.push(CollaborationUnreadSession {
+            conversation_id: row.try_get("", "target_conversation_id")?,
+            unread_count,
+        });
+    }
+    Ok(CollaborationUnreadOverview {
+        total_unread_count,
+        sessions,
+    })
+}
+
 pub struct CollaborationMutationResult {
     pub feed: CollaborationFeed,
     pub affected_conversation_ids: Vec<i32>,
@@ -1284,6 +1320,57 @@ mod tests {
             .unwrap();
         assert_eq!(repeated.feed.revision, marked.feed.revision);
         assert!(marked.feed.revision > before.revision);
+    }
+
+    #[tokio::test]
+    async fn unread_overview_tracks_live_sessions_without_loading_every_feed() {
+        let (db, source, target_a, target_b) = seeded_memory().await;
+        let sent = send(
+            &db.conn,
+            input(
+                source,
+                vec![target_a, target_b, 999_999],
+                "overview",
+                "review this",
+            ),
+        )
+        .await
+        .unwrap();
+
+        let overview = unread_overview(&db.conn).await.unwrap();
+        assert_eq!(overview.total_unread_count, 2);
+        assert_eq!(
+            overview.sessions,
+            vec![
+                CollaborationUnreadSession {
+                    conversation_id: target_a,
+                    unread_count: 1,
+                },
+                CollaborationUnreadSession {
+                    conversation_id: target_b,
+                    unread_count: 1,
+                },
+            ]
+        );
+
+        let delivery_a = sent
+            .deliveries
+            .iter()
+            .find(|delivery| delivery.target.conversation_id == target_a)
+            .unwrap();
+        mark_seen(&db.conn, target_a, vec![delivery_a.id.clone()])
+            .await
+            .unwrap();
+        assert_eq!(
+            unread_overview(&db.conn).await.unwrap(),
+            CollaborationUnreadOverview {
+                total_unread_count: 1,
+                sessions: vec![CollaborationUnreadSession {
+                    conversation_id: target_b,
+                    unread_count: 1,
+                }],
+            }
+        );
     }
 
     #[tokio::test]

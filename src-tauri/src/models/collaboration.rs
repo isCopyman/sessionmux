@@ -180,6 +180,20 @@ pub struct CollaborationFeed {
     pub outbound: Vec<CollaborationDeliveryView>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CollaborationUnreadSession {
+    pub conversation_id: i32,
+    pub unread_count: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CollaborationUnreadOverview {
+    pub total_unread_count: u32,
+    pub sessions: Vec<CollaborationUnreadSession>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SendCollaborationMessageInput {

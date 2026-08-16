@@ -22,10 +22,13 @@ const spies = vi.hoisted(() => ({
     showCompleted?: boolean
     showRecent?: boolean
     sectionOrder?: readonly string[]
+    unreadByConversation?: ReadonlyMap<number, number>
   } | null,
   sessionCenterOpen: false,
   sessionCenterCollection: null as number | "unclassified" | null,
   collectionShowsSessions: false,
+  workbenchUnread: null as ReadonlyMap<number, number> | null,
+  collectionUnread: null as ReadonlyMap<number, number> | null,
 }))
 const mockState = vi.hoisted(() => ({
   activeFolder: { id: 7, path: "/x" } as { id: number; path: string } | null,
@@ -40,25 +43,36 @@ vi.mock("@/components/conversations/sidebar-conversation-list", () => ({
     showCompleted?: boolean
     showRecent?: boolean
     sectionOrder?: readonly string[]
+    unreadByConversation?: ReadonlyMap<number, number>
   }) => {
     spies.listProps = props
     return null
   },
 }))
 vi.mock("@/components/workbench/workbench-tree", () => ({
-  WorkbenchTree: () => <div>Workbench tree</div>,
+  WorkbenchTree: ({
+    unreadByConversation,
+  }: {
+    unreadByConversation?: ReadonlyMap<number, number>
+  }) => {
+    spies.workbenchUnread = unreadByConversation ?? null
+    return <div>Workbench tree</div>
+  },
 }))
 vi.mock("@/components/collections/collection-tree", () => ({
   CollectionTree: ({
     onOpenScope,
     onNewSession,
     showSessions,
+    unreadByConversation,
   }: {
     onOpenScope: (scope: number | "unclassified") => void
     onNewSession?: (rootFolderId: number) => void
     showSessions?: boolean
+    unreadByConversation?: ReadonlyMap<number, number>
   }) => {
     spies.collectionShowsSessions = showSessions === true
+    spies.collectionUnread = unreadByConversation ?? null
     return (
       <>
         <button type="button" onClick={() => onOpenScope(42)}>
@@ -136,6 +150,18 @@ vi.mock("@/hooks/use-mobile", () => ({ useIsMobile: () => false }))
 vi.mock("@/hooks/use-appearance", () => ({
   useZoomLevel: () => ({ zoomLevel: 100, setZoomLevel: () => {} }),
 }))
+vi.mock("@/hooks/use-collaboration-unread-overview", () => ({
+  useCollaborationUnreadOverview: () => ({
+    overview: {
+      totalUnreadCount: 3,
+      sessions: [{ conversationId: 42, unreadCount: 3 }],
+    },
+    unreadByConversation: new Map([[42, 3]]),
+    hydrated: true,
+    error: null,
+    reload: async () => {},
+  }),
+}))
 
 function renderSidebar() {
   return render(
@@ -156,6 +182,8 @@ describe("Sidebar — fixed New chat / Search region", () => {
     spies.sessionCenterOpen = false
     spies.sessionCenterCollection = null
     spies.collectionShowsSessions = false
+    spies.workbenchUnread = null
+    spies.collectionUnread = null
     spies.listProps = null
     mockState.activeFolder = { id: 7, path: "/x" }
   })
@@ -186,6 +214,7 @@ describe("Sidebar — fixed New chat / Search region", () => {
 
   it("Session Center opens the global conversation manager", () => {
     const { getByText } = renderSidebar()
+    expect(screen.getByLabelText("3 unread")).toBeTruthy()
     fireEvent.click(getByText("Session Center"))
     expect(spies.sessionCenterOpen).toBe(true)
     expect(getByText("Session Center Dialog")).toBeTruthy()
@@ -219,6 +248,7 @@ describe("Sidebar — fixed New chat / Search region", () => {
     expect(screen.getByText("Workbench tree")).toBeTruthy()
     expect(spies.listProps).not.toBeNull()
     expect(spies.collectionShowsSessions).toBe(false)
+    expect(spies.workbenchUnread?.get(42)).toBe(3)
   })
 
   it("can switch to semantic Collections without changing Session cwd", async () => {
@@ -231,6 +261,7 @@ describe("Sidebar — fixed New chat / Search region", () => {
     )
 
     expect(spies.collectionShowsSessions).toBe(true)
+    expect(spies.collectionUnread?.get(42)).toBe(3)
     expect(localStorage.getItem("workspace:sidebar-organization-mode")).toBe(
       "collections"
     )
