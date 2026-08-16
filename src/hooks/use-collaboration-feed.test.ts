@@ -56,6 +56,7 @@ function delivery(id: string, seen = false): CollaborationDelivery {
     body: "Please review",
     replyToEventId: null,
     expectsReply: false,
+    replyReceived: false,
     urgency: "normal",
     invocationPolicy: "store_only",
     deliveryHint: "default",

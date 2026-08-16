@@ -5104,6 +5104,10 @@
     "stateFailed": "Delivery failed",
     "stateDismissedByTarget": "Dismissed by target",
     "stateSeen": "Seen",
-    "stateDelivered": "Delivered"
+    "stateDelivered": "Delivered",
+    "stateNeedsReply": "Resposta necessária",
+    "stateReplied": "Respondido",
+    "stateAwaitingReply": "Aguardando resposta",
+    "stateReplyReceived": "Resposta recebida"
   }
 }

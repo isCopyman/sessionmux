@@ -93,6 +93,19 @@ export function SessionCommunicationBanner({
     }
   }
 
+  const replyState = (
+    delivery: CollaborationDelivery,
+    direction: "inbound" | "outbound"
+  ) => {
+    if (!delivery.expectsReply) return null
+    if (direction === "inbound") {
+      return delivery.replyReceived ? t("stateReplied") : t("stateNeedsReply")
+    }
+    return delivery.replyReceived
+      ? t("stateReplyReceived")
+      : t("stateAwaitingReply")
+  }
+
   const unreadIds = feed.inbound
     .filter(
       (delivery) => delivery.uiSeenAt == null && delivery.state !== "dismissed"
@@ -181,6 +194,17 @@ export function SessionCommunicationBanner({
                           {delivery.uiSeenAt == null &&
                           delivery.state !== "dismissed" ? (
                             <span className="h-1.5 w-1.5 rounded-full bg-primary" />
+                          ) : null}
+                          {replyState(delivery, "inbound") ? (
+                            <span
+                              className={
+                                delivery.replyReceived
+                                  ? "rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground"
+                                  : "rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-400"
+                              }
+                            >
+                              {replyState(delivery, "inbound")}
+                            </span>
                           ) : null}
                         </div>
                         <p className="mt-1 whitespace-pre-wrap break-words leading-relaxed">
@@ -305,6 +329,17 @@ export function SessionCommunicationBanner({
                                     ? t("stateSeen")
                                     : t("stateDelivered")}
                           </span>
+                          {replyState(delivery, "outbound") ? (
+                            <span
+                              className={
+                                delivery.replyReceived
+                                  ? "rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground"
+                                  : "rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-400"
+                              }
+                            >
+                              {replyState(delivery, "outbound")}
+                            </span>
+                          ) : null}
                         </div>
                         <p className="mt-1 whitespace-pre-wrap break-words leading-relaxed">
                           {delivery.body}

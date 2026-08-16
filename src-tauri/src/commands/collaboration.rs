@@ -520,6 +520,19 @@ impl SessionCollaborationAccess for DbSessionCollaboration {
             SessionMessageDeliveryMode::DeliverOnly => CollaborationInvocationPolicy::StoreOnly,
             SessionMessageDeliveryMode::Queue => CollaborationInvocationPolicy::InvokeWhenIdle,
         };
+        let chain_depth = match collaboration_service::child_chain_depth(
+            &self.db.conn,
+            spec.reply_to_event_id.as_deref(),
+        )
+        .await
+        {
+            Ok(depth) => depth,
+            Err(err) => {
+                return SessionSendOutcome::rejected(Some(source_session_id), err.to_string())
+            }
+        };
+        let reply_budget_exhausted =
+            spec.expects_reply && chain_depth >= collaboration_service::MAX_AGENT_REPLY_CHAIN_DEPTH;
         let result = collaboration_send_core(
             &self.db.conn,
             &self.emitter,
@@ -535,7 +548,7 @@ impl SessionCollaborationAccess for DbSessionCollaboration {
                 } else {
                     CollaborationDeliveryHint::Default
                 },
-                expects_reply: spec.expects_reply,
+                expects_reply: spec.expects_reply && !reply_budget_exhausted,
                 urgency: CollaborationUrgency::Normal,
                 reply_to_event_id: spec.reply_to_event_id,
             },
@@ -558,7 +571,12 @@ impl SessionCollaborationAccess for DbSessionCollaboration {
                     })
                     .collect(),
                 deduplicated: result.deduplicated,
-                note: None,
+                note: reply_budget_exhausted.then(|| {
+                    format!(
+                        "Reply-chain safety limit ({}) reached. The message was delivered, but no further reply was requested.",
+                        collaboration_service::MAX_AGENT_REPLY_CHAIN_DEPTH
+                    )
+                }),
             },
             Err(err) => SessionSendOutcome::rejected(Some(source_session_id), err.to_string()),
         }
@@ -779,6 +797,7 @@ mod tests {
         AgentType, CollaborationDeliveryHint, CollaborationInvocationPolicy, CollaborationUrgency,
     };
     use crate::web::event_bridge::WebEventBroadcaster;
+    use sea_orm::{ConnectionTrait, DbBackend, Statement};
     use std::path::PathBuf;
     use std::sync::Arc;
 
@@ -1110,6 +1129,71 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    #[tokio::test]
+    async fn agent_reply_chain_keeps_delivering_but_stops_requesting_at_the_budget() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-agent-reply-budget").await;
+        let first = seed_conversation(&db, folder, AgentType::Codex).await;
+        let second = seed_conversation(&db, folder, AgentType::ClaudeCode).await;
+        let access = enabled_agent_access(&db, EventEmitter::Noop).await;
+        let mut source = first;
+        let mut target = second;
+        let mut reply_to_event_id = None;
+
+        for depth in 0..=collaboration_service::MAX_AGENT_REPLY_CHAIN_DEPTH {
+            let sent = access
+                .send_message(
+                    source,
+                    SessionMessageSpec {
+                        target_session_ids: vec![target],
+                        content: format!("reply at depth {depth}"),
+                        delivery_mode: SessionMessageDeliveryMode::DeliverOnly,
+                        steer_if_supported: false,
+                        expects_reply: true,
+                        reply_to_event_id: reply_to_event_id.clone(),
+                        client_dedupe_id: format!("mcp:reply-depth-{depth}"),
+                    },
+                )
+                .await;
+            assert!(sent.accepted, "depth {depth}: {:?}", sent.note);
+            let event_id = sent.event_id.clone().expect("persisted event");
+            let target_feed = collaboration_service::feed(&db.conn, target, None)
+                .await
+                .unwrap();
+            let inbound = target_feed
+                .inbound
+                .iter()
+                .find(|delivery| delivery.event_id == event_id)
+                .expect("target sees the delivered event");
+            if depth < collaboration_service::MAX_AGENT_REPLY_CHAIN_DEPTH {
+                assert!(inbound.expects_reply);
+                assert!(sent.note.is_none());
+            } else {
+                assert!(!inbound.expects_reply);
+                assert!(sent
+                    .note
+                    .as_deref()
+                    .is_some_and(|note| note.contains("safety limit")));
+            }
+
+            let row = db
+                .conn
+                .query_one(Statement::from_sql_and_values(
+                    DbBackend::Sqlite,
+                    "SELECT chain_depth FROM collaboration_event WHERE id = ?",
+                    vec![event_id.clone().into()],
+                ))
+                .await
+                .unwrap()
+                .unwrap();
+            let stored_depth: i32 = row.try_get("", "chain_depth").unwrap();
+            assert_eq!(stored_depth, depth);
+
+            reply_to_event_id = Some(event_id);
+            std::mem::swap(&mut source, &mut target);
+        }
     }
 
     #[tokio::test]

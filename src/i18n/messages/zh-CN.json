@@ -5104,6 +5104,10 @@
     "stateFailed": "投递失败",
     "stateDismissedByTarget": "目标已忽略",
     "stateSeen": "已读",
-    "stateDelivered": "已送达"
+    "stateDelivered": "已送达",
+    "stateNeedsReply": "需要回复",
+    "stateReplied": "已回复",
+    "stateAwaitingReply": "等待回复",
+    "stateReplyReceived": "已收到回复"
   }
 }

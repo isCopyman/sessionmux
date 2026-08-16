@@ -1203,6 +1203,7 @@ export interface CollaborationDelivery {
   body: string
   replyToEventId?: string | null
   expectsReply: boolean
+  replyReceived: boolean
   urgency: CollaborationUrgency
   invocationPolicy: CollaborationInvocationPolicy
   deliveryHint: CollaborationDeliveryHint

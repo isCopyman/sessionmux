@@ -81,6 +81,7 @@ function delivery(
     body: "The evidence does not support the last sentence.",
     replyToEventId: null,
     expectsReply: false,
+    replyReceived: false,
     urgency: "normal",
     invocationPolicy: "store_only",
     deliveryHint: "default",
@@ -165,6 +166,49 @@ describe("SessionCommunicationBanner", () => {
         open: true,
       })
     )
+  })
+
+  it("shows whether an explicit reply obligation is still open", () => {
+    hook.feed = {
+      conversationId: 2,
+      revision: 2,
+      unreadCount: 1,
+      inbound: [delivery({ expectsReply: true })],
+      outbound: [
+        delivery({
+          id: "delivery-outbound",
+          eventId: "event-outbound",
+          expectsReply: true,
+          replyReceived: true,
+        }),
+      ],
+    }
+    render(<SessionCommunicationBanner conversationId={2} />)
+    fireEvent.click(screen.getByRole("button", { name: /panelTitle/ }))
+
+    expect(screen.getByText("stateNeedsReply")).toBeInTheDocument()
+    expect(screen.getByText("stateReplyReceived")).toBeInTheDocument()
+  })
+
+  it("marks an inbound request as replied and an outbound request as waiting", () => {
+    hook.feed = {
+      conversationId: 2,
+      revision: 2,
+      unreadCount: 1,
+      inbound: [delivery({ expectsReply: true, replyReceived: true })],
+      outbound: [
+        delivery({
+          id: "delivery-outbound",
+          eventId: "event-outbound",
+          expectsReply: true,
+        }),
+      ],
+    }
+    render(<SessionCommunicationBanner conversationId={2} />)
+    fireEvent.click(screen.getByRole("button", { name: /panelTitle/ }))
+
+    expect(screen.getByText("stateReplied")).toBeInTheDocument()
+    expect(screen.getByText("stateAwaitingReply")).toBeInTheDocument()
   })
 
   it("keeps a deleted or unavailable source readable without offering broken actions", () => {

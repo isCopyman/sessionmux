@@ -24,6 +24,9 @@ const DEFAULT_FEED_LIMIT: u32 = 100;
 const MAX_FEED_LIMIT: u32 = 500;
 pub const INACTIVE_TARGET_CONFIRMATION_REASON: &str =
     "collaboration_target_inactive_confirmation_required";
+/// An Agent may create replies through this depth, but the event at the limit
+/// cannot ask another Agent for a reply. Human UI sends remain unrestricted.
+pub const MAX_AGENT_REPLY_CHAIN_DEPTH: i32 = 4;
 
 /// Versioned, transcript-safe envelope persisted by every Harness when Codeg
 /// invokes a Session on behalf of another Session. The UUID-scoped closing
@@ -159,7 +162,11 @@ const DELIVERY_SELECT: &str = "SELECT d.id, d.event_id, d.target_conversation_id
             d.created_at, d.updated_at, e.source_conversation_id, \
             e.source_title_snapshot, e.source_agent_type_snapshot, \
             e.source_folder_path_snapshot, e.source_backend_snapshot, e.body, \
-            e.reply_to_event_id, e.expects_reply, e.urgency \
+            e.reply_to_event_id, e.expects_reply, \
+            EXISTS (SELECT 1 FROM collaboration_event reply \
+              WHERE reply.reply_to_event_id = e.id \
+                AND reply.source_conversation_id = d.target_conversation_id) \
+              AS reply_received, e.urgency \
      FROM collaboration_delivery d \
      JOIN collaboration_event e ON e.id = d.event_id \
      LEFT JOIN conversation_prompt_queue_item q \
@@ -190,6 +197,7 @@ fn parse_delivery(row: &QueryResult) -> Result<CollaborationDeliveryView, DbErro
     let urgency = CollaborationUrgency::parse(&urgency_raw)
         .ok_or_else(|| validation(format!("Unknown urgency: {urgency_raw}")))?;
     let expects_reply: i64 = row.try_get("", "expects_reply")?;
+    let reply_received: i64 = row.try_get("", "reply_received")?;
     let interrupt_state = row
         .try_get::<Option<String>>("", "interrupt_state")?
         .map(|value| {
@@ -219,6 +227,7 @@ fn parse_delivery(row: &QueryResult) -> Result<CollaborationDeliveryView, DbErro
         body: row.try_get("", "body")?,
         reply_to_event_id: row.try_get("", "reply_to_event_id")?,
         expects_reply: expects_reply != 0,
+        reply_received: reply_received != 0,
         urgency,
         invocation_policy,
         delivery_hint,
@@ -330,6 +339,28 @@ async fn validate_reply_relation<C: ConnectionTrait>(
         )));
     }
     Ok(())
+}
+
+/// Derive a child's immutable depth from its parent relation. Root events are
+/// depth zero; no mutable counter is maintained alongside the event graph.
+pub(crate) async fn child_chain_depth<C: ConnectionTrait>(
+    conn: &C,
+    reply_to_event_id: Option<&str>,
+) -> Result<i32, DbError> {
+    let Some(reply_to_event_id) = reply_to_event_id else {
+        return Ok(0);
+    };
+    let row = conn
+        .query_one(statement(
+            "SELECT chain_depth FROM collaboration_event WHERE id = ?",
+            vec![reply_to_event_id.into()],
+        ))
+        .await?
+        .ok_or_else(|| DbError::NotFound(format!("Collaboration event {reply_to_event_id}")))?;
+    let parent_depth: i32 = row.try_get("", "chain_depth")?;
+    parent_depth
+        .checked_add(1)
+        .ok_or_else(|| validation("Collaboration reply chain depth overflowed"))
 }
 
 fn validate_input(input: &SendCollaborationMessageInput) -> Result<Vec<i32>, DbError> {
@@ -688,6 +719,7 @@ pub(crate) async fn send_with_initially_inactive_targets(
     if let Some(reply_to) = input.reply_to_event_id.as_deref() {
         validate_reply_relation(&txn, input.source_conversation_id, &target_ids, reply_to).await?;
     }
+    let chain_depth = child_chain_depth(&txn, input.reply_to_event_id.as_deref()).await?;
 
     if let Some(event_id) =
         event_id_for_dedupe(&txn, input.source_conversation_id, &input.client_dedupe_id).await?
@@ -711,8 +743,8 @@ pub(crate) async fn send_with_initially_inactive_targets(
             "INSERT OR IGNORE INTO collaboration_event \
          (id, source_conversation_id, source_title_snapshot, source_agent_type_snapshot, \
           source_folder_path_snapshot, source_backend_snapshot, body, reply_to_event_id, \
-          expects_reply, urgency, client_dedupe_id, created_at) \
-         VALUES (?, ?, ?, ?, ?, 'current', ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
+          expects_reply, urgency, client_dedupe_id, chain_depth, created_at) \
+         VALUES (?, ?, ?, ?, ?, 'current', ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
             vec![
                 event_id.clone().into(),
                 source.id.into(),
@@ -724,6 +756,7 @@ pub(crate) async fn send_with_initially_inactive_targets(
                 (input.expects_reply as i32).into(),
                 input.urgency.as_str().into(),
                 input.client_dedupe_id.clone().into(),
+                chain_depth.into(),
             ],
         ))
         .await?;
@@ -1240,6 +1273,78 @@ mod tests {
         );
         fanout.reply_to_event_id = Some(original.event_id);
         assert!(send(&db.conn, fanout).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn reply_projection_is_derived_independently_for_each_target() {
+        let (db, source, target_a, target_b) = seeded_memory().await;
+        let mut question = input(
+            source,
+            vec![target_a, target_b],
+            "question-with-two-targets",
+            "please review",
+        );
+        question.expects_reply = true;
+        let original = send(&db.conn, question).await.unwrap();
+
+        let before = feed(&db.conn, source, None).await.unwrap();
+        assert!(before.outbound.iter().all(|item| !item.reply_received));
+
+        let mut answer = input(target_a, vec![source], "answer-a", "review complete");
+        answer.reply_to_event_id = Some(original.event_id);
+        send(&db.conn, answer).await.unwrap();
+
+        let source_feed = feed(&db.conn, source, None).await.unwrap();
+        let delivery_a = source_feed
+            .outbound
+            .iter()
+            .find(|item| item.target.conversation_id == target_a)
+            .expect("first target delivery");
+        let delivery_b = source_feed
+            .outbound
+            .iter()
+            .find(|item| item.target.conversation_id == target_b)
+            .expect("second target delivery");
+        assert!(delivery_a.reply_received);
+        assert!(!delivery_b.reply_received);
+
+        let recipient_feed = feed(&db.conn, target_a, None).await.unwrap();
+        assert!(recipient_feed.inbound[0].reply_received);
+    }
+
+    #[tokio::test]
+    async fn core_keeps_explicit_human_reply_chains_unrestricted() {
+        let (db, first, second, _) = seeded_memory().await;
+        let mut source = first;
+        let mut target = second;
+        let mut reply_to_event_id = None;
+
+        for depth in 0..=MAX_AGENT_REPLY_CHAIN_DEPTH + 1 {
+            let mut next = input(
+                source,
+                vec![target],
+                &format!("human-depth-{depth}"),
+                "continue the discussion",
+            );
+            next.expects_reply = true;
+            next.reply_to_event_id = reply_to_event_id.clone();
+            let sent = send(&db.conn, next).await.unwrap();
+            assert!(sent.deliveries[0].expects_reply);
+            reply_to_event_id = Some(sent.event_id);
+            std::mem::swap(&mut source, &mut target);
+        }
+
+        let row = db
+            .conn
+            .query_one(statement(
+                "SELECT chain_depth FROM collaboration_event WHERE id = ?",
+                vec![reply_to_event_id.unwrap().into()],
+            ))
+            .await
+            .unwrap()
+            .unwrap();
+        let stored_depth: i32 = row.try_get("", "chain_depth").unwrap();
+        assert_eq!(stored_depth, MAX_AGENT_REPLY_CHAIN_DEPTH + 1);
     }
 
     #[tokio::test]

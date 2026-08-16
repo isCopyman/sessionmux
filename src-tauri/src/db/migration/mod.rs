@@ -45,6 +45,7 @@ mod m20260815_000005_workbench_pinned;
 mod m20260816_000001_prompt_queue;
 mod m20260816_000002_collaboration;
 mod m20260816_000003_collaboration_interrupt;
+mod m20260816_000004_collaboration_reply_index;
 pub struct Migrator;
 
 #[async_trait::async_trait]
@@ -96,6 +97,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260816_000001_prompt_queue::Migration),
             Box::new(m20260816_000002_collaboration::Migration),
             Box::new(m20260816_000003_collaboration_interrupt::Migration),
+            Box::new(m20260816_000004_collaboration_reply_index::Migration),
         ]
     }
 }

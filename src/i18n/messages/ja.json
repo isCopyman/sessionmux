@@ -5104,6 +5104,10 @@
     "stateFailed": "Delivery failed",
     "stateDismissedByTarget": "Dismissed by target",
     "stateSeen": "Seen",
-    "stateDelivered": "Delivered"
+    "stateDelivered": "Delivered",
+    "stateNeedsReply": "返信が必要",
+    "stateReplied": "返信済み",
+    "stateAwaitingReply": "返信待ち",
+    "stateReplyReceived": "返信を受信"
   }
 }

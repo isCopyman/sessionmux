@@ -5104,6 +5104,10 @@
     "stateFailed": "Delivery failed",
     "stateDismissedByTarget": "Dismissed by target",
     "stateSeen": "Seen",
-    "stateDelivered": "Delivered"
+    "stateDelivered": "Delivered",
+    "stateNeedsReply": "답변 필요",
+    "stateReplied": "답변 완료",
+    "stateAwaitingReply": "답변 대기 중",
+    "stateReplyReceived": "답변 받음"
   }
 }

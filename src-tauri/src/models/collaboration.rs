@@ -149,6 +149,10 @@ pub struct CollaborationDeliveryView {
     pub body: String,
     pub reply_to_event_id: Option<String>,
     pub expects_reply: bool,
+    /// Whether this target Session has sent at least one reply linked to this
+    /// event. This is derived from the immutable reply relation rather than
+    /// stored as a second mutable source of truth.
+    pub reply_received: bool,
     pub urgency: CollaborationUrgency,
     pub invocation_policy: CollaborationInvocationPolicy,
     pub delivery_hint: CollaborationDeliveryHint,
