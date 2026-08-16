@@ -53,6 +53,10 @@ interface SessionMessageComposerDialogProps {
   onOpenChange: (open: boolean) => void
   /** Stable Session id preselected by a contextual reply action. */
   initialTargetConversationId?: number | null
+  /** Structured `@` Session badges from the chat composer. */
+  initialTargetConversationIds?: number[]
+  /** Prefill from the chat composer after Session badges are stripped. */
+  initialBody?: string
   /** Immutable collaboration event being answered, when this is a reply. */
   replyToEventId?: string | null
 }
@@ -62,20 +66,25 @@ export function SessionMessageComposerDialog({
   open,
   onOpenChange,
   initialTargetConversationId = null,
+  initialTargetConversationIds = [],
+  initialBody = "",
   replyToEventId = null,
 }: SessionMessageComposerDialogProps) {
   const t = useTranslations("Collaboration")
   const tStatus = useTranslations("Folder.statusLabels")
   const conversations = useAppWorkspaceStore((state) => state.conversations)
   const folders = useAppWorkspaceStore((state) => state.folders)
+  const presetTargets = useMemo(() => {
+    const ids = [...initialTargetConversationIds]
+    if (initialTargetConversationId != null)
+      ids.push(initialTargetConversationId)
+    return [...new Set(ids.filter((id) => Number.isInteger(id) && id > 0))]
+  }, [initialTargetConversationId, initialTargetConversationIds])
   const [query, setQuery] = useState("")
   const [selected, setSelected] = useState<Set<number>>(
-    () =>
-      new Set(
-        initialTargetConversationId == null ? [] : [initialTargetConversationId]
-      )
+    () => new Set(presetTargets)
   )
-  const [body, setBody] = useState("")
+  const [body, setBody] = useState(initialBody)
   const [invocationPolicy, setInvocationPolicy] =
     useState<CollaborationInvocationPolicy>("store_only")
   const [deliveryHint, setDeliveryHint] =
@@ -124,6 +133,21 @@ export function SessionMessageComposerDialog({
     sourceConversationId,
   ])
 
+  const duplicateTitles = useMemo(() => {
+    const counts = new Map<string, number>()
+    for (const conversation of candidates) {
+      const title =
+        formatConversationTitle(conversation.title) ||
+        t("untitled", { id: conversation.id })
+      counts.set(title, (counts.get(title) ?? 0) + 1)
+    }
+    return new Set(
+      [...counts.entries()]
+        .filter(([, count]) => count > 1)
+        .map(([title]) => title)
+    )
+  }, [candidates, t])
+
   const bodyBytes = useMemo(() => new Blob([body]).size, [body])
   const bodyTooLarge = bodyBytes > MAX_BODY_BYTES
   const canSend =
@@ -136,12 +160,8 @@ export function SessionMessageComposerDialog({
 
   const reset = () => {
     setQuery("")
-    setSelected(
-      new Set(
-        initialTargetConversationId == null ? [] : [initialTargetConversationId]
-      )
-    )
-    setBody("")
+    setSelected(new Set(presetTargets))
+    setBody(initialBody)
     setInvocationPolicy("store_only")
     setDeliveryHint("default")
     setInterruptCurrentTask(false)
@@ -363,6 +383,12 @@ export function SessionMessageComposerDialog({
             ) : (
               candidates.map((conversation) => {
                 const checked = selected.has(conversation.id)
+                const title =
+                  formatConversationTitle(conversation.title) ||
+                  t("untitled", { id: conversation.id })
+                const displayTitle = duplicateTitles.has(title)
+                  ? `${title} #${conversation.id}`
+                  : title
                 const folder = folderById.get(conversation.folder_id)
                 const runtimeStatus = STATUS_ORDER.includes(
                   conversation.status as ConversationStatus
@@ -403,8 +429,7 @@ export function SessionMessageComposerDialog({
                     />
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-sm font-medium">
-                        {formatConversationTitle(conversation.title) ||
-                          t("untitled", { id: conversation.id })}
+                        {displayTitle}
                       </span>
                       <span className="block truncate text-xs text-muted-foreground">
                         {getAgentLabel(conversation.agent_type)}

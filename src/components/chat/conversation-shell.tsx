@@ -67,6 +67,7 @@ interface ConversationShellProps {
   availableCommands?: AvailableCommandInfo[] | null
   attachmentTabId?: string | null
   draftStorageKey?: string | null
+  sourceConversationId?: number | null
   hideInput?: boolean
   /** Optional banner rendered in the composer dock, where the input sits.
    *  Used with `hideInput` to explain WHY the composer is unavailable (e.g.
@@ -143,6 +144,7 @@ export function ConversationShell({
   agentType,
   availableCommands,
   attachmentTabId,
+  sourceConversationId = null,
   draftStorageKey,
   hideInput = false,
   composerBanner,
@@ -296,6 +298,7 @@ export function ConversationShell({
               availableCommands={availableCommands}
               attachmentTabId={attachmentTabId}
               draftStorageKey={draftStorageKey}
+              sourceConversationId={sourceConversationId}
               isActive={isActive}
               showActiveFlow={showActiveFlow}
               queue={queue}

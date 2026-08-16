@@ -5057,6 +5057,7 @@
     "interruptConfirmTitle": "停止当前任务并发送？",
     "interruptConfirmDescription": "会先保存这条消息，再停止这一个目标当前正在运行的任务。停止失败时，已保存的消息仍会留在队列里。",
     "interruptConfirm": "停止并发送",
-    "startProcessing": "启动处理"
+    "startProcessing": "启动处理",
+    "sendToMentionedSessions": "发送到所选的 {count} 个会话"
   }
 }

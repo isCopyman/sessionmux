@@ -280,6 +280,11 @@ export function SessionCommunicationBannerView({
                           delivery.state !== "dismissed" ? (
                             <span className="h-1.5 w-1.5 rounded-full bg-primary" />
                           ) : null}
+                          {delivery.urgency === "urgent" ? (
+                            <span className="rounded bg-destructive/10 px-1.5 py-0.5 text-[10px] font-medium text-destructive">
+                              {t("markUrgent")}
+                            </span>
+                          ) : null}
                           {replyState(delivery, "inbound") ? (
                             <span
                               className={
@@ -456,6 +461,11 @@ export function SessionCommunicationBannerView({
                           delivery.state !== "dismissed" ? (
                             <span className="text-muted-foreground">
                               {invocationState(delivery)}
+                            </span>
+                          ) : null}
+                          {delivery.urgency === "urgent" ? (
+                            <span className="rounded bg-destructive/10 px-1.5 py-0.5 text-[10px] font-medium text-destructive">
+                              {t("markUrgent")}
                             </span>
                           ) : null}
                           {replyState(delivery, "outbound") ? (

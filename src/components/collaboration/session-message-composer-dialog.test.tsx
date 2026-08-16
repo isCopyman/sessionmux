@@ -285,6 +285,52 @@ describe("SessionMessageComposerDialog", () => {
     )
   })
 
+  it("disambiguates two Sessions that share a title with their stable ids", () => {
+    store.conversations.push({
+      id: 4,
+      folder_id: 11,
+      title: "Reviewer",
+      agent_type: "gemini",
+      status: "completed" as const,
+      kind: "regular",
+      updated_at: "2026-08-16T00:00:00Z",
+    })
+    render(
+      <SessionMessageComposerDialog
+        sourceConversationId={1}
+        open
+        onOpenChange={onOpenChange}
+      />
+    )
+    expect(screen.getByText("Reviewer #2")).toBeInTheDocument()
+    expect(screen.getByText("Reviewer #4")).toBeInTheDocument()
+    store.conversations.pop()
+  })
+
+  it("prefills structured @ Session targets and the composer body", async () => {
+    render(
+      <SessionMessageComposerDialog
+        sourceConversationId={1}
+        initialTargetConversationIds={[2, 3]}
+        initialBody="Please compare these claims"
+        open
+        onOpenChange={onOpenChange}
+      />
+    )
+
+    expect(screen.getByText("selectedCount:count=2")).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: /^send$/ }))
+
+    await waitFor(() => expect(api.send).toHaveBeenCalledTimes(1))
+    expect(api.send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sourceConversationId: 1,
+        targetConversationIds: expect.arrayContaining([2, 3]),
+        body: "Please compare these claims",
+      })
+    )
+  })
+
   it("can mark a Session message urgent without changing delivery policy", async () => {
     render(
       <SessionMessageComposerDialog

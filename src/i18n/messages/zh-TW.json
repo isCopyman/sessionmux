@@ -5057,6 +5057,7 @@
     "interruptConfirmTitle": "停止目前任務並傳送？",
     "interruptConfirmDescription": "會先儲存這則訊息，再停止這一個目標目前正在執行的任務。停止失敗時，已儲存的訊息仍會留在佇列裡。",
     "interruptConfirm": "停止並傳送",
-    "startProcessing": "啟動處理"
+    "startProcessing": "啟動處理",
+    "sendToMentionedSessions": "傳送到所選的 {count} 個會話"
   }
 }
