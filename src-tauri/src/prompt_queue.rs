@@ -236,7 +236,7 @@ impl PromptQueueHandle {
                 batch.blocks.clone(),
                 Some(row.folder_id),
                 Some(row.id),
-                Some(turn_ref),
+                Some(turn_ref.clone()),
                 false,
             )
             .await
@@ -253,6 +253,20 @@ impl PromptQueueHandle {
                         conversation_id = target_conversation_id,
                         event_id,
                         "[session-message] prompt accepted but embed mark failed: {err}"
+                    );
+                }
+                if let Err(err) = collaboration_service::mark_session_message_injected(
+                    conn,
+                    target_conversation_id,
+                    event_id,
+                    &turn_ref,
+                )
+                .await
+                {
+                    tracing::warn!(
+                        conversation_id = target_conversation_id,
+                        event_id,
+                        "[session-message] fallback inject mark failed: {err}"
                     );
                 }
                 true
@@ -1459,7 +1473,7 @@ mod tests {
         let PromptInputBlock::Text { text } = &blocks[0] else {
             panic!("expected stable text envelope");
         };
-        assert!(text.contains("external collaboration content"));
+        assert!(text.contains("message from another persistent Session"));
         assert!(text.contains("--- message ---\nreview this claim\n"));
         assert_eq!(
             user_message.as_ref().map(|(id, _)| id.as_str()),
@@ -1830,7 +1844,7 @@ mod tests {
         let ConnectionCommand::Steer { text, reply } = command else {
             panic!("expected native steer command");
         };
-        assert!(text.contains("external collaboration content"));
+        assert!(text.contains("message from another persistent Session"));
         assert!(text.contains("--- message ---\ncorrect the premise\n"));
         reply.send(Ok(SteerOutcome::Injected)).expect("steer reply");
 

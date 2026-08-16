@@ -231,6 +231,11 @@ export function applyCollaborationTimelineProjection(
     return items
   }
 
+  const allEventIds = new Set(
+    deliveries
+      .filter((delivery) => delivery.state !== "dismissed")
+      .map((delivery) => delivery.eventId)
+  )
   const projected: ThreadRenderItem[] = []
   const used = new Set<string>()
   for (const item of items) {
@@ -239,27 +244,21 @@ export function applyCollaborationTimelineProjection(
       continue
     }
     const deliveriesForTurn = byTurn.get(item.group.id)
-    if (!deliveriesForTurn) {
-      projected.push(item)
-      continue
-    }
-
-    const eventIds = new Set(
-      deliveriesForTurn.map((delivery) => delivery.eventId)
-    )
-    for (const delivery of deliveriesForTurn) {
-      used.add(delivery.id)
-      projected.push({
-        key: `collaboration-${delivery.id}`,
-        kind: "collaboration",
-        delivery,
-      })
+    if (deliveriesForTurn) {
+      for (const delivery of deliveriesForTurn) {
+        used.add(delivery.id)
+        projected.push({
+          key: `collaboration-${delivery.id}`,
+          kind: "collaboration",
+          delivery,
+        })
+      }
     }
 
     let changed = false
     const parts = item.group.parts.flatMap((part): AdaptedContentPart[] => {
       if (part.type !== "text") return [part]
-      const text = stripProjectedCollaborationEnvelopes(part.text, eventIds)
+      const text = stripProjectedCollaborationEnvelopes(part.text, allEventIds)
       if (text === part.text) return [part]
       changed = true
       return text.length > 0 ? [{ ...part, text }] : []

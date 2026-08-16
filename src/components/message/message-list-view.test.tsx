@@ -135,35 +135,54 @@ describe("applyCollaborationTimelineProjection", () => {
     expect(user.group.parts).toEqual([{ type: "text", text: "actual prompt" }])
   })
 
-  it("keeps fan-out deliveries separate and excludes partial lifecycle states", () => {
+  it("keeps fan-out deliveries as separate cards on the same Turn", () => {
     const result = applyCollaborationTimelineProjection(
       [userItem("turn-1", COLLABORATION_ENVELOPE)],
       [
         collaborationDelivery(),
         collaborationDelivery({
           id: "delivery-sibling",
-          target: {
-            ...collaborationDelivery().target,
-            conversationId: 8,
-          },
+          eventId: "event-sibling",
+        }),
+      ]
+    )
+    expect(result.map((item) => item.kind)).toEqual([
+      "collaboration",
+      "collaboration",
+    ])
+  })
+
+  it("still shows a message when its Turn is not in the loaded window", () => {
+    const user = userItem("another-turn", "ordinary prompt")
+    const result = applyCollaborationTimelineProjection(
+      [user],
+      [collaborationDelivery()]
+    )
+    expect(result.map((item) => item.kind)).toEqual(["turn", "collaboration"])
+  })
+
+  it("strips the envelope even when the transcript Turn id does not match", () => {
+    const result = applyCollaborationTimelineProjection(
+      [userItem("parser-turn-id", COLLABORATION_ENVELOPE)],
+      [collaborationDelivery({ embeddedTurnRef: "session-msg-xyz" })]
+    )
+    expect(result.map((item) => item.kind)).toEqual(["collaboration"])
+  })
+
+  it("appends a pending inbound message to the timeline", () => {
+    const result = applyCollaborationTimelineProjection(
+      [userItem("turn-1", "ordinary prompt")],
+      [
+        collaborationDelivery({
+          state: "pending",
+          embeddedTurnRef: null,
           agentReceivedAt: null,
           agentReceiptKind: null,
           agentReceiptRef: null,
         }),
       ]
     )
-    expect(result).toHaveLength(1)
-    expect(result[0]).toMatchObject({
-      kind: "collaboration",
-      delivery: { id: "delivery-1", target: { conversationId: 7 } },
-    })
-  })
-
-  it("does not guess placement when the referenced Turn is not loaded", () => {
-    const user = userItem("another-turn", "ordinary prompt")
-    expect(
-      applyCollaborationTimelineProjection([user], [collaborationDelivery()])
-    ).toEqual([user])
+    expect(result.map((item) => item.kind)).toEqual(["turn", "collaboration"])
   })
 })
 

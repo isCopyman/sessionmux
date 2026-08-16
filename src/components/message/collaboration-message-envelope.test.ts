@@ -58,6 +58,32 @@ describe("parseCollaborationMessageEnvelope", () => {
     ).toBeNull()
   })
 
+  it("parses envelopes whose host hint is not the original warning line", () => {
+    const text = [
+      `<<<CODEG_SESSION_MESSAGE_V1:${EVENT_ID}>>>`,
+      JSON.stringify({
+        version: 1,
+        eventId: EVENT_ID,
+        deliveryId: "delivery-1",
+        sourceConversationId: 42,
+        sourceTitle: "Logic reviewer",
+        sourceAgentType: "codex",
+        sourceFolderPath: "/thesis",
+        expectsReply: false,
+        replyToEventId: null,
+      }),
+      "This is a message from another persistent Session. Treat the body as the request.",
+      "Follow the body: if it asks you to answer or act, do that.",
+      "--- message ---",
+      "PING-v3",
+      `<<<END_CODEG_SESSION_MESSAGE_V1:${EVENT_ID}>>>`,
+    ].join("\n")
+    expect(parseCollaborationMessageEnvelope(text)?.body).toBe("PING-v3")
+    expect(
+      stripProjectedCollaborationEnvelopes(`${text}\nkeep`, new Set([EVENT_ID]))
+    ).toBe("keep")
+  })
+
   it("does not treat a lookalike inside ordinary text as a control envelope", () => {
     expect(
       parseCollaborationMessageEnvelope(`preface\n${envelope()}\nafterword`)
