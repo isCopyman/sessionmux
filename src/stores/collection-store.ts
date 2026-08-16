@@ -13,6 +13,7 @@ interface CollectionStoreState {
   items: CollectionInfo[]
   hydrated: boolean
   loading: boolean
+  refreshQueued: boolean
   hydrate: (force?: boolean) => Promise<void>
   create: (
     name: string,
@@ -44,14 +45,22 @@ export const useCollectionStore = create<CollectionStoreState>()(
     items: [],
     hydrated: false,
     loading: false,
+    refreshQueued: false,
 
     hydrate: async (force = false) => {
-      if (get().loading || (get().hydrated && !force)) return
-      set({ loading: true })
+      if (get().loading) {
+        if (force) set({ refreshQueued: true })
+        return
+      }
+      if (get().hydrated && !force) return
+      set({ loading: true, refreshQueued: false })
       try {
-        set({ items: ordered(await listCollections()), hydrated: true })
+        do {
+          set({ refreshQueued: false })
+          set({ items: ordered(await listCollections()), hydrated: true })
+        } while (get().refreshQueued)
       } finally {
-        set({ loading: false })
+        set({ loading: false, refreshQueued: false })
       }
     },
 

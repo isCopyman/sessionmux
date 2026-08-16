@@ -163,8 +163,13 @@ pub async fn move_to(
             "A Collection cannot contain itself".into(),
         ));
     }
-    let row = get_collection(conn, id).await?;
+    // Keep validation and mutation in the same SQLite transaction. Concurrent
+    // opposite moves then cannot both validate an old tree and commit a cycle;
+    // one writer wins and the other retries/fails against the new truth.
+    let txn = conn.begin().await?;
+    let row = get_collection(&txn, id).await?;
     if row.parent_id == parent_id {
+        txn.commit().await?;
         return Ok(to_info(row));
     }
 
@@ -177,7 +182,7 @@ pub async fn move_to(
                 "A Collection cannot be moved into its descendant".into(),
             ));
         }
-        let parent = get_collection(conn, candidate).await?;
+        let parent = get_collection(&txn, candidate).await?;
         if parent.root_folder_id != row.root_folder_id {
             return Err(DbError::Validation(
                 "Collections cannot be nested across Paths".into(),
@@ -186,12 +191,14 @@ pub async fn move_to(
         cursor = parent.parent_id;
     }
 
-    let position = next_position(conn, parent_id, row.root_folder_id).await?;
+    let position = next_position(&txn, parent_id, row.root_folder_id).await?;
     let mut active = row.into_active_model();
     active.parent_id = Set(parent_id);
     active.position = Set(position);
     active.updated_at = Set(Utc::now());
-    Ok(to_info(active.update(conn).await?))
+    let updated = active.update(&txn).await?;
+    txn.commit().await?;
+    Ok(to_info(updated))
 }
 
 /// Place a Collection at an exact sibling index, optionally changing its

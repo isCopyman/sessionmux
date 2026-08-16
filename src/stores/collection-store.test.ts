@@ -43,6 +43,7 @@ describe("collection store", () => {
       items: [],
       hydrated: false,
       loading: false,
+      refreshQueued: false,
     })
   })
 
@@ -57,6 +58,25 @@ describe("collection store", () => {
     expect(useCollectionStore.getState().items).toEqual([
       collection(1, "Research"),
       collection(2, "Sources", 1),
+    ])
+  })
+
+  it("runs one trailing refresh when a forced invalidation arrives mid-load", async () => {
+    let finishFirst!: (items: CollectionInfo[]) => void
+    h.list
+      .mockImplementationOnce(
+        () => new Promise<CollectionInfo[]>((resolve) => (finishFirst = resolve))
+      )
+      .mockResolvedValueOnce([collection(2, "Latest")])
+
+    const first = useCollectionStore.getState().hydrate(true)
+    await useCollectionStore.getState().hydrate(true)
+    finishFirst([collection(1, "Stale")])
+    await first
+
+    expect(h.list).toHaveBeenCalledTimes(2)
+    expect(useCollectionStore.getState().items).toEqual([
+      collection(2, "Latest"),
     ])
   })
 

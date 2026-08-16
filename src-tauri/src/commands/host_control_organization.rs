@@ -101,7 +101,7 @@ impl OrganizationHostControl {
             ),
             capability(
                 "workbench.list",
-                "List saved Workbenches and their persisted Session references in this Codeg workspace. Device-local layout and focus are not returned.",
+                "List the app-wide saved Workbench namespace. Session references outside the caller's Path are redacted; device-local layout and focus are not returned.",
                 HostControlAccessLevel::Read,
                 json!({
                     "type": "object",
@@ -177,7 +177,7 @@ impl OrganizationHostControl {
             ),
             capability(
                 "workbench.create",
-                "Create a saved Workbench without mounting, switching to or focusing it.",
+                "Create an app-wide saved Workbench without mounting, switching to or focusing it.",
                 HostControlAccessLevel::Write,
                 json!({
                     "type": "object",
@@ -188,7 +188,7 @@ impl OrganizationHostControl {
             ),
             capability(
                 "workbench.rename",
-                "Rename a saved Workbench by stable id without mounting, switching to or focusing it.",
+                "Rename an app-wide saved Workbench by stable id without mounting, switching to or focusing it.",
                 HostControlAccessLevel::Write,
                 json!({
                     "type": "object",

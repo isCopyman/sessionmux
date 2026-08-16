@@ -26,6 +26,7 @@ interface WorkbenchStoreState {
   recentlyClosedIds: number[]
   hydrated: boolean
   loading: boolean
+  refreshQueued: boolean
   hydrate: () => Promise<void>
   createAndSwitch: (name: string) => Promise<WorkbenchInfo>
   duplicateAndSwitch: (id: number, name: string) => Promise<WorkbenchInfo>
@@ -65,20 +66,27 @@ export const useWorkbenchStore = create<WorkbenchStoreState>()((set, get) => ({
   recentlyClosedIds: [],
   hydrated: false,
   loading: false,
+  refreshQueued: false,
 
   hydrate: async () => {
-    if (get().loading) return
-    set({ loading: true })
+    if (get().loading) {
+      set({ refreshQueued: true })
+      return
+    }
+    set({ loading: true, refreshQueued: false })
     try {
-      const items = ordered(await listWorkbenches())
-      const windowTabs = loadWorkbenchWindowTabs(
-        items.map((item) => item.id),
-        useTabStore.getState().activeWorkbenchId
-      )
-      saveWorkbenchWindowTabs(windowTabs)
-      set({ items, ...windowTabs, hydrated: true })
+      do {
+        set({ refreshQueued: false })
+        const items = ordered(await listWorkbenches())
+        const windowTabs = loadWorkbenchWindowTabs(
+          items.map((item) => item.id),
+          useTabStore.getState().activeWorkbenchId
+        )
+        saveWorkbenchWindowTabs(windowTabs)
+        set({ items, ...windowTabs, hydrated: true })
+      } while (get().refreshQueued)
     } finally {
-      set({ loading: false })
+      set({ loading: false, refreshQueued: false })
     }
   },
 

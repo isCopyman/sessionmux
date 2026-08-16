@@ -70,6 +70,7 @@ describe("workbench window views", () => {
       recentlyClosedIds: [],
       hydrated: false,
       loading: false,
+      refreshQueued: false,
     })
   })
 
@@ -80,6 +81,23 @@ describe("workbench window views", () => {
       1, 2,
     ])
     expect(useWorkbenchStore.getState().openIds).toEqual([1, 2])
+  })
+
+  it("runs one trailing refresh when another invalidation arrives mid-load", async () => {
+    let finishFirst!: (items: WorkbenchInfo[]) => void
+    h.listWorkbenches
+      .mockImplementationOnce(
+        () => new Promise<WorkbenchInfo[]>((resolve) => (finishFirst = resolve))
+      )
+      .mockResolvedValueOnce([workbench(1, "Latest")])
+
+    const first = useWorkbenchStore.getState().hydrate()
+    await useWorkbenchStore.getState().hydrate()
+    finishFirst([workbench(1, "Stale")])
+    await first
+
+    expect(h.listWorkbenches).toHaveBeenCalledTimes(2)
+    expect(useWorkbenchStore.getState().items[0]?.name).toBe("Latest")
   })
 
   it("switches before closing the active view and keeps the Workbench saved", async () => {
