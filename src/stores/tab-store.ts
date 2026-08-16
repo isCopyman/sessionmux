@@ -317,12 +317,46 @@ const TILE_MODE_STORAGE_KEY = "workspace:tile-mode"
 const TAB_GROUPS_STORAGE_KEY = "workspace:tab-groups:v1"
 const ACTIVE_WORKBENCH_STORAGE_KEY = "workspace:active-workbench-id:v1"
 
+function parseStoredWorkbenchId(raw: string | null): number | null {
+  const parsed = Number(raw)
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null
+}
+
+function persistActiveWorkbenchId(workbenchId: number): void {
+  if (typeof window === "undefined") return
+  const value = String(workbenchId)
+  try {
+    sessionStorage.setItem(ACTIVE_WORKBENCH_STORAGE_KEY, value)
+  } catch {
+    /* ignore */
+  }
+  // sessionStorage dies with the last workspace client. localStorage keeps the
+  // device's last focused Workbench so a brand-new client can restore it.
+  try {
+    localStorage.setItem(ACTIVE_WORKBENCH_STORAGE_KEY, value)
+  } catch {
+    /* ignore */
+  }
+}
+
 function readActiveWorkbenchId(): number {
   if (typeof window === "undefined") return 1
-  // Selection/focus belongs to the physical browser/Tauri window. A shared
-  // localStorage key would make two windows overwrite each other's workbench.
-  const parsed = Number(sessionStorage.getItem(ACTIVE_WORKBENCH_STORAGE_KEY))
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : 1
+  // This window's own selection wins so two open clients do not steal focus
+  // from each other. A new client with empty sessionStorage falls back to the
+  // device-last id; callers still replace a missing/closed id with Main.
+  const fromSession = parseStoredWorkbenchId(
+    sessionStorage.getItem(ACTIVE_WORKBENCH_STORAGE_KEY)
+  )
+  if (fromSession != null) return fromSession
+  try {
+    const fromDevice = parseStoredWorkbenchId(
+      localStorage.getItem(ACTIVE_WORKBENCH_STORAGE_KEY)
+    )
+    if (fromDevice != null) return fromDevice
+  } catch {
+    /* ignore */
+  }
+  return 1
 }
 
 function groupStorageKey(workbenchId: number): string {
@@ -427,6 +461,12 @@ const recentWorkbenchSnapshots = new WorkbenchSnapshotStore()
 const recentSessionWarmCache = new RecentSessionWarmCache(
   DEFAULT_SESSION_WARM_CACHE_LIMIT
 )
+/** Device-local reading positions, keyed by Workbench × canonical tab id.
+ *  The in-memory warm snapshot still owns virtua's measurement cache. */
+const persistedSessionViewStateByWorkbench = new Map<
+  number,
+  Record<string, WorkbenchSessionViewState>
+>()
 let workbenchRuntimeTransition: {
   workbenchId: number
   tabIds: Set<string>
@@ -666,27 +706,95 @@ function rememberWorkbenchSnapshot(
   })
 }
 
-/** Read one Workbench's position while this Session is still warm. */
+function durableSessionViewState(
+  state: WorkbenchSessionViewState
+): WorkbenchSessionViewState {
+  return {
+    scrollOffset: state.scrollOffset,
+    atBottom: state.atBottom,
+    virtualItemCount: state.virtualItemCount,
+    // virtua's measurement cache is process-local; only the offset survives
+    // a cold start. A warm remount still reads the in-memory snapshot.
+    virtualizerCache: null,
+  }
+}
+
+function sanitizeSessionViewState(
+  value: unknown
+): Record<string, WorkbenchSessionViewState> {
+  if (typeof value !== "object" || value == null) return {}
+  const out: Record<string, WorkbenchSessionViewState> = {}
+  for (const [tabId, raw] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof tabId !== "string" || tabId.length === 0) continue
+    if (typeof raw !== "object" || raw == null) continue
+    const entry = raw as Record<string, unknown>
+    if (
+      typeof entry.scrollOffset !== "number" ||
+      !Number.isFinite(entry.scrollOffset) ||
+      entry.scrollOffset < 0 ||
+      typeof entry.atBottom !== "boolean" ||
+      typeof entry.virtualItemCount !== "number" ||
+      !Number.isInteger(entry.virtualItemCount) ||
+      entry.virtualItemCount < 0
+    ) {
+      continue
+    }
+    out[tabId] = {
+      scrollOffset: entry.scrollOffset,
+      atBottom: entry.atBottom,
+      virtualItemCount: entry.virtualItemCount,
+      virtualizerCache: null,
+    }
+  }
+  return out
+}
+
+function rememberPersistedSessionViewState(
+  workbenchId: number,
+  tabId: string,
+  state: WorkbenchSessionViewState
+) {
+  const current = persistedSessionViewStateByWorkbench.get(workbenchId) ?? {}
+  persistedSessionViewStateByWorkbench.set(workbenchId, {
+    ...current,
+    [tabId]: durableSessionViewState(state),
+  })
+}
+
+/** Read one Workbench × tab position. A warm remount prefers the in-memory
+ *  snapshot (including virtua cache). A cold client falls back to the
+ *  device-local group blob. */
 export function getWorkbenchSessionViewState(
   workbenchId: number,
   tabId: string
 ): WorkbenchSessionViewState | null {
-  if (!recentSessionWarmCache.hasConnectionContextKey(tabId)) return null
-  return recentWorkbenchSnapshots.getSessionViewState(workbenchId, tabId)
+  if (recentSessionWarmCache.hasConnectionContextKey(tabId)) {
+    const warm = recentWorkbenchSnapshots.getSessionViewState(
+      workbenchId,
+      tabId
+    )
+    if (warm) return warm
+  }
+  const persisted =
+    persistedSessionViewStateByWorkbench.get(workbenchId)?.[tabId]
+  return persisted ? durableSessionViewState(persisted) : null
 }
 
 /**
- * Remember transcript geometry only while the Session belongs to the bounded
- * warm LRU. It is indexed by Workbench × tab, but neither persisted nor
- * broadcast.
+ * Remember transcript geometry for this Workbench × tab. The warm LRU still
+ * holds the virtua cache for same-client remounts; the numeric position is
+ * also written into the existing per-workbench group blob.
  */
 export function setWorkbenchSessionViewState(
   workbenchId: number,
   tabId: string,
   state: WorkbenchSessionViewState
 ): void {
-  if (!recentSessionWarmCache.hasConnectionContextKey(tabId)) return
-  recentWorkbenchSnapshots.setSessionViewState(workbenchId, tabId, state)
+  if (recentSessionWarmCache.hasConnectionContextKey(tabId)) {
+    recentWorkbenchSnapshots.setSessionViewState(workbenchId, tabId, state)
+  }
+  rememberPersistedSessionViewState(workbenchId, tabId, state)
+  schedulePersistGroupState()
 }
 
 /**
@@ -1034,6 +1142,10 @@ function readPersistedGroupState(workbenchId = readActiveWorkbenchId()): {
         pendingRestoreDrafts = sanitizeDrafts(parsed.drafts)
         pendingRestoreActiveDraft =
           typeof parsed.activeDraft === "string" ? parsed.activeDraft : null
+        persistedSessionViewStateByWorkbench.set(
+          workbenchId,
+          sanitizeSessionViewState(parsed.sessionViewState)
+        )
         return {
           groupLayout: parsed.layout,
           groupOf: sanitizeStringRecord(parsed.assignments),
@@ -1098,6 +1210,20 @@ function persistGroupState() {
         : tab.id
   }
   const activeTab = st.rawTabs.find((t) => t.id === st.activeTabId)
+  const memoryViewState =
+    recentWorkbenchSnapshots.peek(st.activeWorkbenchId)
+      ?.sessionViewStateByTab ?? {}
+  const persistedViewState =
+    persistedSessionViewStateByWorkbench.get(st.activeWorkbenchId) ?? {}
+  const sessionViewState: Record<string, WorkbenchSessionViewState> = {}
+  for (const tabId of Object.keys(assignments)) {
+    const state = memoryViewState[tabId] ?? persistedViewState[tabId]
+    if (state) sessionViewState[tabId] = durableSessionViewState(state)
+  }
+  persistedSessionViewStateByWorkbench.set(
+    st.activeWorkbenchId,
+    sessionViewState
+  )
   const blob = JSON.stringify({
     layout: st.groupLayout,
     assignments,
@@ -1108,6 +1234,7 @@ function persistGroupState() {
     // synced `opened_tabs.is_active`.
     activeDraft:
       activeTab && activeTab.conversationId == null ? activeTab.id : null,
+    sessionViewState,
   })
   if (blob === lastGroupBlob) return
   lastGroupBlob = blob
@@ -1330,6 +1457,18 @@ function schedulePersistGroupState() {
     groupPersistTimer = null
     persistGroupState()
   }, 300)
+}
+
+function flushPersistedGroupStateOnPageHide() {
+  if (groupPersistTimer) {
+    clearTimeout(groupPersistTimer)
+    groupPersistTimer = null
+  }
+  persistGroupState()
+}
+
+if (typeof window !== "undefined") {
+  window.addEventListener("pagehide", flushPersistedGroupStateOnPageHide)
 }
 
 function shallowRecordEqual(
@@ -2589,14 +2728,7 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
           outgoing.activeWorkbenchId,
           outgoing.rawTabs
         )
-        try {
-          sessionStorage.setItem(
-            ACTIVE_WORKBENCH_STORAGE_KEY,
-            String(workbenchId)
-          )
-        } catch {
-          /* ignore */
-        }
+        persistActiveWorkbenchId(workbenchId)
         pendingRemote = null
         applyingRemote = false
         serverKnownTabKeys = new Set()
@@ -2689,12 +2821,14 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
     void (async () => {
       let snapshotLoaded = false
       try {
-        const snap = await fetchTabsForWorkbench(get().activeWorkbenchId)
-        if (cancelled) return
+        const workbenchId = get().activeWorkbenchId
+        const snap = await fetchTabsForWorkbench(workbenchId)
+        if (cancelled || get().activeWorkbenchId !== workbenchId) return
         snapshotLoaded = true
         installHydratedSnapshot(snap)
         touchMountedSessions(get().rawTabs, get().activeTabId)
-        rememberWorkbenchSnapshot(get().activeWorkbenchId, snap, get().rawTabs)
+        rememberWorkbenchSnapshot(workbenchId, snap, get().rawTabs)
+        persistActiveWorkbenchId(workbenchId)
       } catch (err) {
         console.error("[TabStore] listOpenedTabs failed:", err)
         if (!cancelled) {
@@ -2808,6 +2942,7 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
               ...(cached?.runtimeConversationIdByTab ?? {}),
               ...runtimeIds,
             },
+            sessionViewStateByTab: cached?.sessionViewStateByTab,
           })
           // A workbench switch can complete while this request is in flight.
           // Its result belongs to the old surface; only advance the shared clock.
@@ -3394,6 +3529,7 @@ export function resetTabStore() {
   workbenchRuntimeTransition = null
   recentWorkbenchSnapshots.clear()
   recentSessionWarmCache.clear()
+  persistedSessionViewStateByWorkbench.clear()
   recentSessionWarmCache.setCapacity(DEFAULT_SESSION_WARM_CACHE_LIMIT)
   version = 0
   applyingRemote = false

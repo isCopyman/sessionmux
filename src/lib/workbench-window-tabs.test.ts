@@ -44,6 +44,21 @@ describe("Workbench window tabs", () => {
     expect(closeWorkbenchWindowTab(closed, 1)).toBe(closed)
   })
 
+  it("does not reopen a recently closed last-active Workbench", () => {
+    localStorage.setItem(
+      WORKBENCH_WINDOW_TABS_STORAGE_KEY,
+      JSON.stringify({
+        openIds: [1],
+        recentlyClosedIds: [2],
+      })
+    )
+
+    expect(loadWorkbenchWindowTabs([1, 2, 3], 2)).toEqual({
+      openIds: [1],
+      recentlyClosedIds: [2],
+    })
+  })
+
   it("reopens a tab, removes it from recent, and persists the result", () => {
     const reopened = openWorkbenchWindowTab(
       { openIds: [1], recentlyClosedIds: [2, 3] },

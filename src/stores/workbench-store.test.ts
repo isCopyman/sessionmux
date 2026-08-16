@@ -42,6 +42,7 @@ vi.mock("@/stores/app-workspace-store", () => ({
   },
 }))
 
+import { WORKBENCH_WINDOW_TABS_STORAGE_KEY } from "@/lib/workbench-window-tabs"
 import { useWorkbenchStore } from "@/stores/workbench-store"
 
 function workbench(id: number, name: string): WorkbenchInfo {
@@ -81,6 +82,30 @@ describe("workbench window views", () => {
       1, 2,
     ])
     expect(useWorkbenchStore.getState().openIds).toEqual([1, 2])
+  })
+
+  it("falls back to Main when the remembered Workbench is missing", async () => {
+    h.activeWorkbenchId = 99
+    await useWorkbenchStore.getState().hydrate()
+
+    expect(h.switchWorkbench).toHaveBeenCalledWith(1)
+    expect(useWorkbenchStore.getState().openIds).toEqual([1, 2])
+  })
+
+  it("falls back to Main when the remembered Workbench view is closed", async () => {
+    localStorage.setItem(
+      WORKBENCH_WINDOW_TABS_STORAGE_KEY,
+      JSON.stringify({
+        openIds: [1],
+        recentlyClosedIds: [2],
+      })
+    )
+    h.activeWorkbenchId = 2
+    await useWorkbenchStore.getState().hydrate()
+
+    expect(h.switchWorkbench).toHaveBeenCalledWith(1)
+    expect(useWorkbenchStore.getState().openIds).toEqual([1])
+    expect(useWorkbenchStore.getState().recentlyClosedIds).toEqual([2])
   })
 
   it("runs one trailing refresh when another invalidation arrives mid-load", async () => {

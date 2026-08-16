@@ -172,7 +172,13 @@ function VirtualizedMessageThreadImpl<T>({
     virtualItemCountRef.current = virtualItemCount
   })
 
+  const initialViewStateRef = useRef(initialViewState)
+  const restorePendingRef = useRef(
+    Boolean(initialViewState && !initialViewState.atBottom)
+  )
+
   const publishViewState = useCallback(() => {
+    if (restorePendingRef.current) return
     const callback = onViewStateChangeRef.current
     const handle = lastVirtualizerHandleRef.current
     if (!callback || !handle) return
@@ -195,23 +201,31 @@ function VirtualizedMessageThreadImpl<T>({
 
   // Restore before first paint. Passing virtua's measurement cache avoids the
   // visible "first row -> remembered row" sweep; the second frame only corrects
-  // geometry that the WebView measured during this mount.
-  const initialViewStateRef = useRef(initialViewState)
+  // geometry that the WebView measured during this mount. A cold start may
+  // remount with a different item count (older-page row, first history page);
+  // still apply the saved offset so we do not fall back to the top/bottom.
   useLayoutEffect(() => {
     const state = initialViewStateRef.current
-    if (!state || state.atBottom || state.virtualItemCount !== virtualItemCount)
+    if (!state || state.atBottom) {
+      restorePendingRef.current = false
       return
+    }
+    if (virtualItemCount === 0) return
     const handle = virtualizerHandleRef.current
     if (!handle) return
     stopScroll()
     handle.scrollTo(state.scrollOffset)
     const rafId = requestAnimationFrame(() => {
       virtualizerHandleRef.current?.scrollTo(state.scrollOffset)
+      restorePendingRef.current = false
     })
     return () => cancelAnimationFrame(rafId)
   }, [stopScroll, virtualItemCount])
 
-  useLayoutEffect(() => publishViewState, [publishViewState])
+  useLayoutEffect(() => {
+    publishViewState()
+    return () => publishViewState()
+  }, [publishViewState])
 
   const scrollToIndex = useCallback<MessageScrollContextValue["scrollToIndex"]>(
     (index, opts) => {

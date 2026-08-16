@@ -70,10 +70,16 @@ export function loadWorkbenchWindowTabs(
       validIds
     ).filter((id) => !openIds.includes(id))
 
-    // The active surface must always have a visible tab. This also repairs a
-    // stale preference after a backend restore or another client changed the
-    // active Workbench.
-    if (fallback != null && !openIds.includes(fallback)) openIds.push(fallback)
+    // Keep the active surface visible unless the user already closed that
+    // local view. Reopening a recently-closed Workbench just because it was
+    // last focused would ignore an explicit close.
+    if (
+      fallback != null &&
+      !openIds.includes(fallback) &&
+      !recentlyClosedIds.includes(fallback)
+    ) {
+      openIds.push(fallback)
+    }
     return {
       openIds,
       recentlyClosedIds: recentlyClosedIds.slice(

@@ -18,11 +18,13 @@ import {
 } from "@/stores/app-workspace-store"
 import {
   duplicateWorkbenchLocalState,
+  getWorkbenchSessionViewState,
   groupOfTab,
   isReparentUnmount,
   onSessionWarmCacheEvicted,
   resetTabStore,
   selectIsSplit,
+  setWorkbenchSessionViewState,
   shouldRetainWorkbenchConnectionOnUnmount,
   shouldRetainWorkbenchRuntimeOnUnmount,
   useTabStore,
@@ -1899,6 +1901,7 @@ describe("TabProvider tab groups", () => {
     expect(store().activeWorkbenchId).toBe(2)
     expect(store().rawTabs.map((tab) => tab.conversationId)).toEqual([3])
     expect(sessionStorage.getItem("workspace:active-workbench-id:v1")).toBe("2")
+    expect(localStorage.getItem("workspace:active-workbench-id:v1")).toBe("2")
 
     await act(async () => {
       await store().switchWorkbench(1)
@@ -1910,6 +1913,104 @@ describe("TabProvider tab groups", () => {
       "the device-local draft in the second split is restored"
     ).toBe(true)
     expect(leaves()).toHaveLength(2)
+  })
+
+  it("restores the last active workbench after the browser session is gone", async () => {
+    const first = await renderWithTabs([tabItem(1, 1, true)])
+    listWorkbenchTabsMock.mockResolvedValue({
+      items: [tabItem(2, 3, true)],
+      version: 2,
+    })
+
+    await act(async () => {
+      await store().switchWorkbench(2)
+    })
+    expect(localStorage.getItem("workspace:active-workbench-id:v1")).toBe("2")
+
+    first.unmount()
+    sessionStorage.clear()
+    act(() => {
+      resetTabStore()
+    })
+
+    expect(store().activeWorkbenchId).toBe(2)
+    expect(
+      sessionStorage.getItem("workspace:active-workbench-id:v1")
+    ).toBeNull()
+  })
+
+  it("restores each pane reading position from the workbench blob after a restart", async () => {
+    const first = await renderWithTabs([tabItem(1, 1, true), tabItem(1, 2)])
+    const left = "conv-1-codex-1"
+    const right = "conv-1-codex-2"
+
+    act(() => {
+      setWorkbenchSessionViewState(1, left, {
+        scrollOffset: 720,
+        atBottom: false,
+        virtualItemCount: 9,
+        virtualizerCache: { measured: true } as never,
+      })
+      setWorkbenchSessionViewState(1, right, {
+        scrollOffset: 80,
+        atBottom: false,
+        virtualItemCount: 4,
+        virtualizerCache: { measured: true } as never,
+      })
+    })
+    await act(async () => {
+      await store().flushActiveWorkbench()
+    })
+
+    const blob = JSON.parse(
+      localStorage.getItem("workspace:tab-groups:v1")!
+    ) as {
+      sessionViewState: Record<string, { scrollOffset: number }>
+    }
+    expect(blob.sessionViewState[left]?.scrollOffset).toBe(720)
+    expect(blob.sessionViewState[right]?.scrollOffset).toBe(80)
+
+    first.unmount()
+    act(() => {
+      resetTabStore()
+    })
+
+    expect(getWorkbenchSessionViewState(1, left)).toMatchObject({
+      scrollOffset: 720,
+      atBottom: false,
+      virtualItemCount: 9,
+      virtualizerCache: null,
+    })
+    expect(getWorkbenchSessionViewState(1, right)).toMatchObject({
+      scrollOffset: 80,
+      virtualizerCache: null,
+    })
+    expect(getWorkbenchSessionViewState(1, left)?.scrollOffset).not.toBe(
+      getWorkbenchSessionViewState(1, right)?.scrollOffset
+    )
+  })
+
+  it("flushes a pending reading position when the page is being hidden", async () => {
+    await renderWithTabs([tabItem(1, 1, true)])
+    act(() => {
+      setWorkbenchSessionViewState(1, "conv-1-codex-1", {
+        scrollOffset: 640,
+        atBottom: false,
+        virtualItemCount: 6,
+        virtualizerCache: null,
+      })
+    })
+
+    act(() => {
+      window.dispatchEvent(new Event("pagehide"))
+    })
+
+    const blob = JSON.parse(
+      localStorage.getItem("workspace:tab-groups:v1")!
+    ) as {
+      sessionViewState: Record<string, { scrollOffset: number }>
+    }
+    expect(blob.sessionViewState["conv-1-codex-1"]?.scrollOffset).toBe(640)
   })
 
   it("exposes the workbench being restored until its snapshot is mounted", async () => {

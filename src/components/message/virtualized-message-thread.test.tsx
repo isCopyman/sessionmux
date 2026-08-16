@@ -184,6 +184,25 @@ describe("VirtualizedMessageThread focus origin", () => {
     expect(testState.scrollTo).toHaveBeenCalledWith(420)
   })
 
+  it("restores a saved offset after a cold remount even if the item count differs", () => {
+    render(
+      <VirtualizedMessageThread
+        items={[{ id: "message-1" }, { id: "message-2" }]}
+        getItemKey={(item) => item.id}
+        renderItem={() => <div>message</div>}
+        initialViewState={{
+          scrollOffset: 1800,
+          atBottom: false,
+          virtualItemCount: 21,
+          virtualizerCache: null,
+        }}
+      />
+    )
+
+    expect(testState.stopScroll).toHaveBeenCalled()
+    expect(testState.scrollTo).toHaveBeenCalledWith(1800)
+  })
+
   it("publishes the last virtualizer geometry when the surface unmounts", () => {
     const onViewStateChange = vi.fn()
     const view = render(

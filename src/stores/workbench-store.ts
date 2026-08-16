@@ -85,6 +85,21 @@ export const useWorkbenchStore = create<WorkbenchStoreState>()((set, get) => ({
         saveWorkbenchWindowTabs(windowTabs)
         set({ items, ...windowTabs, hydrated: true })
       } while (get().refreshQueued)
+      const items = get().items
+      const activeId = useTabStore.getState().activeWorkbenchId
+      const stillOpen = get().openIds.includes(activeId)
+      if (
+        items.length > 0 &&
+        (!items.some((item) => item.id === activeId) || !stillOpen)
+      ) {
+        const fallback =
+          items.find((item) => item.id === 1) ??
+          items.find((item) => get().openIds.includes(item.id)) ??
+          items[0]
+        if (fallback && fallback.id !== activeId) {
+          await useTabStore.getState().switchWorkbench(fallback.id)
+        }
+      }
     } finally {
       set({ loading: false, refreshQueued: false })
     }
