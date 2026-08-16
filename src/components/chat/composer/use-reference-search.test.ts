@@ -214,6 +214,23 @@ describe("buildReferenceGroups", () => {
     expect(sessions[0].reference.uri).toBe("codeg://session/7")
   })
 
+  it("disambiguates two Sessions that share a title", () => {
+    const groups = buildReferenceGroups(
+      "",
+      emptySources({
+        sessions: [
+          makeConversation(7, "Reviewer"),
+          makeConversation(8, "Reviewer"),
+        ],
+      })
+    )
+    const sessions = itemsOf(groups, "session")
+    expect(sessions.map((item) => item.reference.label).sort()).toEqual([
+      "Reviewer #7",
+      "Reviewer #8",
+    ])
+  })
+
   it("omits the commit group when there is no repoKey (R8)", () => {
     const groups = buildReferenceGroups(
       "",

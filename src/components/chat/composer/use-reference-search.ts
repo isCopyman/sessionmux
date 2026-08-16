@@ -15,6 +15,7 @@ import {
   agentToSuggestion,
   commitToSuggestion,
   fileToSuggestion,
+  sessionMentionTitle,
   sessionToSuggestion,
 } from "./suggestion/adapters"
 import type {
@@ -123,8 +124,18 @@ export function buildReferenceGroups(
     .filter((item) => suggestionMatches(item, q))
   const agentItems = agentMatches.slice(0, MAX_PER_GROUP)
 
+  const sessionTitleCounts = new Map<string, number>()
+  for (const session of sources.sessions) {
+    const title = sessionMentionTitle(session)
+    sessionTitleCounts.set(title, (sessionTitleCounts.get(title) ?? 0) + 1)
+  }
   const sessionMatches = sources.sessions
-    .map(sessionToSuggestion)
+    .map((session) =>
+      sessionToSuggestion(session, {
+        disambiguateId:
+          (sessionTitleCounts.get(sessionMentionTitle(session)) ?? 0) > 1,
+      })
+    )
     .filter((item) => suggestionMatches(item, q))
   const sessionItems = sessionMatches.slice(0, MAX_PER_GROUP)
 

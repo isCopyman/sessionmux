@@ -108,6 +108,14 @@ describe("sessionToSuggestion", () => {
       "#123"
     )
   })
+  it("appends the stable id when two Sessions share a title", () => {
+    expect(
+      sessionToSuggestion(
+        { ...base, title: "Reviewer" },
+        { disambiguateId: true }
+      ).reference.label
+    ).toBe("Reviewer #123")
+  })
 })
 
 describe("commitToSuggestion", () => {
