@@ -632,6 +632,105 @@ pub(crate) async fn mark_origin_failed(
     Ok(changed)
 }
 
+/// Persist the normal final answer of a turn whose *main user message* was one
+/// exact collaboration delivery. `completed_message_id` is the stable id that
+/// the prompt queue handed to the Harness; matching it against
+/// `embedded_turn_ref` prevents ordinary user turns and native steering from
+/// being mistaken for collaboration replies.
+///
+/// An Agent may already have answered explicitly with `send_message` during
+/// the turn. The `NOT EXISTS` guard makes this a fallback, not a duplicate
+/// second reply. The deterministic dedupe id also makes a replayed terminal
+/// event harmless.
+pub(crate) async fn auto_reply_for_completed_turn(
+    conn: &DatabaseConnection,
+    target_conversation_id: i32,
+    completed_message_id: &str,
+    assistant_text: &str,
+) -> Result<Option<CollaborationSendResult>, DbError> {
+    if completed_message_id.trim().is_empty() || assistant_text.trim().is_empty() {
+        return Ok(None);
+    }
+    let Some(row) = conn
+        .query_one(statement(
+            "SELECT e.id AS event_id, e.source_conversation_id \
+             FROM collaboration_delivery d \
+             JOIN collaboration_event e ON e.id = d.event_id \
+             WHERE d.target_conversation_id = ? \
+               AND d.embedded_turn_ref = ? \
+               AND d.state = 'embedded' \
+               AND d.invocation_policy = 'invoke_when_idle' \
+               AND e.expects_reply = 1 \
+               AND NOT EXISTS ( \
+                   SELECT 1 FROM collaboration_event reply \
+                   WHERE reply.reply_to_event_id = e.id \
+                     AND reply.source_conversation_id = d.target_conversation_id \
+               ) \
+             ORDER BY d.updated_at DESC, d.id DESC LIMIT 1",
+            vec![target_conversation_id.into(), completed_message_id.into()],
+        ))
+        .await?
+    else {
+        return Ok(None);
+    };
+    let event_id: String = row.try_get("", "event_id")?;
+    let original_source_conversation_id: i32 = row.try_get("", "source_conversation_id")?;
+    let body =
+        bounded_auto_reply_body(target_conversation_id, completed_message_id, assistant_text);
+    send_with_initially_inactive_targets_guarded(
+        conn,
+        SendCollaborationMessageInput {
+            source_conversation_id: target_conversation_id,
+            target_conversation_ids: vec![original_source_conversation_id],
+            body,
+            // The completed queue message id contains the execution attempt.
+            // A real retry is a second turn and must be allowed to publish its
+            // own answer rather than deduplicating against the earlier one.
+            client_dedupe_id: format!(
+                "auto-reply:{event_id}:{target_conversation_id}:{completed_message_id}"
+            ),
+            invocation_policy: CollaborationInvocationPolicy::StoreOnly,
+            delivery_hint: CollaborationDeliveryHint::Default,
+            expects_reply: false,
+            urgency: CollaborationUrgency::Normal,
+            reply_to_event_id: Some(event_id.clone()),
+        },
+        &HashSet::new(),
+        Some(ReplyInsertGuard {
+            reply_to_event_id: event_id,
+            reply_source_conversation_id: target_conversation_id,
+        }),
+    )
+    .await
+}
+
+fn bounded_auto_reply_body(
+    source_conversation_id: i32,
+    completed_message_id: &str,
+    assistant_text: &str,
+) -> String {
+    if assistant_text.len() <= MAX_BODY_BYTES {
+        return assistant_text.to_string();
+    }
+    let suffix = format!(
+        "\n\n[Reply truncated at Codeg's message limit. Open the full source Session](codeg://session/{source_conversation_id}) (turn `{completed_message_id}`)."
+    );
+    let available = MAX_BODY_BYTES.saturating_sub(suffix.len());
+    let mut boundary = available.min(assistant_text.len());
+    while boundary > 0 && !assistant_text.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    let mut body = assistant_text[..boundary].to_string();
+    body.push_str(&suffix);
+    body
+}
+
+#[derive(Debug, Clone)]
+struct ReplyInsertGuard {
+    reply_to_event_id: String,
+    reply_source_conversation_id: i32,
+}
+
 pub(crate) struct OriginRetryIdentity {
     pub queue_item_id: String,
     pub queue_dedupe_id: String,
@@ -712,6 +811,17 @@ pub(crate) async fn send_with_initially_inactive_targets(
     input: SendCollaborationMessageInput,
     inactive_target_ids: &HashSet<i32>,
 ) -> Result<CollaborationSendResult, DbError> {
+    send_with_initially_inactive_targets_guarded(conn, input, inactive_target_ids, None)
+        .await?
+        .ok_or_else(|| validation("Unguarded collaboration send was not persisted"))
+}
+
+async fn send_with_initially_inactive_targets_guarded(
+    conn: &DatabaseConnection,
+    input: SendCollaborationMessageInput,
+    inactive_target_ids: &HashSet<i32>,
+    reply_guard: Option<ReplyInsertGuard>,
+) -> Result<Option<CollaborationSendResult>, DbError> {
     let target_ids = validate_input(&input)?;
     let txn = conn.begin().await?;
     let source = require_live_session(&txn, input.source_conversation_id).await?;
@@ -729,17 +839,46 @@ pub(crate) async fn send_with_initially_inactive_targets(
         let mut affected = BTreeSet::from([input.source_conversation_id]);
         affected.extend(deliveries.iter().map(|item| item.target.conversation_id));
         txn.commit().await?;
-        return Ok(CollaborationSendResult {
+        return Ok(Some(CollaborationSendResult {
             event_id,
             deliveries,
             affected_conversation_ids: affected.into_iter().collect(),
             deduplicated: true,
-        });
+        }));
     }
 
     let event_id = uuid::Uuid::new_v4().to_string();
-    let inserted = txn
-        .execute(statement(
+    let inserted = if let Some(guard) = reply_guard.as_ref() {
+        txn.execute(statement(
+            "INSERT OR IGNORE INTO collaboration_event \
+             (id, source_conversation_id, source_title_snapshot, source_agent_type_snapshot, \
+              source_folder_path_snapshot, source_backend_snapshot, body, reply_to_event_id, \
+              expects_reply, urgency, client_dedupe_id, chain_depth, created_at) \
+             SELECT ?, ?, ?, ?, ?, 'current', ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP \
+             WHERE NOT EXISTS ( \
+                 SELECT 1 FROM collaboration_event reply \
+                 WHERE reply.reply_to_event_id = ? \
+                   AND reply.source_conversation_id = ? \
+             )",
+            vec![
+                event_id.clone().into(),
+                source.id.into(),
+                source.title.clone().into(),
+                source.agent_type.clone().into(),
+                source.folder_path.clone().into(),
+                input.body.clone().into(),
+                input.reply_to_event_id.clone().into(),
+                (input.expects_reply as i32).into(),
+                input.urgency.as_str().into(),
+                input.client_dedupe_id.clone().into(),
+                chain_depth.into(),
+                guard.reply_to_event_id.clone().into(),
+                guard.reply_source_conversation_id.into(),
+            ],
+        ))
+        .await?
+    } else {
+        txn.execute(statement(
             "INSERT OR IGNORE INTO collaboration_event \
          (id, source_conversation_id, source_title_snapshot, source_agent_type_snapshot, \
           source_folder_path_snapshot, source_backend_snapshot, body, reply_to_event_id, \
@@ -759,29 +898,35 @@ pub(crate) async fn send_with_initially_inactive_targets(
                 chain_depth.into(),
             ],
         ))
-        .await?;
+        .await?
+    };
     // Close the double-click / two-window race between the optimistic dedupe
     // lookup above and the write. The unique key is the arbiter; a loser reads
     // and returns the already-committed fan-out instead of creating a second
     // event or silently appending its possibly different target list.
     if inserted.rows_affected() == 0 {
-        let existing_id =
-            event_id_for_dedupe(&txn, input.source_conversation_id, &input.client_dedupe_id)
-                .await?
-                .ok_or_else(|| {
-                    validation("Collaboration dedupe race did not resolve to an event")
-                })?;
-        validate_dedupe_payload(&txn, &existing_id, &input).await?;
-        let deliveries = deliveries_for_event(&txn, &existing_id).await?;
-        let mut affected = BTreeSet::from([input.source_conversation_id]);
-        affected.extend(deliveries.iter().map(|item| item.target.conversation_id));
-        txn.commit().await?;
-        return Ok(CollaborationSendResult {
-            event_id: existing_id,
-            deliveries,
-            affected_conversation_ids: affected.into_iter().collect(),
-            deduplicated: true,
-        });
+        if let Some(existing_id) =
+            event_id_for_dedupe(&txn, input.source_conversation_id, &input.client_dedupe_id).await?
+        {
+            validate_dedupe_payload(&txn, &existing_id, &input).await?;
+            let deliveries = deliveries_for_event(&txn, &existing_id).await?;
+            let mut affected = BTreeSet::from([input.source_conversation_id]);
+            affected.extend(deliveries.iter().map(|item| item.target.conversation_id));
+            txn.commit().await?;
+            return Ok(Some(CollaborationSendResult {
+                event_id: existing_id,
+                deliveries,
+                affected_conversation_ids: affected.into_iter().collect(),
+                deduplicated: true,
+            }));
+        }
+        if reply_guard.is_some() {
+            txn.commit().await?;
+            return Ok(None);
+        }
+        return Err(validation(
+            "Collaboration dedupe race did not resolve to an event",
+        ));
     }
 
     let mut affected = BTreeSet::from([source.id]);
@@ -855,12 +1000,12 @@ pub(crate) async fn send_with_initially_inactive_targets(
 
     let deliveries = deliveries_for_event(&txn, &event_id).await?;
     txn.commit().await?;
-    Ok(CollaborationSendResult {
+    Ok(Some(CollaborationSendResult {
         event_id,
         deliveries,
         affected_conversation_ids: affected.into_iter().collect(),
         deduplicated: false,
-    })
+    }))
 }
 
 async fn feed_on<C: ConnectionTrait>(
@@ -1310,6 +1455,141 @@ mod tests {
 
         let recipient_feed = feed(&db.conn, target_a, None).await.unwrap();
         assert!(recipient_feed.inbound[0].reply_received);
+    }
+
+    #[tokio::test]
+    async fn completed_collaboration_turn_auto_replies_once_without_waking_source() {
+        let (db, source, target, _) = seeded_memory().await;
+        let mut question =
+            invoke_input(source, vec![target], "auto-reply-question", "please answer");
+        question.expects_reply = true;
+        let original = send(&db.conn, question).await.unwrap();
+        db.conn
+            .execute(statement(
+                "UPDATE collaboration_delivery \
+                 SET state = 'embedded', embedded_turn_ref = 'queue-message-1' \
+                 WHERE event_id = ? AND target_conversation_id = ?",
+                vec![original.event_id.clone().into(), target.into()],
+            ))
+            .await
+            .unwrap();
+
+        assert!(auto_reply_for_completed_turn(
+            &db.conn,
+            target,
+            "another-message",
+            "must not match"
+        )
+        .await
+        .unwrap()
+        .is_none());
+
+        let reply = auto_reply_for_completed_turn(
+            &db.conn,
+            target,
+            "queue-message-1",
+            "The evidence supports the claim.",
+        )
+        .await
+        .unwrap()
+        .expect("normal final answer is projected back to the source");
+        assert!(!reply.deduplicated);
+        assert_eq!(reply.deliveries.len(), 1);
+        assert_eq!(reply.deliveries[0].target.conversation_id, source);
+        assert_eq!(
+            reply.deliveries[0].reply_to_event_id.as_deref(),
+            Some(original.event_id.as_str())
+        );
+        assert!(!reply.deliveries[0].expects_reply);
+        assert_eq!(
+            reply.deliveries[0].invocation_policy,
+            CollaborationInvocationPolicy::StoreOnly
+        );
+        assert!(prompt_queue_service::snapshot(&db.conn, source)
+            .await
+            .unwrap()
+            .items
+            .is_empty());
+
+        assert!(auto_reply_for_completed_turn(
+            &db.conn,
+            target,
+            "queue-message-1",
+            "a duplicate terminal event"
+        )
+        .await
+        .unwrap()
+        .is_none());
+        let source_feed = feed(&db.conn, source, None).await.unwrap();
+        assert_eq!(
+            source_feed.unread_count, 1,
+            "the answer is delivered visibly without waking the source Harness"
+        );
+        assert!(
+            source_feed
+                .outbound
+                .iter()
+                .find(|item| item.event_id == original.event_id)
+                .expect("original outbound request")
+                .reply_received
+        );
+        assert_eq!(
+            source_feed
+                .inbound
+                .iter()
+                .filter(|item| item.reply_to_event_id.as_deref()
+                    == Some(original.event_id.as_str()))
+                .count(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn explicit_agent_reply_suppresses_the_automatic_fallback() {
+        let (db, source, target, _) = seeded_memory().await;
+        let mut question = invoke_input(
+            source,
+            vec![target],
+            "explicit-reply-question",
+            "please answer",
+        );
+        question.expects_reply = true;
+        let original = send(&db.conn, question).await.unwrap();
+        db.conn
+            .execute(statement(
+                "UPDATE collaboration_delivery \
+                 SET state = 'embedded', embedded_turn_ref = 'queue-message-2' \
+                 WHERE event_id = ? AND target_conversation_id = ?",
+                vec![original.event_id.clone().into(), target.into()],
+            ))
+            .await
+            .unwrap();
+
+        let mut explicit = input(target, vec![source], "explicit-reply", "already sent");
+        explicit.reply_to_event_id = Some(original.event_id);
+        send(&db.conn, explicit).await.unwrap();
+
+        assert!(auto_reply_for_completed_turn(
+            &db.conn,
+            target,
+            "queue-message-2",
+            "must not be duplicated"
+        )
+        .await
+        .unwrap()
+        .is_none());
+    }
+
+    #[test]
+    fn automatic_reply_body_is_utf8_safe_and_keeps_a_source_link_when_bounded() {
+        let answer = "结论".repeat(MAX_BODY_BYTES / "结论".len() + 32);
+        let body = bounded_auto_reply_body(42, "attempt-二", &answer);
+
+        assert!(body.len() <= MAX_BODY_BYTES);
+        assert!(body.starts_with("结论结论"));
+        assert!(body.contains("codeg://session/42"));
+        assert!(body.contains("attempt-二"));
+        assert!(body.contains("Reply truncated"));
     }
 
     #[tokio::test]

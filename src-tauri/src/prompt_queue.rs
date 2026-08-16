@@ -192,6 +192,43 @@ impl PromptQueueRuntime {
         }
     }
 
+    async fn auto_reply_completed_collaboration_turn(
+        &self,
+        conversation_id: i32,
+        completed_message_id: Option<String>,
+        assistant_text: Option<String>,
+        ended_abnormally: bool,
+    ) {
+        if ended_abnormally {
+            return;
+        }
+        let (Some(completed_message_id), Some(assistant_text)) =
+            (completed_message_id, assistant_text)
+        else {
+            return;
+        };
+        match collaboration_service::auto_reply_for_completed_turn(
+            &self.db.conn,
+            conversation_id,
+            &completed_message_id,
+            &assistant_text,
+        )
+        .await
+        {
+            Ok(Some(reply)) => emit_event(
+                &self.emitter,
+                COLLABORATION_CHANGED_EVENT,
+                CollaborationChanged {
+                    conversation_ids: reply.affected_conversation_ids,
+                },
+            ),
+            Ok(None) => {}
+            Err(err) => tracing::error!(
+                "[prompt-queue] automatic collaboration reply failed for {conversation_id}: {err}"
+            ),
+        }
+    }
+
     async fn emit_origin_change(&self, item: &crate::models::prompt_queue::ClaimedPromptQueueItem) {
         let Some(event_id) = item.origin_event_id.as_deref() else {
             return;
@@ -403,15 +440,35 @@ impl PromptQueueRuntime {
             AcpEvent::TurnComplete { .. } | AcpEvent::SessionStarted { .. } => None,
             _ => return,
         };
+        let mut completed_turn = None;
         let conversation_id = match explicit {
             Some(id) => Some(id),
             None => match self.manager.get_state(&event.connection_id).await {
-                Some(state) => state.read().await.conversation_id,
+                Some(state) => {
+                    let state = state.read().await;
+                    if turn_completed {
+                        completed_turn = Some((
+                            state.last_completed_user_message_id.clone(),
+                            state.last_assistant_text.clone(),
+                            state.last_turn_ended_abnormally,
+                        ));
+                    }
+                    state.conversation_id
+                }
                 None => None,
             },
         };
         if let Some(id) = conversation_id {
             if turn_completed {
+                if let Some((message_id, assistant_text, ended_abnormally)) = completed_turn {
+                    self.auto_reply_completed_collaboration_turn(
+                        id,
+                        message_id,
+                        assistant_text,
+                        ended_abnormally,
+                    )
+                    .await;
+                }
                 self.reconcile_interrupt_terminal(id).await;
             }
             self.process(id).await;
@@ -1053,6 +1110,143 @@ mod tests {
             .items
             .is_empty());
         assert!(commands.try_recv().is_err(), "delivery must not replay");
+        worker.abort();
+    }
+
+    #[tokio::test]
+    async fn normal_collaboration_turn_returns_one_store_only_final_reply() {
+        let path = "/tmp/codeg-collaboration-auto-reply";
+        let (db, folder_id, target, manager, bus) = setup(path).await;
+        let source = seed_conversation(&db, folder_id, AgentType::ClaudeCode).await;
+        let mut commands = bind_live_connection(&manager, "active", path, folder_id, target).await;
+        let mut request =
+            collaboration_input(source, target, "auto-reply-runtime", "review the result");
+        request.expects_reply = true;
+        let sent = collaboration_service::send(&db.conn, request)
+            .await
+            .expect("collaboration send");
+        let (_handle, task) = build_prompt_queue_runtime(
+            db.conn.clone(),
+            manager.clone_ref(),
+            EventEmitter::Noop,
+            bus.clone(),
+        );
+        let worker = tokio::spawn(task);
+
+        let command = tokio::time::timeout(StdDuration::from_secs(2), commands.recv())
+            .await
+            .expect("prompt timeout")
+            .expect("prompt command");
+        let ConnectionCommand::Prompt { user_message, .. } = command else {
+            panic!("expected prompt command");
+        };
+        let completed_message_id = user_message
+            .map(|(id, _)| id)
+            .expect("stable collaboration message id");
+        assert_eq!(completed_message_id, sent.deliveries[0].id);
+        wait_until(|| async {
+            collaboration_service::feed(&db.conn, target, None)
+                .await
+                .is_ok_and(|feed| feed.inbound[0].state == CollaborationDeliveryState::Embedded)
+        })
+        .await;
+
+        let state = manager.get_state("active").await.expect("state");
+        {
+            let mut state = state.write().await;
+            state.turn_in_flight = false;
+            state.last_completed_user_message_id = Some(completed_message_id);
+            state.last_assistant_text = Some("The result is internally consistent.".into());
+            state.last_turn_ended_abnormally = false;
+        }
+        bus.send(Arc::new(EventEnvelope {
+            seq: 1,
+            connection_id: "active".into(),
+            payload: AcpEvent::TurnComplete {
+                session_id: "native-session".into(),
+                stop_reason: "end_turn".into(),
+                agent_type: "codex".into(),
+            },
+        }));
+
+        wait_until(|| async {
+            collaboration_service::feed(&db.conn, source, None)
+                .await
+                .is_ok_and(|feed| {
+                    feed.inbound.iter().any(|delivery| {
+                        delivery.reply_to_event_id.as_deref() == Some(sent.event_id.as_str())
+                            && delivery.body == "The result is internally consistent."
+                            && delivery.invocation_policy
+                                == CollaborationInvocationPolicy::StoreOnly
+                            && !delivery.expects_reply
+                    })
+                })
+        })
+        .await;
+        assert!(prompt_queue_service::snapshot(&db.conn, source)
+            .await
+            .unwrap()
+            .items
+            .is_empty());
+        worker.abort();
+    }
+
+    #[tokio::test]
+    async fn abnormal_collaboration_turn_does_not_auto_reply() {
+        let path = "/tmp/codeg-collaboration-no-auto-reply";
+        let (db, folder_id, target, manager, bus) = setup(path).await;
+        let source = seed_conversation(&db, folder_id, AgentType::ClaudeCode).await;
+        let mut commands = bind_live_connection(&manager, "active", path, folder_id, target).await;
+        let mut request =
+            collaboration_input(source, target, "abnormal-auto-reply", "review the result");
+        request.expects_reply = true;
+        let sent = collaboration_service::send(&db.conn, request)
+            .await
+            .expect("collaboration send");
+        let (_handle, task) = build_prompt_queue_runtime(
+            db.conn.clone(),
+            manager.clone_ref(),
+            EventEmitter::Noop,
+            bus.clone(),
+        );
+        let worker = tokio::spawn(task);
+        let command = tokio::time::timeout(StdDuration::from_secs(2), commands.recv())
+            .await
+            .expect("prompt timeout")
+            .expect("prompt command");
+        let ConnectionCommand::Prompt { user_message, .. } = command else {
+            panic!("expected prompt command");
+        };
+        wait_until(|| async {
+            collaboration_service::feed(&db.conn, target, None)
+                .await
+                .is_ok_and(|feed| feed.inbound[0].state == CollaborationDeliveryState::Embedded)
+        })
+        .await;
+        let state = manager.get_state("active").await.expect("state");
+        {
+            let mut state = state.write().await;
+            state.turn_in_flight = false;
+            state.last_completed_user_message_id = user_message.map(|(id, _)| id);
+            state.last_assistant_text = Some("partial answer".into());
+            state.last_turn_ended_abnormally = true;
+        }
+        bus.send(Arc::new(EventEnvelope {
+            seq: 1,
+            connection_id: "active".into(),
+            payload: AcpEvent::TurnComplete {
+                session_id: "native-session".into(),
+                stop_reason: "cancelled".into(),
+                agent_type: "codex".into(),
+            },
+        }));
+        tokio::time::sleep(StdDuration::from_millis(100)).await;
+        assert!(!collaboration_service::feed(&db.conn, source, None)
+            .await
+            .unwrap()
+            .inbound
+            .iter()
+            .any(|delivery| delivery.reply_to_event_id.as_deref() == Some(sent.event_id.as_str())));
         worker.abort();
     }
 

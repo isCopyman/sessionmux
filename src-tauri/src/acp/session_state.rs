@@ -415,6 +415,13 @@ pub struct SessionState {
     /// `delegation_call_id`-bound child outcome. Cleared on the next prompt.
     pub last_assistant_text: Option<String>,
 
+    /// Stable user-message id that triggered the just-completed turn. Captured
+    /// alongside `last_assistant_text` before `pending_user_message` is cleared.
+    /// Backend subscribers use the pair to prove that a completed answer came
+    /// from one exact queued prompt instead of guessing from "latest" state.
+    /// Cleared when the next user message starts.
+    pub last_completed_user_message_id: Option<String>,
+
     /// The in-flight user prompt for the current turn, captured from
     /// `AcpEvent::UserMessage` and cleared on `TurnComplete` (alongside
     /// `live_message`). Carried on `to_snapshot()` so a client attaching
@@ -517,6 +524,7 @@ impl SessionState {
             feedback_tool_available: false,
             native_steering_available: false,
             last_assistant_text: None,
+            last_completed_user_message_id: None,
             pending_user_message: None,
             pending_user_message_started_at: None,
             turn_in_flight: false,
@@ -831,6 +839,10 @@ impl SessionState {
                 // other than a normal end-of-turn means this turn's content
                 // may never have reached the wire.
                 self.last_turn_ended_abnormally = stop_reason != "end_turn";
+                self.last_completed_user_message_id = self
+                    .pending_user_message
+                    .as_ref()
+                    .map(|message| message.message_id.clone());
                 // Snapshot the just-finished turn's FINAL assistant text — what
                 // `get_delegation_status` returns as the child result. We take
                 // the Text blocks that follow the LAST tool call (the agent's
@@ -841,14 +853,14 @@ impl SessionState {
                 // call (no concluding text) → empty, which CLEARS the field so a
                 // prior turn's text can't leak as this turn's result; the LLM
                 // reads the full result by opening the child session instead.
-                if let Some(live) = self.live_message.as_ref() {
+                let assembled = self.live_message.as_ref().map(|live| {
                     let after_last_tool_call = live
                         .content
                         .iter()
                         .rposition(|b| matches!(b, LiveContentBlock::ToolCallRef { .. }))
                         .map(|i| i + 1)
                         .unwrap_or(0);
-                    let assembled: String = live.content[after_last_tool_call..]
+                    live.content[after_last_tool_call..]
                         .iter()
                         .filter_map(|b| match b {
                             // Main-thread text only: a subagent's trailing
@@ -863,13 +875,9 @@ impl SessionState {
                             _ => None,
                         })
                         .collect::<Vec<&str>>()
-                        .join("");
-                    self.last_assistant_text = if assembled.trim().is_empty() {
-                        None
-                    } else {
-                        Some(assembled)
-                    };
-                }
+                        .join("")
+                });
+                self.last_assistant_text = assembled.filter(|text| !text.trim().is_empty());
                 self.live_message = None;
                 self.active_tool_calls.clear();
                 // The turn's user prompt is no longer "in flight" — the
@@ -902,6 +910,7 @@ impl SessionState {
                 self.status = ConnectionStatus::Connected;
             }
             AcpEvent::UserMessage { message_id, blocks } => {
+                self.last_completed_user_message_id = None;
                 // Capture the in-flight user prompt so a client attaching
                 // mid-turn renders the user turn from the snapshot (the
                 // one-shot event won't replay for it). Cleared on TurnComplete.
@@ -1856,6 +1865,17 @@ mod tests {
         assert!(
             s.pending_user_message_started_at.is_none(),
             "the turn-start instant is cleared in lockstep with the pending prompt"
+        );
+        assert_eq!(
+            s.last_completed_user_message_id.as_deref(),
+            Some("user-1"),
+            "terminal subscribers can still identify the prompt that just completed"
+        );
+
+        s.apply_event(&text_user_message("user-2", "next"));
+        assert!(
+            s.last_completed_user_message_id.is_none(),
+            "a new turn must not expose the previous completion identity"
         );
     }
 
@@ -2896,6 +2916,17 @@ mod tests {
             agent_type: "codex".into(),
         });
         assert_eq!(s.last_assistant_text, None);
+
+        s.last_assistant_text = Some("another stale answer".into());
+        s.apply_event(&AcpEvent::TurnComplete {
+            session_id: "ext".into(),
+            stop_reason: "end_turn".into(),
+            agent_type: "codex".into(),
+        });
+        assert_eq!(
+            s.last_assistant_text, None,
+            "a turn with no assistant message must not reuse an older answer"
+        );
     }
 
     #[test]
