@@ -387,3 +387,169 @@ async fn real_host_bridge_routes_session_message_from_token_bound_source() {
     assert_eq!(sends[0].1.target_session_ids, vec![7, 8]);
     assert_eq!(sends[0].1.content, "Please compare the evidence.");
 }
+
+struct MapParent(std::collections::HashMap<String, i32>);
+
+#[async_trait]
+impl ParentSessionLookup for MapParent {
+    async fn current_conversation_id(&self, parent_connection_id: &str) -> Option<i32> {
+        self.0.get(parent_connection_id).copied()
+    }
+}
+
+/// Public MCP companion entry (`send_message` over the host bridge) through
+/// real Host Core — not a direct `collaboration_service::send` call.
+#[tokio::test]
+async fn real_host_bridge_round_trips_reply_status_through_host_core() {
+    use codeg_lib::acp::session_collaboration::{
+        SessionCollaborationConfig, SessionCollaborationRuntimeConfig,
+    };
+    use codeg_lib::commands::collaboration::{
+        collaboration_feed_core, DbSessionCollaboration,
+    };
+    use codeg_lib::db::test_helpers::{fresh_in_memory_db, seed_conversation, seed_folder};
+    use codeg_lib::db::AppDatabase;
+    use codeg_lib::models::{AgentType, CollaborationObligationState};
+    use codeg_lib::prompt_queue::PromptQueueHandle;
+    use codeg_lib::web::event_bridge::EventEmitter;
+
+    let db = fresh_in_memory_db().await;
+    let folder = seed_folder(&db, "/tmp/codeg-host-bridge-reply").await;
+    let session_a = seed_conversation(&db, folder, AgentType::Codex).await;
+    let session_b = seed_conversation(&db, folder, AgentType::ClaudeCode).await;
+
+    let config = SessionCollaborationRuntimeConfig::new();
+    config
+        .set(SessionCollaborationConfig { enabled: true })
+        .await;
+    let collaboration = Arc::new(DbSessionCollaboration::new(
+        Arc::new(AppDatabase {
+            conn: db.conn.clone(),
+        }),
+        EventEmitter::Noop,
+        PromptQueueHandle::disconnected_for_test(),
+        config,
+    ));
+
+    let tokens = Arc::new(TokenRegistry::default());
+    tokens
+        .register(
+            "token-a".to_string(),
+            TokenEntry {
+                parent_connection_id: "conn-a".to_string(),
+                working_dir: PathBuf::from("/tmp/codeg-host-bridge-reply"),
+                host_control_writes_allowed: true,
+            },
+        )
+        .await;
+    tokens
+        .register(
+            "token-b".to_string(),
+            TokenEntry {
+                parent_connection_id: "conn-b".to_string(),
+                working_dir: PathBuf::from("/tmp/codeg-host-bridge-reply"),
+                host_control_writes_allowed: true,
+            },
+        )
+        .await;
+
+    let mut parents = std::collections::HashMap::new();
+    parents.insert("conn-a".to_string(), session_a);
+    parents.insert("conn-b".to_string(), session_b);
+
+    let endpoint = unique_endpoint("reply-round-trip");
+    let task = {
+        let listener = HostBridgeListener::new(
+            tokens,
+            Arc::new(MapParent(parents)),
+            Arc::new(RecordingHostControl::default()),
+            Arc::new(NoFeedback),
+            Arc::new(NoQuestions),
+            Arc::new(NoSessionInfo),
+            collaboration,
+            Arc::new(NoTaskTools),
+            Arc::new(NoAuthoring),
+        );
+        let endpoint = endpoint.clone();
+        tokio::spawn(async move { listener.run(endpoint).await })
+    };
+    let endpoint_text = endpoint.to_string_lossy().to_string();
+
+    let outbound = send_message_round_trip_with_retry(
+        &endpoint_text,
+        &BrokerSendMessageRequest {
+            token: "token-a".to_string(),
+            spec: SessionMessageSpec {
+                target_session_ids: vec![session_b],
+                content: "Please review this change.".to_string(),
+                delivery_mode: SessionMessageDeliveryMode::DeliverOnly,
+                steer_if_supported: false,
+                expects_reply: true,
+                reply_to_event_id: None,
+                client_dedupe_id: "bridge-a-to-b".to_string(),
+            },
+        },
+    )
+    .await
+    .expect("A -> B host-bridge send");
+    assert_eq!(outbound.outcome["accepted"], true);
+    assert_eq!(outbound.outcome["source_session_id"], session_a);
+    let event_id = outbound.outcome["event_id"]
+        .as_str()
+        .expect("public send_message returns event_id")
+        .to_string();
+
+    let feed_b = collaboration_feed_core(&db.conn, session_b, None)
+        .await
+        .expect("B feed via public command");
+    assert_eq!(feed_b.inbound.len(), 1);
+    assert_eq!(feed_b.inbound[0].event_id, event_id);
+    assert_eq!(
+        feed_b.inbound[0].obligation_state,
+        CollaborationObligationState::AwaitingReply
+    );
+    assert!(!feed_b.inbound[0].reply_received);
+
+    let feed_a = collaboration_feed_core(&db.conn, session_a, None)
+        .await
+        .expect("A feed via public command");
+    assert_eq!(feed_a.outbound.len(), 1);
+    assert_eq!(
+        feed_a.outbound[0].obligation_state,
+        CollaborationObligationState::AwaitingReply
+    );
+    assert!(!feed_a.outbound[0].reply_received);
+
+    let reply = send_message_round_trip_with_retry(
+        &endpoint_text,
+        &BrokerSendMessageRequest {
+            token: "token-b".to_string(),
+            spec: SessionMessageSpec {
+                target_session_ids: vec![session_a],
+                content: "Looks good.".to_string(),
+                delivery_mode: SessionMessageDeliveryMode::DeliverOnly,
+                steer_if_supported: false,
+                expects_reply: false,
+                reply_to_event_id: Some(event_id.clone()),
+                client_dedupe_id: "bridge-b-reply".to_string(),
+            },
+        },
+    )
+    .await
+    .expect("B -> A host-bridge reply");
+    assert_eq!(reply.outcome["accepted"], true);
+    assert_eq!(reply.outcome["source_session_id"], session_b);
+
+    let feed_a = collaboration_feed_core(&db.conn, session_a, None)
+        .await
+        .expect("A feed after reply");
+    assert_eq!(feed_a.outbound[0].event_id, event_id);
+    assert!(feed_a.outbound[0].reply_received);
+    assert_eq!(
+        feed_a.outbound[0].obligation_state,
+        CollaborationObligationState::Resolved
+    );
+
+    task.abort();
+    cleanup_endpoint(&endpoint).await;
+}
