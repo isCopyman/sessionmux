@@ -1,6 +1,6 @@
 ---
 name: codeg-host-control
-description: Use when a managed Codeg Agent needs to inspect or rename Codeg Sessions, organize Sessions into Collections, or manage saved Workbench membership through Codeg's progressive Host Control MCP.
+description: Use when a managed Codeg Agent needs to create, inspect or rename Codeg Sessions, organize Sessions into Collections, or manage and arrange saved Workbenches through Codeg's progressive Host Control MCP.
 ---
 
 # Codeg Host Control
@@ -15,7 +15,7 @@ vendor tool search, database access, or UI automation.
    short `query` when you need to discover it.
 2. Read the returned server-owned input schema and access level.
 3. Call `codeg_use` with exactly the advertised `action` and `input` fields.
-4. Treat `read`, `persisted`, `not_found`, and `rejected` as distinct stages.
+4. Treat `read`, `persisted`, `ui_requested`, `not_found`, and `rejected` as distinct stages.
    A result with `replayed: true` is the response to the same live-host MCP
    call. After a Host restart, list current state before repeating a create.
 
@@ -54,12 +54,17 @@ the idempotency key outside model-controlled arguments.
   switch to, or focus a Workbench.
 - `workbench.add_session/remove_session`: persist or remove a Session reference
   without deleting/stopping the Session or requesting focus.
+- `workbench.place_session`: explicitly switch the connected workspace UI to a
+  Workbench, focus the Session, and optionally place it in a right/down split.
+  Use this UI-affecting action only when the user asked to open or arrange the
+  Workbench. `ui_requested` is not proof that a disconnected View applied it.
 
-Workbench Pane layout, window mounts and focus remain device-local and are not
-in this capability slice. A persisted Workbench membership is not proof that a
-user saw it. Do not claim a layout was applied and do not simulate layout/open/
-focus through UI automation. Session import/resume/fork/archive/open/focus are
-also unavailable unless `codeg_help` advertises them.
+Workbench Pane layout, window mounts and focus remain device-local.
+`workbench.place_session` exposes only the existing tab/right/down placement
+primitive; arbitrary layout save/apply is still unavailable. A persisted
+Workbench membership is not proof that a user saw it. Do not simulate layout or
+focus through UI automation. Session import/resume/fork/archive are also
+unavailable unless `codeg_help` advertises them.
 
 Before any write, discover the exact action schema and use stable numeric IDs
 returned by `session.list`, `collection.list`, or `workbench.list`.

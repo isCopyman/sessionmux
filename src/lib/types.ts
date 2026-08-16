@@ -534,6 +534,20 @@ export interface OrganizationChanged {
 
 export const ORGANIZATION_CHANGED_EVENT = "organization://changed"
 
+/** Explicit Host Control request to mount one persisted Session in a local
+ * Workbench view. Backend membership is already durable when this arrives;
+ * placement and focus remain device-local UI state. */
+export interface WorkbenchPlaceSessionRequest {
+  requestId: string
+  workbenchId: number
+  folderId: number
+  conversationId: number
+  agent: AgentType
+  placement: "tab" | "right" | "down"
+}
+
+export const WORKBENCH_PLACE_SESSION_EVENT = "workbench://place-session"
+
 /** Response of `list_opened_tabs`: the persisted set + current workspace tab
  *  version (clients seed their compare-and-set / echo logic from it). */
 export interface OpenedTabsSnapshot {

@@ -41,6 +41,7 @@ import {
 } from "@/components/workbench/workbench-content"
 import { WorkbenchTabStrip } from "@/components/workbench/workbench-tab-strip"
 import { OrganizationSyncListener } from "@/components/workbench/organization-sync-listener"
+import { HostControlWorkbenchBridge } from "@/components/workbench/host-control-workbench-bridge"
 import {
   AuxPanelProvider,
   useAuxPanelContext,
@@ -1196,6 +1197,7 @@ function WorkspaceLayoutInner({ children }: { children: React.ReactNode }) {
                 <WorkspaceProvider>
                   <TabProvider>
                     <OrganizationSyncListener />
+                    <HostControlWorkbenchBridge />
                     <WorkspaceDocumentTitle />
                     <TabKeysSync />
                     <HeavyPluginsWarmup />

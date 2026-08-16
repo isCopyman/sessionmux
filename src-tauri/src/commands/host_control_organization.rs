@@ -32,6 +32,7 @@ use crate::models::{CollectionInfo, DbConversationSummary, OpenedTab, WorkbenchI
 use crate::web::event_bridge::{emit_event, EventEmitter};
 
 pub const ORGANIZATION_CHANGED_EVENT: &str = "organization://changed";
+pub const WORKBENCH_PLACE_SESSION_EVENT: &str = "workbench://place-session";
 
 const MAX_NAME_CHARS: usize = 80;
 const MAX_IDEMPOTENCY_ENTRIES: usize = 512;
@@ -209,6 +210,13 @@ impl OrganizationHostControl {
                 &["persisted"],
             ),
             capability(
+                "workbench.place_session",
+                "Open and focus a Session in a saved Workbench, optionally placing it to the right or below the current Pane. This is an explicit UI-affecting action.",
+                HostControlAccessLevel::Write,
+                workbench_place_session_schema(),
+                &["ui_requested"],
+            ),
+            capability(
                 "workbench.remove_session",
                 "Remove a persisted Session reference from one Workbench. The Session and runtime are not deleted or stopped; no Workbench switch is requested.",
                 HostControlAccessLevel::Write,
@@ -230,6 +238,7 @@ impl OrganizationHostControl {
             | "workbench.create"
             | "workbench.rename"
             | "workbench.add_session"
+            | "workbench.place_session"
             | "workbench.remove_session" => Some(HostControlAccessLevel::Write),
             _ => None,
         }
@@ -317,6 +326,10 @@ impl OrganizationHostControl {
             }
             "workbench.add_session" => {
                 self.workbench_set_session(caller, request_id.clone(), action.clone(), input, true)
+                    .await
+            }
+            "workbench.place_session" => {
+                self.workbench_place_session(caller, request_id.clone(), action.clone(), input)
                     .await
             }
             "workbench.remove_session" => {
@@ -1077,6 +1090,77 @@ impl OrganizationHostControl {
         )
     }
 
+    async fn workbench_place_session(
+        &self,
+        caller: &HostControlCaller,
+        request_id: String,
+        action: String,
+        input: Value,
+    ) -> HostControlUseOutcome {
+        let params: WorkbenchPlaceSessionInput = match parse_input(&action, input) {
+            Ok(params) => params,
+            Err(note) => return HostControlUseOutcome::rejected(request_id, action, note),
+        };
+        let scope = match self.caller_scope(caller).await {
+            Ok(scope) => scope,
+            Err(note) => return HostControlUseOutcome::rejected(request_id, action, note),
+        };
+        let session = match self.manageable_session(&scope, params.session_id).await {
+            Ok(session) => session,
+            Err(note) => return HostControlUseOutcome::rejected(request_id, action, note),
+        };
+
+        let membership = self
+            .workbench_set_session(
+                caller,
+                request_id.clone(),
+                action.clone(),
+                json!({
+                    "workbench_id": params.workbench_id,
+                    "session_id": params.session_id,
+                }),
+                true,
+            )
+            .await;
+        if !membership.accepted {
+            return membership;
+        }
+
+        let placement = params.placement.unwrap_or_default();
+        emit_event(
+            &self.emitter,
+            WORKBENCH_PLACE_SESSION_EVENT,
+            json!({
+                "requestId": request_id,
+                "workbenchId": params.workbench_id,
+                "folderId": session.folder_id,
+                "conversationId": session.id,
+                "agent": session.agent_type,
+                "placement": placement,
+            }),
+        );
+
+        HostControlUseOutcome {
+            accepted: true,
+            request_id,
+            action,
+            stage: "ui_requested".to_string(),
+            replayed: false,
+            data: json!({
+                "workbench_id": params.workbench_id,
+                "session_id": params.session_id,
+                "membership_changed": membership.data.get("changed").cloned().unwrap_or(Value::Bool(false)),
+                "version": membership.data.get("version").cloned().unwrap_or(Value::Null),
+                "placement": placement,
+                "focus_requested": true,
+            }),
+            note: Some(
+                "Persisted the Session reference and requested the connected workspace UI to open, focus and place it. The backend does not claim that a disconnected View applied the request."
+                    .to_string(),
+            ),
+        }
+    }
+
     fn emit_change(&self, entity: &str, id: i32) {
         emit_event(
             &self.emitter,
@@ -1148,6 +1232,24 @@ fn workbench_session_schema() -> Value {
         "properties": {
             "workbench_id": positive_id_schema("Saved Workbench id in this Codeg workspace."),
             "session_id": positive_id_schema("Existing Session id in the calling Session's Path scope."),
+        }
+    })
+}
+
+fn workbench_place_session_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["workbench_id", "session_id"],
+        "properties": {
+            "workbench_id": positive_id_schema("Saved Workbench id in this Codeg workspace."),
+            "session_id": positive_id_schema("Existing Session id in the calling Session's Path scope."),
+            "placement": {
+                "type": "string",
+                "enum": ["tab", "right", "down"],
+                "default": "tab",
+                "description": "Open as a tab in the active Pane, or split to the right/below."
+            }
         }
     })
 }
@@ -1276,6 +1378,24 @@ struct WorkbenchRenameInput {
 struct WorkbenchSessionInput {
     workbench_id: i32,
     session_id: i32,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+enum WorkbenchPlacement {
+    #[default]
+    Tab,
+    Right,
+    Down,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkbenchPlaceSessionInput {
+    workbench_id: i32,
+    session_id: i32,
+    #[serde(default)]
+    placement: Option<WorkbenchPlacement>,
 }
 
 #[cfg(test)]
@@ -1482,6 +1602,24 @@ mod tests {
         assert!(added.accepted);
         assert_eq!(added.data["layout_changed"], false);
         assert_eq!(added.data["focus_requested"], false);
+
+        let placed = use_action(
+            &host,
+            caller_id,
+            "workbench-place",
+            "workbench.place_session",
+            json!({
+                "workbench_id": workbench_id,
+                "session_id": target_id,
+                "placement": "right"
+            }),
+        )
+        .await;
+        assert!(placed.accepted);
+        assert_eq!(placed.stage, "ui_requested");
+        assert_eq!(placed.data["membership_changed"], false);
+        assert_eq!(placed.data["placement"], "right");
+        assert_eq!(placed.data["focus_requested"], true);
 
         let snapshot = list_workbench_tabs_core(&host.db.conn, workbench_id)
             .await
