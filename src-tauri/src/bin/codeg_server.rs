@@ -264,6 +264,7 @@ async fn async_main() -> ExitCode {
     let (
         codeg_mcp_tokens,
         codeg_mcp_socket_path,
+        host_control_config,
         feedback_config,
         question_config,
         session_info_config,
@@ -287,6 +288,7 @@ async fn async_main() -> ExitCode {
         pet_state: pet_state_handle.clone(),
         codeg_mcp_tokens: codeg_mcp_tokens.clone(),
         codeg_mcp_socket_path: codeg_mcp_socket_path.clone(),
+        host_control_config: host_control_config.clone(),
         feedback_config: feedback_config.clone(),
         question_config: question_config.clone(),
         session_info_config: session_info_config.clone(),
@@ -358,6 +360,16 @@ async fn async_main() -> ExitCode {
             Arc::new(codeg_lib::acp::manager::ConnectionManagerParentLookup {
                 manager: Arc::new(state.connection_manager.clone_ref()),
             }),
+            Arc::new(
+                codeg_lib::commands::host_control::DbSessionHostControl::new(
+                    Arc::new(codeg_lib::db::AppDatabase {
+                        conn: state.db.conn.clone(),
+                    }),
+                    state.emitter.clone(),
+                    state.chat_channel_manager.clone_ref(),
+                    host_control_config.clone(),
+                ),
+            ),
             Arc::new(codeg_lib::acp::manager::ConnectionManagerFeedbackLookup {
                 manager: Arc::new(state.connection_manager.clone_ref()),
             }),

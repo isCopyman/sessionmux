@@ -409,6 +409,21 @@ ar = "يحدد كيفية اكتشاف واستخدام المهارات في ب
 
 
 [[expert]]
+id = "codeg-host-control"
+category = "execution"
+icon = "Network"
+sort_order = 130
+
+[expert.display_name]
+en = "Codeg Host Control"
+"zh-CN" = "Codeg 主机控制"
+
+[expert.description]
+en = "Manages Codeg Sessions through the progressive Codeg MCP gateway."
+"zh-CN" = "通过 Codeg 自有渐进式 MCP 网关管理会话。"
+
+
+[[expert]]
 id = "writing-skills"
 category = "meta"
 icon = "FileCode2"

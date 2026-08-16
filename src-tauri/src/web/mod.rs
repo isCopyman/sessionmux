@@ -811,6 +811,10 @@ pub(crate) async fn do_start_web_server_tauri(
             .state::<crate::app_state::CodegMcpSocketPath>()
             .0
             .clone(),
+        host_control_config: app
+            .state::<crate::acp::host_control::HostControlRuntimeConfig>()
+            .inner()
+            .clone(),
         // Reuse the same live-feedback config handle the desktop MCP injection
         // reads, so HTTP-side feedback settings target the identical flag.
         feedback_config: app

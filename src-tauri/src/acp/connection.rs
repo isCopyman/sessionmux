@@ -3278,6 +3278,9 @@ fn load_mcp_servers_for_agent(agent_type: AgentType) -> Vec<McpServer> {
 pub struct CodegMcpInjection {
     pub tokens: Arc<crate::acp::delegation::listener::TokenRegistry>,
     pub socket_path: PathBuf,
+    /// Codeg's progressive Host Control gateway. Injection exposes the two
+    /// static gateway tools; the Host Core re-checks this config per call.
+    pub host_control: crate::acp::host_control::HostControlRuntimeConfig,
     /// Hot-swappable "is live-feedback enabled?" flag. Read at injection time
     /// alongside the other flags so `codeg-mcp` is injected when any group is
     /// on. Shares the same `tokens` registry and UDS socket as every group.
@@ -3401,6 +3404,8 @@ fn is_executable_file(path: &Path) -> bool {
 /// call site is a silent argument-swap waiting to happen.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct CompanionFeatureFlags {
+    /// `codeg_help` / `codeg_use`, backed by Codeg's server-owned catalog.
+    host_control: bool,
     feedback: bool,
     ask: bool,
     sessions: bool,
@@ -3422,6 +3427,9 @@ struct CompanionFeatureFlags {
 /// `CompanionFeatures::parse` recognizes.
 fn companion_features_arg(flags: CompanionFeatureFlags) -> Option<String> {
     let mut features: Vec<&str> = Vec::new();
+    if flags.host_control {
+        features.push("host_control");
+    }
     if flags.feedback {
         features.push("feedback");
     }
@@ -3470,6 +3478,7 @@ async fn inject_codeg_mcp(
     let feedback_enabled = injection.feedback.is_enabled().await;
     let authoring = injection.authoring.snapshot().await;
     let flags = CompanionFeatureFlags {
+        host_control: injection.host_control.is_enabled().await,
         feedback: feedback_enabled,
         ask: injection.ask.is_enabled().await,
         sessions: injection.sessions.is_enabled().await,
@@ -3484,7 +3493,7 @@ async fn inject_codeg_mcp(
         tracing::warn!(
             "[host-bridge][WARN] codeg-mcp companion binary not found (checked CODEG_MCP_BIN, \
              exe sibling, and PATH); skipping check_user_feedback / \
-             ask_user_question / get_session_info / Session collaboration tool injection for connection \
+             ask_user_question / get_session_info / Host Control / Session collaboration tool injection for connection \
              {parent_connection_id}. Reinstall codeg or set CODEG_MCP_BIN to fix."
         );
         return None;
@@ -3497,6 +3506,10 @@ async fn inject_codeg_mcp(
             crate::acp::delegation::listener::TokenEntry {
                 parent_connection_id: parent_connection_id.to_string(),
                 working_dir: working_dir.to_path_buf(),
+                // Host Control is a separate, typed application capability.
+                // CODEG_ACP_HOST_TOOLS only chooses who hosts fs/terminal and
+                // must not silently disable reversible Session organization.
+                host_control_writes_allowed: true,
             },
         )
         .await;
@@ -14895,6 +14908,11 @@ mod tests {
             companion_features_arg(CompanionFeatureFlags::default()),
             None
         );
+        // Host Control alone exposes only the progressive gateway.
+        assert_eq!(
+            only(|f| f.host_control = true),
+            Some("host_control".to_string())
+        );
         // Feedback alone injects the shared companion.
         assert_eq!(only(|f| f.feedback = true), Some("feedback".to_string()));
         // Ask only — likewise injects the companion on its own.
@@ -14918,6 +14936,7 @@ mod tests {
         // All on → comma-joined, in the order the companion parses.
         assert_eq!(
             companion_features_arg(CompanionFeatureFlags {
+                host_control: true,
                 feedback: true,
                 ask: true,
                 sessions: true,
@@ -14927,7 +14946,7 @@ mod tests {
                 taskboard: true,
             }),
             Some(
-                "feedback,ask,sessions,collaboration,tasks,automations,taskboard"
+                "host_control,feedback,ask,sessions,collaboration,tasks,automations,taskboard"
                     .to_string()
             )
         );

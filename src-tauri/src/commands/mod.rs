@@ -18,6 +18,7 @@ pub mod file_io;
 pub mod folder_commands;
 pub mod folder_links;
 pub mod folders;
+pub mod host_control;
 pub mod logging;
 pub mod mcp;
 pub mod model_provider;

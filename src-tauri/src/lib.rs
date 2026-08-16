@@ -585,6 +585,7 @@ mod tauri_app {
                     let (
                         tokens,
                         socket_path,
+                        host_control_config,
                         feedback_config,
                         question_config,
                         session_info_config,
@@ -592,6 +593,7 @@ mod tauri_app {
                         chat_authoring_config,
                     ) = crate::app_state::build_codeg_mcp_stack(&cm_state);
                     app.manage(tokens.clone());
+                    app.manage(host_control_config.clone());
                     app.manage(feedback_config.clone());
                     app.manage(question_config.clone());
                     app.manage(session_info_config.clone());
@@ -643,6 +645,20 @@ mod tauri_app {
                             crate::acp::manager::ConnectionManagerParentLookup {
                                 manager: std::sync::Arc::new(cm_state.clone_ref()),
                             },
+                        ),
+                        std::sync::Arc::new(
+                            crate::commands::host_control::DbSessionHostControl::new(
+                                std::sync::Arc::new(db::AppDatabase {
+                                    conn: db_conn.clone(),
+                                }),
+                                crate::web::event_bridge::EventEmitter::Tauri(
+                                    app.handle().clone(),
+                                ),
+                                app.state::<crate::chat_channel::manager::ChatChannelManager>()
+                                    .inner()
+                                    .clone_ref(),
+                                host_control_config.clone(),
+                            ),
                         ),
                         std::sync::Arc::new(
                             crate::acp::manager::ConnectionManagerFeedbackLookup {
