@@ -1332,6 +1332,22 @@
   scrollbar-color: var(--border) transparent;
 }
 
+/* Workbench tabs remain a real horizontal scroller for touchpads, Shift+wheel,
+   keyboard focus and programmatic scrollIntoView. The native Windows/WebView2
+   bar is intentionally hidden because it adds a second, heavy row under the
+   tabs; WorkbenchTabStrip also maps a vertical mouse wheel to scrollLeft. */
+.workbench-tab-scroll {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  overscroll-behavior-inline: contain;
+}
+
+.workbench-tab-scroll::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
 /* OverlayScrollbars custom theme — 6px track, grows to 8px on hover.
    Use compound selector to beat the base `.os-scrollbar` defaults
    (--os-size:0, --os-handle-bg:none) regardless of CSS load order. */

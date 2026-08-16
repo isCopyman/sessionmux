@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useRef, useState, type WheelEvent } from "react"
 import { Reorder } from "motion/react"
 import {
   ArrowLeft,
@@ -97,6 +97,7 @@ export function WorkbenchTabStrip({
   const [pinningId, setPinningId] = useState<number | null>(null)
   const [closingId, setClosingId] = useState<number | null>(null)
   const [reopeningId, setReopeningId] = useState<number | null>(null)
+  const scrollRef = useRef<HTMLDivElement>(null)
   const dragStartOrderRef = useRef<string | null>(null)
   const dragClickGuardRef = useRef<number | null>(null)
   const busy =
@@ -129,6 +130,26 @@ export function WorkbenchTabStrip({
     if (!hydrated) return
     ensureOpen(activeWorkbenchId)
   }, [activeWorkbenchId, ensureOpen, hydrated])
+
+  useEffect(() => {
+    scrollRef.current
+      ?.querySelector(`[data-workbench-tab-id="${activeWorkbenchId}"]`)
+      ?.scrollIntoView({ block: "nearest", inline: "nearest" })
+  }, [activeWorkbenchId, openItems.length])
+
+  const handleWheel = (event: WheelEvent<HTMLDivElement>) => {
+    const viewport = scrollRef.current
+    if (
+      !viewport ||
+      viewport.scrollWidth <= viewport.clientWidth ||
+      Math.abs(event.deltaX) >= Math.abs(event.deltaY) ||
+      event.deltaY === 0
+    ) {
+      return
+    }
+    event.preventDefault()
+    viewport.scrollLeft += event.deltaY
+  }
 
   const create = async () => {
     if (busy) return
@@ -236,14 +257,17 @@ export function WorkbenchTabStrip({
       )}
       <Reorder.Group
         as="div"
+        ref={scrollRef}
         role="tablist"
         aria-label={t("switchTitle")}
+        data-workbench-tab-scroll
         axis="x"
         values={openItems.map((item) => item.id)}
         onReorder={(orderedIds) => {
           previewOrder(mergeOpenWorkbenchOrder(items, orderedIds, openIdSet))
         }}
-        className="flex min-w-0 items-end gap-0.5 overflow-x-auto px-1 pt-1"
+        onWheel={handleWheel}
+        className="workbench-tab-scroll flex min-w-0 items-end gap-0.5 overflow-x-auto overflow-y-hidden px-1 pt-1"
       >
         {openItems.map((item, index) => {
           const active = item.id === activeWorkbenchId

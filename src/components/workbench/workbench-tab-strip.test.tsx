@@ -107,6 +107,20 @@ describe("WorkbenchTabStrip", () => {
     expect(mocks.switchWorkbench).toHaveBeenCalledWith(2)
   })
 
+  it("hides the native scrollbar while preserving wheel scrolling", () => {
+    renderStrip()
+    const viewport = screen.getByRole("tablist")
+    Object.defineProperties(viewport, {
+      clientWidth: { configurable: true, value: 320 },
+      scrollWidth: { configurable: true, value: 960 },
+      scrollLeft: { configurable: true, value: 0, writable: true },
+    })
+
+    expect(viewport).toHaveClass("workbench-tab-scroll")
+    fireEvent.wheel(viewport, { deltaX: 0, deltaY: 120 })
+    expect(viewport.scrollLeft).toBe(120)
+  })
+
   it("creates a named workbench from the trailing plus button", async () => {
     renderStrip()
     await act(async () => {
