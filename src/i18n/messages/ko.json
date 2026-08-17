@@ -658,7 +658,8 @@
       "saveKimiCodeConfig": "Kimi Code 구성 저장",
       "customInstall": "사용자 지정 설치",
       "saveKimiCodeRawConfig": "Save config.toml",
-      "diagnose": "진단"
+      "diagnose": "진단",
+      "saveDeepSeekConfig": "DeepSeek 설정 저장"
     },
     "status": {
       "enabled": "활성화됨",
@@ -1197,7 +1198,9 @@
       "piBinaryInstallFailed": "pi 설치 실패",
       "piBinaryUninstalled": "pi 제거됨",
       "piBinaryUninstallFailed": "pi 제거 실패",
-      "savePiTrustFailed": "작업 공간 신뢰 저장 실패"
+      "savePiTrustFailed": "작업 공간 신뢰 저장 실패",
+      "deepseekSaved": "DeepSeek 설정이 저장되었습니다",
+      "saveDeepSeekFailed": "DeepSeek 설정을 저장할 수 없습니다"
     },
     "version": {
       "statusLabel": "버전 상태",
@@ -1360,7 +1363,16 @@
     "customAgentRemoveWithData": "기록된 대화 기록도 삭제",
     "customAgentRemoved": "{name} 제거됨",
     "customAgentBadge": "사용자 지정",
-    "customAgentNotLaunchable": "이 환경에서는 실행할 수 없습니다: {reason}"
+    "customAgentNotLaunchable": "이 환경에서는 실행할 수 없습니다: {reason}",
+    "deepseek": {
+      "configManagement": "DeepSeek 설정",
+      "configDescription": "DeepSeek 엔드포인트와 키를 설정합니다. 세션은 여기에 표시된 값을 그대로 사용합니다.",
+      "baseUrlLabel": "API 기본 URL",
+      "baseUrlHint": "OpenAI 호환 기본 URL이며 끝의 슬래시는 제거됩니다.",
+      "baseUrlInvalid": "완전한 http(s) URL을 입력하세요.",
+      "apiKeyLabel": "API 키",
+      "apiKeyHint": "로컬에 저장되며 DEEPSEEK_API_KEY로 에이전트에 전달됩니다."
+    }
   },
   "SettingsPages": {
     "agentsLoading": "에이전트 설정을 불러오는 중...",
@@ -2811,7 +2823,10 @@
         "paused": "대기열 일시 중지: {reason}",
         "pauseReasonCancelled": "현재 작업이 취소되었습니다. 준비되면 다시 시작하세요.",
         "pauseReasonUnknownDispatch": "이전 메시지가 에이전트에 도착했을 수 있습니다. 다시 시도하기 전에 세션을 확인하세요.",
-        "persistFailed": "대기 메시지를 저장하지 못했습니다: {error}. 메시지 텍스트를 입력창에 복원했습니다."
+        "persistFailed": "대기 메시지를 저장하지 못했습니다: {error}. 메시지 텍스트를 입력창에 복원했습니다.",
+        "sourceCollaboration": "메일",
+        "sourceReminder": "리마인더",
+        "sourceTimer": "타이머"
       },
       "welcomeInputPanel": {
         "agentsSettingsPath": "설정 > 에이전트",
@@ -2937,7 +2952,8 @@
       "agentSelector": {
         "noEnabledAgents": "활성화된 에이전트가 없습니다",
         "openAgentsSettings": "에이전트 설정 열기",
-        "notInstalled": "설치되지 않음"
+        "notInstalled": "설치되지 않음",
+        "moreAgents": "추가 에이전트 ({count})"
       },
       "agentPlanOverlay": {
         "title": "에이전트 계획",
@@ -3145,7 +3161,8 @@
             "blocked": "차단됨",
             "usageLimited": "사용량 제한",
             "budgetLimited": "예산 제한",
-            "complete": "완료"
+            "complete": "완료",
+            "limited": "제한됨"
           }
         },
         "field": {
@@ -3255,7 +3272,8 @@
           "outputMissing": "codex가 스크립트 출력을 잘라내면서 이 명령의 구분선이 사라져 출력을 귀속시킬 수 없습니다.",
           "sharedWith": "이 구간에는 {commands}의 출력도 포함됩니다 — 구분선이 codex에 의해 잘렸습니다.",
           "truncated": "잘림"
-        }
+        },
+        "agentCodexLaunchOnly": "시작이 확인되었습니다. 이 카드는 더 이상 진행 상황을 보고하지 않으며, 하위 에이전트는 자체 스레드에서 계속 작업 중일 수 있습니다."
       },
       "messageNav": {
         "title": "메시지 탐색",
@@ -3371,7 +3389,8 @@
       "contextCompaction": {
         "compacting": "컨텍스트 압축 중…",
         "compacted": "컨텍스트 압축 완료",
-        "compactedTokens": "컨텍스트 압축 완료 · {before} → {after} 토큰"
+        "compactedTokens": "컨텍스트 압축 완료 · {before} → {after} 토큰",
+        "failed": "컨텍스트 압축 실패"
       },
       "backgroundTasks": {
         "running": "백그라운드 작업 {count}개 실행 중",
@@ -3405,6 +3424,26 @@
         "errors": {
           "emptyPrompt": "프롬프트를 입력하세요"
         }
+      },
+      "sessionFailure": {
+        "category": {
+          "connection": "연결 문제",
+          "access": "접근 문제",
+          "limit": "사용량 한도 도달",
+          "request": "요청 거부됨",
+          "service": "서비스 오류",
+          "unknown": "세션 문제"
+        },
+        "action": {
+          "retry": "재시도",
+          "login": "로그인",
+          "newSession": "새 세션"
+        },
+        "moreIncidents": "외 {count}건",
+        "toggleDetails": "세부 정보 전환",
+        "dismiss": "닫기",
+        "recovered": "복구됨",
+        "retryUnavailable": "다시 보낼 내용이 없습니다. 원본 프롬프트를 복구할 수 없었습니다."
       }
     },
     "diffPreview": {
@@ -4731,7 +4770,13 @@
     "eventCleanupFailed": "worktree 정리 실패",
     "eventResumeFallback": "세션 재개 실패, 새 세션으로 전환",
     "eventUserAction": "사용자 작업",
-    "eventDiffStat": "변경 스냅샷"
+    "eventDiffStat": "변경 스냅샷",
+    "settingsTabMerge": "병합",
+    "settingsTabWorktree": "워크트리",
+    "settingsWorktreeRoot": "워크트리 위치",
+    "settingsWorktreeRootHint": "작업 워크트리를 만들 위치입니다. 비워 두면 저장소 옆 기본 위치를 사용합니다.",
+    "settingsWorktreeRootPlaceholder": "기본값: 저장소와 같은 위치",
+    "settingsWorktreeRootBrowse": "찾아보기"
   },
   "CustomSkillsSettings": {
     "loading": "사용자 지정 스킬 불러오는 중…",

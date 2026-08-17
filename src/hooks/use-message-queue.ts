@@ -14,6 +14,7 @@ import { onTransportReconnect, subscribe } from "@/lib/platform"
 import type {
   PromptDraft,
   PromptQueueItem,
+  PromptQueueSource,
   PromptQueueSnapshot,
 } from "@/lib/types"
 import { randomUUID } from "@/lib/utils"
@@ -25,6 +26,7 @@ export interface QueuedMessage {
   draft: PromptDraft
   modeId: string | null
   state: "queued" | "claimed" | "paused"
+  source: PromptQueueSource
   attempts: number
   pausedReason: string | null
 }
@@ -57,6 +59,11 @@ function fromWire(item: PromptQueueItem): QueuedMessage | null {
     draft: item.draft,
     modeId: item.modeId ?? null,
     state: item.state,
+    // A dev-mode HMR frontend can outlive the backend it talks to; snapshots
+    // from a pre-`source` backend simply lack the field, and "user" is the
+    // only class such a backend ever surfaced here (drafts render, letters
+    // and reminders queue draftless).
+    source: item.source ?? "user",
     attempts: item.attempts,
     pausedReason: item.pausedReason ?? null,
   }
@@ -214,6 +221,7 @@ export function useMessageQueue(
         draft,
         modeId,
         state: "queued",
+        source: "user",
         attempts: 0,
         pausedReason: null,
       }

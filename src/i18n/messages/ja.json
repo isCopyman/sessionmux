@@ -658,7 +658,8 @@
       "saveKimiCodeConfig": "Kimi Code の設定を保存",
       "customInstall": "カスタムインストール",
       "saveKimiCodeRawConfig": "Save config.toml",
-      "diagnose": "診断"
+      "diagnose": "診断",
+      "saveDeepSeekConfig": "DeepSeek 設定を保存"
     },
     "status": {
       "enabled": "有効",
@@ -1197,7 +1198,9 @@
       "piBinaryInstallFailed": "pi のインストールに失敗しました",
       "piBinaryUninstalled": "pi をアンインストールしました",
       "piBinaryUninstallFailed": "pi のアンインストールに失敗しました",
-      "savePiTrustFailed": "ワークスペースの信頼設定の保存に失敗しました"
+      "savePiTrustFailed": "ワークスペースの信頼設定の保存に失敗しました",
+      "deepseekSaved": "DeepSeek 設定を保存しました",
+      "saveDeepSeekFailed": "DeepSeek 設定を保存できませんでした"
     },
     "version": {
       "statusLabel": "バージョン状態",
@@ -1360,7 +1363,16 @@
     "customAgentRemoveWithData": "記録された会話履歴も削除する",
     "customAgentRemoved": "{name} を削除しました",
     "customAgentBadge": "カスタム",
-    "customAgentNotLaunchable": "この環境では起動できません: {reason}"
+    "customAgentNotLaunchable": "この環境では起動できません: {reason}",
+    "deepseek": {
+      "configManagement": "DeepSeek 設定",
+      "configDescription": "DeepSeek のエンドポイントとキーを設定します。セッションはここに表示される値をそのまま使用します。",
+      "baseUrlLabel": "API ベース URL",
+      "baseUrlHint": "OpenAI 互換のベース URL。末尾のスラッシュは削除されます。",
+      "baseUrlInvalid": "完全な http(s) URL を入力してください。",
+      "apiKeyLabel": "API キー",
+      "apiKeyHint": "ローカルに保存され、DEEPSEEK_API_KEY としてエージェントに渡されます。"
+    }
   },
   "SettingsPages": {
     "agentsLoading": "エージェント設定を読み込み中...",
@@ -2811,7 +2823,10 @@
         "paused": "キューは一時停止中：{reason}",
         "pauseReasonCancelled": "現在のタスクはキャンセルされました。準備ができたら再開してください。",
         "pauseReasonUnknownDispatch": "前のメッセージはエージェントに届いている可能性があります。再試行する前にセッションを確認してください。",
-        "persistFailed": "キューのメッセージを保存できませんでした：{error}。本文を入力欄に戻しました。"
+        "persistFailed": "キューのメッセージを保存できませんでした：{error}。本文を入力欄に戻しました。",
+        "sourceCollaboration": "メール",
+        "sourceReminder": "リマインダー",
+        "sourceTimer": "タイマー"
       },
       "welcomeInputPanel": {
         "agentsSettingsPath": "設定 > エージェント",
@@ -2937,7 +2952,8 @@
       "agentSelector": {
         "noEnabledAgents": "有効なエージェントがありません",
         "openAgentsSettings": "エージェント設定を開く",
-        "notInstalled": "未インストール"
+        "notInstalled": "未インストール",
+        "moreAgents": "その他のエージェント（{count}）"
       },
       "agentPlanOverlay": {
         "title": "エージェントプラン",
@@ -3145,7 +3161,8 @@
             "blocked": "ブロック中",
             "usageLimited": "使用量制限",
             "budgetLimited": "予算制限",
-            "complete": "完了"
+            "complete": "完了",
+            "limited": "制限"
           }
         },
         "field": {
@@ -3255,7 +3272,8 @@
           "outputMissing": "codex がスクリプト出力を切り詰めた際にこのコマンドの区切り行が失われたため、出力を割り当てられませんでした。",
           "sharedWith": "この範囲には {commands} の出力も含まれます — 区切り行が codex により切り捨てられました。",
           "truncated": "切り詰め済み"
-        }
+        },
+        "agentCodexLaunchOnly": "起動を確認しました。このカードはこれ以上進捗を報告しません。サブエージェントは独自のスレッドで作業を続けている可能性があります。"
       },
       "messageNav": {
         "title": "メッセージナビ",
@@ -3371,7 +3389,8 @@
       "contextCompaction": {
         "compacting": "コンテキストを圧縮しています…",
         "compacted": "コンテキストを圧縮しました",
-        "compactedTokens": "コンテキストを圧縮 · {before} → {after} トークン"
+        "compactedTokens": "コンテキストを圧縮 · {before} → {after} トークン",
+        "failed": "コンテキスト圧縮に失敗しました"
       },
       "backgroundTasks": {
         "running": "{count} 件のバックグラウンドタスクを実行中",
@@ -3405,6 +3424,26 @@
         "errors": {
           "emptyPrompt": "プロンプトを入力してください"
         }
+      },
+      "sessionFailure": {
+        "category": {
+          "connection": "接続の問題",
+          "access": "アクセスの問題",
+          "limit": "上限に達しました",
+          "request": "リクエストが拒否されました",
+          "service": "サービスエラー",
+          "unknown": "セッションの問題"
+        },
+        "action": {
+          "retry": "再試行",
+          "login": "サインイン",
+          "newSession": "新しいセッション"
+        },
+        "moreIncidents": "他 {count} 件",
+        "toggleDetails": "詳細の表示切替",
+        "dismiss": "閉じる",
+        "recovered": "回復しました",
+        "retryUnavailable": "再送できる内容がありません。元のプロンプトを復元できませんでした。"
       }
     },
     "diffPreview": {
@@ -4731,7 +4770,13 @@
     "eventCleanupFailed": "worktree のクリーンアップに失敗",
     "eventResumeFallback": "セッション再開に失敗し新規セッションへ",
     "eventUserAction": "ユーザー操作",
-    "eventDiffStat": "変更スナップショット"
+    "eventDiffStat": "変更スナップショット",
+    "settingsTabMerge": "マージ",
+    "settingsTabWorktree": "ワークツリー",
+    "settingsWorktreeRoot": "ワークツリーの場所",
+    "settingsWorktreeRootHint": "タスクのワークツリーを作成する場所。空欄の場合はリポジトリの隣の既定の場所を使用します。",
+    "settingsWorktreeRootPlaceholder": "既定：リポジトリと同じ階層",
+    "settingsWorktreeRootBrowse": "参照"
   },
   "CustomSkillsSettings": {
     "loading": "カスタムスキルを読み込み中…",

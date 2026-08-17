@@ -41,7 +41,10 @@ function assistantItem(
   }
 }
 
-function userItem(id: string, text: string): ThreadItem {
+function userItem(
+  id: string,
+  text: string
+): Extract<ThreadItem, { kind: "turn" }> {
   return {
     key: `persisted-user-${id}`,
     kind: "turn",

@@ -20,7 +20,7 @@ export type MailDirection = "inbound" | "outbound" | "system"
 export function mailStatusLabelKey(
   status: MailHumanStatus,
   direction: MailDirection
-): string {
+) {
   if (direction === "outbound") {
     switch (status) {
       case "unread":

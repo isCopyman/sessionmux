@@ -658,7 +658,8 @@
       "saveKimiCodeConfig": "Enregistrer la configuration de Kimi Code",
       "customInstall": "Installation personnalisée",
       "saveKimiCodeRawConfig": "Enregistrer config.toml",
-      "diagnose": "Diagnostiquer"
+      "diagnose": "Diagnostiquer",
+      "saveDeepSeekConfig": "Enregistrer les réglages DeepSeek"
     },
     "status": {
       "enabled": "Activé",
@@ -1197,7 +1198,9 @@
       "piBinaryInstallFailed": "Échec de l'installation de pi",
       "piBinaryUninstalled": "pi désinstallé",
       "piBinaryUninstallFailed": "Échec de la désinstallation de pi",
-      "savePiTrustFailed": "Échec de l'enregistrement de la confiance de l'espace de travail"
+      "savePiTrustFailed": "Échec de l'enregistrement de la confiance de l'espace de travail",
+      "deepseekSaved": "Configuration DeepSeek enregistrée",
+      "saveDeepSeekFailed": "Impossible d'enregistrer la configuration DeepSeek"
     },
     "version": {
       "statusLabel": "Statut de version",
@@ -1360,7 +1363,16 @@
     "customAgentRemoveWithData": "Supprimer aussi l'historique de conversation enregistré",
     "customAgentRemoved": "{name} supprimé",
     "customAgentBadge": "Personnalisé",
-    "customAgentNotLaunchable": "Cet agent ne peut pas démarrer ici : {reason}"
+    "customAgentNotLaunchable": "Cet agent ne peut pas démarrer ici : {reason}",
+    "deepseek": {
+      "configManagement": "Configuration DeepSeek",
+      "configDescription": "Renseignez l'endpoint et la clé DeepSeek. Les sessions utilisent exactement ce qui est affiché ici.",
+      "baseUrlLabel": "URL de base de l'API",
+      "baseUrlHint": "URL de base compatible OpenAI ; la barre oblique finale est supprimée.",
+      "baseUrlInvalid": "Saisissez une URL http(s) complète.",
+      "apiKeyLabel": "Clé d'API",
+      "apiKeyHint": "Stockée localement et transmise à l'agent via DEEPSEEK_API_KEY."
+    }
   },
   "SettingsPages": {
     "agentsLoading": "Chargement des paramètres des agents...",
@@ -2811,7 +2823,10 @@
         "paused": "File d’attente en pause : {reason}",
         "pauseReasonCancelled": "La tâche en cours a été annulée. Reprenez quand vous le souhaitez.",
         "pauseReasonUnknownDispatch": "Le message précédent a peut-être atteint l’agent. Vérifiez la session avant de réessayer.",
-        "persistFailed": "Impossible d’enregistrer le message en attente : {error}. Son texte a été restauré dans la zone de saisie."
+        "persistFailed": "Impossible d’enregistrer le message en attente : {error}. Son texte a été restauré dans la zone de saisie.",
+        "sourceCollaboration": "Lettre",
+        "sourceReminder": "Rappel",
+        "sourceTimer": "Minuteur"
       },
       "welcomeInputPanel": {
         "agentsSettingsPath": "Paramètres > Agents",
@@ -2937,7 +2952,8 @@
       "agentSelector": {
         "noEnabledAgents": "Aucun agent activé",
         "openAgentsSettings": "Ouvrir les paramètres des agents",
-        "notInstalled": "Non installé"
+        "notInstalled": "Non installé",
+        "moreAgents": "Plus d'agents ({count})"
       },
       "agentPlanOverlay": {
         "title": "Plan de l'agent",
@@ -3145,7 +3161,8 @@
             "blocked": "bloqué",
             "usageLimited": "utilisation limitée",
             "budgetLimited": "budget limité",
-            "complete": "terminé"
+            "complete": "terminé",
+            "limited": "limité"
           }
         },
         "field": {
@@ -3255,7 +3272,8 @@
           "outputMissing": "Codex a tronqué la sortie du script et supprimé le séparateur de cette commande ; aucune sortie n'a donc pu lui être attribuée.",
           "sharedWith": "Contient aussi la sortie de {commands} — codex en a tronqué les séparateurs.",
           "truncated": "tronqué"
-        }
+        },
+        "agentCodexLaunchOnly": "Lancement confirmé - cette carte ne rapporte plus de progression ; le sous-agent peut continuer à travailler dans son propre fil."
       },
       "messageNav": {
         "title": "Navigation des messages",
@@ -3371,7 +3389,8 @@
       "contextCompaction": {
         "compacting": "Compactage du contexte…",
         "compacted": "Contexte compacté",
-        "compactedTokens": "Contexte compacté · {before} → {after} tokens"
+        "compactedTokens": "Contexte compacté · {before} → {after} tokens",
+        "failed": "Échec de la compaction du contexte"
       },
       "backgroundTasks": {
         "running": "{count, plural, one {# tâche en arrière-plan en cours} other {# tâches en arrière-plan en cours}}",
@@ -3405,6 +3424,26 @@
         "errors": {
           "emptyPrompt": "L'invite ne peut pas être vide"
         }
+      },
+      "sessionFailure": {
+        "category": {
+          "connection": "Problème de connexion",
+          "access": "Problème d'accès",
+          "limit": "Limite atteinte",
+          "request": "Requête rejetée",
+          "service": "Erreur du service",
+          "unknown": "Problème de session"
+        },
+        "action": {
+          "retry": "Réessayer",
+          "login": "Se connecter",
+          "newSession": "Nouvelle session"
+        },
+        "moreIncidents": "+{count} autres",
+        "toggleDetails": "Afficher/masquer les détails",
+        "dismiss": "Fermer",
+        "recovered": "Rétabli",
+        "retryUnavailable": "Rien à renvoyer — le prompt d'origine n'a pas pu être récupéré."
       }
     },
     "diffPreview": {
@@ -4731,7 +4770,13 @@
     "eventCleanupFailed": "Échec du nettoyage du worktree",
     "eventResumeFallback": "Reprise échouée, nouvelle session utilisée",
     "eventUserAction": "Action utilisateur",
-    "eventDiffStat": "Instantané des changements"
+    "eventDiffStat": "Instantané des changements",
+    "settingsTabMerge": "Fusion",
+    "settingsTabWorktree": "Arbre de travail",
+    "settingsWorktreeRoot": "Emplacement de l'arbre de travail",
+    "settingsWorktreeRootHint": "Où les arbres de travail des tâches sont créés. Laissez vide pour l'emplacement par défaut à côté du dépôt.",
+    "settingsWorktreeRootPlaceholder": "Par défaut : à côté du dépôt",
+    "settingsWorktreeRootBrowse": "Parcourir"
   },
   "CustomSkillsSettings": {
     "loading": "Chargement des compétences personnalisées…",

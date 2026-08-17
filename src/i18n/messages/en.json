@@ -658,7 +658,8 @@
       "saveKimiCodeConfig": "Save Kimi Code Config",
       "customInstall": "Custom install",
       "saveKimiCodeRawConfig": "Save config.toml",
-      "diagnose": "Diagnose"
+      "diagnose": "Diagnose",
+      "saveDeepSeekConfig": "Save DeepSeek settings"
     },
     "status": {
       "enabled": "Enabled",
@@ -1197,7 +1198,9 @@
       "piBinaryInstallFailed": "Failed to install pi",
       "piBinaryUninstalled": "pi uninstalled",
       "piBinaryUninstallFailed": "Failed to uninstall pi",
-      "savePiTrustFailed": "Failed to save workspace trust"
+      "savePiTrustFailed": "Failed to save workspace trust",
+      "deepseekSaved": "DeepSeek configuration saved",
+      "saveDeepSeekFailed": "Could not save the DeepSeek configuration"
     },
     "version": {
       "statusLabel": "Version Status",
@@ -1360,7 +1363,16 @@
     "customAgentRemoveWithData": "Also delete its recorded conversation history",
     "customAgentRemoved": "Removed {name}",
     "customAgentBadge": "Custom",
-    "customAgentNotLaunchable": "This agent cannot launch here: {reason}"
+    "customAgentNotLaunchable": "This agent cannot launch here: {reason}",
+    "deepseek": {
+      "configManagement": "DeepSeek Configuration",
+      "configDescription": "Point the DeepSeek adapter at your endpoint and key. Sessions use exactly what is shown here.",
+      "baseUrlLabel": "API Base URL",
+      "baseUrlHint": "OpenAI-compatible base URL; a trailing slash is trimmed.",
+      "baseUrlInvalid": "Enter a full http(s) URL.",
+      "apiKeyLabel": "API Key",
+      "apiKeyHint": "Stored locally and passed to the agent as DEEPSEEK_API_KEY."
+    }
   },
   "SettingsPages": {
     "agentsLoading": "Loading agent settings...",
@@ -2811,7 +2823,10 @@
         "paused": "Queue paused: {reason}",
         "pauseReasonCancelled": "The current turn was cancelled. Resume when you are ready.",
         "pauseReasonUnknownDispatch": "The previous message may have reached the agent. Check the session before retrying.",
-        "persistFailed": "Could not save the queued message: {error}. Its text was restored to the composer."
+        "persistFailed": "Could not save the queued message: {error}. Its text was restored to the composer.",
+        "sourceCollaboration": "Letter",
+        "sourceReminder": "Reminder",
+        "sourceTimer": "Timer"
       },
       "welcomeInputPanel": {
         "agentsSettingsPath": "Settings > Agents",
@@ -2937,7 +2952,8 @@
       "agentSelector": {
         "noEnabledAgents": "No enabled agents",
         "openAgentsSettings": "Open Agents settings",
-        "notInstalled": "Not installed"
+        "notInstalled": "Not installed",
+        "moreAgents": "More agents ({count})"
       },
       "agentPlanOverlay": {
         "title": "Agent Plan",
@@ -3145,7 +3161,8 @@
             "blocked": "blocked",
             "usageLimited": "usage limited",
             "budgetLimited": "budget limited",
-            "complete": "complete"
+            "complete": "complete",
+            "limited": "limited"
           }
         },
         "field": {
@@ -3255,7 +3272,8 @@
           "outputMissing": "Codex truncated the script output and dropped this command's separator, so none of the output could be attributed to it.",
           "sharedWith": "Also contains the output of {commands} — codex truncated their separators away.",
           "truncated": "truncated"
-        }
+        },
+        "agentCodexLaunchOnly": "Launch acknowledged - this card reports no further progress; the sub-agent may still be working in its own thread."
       },
       "messageNav": {
         "title": "Message navigation",
@@ -3371,7 +3389,8 @@
       "contextCompaction": {
         "compacting": "Compacting context…",
         "compacted": "Context compacted",
-        "compactedTokens": "Context compacted · {before} → {after} tokens"
+        "compactedTokens": "Context compacted · {before} → {after} tokens",
+        "failed": "Context compaction failed"
       },
       "backgroundTasks": {
         "running": "{count, plural, one {# background task running} other {# background tasks running}}",
@@ -3405,6 +3424,26 @@
         "errors": {
           "emptyPrompt": "The timer prompt must not be empty"
         }
+      },
+      "sessionFailure": {
+        "category": {
+          "connection": "Connection issue",
+          "access": "Access issue",
+          "limit": "Limit reached",
+          "request": "Request rejected",
+          "service": "Service error",
+          "unknown": "Session issue"
+        },
+        "action": {
+          "retry": "Retry",
+          "login": "Sign in",
+          "newSession": "New session"
+        },
+        "moreIncidents": "+{count} more",
+        "toggleDetails": "Toggle details",
+        "dismiss": "Dismiss",
+        "recovered": "Recovered",
+        "retryUnavailable": "Nothing to resend — the original prompt could not be recovered."
       }
     },
     "diffPreview": {
@@ -4731,7 +4770,13 @@
     "eventCleanupFailed": "Worktree cleanup failed",
     "eventResumeFallback": "Session resume fell back to a new session",
     "eventUserAction": "User action",
-    "eventDiffStat": "Change snapshot"
+    "eventDiffStat": "Change snapshot",
+    "settingsTabMerge": "Merge",
+    "settingsTabWorktree": "Worktree",
+    "settingsWorktreeRoot": "Worktree location",
+    "settingsWorktreeRootHint": "Where task worktrees are created. Leave blank for the default next to the repository.",
+    "settingsWorktreeRootPlaceholder": "Default: alongside the repository",
+    "settingsWorktreeRootBrowse": "Browse"
   },
   "CustomSkillsSettings": {
     "loading": "Loading custom skills…",

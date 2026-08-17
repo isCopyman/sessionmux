@@ -658,7 +658,8 @@
       "saveKimiCodeConfig": "Guardar configuración de Kimi Code",
       "customInstall": "Instalación personalizada",
       "saveKimiCodeRawConfig": "Save config.toml",
-      "diagnose": "Diagnosticar"
+      "diagnose": "Diagnosticar",
+      "saveDeepSeekConfig": "Guardar ajustes de DeepSeek"
     },
     "status": {
       "enabled": "Habilitado",
@@ -1197,7 +1198,9 @@
       "piBinaryInstallFailed": "Error al instalar pi",
       "piBinaryUninstalled": "pi desinstalado",
       "piBinaryUninstallFailed": "Error al desinstalar pi",
-      "savePiTrustFailed": "Error al guardar la confianza del espacio de trabajo"
+      "savePiTrustFailed": "Error al guardar la confianza del espacio de trabajo",
+      "deepseekSaved": "Configuración de DeepSeek guardada",
+      "saveDeepSeekFailed": "No se pudo guardar la configuración de DeepSeek"
     },
     "version": {
       "statusLabel": "Estado de versión",
@@ -1360,7 +1363,16 @@
     "customAgentRemoveWithData": "Eliminar también su historial de conversaciones registrado",
     "customAgentRemoved": "{name} eliminado",
     "customAgentBadge": "Personalizado",
-    "customAgentNotLaunchable": "Este agente no puede iniciarse aquí: {reason}"
+    "customAgentNotLaunchable": "Este agente no puede iniciarse aquí: {reason}",
+    "deepseek": {
+      "configManagement": "Configuración de DeepSeek",
+      "configDescription": "Configura el endpoint y la clave de DeepSeek. Las sesiones usan exactamente lo que se muestra aquí.",
+      "baseUrlLabel": "URL base de la API",
+      "baseUrlHint": "URL base compatible con OpenAI; la barra final se elimina.",
+      "baseUrlInvalid": "Introduce una URL http(s) completa.",
+      "apiKeyLabel": "Clave de API",
+      "apiKeyHint": "Se guarda localmente y se pasa al agente como DEEPSEEK_API_KEY."
+    }
   },
   "SettingsPages": {
     "agentsLoading": "Cargando configuración de agentes...",
@@ -2811,7 +2823,10 @@
         "paused": "Cola en pausa: {reason}",
         "pauseReasonCancelled": "Se canceló la tarea actual. Reanuda cuando quieras.",
         "pauseReasonUnknownDispatch": "Es posible que el mensaje anterior haya llegado al agente. Revisa la sesión antes de reintentar.",
-        "persistFailed": "No se pudo guardar el mensaje en cola: {error}. El texto se restauró en el campo de entrada."
+        "persistFailed": "No se pudo guardar el mensaje en cola: {error}. El texto se restauró en el campo de entrada.",
+        "sourceCollaboration": "Carta",
+        "sourceReminder": "Recordatorio",
+        "sourceTimer": "Temporizador"
       },
       "welcomeInputPanel": {
         "agentsSettingsPath": "Ajustes > Agentes",
@@ -2937,7 +2952,8 @@
       "agentSelector": {
         "noEnabledAgents": "No hay agentes habilitados",
         "openAgentsSettings": "Abrir ajustes de agentes",
-        "notInstalled": "No instalado"
+        "notInstalled": "No instalado",
+        "moreAgents": "Más agentes ({count})"
       },
       "agentPlanOverlay": {
         "title": "Plan del agente",
@@ -3145,7 +3161,8 @@
             "blocked": "bloqueado",
             "usageLimited": "uso limitado",
             "budgetLimited": "presupuesto limitado",
-            "complete": "completo"
+            "complete": "completo",
+            "limited": "limitado"
           }
         },
         "field": {
@@ -3255,7 +3272,8 @@
           "outputMissing": "Codex truncó la salida del script y eliminó el separador de este comando, por lo que no se le pudo atribuir ninguna salida.",
           "sharedWith": "También contiene la salida de {commands}: codex truncó sus separadores.",
           "truncated": "truncado"
-        }
+        },
+        "agentCodexLaunchOnly": "Lanzamiento confirmado: esta tarjeta no informa más progreso; el subagente puede seguir trabajando en su propio hilo."
       },
       "messageNav": {
         "title": "Navegación de mensajes",
@@ -3371,7 +3389,8 @@
       "contextCompaction": {
         "compacting": "Compactando el contexto…",
         "compacted": "Contexto compactado",
-        "compactedTokens": "Contexto compactado · {before} → {after} tokens"
+        "compactedTokens": "Contexto compactado · {before} → {after} tokens",
+        "failed": "Falló la compactación de contexto"
       },
       "backgroundTasks": {
         "running": "{count, plural, one {# tarea en segundo plano en ejecución} other {# tareas en segundo plano en ejecución}}",
@@ -3405,6 +3424,26 @@
         "errors": {
           "emptyPrompt": "La indicación no puede estar vacía"
         }
+      },
+      "sessionFailure": {
+        "category": {
+          "connection": "Problema de conexión",
+          "access": "Problema de acceso",
+          "limit": "Límite alcanzado",
+          "request": "Solicitud rechazada",
+          "service": "Error del servicio",
+          "unknown": "Problema de sesión"
+        },
+        "action": {
+          "retry": "Reintentar",
+          "login": "Iniciar sesión",
+          "newSession": "Nueva sesión"
+        },
+        "moreIncidents": "+{count} más",
+        "toggleDetails": "Alternar detalles",
+        "dismiss": "Descartar",
+        "recovered": "Recuperado",
+        "retryUnavailable": "No hay nada que reenviar: no se pudo recuperar el prompt original."
       }
     },
     "diffPreview": {
@@ -4731,7 +4770,13 @@
     "eventCleanupFailed": "Fallo al limpiar el worktree",
     "eventResumeFallback": "La reanudación falló; se usó una sesión nueva",
     "eventUserAction": "Acción del usuario",
-    "eventDiffStat": "Instantánea de cambios"
+    "eventDiffStat": "Instantánea de cambios",
+    "settingsTabMerge": "Fusión",
+    "settingsTabWorktree": "Árbol de trabajo",
+    "settingsWorktreeRoot": "Ubicación del árbol de trabajo",
+    "settingsWorktreeRootHint": "Dónde se crean los árboles de trabajo de tareas. Déjalo vacío para usar la ubicación predeterminada junto al repositorio.",
+    "settingsWorktreeRootPlaceholder": "Predeterminado: junto al repositorio",
+    "settingsWorktreeRootBrowse": "Examinar"
   },
   "CustomSkillsSettings": {
     "loading": "Cargando habilidades personalizadas…",

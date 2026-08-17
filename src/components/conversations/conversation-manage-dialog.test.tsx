@@ -967,7 +967,7 @@ describe("ConversationManageDialog", () => {
     await user.click(screen.getByRole("menuitem", { name: "Review" }))
 
     await waitFor(() => expect(toast.success).toHaveBeenCalled())
-    const options = vi.mocked(toast.success).mock.calls[0]?.[1] as {
+    const options = vi.mocked(toast.success).mock.calls[0]?.[1] as unknown as {
       action: { onClick: () => void }
     }
     options.action.onClick()

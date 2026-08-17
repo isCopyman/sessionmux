@@ -23,7 +23,8 @@ import { MessageQueueDisplay } from "./message-queue-display"
 
 function item(
   id: string,
-  state: QueuedMessage["state"] = "queued"
+  state: QueuedMessage["state"] = "queued",
+  source: QueuedMessage["source"] = "user"
 ): QueuedMessage {
   return {
     id,
@@ -33,6 +34,7 @@ function item(
     },
     modeId: null,
     state,
+    source,
     attempts: state === "queued" ? 0 : 1,
     pausedReason: state === "paused" ? "failed" : null,
   }
@@ -57,6 +59,24 @@ describe("MessageQueueDisplay", () => {
     expect(screen.getByText("paused:pauseReasonCancelled")).toBeInTheDocument()
     fireEvent.click(screen.getByRole("button", { name: "resumeQueue" }))
     expect(onResume).toHaveBeenCalledTimes(1)
+  })
+
+  it("labels non-user entries with their scheduling class", () => {
+    render(
+      <MessageQueueDisplay
+        queue={[item("mine"), item("auto", "queued", "timer")]}
+        pausedReason={null}
+        onResume={() => {}}
+        onRetry={() => {}}
+        onReorder={() => {}}
+        onEdit={() => {}}
+        onDelete={() => {}}
+        editingItemId={null}
+      />
+    )
+
+    expect(screen.getByText("sourceTimer")).toBeInTheDocument()
+    expect(screen.queryByText("sourceUser")).not.toBeInTheDocument()
   })
 
   it("retries a failed item and locks a claimed item against mutation", () => {

@@ -658,7 +658,8 @@
       "saveKimiCodeConfig": "儲存 Kimi Code 設定",
       "customInstall": "自訂安裝",
       "saveKimiCodeRawConfig": "儲存 config.toml",
-      "diagnose": "診斷"
+      "diagnose": "診斷",
+      "saveDeepSeekConfig": "儲存 DeepSeek 設定"
     },
     "status": {
       "enabled": "啟用",
@@ -1197,7 +1198,9 @@
       "piBinaryInstallFailed": "pi 安裝失敗",
       "piBinaryUninstalled": "pi 已解除安裝",
       "piBinaryUninstallFailed": "pi 解除安裝失敗",
-      "savePiTrustFailed": "儲存工作區信任失敗"
+      "savePiTrustFailed": "儲存工作區信任失敗",
+      "deepseekSaved": "DeepSeek 設定已儲存",
+      "saveDeepSeekFailed": "DeepSeek 設定儲存失敗"
     },
     "version": {
       "statusLabel": "版本狀態",
@@ -1360,7 +1363,16 @@
     "customAgentRemoveWithData": "同時刪除已記錄的會話歷史",
     "customAgentRemoved": "已移除 {name}",
     "customAgentBadge": "自訂",
-    "customAgentNotLaunchable": "該智慧體在此環境無法啟動：{reason}"
+    "customAgentNotLaunchable": "該智慧體在此環境無法啟動：{reason}",
+    "deepseek": {
+      "configManagement": "DeepSeek 設定",
+      "configDescription": "設定 DeepSeek 端點與金鑰，會話將使用此處顯示的值。",
+      "baseUrlLabel": "API 基礎位址",
+      "baseUrlHint": "OpenAI 相容的基礎位址，結尾斜線會被移除。",
+      "baseUrlInvalid": "請輸入完整的 http(s) 位址。",
+      "apiKeyLabel": "API 金鑰",
+      "apiKeyHint": "儲存在本機，以 DEEPSEEK_API_KEY 傳給智慧代理。"
+    }
   },
   "SettingsPages": {
     "agentsLoading": "載入 Agent 設定中...",
@@ -2811,7 +2823,10 @@
         "paused": "佇列已暫停：{reason}",
         "pauseReasonCancelled": "目前任務已取消；確認後可繼續傳送。",
         "pauseReasonUnknownDispatch": "上一則訊息可能已到達 Agent；請先檢查會話，再決定是否重試。",
-        "persistFailed": "無法儲存排隊訊息：{error}。訊息文字已恢復到輸入框。"
+        "persistFailed": "無法儲存排隊訊息：{error}。訊息文字已恢復到輸入框。",
+        "sourceCollaboration": "信件",
+        "sourceReminder": "催辦",
+        "sourceTimer": "定時續跑"
       },
       "welcomeInputPanel": {
         "agentsSettingsPath": "設定 > Agents",
@@ -2937,7 +2952,8 @@
       "agentSelector": {
         "noEnabledAgents": "暫無已啟用的 Agent",
         "openAgentsSettings": "開啟 Agents 設定",
-        "notInstalled": "未安裝"
+        "notInstalled": "未安裝",
+        "moreAgents": "更多智慧代理（{count}）"
       },
       "agentPlanOverlay": {
         "title": "計畫任務",
@@ -3145,7 +3161,8 @@
             "blocked": "受阻",
             "usageLimited": "用量受限",
             "budgetLimited": "預算受限",
-            "complete": "已完成"
+            "complete": "已完成",
+            "limited": "受限"
           }
         },
         "field": {
@@ -3255,7 +3272,8 @@
           "outputMissing": "codex 截斷指令碼輸出時捨棄了這個命令的分隔行，因此沒有輸出可歸屬給它。",
           "sharedWith": "本段還包含 {commands} 的輸出——它們的分隔行已被 codex 截斷捨棄。",
           "truncated": "已截斷"
-        }
+        },
+        "agentCodexLaunchOnly": "已確認啟動：此卡片不再回報後續進展，子智慧代理可能仍在自己的執行緒中工作。"
       },
       "messageNav": {
         "title": "訊息導覽",
@@ -3371,7 +3389,8 @@
       "contextCompaction": {
         "compacting": "正在壓縮上下文…",
         "compacted": "上下文已壓縮",
-        "compactedTokens": "上下文已壓縮 · {before} → {after} tokens"
+        "compactedTokens": "上下文已壓縮 · {before} → {after} tokens",
+        "failed": "上下文壓縮失敗"
       },
       "backgroundTasks": {
         "running": "{count} 個背景任務執行中",
@@ -3405,6 +3424,26 @@
         "errors": {
           "emptyPrompt": "計時器提示詞不能為空"
         }
+      },
+      "sessionFailure": {
+        "category": {
+          "connection": "連線異常",
+          "access": "存取受限",
+          "limit": "達到用量上限",
+          "request": "請求被拒絕",
+          "service": "服務異常",
+          "unknown": "會話異常"
+        },
+        "action": {
+          "retry": "重試",
+          "login": "登入",
+          "newSession": "新建會話"
+        },
+        "moreIncidents": "另有 {count} 條",
+        "toggleDetails": "展開或收合詳情",
+        "dismiss": "關閉",
+        "recovered": "已恢復",
+        "retryUnavailable": "沒有可重發的內容：未能恢復原始提示詞。"
       }
     },
     "diffPreview": {
@@ -4731,7 +4770,13 @@
     "eventCleanupFailed": "worktree 清理失敗",
     "eventResumeFallback": "會話恢復失敗，已改用新會話",
     "eventUserAction": "使用者操作",
-    "eventDiffStat": "變更快照"
+    "eventDiffStat": "變更快照",
+    "settingsTabMerge": "合併",
+    "settingsTabWorktree": "工作樹",
+    "settingsWorktreeRoot": "工作樹位置",
+    "settingsWorktreeRootHint": "任務工作樹的建立位置，留空則使用儲存庫旁的預設目錄。",
+    "settingsWorktreeRootPlaceholder": "預設：儲存庫同層目錄",
+    "settingsWorktreeRootBrowse": "瀏覽"
   },
   "CustomSkillsSettings": {
     "loading": "正在載入自訂技能…",

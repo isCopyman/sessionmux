@@ -658,7 +658,8 @@
       "saveKimiCodeConfig": "Salvar configuração do Kimi Code",
       "customInstall": "Instalação personalizada",
       "saveKimiCodeRawConfig": "Save config.toml",
-      "diagnose": "Diagnosticar"
+      "diagnose": "Diagnosticar",
+      "saveDeepSeekConfig": "Salvar configurações do DeepSeek"
     },
     "status": {
       "enabled": "Habilitado",
@@ -1197,7 +1198,9 @@
       "piBinaryInstallFailed": "Falha ao instalar o pi",
       "piBinaryUninstalled": "pi desinstalado",
       "piBinaryUninstallFailed": "Falha ao desinstalar o pi",
-      "savePiTrustFailed": "Falha ao salvar a confiança do espaço de trabalho"
+      "savePiTrustFailed": "Falha ao salvar a confiança do espaço de trabalho",
+      "deepseekSaved": "Configuração do DeepSeek salva",
+      "saveDeepSeekFailed": "Não foi possível salvar a configuração do DeepSeek"
     },
     "version": {
       "statusLabel": "Status da versão",
@@ -1360,7 +1363,16 @@
     "customAgentRemoveWithData": "Excluir também o histórico de conversas registrado",
     "customAgentRemoved": "{name} removido",
     "customAgentBadge": "Personalizado",
-    "customAgentNotLaunchable": "Este agente não pode ser iniciado aqui: {reason}"
+    "customAgentNotLaunchable": "Este agente não pode ser iniciado aqui: {reason}",
+    "deepseek": {
+      "configManagement": "Configuração do DeepSeek",
+      "configDescription": "Configure o endpoint e a chave do DeepSeek. As sessões usam exatamente o que é mostrado aqui.",
+      "baseUrlLabel": "URL base da API",
+      "baseUrlHint": "URL base compatível com OpenAI; a barra final é removida.",
+      "baseUrlInvalid": "Insira uma URL http(s) completa.",
+      "apiKeyLabel": "Chave de API",
+      "apiKeyHint": "Armazenada localmente e repassada ao agente como DEEPSEEK_API_KEY."
+    }
   },
   "SettingsPages": {
     "agentsLoading": "Carregando configurações de agentes...",
@@ -2811,7 +2823,10 @@
         "paused": "Fila pausada: {reason}",
         "pauseReasonCancelled": "A tarefa atual foi cancelada. Retome quando estiver pronto.",
         "pauseReasonUnknownDispatch": "A mensagem anterior pode ter chegado ao agente. Verifique a sessão antes de tentar novamente.",
-        "persistFailed": "Não foi possível salvar a mensagem na fila: {error}. O texto foi restaurado no campo de entrada."
+        "persistFailed": "Não foi possível salvar a mensagem na fila: {error}. O texto foi restaurado no campo de entrada.",
+        "sourceCollaboration": "Carta",
+        "sourceReminder": "Lembrete",
+        "sourceTimer": "Temporizador"
       },
       "welcomeInputPanel": {
         "agentsSettingsPath": "Configurações > Agentes",
@@ -2937,7 +2952,8 @@
       "agentSelector": {
         "noEnabledAgents": "Nenhum agente habilitado",
         "openAgentsSettings": "Abrir configurações de agentes",
-        "notInstalled": "Não instalado"
+        "notInstalled": "Não instalado",
+        "moreAgents": "Mais agentes ({count})"
       },
       "agentPlanOverlay": {
         "title": "Plano do agente",
@@ -3145,7 +3161,8 @@
             "blocked": "bloqueado",
             "usageLimited": "uso limitado",
             "budgetLimited": "orçamento limitado",
-            "complete": "concluído"
+            "complete": "concluído",
+            "limited": "limitado"
           }
         },
         "field": {
@@ -3255,7 +3272,8 @@
           "outputMissing": "O codex truncou a saída do script e removeu o separador deste comando, então nenhuma saída pôde ser atribuída a ele.",
           "sharedWith": "Também contém a saída de {commands} — o codex truncou os separadores delas.",
           "truncated": "truncado"
-        }
+        },
+        "agentCodexLaunchOnly": "Lançamento confirmado - este cartão não relata mais progresso; o subagente pode continuar trabalhando em seu próprio thread."
       },
       "messageNav": {
         "title": "Navegação de mensagens",
@@ -3371,7 +3389,8 @@
       "contextCompaction": {
         "compacting": "Compactando o contexto…",
         "compacted": "Contexto compactado",
-        "compactedTokens": "Contexto compactado · {before} → {after} tokens"
+        "compactedTokens": "Contexto compactado · {before} → {after} tokens",
+        "failed": "Falha na compactação de contexto"
       },
       "backgroundTasks": {
         "running": "{count, plural, one {# tarefa em segundo plano em execução} other {# tarefas em segundo plano em execução}}",
@@ -3405,6 +3424,26 @@
         "errors": {
           "emptyPrompt": "O prompt não pode estar vazio"
         }
+      },
+      "sessionFailure": {
+        "category": {
+          "connection": "Problema de conexão",
+          "access": "Problema de acesso",
+          "limit": "Limite atingido",
+          "request": "Solicitação rejeitada",
+          "service": "Erro do serviço",
+          "unknown": "Problema de sessão"
+        },
+        "action": {
+          "retry": "Tentar novamente",
+          "login": "Entrar",
+          "newSession": "Nova sessão"
+        },
+        "moreIncidents": "+{count} mais",
+        "toggleDetails": "Alternar detalhes",
+        "dismiss": "Dispensar",
+        "recovered": "Recuperado",
+        "retryUnavailable": "Nada para reenviar — o prompt original não pôde ser recuperado."
       }
     },
     "diffPreview": {
@@ -4731,7 +4770,13 @@
     "eventCleanupFailed": "Falha na limpeza do worktree",
     "eventResumeFallback": "Retomada falhou; nova sessão usada",
     "eventUserAction": "Ação do usuário",
-    "eventDiffStat": "Resumo das mudanças"
+    "eventDiffStat": "Resumo das mudanças",
+    "settingsTabMerge": "Mesclagem",
+    "settingsTabWorktree": "Árvore de trabalho",
+    "settingsWorktreeRoot": "Local da árvore de trabalho",
+    "settingsWorktreeRootHint": "Onde as árvores de trabalho das tarefas são criadas. Deixe em branco para o padrão ao lado do repositório.",
+    "settingsWorktreeRootPlaceholder": "Padrão: ao lado do repositório",
+    "settingsWorktreeRootBrowse": "Procurar"
   },
   "CustomSkillsSettings": {
     "loading": "Carregando habilidades personalizadas…",

@@ -238,8 +238,10 @@ export function decorateDeleteAddBlock(
   deletedSpans: Array<IntralineSpan[] | null>
   addedSpans: Array<IntralineSpan[] | null>
 } {
-  const deletedSpans = deletedTexts.map(() => null)
-  const addedSpans = addedTexts.map(() => null)
+  const deletedSpans: Array<IntralineSpan[] | null> = deletedTexts.map(
+    () => null
+  )
+  const addedSpans: Array<IntralineSpan[] | null> = addedTexts.map(() => null)
   for (const pair of pairDeleteAddLines(deletedTexts, addedTexts)) {
     const oldText = deletedTexts[pair.deletedIndex] ?? ""
     const newText = addedTexts[pair.addedIndex] ?? ""

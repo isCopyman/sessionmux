@@ -658,7 +658,8 @@
       "saveKimiCodeConfig": "حفظ إعدادات Kimi Code",
       "customInstall": "تثبيت مخصص",
       "saveKimiCodeRawConfig": "Save config.toml",
-      "diagnose": "تشخيص"
+      "diagnose": "تشخيص",
+      "saveDeepSeekConfig": "حفظ إعدادات DeepSeek"
     },
     "status": {
       "enabled": "مفعّل",
@@ -1197,7 +1198,9 @@
       "piBinaryInstallFailed": "فشل تثبيت pi",
       "piBinaryUninstalled": "تم إلغاء تثبيت pi",
       "piBinaryUninstallFailed": "فشل إلغاء تثبيت pi",
-      "savePiTrustFailed": "فشل حفظ الثقة بمساحة العمل"
+      "savePiTrustFailed": "فشل حفظ الثقة بمساحة العمل",
+      "deepseekSaved": "تم حفظ إعدادات DeepSeek",
+      "saveDeepSeekFailed": "تعذّر حفظ إعدادات DeepSeek"
     },
     "version": {
       "statusLabel": "حالة الإصدار",
@@ -1360,7 +1363,16 @@
     "customAgentRemoveWithData": "حذف سجل المحادثات المسجل أيضًا",
     "customAgentRemoved": "تمت إزالة {name}",
     "customAgentBadge": "مخصص",
-    "customAgentNotLaunchable": "لا يمكن تشغيل هذا الوكيل هنا: {reason}"
+    "customAgentNotLaunchable": "لا يمكن تشغيل هذا الوكيل هنا: {reason}",
+    "deepseek": {
+      "configManagement": "إعدادات DeepSeek",
+      "configDescription": "حدّد نقطة نهاية DeepSeek والمفتاح. تستخدم الجلسات القيم المعروضة هنا تمامًا.",
+      "baseUrlLabel": "عنوان API الأساسي",
+      "baseUrlHint": "عنوان أساسي متوافق مع OpenAI؛ تُحذف الشرطة المائلة الأخيرة.",
+      "baseUrlInvalid": "أدخل عنوان http(s)‎ كاملًا.",
+      "apiKeyLabel": "مفتاح API",
+      "apiKeyHint": "يُحفظ محليًا ويُمرَّر إلى الوكيل باسم DEEPSEEK_API_KEY."
+    }
   },
   "SettingsPages": {
     "agentsLoading": "جارٍ تحميل إعدادات الوكلاء...",
@@ -2811,7 +2823,10 @@
         "paused": "تم إيقاف قائمة الانتظار مؤقتًا: {reason}",
         "pauseReasonCancelled": "تم إلغاء المهمة الحالية. استأنف عندما تكون مستعدًا.",
         "pauseReasonUnknownDispatch": "ربما وصلت الرسالة السابقة إلى الوكيل. تحقّق من الجلسة قبل إعادة المحاولة.",
-        "persistFailed": "تعذر حفظ الرسالة المنتظرة: {error}. تمت استعادة النص في مربع الإدخال."
+        "persistFailed": "تعذر حفظ الرسالة المنتظرة: {error}. تمت استعادة النص في مربع الإدخال.",
+        "sourceCollaboration": "رسالة",
+        "sourceReminder": "تذكير",
+        "sourceTimer": "مؤقت"
       },
       "welcomeInputPanel": {
         "agentsSettingsPath": "الإعدادات > الوكلاء",
@@ -2937,7 +2952,8 @@
       "agentSelector": {
         "noEnabledAgents": "لا يوجد وكلاء مفعّلون",
         "openAgentsSettings": "فتح إعدادات الوكلاء",
-        "notInstalled": "غير مثبّت"
+        "notInstalled": "غير مثبّت",
+        "moreAgents": "مزيد من الوكلاء ({count})"
       },
       "agentPlanOverlay": {
         "title": "خطة الوكيل",
@@ -3145,7 +3161,8 @@
             "blocked": "محظور",
             "usageLimited": "الاستخدام محدود",
             "budgetLimited": "الميزانية محدودة",
-            "complete": "مكتمل"
+            "complete": "مكتمل",
+            "limited": "مقيّد"
           }
         },
         "field": {
@@ -3255,7 +3272,8 @@
           "outputMissing": "اقتطع codex مُخرَج النص البرمجي وأزال الفاصل الخاص بهذا الأمر، لذا تعذّر نسب أي مُخرَج إليه.",
           "sharedWith": "يحتوي هذا المقطع أيضًا على مُخرَج {commands} — إذ اقتطع codex الفواصل الخاصة بها.",
           "truncated": "مقتطع"
-        }
+        },
+        "agentCodexLaunchOnly": "تم تأكيد التشغيل - لا تُبلغ هذه البطاقة عن مزيد من التقدم؛ وقد يواصل الوكيل الفرعي العمل في مساره الخاص."
       },
       "messageNav": {
         "title": "تنقل الرسائل",
@@ -3371,7 +3389,8 @@
       "contextCompaction": {
         "compacting": "جارٍ ضغط السياق…",
         "compacted": "تم ضغط السياق",
-        "compactedTokens": "تم ضغط السياق · {before} → {after} رمز"
+        "compactedTokens": "تم ضغط السياق · {before} → {after} رمز",
+        "failed": "فشل ضغط السياق"
       },
       "backgroundTasks": {
         "running": "{count, plural, one {مهمة خلفية واحدة قيد التشغيل} two {مهمتا خلفية قيد التشغيل} few {# مهام خلفية قيد التشغيل} other {# مهمة خلفية قيد التشغيل}}",
@@ -3405,6 +3424,26 @@
         "errors": {
           "emptyPrompt": "لا يمكن أن يكون الموجه فارغًا"
         }
+      },
+      "sessionFailure": {
+        "category": {
+          "connection": "مشكلة اتصال",
+          "access": "مشكلة وصول",
+          "limit": "تم بلوغ الحد",
+          "request": "رُفض الطلب",
+          "service": "خطأ في الخدمة",
+          "unknown": "مشكلة في الجلسة"
+        },
+        "action": {
+          "retry": "إعادة المحاولة",
+          "login": "تسجيل الدخول",
+          "newSession": "جلسة جديدة"
+        },
+        "moreIncidents": "+{count} أخرى",
+        "toggleDetails": "إظهار/إخفاء التفاصيل",
+        "dismiss": "إغلاق",
+        "recovered": "تم التعافي",
+        "retryUnavailable": "لا يوجد ما يُعاد إرساله — تعذّر استعادة الموجّه الأصلي."
       }
     },
     "diffPreview": {
@@ -4731,7 +4770,13 @@
     "eventCleanupFailed": "فشل تنظيف worktree",
     "eventResumeFallback": "فشل استئناف الجلسة؛ استُخدمت جلسة جديدة",
     "eventUserAction": "إجراء المستخدم",
-    "eventDiffStat": "لقطة التغييرات"
+    "eventDiffStat": "لقطة التغييرات",
+    "settingsTabMerge": "الدمج",
+    "settingsTabWorktree": "شجرة العمل",
+    "settingsWorktreeRoot": "موقع شجرة العمل",
+    "settingsWorktreeRootHint": "مكان إنشاء أشجار عمل المهام. اتركه فارغًا لاستخدام الموقع الافتراضي بجوار المستودع.",
+    "settingsWorktreeRootPlaceholder": "الافتراضي: بجوار المستودع",
+    "settingsWorktreeRootBrowse": "استعراض"
   },
   "CustomSkillsSettings": {
     "loading": "جارٍ تحميل المهارات المخصّصة…",

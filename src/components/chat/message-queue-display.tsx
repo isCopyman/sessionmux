@@ -34,6 +34,15 @@ interface QueueItemProps {
   onRetry: (id: string) => void
 }
 
+// Scheduling-class badge for entries the user did not type themselves.
+// Letters and reminders normally queue without a draft (they render in the
+// mailbox instead), but any that do surface here must say who they are.
+const SOURCE_LABEL_KEY = {
+  collaboration: "sourceCollaboration",
+  reminder: "sourceReminder",
+  timer: "sourceTimer",
+} as const
+
 function QueueItem({
   item,
   index,
@@ -86,6 +95,11 @@ function QueueItem({
       <span className="shrink-0 font-mono text-[10px] text-muted-foreground/70">
         #{index + 1}
       </span>
+      {item.source !== "user" ? (
+        <span className="shrink-0 rounded-sm bg-muted-foreground/15 px-1 py-px text-[9px] font-medium text-muted-foreground">
+          {t(SOURCE_LABEL_KEY[item.source])}
+        </span>
+      ) : null}
       <span className="min-w-0 flex-1 truncate text-[10px] text-foreground/80">
         {item.draft.displayText}
       </span>

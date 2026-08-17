@@ -658,7 +658,8 @@
       "saveKimiCodeConfig": "保存 Kimi Code 配置",
       "customInstall": "自定义安装",
       "saveKimiCodeRawConfig": "保存 config.toml",
-      "diagnose": "诊断"
+      "diagnose": "诊断",
+      "saveDeepSeekConfig": "保存 DeepSeek 设置"
     },
     "status": {
       "enabled": "启用",
@@ -1197,7 +1198,9 @@
       "piBinaryInstallFailed": "pi 安装失败",
       "piBinaryUninstalled": "pi 已卸载",
       "piBinaryUninstallFailed": "pi 卸载失败",
-      "savePiTrustFailed": "保存工作区信任失败"
+      "savePiTrustFailed": "保存工作区信任失败",
+      "deepseekSaved": "DeepSeek 配置已保存",
+      "saveDeepSeekFailed": "DeepSeek 配置保存失败"
     },
     "version": {
       "statusLabel": "版本状态",
@@ -1360,7 +1363,16 @@
     "customAgentRemoveWithData": "同时删除已记录的会话历史",
     "customAgentRemoved": "已移除 {name}",
     "customAgentBadge": "自定义",
-    "customAgentNotLaunchable": "该智能体在此环境无法启动：{reason}"
+    "customAgentNotLaunchable": "该智能体在此环境无法启动：{reason}",
+    "deepseek": {
+      "configManagement": "DeepSeek 配置",
+      "configDescription": "配置 DeepSeek 端点与密钥，会话将使用此处显示的值。",
+      "baseUrlLabel": "API 基础地址",
+      "baseUrlHint": "OpenAI 兼容的基础地址，末尾斜杠会被去除。",
+      "baseUrlInvalid": "请输入完整的 http(s) 地址。",
+      "apiKeyLabel": "API 密钥",
+      "apiKeyHint": "保存在本地，以 DEEPSEEK_API_KEY 传给智能体。"
+    }
   },
   "SettingsPages": {
     "agentsLoading": "加载 Agent 设置中...",
@@ -2811,7 +2823,10 @@
         "paused": "队列已暂停：{reason}",
         "pauseReasonCancelled": "当前任务已取消；确认后可继续发送。",
         "pauseReasonUnknownDispatch": "上一条消息可能已经到达 Agent；请先检查会话，再决定是否重试。",
-        "persistFailed": "无法保存排队消息：{error}。消息文字已恢复到输入框。"
+        "persistFailed": "无法保存排队消息：{error}。消息文字已恢复到输入框。",
+        "sourceCollaboration": "信件",
+        "sourceReminder": "催办",
+        "sourceTimer": "定时续跑"
       },
       "welcomeInputPanel": {
         "agentsSettingsPath": "设置 > Agents",
@@ -2937,7 +2952,8 @@
       "agentSelector": {
         "noEnabledAgents": "暂无已启用的 Agent",
         "openAgentsSettings": "打开 Agents 设置",
-        "notInstalled": "未安装"
+        "notInstalled": "未安装",
+        "moreAgents": "更多智能体（{count}）"
       },
       "agentPlanOverlay": {
         "title": "计划任务",
@@ -3145,7 +3161,8 @@
             "blocked": "受阻",
             "usageLimited": "用量受限",
             "budgetLimited": "预算受限",
-            "complete": "已完成"
+            "complete": "已完成",
+            "limited": "受限"
           }
         },
         "field": {
@@ -3255,7 +3272,8 @@
           "outputMissing": "codex 截断脚本输出时丢掉了这条命令的分隔行，因此没有输出可以归属给它。",
           "sharedWith": "本段还包含 {commands} 的输出——它们的分隔行被 codex 截断丢弃了。",
           "truncated": "已截断"
-        }
+        },
+        "agentCodexLaunchOnly": "已确认启动：此卡片不再报告后续进展，子智能体可能仍在自己的线程中工作。"
       },
       "messageNav": {
         "title": "消息导航",
@@ -3371,7 +3389,8 @@
       "contextCompaction": {
         "compacting": "正在压缩上下文…",
         "compacted": "上下文已压缩",
-        "compactedTokens": "上下文已压缩 · {before} → {after} tokens"
+        "compactedTokens": "上下文已压缩 · {before} → {after} tokens",
+        "failed": "上下文压缩失败"
       },
       "backgroundTasks": {
         "running": "{count} 个后台任务运行中",
@@ -3405,6 +3424,26 @@
         "errors": {
           "emptyPrompt": "定时器提示词不能为空"
         }
+      },
+      "sessionFailure": {
+        "category": {
+          "connection": "连接异常",
+          "access": "访问受限",
+          "limit": "达到用量上限",
+          "request": "请求被拒绝",
+          "service": "服务异常",
+          "unknown": "会话异常"
+        },
+        "action": {
+          "retry": "重试",
+          "login": "登录",
+          "newSession": "新建会话"
+        },
+        "moreIncidents": "另有 {count} 条",
+        "toggleDetails": "展开或收起详情",
+        "dismiss": "关闭",
+        "recovered": "已恢复",
+        "retryUnavailable": "没有可重发的内容：未能恢复原始提示词。"
       }
     },
     "diffPreview": {
@@ -4731,7 +4770,13 @@
     "eventCleanupFailed": "worktree 清理失败",
     "eventResumeFallback": "会话恢复失败，已改用新会话",
     "eventUserAction": "用户操作",
-    "eventDiffStat": "变更快照"
+    "eventDiffStat": "变更快照",
+    "settingsTabMerge": "合并",
+    "settingsTabWorktree": "工作树",
+    "settingsWorktreeRoot": "工作树位置",
+    "settingsWorktreeRootHint": "任务工作树的创建位置，留空则使用仓库旁的默认目录。",
+    "settingsWorktreeRootPlaceholder": "默认：仓库同级目录",
+    "settingsWorktreeRootBrowse": "浏览"
   },
   "CustomSkillsSettings": {
     "loading": "正在加载自定义技能…",

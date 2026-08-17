@@ -327,7 +327,10 @@ export function applyCollaborationTimelineProjection(
       changed = true
       return text.length > 0 ? [{ ...part, text }] : []
     })
-    if (matched.length > 0 && parts.every((part) => part.type !== "text")) {
+    // Boolean first: `parts.every(...)` inline would let the compiler narrow
+    // `parts` to exclude the "text" variant we unshift right below.
+    const hasTextPart = parts.some((part) => part.type === "text")
+    if (matched.length > 0 && !hasTextPart) {
       if (systemNotify) {
         if (letterTitle) {
           parts.unshift({ type: "text", text: letterTitle })

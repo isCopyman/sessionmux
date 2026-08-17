@@ -658,7 +658,8 @@
       "saveKimiCodeConfig": "Kimi-Code-Konfiguration speichern",
       "customInstall": "Benutzerdefinierte Installation",
       "saveKimiCodeRawConfig": "Save config.toml",
-      "diagnose": "Diagnose"
+      "diagnose": "Diagnose",
+      "saveDeepSeekConfig": "DeepSeek-Einstellungen speichern"
     },
     "status": {
       "enabled": "Aktiviert",
@@ -1197,7 +1198,9 @@
       "piBinaryInstallFailed": "pi-Installation fehlgeschlagen",
       "piBinaryUninstalled": "pi deinstalliert",
       "piBinaryUninstallFailed": "pi-Deinstallation fehlgeschlagen",
-      "savePiTrustFailed": "Speichern des Arbeitsbereich-Vertrauens fehlgeschlagen"
+      "savePiTrustFailed": "Speichern des Arbeitsbereich-Vertrauens fehlgeschlagen",
+      "deepseekSaved": "DeepSeek-Konfiguration gespeichert",
+      "saveDeepSeekFailed": "DeepSeek-Konfiguration konnte nicht gespeichert werden"
     },
     "version": {
       "statusLabel": "Versionsstatus",
@@ -1360,7 +1363,16 @@
     "customAgentRemoveWithData": "Auch den aufgezeichneten Gesprächsverlauf löschen",
     "customAgentRemoved": "{name} entfernt",
     "customAgentBadge": "Eigen",
-    "customAgentNotLaunchable": "Dieser Agent kann hier nicht gestartet werden: {reason}"
+    "customAgentNotLaunchable": "Dieser Agent kann hier nicht gestartet werden: {reason}",
+    "deepseek": {
+      "configManagement": "DeepSeek-Konfiguration",
+      "configDescription": "Endpoint und Schlüssel für DeepSeek festlegen. Sitzungen verwenden genau die hier angezeigten Werte.",
+      "baseUrlLabel": "API-Basis-URL",
+      "baseUrlHint": "OpenAI-kompatible Basis-URL; ein abschließender Schrägstrich wird entfernt.",
+      "baseUrlInvalid": "Vollständige http(s)-URL eingeben.",
+      "apiKeyLabel": "API-Schlüssel",
+      "apiKeyHint": "Wird lokal gespeichert und als DEEPSEEK_API_KEY an den Agenten übergeben."
+    }
   },
   "SettingsPages": {
     "agentsLoading": "Agent-Einstellungen werden geladen...",
@@ -2811,7 +2823,10 @@
         "paused": "Warteschlange pausiert: {reason}",
         "pauseReasonCancelled": "Der aktuelle Vorgang wurde abgebrochen. Setzen Sie fort, wenn Sie bereit sind.",
         "pauseReasonUnknownDispatch": "Die vorherige Nachricht könnte den Agenten erreicht haben. Prüfen Sie die Sitzung vor einem erneuten Versuch.",
-        "persistFailed": "Die wartende Nachricht konnte nicht gespeichert werden: {error}. Der Text wurde im Eingabefeld wiederhergestellt."
+        "persistFailed": "Die wartende Nachricht konnte nicht gespeichert werden: {error}. Der Text wurde im Eingabefeld wiederhergestellt.",
+        "sourceCollaboration": "Brief",
+        "sourceReminder": "Erinnerung",
+        "sourceTimer": "Timer"
       },
       "welcomeInputPanel": {
         "agentsSettingsPath": "Einstellungen > Agenten",
@@ -2937,7 +2952,8 @@
       "agentSelector": {
         "noEnabledAgents": "Keine aktivierten Agenten",
         "openAgentsSettings": "Agenten-Einstellungen öffnen",
-        "notInstalled": "Nicht installiert"
+        "notInstalled": "Nicht installiert",
+        "moreAgents": "Weitere Agenten ({count})"
       },
       "agentPlanOverlay": {
         "title": "Agentenplan",
@@ -3145,7 +3161,8 @@
             "blocked": "blockiert",
             "usageLimited": "Nutzung begrenzt",
             "budgetLimited": "Budget begrenzt",
-            "complete": "abgeschlossen"
+            "complete": "abgeschlossen",
+            "limited": "begrenzt"
           }
         },
         "field": {
@@ -3255,7 +3272,8 @@
           "outputMissing": "Codex hat die Skriptausgabe gekürzt und dabei das Trennzeichen dieses Befehls entfernt, sodass ihm keine Ausgabe zugeordnet werden konnte.",
           "sharedWith": "Enthält auch die Ausgabe von {commands} – codex hat deren Trennzeichen abgeschnitten.",
           "truncated": "gekürzt"
-        }
+        },
+        "agentCodexLaunchOnly": "Start bestätigt - diese Karte meldet keinen weiteren Fortschritt; der Sub-Agent arbeitet möglicherweise noch in seinem eigenen Thread."
       },
       "messageNav": {
         "title": "Nachrichtennavigation",
@@ -3371,7 +3389,8 @@
       "contextCompaction": {
         "compacting": "Kontext wird komprimiert…",
         "compacted": "Kontext komprimiert",
-        "compactedTokens": "Kontext komprimiert · {before} → {after} Tokens"
+        "compactedTokens": "Kontext komprimiert · {before} → {after} Tokens",
+        "failed": "Kontextkomprimierung fehlgeschlagen"
       },
       "backgroundTasks": {
         "running": "{count, plural, one {# Hintergrundaufgabe läuft} other {# Hintergrundaufgaben laufen}}",
@@ -3405,6 +3424,26 @@
         "errors": {
           "emptyPrompt": "Die Prompt darf nicht leer sein"
         }
+      },
+      "sessionFailure": {
+        "category": {
+          "connection": "Verbindungsproblem",
+          "access": "Zugriffsproblem",
+          "limit": "Limit erreicht",
+          "request": "Anfrage abgelehnt",
+          "service": "Dienstfehler",
+          "unknown": "Sitzungsproblem"
+        },
+        "action": {
+          "retry": "Erneut versuchen",
+          "login": "Anmelden",
+          "newSession": "Neue Sitzung"
+        },
+        "moreIncidents": "+{count} weitere",
+        "toggleDetails": "Details umschalten",
+        "dismiss": "Schließen",
+        "recovered": "Wiederhergestellt",
+        "retryUnavailable": "Nichts zum erneuten Senden — der ursprüngliche Prompt konnte nicht wiederhergestellt werden."
       }
     },
     "diffPreview": {
@@ -4731,7 +4770,13 @@
     "eventCleanupFailed": "Worktree-Aufräumen fehlgeschlagen",
     "eventResumeFallback": "Sitzungsfortsetzung fehlgeschlagen, neue Sitzung",
     "eventUserAction": "Benutzeraktion",
-    "eventDiffStat": "Änderungs-Snapshot"
+    "eventDiffStat": "Änderungs-Snapshot",
+    "settingsTabMerge": "Zusammenführen",
+    "settingsTabWorktree": "Worktree",
+    "settingsWorktreeRoot": "Worktree-Speicherort",
+    "settingsWorktreeRootHint": "Wo Task-Worktrees erstellt werden. Leer lassen für den Standardort neben dem Repository.",
+    "settingsWorktreeRootPlaceholder": "Standard: neben dem Repository",
+    "settingsWorktreeRootBrowse": "Durchsuchen"
   },
   "CustomSkillsSettings": {
     "loading": "Benutzerdefinierte Skills werden geladen…",
