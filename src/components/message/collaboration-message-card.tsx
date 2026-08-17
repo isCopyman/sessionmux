@@ -1,68 +1,13 @@
 "use client"
 
 import { useMemo } from "react"
-import { ArrowUpRight } from "lucide-react"
-import { useTranslations } from "next-intl"
 
 import { Message, MessageContent } from "@/components/ai-elements/message"
-import { Button } from "@/components/ui/button"
-import { useTabActions } from "@/contexts/tab-context"
-import {
-  formatConversationTitle,
-  formatSessionMailName,
-} from "@/lib/conversation-title"
 import type { CollaborationDelivery } from "@/lib/types"
-import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { CollapsibleUserMessage } from "./collapsible-user-message"
+import { SessionMailFromBadge } from "./session-mail-peer-chip"
 
-export function SessionMailFromBadge({
-  conversationId,
-  title,
-}: {
-  conversationId: number
-  title?: string | null
-  agentType?: string | null
-}) {
-  const t = useTranslations("Collaboration")
-  const conversations = useAppWorkspaceStore((state) => state.conversations)
-  const peerConversation = conversations.find(
-    (conversation) => conversation.id === conversationId
-  )
-  const { openTab } = useTabActions()
-  const name = formatSessionMailName(
-    peerConversation?.title ?? title,
-    conversationId
-  )
-
-  return (
-    <div className="mb-1 flex w-fit max-w-full items-center gap-1 self-end text-[0.6875rem] text-muted-foreground">
-      <span className="truncate" title={peerConversation?.title ?? title ?? name}>
-        {t("fromSession", { name })}
-      </span>
-      <Button
-        type="button"
-        size="icon"
-        variant="ghost"
-        className="h-5 w-5 shrink-0"
-        title={t("openSession")}
-        aria-label={t("openSession")}
-        disabled={!peerConversation}
-        onClick={() => {
-          if (!peerConversation) return
-          openTab(
-            peerConversation.folder_id,
-            peerConversation.id,
-            peerConversation.agent_type,
-            true,
-            formatConversationTitle(peerConversation.title) || undefined
-          )
-        }}
-      >
-        <ArrowUpRight className="h-3 w-3" />
-      </Button>
-    </div>
-  )
-}
+export { SessionMailFromBadge } from "./session-mail-peer-chip"
 
 /** Pending inbound letter that is not a Harness user turn yet — same chrome. */
 export function CollaborationMessageCard({

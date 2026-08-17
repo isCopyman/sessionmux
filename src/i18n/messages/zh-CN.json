@@ -5027,6 +5027,8 @@
     "transcriptTo": "发给 {name} 的会话消息",
     "fromSession": "来自 {name}",
     "toSession": "发给 {name}",
+    "fromPrefix": "来自",
+    "toPrefix": "发给",
     "letterRenderToMcp": "显示原始 MCP 工具",
     "letterRenderToCustom": "显示自定义信件卡片",
     "to": "发给 {name}",

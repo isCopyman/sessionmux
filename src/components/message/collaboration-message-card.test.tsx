@@ -102,13 +102,18 @@ describe("CollaborationMessageCard", () => {
       />
     )
 
-    expect(screen.getByText("fromSession:Reviewer")).toBeInTheDocument()
+    expect(screen.getByText("fromPrefix")).toBeInTheDocument()
+    expect(screen.getByText("Reviewer")).toBeInTheDocument()
+    expect(screen.getByText("#1")).toBeInTheDocument()
     expect(screen.getByText("Please check the proof.")).toBeInTheDocument()
     expect(
       document.querySelector("[data-collaboration-direction='inbound']")
     ).not.toBeNull()
+    expect(
+      document.querySelector("[data-reference-badge][data-ref-type='session']")
+    ).not.toBeNull()
 
-    fireEvent.click(screen.getByRole("button", { name: "openSession" }))
+    fireEvent.click(screen.getByRole("button", { name: /Reviewer/ }))
     expect(tabs.openTab).toHaveBeenCalledWith(10, 1, "codex", true, "Reviewer")
   })
 })

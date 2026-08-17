@@ -1,18 +1,12 @@
 "use client"
 
 import { useMemo } from "react"
-import { ArrowUpRight } from "lucide-react"
 import { useTranslations } from "next-intl"
 
-import { Button } from "@/components/ui/button"
-import { useTabActions } from "@/contexts/tab-context"
-import {
-  formatConversationTitle,
-  formatSessionMailName,
-} from "@/lib/conversation-title"
 import { parseSessionSendMessageInput } from "@/lib/session-send-message-tool"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { ContentPartsRenderer } from "./content-parts-renderer"
+import { SessionMailPeerChip } from "./session-mail-peer-chip"
 
 export function SessionSendMessageCard({
   input,
@@ -22,7 +16,6 @@ export function SessionSendMessageCard({
   const t = useTranslations("Collaboration")
   const parsed = parseSessionSendMessageInput(input)
   const conversations = useAppWorkspaceStore((state) => state.conversations)
-  const { openTab } = useTabActions()
   const targetId = parsed?.targetSessionIds[0]
   const target = conversations.find(
     (conversation) => conversation.id === targetId
@@ -34,7 +27,6 @@ export function SessionSendMessageCard({
 
   if (!parsed || targetId == null) return null
 
-  const name = formatSessionMailName(target?.title, targetId)
   const extra =
     parsed.targetSessionIds.length > 1
       ? ` +${parsed.targetSessionIds.length - 1}`
@@ -47,34 +39,13 @@ export function SessionSendMessageCard({
       data-target-session-id={targetId}
     >
       <header className="mb-1.5 flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
-        <span
-          className="truncate font-medium text-foreground"
-          title={target?.title ?? name}
-        >
-          {t("toSession", { name })}
-          {extra}
-        </span>
-        <Button
-          type="button"
-          size="icon"
-          variant="ghost"
-          className="ml-auto h-6 w-6 shrink-0"
-          title={t("openSession")}
-          aria-label={t("openSession")}
-          disabled={!target}
-          onClick={() => {
-            if (!target) return
-            openTab(
-              target.folder_id,
-              target.id,
-              target.agent_type,
-              true,
-              formatConversationTitle(target.title) || undefined
-            )
-          }}
-        >
-          <ArrowUpRight className="h-3.5 w-3.5" />
-        </Button>
+        <SessionMailPeerChip
+          conversationId={targetId}
+          title={target?.title}
+          agentType={target?.agent_type}
+          prefix={t("toPrefix")}
+        />
+        {extra ? <span className="shrink-0">{extra}</span> : null}
       </header>
       <div className="text-sm">
         <ContentPartsRenderer parts={bodyParts} role="assistant" />

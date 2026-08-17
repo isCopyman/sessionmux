@@ -5028,6 +5028,8 @@
     "transcriptTo": "Message to {name}",
     "fromSession": "From {name}",
     "toSession": "To {name}",
+    "fromPrefix": "From",
+    "toPrefix": "To",
     "letterRenderToMcp": "Show raw MCP tools",
     "letterRenderToCustom": "Show custom letter cards",
     "to": "To {name}",
