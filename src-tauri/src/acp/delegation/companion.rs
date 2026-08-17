@@ -52,7 +52,7 @@ use crate::acp::delegation::transport::{
 };
 use crate::acp::question::parse_questions;
 use crate::acp::session_collaboration::{
-    SessionInboxFilter, SessionMessageDeliveryMode, SessionMessageSpec, DEFAULT_INBOX_LIMIT,
+    SessionInboxFilter, SessionMailboxScope, SessionMessageDeliveryMode, SessionMessageSpec, DEFAULT_INBOX_LIMIT,
     DEFAULT_SESSION_LIST_LIMIT, MAX_INBOX_LIMIT, MAX_SESSION_LIST_LIMIT,
     MAX_SESSION_MESSAGE_TARGETS,
 };
@@ -597,9 +597,19 @@ async fn build_tools_call_spawn(
                 Ok(filter) => filter,
                 Err(message) => return LineAction::Respond(err(id, -32602, message)),
             };
+            let mail_box = match parse_inbox_box(&arguments) {
+                Ok(value) => value,
+                Err(message) => return LineAction::Respond(err(id, -32602, message)),
+            };
+            let peer_session_id = match parse_peer_session_id(&arguments) {
+                Ok(value) => value,
+                Err(message) => return LineAction::Respond(err(id, -32602, message)),
+            };
             let limit = parse_inbox_limit(&arguments);
             let req = BrokerListInboxRequest {
                 token: ctx.token.clone(),
+                mail_box,
+                peer_session_id,
                 filter,
                 limit: Some(limit),
             };
@@ -1330,6 +1340,32 @@ fn parse_inbox_filter(arguments: &Value) -> Result<Option<String>, String> {
     Ok(Some(raw.to_string()))
 }
 
+fn parse_inbox_box(arguments: &Value) -> Result<Option<String>, String> {
+    let Some(value) = arguments.get("box") else {
+        return Ok(None);
+    };
+    let raw = value
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    match raw {
+        Some(raw) if SessionMailboxScope::parse(raw).is_some() => Ok(Some(raw.to_string())),
+        _ => Err("list_inbox `box` must be inbox or sent".to_string()),
+    }
+}
+
+fn parse_peer_session_id(arguments: &Value) -> Result<Option<i32>, String> {
+    let Some(value) = arguments.get("peer_session_id") else {
+        return Ok(None);
+    };
+    value
+        .as_i64()
+        .and_then(|raw| i32::try_from(raw).ok())
+        .filter(|id| *id > 0)
+        .map(Some)
+        .ok_or_else(|| "list_inbox `peer_session_id` must be a positive Session id".to_string())
+}
+
 fn parse_target_session_ids(arguments: &Value) -> Result<Vec<i32>, String> {
     let values = arguments
         .get("target_session_ids")
@@ -1457,12 +1493,22 @@ pub fn render_session_inbox_result(outcome: &Value) -> Value {
             .and_then(Value::as_array)
             .cloned()
             .unwrap_or_default();
+        let sent_box = outcome.get("scope").and_then(Value::as_str) == Some("sent");
         if items.is_empty() {
-            format!("Inbox is empty. Unread: {unread}. Awaiting reply: {awaiting}.")
+            if sent_box {
+                "Sent box is empty.".to_string()
+            } else {
+                format!("Inbox is empty. Unread: {unread}. Awaiting reply: {awaiting}.")
+            }
         } else {
-            let mut lines = vec![format!(
-                "Inbox: {unread} unread, {awaiting} awaiting reply. Titles only — open a letter with read_message(event_id)."
-            )];
+            let mut lines = vec![if sent_box {
+                "Sent letters, newest first. awaiting reply = the recipient still owes you an answer."
+                    .to_string()
+            } else {
+                format!(
+                    "Inbox: {unread} unread, {awaiting} awaiting reply. Titles only — open a letter with read_message(event_id)."
+                )
+            }];
             for item in items {
                 let event_id = item
                     .get("event_id")
@@ -1481,16 +1527,17 @@ pub fn render_session_inbox_result(outcome: &Value) -> Value {
                     .and_then(Value::as_str)
                     .or_else(|| item.get("preview").and_then(Value::as_str))
                     .unwrap_or("(untitled)");
+                let outbound =
+                    item.get("direction").and_then(Value::as_str) == Some("outbound");
+                let peer_word = if outbound { "to" } else { "from" };
+                let awaiting_open = item.get("obligation_state").and_then(Value::as_str)
+                    == Some("awaiting_reply");
                 let mut flags = Vec::new();
                 if item.get("unread").and_then(Value::as_bool).unwrap_or(false) {
-                    flags.push("unread");
+                    flags.push(if outbound { "unopened" } else { "unread" });
                 }
-                if item
-                    .get("expects_reply")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false)
-                {
-                    flags.push("needs reply");
+                if awaiting_open {
+                    flags.push(if outbound { "awaiting reply" } else { "needs reply" });
                 }
                 let flag_text = if flags.is_empty() {
                     String::new()
@@ -1498,7 +1545,7 @@ pub fn render_session_inbox_result(outcome: &Value) -> Value {
                     format!(" [{}]", flags.join(", "))
                 };
                 lines.push(format!(
-                    "- {event_id} from {from_id} {from_title}{flag_text}: 《{title}》"
+                    "- {event_id} {peer_word} {from_id} {from_title}{flag_text}: 《{title}》"
                 ));
             }
             if outcome
@@ -2220,6 +2267,28 @@ mod tests {
         let opened_text = opened["content"][0]["text"].as_str().unwrap();
         assert!(opened_text.contains("please review claim 3"));
         assert!(opened_text.contains("reply_to_event_id=event-1"));
+
+        let sent_view = render_session_inbox_result(&serde_json::json!({
+            "available": true,
+            "scope": "sent",
+            "unread_count": 0,
+            "awaiting_reply_count": 0,
+            "items": [{
+                "event_id": "event-9",
+                "direction": "outbound",
+                "from_session_id": 9,
+                "from_title": "Worker",
+                "title": "Ping",
+                "unread": true,
+                "obligation_state": "awaiting_reply"
+            }],
+            "truncated": false
+        }));
+        let sent_text = sent_view["content"][0]["text"].as_str().unwrap();
+        assert!(sent_text.contains("to 9 Worker"));
+        assert!(sent_text.contains("unopened"));
+        assert!(sent_text.contains("awaiting reply"));
+        assert!(!sent_text.contains("Inbox:"));
     }
 
     #[test]

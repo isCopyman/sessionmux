@@ -190,14 +190,24 @@
   },
   {
     "name": "list_inbox",
-    "description": "List this Session's Agent mailbox. Default filter is open: unread letters plus letters that still expect a reply. Results are newest first and include the letter title only — call read_message with event_id to open the body. Listing does not mark mail as read. A human opening the Session never consumes this mailbox.",
+    "description": "List this Session's Agent mailbox. box=inbox (default) lists received letters; box=sent lists letters this Session sent, with the same filter words applied to the recipient (unread: they have not received it; awaiting_reply: they still owe the reply). Use peer_session_id to see only the exchange with one Session. Results are newest first and include the letter title only — call read_message with event_id to open a received body. Listing does not mark mail as read. A human opening the Session never consumes this mailbox.",
     "inputSchema": {
       "type": "object",
       "properties": {
+        "box": {
+          "type": "string",
+          "enum": ["inbox", "sent"],
+          "description": "inbox (default): letters this Session received. sent: letters this Session sent — use with filter=awaiting_reply to see who still owes you a reply."
+        },
         "filter": {
           "type": "string",
           "enum": ["open", "unread", "awaiting_reply", "all"],
-          "description": "open (default): unread or still expecting a reply. unread: Agent has not opened the letter. awaiting_reply: reply obligation is still open. all: every non-dismissed inbound letter."
+          "description": "open (default): unread or still expecting a reply. unread: not yet received (by this Agent for inbox, by the recipient for sent). awaiting_reply: reply obligation is still open. all: every non-dismissed letter in the box."
+        },
+        "peer_session_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Only letters exchanged with this Session id: the sender for inbox, the recipient for sent."
         },
         "limit": {
           "type": "integer",

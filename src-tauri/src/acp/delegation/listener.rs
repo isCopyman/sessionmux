@@ -517,10 +517,17 @@ impl HostBridgeListener {
             .as_deref()
             .and_then(SessionInboxFilter::parse)
             .unwrap_or(SessionInboxFilter::Open);
+        let scope = req
+            .mail_box
+            .as_deref()
+            .and_then(crate::acp::session_collaboration::SessionMailboxScope::parse)
+            .unwrap_or(crate::acp::session_collaboration::SessionMailboxScope::Inbox);
         self.collaboration
             .list_inbox(
                 caller_session_id,
+                scope,
                 filter,
+                req.peer_session_id,
                 req.limit
                     .unwrap_or(crate::acp::session_collaboration::DEFAULT_INBOX_LIMIT),
             )
@@ -885,7 +892,9 @@ mod tests {
         async fn list_inbox(
             &self,
             caller_session_id: i32,
+            _scope: crate::acp::session_collaboration::SessionMailboxScope,
             filter: crate::acp::session_collaboration::SessionInboxFilter,
+            _peer_session_id: Option<i32>,
             limit: u32,
         ) -> crate::acp::session_collaboration::SessionInboxOutcome {
             self.inbox_by
@@ -1070,6 +1079,8 @@ mod tests {
         let listed = listener
             .process_list_inbox(BrokerListInboxRequest {
                 token: "tok".into(),
+                mail_box: None,
+                peer_session_id: None,
                 filter: Some("unread".into()),
                 limit: Some(8),
             })

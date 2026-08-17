@@ -162,10 +162,33 @@ impl SessionInboxFilter {
     }
 }
 
+/// Which side of the mailbox `list_inbox` reads. The filter vocabulary is
+/// shared: for `Sent` the same words describe the recipient's side.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionMailboxScope {
+    Inbox,
+    Sent,
+}
+
+impl SessionMailboxScope {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "inbox" => Some(Self::Inbox),
+            "sent" => Some(Self::Sent),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionInboxItem {
     pub event_id: String,
     pub delivery_id: String,
+    /// "inbound" or "outbound", relative to the calling Session.
+    #[serde(default)]
+    pub direction: String,
+    /// The other party: the sender for inbox items, the recipient for sent.
     pub from_session_id: i32,
     pub from_title: Option<String>,
     pub from_agent_type: Option<String>,
@@ -181,6 +204,8 @@ pub struct SessionInboxItem {
 pub struct SessionInboxOutcome {
     pub available: bool,
     pub caller_session_id: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<SessionMailboxScope>,
     pub unread_count: u32,
     pub awaiting_reply_count: u32,
     pub items: Vec<SessionInboxItem>,
@@ -194,6 +219,7 @@ impl SessionInboxOutcome {
         Self {
             available: false,
             caller_session_id,
+            scope: None,
             unread_count: 0,
             awaiting_reply_count: 0,
             items: Vec::new(),
@@ -275,7 +301,9 @@ pub trait SessionCollaborationAccess: Send + Sync {
     async fn list_inbox(
         &self,
         caller_session_id: i32,
+        scope: SessionMailboxScope,
         filter: SessionInboxFilter,
+        peer_session_id: Option<i32>,
         limit: u32,
     ) -> SessionInboxOutcome;
 
@@ -343,6 +371,15 @@ mod tests {
 
     #[test]
     fn inbox_filter_parses_known_wires_only() {
+        assert_eq!(
+            SessionMailboxScope::parse("inbox"),
+            Some(SessionMailboxScope::Inbox)
+        );
+        assert_eq!(
+            SessionMailboxScope::parse("sent"),
+            Some(SessionMailboxScope::Sent)
+        );
+        assert_eq!(SessionMailboxScope::parse("outbox"), None);
         assert_eq!(
             SessionInboxFilter::parse("open"),
             Some(SessionInboxFilter::Open)

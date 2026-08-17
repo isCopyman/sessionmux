@@ -1361,11 +1361,15 @@ pub async fn feed(
 pub async fn list_inbox(
     conn: &DatabaseConnection,
     conversation_id: i32,
+    scope: crate::acp::session_collaboration::SessionMailboxScope,
     filter: crate::acp::session_collaboration::SessionInboxFilter,
+    peer_session_id: Option<i32>,
     limit: u32,
 ) -> Result<Vec<crate::models::CollaborationDeliveryView>, DbError> {
     require_live_session(conn, conversation_id).await?;
     let limit = limit.clamp(1, crate::acp::session_collaboration::MAX_INBOX_LIMIT) as i64;
+    // The delivery row always carries recipient-side facts, so one filter
+    // vocabulary serves both boxes: for Sent, "unread" is the recipient's.
     let filter_sql = match filter {
         crate::acp::session_collaboration::SessionInboxFilter::Open => {
             "AND (d.agent_received_at IS NULL OR d.obligation_state = 'awaiting_reply')"
@@ -1378,14 +1382,31 @@ pub async fn list_inbox(
         }
         crate::acp::session_collaboration::SessionInboxFilter::All => "",
     };
+    let (anchor_sql, peer_sql) = match scope {
+        crate::acp::session_collaboration::SessionMailboxScope::Inbox => (
+            "d.target_conversation_id = ?",
+            "AND e.source_conversation_id = ?",
+        ),
+        crate::acp::session_collaboration::SessionMailboxScope::Sent => (
+            "e.source_conversation_id = ?",
+            "AND d.target_conversation_id = ?",
+        ),
+    };
+    let mut params: Vec<sea_orm::Value> = vec![conversation_id.into()];
+    let peer_clause = match peer_session_id {
+        Some(peer) => {
+            params.push(peer.into());
+            peer_sql
+        }
+        None => "",
+    };
+    params.push(limit.into());
     let rows = conn
         .query_all(statement(
             &format!(
-                "{DELIVERY_SELECT} WHERE d.target_conversation_id = ? \
-                 AND d.state <> 'dismissed' {filter_sql} \
-                 ORDER BY d.created_at DESC, d.id DESC LIMIT ?"
+                "{DELIVERY_SELECT} WHERE {anchor_sql}                  AND d.state <> 'dismissed' {peer_clause} {filter_sql}                  ORDER BY d.created_at DESC, d.id DESC LIMIT ?"
             ),
-            vec![conversation_id.into(), limit.into()],
+            params,
         ))
         .await?;
     rows.iter().map(parse_delivery).collect()
@@ -2897,7 +2918,7 @@ mod tests {
 
     #[tokio::test]
     async fn agent_inbox_filters_and_read_do_not_clear_reply_debt() {
-        use crate::acp::session_collaboration::SessionInboxFilter;
+        use crate::acp::session_collaboration::{SessionInboxFilter, SessionMailboxScope};
         let (db, source, target, other) = seeded_memory().await;
         let mut request = input(source, vec![target], "inbox-letter", "please review");
         request.expects_reply = true;
@@ -2909,7 +2930,14 @@ mod tests {
         .await
         .unwrap();
 
-        let open = list_inbox(&db.conn, target, SessionInboxFilter::Open, 20)
+        let open = list_inbox(
+            &db.conn,
+            target,
+            SessionMailboxScope::Inbox,
+            SessionInboxFilter::Open,
+            None,
+            20,
+        )
             .await
             .unwrap();
         assert_eq!(open.len(), 2);
@@ -2918,7 +2946,14 @@ mod tests {
         mark_agent_read(&db.conn, target, &fyi.event_id)
             .await
             .unwrap();
-        let unread = list_inbox(&db.conn, target, SessionInboxFilter::Unread, 20)
+        let unread = list_inbox(
+            &db.conn,
+            target,
+            SessionMailboxScope::Inbox,
+            SessionInboxFilter::Unread,
+            None,
+            20,
+        )
             .await
             .unwrap();
         assert_eq!(unread.len(), 1);
@@ -2927,7 +2962,14 @@ mod tests {
         mark_agent_read(&db.conn, target, &sent.event_id)
             .await
             .unwrap();
-        let awaiting = list_inbox(&db.conn, target, SessionInboxFilter::AwaitingReply, 20)
+        let awaiting = list_inbox(
+            &db.conn,
+            target,
+            SessionMailboxScope::Inbox,
+            SessionInboxFilter::AwaitingReply,
+            None,
+            20,
+        )
             .await
             .unwrap();
         assert_eq!(awaiting.len(), 1);
@@ -2941,6 +2983,64 @@ mod tests {
         assert!(get_inbound_message(&db.conn, other, &sent.event_id)
             .await
             .is_err());
+    }
+
+    #[tokio::test]
+    async fn sent_box_lists_outbound_debt_and_peer_filter_narrows() {
+        use crate::acp::session_collaboration::{SessionInboxFilter, SessionMailboxScope};
+        let (db, source, target, other) = seeded_memory().await;
+        let mut ask = input(source, vec![target], "sent-ask", "please review");
+        ask.expects_reply = true;
+        let asked = send(&db.conn, ask).await.unwrap();
+        send(
+            &db.conn,
+            input(source, vec![other], "sent-fyi", "just so you know"),
+        )
+        .await
+        .unwrap();
+
+        // Sent box + awaiting_reply: only the letter whose recipient owes us.
+        let awaiting = list_inbox(
+            &db.conn,
+            source,
+            SessionMailboxScope::Sent,
+            SessionInboxFilter::AwaitingReply,
+            None,
+            20,
+        )
+        .await
+        .unwrap();
+        assert_eq!(awaiting.len(), 1);
+        assert_eq!(awaiting[0].event_id, asked.event_id);
+        assert_eq!(awaiting[0].target.conversation_id, target);
+
+        // The peer filter narrows the sent box to one exchange.
+        let with_other = list_inbox(
+            &db.conn,
+            source,
+            SessionMailboxScope::Sent,
+            SessionInboxFilter::All,
+            Some(other),
+            20,
+        )
+        .await
+        .unwrap();
+        assert_eq!(with_other.len(), 1);
+        assert_eq!(with_other[0].target.conversation_id, other);
+
+        // Inbox side: target got mail from source only, so a peer filter on
+        // `other` must come back empty.
+        let none_from_other = list_inbox(
+            &db.conn,
+            target,
+            SessionMailboxScope::Inbox,
+            SessionInboxFilter::All,
+            Some(other),
+            20,
+        )
+        .await
+        .unwrap();
+        assert!(none_from_other.is_empty());
     }
 
     #[tokio::test]

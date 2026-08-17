@@ -137,6 +137,10 @@ pub struct BrokerSendMessageRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BrokerListInboxRequest {
     pub token: String,
+    #[serde(default, rename = "box", skip_serializing_if = "Option::is_none")]
+    pub mail_box: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub peer_session_id: Option<i32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub filter: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

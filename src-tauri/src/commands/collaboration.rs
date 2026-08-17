@@ -601,7 +601,9 @@ impl SessionCollaborationAccess for DbSessionCollaboration {
     async fn list_inbox(
         &self,
         caller_session_id: i32,
+        scope: crate::acp::session_collaboration::SessionMailboxScope,
         filter: crate::acp::session_collaboration::SessionInboxFilter,
+        peer_session_id: Option<i32>,
         limit: u32,
     ) -> crate::acp::session_collaboration::SessionInboxOutcome {
         use crate::acp::session_collaboration::{
@@ -616,7 +618,9 @@ impl SessionCollaborationAccess for DbSessionCollaboration {
         let items = match collaboration_service::list_inbox(
             &self.db.conn,
             caller_session_id,
+            scope,
             filter,
+            peer_session_id,
             limit.clamp(1, MAX_INBOX_LIMIT),
         )
         .await
@@ -639,32 +643,41 @@ impl SessionCollaborationAccess for DbSessionCollaboration {
                 item.obligation_state == crate::models::CollaborationObligationState::AwaitingReply
             })
             .count() as u32;
+        let outbound =
+            scope == crate::acp::session_collaboration::SessionMailboxScope::Sent;
         SessionInboxOutcome {
             available: true,
             caller_session_id: Some(caller_session_id),
+            scope: Some(scope),
             unread_count: feed.unread_count,
             awaiting_reply_count,
             truncated: items.len() as u32 >= limit.clamp(1, MAX_INBOX_LIMIT),
             items: items
                 .into_iter()
-                .map(|item| SessionInboxItem {
-                    event_id: item.event_id,
-                    delivery_id: item.id,
-                    from_session_id: item.source.conversation_id,
-                    from_title: item.source.title,
-                    from_agent_type: item.source.agent_type,
-                    title: crate::acp::session_collaboration::letter_title(
-                        &item.subject,
-                        &item.body,
-                    ),
-                    preview: crate::acp::session_collaboration::letter_title(
-                        &item.subject,
-                        &item.body,
-                    ),
-                    unread: item.agent_received_at.is_none(),
-                    expects_reply: item.expects_reply,
-                    obligation_state: item.obligation_state.as_str().to_string(),
-                    created_at: item.created_at,
+                .map(|item| {
+                    // from_* carries the OTHER party: sender for inbox, recipient for sent.
+                    let peer = if outbound { item.target } else { item.source };
+                    SessionInboxItem {
+                        event_id: item.event_id,
+                        delivery_id: item.id,
+                        direction: if outbound { "outbound" } else { "inbound" }
+                            .to_string(),
+                        from_session_id: peer.conversation_id,
+                        from_title: peer.title,
+                        from_agent_type: peer.agent_type,
+                        title: crate::acp::session_collaboration::letter_title(
+                            &item.subject,
+                            &item.body,
+                        ),
+                        preview: crate::acp::session_collaboration::letter_title(
+                            &item.subject,
+                            &item.body,
+                        ),
+                        unread: item.agent_received_at.is_none(),
+                        expects_reply: item.expects_reply,
+                        obligation_state: item.obligation_state.as_str().to_string(),
+                        created_at: item.created_at,
+                    }
                 })
                 .collect(),
             note: None,
@@ -1541,7 +1554,13 @@ mod tests {
         .expect("send");
 
         let listed = access
-            .list_inbox(target, SessionInboxFilter::Open, 20)
+            .list_inbox(
+                target,
+                crate::acp::session_collaboration::SessionMailboxScope::Inbox,
+                SessionInboxFilter::Open,
+                None,
+                20,
+            )
             .await;
         assert!(listed.available);
         assert_eq!(listed.unread_count, 1);
@@ -1564,7 +1583,13 @@ mod tests {
         assert!(!opened.unread);
 
         let unread = access
-            .list_inbox(target, SessionInboxFilter::Unread, 20)
+            .list_inbox(
+                target,
+                crate::acp::session_collaboration::SessionMailboxScope::Inbox,
+                SessionInboxFilter::Unread,
+                None,
+                20,
+            )
             .await;
         assert_eq!(unread.unread_count, 0);
         assert!(unread.items.is_empty());
