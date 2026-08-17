@@ -3,8 +3,8 @@
 //! The frontend may render the queue in several Workbenches/windows, but it
 //! never owns dispatch. One process worker claims the FIFO head, hands it to
 //! the already-running Harness through `ConnectionManager::send_prompt_linked`,
-//! and removes it only after that call accepts the prompt. Closed Sessions are
-//! not cold-started by V1: their durable items simply wait for a normal resume.
+//! and removes it only after that call accepts the prompt. When a deliverable
+//! item exists and the Session is closed, the dispatcher starts or resumes it.
 
 use std::future::Future;
 use std::sync::Arc;
@@ -27,6 +27,9 @@ use crate::models::{
     AgentType, CollaborationChanged, CollaborationDeliveryHint, PromptQueueSnapshot,
 };
 use crate::parsers::path_eq_for_matching;
+use crate::session_dispatcher::{
+    connection_is_live, conversation_can_auto_start, EnsureGate, SessionDispatchConfig,
+};
 use crate::web::event_bridge::{
     emit_event, EventEmitter, COLLABORATION_CHANGED_EVENT, PROMPT_QUEUE_CHANGED_EVENT,
 };
@@ -73,8 +76,8 @@ impl PromptQueueHandle {
         let Some((_, state)) = active_connection_for_row(&self.manager, &row).await else {
             return Ok(false);
         };
-        let is_connected = state.read().await.status == ConnectionStatus::Connected;
-        Ok(is_connected)
+        let is_active = connection_is_live(&state.read().await.status);
+        Ok(is_active)
     }
 
     /// A non-running handle for handler-only tests. Queue mutations remain
@@ -120,6 +123,38 @@ pub fn build_prompt_queue_runtime(
     emitter: EventEmitter,
     bus: Arc<InternalEventBus>,
 ) -> (PromptQueueHandle, impl Future<Output = ()> + Send + 'static) {
+    build_prompt_queue_runtime_inner(db_conn, manager, emitter, bus, None, None)
+}
+
+pub fn build_prompt_queue_runtime_with_dispatch(
+    db_conn: sea_orm::DatabaseConnection,
+    manager: ConnectionManager,
+    emitter: EventEmitter,
+    bus: Arc<InternalEventBus>,
+    dispatch: SessionDispatchConfig,
+) -> (PromptQueueHandle, impl Future<Output = ()> + Send + 'static) {
+    build_prompt_queue_runtime_inner(db_conn, manager, emitter, bus, Some(dispatch), None)
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+pub fn build_prompt_queue_runtime_with_ensure_hook(
+    db_conn: sea_orm::DatabaseConnection,
+    manager: ConnectionManager,
+    emitter: EventEmitter,
+    bus: Arc<InternalEventBus>,
+    hook: Arc<dyn Fn(i32) + Send + Sync + 'static>,
+) -> (PromptQueueHandle, impl Future<Output = ()> + Send + 'static) {
+    build_prompt_queue_runtime_inner(db_conn, manager, emitter, bus, None, Some(hook))
+}
+
+fn build_prompt_queue_runtime_inner(
+    db_conn: sea_orm::DatabaseConnection,
+    manager: ConnectionManager,
+    emitter: EventEmitter,
+    bus: Arc<InternalEventBus>,
+    dispatch: Option<SessionDispatchConfig>,
+    ensure_hook: Option<Arc<dyn Fn(i32) + Send + Sync + 'static>>,
+) -> (PromptQueueHandle, impl Future<Output = ()> + Send + 'static) {
     // Subscribe before returning the future, matching the lifecycle subscriber:
     // events emitted between construction and spawn are buffered, not lost.
     let bus_rx = bus.subscribe();
@@ -136,6 +171,9 @@ pub fn build_prompt_queue_runtime(
         bus,
         bus_rx,
         wake_rx,
+        dispatch,
+        ensure_hook,
+        ensure_gate: EnsureGate::default(),
     };
     (handle, async move { runtime.run().await })
 }
@@ -148,6 +186,9 @@ struct PromptQueueRuntime {
     bus: Arc<InternalEventBus>,
     bus_rx: broadcast::Receiver<Arc<crate::acp::EventEnvelope>>,
     wake_rx: mpsc::UnboundedReceiver<i32>,
+    dispatch: Option<SessionDispatchConfig>,
+    ensure_hook: Option<Arc<dyn Fn(i32) + Send + Sync + 'static>>,
+    ensure_gate: EnsureGate,
 }
 
 impl PromptQueueRuntime {
@@ -448,9 +489,7 @@ impl PromptQueueRuntime {
                     }
                     match state.conversation_id {
                         Some(id) => Some(id),
-                        None => self
-                            .conversation_id_from_external(&state)
-                            .await,
+                        None => self.conversation_id_from_external(&state).await,
                     }
                 }
                 None => None,
@@ -480,6 +519,70 @@ impl PromptQueueRuntime {
         active_connection_for_row(&self.manager, row).await
     }
 
+    async fn request_ensure_runtime(&self, row: &conversation::Model) {
+        if self.dispatch.is_none() && self.ensure_hook.is_none() {
+            return;
+        }
+        if !conversation_can_auto_start(row) {
+            return;
+        }
+        match prompt_queue_service::has_queued_items(&self.db.conn, row.id).await {
+            Ok(true) => {}
+            Ok(false) => return,
+            Err(err) => {
+                tracing::warn!(
+                    "[session-dispatcher] queued-item check failed for {}: {err}",
+                    row.id
+                );
+                return;
+            }
+        }
+        emit_event(
+            &self.emitter,
+            COLLABORATION_CHANGED_EVENT,
+            CollaborationChanged {
+                conversation_ids: vec![row.id],
+            },
+        );
+        if !self.ensure_gate.try_begin(row.id) {
+            return;
+        }
+        if let Some(hook) = &self.ensure_hook {
+            hook(row.id);
+            return;
+        }
+        let Some(dispatch) = self.dispatch.clone() else {
+            return;
+        };
+        let db = AppDatabase {
+            conn: self.db.conn.clone(),
+        };
+        let manager = self.manager.clone_ref();
+        let emitter = self.emitter.clone();
+        let row = row.clone();
+        tokio::spawn(async move {
+            match crate::session_dispatcher::ensure_session_runtime(
+                &db,
+                &manager,
+                &emitter,
+                &dispatch.data_dir,
+                &row,
+            )
+            .await
+            {
+                Ok(outcome) => tracing::info!(
+                    "[session-dispatcher] Session {} runtime {:?}",
+                    row.id,
+                    outcome
+                ),
+                Err(err) => tracing::warn!(
+                    "[session-dispatcher] Session {} start failed: {err}",
+                    row.id
+                ),
+            }
+        });
+    }
+
     async fn process(&self, conversation_id: i32) {
         let Some(row) = (match conversation::Entity::find_by_id(conversation_id)
             .one(&self.db.conn)
@@ -496,19 +599,24 @@ impl PromptQueueRuntime {
         if row.deleted_at.is_some() {
             return;
         }
-        let Some((connection_id, state)) = self.active_connection(&row).await else {
-            // V1 deliberately does not cold-start a Session just because a
-            // follow-up exists. The next ordinary resume emits SessionStarted
-            // and wakes this worker.
+        let live = match self.active_connection(&row).await {
+            Some((connection_id, state)) => {
+                let status = state.read().await.status.clone();
+                if connection_is_live(&status) {
+                    Some((connection_id, state, status))
+                } else {
+                    None
+                }
+            }
+            None => None,
+        };
+        let Some((connection_id, state, status)) = live else {
+            self.request_ensure_runtime(&row).await;
             return;
         };
-        let (status, turn_in_flight, native_steering_available) = {
+        let (turn_in_flight, native_steering_available) = {
             let state = state.read().await;
-            (
-                state.status.clone(),
-                state.turn_in_flight,
-                state.native_steering_available,
-            )
+            (state.turn_in_flight, state.native_steering_available)
         };
         if status != ConnectionStatus::Connected {
             return;
@@ -677,10 +785,7 @@ impl PromptQueueRuntime {
         }
     }
 
-    async fn conversation_id_from_external(
-        &self,
-        state: &crate::acp::SessionState,
-    ) -> Option<i32> {
+    async fn conversation_id_from_external(&self, state: &crate::acp::SessionState) -> Option<i32> {
         let external_id = state.external_id.as_deref()?;
         conversation::Entity::find()
             .filter(conversation::Column::ExternalId.eq(external_id))
@@ -1010,7 +1115,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn closed_session_stays_queued_without_cold_start() {
+    async fn closed_session_stays_queued_without_dispatcher() {
         let (db, _, conversation_id, manager, bus) = setup("/tmp/codeg-queue-no-cold-start").await;
         let (handle, task) = build_prompt_queue_runtime(
             db.conn.clone(),
@@ -1035,18 +1140,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn closed_session_requests_runtime_start_so_mail_can_arrive() {
+        let (db, _, conversation_id, manager, bus) =
+            setup("/tmp/codeg-queue-dispatcher-start").await;
+        let requested = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let hook_requested = requested.clone();
+        let (handle, task) = build_prompt_queue_runtime_with_ensure_hook(
+            db.conn.clone(),
+            manager.clone_ref(),
+            EventEmitter::Noop,
+            bus,
+            Arc::new(move |id| hook_requested.lock().unwrap().push(id)),
+        );
+        let worker = tokio::spawn(task);
+        prompt_queue_service::enqueue(&db.conn, input(conversation_id, "one", "wait"))
+            .await
+            .expect("enqueue");
+        handle.wake(conversation_id);
+        tokio::time::sleep(StdDuration::from_millis(80)).await;
+
+        assert_eq!(requested.lock().unwrap().as_slice(), [conversation_id]);
+        let snapshot = prompt_queue_service::snapshot(&db.conn, conversation_id)
+            .await
+            .expect("snapshot");
+        assert_eq!(snapshot.items[0].state, PromptQueueItemState::Queued);
+        worker.abort();
+    }
+
+    #[tokio::test]
     async fn deliver_only_does_not_start_an_idle_turn() {
         let path = "/tmp/codeg-session-message-idle-inject";
         let (db, folder_id, target, manager, bus) = setup(path).await;
         let source = seed_conversation(&db, folder_id, AgentType::ClaudeCode).await;
-        let mut commands =
-            bind_live_connection(&manager, "active", path, folder_id, target).await;
+        let mut commands = bind_live_connection(&manager, "active", path, folder_id, target).await;
         collaboration_service::send(
             &db.conn,
             SendCollaborationMessageInput {
                 source_conversation_id: source,
                 target_conversation_ids: vec![target],
-            subject: "Test letter".into(),
+                subject: "Test letter".into(),
                 body: "PING idle".into(),
                 client_dedupe_id: "idle-inject".into(),
                 invocation_policy: CollaborationInvocationPolicy::StoreOnly,
@@ -1080,8 +1212,7 @@ mod tests {
         let path = "/tmp/codeg-session-message-busy-steer";
         let (db, folder_id, target, manager, bus) = setup(path).await;
         let source = seed_conversation(&db, folder_id, AgentType::ClaudeCode).await;
-        let mut commands =
-            bind_live_connection(&manager, "active", path, folder_id, target).await;
+        let mut commands = bind_live_connection(&manager, "active", path, folder_id, target).await;
         let state = manager.get_state("active").await.expect("state");
         {
             let mut state = state.write().await;
@@ -1093,7 +1224,7 @@ mod tests {
             SendCollaborationMessageInput {
                 source_conversation_id: source,
                 target_conversation_ids: vec![target],
-            subject: "Test letter".into(),
+                subject: "Test letter".into(),
                 body: "PING steer".into(),
                 client_dedupe_id: "busy-steer".into(),
                 invocation_policy: CollaborationInvocationPolicy::StoreOnly,
@@ -1127,8 +1258,7 @@ mod tests {
         let path = "/tmp/codeg-session-message-busy-park";
         let (db, folder_id, target, manager, bus) = setup(path).await;
         let source = seed_conversation(&db, folder_id, AgentType::ClaudeCode).await;
-        let mut commands =
-            bind_live_connection(&manager, "active", path, folder_id, target).await;
+        let mut commands = bind_live_connection(&manager, "active", path, folder_id, target).await;
         let state = manager.get_state("active").await.expect("state");
         {
             let mut state = state.write().await;
@@ -1140,7 +1270,7 @@ mod tests {
             SendCollaborationMessageInput {
                 source_conversation_id: source,
                 target_conversation_ids: vec![target],
-            subject: "Test letter".into(),
+                subject: "Test letter".into(),
                 body: "PING park".into(),
                 client_dedupe_id: "busy-park".into(),
                 invocation_policy: CollaborationInvocationPolicy::StoreOnly,
@@ -1177,8 +1307,7 @@ mod tests {
         let path = "/tmp/codeg-session-message-idle-wakeup";
         let (db, folder_id, target, manager, bus) = setup(path).await;
         let source = seed_conversation(&db, folder_id, AgentType::ClaudeCode).await;
-        let mut commands =
-            bind_live_connection(&manager, "active", path, folder_id, target).await;
+        let mut commands = bind_live_connection(&manager, "active", path, folder_id, target).await;
         let state = manager.get_state("active").await.expect("state");
         {
             let mut state = state.write().await;
@@ -1190,7 +1319,7 @@ mod tests {
             SendCollaborationMessageInput {
                 source_conversation_id: source,
                 target_conversation_ids: vec![target],
-            subject: "Test letter".into(),
+                subject: "Test letter".into(),
                 body: "PING after long task".into(),
                 client_dedupe_id: "idle-wakeup".into(),
                 invocation_policy: CollaborationInvocationPolicy::StoreOnly,
@@ -1241,8 +1370,7 @@ mod tests {
         let path = "/tmp/codeg-session-message-send-core-idle";
         let (db, folder_id, target, manager, bus) = setup(path).await;
         let source = seed_conversation(&db, folder_id, AgentType::ClaudeCode).await;
-        let mut commands =
-            bind_live_connection(&manager, "active", path, folder_id, target).await;
+        let mut commands = bind_live_connection(&manager, "active", path, folder_id, target).await;
         let (handle, task) = build_prompt_queue_runtime(
             db.conn.clone(),
             manager.clone_ref(),
@@ -1294,8 +1422,7 @@ mod tests {
         let path = "/tmp/codeg-session-message-send-core-steer";
         let (db, folder_id, target, manager, bus) = setup(path).await;
         let source = seed_conversation(&db, folder_id, AgentType::ClaudeCode).await;
-        let mut commands =
-            bind_live_connection(&manager, "active", path, folder_id, target).await;
+        let mut commands = bind_live_connection(&manager, "active", path, folder_id, target).await;
         let state = manager.get_state("active").await.expect("state");
         {
             let mut state = state.write().await;
@@ -1309,8 +1436,7 @@ mod tests {
             bus,
         );
         let worker = tokio::spawn(task);
-        let mut input =
-            collaboration_input(source, target, "send-core-steer", "PING queue steer");
+        let mut input = collaboration_input(source, target, "send-core-steer", "PING queue steer");
         input.delivery_hint = CollaborationDeliveryHint::SteerIfSupported;
         crate::commands::collaboration::collaboration_send_core(
             &db.conn,
@@ -1345,8 +1471,7 @@ mod tests {
         let path = "/tmp/codeg-session-message-no-replay";
         let (db, folder_id, target, manager, bus) = setup(path).await;
         let source = seed_conversation(&db, folder_id, AgentType::ClaudeCode).await;
-        let mut commands =
-            bind_live_connection(&manager, "active", path, folder_id, target).await;
+        let mut commands = bind_live_connection(&manager, "active", path, folder_id, target).await;
         let state = manager.get_state("active").await.expect("state");
         {
             let mut state = state.write().await;
@@ -1358,7 +1483,7 @@ mod tests {
             SendCollaborationMessageInput {
                 source_conversation_id: source,
                 target_conversation_ids: vec![target],
-            subject: "Test letter".into(),
+                subject: "Test letter".into(),
                 body: "already consumed".into(),
                 client_dedupe_id: "no-replay".into(),
                 invocation_policy: CollaborationInvocationPolicy::StoreOnly,
@@ -1465,7 +1590,7 @@ mod tests {
         let PromptInputBlock::Text { text } = &blocks[0] else {
             panic!("expected stable text envelope");
         };
-        assert!(text.contains("durable mailbox notification"));
+        assert!(text.contains("system mailbox notice"));
         assert!(text.contains("Call read_message"));
         assert!(!text.contains("review this claim"));
         assert_eq!(
@@ -1840,7 +1965,7 @@ mod tests {
         let ConnectionCommand::Steer { text, reply } = command else {
             panic!("expected native steer command");
         };
-        assert!(text.contains("durable mailbox notification"));
+        assert!(text.contains("system mailbox notice"));
         assert!(text.contains("Call read_message"));
         assert!(!text.contains("correct the premise"));
         reply.send(Ok(SteerOutcome::Injected)).expect("steer reply");

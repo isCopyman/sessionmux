@@ -90,7 +90,6 @@ import {
 import {
   CollaborationMessageCard,
   SessionMailFromBadge,
-  SessionMailSystemBadge,
 } from "./collaboration-message-card"
 import { SessionMailCard } from "./session-mail-card"
 import { SessionMailLookupProvider } from "./session-mail-lookup"
@@ -773,8 +772,58 @@ const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
     (state) => state.focusedEventId
   )
   const mailEventId = group.sessionMail?.eventIds[0]
+  const mailText = group.parts
+    .map((part) => (part.type === "text" ? part.text : ""))
+    .join("\n\n")
+  const isSystemDigest =
+    group.sessionMail?.source === "system" ||
+    /Codeg 系统信箱提醒|Codeg system mailbox|This is a Codeg system mailbox notice/i.test(
+      mailText
+    )
   if (group.role === "system") {
     return <CollapsibleSystemMessage group={group} />
+  }
+
+  if (group.role === "user" && group.sessionMail?.source === "session") {
+    return (
+      <div
+        className={cn(
+          dimmed && "opacity-70",
+          mailEventId &&
+            focusedEventId === mailEventId &&
+            "rounded-lg ring-2 ring-primary/35"
+        )}
+        data-letter-event-id={mailEventId}
+      >
+        <SessionMailCard
+          direction="inbound"
+          eventId={mailEventId}
+          fromConversationId={group.sessionMail.conversationId}
+          fromTitle={group.sessionMail.title}
+          fromAgentType={group.sessionMail.agentType}
+          subject={group.sessionMail.letterTitle}
+          body={mailText}
+        />
+      </div>
+    )
+  }
+
+  if (group.role === "user" && isSystemDigest) {
+    const title = group.sessionMail?.letterTitle?.trim() ?? ""
+    return (
+      <div
+        className={cn(dimmed && "opacity-70")}
+        data-letter-event-id={mailEventId}
+        data-mail-system-notice=""
+      >
+        <SessionMailCard
+          direction="system"
+          eventId={mailEventId}
+          subject={title || undefined}
+          body={title && mailText.trim() === title ? "" : mailText}
+        />
+      </div>
+    )
   }
 
   return (
@@ -791,23 +840,9 @@ const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
         {group.role === "user" && group.images.length > 0 ? (
           <UserImageAttachments images={group.images} className="self-end" />
         ) : null}
-        {group.role === "user" && group.sessionMail?.source === "session" ? (
-          <SessionMailCard
-            direction="inbound"
-            eventId={mailEventId}
-            fromConversationId={group.sessionMail.conversationId}
-            fromTitle={group.sessionMail.title}
-            fromAgentType={group.sessionMail.agentType}
-            subject={group.sessionMail.letterTitle}
-            body={group.parts
-              .map((part) => (part.type === "text" ? part.text : ""))
-              .join("\n\n")}
-          />
-        ) : group.role === "user" ? (
+        {group.role === "user" ? (
           <div className="flex w-fit max-w-full flex-col items-end self-end">
-            {group.sessionMail?.source === "system" ? (
-              <SessionMailSystemBadge />
-            ) : group.sessionMail ? (
+            {group.sessionMail ? (
               <SessionMailFromBadge
                 conversationId={group.sessionMail.conversationId}
                 title={group.sessionMail.title}

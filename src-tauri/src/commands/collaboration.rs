@@ -8,8 +8,8 @@ use serde::{Deserialize, Serialize};
 use crate::acp::manager::ConnectionManager;
 use crate::acp::session_collaboration::{
     SessionAddress, SessionCollaborationAccess, SessionCollaborationConfig,
-    SessionCollaborationRuntimeConfig, SessionListOutcome, SessionMessageDeliveryOutcome,
-    SessionMessageDeliveryMode, SessionMessageSpec, SessionSendOutcome, MAX_SESSION_LIST_LIMIT,
+    SessionCollaborationRuntimeConfig, SessionListOutcome, SessionMessageDeliveryMode,
+    SessionMessageDeliveryOutcome, SessionMessageSpec, SessionSendOutcome, MAX_SESSION_LIST_LIMIT,
 };
 use crate::app_error::AppCommandError;
 use crate::db::service::{
@@ -94,9 +94,9 @@ async fn persist_collaboration_message(
     _prompt_queue: &PromptQueueHandle,
     input: SendCollaborationMessageInput,
 ) -> Result<CollaborationSendResult, AppCommandError> {
-    // Do not pause closed targets for human confirmation. The durable queue
-    // waits for a live connection, then steers or starts a turn the same way
-    // a human follow-up would.
+    // Do not pause closed targets for human confirmation. The dispatcher
+    // starts or resumes a closed Session, then steers or starts a turn the
+    // same way a human follow-up would.
     collaboration_service::send_with_initially_inactive_targets(
         conn,
         input,
@@ -119,8 +119,9 @@ pub async fn collaboration_send_core(
     input: SendCollaborationMessageInput,
 ) -> Result<CollaborationSendResult, AppCommandError> {
     // Persist first. Only invoke_when_idle enters the Session dispatcher;
-    // store_only remains visible in the mailbox until a later natural turn or
-    // explicit Agent read. Closed Sessions are never cold-started here.
+    // store_only remains visible in the mailbox until a later natural turn,
+    // overdue attention, or explicit Agent read. The dispatcher starts a
+    // closed target when the queued notice needs a live runtime.
     let should_wake = input.invocation_policy == CollaborationInvocationPolicy::InvokeWhenIdle;
     let result = persist_collaboration_message(conn, prompt_queue, input).await?;
     publish_persisted_message(emitter, &result);
@@ -984,9 +985,7 @@ mod tests {
     use super::*;
     use crate::acp::connection::ConnectionCommand;
     use crate::acp::internal_bus::EventBusMetrics;
-    use crate::acp::session_collaboration::{
-        SessionInboxFilter, SessionMessageDeliveryMode,
-    };
+    use crate::acp::session_collaboration::{SessionInboxFilter, SessionMessageDeliveryMode};
     use crate::acp::InternalEventBus;
     use crate::db::test_helpers::{fresh_in_memory_db, seed_conversation, seed_folder};
     use crate::models::{
@@ -1071,7 +1070,7 @@ mod tests {
             SendCollaborationMessageInput {
                 source_conversation_id: source,
                 target_conversation_ids: vec![target],
-            subject: "Test letter".into(),
+                subject: "Test letter".into(),
                 body: "review".to_string(),
                 client_dedupe_id: "command-send".to_string(),
                 invocation_policy: CollaborationInvocationPolicy::StoreOnly,
@@ -1100,7 +1099,7 @@ mod tests {
             SendCollaborationMessageInput {
                 source_conversation_id: source,
                 target_conversation_ids: vec![target],
-            subject: "Test letter".into(),
+                subject: "Test letter".into(),
                 body: "review".to_string(),
                 client_dedupe_id: "command-send".to_string(),
                 invocation_policy: CollaborationInvocationPolicy::StoreOnly,
@@ -1129,7 +1128,7 @@ mod tests {
             SendCollaborationMessageInput {
                 source_conversation_id: source,
                 target_conversation_ids: vec![target],
-            subject: "Test letter".into(),
+                subject: "Test letter".into(),
                 body: "review after I open your session".to_string(),
                 client_dedupe_id: "inactive-target-confirmation".to_string(),
                 invocation_policy: CollaborationInvocationPolicy::InvokeWhenIdle,
@@ -1169,7 +1168,7 @@ mod tests {
                 message: SendCollaborationMessageInput {
                     source_conversation_id: source,
                     target_conversation_ids: vec![target],
-            subject: "Test letter".into(),
+                    subject: "Test letter".into(),
                     body: "change direction".into(),
                     client_dedupe_id: "atomic-interrupt-message".into(),
                     invocation_policy: CollaborationInvocationPolicy::StoreOnly,
@@ -1221,7 +1220,7 @@ mod tests {
                 message: SendCollaborationMessageInput {
                     source_conversation_id: source,
                     target_conversation_ids: vec![target],
-            subject: "Test letter".into(),
+                    subject: "Test letter".into(),
                     body: "run next".into(),
                     client_dedupe_id: "idle-interrupt-message".into(),
                     invocation_policy: CollaborationInvocationPolicy::InvokeWhenIdle,
@@ -1345,7 +1344,7 @@ mod tests {
                     SessionMessageSpec {
                         target_session_ids: vec![target],
                         title: "Test letter".into(),
-            content: format!("reply at depth {depth}"),
+                        content: format!("reply at depth {depth}"),
                         delivery_mode: SessionMessageDeliveryMode::DeliverOnly,
                         steer_if_supported: false,
                         expects_reply: true,
@@ -1409,7 +1408,7 @@ mod tests {
                 SessionMessageSpec {
                     target_session_ids: vec![target],
                     title: "Test letter".into(),
-            content: "must not land".into(),
+                    content: "must not land".into(),
                     delivery_mode: SessionMessageDeliveryMode::Queue,
                     steer_if_supported: false,
                     expects_reply: true,
@@ -1462,7 +1461,7 @@ mod tests {
             SendCollaborationMessageInput {
                 source_conversation_id: source,
                 target_conversation_ids: vec![target],
-            subject: "Test letter".into(),
+                subject: "Test letter".into(),
                 body: "wait until collaboration is enabled again".into(),
                 client_dedupe_id: "setting-policy-transition".into(),
                 invocation_policy: CollaborationInvocationPolicy::InvokeWhenIdle,

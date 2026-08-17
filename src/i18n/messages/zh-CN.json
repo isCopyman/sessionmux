@@ -5065,6 +5065,7 @@
     "toPrefix": "发给",
     "fromMailSystem": "来自邮件系统",
     "openedLetter": "已打开信件",
+    "sentLetter": "已发出信件",
     "threadsLabel": "往来",
     "threadCount": "{count} 封",
     "inboxEmpty": "收件箱是空的",

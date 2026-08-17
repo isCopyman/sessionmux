@@ -59,8 +59,8 @@ pub enum SessionMessageDeliveryMode {
     /// Persist and display the message without asking the target Harness to
     /// consume it as a new turn.
     DeliverOnly,
-    /// Persist first, then enqueue an origin-event reference for the target's
-    /// existing runtime. A closed Session is never cold-started.
+    /// Persist first, then enqueue an origin-event reference. The dispatcher
+    /// starts or resumes a closed Session so the notice can be delivered.
     Queue,
 }
 
@@ -331,7 +331,10 @@ mod tests {
 
     #[test]
     fn letter_title_prefers_subject_and_falls_back_to_body() {
-        assert_eq!(letter_title("  Review  claim  ", "long body"), "Review claim");
+        assert_eq!(
+            letter_title("  Review  claim  ", "long body"),
+            "Review claim"
+        );
         assert_eq!(letter_title("   ", "hello   world"), "hello world");
         assert!(normalize_letter_title("").is_err());
         assert!(normalize_letter_title(&"x".repeat(MAX_LETTER_TITLE_CHARS + 1)).is_err());

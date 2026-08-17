@@ -68,6 +68,11 @@ describe("SessionSendMessageCard", () => {
       expect(mockCopy).toHaveBeenCalledWith("ping Session D")
     })
     expect(await screen.findByRole("button", { name: "Copied" })).toBeTruthy()
+    expect(screen.getByText("Sent letter")).toBeInTheDocument()
+    expect(screen.getByText("To")).toBeInTheDocument()
+    expect(
+      document.querySelector("[data-session-mail-card='outbound']")
+    ).not.toBeNull()
     expect(
       screen.getByRole("button", { name: "Show raw MCP tools" })
     ).toBeTruthy()

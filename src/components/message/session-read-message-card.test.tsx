@@ -49,6 +49,7 @@ describe("SessionReadMessageCard", () => {
       />
     )
 
+    expect(screen.getByText("Opened letter")).toBeInTheDocument()
     expect(screen.getByText("From")).toBeInTheDocument()
     expect(screen.getByText("Session C")).toBeInTheDocument()
     expect(document.querySelector("[data-session-mail-card='inbound']")).not.toBeNull()

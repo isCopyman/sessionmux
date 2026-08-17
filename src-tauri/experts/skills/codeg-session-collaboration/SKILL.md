@@ -15,7 +15,8 @@ A letter has two parts, like email:
 
 A successful `send_message` means Codeg stored the letter and queued a
 **system notice** (titles only). It is not user approval and not a Room.
-A closed Session is not cold-started.
+If the target Session is closed, Codeg starts or resumes it so the notice
+can be delivered.
 
 ## Tools
 

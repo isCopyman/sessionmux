@@ -5065,6 +5065,7 @@
     "toPrefix": "To",
     "fromMailSystem": "From the mail system",
     "openedLetter": "Opened letter",
+    "sentLetter": "Sent letter",
     "threadsLabel": "Threads",
     "threadCount": "{count} messages",
     "inboxEmpty": "Inbox is empty",

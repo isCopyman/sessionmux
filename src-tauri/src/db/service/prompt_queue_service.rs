@@ -1203,6 +1203,68 @@ pub(crate) async fn recover_expired_claims(
     Ok(snapshots)
 }
 
+pub(crate) async fn has_queued_items(
+    conn: &DatabaseConnection,
+    conversation_id: i32,
+) -> Result<bool, DbError> {
+    let found: i64 = conn
+        .query_one(statement(
+            "SELECT EXISTS(\
+                SELECT 1 FROM conversation_prompt_queue_item \
+                WHERE conversation_id = ? AND state = 'queued'\
+             ) AS found",
+            vec![conversation_id.into()],
+        ))
+        .await?
+        .ok_or_else(|| validation("Could not inspect queued prompt items"))?
+        .try_get("", "found")?;
+    Ok(found != 0)
+}
+
+pub(crate) async fn has_pending_mailbox_attention(
+    conn: &DatabaseConnection,
+    conversation_id: i32,
+) -> Result<bool, DbError> {
+    let found: i64 = conn
+        .query_one(statement(
+            "SELECT EXISTS(\
+                SELECT 1 FROM conversation_prompt_queue_item \
+                WHERE conversation_id = ? \
+                  AND state IN ('queued', 'claimed') \
+                  AND (\
+                    origin_event_id IS NOT NULL \
+                    OR client_dedupe_id LIKE 'mailbox-attention:%'\
+                  )\
+             ) AS found",
+            vec![conversation_id.into()],
+        ))
+        .await?
+        .ok_or_else(|| validation("Could not inspect mailbox attention queue"))?
+        .try_get("", "found")?;
+    Ok(found != 0)
+}
+
+pub async fn enqueue_origin(
+    conn: &DatabaseConnection,
+    conversation_id: i32,
+    item_id: &str,
+    origin_event_id: &str,
+    client_dedupe_id: &str,
+) -> Result<bool, DbError> {
+    let txn = conn.begin().await?;
+    let inserted = enqueue_origin_in_transaction(
+        &txn,
+        conversation_id,
+        item_id,
+        origin_event_id,
+        client_dedupe_id,
+        None,
+    )
+    .await?;
+    txn.commit().await?;
+    Ok(inserted)
+}
+
 pub(crate) async fn pending_conversation_ids(
     conn: &DatabaseConnection,
 ) -> Result<Vec<i32>, DbError> {
@@ -1362,7 +1424,7 @@ mod tests {
             SendCollaborationMessageInput {
                 source_conversation_id: source,
                 target_conversation_ids: vec![target],
-            subject: "Test letter".into(),
+                subject: "Test letter".into(),
                 body: "immutable external input".to_string(),
                 client_dedupe_id: "protected-origin".to_string(),
                 invocation_policy: CollaborationInvocationPolicy::InvokeWhenIdle,
@@ -1601,7 +1663,7 @@ mod tests {
             SendCollaborationMessageInput {
                 source_conversation_id: source,
                 target_conversation_ids: vec![target],
-            subject: "Test letter".into(),
+                subject: "Test letter".into(),
                 body: "possibly accepted".to_string(),
                 client_dedupe_id: "unknown-collaboration-dispatch".to_string(),
                 invocation_policy: CollaborationInvocationPolicy::InvokeWhenIdle,
@@ -1658,7 +1720,7 @@ mod tests {
             SendCollaborationMessageInput {
                 source_conversation_id: source,
                 target_conversation_ids: vec![target],
-            subject: "Test letter".into(),
+                subject: "Test letter".into(),
                 body: "retry with a new turn identity".to_string(),
                 client_dedupe_id: "collaboration-retry-identity".to_string(),
                 invocation_policy: CollaborationInvocationPolicy::InvokeWhenIdle,
@@ -1714,7 +1776,7 @@ mod tests {
             SendCollaborationMessageInput {
                 source_conversation_id: source,
                 target_conversation_ids: vec![target],
-            subject: "Test letter".into(),
+                subject: "Test letter".into(),
                 body: "wait for an explicit start".to_string(),
                 client_dedupe_id: "inactive-collaboration-confirmation".to_string(),
                 invocation_policy: CollaborationInvocationPolicy::InvokeWhenIdle,
@@ -1769,7 +1831,7 @@ mod tests {
             SendCollaborationMessageInput {
                 source_conversation_id: source,
                 target_conversation_ids: vec![target],
-            subject: "Test letter".into(),
+                subject: "Test letter".into(),
                 body: "freeze this cross-session request".to_string(),
                 client_dedupe_id: "collaboration-policy-freeze".to_string(),
                 invocation_policy: CollaborationInvocationPolicy::InvokeWhenIdle,
@@ -1847,7 +1909,7 @@ mod tests {
             SendCollaborationMessageInput {
                 source_conversation_id: source,
                 target_conversation_ids: vec![target],
-            subject: "Test letter".into(),
+                subject: "Test letter".into(),
                 body: "must stop before the harness".to_string(),
                 client_dedupe_id: "collaboration-policy-boundary".to_string(),
                 invocation_policy: CollaborationInvocationPolicy::InvokeWhenIdle,

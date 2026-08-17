@@ -7,13 +7,25 @@ import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { getCollaborationFeed } from "@/lib/api"
 import { onTransportReconnect, subscribe } from "@/lib/platform"
 import { formatConversationTitle } from "@/lib/conversation-title"
-import type { CollaborationChanged } from "@/lib/types"
+import type { CollaborationChanged, CollaborationFeed } from "@/lib/types"
 import { COLLABORATION_CHANGED_EVENT } from "./use-collaboration-feed"
 
+export function mailboxSessionNeedsWorkbench(feed: CollaborationFeed): boolean {
+  return feed.inbound.some((delivery) => {
+    const unreadQueued =
+      delivery.invocationPolicy === "invoke_when_idle" &&
+      (delivery.state === "queued" || delivery.state === "embedding") &&
+      delivery.agentReceivedAt == null
+    const awaitingReply =
+      delivery.obligationState === "awaiting_reply" && !delivery.replyReceived
+    return unreadQueued || awaitingReply
+  })
+}
+
 /**
- * When invoke_when_idle mail arrives for a Session that has no workbench tab,
- * open that Session so the existing connect path can receive the queued
- * notice — the same surface a human send would activate.
+ * When mailbox attention needs a live Session that has no workbench tab,
+ * open that Session so the existing connect path can attach to the
+ * dispatcher-started runtime — the same surface a human send would activate.
  */
 export function useOpenQueuedMailboxSessions() {
   const { openTab } = useTabActions()
@@ -44,13 +56,7 @@ export function useOpenQueuedMailboxSessions() {
           continue
         }
         if (disposed) return
-        const queued = feed.inbound.some(
-          (delivery) =>
-            delivery.invocationPolicy === "invoke_when_idle" &&
-            (delivery.state === "queued" || delivery.state === "embedding") &&
-            delivery.agentReceivedAt == null
-        )
-        if (!queued) continue
+        if (!mailboxSessionNeedsWorkbench(feed)) continue
         const conversation = conversations.find(
           (item) => item.id === conversationId
         )

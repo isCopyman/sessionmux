@@ -40,6 +40,7 @@ pub mod pets;
 pub mod preferences;
 pub mod process;
 pub mod prompt_queue;
+pub mod session_dispatcher;
 pub mod session_timer;
 pub mod supervise;
 mod terminal;
@@ -74,13 +75,12 @@ mod tauri_app {
         model_provider as model_provider_commands, notification,
         office_tools as office_tools_commands, pet as pet_commands, project_boot,
         prompt_queue as prompt_queue_commands, question as question_commands,
-        session_timer as session_timer_commands,
         quick_messages as quick_messages_commands, remote_proxy as remote_proxy_commands,
         remote_workspace as remote_workspace_commands, science as science_commands,
         session_info as session_info_commands, session_search as session_search_commands,
-        system_settings, terminal as terminal_commands, token_usage as token_usage_commands,
-        version_control, windows, work_task as work_task_commands, workbenches,
-        workspace_state as workspace_state_commands,
+        session_timer as session_timer_commands, system_settings, terminal as terminal_commands,
+        token_usage as token_usage_commands, version_control, windows,
+        work_task as work_task_commands, workbenches, workspace_state as workspace_state_commands,
     };
     use crate::terminal::manager::TerminalManager;
     use crate::{db, git_credential, network, paths, process, web};
@@ -323,14 +323,18 @@ mod tauri_app {
                 // It subscribes before the future is spawned, so a fast Harness
                 // lifecycle event cannot slip through the startup gap.
                 {
-                    let (handle, task) = crate::prompt_queue::build_prompt_queue_runtime(
-                        app.state::<db::AppDatabase>().conn.clone(),
-                        app.state::<ConnectionManager>().clone_ref(),
-                        web::event_bridge::EventEmitter::Tauri(app.handle().clone()),
-                        app.state::<std::sync::Arc<crate::acp::InternalEventBus>>()
-                            .inner()
-                            .clone(),
-                    );
+                    let (handle, task) =
+                        crate::prompt_queue::build_prompt_queue_runtime_with_dispatch(
+                            app.state::<db::AppDatabase>().conn.clone(),
+                            app.state::<ConnectionManager>().clone_ref(),
+                            web::event_bridge::EventEmitter::Tauri(app.handle().clone()),
+                            app.state::<std::sync::Arc<crate::acp::InternalEventBus>>()
+                                .inner()
+                                .clone(),
+                            crate::session_dispatcher::SessionDispatchConfig {
+                                data_dir: effective_data_dir.clone(),
+                            },
+                        );
                     let reminder_queue = handle.clone();
                     app.manage(handle);
                     tauri::async_runtime::spawn(task);

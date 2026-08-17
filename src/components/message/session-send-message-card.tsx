@@ -33,6 +33,7 @@ export function SessionSendMessageCard({
         replyToEventId={live?.replyToEventId}
         status={live ? mailHumanStatus(live) : null}
         letterKey={letterKey}
+        action="sent"
       />
     </div>
   )

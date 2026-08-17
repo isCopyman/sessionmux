@@ -3,8 +3,8 @@
 //! New mail is due immediately. Unread follow-ups and read-but-unreplied
 //! mail use a 5-minute clock. There is no urgency dimension. Busy Sessions
 //! are injected when native steering exists, otherwise the reminder waits in
-//! the same durable queue as ordinary follow-ups. Closed Sessions are not
-//! cold-started.
+//! the same durable queue as ordinary follow-ups. Closed Sessions are started
+//! or resumed so the notice can be delivered.
 
 use chrono::{DateTime, Duration, Utc};
 
@@ -55,8 +55,8 @@ pub enum CollaborationReminderLane {
     QueueAfterTurn,
     /// Connected and idle: host starts a turn so mail cannot sit forever.
     IdleStart,
-    /// Closed Session: keep mail; do not cold-start.
-    HoldClosed,
+    /// Closed / missing runtime: start or resume the Session, then deliver.
+    EnsureRuntime,
     /// Mail for the host user: not implemented.
     HumanOverlay,
     /// Nothing to surface.
@@ -98,7 +98,7 @@ pub fn choose_reminder_lane(state: ReminderTargetState) -> CollaborationReminder
         }
         ReminderRuntime::ConnectedBusy => CollaborationReminderLane::QueueAfterTurn,
         ReminderRuntime::ConnectedIdle => CollaborationReminderLane::IdleStart,
-        ReminderRuntime::Missing => CollaborationReminderLane::HoldClosed,
+        ReminderRuntime::Missing => CollaborationReminderLane::EnsureRuntime,
     }
 }
 
@@ -232,10 +232,10 @@ mod tests {
     }
 
     #[test]
-    fn closed_session_is_held_not_cold_started() {
+    fn closed_session_is_started_so_mail_can_arrive() {
         assert_eq!(
             choose_reminder_lane(agent(ReminderRuntime::Missing)),
-            CollaborationReminderLane::HoldClosed
+            CollaborationReminderLane::EnsureRuntime
         );
     }
 

@@ -44,6 +44,7 @@ function SessionReadMessageCardView({
               : "read"
         }
         letterKey={letterKey}
+        action="opened"
       />
     </div>
   )

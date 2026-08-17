@@ -427,8 +427,12 @@ mailbox Delivery 独占触发且目标唯一可判定的 Turn，才允许兜底�
 和 PromptQueue 已经是后端持久共享状态；后续 execution-plan projection 也必须继续由后端原子
 认领，不能退回到让每个可见窗口各自判断一次的旧式 effect。
 
-已关闭 Session 默认不因一条 Agent 消息自动冷启动。否则一次 fan-out 可能未经用户同意启动多个
-CLI、消耗 Token 并触发工具权限。后续可为特定 Session 或发送者建立显式自动恢复策略。
+**【实现注记 2026-08-18】** 产品已授权：需要送达 Agent 的信件（`invoke_when_idle`
+与逾期催办）在目标关闭时由 Session Dispatcher 启动/恢复该 Session。`store_only`
+仍不单独起 Turn。fan-out 仍受目标个数上限约束。
+
+已关闭 Session 原先默认不因一条 Agent 消息自动冷启动。否则一次 fan-out 可能未经用户同意启动多个
+CLI、消耗 Token 并触发工具权限。当前实现改为由统一 Dispatcher 决定启动，而不是各入口自行 spawn。
 
 紧急 Delivery 可以排在普通协作 Delivery 前面，但不能越过已经开始的 prompt 锁。若声明
 `steer_if_supported`，Router 只在当前连接的能力门槛真实通过时调用原生 steering；否则消息继续

@@ -1,6 +1,6 @@
 "use client"
 
-import { CornerDownRight, Mail } from "lucide-react"
+import { CornerDownRight, Inbox, Mail, Send } from "lucide-react"
 import { useTranslations } from "next-intl"
 
 import { cn } from "@/lib/utils"
@@ -53,6 +53,7 @@ export function SessionMailCard({
   replyToEventId,
   status,
   letterKey,
+  action,
 }: {
   direction: "inbound" | "outbound" | "system"
   eventId?: string | null
@@ -65,6 +66,7 @@ export function SessionMailCard({
   replyToEventId?: string | null
   status?: MailHumanStatus | null
   letterKey?: string
+  action?: "opened" | "sent"
 }) {
   const t = useTranslations("Collaboration")
   const live = useMailDelivery(eventId)
@@ -77,25 +79,40 @@ export function SessionMailCard({
     letterListPreview(parent?.subject, parent?.body, 32)
   const replyId = replyToEventId ?? live?.replyToEventId ?? null
 
+  const DirectionIcon =
+    direction === "outbound" ? Send : direction === "inbound" ? Inbox : Mail
+
   return (
     <article
       data-session-mail-card={direction}
       data-letter-event-id={eventId ?? undefined}
       className={cn(
-        "group/letter w-full max-w-[36rem] overflow-hidden rounded-lg border bg-card/80",
-        direction === "inbound" && "self-start",
-        direction === "outbound" && "self-start",
-        direction === "system" && "border-dashed"
+        "group/letter w-full max-w-[36rem] overflow-hidden rounded-lg border",
+        direction === "inbound" &&
+          "self-start border-sky-500/30 bg-sky-500/[0.05]",
+        direction === "outbound" &&
+          "ml-auto self-end border-border bg-muted/55",
+        direction === "system" && "self-start border-dashed bg-muted/25"
       )}
     >
       <div className="flex">
         <span className={`w-0.5 shrink-0 ${tone?.bar ?? "bg-border"}`} />
         <div className="min-w-0 flex-1 px-3 py-2">
           <header className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
-            <Mail className="h-3 w-3 shrink-0" aria-hidden="true" />
+            <DirectionIcon className="h-3 w-3 shrink-0" aria-hidden="true" />
             {direction === "system" ? (
               <span className="font-medium text-foreground">
                 {t("fromMailSystem")}
+              </span>
+            ) : null}
+            {action === "opened" ? (
+              <span className="font-medium text-sky-800 dark:text-sky-300">
+                {t("openedLetter")}
+              </span>
+            ) : null}
+            {action === "sent" ? (
+              <span className="font-medium text-foreground">
+                {t("sentLetter")}
               </span>
             ) : null}
             {direction === "inbound" && fromConversationId != null ? (

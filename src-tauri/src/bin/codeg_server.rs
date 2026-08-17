@@ -255,20 +255,23 @@ async fn async_main() -> ExitCode {
     // Build AppState
     let pet_state_handle = codeg_lib::pet_state_mapper::new_pet_state_handle();
     let connection_manager = codeg_lib::app_state::default_connection_manager();
-    let (prompt_queue, prompt_queue_task) = codeg_lib::prompt_queue::build_prompt_queue_runtime(
-        db.conn.clone(),
-        connection_manager.clone_ref(),
-        emitter.clone(),
-        acp_event_bus.clone(),
-    );
-    let (session_timer, session_timer_task) =
-        codeg_lib::session_timer::build_session_timer_runtime(
+    let (prompt_queue, prompt_queue_task) =
+        codeg_lib::prompt_queue::build_prompt_queue_runtime_with_dispatch(
             db.conn.clone(),
             connection_manager.clone_ref(),
             emitter.clone(),
             acp_event_bus.clone(),
-            prompt_queue.clone(),
+            codeg_lib::session_dispatcher::SessionDispatchConfig {
+                data_dir: data_dir.clone(),
+            },
         );
+    let (session_timer, session_timer_task) = codeg_lib::session_timer::build_session_timer_runtime(
+        db.conn.clone(),
+        connection_manager.clone_ref(),
+        emitter.clone(),
+        acp_event_bus.clone(),
+        prompt_queue.clone(),
+    );
     let (
         codeg_mcp_tokens,
         codeg_mcp_socket_path,
@@ -308,12 +311,14 @@ async fn async_main() -> ExitCode {
     });
     tokio::spawn(prompt_queue_task);
     tokio::spawn(session_timer_task);
-    tokio::spawn(codeg_lib::collaboration_reminder_runtime::reminder_sweep_task(
-        state.db.conn.clone(),
-        state.connection_manager.clone_ref(),
-        state.prompt_queue.clone(),
-        state.emitter.clone(),
-    ));
+    tokio::spawn(
+        codeg_lib::collaboration_reminder_runtime::reminder_sweep_task(
+            state.db.conn.clone(),
+            state.connection_manager.clone_ref(),
+            state.prompt_queue.clone(),
+            state.emitter.clone(),
+        ),
+    );
 
     // Logging phase 3: wire the emitter so the Logs viewer's live tail
     // (`logs://appended`) reaches WS clients.
