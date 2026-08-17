@@ -73,6 +73,7 @@ import {
 } from "@/components/message/conversation-message-nav"
 import type { MessageScrollContextValue } from "@/components/message/message-scroll-context"
 import { extractSessionFilesGrouped } from "@/lib/session-files"
+import { resolveMessageNavPreview } from "@/components/message/message-nav-label"
 import { unescapeComposerText } from "@/lib/composer-copy-text"
 import { useStickToBottomContext } from "use-stick-to-bottom"
 import { ConversationFindBar } from "@/components/message/conversation-find-bar"
@@ -1402,10 +1403,22 @@ export function MessageListView({
     if (groups.length === 0) return EMPTY_NAV_ENTRIES
 
     const indexByTurnId = new Map<string, number>()
+    const projectedByTurnId = new Map<string, ResolvedMessageGroup>()
+    const rawByTurnId = new Map<string, string>()
+    for (const turn of turns) {
+      if (turn.role !== "user") continue
+      const text = turn.blocks
+        .flatMap((block) =>
+          block.type === "text" && block.text ? [block.text] : []
+        )
+        .join("\n")
+      if (text) rawByTurnId.set(turn.id, text)
+    }
     for (let i = 0; i < threadItems.length; i++) {
       const item = threadItems[i]
       if (item.kind === "turn" && item.group.role === "user") {
         indexByTurnId.set(item.group.id, i)
+        projectedByTurnId.set(item.group.id, item.group)
       }
     }
 
@@ -1419,11 +1432,24 @@ export function MessageListView({
         additions += file.additions
         deletions += file.deletions
       }
+      const projected = projectedByTurnId.get(group.userTurnId)
+      const projectedText = projected
+        ? extractTextFromParts(projected.parts)
+        : null
+      const preview = resolveMessageNavPreview({
+        raw:
+          projectedText ||
+          rawByTurnId.get(group.userTurnId) ||
+          group.userMessage,
+        projectedText: projected?.sessionMail ? projectedText : null,
+        sessionMail: projected?.sessionMail ?? null,
+      })
       entries.push({
         threadIndex,
         turnId: group.userTurnId,
         ordinal: entries.length + 1,
-        label: group.userMessage,
+        label: preview.label,
+        sessionMail: preview.sessionMail,
         additions,
         deletions,
         files: group.files,

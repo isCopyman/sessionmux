@@ -2619,15 +2619,11 @@ const ToolCallPart = memo(function ToolCallPart({
     : null
   if (sendMessageInput && !previewMcp) {
     return (
-      <SessionLetterFrame
+      <SessionSendMessageCard
         letterKey={part.toolCallId}
-        eventId={sendMessageEventId}
-      >
-        <SessionSendMessageCard
-          input={part.input ?? null}
-          output={part.output ?? null}
-        />
-      </SessionLetterFrame>
+        input={part.input ?? null}
+        output={part.output ?? null}
+      />
     )
   }
 
@@ -2801,6 +2797,7 @@ const ToolCallPart = memo(function ToolCallPart({
       <SessionLetterFrame
         letterKey={part.toolCallId}
         eventId={sendMessageEventId}
+        copyText={sendMessageInput.content}
       >
         {genericTool}
       </SessionLetterFrame>

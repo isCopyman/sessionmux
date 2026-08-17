@@ -1,6 +1,5 @@
 "use client"
 
-import { useMemo } from "react"
 import { useTranslations } from "next-intl"
 
 import { cn } from "@/lib/utils"
@@ -11,7 +10,7 @@ import {
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { useSessionLetterUiStore } from "@/stores/session-letter-ui-store"
 import { CollapsibleUserMessage } from "./collapsible-user-message"
-import { SessionLetterPreviewToggle } from "./session-letter-render-toggle"
+import { SessionLetterActions } from "./session-letter-render-toggle"
 import { SessionMailPeerChip } from "./session-mail-peer-chip"
 
 export function SessionSendMessageCard({
@@ -24,21 +23,21 @@ export function SessionSendMessageCard({
   output?: string | null
 }) {
   const t = useTranslations("Collaboration")
-  const focusedEventId = useSessionLetterUiStore((state) => state.focusedEventId)
+  const focusedEventId = useSessionLetterUiStore(
+    (state) => state.focusedEventId
+  )
   const parsed = parseSessionSendMessageInput(input)
   const conversations = useAppWorkspaceStore((state) => state.conversations)
   const targetIds = parsed?.targetSessionIds ?? []
-  const bodyParts = useMemo(
-    () => [{ type: "text" as const, text: parsed?.content ?? "" }],
-    [parsed?.content]
-  )
+  const content = parsed?.content ?? ""
+  const bodyParts = [{ type: "text" as const, text: content }]
   const eventId = parseSessionSendMessageEventId(output)
 
   if (!parsed || targetIds.length === 0) return null
 
   return (
     <div
-      className="group/letter flex w-fit max-w-[40rem] items-end gap-0.5"
+      className="group/letter flex w-fit max-w-[40rem] items-end gap-1"
       data-session-send-message=""
       data-letter-event-id={eventId ?? undefined}
       data-target-session-id={targetIds[0]}
@@ -46,9 +45,7 @@ export function SessionSendMessageCard({
       <article
         className={cn(
           "min-w-0 rounded-lg border border-border bg-muted/30 px-3 py-2.5",
-          eventId &&
-            focusedEventId === eventId &&
-            "ring-2 ring-primary/35"
+          eventId && focusedEventId === eventId && "ring-2 ring-primary/35"
         )}
       >
         <header className="mb-1.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
@@ -70,10 +67,7 @@ export function SessionSendMessageCard({
         </header>
         <CollapsibleUserMessage parts={bodyParts} role="assistant" />
       </article>
-      <SessionLetterPreviewToggle
-        letterKey={letterKey}
-        className="mb-0.5 opacity-0 transition-opacity group-hover/letter:opacity-100 group-focus-within/letter:opacity-100"
-      />
+      <SessionLetterActions letterKey={letterKey} copyText={content} />
     </div>
   )
 }

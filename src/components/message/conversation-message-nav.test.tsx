@@ -23,6 +23,16 @@ vi.mock("@/contexts/active-folder-context", () => ({
   useActiveFolder: () => ({ activeFolder: { path: "/repo" } }),
 }))
 
+const workspace = vi.hoisted(() => ({
+  conversations: [] as Array<{ id: number; title: string }>,
+}))
+
+vi.mock("@/stores/app-workspace-store", () => ({
+  useAppWorkspaceStore: (
+    selector: (state: typeof workspace) => unknown
+  ) => selector(workspace),
+}))
+
 const DELETION_DIFF = "*** Delete File: old.ts\n-a\n-b\n-c\n-d"
 
 const entries: MessageNavEntry[] = [
@@ -31,6 +41,7 @@ const entries: MessageNavEntry[] = [
     turnId: "u1",
     ordinal: 1,
     label: "first message",
+    sessionMail: null,
     additions: 0,
     deletions: 0,
     files: [],
@@ -42,6 +53,7 @@ const entries: MessageNavEntry[] = [
     turnId: "u2",
     ordinal: 2,
     label: "edit something",
+    sessionMail: null,
     additions: 5,
     deletions: 0,
     files: [
@@ -61,6 +73,7 @@ const entries: MessageNavEntry[] = [
     turnId: "u3",
     ordinal: 3,
     label: "delete a file",
+    sessionMail: null,
     additions: 0,
     deletions: 4,
     files: [
@@ -87,6 +100,7 @@ function makeScrollApi() {
 describe("ConversationMessageNav", () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    workspace.conversations = []
   })
 
   it("renders nothing when there are no user messages", () => {
@@ -174,6 +188,72 @@ describe("ConversationMessageNav", () => {
     expect(screen.getByText("-4")).toBeInTheDocument()
     // Placeholder message still renders its label.
     expect(screen.getByText("first message")).toBeInTheDocument()
+  })
+
+  it("shows the session-mail source above the letter body", () => {
+    const { scrollApiRef } = makeScrollApi()
+    render(
+      <ConversationMessageNav
+        count={1}
+        expanded
+        onToggle={vi.fn()}
+        entries={[
+          {
+            threadIndex: 2,
+            turnId: "mail-1",
+            ordinal: 2,
+            label: "PONG-CD-291",
+            sessionMail: {
+              conversationId: 291,
+              title: "Session D",
+              agentType: "codex",
+              eventIds: ["aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"],
+            },
+            additions: 0,
+            deletions: 0,
+            files: [],
+            hasChanges: false,
+          },
+        ]}
+        scrollApiRef={scrollApiRef}
+      />
+    )
+    expect(screen.getByText(/fromPrefix\s+Session D/)).toBeInTheDocument()
+    expect(screen.getByText("PONG-CD-291")).toBeInTheDocument()
+    expect(screen.queryByText(/CODEG_SESSION_MESSAGE/)).not.toBeInTheDocument()
+  })
+
+  it("prefers the live Session title over the envelope snapshot", () => {
+    workspace.conversations = [{ id: 291, title: "Session D" }]
+    const { scrollApiRef } = makeScrollApi()
+    render(
+      <ConversationMessageNav
+        count={1}
+        expanded
+        onToggle={vi.fn()}
+        entries={[
+          {
+            threadIndex: 2,
+            turnId: "mail-1",
+            ordinal: 2,
+            label: "PONG-CD-291",
+            sessionMail: {
+              conversationId: 291,
+              title: "You are Session D. Reply with exactly D_READY.",
+              agentType: "codex",
+              eventIds: ["aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"],
+            },
+            additions: 0,
+            deletions: 0,
+            files: [],
+            hasChanges: false,
+          },
+        ]}
+        scrollApiRef={scrollApiRef}
+      />
+    )
+    expect(screen.getByText(/fromPrefix\s+Session D/)).toBeInTheDocument()
+    expect(screen.queryByText(/You are Sess/)).not.toBeInTheDocument()
   })
 
   it("opens a file diff when a changed file is clicked", () => {

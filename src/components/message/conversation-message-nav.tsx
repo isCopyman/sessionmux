@@ -25,7 +25,10 @@ import {
   normalizeSlashPath,
   toFolderRelativePath,
 } from "@/lib/file-path-display"
+import { formatSessionMailName } from "@/lib/conversation-title"
 import { cn } from "@/lib/utils"
+import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
+import type { MessageNavMailAttribution } from "./message-nav-label"
 
 /** One navigable user message. Present for every user turn, even when it made
  *  no file edits (`hasChanges === false`) so the list is a complete index. */
@@ -36,6 +39,7 @@ export interface MessageNavEntry {
   /** 1-based position among shown entries. */
   ordinal: number
   label: string
+  sessionMail?: MessageNavMailAttribution | null
   additions: number
   deletions: number
   files: FileChangeStat[]
@@ -74,6 +78,8 @@ export const ConversationMessageNav = memo(function ConversationMessageNav({
   scrollApiRef,
 }: ConversationMessageNavProps) {
   const t = useTranslations("Folder.chat.messageNav")
+  const tMail = useTranslations("Collaboration")
+  const conversations = useAppWorkspaceStore((state) => state.conversations)
   const { openSessionFileDiff } = useWorkspaceActions()
   const { activeFolder: folder } = useActiveFolder()
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({})
@@ -163,6 +169,19 @@ export const ConversationMessageNav = memo(function ConversationMessageNav({
                       #{entry.ordinal}
                     </span>
                     <span className="min-w-0 flex-1">
+                      {entry.sessionMail ? (
+                        <span className="mb-0.5 block truncate text-[0.6875rem] text-muted-foreground">
+                          {tMail("fromPrefix")}{" "}
+                          {formatSessionMailName(
+                            conversations.find(
+                              (conversation) =>
+                                conversation.id ===
+                                entry.sessionMail?.conversationId
+                            )?.title ?? entry.sessionMail.title,
+                            entry.sessionMail.conversationId
+                          )}
+                        </span>
+                      ) : null}
                       <span className="line-clamp-2 text-xs leading-5 text-foreground">
                         {entry.label}
                       </span>
