@@ -214,7 +214,7 @@ describe("Sidebar — fixed New chat / Search region", () => {
 
   it("Session Center opens the global conversation manager", () => {
     const { getByText } = renderSidebar()
-    expect(screen.getByLabelText("3 unread")).toBeTruthy()
+    expect(screen.queryByLabelText("3 unread")).toBeNull()
     fireEvent.click(getByText("Session Center"))
     expect(spies.sessionCenterOpen).toBe(true)
     expect(getByText("Session Center Dialog")).toBeTruthy()
@@ -248,7 +248,6 @@ describe("Sidebar — fixed New chat / Search region", () => {
     expect(screen.getByText("Workbench tree")).toBeTruthy()
     expect(spies.listProps).not.toBeNull()
     expect(spies.collectionShowsSessions).toBe(false)
-    expect(spies.workbenchUnread?.get(42)).toBe(3)
   })
 
   it("can switch to semantic Collections without changing Session cwd", async () => {
@@ -261,7 +260,6 @@ describe("Sidebar — fixed New chat / Search region", () => {
     )
 
     expect(spies.collectionShowsSessions).toBe(true)
-    expect(spies.collectionUnread?.get(42)).toBe(3)
     expect(localStorage.getItem("workspace:sidebar-organization-mode")).toBe(
       "collections"
     )

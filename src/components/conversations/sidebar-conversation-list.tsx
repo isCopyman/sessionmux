@@ -51,6 +51,7 @@ import {
   updateConversationTitle,
   updateConversationStatus,
   updateConversationPinned,
+  updateConversationArchive,
   updateFolderColor,
   updateFolderAlias,
   updateFolderDefaultAgent,
@@ -734,7 +735,6 @@ export interface SidebarConversationListProps {
    *  `sectionOrder`. Defaults to off here; the Sidebar passes the user's
    *  preference, whose product default is ON. */
   showRecent?: boolean
-  unreadByConversation?: ReadonlyMap<number, number>
 }
 
 export function SidebarConversationList({
@@ -744,7 +744,6 @@ export function SidebarConversationList({
   sectionOrder = DEFAULT_SECTION_ORDER,
   showWorktrees = false,
   showRecent = false,
-  unreadByConversation = new Map(),
 }: SidebarConversationListProps & {
   ref?: Ref<SidebarConversationListHandle>
 }) {
@@ -766,6 +765,9 @@ export function SidebarConversationList({
   )
   const updateConversationLocal = useAppWorkspaceStore(
     (s) => s.updateConversationLocal
+  )
+  const applyConversationUpsert = useAppWorkspaceStore(
+    (s) => s.applyConversationUpsert
   )
   const removeFolderFromWorkspace = useAppWorkspaceStore(
     (s) => s.removeFolderFromWorkspace
@@ -1839,6 +1841,22 @@ export function SidebarConversationList({
     [updateConversationLocal]
   )
 
+  const handleArchive = useCallback(
+    async (id: number) => {
+      const conversation = useAppWorkspaceStore
+        .getState()
+        .conversations.find((item) => item.id === id)
+      await updateConversationArchive(id, true)
+      if (conversation) {
+        applyConversationUpsert({
+          ...conversation,
+          archived_at: new Date().toISOString(),
+        })
+      }
+    },
+    [applyConversationUpsert]
+  )
+
   const handleNewConversation = useCallback(() => {
     // Starting a conversation returns to the conversation workspace if a
     // workbench route (e.g. Automations) was taking over the content region.
@@ -2454,7 +2472,6 @@ export function SidebarConversationList({
           selectedConversation?.id === conv.id
         }
         isOpenInTab={openTabKeys.has(`${conv.agent_type}:${conv.id}`)}
-        unreadCount={unreadByConversation.get(conv.id) ?? 0}
         timeLabel={formatRelative(
           sortMode === "updated" ? conv.updated_at : conv.created_at,
           now
@@ -2467,6 +2484,7 @@ export function SidebarConversationList({
         onStatusChange={handleStatusChange}
         onNewConversation={handleNewConversationForFolder}
         onTogglePin={handleTogglePin}
+        onArchive={handleArchive}
         depth={row.depth}
         hasChildren={conv.child_count > 0}
         expanded={conversationExpanded.has(conv.id)}

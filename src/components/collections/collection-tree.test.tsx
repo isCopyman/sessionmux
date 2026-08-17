@@ -16,6 +16,15 @@ const h = vi.hoisted(() => ({
   hydrate: vi.fn(),
   listRefs: vi.fn(),
   assignCollection: vi.fn(),
+  updateTitle: vi.fn(),
+  updateArchive: vi.fn(),
+  updatePinned: vi.fn(),
+  updateStatus: vi.fn(),
+  deleteConversation: vi.fn(),
+  updateConversationLocal: vi.fn(),
+  applyConversationUpsert: vi.fn(),
+  applyConversationRemove: vi.fn(),
+  closeConversationTab: vi.fn(),
   conversations: [
     {
       id: 101,
@@ -180,6 +189,9 @@ vi.mock("@/stores/app-workspace-store", () => ({
           kind: "regular",
         },
       ],
+      updateConversationLocal: h.updateConversationLocal,
+      applyConversationUpsert: h.applyConversationUpsert,
+      applyConversationRemove: h.applyConversationRemove,
       allFolders: [
         {
           id: 7,
@@ -215,11 +227,23 @@ vi.mock("@/contexts/tab-context", () => ({
       activeTabId: "conv-102",
       tabs: [{ id: "conv-102", conversationId: 102 }],
     }),
+  useTabActions: () => ({
+    closeConversationTab: h.closeConversationTab,
+  }),
+}))
+
+vi.mock("@/components/conversations/session-details-dialog", () => ({
+  SessionDetailsDialog: () => null,
 }))
 
 vi.mock("@/lib/api", () => ({
   listConversationCollectionRefs: h.listRefs,
   assignConversationsToCollection: h.assignCollection,
+  updateConversationTitle: h.updateTitle,
+  updateConversationArchive: h.updateArchive,
+  updateConversationPinned: h.updatePinned,
+  updateConversationStatus: h.updateStatus,
+  deleteConversation: h.deleteConversation,
 }))
 
 function createDataTransfer() {
@@ -268,7 +292,6 @@ function renderTree(
       direction: "right" | "down"
     ) => void
     onNewSession?: (rootFolderId: number) => void
-    unreadByConversation?: ReadonlyMap<number, number>
   } = {}
 ) {
   render(
@@ -306,8 +329,9 @@ describe("CollectionTree", () => {
 
   it("opens nested Collections as Session Center scopes", async () => {
     const { user, onOpenScope } = renderTree()
-    const research = screen.getByRole("button", { name: "Research" })
-    await user.click(research.previousElementSibling as HTMLElement)
+    await user.click(
+      screen.getAllByRole("button", { name: "Expand collection" })[0]
+    )
     await user.click(screen.getByTitle("Sources"))
 
     expect(onOpenScope).toHaveBeenCalledWith(11)
@@ -367,15 +391,6 @@ describe("CollectionTree", () => {
       expect.objectContaining({ id: 102, title: "Loose notes" }),
       "right"
     )
-  })
-
-  it("shows unread collaboration on an inline Session", async () => {
-    renderTree(vi.fn(), {
-      showSessions: true,
-      unreadByConversation: new Map([[102, 3]]),
-    })
-
-    expect(await screen.findByLabelText("3 unread")).toBeTruthy()
   })
 
   it("moves a Session into a Collection without changing its Path", async () => {
@@ -537,5 +552,58 @@ describe("CollectionTree", () => {
     expect(h.place).not.toHaveBeenCalled()
     expect(sources.getAttribute("data-collection-drop-position")).toBeNull()
     expect(other.getAttribute("data-collection-drop-position")).toBeNull()
+  })
+
+  it("renames a Session from the tree context menu", async () => {
+    h.updateTitle.mockResolvedValue(undefined)
+    renderTree(vi.fn(), { showSessions: true })
+    fireEvent.contextMenu(await screen.findByText("Loose notes"))
+    await userEvent.click(screen.getByRole("menuitem", { name: /Rename/ }))
+    const input = screen.getByRole("textbox")
+    await userEvent.clear(input)
+    await userEvent.type(input, "Session notes")
+    await userEvent.click(screen.getByRole("button", { name: "Save" }))
+    await waitFor(() =>
+      expect(h.updateTitle).toHaveBeenCalledWith(102, "Session notes")
+    )
+  })
+
+  it("archives a Session from the tree context menu", async () => {
+    h.updateArchive.mockResolvedValue(undefined)
+    renderTree(vi.fn(), { showSessions: true })
+    fireEvent.contextMenu(await screen.findByText("Loose notes"))
+    await userEvent.click(screen.getByRole("menuitem", { name: "Archive" }))
+    await waitFor(() => expect(h.updateArchive).toHaveBeenCalledWith(102, true))
+    expect(h.applyConversationUpsert).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 102, archived_at: expect.any(String) })
+    )
+  })
+
+  it("renames a Collection with F2", async () => {
+    renderTree(vi.fn(), { showSessions: true })
+    const research = screen.getByRole("button", { name: "Research" })
+    research.focus()
+    fireEvent.keyDown(research, { key: "F2" })
+    expect(await screen.findByText("Rename collection")).toBeTruthy()
+  })
+
+  it("moves a Session by dropping it on another Session in the same Path", async () => {
+    const { user } = renderTree(vi.fn(), { showSessions: true })
+    await user.click(screen.getByRole("button", { name: "Research" }))
+    await user.click(screen.getByTitle("Sources"))
+    const source = (await screen.findByText("Loose notes")).closest("button")!
+    const target = (await screen.findByText("Evidence review")).closest(
+      "button"
+    )!
+    const dataTransfer = createDataTransfer()
+
+    fireEvent.dragStart(source, { dataTransfer })
+    fireEvent.dragOver(target, { dataTransfer })
+    expect(target.getAttribute("data-session-drop-target")).toBe("true")
+    fireEvent.drop(target, { dataTransfer })
+
+    await waitFor(() =>
+      expect(h.assignCollection).toHaveBeenCalledWith([102], 11)
+    )
   })
 })

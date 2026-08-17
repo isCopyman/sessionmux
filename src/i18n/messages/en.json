@@ -1835,6 +1835,7 @@
       "save": "Save",
       "pin": "Pin",
       "unpin": "Unpin",
+      "archive": "Archive",
       "markCompleted": "Mark as completed",
       "reopen": "Reopen",
       "expandSubsessions": "Expand sub-conversations",

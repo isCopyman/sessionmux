@@ -1835,6 +1835,7 @@
       "save": "保存",
       "pin": "置顶",
       "unpin": "取消置顶",
+      "archive": "归档",
       "markCompleted": "标记为已完成",
       "reopen": "重新打开",
       "expandSubsessions": "展开子会话",

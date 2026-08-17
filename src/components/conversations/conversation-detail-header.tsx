@@ -9,6 +9,7 @@ import {
   Pencil,
   Pin,
   PinOff,
+  Archive,
   SquarePen,
   Trash2,
 } from "lucide-react"
@@ -17,6 +18,7 @@ import { useImeGuard } from "@/hooks/use-ime-guard"
 import {
   deleteConversation,
   updateConversationPinned,
+  updateConversationArchive,
   updateConversationStatus,
   updateConversationTitle,
 } from "@/lib/api"
@@ -161,6 +163,25 @@ export const ConversationDetailHeader = memo(function ConversationDetailHeader({
     })
   }, [conversationId, isPinned, updateConversationLocal])
 
+  const handleArchive = useCallback(() => {
+    if (conversationId == null) return
+    const conversation = useAppWorkspaceStore
+      .getState()
+      .conversations.find((item) => item.id === conversationId)
+    updateConversationArchive(conversationId, true)
+      .then(() => {
+        if (conversation) {
+          useAppWorkspaceStore.getState().applyConversationUpsert({
+            ...conversation,
+            archived_at: new Date().toISOString(),
+          })
+        }
+      })
+      .catch((err) => {
+        console.error("[ConversationDetailHeader] archive:", err)
+      })
+  }, [conversationId])
+
   const handleNewConversation = useCallback(() => {
     if (!folderPath) return
     // Keep the active agent when the folder has no pinned default (matches the
@@ -291,6 +312,10 @@ export const ConversationDetailHeader = memo(function ConversationDetailHeader({
                 <Pin className="h-4 w-4" />
               )}
               {isPinned ? t("unpin") : t("pin")}
+            </DropdownMenuItem>
+            <DropdownMenuItem disabled={!persisted} onSelect={handleArchive}>
+              <Archive className="h-4 w-4" />
+              {t("archive")}
             </DropdownMenuItem>
             <DropdownMenuItem
               disabled={!persisted}

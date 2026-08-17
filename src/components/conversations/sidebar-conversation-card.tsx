@@ -10,6 +10,7 @@ import {
   XCircle,
   Pin,
   PinOff,
+  Archive,
   CheckCircle2,
   FolderX,
   Info,
@@ -55,7 +56,6 @@ import { Input } from "@/components/ui/input"
 import { ConversationStatusDot } from "./conversation-status-dot"
 import { SessionDetailsDialog } from "./session-details-dialog"
 import { AgentIcon } from "@/components/agent-icon"
-import { CollaborationUnreadBadge } from "@/components/collaboration/collaboration-unread-badge"
 
 /**
  * Horizontal indent added per delegation-nesting level. Chosen so a child's
@@ -109,7 +109,7 @@ interface SidebarConversationCardProps {
   conversation: DbConversationSummary
   isSelected: boolean
   isOpenInTab?: boolean
-  unreadCount?: number
+
   timeLabel?: string
   onSelect: (id: number, agentType: string, folderId: number) => void
   onDoubleClick?: (id: number, agentType: string, folderId: number) => void
@@ -124,6 +124,7 @@ interface SidebarConversationCardProps {
   onStatusChange: (id: number, status: ConversationStatus) => Promise<void>
   onNewConversation?: (folderId: number) => void
   onTogglePin?: (id: number, nextPinned: boolean) => void
+  onArchive?: (id: number) => void
   /** Delegation-tree nesting depth (0 = root). Drives the per-level indent. */
   depth?: number
   /** True when `child_count > 0`: the conversation has delegation children, so
@@ -139,7 +140,7 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
   conversation,
   isSelected,
   isOpenInTab = false,
-  unreadCount = 0,
+
   timeLabel,
   onSelect,
   onDoubleClick,
@@ -149,6 +150,7 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
   onStatusChange,
   onNewConversation,
   onTogglePin,
+  onArchive,
   depth = 0,
   hasChildren = false,
   expanded = false,
@@ -258,6 +260,17 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                 data-conversation-id={conversation.id}
                 onClick={handleClick}
                 onDoubleClick={handleDblClick}
+                onKeyDown={(event) => {
+                  if (event.key === "F2") {
+                    event.preventDefault()
+                    handleRenameOpen()
+                    return
+                  }
+                  if (event.key === "Delete") {
+                    event.preventDefault()
+                    setDeleteOpen(true)
+                  }
+                }}
                 className={cn(
                   "relative flex h-full min-w-0 flex-1 items-center gap-[0.625rem] text-left outline-none",
                   "rounded-full",
@@ -419,7 +432,6 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                     !isSubsession && "group-hover:hidden"
                   )}
                 >
-                  <CollaborationUnreadBadge count={unreadCount} />
                   {isRunning ? (
                     <span
                       className="relative inline-flex shrink-0 items-center justify-center"
@@ -446,7 +458,7 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                         {tSidebar("statusCancelledBadge")}
                       </span>
                     </span>
-                  ) : unreadCount === 0 && timeLabel ? (
+                  ) : timeLabel ? (
                     <span
                       className={cn(
                         "relative shrink-0 tabular-nums",
@@ -568,6 +580,9 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
           <ContextMenuItem onSelect={handleRenameOpen}>
             <Pencil className="h-4 w-4" />
             {t("rename")}
+            <span className="ms-auto text-[10px] text-muted-foreground">
+              F2
+            </span>
           </ContextMenuItem>
           {onTogglePin && (
             <ContextMenuItem
@@ -579,6 +594,12 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                 <Pin className="h-4 w-4" />
               )}
               {isPinned ? t("unpin") : t("pin")}
+            </ContextMenuItem>
+          )}
+          {onArchive && (
+            <ContextMenuItem onSelect={() => onArchive(conversation.id)}>
+              <Archive className="h-4 w-4" />
+              {t("archive")}
             </ContextMenuItem>
           )}
           <ContextMenuItem onSelect={() => setDetailsOpen(true)}>
@@ -612,6 +633,9 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
           >
             <Trash2 className="h-4 w-4" />
             {t("delete")}
+            <span className="ms-auto text-[10px] text-muted-foreground">
+              Del
+            </span>
           </ContextMenuItem>
         </ContextMenuContent>
       </ContextMenu>

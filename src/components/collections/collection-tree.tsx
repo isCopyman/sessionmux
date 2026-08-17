@@ -11,18 +11,23 @@ import {
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 import {
+  Archive,
   ChevronDown,
   ChevronRight,
+  Circle,
   Folder,
   FolderInput,
   FolderOpen,
   FolderPlus,
   Inbox,
+  Info,
   Loader2,
   MoreHorizontal,
   Pencil,
   PanelBottomOpen,
   PanelRightOpen,
+  Pin,
+  PinOff,
   Plus,
   SquarePen,
   Trash2,
@@ -56,6 +61,10 @@ import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu"
 import {
@@ -67,24 +76,33 @@ import {
 } from "@/components/ui/select"
 import { AgentIcon } from "@/components/agent-icon"
 import { ConversationStatusDot } from "@/components/conversations/conversation-status-dot"
-import { CollaborationUnreadBadge } from "@/components/collaboration/collaboration-unread-badge"
+import { SessionDetailsDialog } from "@/components/conversations/session-details-dialog"
+
+import { useImeGuard } from "@/hooks/use-ime-guard"
 import {
   assignConversationsToCollection,
+  deleteConversation,
   listConversationCollectionRefs,
+  updateConversationArchive,
+  updateConversationPinned,
+  updateConversationStatus,
+  updateConversationTitle,
 } from "@/lib/api"
 import { formatConversationTitle } from "@/lib/conversation-title"
 import type {
+  AgentType,
   CollectionInfo,
   ConversationStatus,
   DbConversationSummary,
 } from "@/lib/types"
+import { STATUS_ORDER } from "@/lib/types"
 import { toErrorMessage } from "@/lib/app-error"
 import { cn } from "@/lib/utils"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { useCollectionStore } from "@/stores/collection-store"
 import { useOrganizationRevisionStore } from "@/stores/organization-revision-store"
 import type { SidebarSortMode } from "@/lib/sidebar-view-mode-storage"
-import { useTabStore } from "@/contexts/tab-context"
+import { useTabActions, useTabStore } from "@/contexts/tab-context"
 
 type OpenScope = number | "unclassified"
 type SessionDragPayload = {
@@ -130,7 +148,6 @@ interface CollectionTreeProps {
   ) => void
   /** Start a Session in the chosen canonical Path. */
   onNewSession?: (rootFolderId: number) => void
-  unreadByConversation?: ReadonlyMap<number, number>
 }
 
 function descendants(items: CollectionInfo[], id: number) {
@@ -189,12 +206,14 @@ export function CollectionTree({
   onOpenSession,
   onOpenSessionInSplit,
   onNewSession,
-  unreadByConversation = new Map(),
 }: CollectionTreeProps) {
   const t = useTranslations("Folder.sidebar.collections")
   const tSidebar = useTranslations("Folder.sidebar")
   const tCommon = useTranslations("Folder.common")
   const tConversation = useTranslations("Folder.conversationCard")
+  const tStatus = useTranslations("Folder.statusLabels")
+  const tDetails = useTranslations("Folder.sessionDetails")
+  const ime = useImeGuard()
   const items = useCollectionStore((state) => state.items)
   const hydrated = useCollectionStore((state) => state.hydrated)
   const loading = useCollectionStore((state) => state.loading)
@@ -208,8 +227,18 @@ export function CollectionTree({
   const folders = useAppWorkspaceStore((state) => state.folders)
   const allFolders = useAppWorkspaceStore((state) => state.allFolders)
   const activeFolderId = useAppWorkspaceStore((state) => state.activeFolderId)
+  const updateConversationLocal = useAppWorkspaceStore(
+    (state) => state.updateConversationLocal
+  )
+  const applyConversationUpsert = useAppWorkspaceStore(
+    (state) => state.applyConversationUpsert
+  )
+  const applyConversationRemove = useAppWorkspaceStore(
+    (state) => state.applyConversationRemove
+  )
   const activeTabId = useTabStore((state) => state.activeTabId)
   const tabs = useTabStore((state) => state.tabs)
+  const { closeConversationTab } = useTabActions()
   const organizationRevision = useOrganizationRevisionStore(
     (state) => state.revision
   )
@@ -247,6 +276,14 @@ export function CollectionTree({
   const [placingCollectionId, setPlacingCollectionId] = useState<number | null>(
     null
   )
+  const [sessionRename, setSessionRename] = useState<{
+    conversation: DbConversationSummary
+    value: string
+  } | null>(null)
+  const [sessionDelete, setSessionDelete] =
+    useState<DbConversationSummary | null>(null)
+  const [sessionDetails, setSessionDetails] =
+    useState<DbConversationSummary | null>(null)
 
   const activeConversationId = useMemo(
     () => tabs.find((tab) => tab.id === activeTabId)?.conversationId ?? null,
@@ -806,14 +843,120 @@ export function CollectionTree({
     }
   }
 
+  const handleSessionRename = async () => {
+    if (!sessionRename) return
+    const trimmed = sessionRename.value.trim()
+    if (!trimmed || trimmed === (sessionRename.conversation.title ?? "")) {
+      setSessionRename(null)
+      return
+    }
+    try {
+      await updateConversationTitle(sessionRename.conversation.id, trimmed)
+      updateConversationLocal(sessionRename.conversation.id, { title: trimmed })
+      setSessionRename(null)
+    } catch (error) {
+      toast.error(t("operationFailed", { message: toErrorMessage(error) }))
+    }
+  }
+
+  const handleSessionDelete = async () => {
+    if (!sessionDelete) return
+    try {
+      await deleteConversation(sessionDelete.id)
+      closeConversationTab(
+        sessionDelete.folder_id,
+        sessionDelete.id,
+        sessionDelete.agent_type as AgentType
+      )
+      applyConversationRemove(sessionDelete.id)
+      setSessionDelete(null)
+    } catch (error) {
+      toast.error(t("operationFailed", { message: toErrorMessage(error) }))
+    }
+  }
+
+  const handleSessionArchive = async (conversation: DbConversationSummary) => {
+    try {
+      await updateConversationArchive(conversation.id, true)
+      applyConversationUpsert({
+        ...conversation,
+        archived_at: new Date().toISOString(),
+      })
+    } catch (error) {
+      toast.error(t("operationFailed", { message: toErrorMessage(error) }))
+    }
+  }
+
+  const handleSessionPin = async (
+    conversation: DbConversationSummary,
+    nextPinned: boolean
+  ) => {
+    updateConversationLocal(conversation.id, {
+      pinned_at: nextPinned ? new Date().toISOString() : null,
+    })
+    try {
+      await updateConversationPinned(conversation.id, nextPinned)
+    } catch (error) {
+      toast.error(t("operationFailed", { message: toErrorMessage(error) }))
+    }
+  }
+
+  const handleSessionStatus = async (
+    conversation: DbConversationSummary,
+    status: ConversationStatus
+  ) => {
+    updateConversationLocal(conversation.id, { status })
+    try {
+      await updateConversationStatus(conversation.id, status)
+    } catch (error) {
+      toast.error(t("operationFailed", { message: toErrorMessage(error) }))
+    }
+  }
+
+  const handleSessionTreeKey = (
+    event: { key: string; preventDefault: () => void },
+    conversation: DbConversationSummary
+  ) => {
+    if (event.key === "F2") {
+      event.preventDefault()
+      setSessionRename({
+        conversation,
+        value: conversation.title ?? "",
+      })
+      return
+    }
+    if (event.key === "Delete") {
+      event.preventDefault()
+      setSessionDelete(conversation)
+    }
+  }
+
+  const handleCollectionTreeKey = (
+    event: { key: string; preventDefault: () => void },
+    item: CollectionInfo
+  ) => {
+    if (event.key === "F2") {
+      event.preventDefault()
+      openEditor({ mode: "rename", item })
+      return
+    }
+    if (event.key === "Delete") {
+      event.preventDefault()
+      setDeleteTarget(item)
+    }
+  }
+
   const renderSession = (
     conversation: DbConversationSummary,
-    depth: number
+    depth: number,
+    collectionId: number | null
   ) => {
     const selected = conversation.id === activeConversationId
+    const rootId = sessionRootId(conversation)
+    const dropKey = rootId == null ? null : dragTargetKey(rootId, collectionId)
+    const isPinned = conversation.pinned_at != null
     const row = (
       <button
-        key={conversation.id}
         type="button"
         draggable={showSessions && movingConversationId == null}
         data-conversation-id={conversation.id}
@@ -821,20 +964,36 @@ export function CollectionTree({
         data-session-dragging={
           draggingConversationId === conversation.id ? "true" : undefined
         }
+        data-session-drop-target={
+          dropKey != null && dropTarget === dropKey ? "true" : undefined
+        }
         aria-current={selected ? "page" : undefined}
         title={formatConversationTitle(conversation.title)}
         className={cn(
           "flex h-7 w-full min-w-0 cursor-grab items-center gap-1.5 rounded-md pe-2 text-start text-xs hover:bg-sidebar-accent active:cursor-grabbing focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
           selected &&
             "bg-primary/8 text-primary ring-1 ring-inset ring-primary/30",
+          dropKey != null &&
+            dropTarget === dropKey &&
+            "bg-primary/10 ring-1 ring-inset ring-primary/45",
           draggingConversationId === conversation.id && "opacity-45",
           movingConversationId === conversation.id &&
             "pointer-events-none opacity-55"
         )}
         style={{ paddingInlineStart: `${1.75 + depth * 0.75}rem` }}
         onClick={() => onOpenSession?.(conversation)}
+        onKeyDown={(event) => handleSessionTreeKey(event, conversation)}
         onDragStart={(event) => beginSessionDrag(event, conversation)}
         onDragEnd={finishSessionDrag}
+        onDragOver={(event) => {
+          if (rootId == null) return
+          handleSessionDragOver(event, rootId, collectionId)
+        }}
+        onDragLeave={handleSessionDragLeave}
+        onDrop={(event) => {
+          if (rootId == null) return
+          void handleSessionDrop(event, rootId, collectionId)
+        }}
       >
         <span
           aria-hidden
@@ -851,29 +1010,106 @@ export function CollectionTree({
           {formatConversationTitle(conversation.title) ||
             tConversation("untitledConversation")}
         </span>
-        <CollaborationUnreadBadge
-          count={unreadByConversation.get(conversation.id) ?? 0}
-        />
       </button>
     )
-    if (!onOpenSessionInSplit) {
-      return row
-    }
     return (
       <ContextMenu key={conversation.id}>
-        <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
+        <ContextMenuTrigger asChild>
+          <div className="min-w-0">{row}</div>
+        </ContextMenuTrigger>
         <ContextMenuContent>
+          {onOpenSessionInSplit ? (
+            <>
+              <ContextMenuItem
+                onSelect={() => onOpenSessionInSplit(conversation, "right")}
+              >
+                <PanelRightOpen className="h-4 w-4" />
+                {tConversation("openRight")}
+              </ContextMenuItem>
+              <ContextMenuItem
+                onSelect={() => onOpenSessionInSplit(conversation, "down")}
+              >
+                <PanelBottomOpen className="h-4 w-4" />
+                {tConversation("openDown")}
+              </ContextMenuItem>
+              <ContextMenuSeparator />
+            </>
+          ) : null}
+          {onNewSession && rootId != null ? (
+            <>
+              <ContextMenuItem onSelect={() => onNewSession(rootId)}>
+                <SquarePen className="h-4 w-4" />
+                {tConversation("newConversation")}
+              </ContextMenuItem>
+              <ContextMenuSeparator />
+            </>
+          ) : null}
           <ContextMenuItem
-            onSelect={() => onOpenSessionInSplit(conversation, "right")}
+            onSelect={() =>
+              setSessionRename({
+                conversation,
+                value: conversation.title ?? "",
+              })
+            }
           >
-            <PanelRightOpen className="h-4 w-4" />
-            {tConversation("openRight")}
+            <Pencil className="h-4 w-4" />
+            {tConversation("rename")}
+            <span className="ms-auto text-[10px] text-muted-foreground">
+              F2
+            </span>
           </ContextMenuItem>
           <ContextMenuItem
-            onSelect={() => onOpenSessionInSplit(conversation, "down")}
+            onSelect={() => void handleSessionPin(conversation, !isPinned)}
           >
-            <PanelBottomOpen className="h-4 w-4" />
-            {tConversation("openDown")}
+            {isPinned ? (
+              <PinOff className="h-4 w-4" />
+            ) : (
+              <Pin className="h-4 w-4" />
+            )}
+            {isPinned ? tConversation("unpin") : tConversation("pin")}
+          </ContextMenuItem>
+          <ContextMenuItem
+            onSelect={() => void handleSessionArchive(conversation)}
+          >
+            <Archive className="h-4 w-4" />
+            {tConversation("archive")}
+          </ContextMenuItem>
+          <ContextMenuItem onSelect={() => setSessionDetails(conversation)}>
+            <Info className="h-4 w-4" />
+            {tDetails("menuLabel")}
+          </ContextMenuItem>
+          <ContextMenuSeparator />
+          <ContextMenuSub>
+            <ContextMenuSubTrigger>
+              <Circle className="h-4 w-4" />
+              {tConversation("status")}
+            </ContextMenuSubTrigger>
+            <ContextMenuSubContent>
+              {STATUS_ORDER.filter(
+                (status) => status !== conversation.status
+              ).map((status) => (
+                <ContextMenuItem
+                  key={status}
+                  onSelect={() =>
+                    void handleSessionStatus(conversation, status)
+                  }
+                >
+                  <ConversationStatusDot status={status} />
+                  {tStatus(status)}
+                </ContextMenuItem>
+              ))}
+            </ContextMenuSubContent>
+          </ContextMenuSub>
+          <ContextMenuSeparator />
+          <ContextMenuItem
+            variant="destructive"
+            onSelect={() => setSessionDelete(conversation)}
+          >
+            <Trash2 className="h-4 w-4" />
+            {tConversation("delete")}
+            <span className="ms-auto text-[10px] text-muted-foreground">
+              Del
+            </span>
           </ContextMenuItem>
         </ContextMenuContent>
       </ContextMenu>
@@ -965,42 +1201,91 @@ export function CollectionTree({
                   <ChevronRight className="h-3.5 w-3.5 rtl:rotate-180" />
                 )}
               </button>
-              <button
-                type="button"
-                draggable={placingCollectionId == null}
-                data-collection-dragging={
-                  draggingCollectionId === item.id ? "true" : undefined
-                }
-                className="flex h-full min-w-0 flex-1 cursor-grab items-center gap-1.5 text-start text-xs active:cursor-grabbing"
-                title={item.name}
-                aria-label={item.name}
-                onDragStart={(event) => beginCollectionDrag(event, item)}
-                onDragEnd={finishCollectionDrag}
-                onClick={() => {
-                  if (!showSessions) {
-                    onOpenScope(item.id)
-                    return
-                  }
-                  setExpanded((current) => {
-                    const next = new Set(current)
-                    if (next.has(item.id)) next.delete(item.id)
-                    else next.add(item.id)
-                    return next
-                  })
-                }}
-              >
-                {isExpanded ? (
-                  <FolderOpen className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                ) : (
-                  <Folder className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                )}
-                <span className="truncate">{item.name}</span>
-                {showSessions && memberSessions.length > 0 ? (
-                  <span className="ms-auto shrink-0 text-[10px] text-muted-foreground">
-                    {memberSessions.length}
-                  </span>
-                ) : null}
-              </button>
+              <ContextMenu>
+                <ContextMenuTrigger asChild>
+                  <div className="flex min-h-0 min-w-0 flex-1">
+                    <button
+                      type="button"
+                      draggable={placingCollectionId == null}
+                      data-collection-dragging={
+                        draggingCollectionId === item.id ? "true" : undefined
+                      }
+                      className="flex h-full min-w-0 flex-1 cursor-grab items-center gap-1.5 text-start text-xs active:cursor-grabbing"
+                      title={item.name}
+                      aria-label={item.name}
+                      onKeyDown={(event) =>
+                        handleCollectionTreeKey(event, item)
+                      }
+                      onDragStart={(event) => beginCollectionDrag(event, item)}
+                      onDragEnd={finishCollectionDrag}
+                      onClick={() => {
+                        if (!showSessions) {
+                          onOpenScope(item.id)
+                          return
+                        }
+                        setExpanded((current) => {
+                          const next = new Set(current)
+                          if (next.has(item.id)) next.delete(item.id)
+                          else next.add(item.id)
+                          return next
+                        })
+                      }}
+                    >
+                      {isExpanded ? (
+                        <FolderOpen className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                      ) : (
+                        <Folder className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                      )}
+                      <span className="truncate">{item.name}</span>
+                      {showSessions && memberSessions.length > 0 ? (
+                        <span className="ms-auto shrink-0 text-[10px] text-muted-foreground">
+                          {memberSessions.length}
+                        </span>
+                      ) : null}
+                    </button>
+                  </div>
+                </ContextMenuTrigger>
+                <ContextMenuContent>
+                  <ContextMenuItem onSelect={() => onOpenScope(item.id)}>
+                    <FolderOpen className="h-4 w-4" />
+                    {t("openInSessionCenter")}
+                  </ContextMenuItem>
+                  <ContextMenuItem
+                    onSelect={() =>
+                      openEditor({ mode: "create", parentId: item.id })
+                    }
+                  >
+                    <FolderPlus className="h-4 w-4" />
+                    {t("newChild")}
+                  </ContextMenuItem>
+                  <ContextMenuItem
+                    onSelect={() => openEditor({ mode: "rename", item })}
+                  >
+                    <Pencil className="h-4 w-4" />
+                    {t("rename")}
+                    <span className="ms-auto text-[10px] text-muted-foreground">
+                      F2
+                    </span>
+                  </ContextMenuItem>
+                  <ContextMenuItem
+                    onSelect={() => openEditor({ mode: "move", item })}
+                  >
+                    <FolderInput className="h-4 w-4" />
+                    {t("move")}
+                  </ContextMenuItem>
+                  <ContextMenuSeparator />
+                  <ContextMenuItem
+                    variant="destructive"
+                    onSelect={() => setDeleteTarget(item)}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                    {t("delete")}
+                    <span className="ms-auto text-[10px] text-muted-foreground">
+                      Del
+                    </span>
+                  </ContextMenuItem>
+                </ContextMenuContent>
+              </ContextMenu>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button
@@ -1030,6 +1315,9 @@ export function CollectionTree({
                   >
                     <Pencil className="h-4 w-4" />
                     {t("rename")}
+                    <span className="ms-auto text-[10px] text-muted-foreground">
+                      F2
+                    </span>
                   </DropdownMenuItem>
                   <DropdownMenuItem
                     onSelect={() => openEditor({ mode: "move", item })}
@@ -1043,6 +1331,9 @@ export function CollectionTree({
                   >
                     <Trash2 className="h-4 w-4" />
                     {t("delete")}
+                    <span className="ms-auto text-[10px] text-muted-foreground">
+                      Del
+                    </span>
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
@@ -1050,7 +1341,7 @@ export function CollectionTree({
             {isExpanded ? (
               <>
                 {memberSessions.map((session) =>
-                  renderSession(session, depth + 1)
+                  renderSession(session, depth + 1, item.id)
                 )}
                 {renderItems(item.id, depth + 1, rootFolderId)}
               </>
@@ -1139,7 +1430,7 @@ export function CollectionTree({
           </Button>
         </div>
         {isExpanded
-          ? sessions.map((session) => renderSession(session, 1))
+          ? sessions.map((session) => renderSession(session, 1, null))
           : null}
       </div>
     )
@@ -1339,6 +1630,73 @@ export function CollectionTree({
           </>
         )}
       </div>
+
+      <Dialog
+        open={sessionRename != null}
+        onOpenChange={(open) => !open && setSessionRename(null)}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{tConversation("renameConversation")}</DialogTitle>
+          </DialogHeader>
+          <Input
+            value={sessionRename?.value ?? ""}
+            onChange={(event) =>
+              setSessionRename((current) =>
+                current ? { ...current, value: event.target.value } : current
+              )
+            }
+            {...ime.props}
+            onKeyDown={(event) => {
+              if (ime.isComposing(event)) return
+              if (event.key === "Enter") void handleSessionRename()
+            }}
+            autoFocus
+          />
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setSessionRename(null)}>
+              {tConversation("cancel")}
+            </Button>
+            <Button onClick={() => void handleSessionRename()}>
+              {tConversation("save")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog
+        open={sessionDelete != null}
+        onOpenChange={(open) => !open && setSessionDelete(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {tConversation("deleteConversationTitle")}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {tConversation("deleteConversationDescription", {
+                title:
+                  formatConversationTitle(sessionDelete?.title) ||
+                  tConversation("untitledConversation"),
+              })}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{tConversation("cancel")}</AlertDialogCancel>
+            <AlertDialogAction onClick={() => void handleSessionDelete()}>
+              {tConversation("delete")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {sessionDetails ? (
+        <SessionDetailsDialog
+          open
+          onOpenChange={(open) => !open && setSessionDetails(null)}
+          summary={sessionDetails}
+        />
+      ) : null}
 
       <Dialog
         open={editor != null}

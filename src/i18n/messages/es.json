@@ -1835,6 +1835,7 @@
       "save": "Guardar",
       "pin": "Fijar",
       "unpin": "Dejar de fijar",
+      "archive": "Archivar",
       "markCompleted": "Marcar como completada",
       "reopen": "Reabrir",
       "expandSubsessions": "Expandir subconversaciones",

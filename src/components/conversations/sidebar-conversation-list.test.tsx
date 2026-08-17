@@ -65,9 +65,6 @@ const stableTabFns = vi.hoisted(() => ({
 }))
 
 const stableAgents = vi.hoisted(() => ({ sortedTypes: ["claude_code"] }))
-const collaborationUnread = vi.hoisted(() => ({
-  counts: new Map<number, number>(),
-}))
 
 // Context functions are stable refs in production (useCallback values); the
 // mocks must be too, else the list's folder callbacks (which close over them)
@@ -306,11 +303,7 @@ function Harness() {
     harness.rerender = () => setTick((n) => n + 1)
   }, [])
   return (
-    <SidebarConversationList
-      showCompleted
-      sortMode="created"
-      unreadByConversation={collaborationUnread.counts}
-    />
+    <SidebarConversationList showCompleted sortMode="created" />
   )
 }
 
@@ -330,7 +323,6 @@ function tree() {
 // describe's own beforeEach seeds its folders/conversations fixture on top.
 beforeEach(() => {
   resetAppWorkspaceStore()
-  collaborationUnread.counts = new Map()
   useAppWorkspaceStore.setState({
     conversationsLoading: false,
     conversationsError: null,
@@ -418,18 +410,6 @@ describe("SidebarConversationList — single status event re-render scope", () =
     expect(probes.folder).toBe(0)
   })
 
-  it("re-renders only the Session whose collaboration unread count changed", () => {
-    const { getByLabelText } = render(tree())
-
-    probes.card = 0
-    probes.folder = 0
-    collaborationUnread.counts = new Map([[22, 2]])
-    act(() => harness.rerender())
-
-    expect(getByLabelText("2 unread")).not.toBeNull()
-    expect(probes.card).toBe(1)
-    expect(probes.folder).toBe(0)
-  })
 })
 
 describe("SidebarConversationList — Pinned section (migration semantics)", () => {

@@ -167,11 +167,6 @@ export function SessionCommunicationBannerView({
             <span className="text-muted-foreground">
               {t("messageCount", { count: total })}
             </span>
-            {feed.unreadCount > 0 ? (
-              <span className="rounded-full bg-primary px-1.5 py-0.5 text-[10px] font-medium text-primary-foreground">
-                {t("unreadCount", { count: feed.unreadCount })}
-              </span>
-            ) : null}
             <span className="ml-auto text-muted-foreground">
               {expanded ? (
                 <ChevronUp className="h-4 w-4" />
