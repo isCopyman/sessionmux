@@ -28,6 +28,25 @@ const MAX_DISPLAY_TEXT_BYTES: usize = 1_000_000;
 const UNKNOWN_DISPATCH_REASON: &str = "dispatch_outcome_unknown";
 pub const SESSION_COLLABORATION_ENABLED_KEY: &str = "session_collaboration.enabled";
 pub const COLLABORATION_DISABLED_REASON: &str = "session_collaboration_disabled";
+/// Written by the user-facing cancel path before the Harness cancel command,
+/// so an interrupted turn's queued follow-ups do not dispatch on the idle
+/// edge the cancellation itself creates.
+pub const CANCELLED_TURN_PAUSE_REASON: &str = "cancelled_current_turn";
+/// Host-control variants of the same freeze (another Agent or an automation
+/// stopped this Session's turn / runtime).
+pub const HOST_CANCEL_PAUSE_REASON: &str = "host_control_turn_cancelled";
+pub const HOST_STOP_PAUSE_REASON: &str = "host_control_session_stopped";
+
+/// A hand-typed user message is the freshest statement of intent: it lifts a
+/// stop/cancel freeze so the send actually runs. Collaboration-interrupt
+/// pauses are deliberately excluded — that lane waits for the interrupted
+/// turn to settle and only its own state machine may clear it.
+fn user_send_clears_pause(reason: &str) -> bool {
+    matches!(
+        reason,
+        CANCELLED_TURN_PAUSE_REASON | HOST_CANCEL_PAUSE_REASON | HOST_STOP_PAUSE_REASON
+    )
+}
 
 #[derive(Debug)]
 pub(crate) struct CollaborationQueuePolicyChange {
@@ -404,6 +423,18 @@ pub async fn enqueue(
         ],
     ))
     .await?;
+    if input.source == PromptQueueSource::User {
+        let (_, paused_reason) = state_row(&txn, input.conversation_id).await?;
+        if paused_reason.as_deref().is_some_and(user_send_clears_pause) {
+            txn.execute(statement(
+                "UPDATE conversation_prompt_queue_state \
+                 SET paused_reason = NULL, updated_at = CURRENT_TIMESTAMP \
+                 WHERE conversation_id = ?",
+                vec![input.conversation_id.into()],
+            ))
+            .await?;
+        }
+    }
     txn.commit().await?;
     snapshot_on(conn, input.conversation_id).await
 }
@@ -1391,6 +1422,66 @@ mod tests {
         let folder_id = seed_folder(&db, "/tmp/codeg-prompt-queue").await;
         let conversation_id = seed_conversation(&db, folder_id, AgentType::Codex).await;
         (db, conversation_id)
+    }
+
+    #[tokio::test]
+    async fn user_enqueue_lifts_a_cancel_freeze_but_not_an_interrupt_hold() {
+        let (db, conversation_id) = seeded_memory().await;
+        enqueue(&db.conn, input(conversation_id, "old-1", "queued before cancel"))
+            .await
+            .expect("enqueue");
+        pause_queue(
+            &db.conn,
+            conversation_id,
+            CANCELLED_TURN_PAUSE_REASON.to_string(),
+        )
+        .await
+        .expect("pause");
+
+        let snapshot = enqueue(&db.conn, input(conversation_id, "typed-1", "user speaks"))
+            .await
+            .expect("enqueue after cancel");
+        assert_eq!(snapshot.paused_reason, None);
+
+        // The interrupt lane's hold waits for the interrupted turn to settle;
+        // typing must not lift it.
+        let hold = format!(
+            "{}op-1",
+            crate::db::service::collaboration_interrupt_service::PAUSE_REASON_PREFIX
+        );
+        pause_queue(&db.conn, conversation_id, hold.clone())
+            .await
+            .expect("pause interrupt");
+        let snapshot = enqueue(&db.conn, input(conversation_id, "typed-2", "still held"))
+            .await
+            .expect("enqueue during interrupt");
+        assert_eq!(snapshot.paused_reason.as_deref(), Some(hold.as_str()));
+    }
+
+    #[tokio::test]
+    async fn automation_enqueue_never_lifts_a_stop_freeze() {
+        let (db, conversation_id) = seeded_memory().await;
+        enqueue(&db.conn, input(conversation_id, "old-1", "queued before stop"))
+            .await
+            .expect("enqueue");
+        pause_queue(&db.conn, conversation_id, HOST_STOP_PAUSE_REASON.to_string())
+            .await
+            .expect("pause");
+
+        let mut timer_item = input(conversation_id, "timer-1", "idle continuation");
+        timer_item.source = PromptQueueSource::Timer;
+        let snapshot = enqueue(&db.conn, timer_item)
+            .await
+            .expect("timer enqueue");
+        assert_eq!(
+            snapshot.paused_reason.as_deref(),
+            Some(HOST_STOP_PAUSE_REASON)
+        );
+
+        let snapshot = enqueue(&db.conn, input(conversation_id, "typed-1", "resume please"))
+            .await
+            .expect("user enqueue");
+        assert_eq!(snapshot.paused_reason, None);
     }
 
     #[tokio::test]

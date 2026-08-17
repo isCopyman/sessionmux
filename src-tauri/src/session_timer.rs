@@ -103,6 +103,7 @@ struct SessionTimerRuntime {
 
 impl SessionTimerRuntime {
     async fn run(mut self) {
+        self.seed_idle_boundaries().await;
         let mut scan = tokio::time::interval(StdDuration::from_secs(SCAN_INTERVAL_SECS));
         scan.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
@@ -120,6 +121,28 @@ impl SessionTimerRuntime {
                 }
                 _ = scan.tick() => self.fire_due(None).await,
             }
+        }
+    }
+
+    /// A restart wipes this in-memory idle map while the timers themselves
+    /// persist, so without a seed every enabled timer stays silent until its
+    /// Session happens to complete another turn — which a backed-off Session
+    /// waiting on replies may never do on its own. Treating "idle since
+    /// process start" as the boundary is conservative: each fire still waits
+    /// a full grace (or backoff interval) measured from startup, and every
+    /// pre-fire guard (queued work yields, busy runtime skips, auto-pause
+    /// holds) applies unchanged.
+    async fn seed_idle_boundaries(&mut self) {
+        let timers = match session_timer_service::enabled(&self.db.conn).await {
+            Ok(timers) => timers,
+            Err(error) => {
+                tracing::warn!("[session-timer] idle-boundary seed failed: {error}");
+                return;
+            }
+        };
+        let now = Utc::now();
+        for timer in timers {
+            self.idle_since.entry(timer.conversation_id).or_insert(now);
         }
     }
 
@@ -555,6 +578,38 @@ mod tests {
             .unwrap();
         assert!(timer.enabled);
         assert_eq!(timer.fire_count, 1);
+    }
+
+    #[tokio::test]
+    async fn restart_seed_lets_an_enabled_timer_fire_without_a_turn() {
+        // A restart wipes the in-memory idle map; nothing completes a turn
+        // on its own while a Session waits on replies, so the seed must
+        // stand in for the lost boundary or the continuation sleeps forever.
+        let (db, conversation_id, _) = setup().await;
+        create_timer(&db, conversation_id, "post-restart").await;
+        let mut runtime = runtime(crate::db::AppDatabase {
+            conn: db.conn.clone(),
+        });
+
+        // An already-observed boundary must survive the seed untouched.
+        let observed = Utc::now() - Duration::seconds(120);
+        runtime.idle_since.insert(-999, observed);
+        runtime.seed_idle_boundaries().await;
+        assert_eq!(runtime.idle_since.get(&-999), Some(&observed));
+
+        let seeded = runtime
+            .idle_since
+            .get(&conversation_id)
+            .copied()
+            .expect("restart seeds every enabled timer's conversation");
+        runtime
+            .idle_since
+            .insert(conversation_id, seeded - Duration::seconds(5));
+        runtime.fire_due(None).await;
+        assert_eq!(
+            queue_text(&db, conversation_id).await,
+            ["Read docs/current-task.md and continue"]
+        );
     }
 
     #[tokio::test]

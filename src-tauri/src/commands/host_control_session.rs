@@ -40,8 +40,10 @@ const MAX_CONFIG_KEY_CHARS: usize = 128;
 const MAX_CONFIG_VALUE_CHARS: usize = 512;
 const MAX_IDEMPOTENCY_ENTRIES: usize = 512;
 const SELECTOR_WAIT_TIMEOUT: Duration = Duration::from_secs(60);
-const CANCEL_QUEUE_PAUSE_REASON: &str = "host_control_turn_cancelled";
-const STOP_QUEUE_PAUSE_REASON: &str = "host_control_session_stopped";
+use crate::db::service::prompt_queue_service::{
+    HOST_CANCEL_PAUSE_REASON as CANCEL_QUEUE_PAUSE_REASON,
+    HOST_STOP_PAUSE_REASON as STOP_QUEUE_PAUSE_REASON,
+};
 
 #[derive(Clone)]
 struct CachedWrite {

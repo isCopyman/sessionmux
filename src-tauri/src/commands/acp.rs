@@ -32,7 +32,7 @@ use crate::web::event_bridge::EventEmitter;
 const ACP_AGENTS_UPDATED_EVENT: &str = "app://acp-agents-updated";
 const NPM_PREFIX_TIMEOUT: Duration = Duration::from_millis(1500);
 
-const CANCELLED_QUEUE_PAUSE_REASON: &str = "cancelled_current_turn";
+use crate::db::service::prompt_queue_service::CANCELLED_TURN_PAUSE_REASON as CANCELLED_QUEUE_PAUSE_REASON;
 
 static NPM_GLOBAL_PREFIX_CACHE: tokio::sync::OnceCell<PathBuf> = tokio::sync::OnceCell::const_new();
 
