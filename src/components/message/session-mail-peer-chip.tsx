@@ -42,7 +42,7 @@ export function SessionMailPeerChip({
 
   return (
     <span className="inline-flex min-w-0 max-w-full items-center gap-1">
-      <span className="shrink-0">{prefix}</span>
+      {prefix ? <span className="shrink-0">{prefix}</span> : null}
       <button
         type="button"
         className="inline-flex min-w-0 max-w-full items-center gap-1 appearance-none text-left"

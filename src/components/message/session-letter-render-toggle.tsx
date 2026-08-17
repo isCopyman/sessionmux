@@ -53,7 +53,7 @@ export function SessionLetterFrame({
   return (
     <div
       className={cn(
-        "relative w-full pr-8",
+        "group/letter relative w-full",
         focused && "rounded-lg ring-2 ring-primary/35"
       )}
       data-session-letter-frame=""
@@ -62,7 +62,7 @@ export function SessionLetterFrame({
       {children}
       <SessionLetterPreviewToggle
         letterKey={letterKey}
-        className="absolute bottom-1 right-0"
+        className="pointer-events-none absolute right-1 bottom-1 opacity-0 transition-opacity group-hover/letter:pointer-events-auto group-hover/letter:opacity-100 group-focus-within/letter:pointer-events-auto group-focus-within/letter:opacity-100"
       />
     </div>
   )

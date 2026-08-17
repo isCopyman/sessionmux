@@ -21,37 +21,38 @@ export function SessionSendMessageCard({
   const t = useTranslations("Collaboration")
   const parsed = parseSessionSendMessageInput(input)
   const conversations = useAppWorkspaceStore((state) => state.conversations)
-  const targetId = parsed?.targetSessionIds[0]
-  const target = conversations.find(
-    (conversation) => conversation.id === targetId
-  )
+  const targetIds = parsed?.targetSessionIds ?? []
   const bodyParts = useMemo(
     () => [{ type: "text" as const, text: parsed?.content ?? "" }],
     [parsed?.content]
   )
 
-  if (!parsed || targetId == null) return null
+  if (!parsed || targetIds.length === 0) return null
 
-  const extra =
-    parsed.targetSessionIds.length > 1
-      ? ` +${parsed.targetSessionIds.length - 1}`
-      : ""
+  const eventId = parseSessionSendMessageEventId(output)
 
   return (
     <article
       className="w-full max-w-[min(40rem,88%)] rounded-lg border border-border bg-muted/30 px-3 py-2.5"
       data-session-send-message=""
-      data-target-session-id={targetId}
+      data-target-session-id={targetIds[0]}
     >
-      <header className="mb-1.5 flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
-        <SessionMailPeerChip
-          conversationId={targetId}
-          title={target?.title}
-          agentType={target?.agent_type}
-          eventId={parseSessionSendMessageEventId(output)}
-          prefix={t("toPrefix")}
-        />
-        {extra ? <span className="shrink-0">{extra}</span> : null}
+      <header className="mb-1.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+        {targetIds.map((targetId, index) => {
+          const target = conversations.find(
+            (conversation) => conversation.id === targetId
+          )
+          return (
+            <SessionMailPeerChip
+              key={targetId}
+              conversationId={targetId}
+              title={target?.title}
+              agentType={target?.agent_type}
+              eventId={eventId}
+              prefix={index === 0 ? t("toPrefix") : ""}
+            />
+          )
+        })}
       </header>
       <div className="text-sm">
         <ContentPartsRenderer parts={bodyParts} role="assistant" />
