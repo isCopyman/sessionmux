@@ -365,6 +365,17 @@ Agent 从群聊触发后默认回复原 Room，也可以在公开回复中点名
 它仍可能记住自己在另一个 Room 中实际处理过的内容，因此不能提供真正盲评或保密隔离。用户需要
 严格隔离时，应为不同 Room 使用不同 Session 或显式 Fork，而不是依赖 Room 名称隔离记忆。
 
+#### 场景九：后台 Session 需要人类拍板
+
+一个后台 Session 完成调研后发现两个互斥方案，或者遇到权限、路径和外部条件阻塞。它可以显式
+给 `human` 发一封信，选择“仅通知”或“需要回复”。Codeg 在全局铃铛/收件入口显示来源 Session、
+主题、是否需要处理和当前状态；普通 Session 最终回答不会自动复制到这里，避免把工作台变成
+通知洪水。
+
+人点击信件可打开来源 Session，也可以直接写 linked reply。回复作为明确的人类输入进入来源
+Session 的统一队列；人在另一个 Session 中旁观同一封信，不会替目标 Agent 签收。`human` 是宿主
+参与者，不是虚假的可 Resume Session，也不要求用户先创建 Room。
+
 ### 4.10 联系其他 Backend 或 Codeg 管理边界之外的 Agent
 
 当前直接使用 AgentBus 时，一次普通协作也要求用户或 Agent 记住 project、role 和真实 Session

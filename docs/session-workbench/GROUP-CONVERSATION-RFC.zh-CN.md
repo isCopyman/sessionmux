@@ -1,9 +1,71 @@
 # Codeg 群聊面板与 Session 协作 RFC
 
 > 状态：Draft  
-> 最近调研：2026-08-15  
+> 最近调研：2026-08-18
 > 定位：定义多个持久 Session 如何在一个共享面板中交流，以及共享可见、运行时投递和模型上下文之间的边界。  
 > 前置条件：稳定的 Session 身份、Resume、Workbench、多视图同步和统一 Delivery Router。
+
+## 0. 2026-08-18 重新裁决：邮件串是 Thread 底座，但还不是 Room
+
+这轮重新核对当前分支后，三个概念不再平行造系统，而是分层复用同一套通信事实：
+
+```text
+Mailbox event + per-target Delivery     可靠正文、收发状态与实际投递
+                ↓ projection
+Direct Mail Thread                      私信回复串
+Human Inbox                             宿主级的人类收件投影
+Room                                    带成员和公共可见性的共享时间线
+                ↓ local projection
+Room Thread                             某条公共根消息下面的回复串
+```
+
+### 0.1 当前已经实现什么
+
+- `collaboration_event.reply_to_event_id` 已保存不可变回复关系；
+- [`mail-threads.ts`](../../src/lib/mail-threads.ts) 已从回复链向上寻找根事件，并把一串收发信聚合成
+  `MailThread`；根消息的 `event_id` 就是当前 UI 使用的 Thread 身份；
+- [`SessionMailboxDialog`](../../src/components/collaboration/session-mailbox-dialog.tsx) 已提供 Inbox、
+  Sent、筛选、全文检索和右侧完整回复串，用户点击任一封信都会进入所属 Thread；
+- 当前后端故意把 direct reply 限制为“原收件 Session 只回复原发送 Session”，多目标 fan-out 的
+  各接收者也不能看到彼此回复。因此它是安全的私信 Thread，不是隐藏的群聊；
+- 当前数据库的作者和目标仍然都是数值 `conversation_id`。RFC 中的 `human` 保留地址尚未进入
+  schema、MCP 或 UI；Room 成员、公共时间线和 `scope=room` 也尚未实现。
+
+因此，“没有父节点就是新 Thread，有 `reply_to_event_id` 就沿用原 Thread”已经可用，不需要为了
+direct mail 再创建 `thread` 表。当前 UI 数据量下向上遍历足够；等后端分页、Room 时间线和全局
+Thread 搜索需要不加载祖先即可查询时，再把根事件 ID 物化到 event 行并建立索引。这个字段可以叫
+`thread_root_event_id`，但值仍复用根 `event_id`，不是第二套随机身份。
+
+### 0.2 Human Inbox 值得做，但不能把人伪装成 Session
+
+Human Inbox 的真实需求不是让人再拥有一套普通邮箱，而是让后台 Session 能明确表达：
+
+- “这里有一个需要你拍板的问题”；
+- “任务完成，产物等你查看”；
+- “权限、路径或外部条件阻塞，需要你处理”。
+
+它应是 Codeg 宿主的保留参与者 `human`，在全局导航中显示一个轻量铃铛/收件入口。Agent 显式发给
+`human` 的 event 才进入这里；普通最终回答仍留在原 Session，不自动复制成邮件。人在 Human Inbox
+回复时创建 linked event，并通过同一 Session Dispatcher 排入来源 Session；“稍后”“无需回复”只
+改变这封信的 Attention/Obligation，不替任何 Agent 签收其他邮件。
+
+Human Inbox 需要一次正式的地址模型迁移：当前 `source_conversation_id` 和
+`target_conversation_id` 都假定参与者必为 Session，不能用 `0`、负数或伪造 Conversation 当人类。
+实施时应显式增加 author/target kind 与可空 Session 引用，或在迁移中重建相应表；不能另建一套
+与 Collaboration 生命周期重复的 `human_message` 真相源。
+
+### 0.3 Room 需要一个对象，但不需要第二套消息引擎
+
+Room 与多收件人邮件的差异只有一个，却是不可省略的差异：**公共可见性**。
+
+- direct fan-out：每个目标只看到自己的 Delivery，彼此不知道其他收件者和回复；
+- Room event：Room 成员都有权查询公共 event，但只有结构化 `@` 目标产生 Delivery 和 Agent turn；
+- Room Thread：仍用 `reply_to_event_id` 和根 event ID 组织，只是继承 Room 的成员与公开可见性；
+- 从 Room 转为私聊或从私聊分享到 Room 都产生带来源引用的新 event，不能悄悄改变旧消息的可见域。
+
+所以 Room 是“成员集合 + 公共账本投影 + 路由策略”，不是另一套 Mailbox、PromptQueue 或 Agent
+生命周期。最小实现只需在现有 Collaboration 之上增加 Room/Member、event scope/room reference
+与公共顺序；所有实际执行仍进入现有 per-Session Dispatcher。
 
 ## 1. 决策摘要
 
@@ -81,6 +143,20 @@ Session ID。系统用 `ChainDepth` 限制 Agent 间连续传播。
 它证明了：**真正群聊也不要求全量 Prompt 共享**，但必须保存一个人类可检查的公共账本，并为
 Agent 间链式触发设置预算和停止条件。
 
+### 3.5 CCCC
+
+本地 CCCC 源码进一步验证了“共享账本和个体收件投影可以共用一套消息事实”：
+
+- Working Group 类似带执行能力的 IM 群，`ledger.jsonl` 是单一 append-only 事实源；
+- `chat.message.to=[]` 表示广播，也可以显式点名 actor；daemon 只向目标 Actor 投递，其余公共内容
+  仍留在 Group ledger；
+- 每个 Actor 通过 Inbox、read cursor 和独立 ACK 消费消息，不用为每人复制一份正文；
+- `reply_to` 和 `quote_text` 已是结构化字段，但 CCCS v1 的 `thread` 字段仍明确保留、不可依赖。
+
+因此 CCCC 并不是“邮箱天然等于 Room”：它先有 Group 作为共享可见性边界，再用 Inbox 负责实际
+Actor 消费。Codeg 可以采用同样的分层，但不复制 CCCC 的 Foreman/Peer/Group 生命周期；我们的
+Room 成员直接引用已有持久 Session，Thread 继续由根 event 和 `reply_to_event_id` 投影。
+
 ## 4. 产品对象
 
 ### 4.1 Room / Group Conversation
@@ -139,6 +215,18 @@ Room 无权读取成员的私聊历史，但 Session 会记得自己实际接收
 因此，同一 Session 参加多个 Room 可能产生跨主题记忆。如果场景要求盲评、保密或严格上下文
 隔离，应创建独立 Session，或在 Harness 支持时从原 Session Fork 一个参与分支；不能假装同一
 原生 Session 同时拥有互不相知的多份记忆。
+
+### 4.4 Human 作为宿主参与者
+
+`human` 是当前 Codeg Backend 的宿主级参与者，不是 Room 成员必须绑定的虚假 Session。它可以：
+
+- 在 Room 主时间线直接发言；
+- 被 Agent 明确投递一封需要处理或回复的 Human Mail；
+- 在 Human Inbox 回复后，把 linked reply 排入来源 Session；
+- 旁观所有本机协作投影，但旁观不等于替 Agent read/ack。
+
+第一版仍按单机单用户处理，不引入账号、组织和 ACL。以后若出现多用户 Backend，再把
+`human` 扩展为稳定 principal；不能提前让 Room 权限模型拖累个人工作台。
 
 ## 5. 群聊与私聊的行为规则
 
@@ -436,13 +524,13 @@ collaboration_room_member
 
 collaboration_event
 - id / optional room_id / author_kind / author_ref
-- body / attachments / reply_to
+- body / attachments / reply_to / thread_root_event_id（根 event ID，可后置物化）
 - visibility = direct | room
 - expects_reply / context_cutoff_event_id / optional promoted_room_id
 - created_at / edited_at / deleted_at
 
 collaboration_delivery
-- event_id / backend_ref / conversation_id
+- event_id / target_kind = session | human / optional backend_ref / optional conversation_id
 - adapter / status / attempts
 - native_turn_ref / error
 ```
@@ -483,12 +571,21 @@ collaboration_delivery
 
 ## 13. 分阶段实施
 
-### R0：已有轻量协作动作
+### M0：当前已有的 Direct Mail Thread
 
 - 多选 Session 发送同一问题；
-- 定向转发和并列比较；
-- 统一 Delivery 状态；
-- 不创建共享时间线。
+- 定向转发、收件/发件投影和 Delivery 状态；
+- `reply_to_event_id` 组成私信回复串，根 event ID 作为 Thread 身份；
+- Gmail-lite Session Mailbox 展示完整链；
+- 不创建共享时间线，fan-out 接收者彼此隔离。
+
+### H1：Human Inbox
+
+- 增加稳定 `human` 宿主地址，不伪造 Conversation；
+- Agent 可显式发送“通知”或“需要回复”的信；
+- 全局铃铛/收件入口显示未读、待处理和失败，普通 Session 回答不重复投影；
+- 人类 linked reply 进入同一 Dispatcher，保持来源 event 和 Session；
+- 第一版不做邮件文件夹、规则引擎和多用户权限。
 
 ### R1：最小 Room
 
@@ -549,6 +646,13 @@ collaboration_delivery
 19. 自动协作达到链深、预算或用户停止条件后可靠终止。
 
 ## 15. 本轮调研依据
+
+- Codeg 当前实现：[`reply_to_event_id` 与 direct reply 校验](../../src-tauri/src/db/service/collaboration_service.rs)、
+  [`MailThread` 回复链投影](../../src/lib/mail-threads.ts)、
+  [`SessionMailboxDialog` 收件/发件与 Thread 阅读面板](../../src/components/collaboration/session-mailbox-dialog.tsx)。
+- CCCC：[`Working Group / Ledger / Inbox 架构`](../../../cccc/docs/reference/architecture.md)、
+  [`ChatMessageData.to/reply_to` 合约](../../../cccc/src/cccc/contracts/v1/message.py)、
+  [`CCCS v1 thread 保留字段`](../../../cccc/docs/standards/CCCS_V1.md)。
 
 - Buzz：[`buzz-acp` 工作方式与 Channel 订阅](https://github.com/block/buzz/blob/1f4c69eccf012dc58737e9265498397215c706c5/crates/buzz-acp/README.md)、
   [Channel/DM/Thread 与 per-channel queue 架构](https://github.com/block/buzz/blob/1f4c69eccf012dc58737e9265498397215c706c5/ARCHITECTURE.md)。
