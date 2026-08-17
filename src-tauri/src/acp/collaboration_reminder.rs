@@ -8,6 +8,8 @@
 
 use chrono::{DateTime, Duration, Utc};
 
+use super::types::ConnectionStatus;
+
 /// First unread reminder is due as soon as the Delivery exists.
 pub const UNREAD_AFTER_SECS: i64 = 0;
 /// Awaiting reply after the Agent actually received the body.
@@ -64,6 +66,22 @@ pub enum CollaborationReminderLane {
 impl ReminderTargetState {
     pub fn needs_attention(self) -> bool {
         self.has_unread || self.has_awaiting_reply
+    }
+}
+
+/// Map ACP connection status onto reminder runtime. `Connecting` still has a
+/// live process, so overdue mail is queued instead of treated as closed.
+pub fn reminder_runtime(status: ConnectionStatus, turn_in_flight: bool) -> ReminderRuntime {
+    match status {
+        ConnectionStatus::Disconnected | ConnectionStatus::Error => ReminderRuntime::Missing,
+        ConnectionStatus::Prompting => ReminderRuntime::ConnectedBusy,
+        ConnectionStatus::Connected | ConnectionStatus::Connecting => {
+            if turn_in_flight {
+                ReminderRuntime::ConnectedBusy
+            } else {
+                ReminderRuntime::ConnectedIdle
+            }
+        }
     }
 }
 
@@ -194,6 +212,22 @@ mod tests {
         assert_eq!(
             choose_reminder_lane(state),
             CollaborationReminderLane::InjectSteer
+        );
+    }
+
+    #[test]
+    fn connecting_session_is_queued_not_treated_as_closed() {
+        assert_eq!(
+            reminder_runtime(ConnectionStatus::Connecting, false),
+            ReminderRuntime::ConnectedIdle
+        );
+        assert_eq!(
+            reminder_runtime(ConnectionStatus::Connecting, true),
+            ReminderRuntime::ConnectedBusy
+        );
+        assert_eq!(
+            reminder_runtime(ConnectionStatus::Disconnected, false),
+            ReminderRuntime::Missing
         );
     }
 

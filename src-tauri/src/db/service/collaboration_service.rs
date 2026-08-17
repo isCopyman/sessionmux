@@ -1625,12 +1625,12 @@ pub async fn list_overdue_reminder_targets(
                 "SELECT d.target_conversation_id AS conversation_id, \
                  SUM(CASE WHEN d.invocation_policy = 'invoke_when_idle' \
                       AND d.agent_received_at IS NULL AND d.state <> 'dismissed' \
-                      AND d.created_at <= datetime('now', '-{UNREAD_AFTER_SECS} seconds') \
+                      AND datetime(d.created_at) <= datetime('now', '-{UNREAD_AFTER_SECS} seconds') \
                       THEN 1 ELSE 0 END) AS overdue_unread, \
-                 SUM(CASE WHEN d.invocation_policy = 'invoke_when_idle' \
-                      AND d.obligation_state = 'awaiting_reply' \
+                 SUM(CASE WHEN d.obligation_state = 'awaiting_reply' \
+                      AND d.state <> 'dismissed' AND d.state <> 'failed' \
                       AND d.agent_received_at IS NOT NULL \
-                      AND d.agent_received_at <= datetime('now', '-{REPLY_AFTER_SECS} seconds') \
+                      AND datetime(d.agent_received_at) <= datetime('now', '-{REPLY_AFTER_SECS} seconds') \
                       THEN 1 ELSE 0 END) AS overdue_reply, \
                  COALESCE(s.reminder_repeat_count, 0) AS reminder_repeat_count, \
                  s.reminder_last_at AS reminder_last_at \
@@ -1695,14 +1695,14 @@ async fn overdue_reminder_letters(
                  FROM collaboration_delivery d \
                  JOIN collaboration_event e ON e.id = d.event_id \
                  WHERE d.target_conversation_id = ? \
-                   AND d.invocation_policy = 'invoke_when_idle' \
-                   AND d.state <> 'dismissed' \
+                   AND d.state <> 'dismissed' AND d.state <> 'failed' \
                    AND ( \
-                        (d.agent_received_at IS NULL \
-                         AND d.created_at <= datetime('now', '-{UNREAD_AFTER_SECS} seconds')) \
+                        (d.invocation_policy = 'invoke_when_idle' \
+                         AND d.agent_received_at IS NULL \
+                         AND datetime(d.created_at) <= datetime('now', '-{UNREAD_AFTER_SECS} seconds')) \
                      OR (d.obligation_state = 'awaiting_reply' \
                          AND d.agent_received_at IS NOT NULL \
-                         AND d.agent_received_at <= datetime('now', '-{REPLY_AFTER_SECS} seconds')) \
+                         AND datetime(d.agent_received_at) <= datetime('now', '-{REPLY_AFTER_SECS} seconds')) \
                    ) \
                  ORDER BY d.created_at ASC LIMIT 8"
             ),
@@ -1758,8 +1758,11 @@ pub async fn reset_idle_reminder_cursors(conn: &DatabaseConnection) -> Result<()
          WHERE (reminder_last_at IS NOT NULL OR reminder_repeat_count > 0) \
            AND conversation_id NOT IN ( \
              SELECT DISTINCT target_conversation_id FROM collaboration_delivery \
-             WHERE invocation_policy = 'invoke_when_idle' AND state <> 'dismissed' \
-               AND (agent_received_at IS NULL OR obligation_state = 'awaiting_reply') \
+             WHERE state <> 'dismissed' AND state <> 'failed' \
+               AND ( \
+                    (invocation_policy = 'invoke_when_idle' AND agent_received_at IS NULL) \
+                 OR (obligation_state = 'awaiting_reply' AND agent_received_at IS NOT NULL) \
+               ) \
            )",
         vec![],
     ))
@@ -3286,5 +3289,54 @@ mod tests {
                 .is_empty(),
             "cooldown after a successful reminder must suppress the next scan"
         );
+    }
+
+    #[tokio::test]
+    async fn overdue_reply_includes_store_only_mail_after_agent_read() {
+        let (db, source, target, _) = seeded_memory().await;
+        let mut letter = input(
+            source,
+            vec![target],
+            "await-store-only",
+            "please answer this",
+        );
+        letter.expects_reply = true;
+        let sent = send(&db.conn, letter).await.unwrap();
+        assert!(
+            list_overdue_reminder_targets(&db.conn)
+                .await
+                .unwrap()
+                .is_empty(),
+            "deliver-only unread mail must not start a reminder turn"
+        );
+
+        mark_agent_read(&db.conn, target, &sent.event_id)
+            .await
+            .unwrap();
+        assert!(
+            list_overdue_reminder_targets(&db.conn)
+                .await
+                .unwrap()
+                .is_empty(),
+            "reply reminder is not due until the five-minute clock elapses"
+        );
+
+        db.conn
+            .execute(Statement::from_sql_and_values(
+                DbBackend::Sqlite,
+                "UPDATE collaboration_delivery \
+                 SET agent_received_at = datetime('now', '-6 minutes') \
+                 WHERE event_id = ?",
+                vec![sent.event_id.clone().into()],
+            ))
+            .await
+            .unwrap();
+        let overdue = list_overdue_reminder_targets(&db.conn).await.unwrap();
+        assert_eq!(overdue.len(), 1);
+        assert_eq!(overdue[0].conversation_id, target);
+        assert_eq!(overdue[0].overdue_unread, 0);
+        assert_eq!(overdue[0].overdue_reply, 1);
+        assert_eq!(overdue[0].letters.len(), 1);
+        assert!(overdue[0].letters[0].awaiting_reply);
     }
 }

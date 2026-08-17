@@ -9,11 +9,12 @@ use std::time::Duration;
 use sea_orm::DatabaseConnection;
 
 use crate::acp::collaboration_reminder::{
-    choose_reminder_lane, reminder_digest_text_with_letters, CollaborationReminderLane,
-    ReminderAudience, ReminderRuntime, ReminderTargetState, REMINDER_SCAN_SECS,
+    choose_reminder_lane, reminder_digest_text_with_letters, reminder_runtime,
+    CollaborationReminderLane, ReminderAudience, ReminderRuntime, ReminderTargetState,
+    REMINDER_SCAN_SECS,
 };
 use crate::acp::manager::ConnectionManager;
-use crate::acp::types::{ConnectionStatus, PromptInputBlock};
+use crate::acp::types::PromptInputBlock;
 use crate::commands::prompt_queue::prompt_queue_enqueue_core;
 use crate::db::entities::conversation;
 use crate::db::service::collaboration_service;
@@ -100,14 +101,11 @@ async fn dispatch_target(
         match active_connection_for_row(manager, &row).await {
             Some((connection_id, state)) => {
                 let state = state.read().await;
-                let runtime = if state.status != ConnectionStatus::Connected {
-                    ReminderRuntime::Missing
-                } else if state.turn_in_flight {
-                    ReminderRuntime::ConnectedBusy
-                } else {
-                    ReminderRuntime::ConnectedIdle
-                };
-                (runtime, state.native_steering_available, Some(connection_id))
+                (
+                    reminder_runtime(state.status.clone(), state.turn_in_flight),
+                    state.native_steering_available,
+                    Some(connection_id),
+                )
             }
             None => (ReminderRuntime::Missing, false, None),
         };

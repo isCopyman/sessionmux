@@ -542,6 +542,6 @@ Desktop 调试分层与 WebView2 CDP 验证记录；历史记录只用于找回�
 - 「已读未回」要单独测：`expects_reply=true` + `store_only`，再让目标只
   `read_message`、禁止 `send_message`。2026-08-18 用 event `ef6bccdd-…` 得到
   `obligation=awaiting_reply`、`replyReceived=false`、触发条「1 封已读未回」、
-  列表琥珀标签。5 分钟后的系统催办 digest 另测；时钟在
-  `collaboration_reminder.rs`（`REPLY_AFTER_SECS=300`），不要用立刻回复的 PING/PONG
-  冒充催办已测。
+  列表琥珀标签。当时过了 10 分钟也没有系统催办：扫描曾只认
+  `invoke_when_idle`，把已读的 `store_only` 信排除了；连接停在 `connecting` 还会被
+  当成未接通而不投递。这两处已修。不要用立刻回完的 PING/PONG 冒充催办已测。
