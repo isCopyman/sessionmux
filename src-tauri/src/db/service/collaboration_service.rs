@@ -437,13 +437,12 @@ fn validate_input(input: &SendCollaborationMessageInput) -> Result<Vec<i32>, DbE
     Ok(targets.into_iter().collect())
 }
 
-/// Resolve an immutable collaboration event into the only text copied into a
-/// Harness transcript. Event/delivery rows remain the source of truth; the
-/// prompt queue stores only `origin_event_id`, never a second body copy.
+/// Resolve an immutable collaboration event into a compact mailbox
+/// notification. The body remains exclusively in the mailbox and is returned
+/// to the target Agent only by `read_message(event_id)`.
 fn prompt_draft_from_delivery_row(row: &QueryResult) -> Result<PromptQueueDraft, DbError> {
     let event_id: String = row.try_get("", "event_id")?;
     let delivery_id: String = row.try_get("", "delivery_id")?;
-    let body: String = row.try_get("", "body")?;
     let source_title: Option<String> = row.try_get("", "source_title_snapshot")?;
     let source_conversation_id: i32 = row.try_get("", "source_conversation_id")?;
     let source_agent_type: String = row.try_get("", "source_agent_type_snapshot")?;
@@ -465,9 +464,10 @@ fn prompt_draft_from_delivery_row(row: &QueryResult) -> Result<PromptQueueDraft,
         .map_err(|err| validation(format!("Could not serialize collaboration envelope: {err}")))?;
     let text = format!(
         "{ENVELOPE_PREFIX}{event_id}>>>\n{metadata}\n\
-This is a live user turn from another persistent Session. Do the work in the body now.\n\
-If the body asks you to answer or act, do that in this turn. To write back, call send_message to sourceConversationId. expectsReply is only a host hint, never a reason to stay silent.\n\
---- message ---\n{body}\n{ENVELOPE_END_PREFIX}{event_id}>>>"
+This is a durable mailbox notification from another persistent Session. The message body is not duplicated into this prompt.\n\
+Call read_message with event_id={event_id} to read the full message. If it expects a reply, answer with send_message to sourceConversationId and set reply_to_event_id={event_id}.\n\
+--- message ---\n\
+{ENVELOPE_END_PREFIX}{event_id}>>>"
     );
     let source_label = source_title
         .as_deref()
@@ -475,7 +475,7 @@ If the body asks you to answer or act, do that in this turn. To write back, call
         .unwrap_or("Untitled Session");
     Ok(PromptQueueDraft {
         blocks: vec![PromptInputBlock::Text { text }],
-        display_text: format!("From {source_label}: {body}"),
+        display_text: format!("New Session message from {source_label}"),
     })
 }
 
@@ -486,7 +486,7 @@ pub(crate) async fn prompt_draft_for_origin<C: ConnectionTrait>(
 ) -> Result<PromptQueueDraft, DbError> {
     let row = conn
         .query_one(statement(
-            "SELECT d.id AS delivery_id, e.id AS event_id, e.body, e.reply_to_event_id, \
+            "SELECT d.id AS delivery_id, e.id AS event_id, e.reply_to_event_id, \
                     CASE WHEN d.obligation_state = 'awaiting_reply' THEN 1 ELSE 0 END \
                         AS effective_expects_reply, \
                     e.source_conversation_id, e.source_title_snapshot, \
@@ -504,114 +504,6 @@ pub(crate) async fn prompt_draft_for_origin<C: ConnectionTrait>(
             ))
         })?;
     prompt_draft_from_delivery_row(&row)
-}
-
-/// Oldest parked Session letter waiting on this target. Used to start a
-/// turn after `TurnComplete` / resume — mailbox idle-start without inbox.
-pub(crate) async fn pending_store_only_conversation_ids(
-    conn: &DatabaseConnection,
-) -> Result<Vec<i32>, DbError> {
-    let rows = conn
-        .query_all(statement(
-            "SELECT DISTINCT target_conversation_id \
-             FROM collaboration_delivery \
-             WHERE invocation_policy = 'store_only' AND state = 'pending' \
-             ORDER BY target_conversation_id",
-            vec![],
-        ))
-        .await?;
-    rows.into_iter()
-        .map(|row| Ok(row.try_get("", "target_conversation_id")?))
-        .collect()
-}
-
-pub(crate) async fn oldest_pending_store_only_event_id<C: ConnectionTrait>(
-    conn: &C,
-    target_conversation_id: i32,
-) -> Result<Option<String>, DbError> {
-    let Some(row) = conn
-        .query_one(statement(
-            "SELECT d.event_id \
-             FROM collaboration_delivery d \
-             WHERE d.target_conversation_id = ? \
-               AND d.invocation_policy = 'store_only' AND d.state = 'pending' \
-             ORDER BY d.created_at ASC, d.id ASC LIMIT 1",
-            vec![target_conversation_id.into()],
-        ))
-        .await?
-    else {
-        return Ok(None);
-    };
-    Ok(Some(row.try_get("", "event_id")?))
-}
-
-pub(crate) async fn session_message_is_pending<C: ConnectionTrait>(
-    conn: &C,
-    target_conversation_id: i32,
-    event_id: &str,
-) -> Result<bool, DbError> {
-    let Some(row) = conn
-        .query_one(statement(
-            "SELECT 1 AS found FROM collaboration_delivery \
-             WHERE event_id = ? AND target_conversation_id = ? \
-               AND state = 'pending'",
-            vec![event_id.into(), target_conversation_id.into()],
-        ))
-        .await?
-    else {
-        return Ok(false);
-    };
-    let found: i64 = row.try_get("", "found")?;
-    Ok(found != 0)
-}
-
-/// Mark a single Session message as already injected (steer or a started
-/// turn). The next ordinary human prompt must not attach the same letter
-/// again via `claim_pending_store_only_for_turn`.
-pub(crate) async fn mark_session_message_injected(
-    conn: &DatabaseConnection,
-    target_conversation_id: i32,
-    event_id: &str,
-    receipt_ref: &str,
-) -> Result<Vec<i32>, DbError> {
-    if receipt_ref.trim().is_empty() || receipt_ref.len() > MAX_DEDUPE_ID_BYTES {
-        return Err(validation(format!(
-            "Collaboration receipt reference must contain between 1 and {MAX_DEDUPE_ID_BYTES} bytes"
-        )));
-    }
-    let txn = conn.begin().await?;
-    let changed = txn
-        .execute(statement(
-            "UPDATE collaboration_delivery \
-             SET state = 'embedded', \
-                 embedded_turn_ref = COALESCE(embedded_turn_ref, ?), \
-                 agent_received_at = COALESCE(agent_received_at, CURRENT_TIMESTAMP), \
-                 agent_receipt_kind = COALESCE(agent_receipt_kind, 'managed_acp'), \
-                 agent_receipt_ref = COALESCE(agent_receipt_ref, ?), \
-                 updated_at = CURRENT_TIMESTAMP \
-             WHERE event_id = ? AND target_conversation_id = ? \
-               AND state IN ('pending', 'queued', 'embedding')",
-            vec![
-                receipt_ref.into(),
-                receipt_ref.into(),
-                event_id.into(),
-                target_conversation_id.into(),
-            ],
-        ))
-        .await?
-        .rows_affected()
-        > 0;
-    if !changed {
-        txn.commit().await?;
-        return Ok(Vec::new());
-    }
-    let mut participants = BTreeSet::from([target_conversation_id]);
-    if let Ok(source) = source_for_origin(&txn, target_conversation_id, event_id).await {
-        participants.insert(source);
-    }
-    let affected = bump_live_participants(&txn, participants).await?;
-    txn.commit().await?;
-    Ok(affected)
 }
 
 /// Atomically reserve the oldest `store_only` deliveries for a Session's next
@@ -648,7 +540,7 @@ pub(crate) async fn claim_pending_store_only_for_turn(
     let rows = txn
         .query_all(statement(
             &format!(
-                "SELECT d.id AS delivery_id, e.id AS event_id, e.body, e.reply_to_event_id, \
+                "SELECT d.id AS delivery_id, e.id AS event_id, e.reply_to_event_id, \
                         CASE WHEN d.obligation_state = 'awaiting_reply' THEN 1 ELSE 0 END \
                             AS effective_expects_reply, \
                         e.source_conversation_id, e.source_title_snapshot, \
@@ -750,9 +642,6 @@ async fn transition_store_only_batch(
         } else {
             "UPDATE collaboration_delivery \
              SET state = 'embedded', error = NULL, \
-                 agent_received_at = COALESCE(agent_received_at, CURRENT_TIMESTAMP), \
-                 agent_receipt_kind = COALESCE(agent_receipt_kind, 'managed_acp'), \
-                 agent_receipt_ref = COALESCE(agent_receipt_ref, ?), \
                  updated_at = CURRENT_TIMESTAMP \
              WHERE event_id = ? AND target_conversation_id = ? \
                AND invocation_policy = 'store_only' AND state = 'embedding' \
@@ -766,7 +655,6 @@ async fn transition_store_only_batch(
             ]
         } else {
             vec![
-                batch.turn_ref.clone().into(),
                 event_id.clone().into(),
                 target_conversation_id.into(),
                 batch.turn_ref.clone().into(),
@@ -931,13 +819,9 @@ pub(crate) async fn mark_origin_embedded(
         .execute(statement(
             "UPDATE collaboration_delivery \
              SET state = 'embedded', embedded_turn_ref = ?, error = NULL, \
-                 agent_received_at = COALESCE(agent_received_at, CURRENT_TIMESTAMP), \
-                 agent_receipt_kind = COALESCE(agent_receipt_kind, 'managed_acp'), \
-                 agent_receipt_ref = COALESCE(agent_receipt_ref, ?), \
                   updated_at = CURRENT_TIMESTAMP \
              WHERE event_id = ? AND target_conversation_id = ? AND state = 'embedding'",
             vec![
-                turn_ref.into(),
                 turn_ref.into(),
                 event_id.into(),
                 target_conversation_id.into(),
@@ -1008,6 +892,7 @@ pub(crate) async fn auto_reply_for_completed_turn(
                AND d.state = 'embedded' \
                AND d.invocation_policy = 'invoke_when_idle' \
                AND e.expects_reply = 1 \
+               AND d.agent_received_at IS NOT NULL \
                AND d.obligation_state = 'awaiting_reply' \
                AND NOT EXISTS ( \
                    SELECT 1 FROM collaboration_event reply \
@@ -1703,12 +1588,14 @@ pub async fn list_overdue_reminder_targets(
         .query_all(statement(
             &format!(
                 "SELECT d.target_conversation_id AS conversation_id, \
-                 SUM(CASE WHEN d.agent_received_at IS NULL AND d.state <> 'dismissed' \
+                 SUM(CASE WHEN d.invocation_policy = 'invoke_when_idle' \
+                      AND d.agent_received_at IS NULL AND d.state <> 'dismissed' \
                       AND d.created_at <= datetime('now', '-{UNREAD_AFTER_SECS} seconds') \
                       THEN 1 ELSE 0 END) AS overdue_unread, \
-                 SUM(CASE WHEN d.obligation_state = 'awaiting_reply' \
-                      AND COALESCE(d.agent_received_at, d.created_at) \
-                        <= datetime('now', '-{REPLY_AFTER_SECS} seconds') \
+                 SUM(CASE WHEN d.invocation_policy = 'invoke_when_idle' \
+                      AND d.obligation_state = 'awaiting_reply' \
+                      AND d.agent_received_at IS NOT NULL \
+                      AND d.agent_received_at <= datetime('now', '-{REPLY_AFTER_SECS} seconds') \
                       THEN 1 ELSE 0 END) AS overdue_reply, \
                  COALESCE(s.reminder_repeat_count, 0) AS reminder_repeat_count, \
                  s.reminder_last_at AS reminder_last_at \
@@ -1778,7 +1665,7 @@ pub async fn reset_idle_reminder_cursors(conn: &DatabaseConnection) -> Result<()
          WHERE (reminder_last_at IS NOT NULL OR reminder_repeat_count > 0) \
            AND conversation_id NOT IN ( \
              SELECT DISTINCT target_conversation_id FROM collaboration_delivery \
-             WHERE state <> 'dismissed' \
+             WHERE invocation_policy = 'invoke_when_idle' AND state <> 'dismissed' \
                AND (agent_received_at IS NULL OR obligation_state = 'awaiting_reply') \
            )",
         vec![],
@@ -2181,8 +2068,10 @@ mod tests {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        assert!(attached[0].contains("first review note"));
-        assert!(attached[1].contains("second review note"));
+        assert!(attached[0].contains(&first.event_id));
+        assert!(attached[1].contains(&second.event_id));
+        assert!(attached.iter().all(|text| text.contains("Call read_message")));
+        assert!(attached.iter().all(|text| !text.contains("review note")));
         assert!(
             claim_pending_store_only_for_turn(&db.conn, target, "another-turn")
                 .await
@@ -2197,9 +2086,9 @@ mod tests {
         assert!(feed.inbound.iter().all(|delivery| {
             delivery.state == CollaborationDeliveryState::Embedded
                 && delivery.embedded_turn_ref.as_deref() == Some("optimistic-natural")
-                && delivery.agent_receipt_kind == Some(CollaborationAgentReceiptKind::ManagedAcp)
-                && delivery.agent_receipt_ref.as_deref() == Some("optimistic-natural")
-                && delivery.agent_received_at.is_some()
+                && delivery.agent_receipt_kind.is_none()
+                && delivery.agent_receipt_ref.is_none()
+                && delivery.agent_received_at.is_none()
                 && delivery.attempts == 1
         }));
     }
@@ -2333,49 +2222,9 @@ mod tests {
         let PromptInputBlock::Text { text } = &draft.blocks[0] else {
             panic!("store_only draft must be one text envelope");
         };
-        assert_eq!(
-            oldest_pending_store_only_event_id(&db.conn, target)
-                .await
-                .unwrap()
-                .as_deref(),
-            Some(sent.event_id.as_str())
-        );
-        assert!(text.contains("--- message ---\nwake the other Session\n"));
+        assert!(!text.contains("wake the other Session"));
         assert!(text.contains(&sent.event_id));
-        assert!(
-            text.contains("expectsReply is only a host hint, never a reason to stay silent"),
-            "V1 envelope must not tell the target to stay silent"
-        );
-    }
-
-    #[tokio::test]
-    async fn injected_store_only_mail_is_not_claimed_again() {
-        let (db, source, target, _) = seeded_memory().await;
-        let sent = send(
-            &db.conn,
-            input(source, vec![target], "inject-once", "do not double"),
-        )
-        .await
-        .unwrap();
-        let affected = mark_session_message_injected(
-            &db.conn,
-            target,
-            &sent.event_id,
-            "steer-inject-once",
-        )
-        .await
-        .unwrap();
-        assert!(affected.contains(&target));
-        assert!(
-            claim_pending_store_only_for_turn(&db.conn, target, "next-human-turn")
-                .await
-                .unwrap()
-                .is_none(),
-            "already-injected mail must not ride the next ordinary turn"
-        );
-        let projected = timeline_projection(&db.conn, target).await.unwrap();
-        assert_eq!(projected.inbound[0].state, CollaborationDeliveryState::Embedded);
-        assert!(projected.inbound[0].agent_received_at.is_some());
+        assert!(text.contains("Call read_message"));
     }
 
     #[tokio::test]
@@ -2414,7 +2263,8 @@ mod tests {
                 panic!("collaboration delivery must resolve to one text envelope");
             };
             assert!(text.starts_with(&format!("{ENVELOPE_PREFIX}{}>>>", sent.event_id)));
-            assert!(text.contains("--- message ---\ncompare the evidence\n"));
+            assert!(!text.contains("compare the evidence"));
+            assert!(text.contains("Call read_message"));
             assert!(text.ends_with(&format!("{ENVELOPE_END_PREFIX}{}>>>", sent.event_id)));
         }
 
@@ -2556,6 +2406,9 @@ mod tests {
                  WHERE event_id = ? AND target_conversation_id = ?",
                 vec![original.event_id.clone().into(), target.into()],
             ))
+            .await
+            .unwrap();
+        mark_agent_read(&db.conn, target, &original.event_id)
             .await
             .unwrap();
 
@@ -3096,7 +2949,8 @@ mod tests {
         assert_eq!(claimed.event_ids, vec![sent.event_id]);
         assert!(claimed.blocks.iter().any(|block| matches!(
             block,
-            PromptInputBlock::Text { text } if text.contains("include me later")
+            PromptInputBlock::Text { text } if text.contains("Call read_message")
+                && !text.contains("include me later")
         )));
     }
 
@@ -3304,7 +3158,8 @@ mod tests {
             panic!("expected a text envelope");
         };
         assert!(first_text.contains("\"sourceAgentType\":\"codex\""));
-        assert!(first_text.contains("keep this wording"));
+        assert!(!first_text.contains("keep this wording"));
+        assert!(first_text.contains("Call read_message"));
         assert!(first_text.contains(&sent.event_id));
         release_store_only_batch(&db.conn, target, &first)
             .await
@@ -3317,15 +3172,7 @@ mod tests {
         let PromptInputBlock::Text { text: resumed_text } = &resumed.blocks[0] else {
             panic!("expected a text envelope");
         };
-        let first_body = first_text
-            .split_once("--- message ---")
-            .map(|(_, rest)| rest)
-            .unwrap();
-        let resumed_body = resumed_text
-            .split_once("--- message ---")
-            .map(|(_, rest)| rest)
-            .unwrap();
-        assert_eq!(first_body, resumed_body);
+        assert_eq!(first_text, resumed_text);
         assert!(resumed_text.contains("\"eventId\":"));
         assert!(resumed_text.contains(&sent.event_id));
     }
@@ -3333,7 +3180,7 @@ mod tests {
     #[tokio::test]
     async fn overdue_reminder_ignores_human_seen_and_respects_clock() {
         let (db, source, target, _) = seeded_memory().await;
-        let sent = send(&db.conn, input(source, vec![target], "due", "hello"))
+        let sent = send(&db.conn, invoke_input(source, vec![target], "due", "hello"))
             .await
             .unwrap();
         let immediately = list_overdue_reminder_targets(&db.conn).await.unwrap();

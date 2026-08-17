@@ -2,8 +2,9 @@
 //!
 //! New mail is due immediately. Unread follow-ups and read-but-unreplied
 //! mail use a 5-minute clock. There is no urgency dimension. Busy Sessions
-//! are injected when native steering exists, otherwise the current turn is
-//! cancelled so the reminder can be sent. Closed Sessions are not cold-started.
+//! are injected when native steering exists, otherwise the reminder waits in
+//! the same durable queue as ordinary follow-ups. Closed Sessions are not
+//! cold-started.
 
 use chrono::{DateTime, Duration, Utc};
 
@@ -48,8 +49,8 @@ pub struct ReminderTargetState {
 pub enum CollaborationReminderLane {
     /// Busy + native steering: inject a short digest into the running turn.
     InjectSteer,
-    /// Busy, no native steer: persist the digest, cancel the turn, then send.
-    ForceInterruptSend,
+    /// Busy, no native steer: persist the digest behind the current turn.
+    QueueAfterTurn,
     /// Connected and idle: host starts a turn so mail cannot sit forever.
     IdleStart,
     /// Closed Session: keep mail; do not cold-start.
@@ -77,7 +78,7 @@ pub fn choose_reminder_lane(state: ReminderTargetState) -> CollaborationReminder
         ReminderRuntime::ConnectedBusy if state.native_steering => {
             CollaborationReminderLane::InjectSteer
         }
-        ReminderRuntime::ConnectedBusy => CollaborationReminderLane::ForceInterruptSend,
+        ReminderRuntime::ConnectedBusy => CollaborationReminderLane::QueueAfterTurn,
         ReminderRuntime::ConnectedIdle => CollaborationReminderLane::IdleStart,
         ReminderRuntime::Missing => CollaborationReminderLane::HoldClosed,
     }
@@ -136,10 +137,10 @@ mod tests {
     }
 
     #[test]
-    fn busy_without_steer_force_sends() {
+    fn busy_without_steer_waits_in_the_shared_queue() {
         assert_eq!(
             choose_reminder_lane(agent(ReminderRuntime::ConnectedBusy)),
-            CollaborationReminderLane::ForceInterruptSend
+            CollaborationReminderLane::QueueAfterTurn
         );
     }
 

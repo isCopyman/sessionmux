@@ -9,7 +9,7 @@ use crate::acp::manager::ConnectionManager;
 use crate::acp::session_collaboration::{
     SessionAddress, SessionCollaborationAccess, SessionCollaborationConfig,
     SessionCollaborationRuntimeConfig, SessionListOutcome, SessionMessageDeliveryOutcome,
-    SessionMessageSpec, SessionSendOutcome, MAX_SESSION_LIST_LIMIT,
+    SessionMessageDeliveryMode, SessionMessageSpec, SessionSendOutcome, MAX_SESSION_LIST_LIMIT,
 };
 use crate::app_error::AppCommandError;
 use crate::db::service::{
@@ -116,17 +116,15 @@ pub async fn collaboration_send_core(
     conn: &sea_orm::DatabaseConnection,
     emitter: &EventEmitter,
     prompt_queue: &PromptQueueHandle,
-    mut input: SendCollaborationMessageInput,
+    input: SendCollaborationMessageInput,
 ) -> Result<CollaborationSendResult, AppCommandError> {
-    // Same admission as a human message: persist into the Session prompt
-    // queue, steer when the target is mid-turn, otherwise start a turn.
-    // Closed Sessions stay queued until they reconnect — no cold start.
-    input.invocation_policy = CollaborationInvocationPolicy::InvokeWhenIdle;
-    input.delivery_hint = CollaborationDeliveryHint::SteerIfSupported;
-    input.expects_reply = false;
+    // Persist first. Only invoke_when_idle enters the Session dispatcher;
+    // store_only remains visible in the mailbox until a later natural turn or
+    // explicit Agent read. Closed Sessions are never cold-started here.
+    let should_wake = input.invocation_policy == CollaborationInvocationPolicy::InvokeWhenIdle;
     let result = persist_collaboration_message(conn, prompt_queue, input).await?;
     publish_persisted_message(emitter, &result);
-    if !result.deduplicated {
+    if should_wake && !result.deduplicated {
         for delivery in result.deliveries.iter().filter(|delivery| {
             delivery.state != CollaborationDeliveryState::Failed
                 && delivery.state != CollaborationDeliveryState::Dismissed
@@ -556,9 +554,20 @@ impl SessionCollaborationAccess for DbSessionCollaboration {
                 target_conversation_ids: spec.target_session_ids,
                 body: spec.content,
                 client_dedupe_id: spec.client_dedupe_id,
-                invocation_policy: CollaborationInvocationPolicy::StoreOnly,
-                delivery_hint: CollaborationDeliveryHint::Default,
-                expects_reply: false,
+                invocation_policy: match spec.delivery_mode {
+                    SessionMessageDeliveryMode::DeliverOnly => {
+                        CollaborationInvocationPolicy::StoreOnly
+                    }
+                    SessionMessageDeliveryMode::Queue => {
+                        CollaborationInvocationPolicy::InvokeWhenIdle
+                    }
+                },
+                delivery_hint: if spec.steer_if_supported {
+                    CollaborationDeliveryHint::SteerIfSupported
+                } else {
+                    CollaborationDeliveryHint::Default
+                },
+                expects_reply: spec.expects_reply,
                 urgency: CollaborationUrgency::Normal,
                 reply_to_event_id: spec.reply_to_event_id,
             },
@@ -1108,7 +1117,7 @@ mod tests {
                 target_conversation_ids: vec![target],
                 body: "review after I open your session".to_string(),
                 client_dedupe_id: "inactive-target-confirmation".to_string(),
-                invocation_policy: CollaborationInvocationPolicy::StoreOnly,
+                invocation_policy: CollaborationInvocationPolicy::InvokeWhenIdle,
                 delivery_hint: CollaborationDeliveryHint::Default,
                 expects_reply: false,
                 urgency: CollaborationUrgency::Normal,
@@ -1281,7 +1290,7 @@ mod tests {
             .inbound
             .remove(0);
         assert_eq!(inbound.event_id, event_id);
-        assert!(!inbound.expects_reply);
+        assert!(inbound.expects_reply);
         assert_eq!(
             inbound.delivery_hint,
             CollaborationDeliveryHint::SteerIfSupported
@@ -1301,7 +1310,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn agent_reply_chain_still_delivers_without_reply_debt() {
+    async fn agent_reply_chain_preserves_each_explicit_reply_obligation() {
         let db = fresh_in_memory_db().await;
         let folder = seed_folder(&db, "/tmp/codeg-agent-reply-budget").await;
         let first = seed_conversation(&db, folder, AgentType::Codex).await;
@@ -1336,7 +1345,11 @@ mod tests {
                 .iter()
                 .find(|delivery| delivery.event_id == event_id)
                 .expect("target sees the delivered event");
-            assert!(!inbound.expects_reply);
+            assert!(inbound.expects_reply);
+            assert_eq!(
+                inbound.obligation_state,
+                crate::models::CollaborationObligationState::AwaitingReply
+            );
             assert!(sent.note.is_none());
 
             let row = db
@@ -1511,11 +1524,11 @@ mod tests {
             .await;
         assert!(listed.available);
         assert_eq!(listed.unread_count, 1);
-        assert_eq!(listed.awaiting_reply_count, 0);
+        assert_eq!(listed.awaiting_reply_count, 1);
         assert_eq!(listed.items.len(), 1);
         assert_eq!(listed.items[0].event_id, sent.event_id);
         assert!(listed.items[0].unread);
-        assert!(!listed.items[0].expects_reply);
+        assert!(listed.items[0].expects_reply);
         assert!(listed.items[0].preview.contains("please review claim 3"));
 
         let opened = access.read_message(target, sent.event_id.clone()).await;

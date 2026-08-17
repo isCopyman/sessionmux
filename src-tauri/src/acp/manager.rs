@@ -4321,7 +4321,8 @@ mod tests {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        assert!(text[0].contains("mail from another Harness"));
+        assert!(!text[0].contains("mail from another Harness"));
+        assert!(text[0].contains("Call read_message"));
         assert_eq!(text[1], "message from managed chat");
         let delivery = collaboration_service::feed(&db.conn, target, None)
             .await
@@ -4331,6 +4332,7 @@ mod tests {
             .find(|delivery| delivery.event_id == sent.event_id)
             .unwrap();
         assert_eq!(delivery.state, CollaborationDeliveryState::Embedded);
+        assert!(delivery.agent_received_at.is_none());
         assert!(delivery
             .embedded_turn_ref
             .as_deref()
@@ -4813,7 +4815,8 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(harness_text.len(), 2);
-        assert!(harness_text[0].contains("compare this evidence"));
+        assert!(!harness_text[0].contains("compare this evidence"));
+        assert!(harness_text[0].contains("Call read_message"));
         assert_eq!(harness_text[1], "my own question");
 
         let (message_id, visible_blocks) = user_message.expect("viewer user message");

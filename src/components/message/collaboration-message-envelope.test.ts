@@ -91,6 +91,32 @@ describe("parseCollaborationMessageEnvelope", () => {
     ).toBe("keep")
   })
 
+  it("recognizes body-free mailbox notifications so the UI can project the durable card", () => {
+    const text = [
+      `<<<CODEG_SESSION_MESSAGE_V1:${EVENT_ID}>>>`,
+      JSON.stringify({
+        version: 1,
+        eventId: EVENT_ID,
+        deliveryId: "delivery-1",
+        sourceConversationId: 42,
+        sourceTitle: "Logic reviewer",
+        sourceAgentType: "codex",
+        sourceFolderPath: "/thesis",
+        expectsReply: true,
+        replyToEventId: null,
+      }),
+      "This is a durable mailbox notification.",
+      `Call read_message with event_id=${EVENT_ID} to read the full message.`,
+      "--- message ---",
+      `<<<END_CODEG_SESSION_MESSAGE_V1:${EVENT_ID}>>>`,
+    ].join("\n")
+
+    expect(parseCollaborationMessageEnvelope(text)?.body).toBe("")
+    expect(
+      stripProjectedCollaborationEnvelopes(`${text}\nkeep`, new Set([EVENT_ID]))
+    ).toBe("keep")
+  })
+
   it("does not treat a lookalike inside ordinary text as a control envelope", () => {
     expect(
       parseCollaborationMessageEnvelope(`preface\n${envelope()}\nafterword`)

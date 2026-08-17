@@ -23,7 +23,9 @@ use crate::db::service::{
     collaboration_interrupt_service, collaboration_service, prompt_queue_service,
 };
 use crate::db::AppDatabase;
-use crate::models::{AgentType, CollaborationChanged, PromptQueueSnapshot};
+use crate::models::{
+    AgentType, CollaborationChanged, CollaborationDeliveryHint, PromptQueueSnapshot,
+};
 use crate::parsers::path_eq_for_matching;
 use crate::web::event_bridge::{
     emit_event, EventEmitter, COLLABORATION_CHANGED_EVENT, PROMPT_QUEUE_CHANGED_EVENT,
@@ -73,243 +75,6 @@ impl PromptQueueHandle {
         };
         let is_connected = state.read().await.status == ConnectionStatus::Connected;
         Ok(is_connected)
-    }
-
-    /// Inject a leftover `store_only` Session letter: steer into the current
-    /// turn when that channel exists, otherwise start a new turn. New mail
-    /// goes through the ordinary prompt queue instead. Returns true when the
-    /// letter was injected (steer or a started turn).
-    pub async fn deliver_session_message_now(
-        &self,
-        conn: &sea_orm::DatabaseConnection,
-        target_conversation_id: i32,
-        event_id: &str,
-    ) -> bool {
-        let Ok(Some(row)) = conversation::Entity::find_by_id(target_conversation_id)
-            .one(conn)
-            .await
-        else {
-            tracing::warn!(
-                conversation_id = target_conversation_id,
-                event_id,
-                "[session-message] deliver skipped: target Session is missing"
-            );
-            return false;
-        };
-        let Some((connection_id, state)) = active_connection_for_row(&self.manager, &row).await
-        else {
-            tracing::info!(
-                conversation_id = target_conversation_id,
-                event_id,
-                "[session-message] deliver parked: no live Harness connection"
-            );
-            return false;
-        };
-        let (status, turn_in_flight, native_steering_available) = {
-            let state = state.read().await;
-            (
-                state.status.clone(),
-                state.turn_in_flight,
-                state.native_steering_available,
-            )
-        };
-        if status != ConnectionStatus::Connected {
-            tracing::info!(
-                conversation_id = target_conversation_id,
-                event_id,
-                ?status,
-                "[session-message] deliver parked: Harness is not connected"
-            );
-            return false;
-        }
-        match collaboration_service::session_message_is_pending(
-            conn,
-            target_conversation_id,
-            event_id,
-        )
-        .await
-        {
-            Ok(true) => {}
-            Ok(false) => return false,
-            Err(err) => {
-                tracing::warn!(
-                    conversation_id = target_conversation_id,
-                    event_id,
-                    "[session-message] pending check failed: {err}"
-                );
-                return false;
-            }
-        }
-
-        if turn_in_flight {
-            if !native_steering_available {
-                tracing::info!(
-                    conversation_id = target_conversation_id,
-                    event_id,
-                    "[session-message] deliver parked: turn in flight without native steering"
-                );
-                return false;
-            }
-            let draft = match collaboration_service::prompt_draft_for_origin(
-                conn,
-                target_conversation_id,
-                event_id,
-            )
-            .await
-            {
-                Ok(draft) => draft,
-                Err(err) => {
-                    tracing::warn!(
-                        conversation_id = target_conversation_id,
-                        event_id,
-                        "[session-message] steer draft failed: {err}"
-                    );
-                    return false;
-                }
-            };
-            let [crate::acp::types::PromptInputBlock::Text { text }] = draft.blocks.as_slice()
-            else {
-                tracing::warn!(
-                    conversation_id = target_conversation_id,
-                    event_id,
-                    "[session-message] steer skipped: draft is not a single text envelope"
-                );
-                return false;
-            };
-            return match self
-                .manager
-                .try_submit_native_feedback(&connection_id, text.clone())
-                .await
-            {
-                Ok(Some(_)) => {
-                    if let Err(err) = collaboration_service::mark_session_message_injected(
-                        conn,
-                        target_conversation_id,
-                        event_id,
-                        &format!("steer-{event_id}"),
-                    )
-                    .await
-                    {
-                        tracing::error!(
-                            conversation_id = target_conversation_id,
-                            event_id,
-                            "[session-message] steered but could not mark injected: {err}"
-                        );
-                    }
-                    true
-                }
-                Ok(None) => {
-                    tracing::info!(
-                        conversation_id = target_conversation_id,
-                        event_id,
-                        "[session-message] steer declined; leaving durable row for the next turn"
-                    );
-                    false
-                }
-                Err(err) => {
-                    tracing::warn!(
-                        conversation_id = target_conversation_id,
-                        event_id,
-                        "[session-message] steer uncertain, not replaying: {err}"
-                    );
-                    false
-                }
-            };
-        }
-
-        let turn_ref = format!("session-msg-{event_id}");
-        let batch = match collaboration_service::claim_pending_store_only_for_turn(
-            conn,
-            target_conversation_id,
-            &turn_ref,
-        )
-        .await
-        {
-            Ok(Some(batch)) => batch,
-            Ok(None) => {
-                tracing::info!(
-                    conversation_id = target_conversation_id,
-                    event_id,
-                    "[session-message] idle inject found no pending store_only row"
-                );
-                return false;
-            }
-            Err(err) => {
-                tracing::warn!(
-                    conversation_id = target_conversation_id,
-                    event_id,
-                    "[session-message] idle claim failed: {err}"
-                );
-                return false;
-            }
-        };
-
-        let db = AppDatabase { conn: conn.clone() };
-        match self
-            .manager
-            .send_prompt_linked_with_message_id(
-                &db,
-                &connection_id,
-                batch.blocks.clone(),
-                Some(row.folder_id),
-                Some(row.id),
-                Some(turn_ref.clone()),
-                false,
-            )
-            .await
-        {
-            Ok(_) => {
-                if let Err(err) = collaboration_service::mark_store_only_batch_embedded(
-                    conn,
-                    target_conversation_id,
-                    &batch,
-                )
-                .await
-                {
-                    tracing::error!(
-                        conversation_id = target_conversation_id,
-                        event_id,
-                        "[session-message] prompt accepted but embed mark failed: {err}"
-                    );
-                }
-                if let Err(err) = collaboration_service::mark_session_message_injected(
-                    conn,
-                    target_conversation_id,
-                    event_id,
-                    &turn_ref,
-                )
-                .await
-                {
-                    tracing::warn!(
-                        conversation_id = target_conversation_id,
-                        event_id,
-                        "[session-message] fallback inject mark failed: {err}"
-                    );
-                }
-                true
-            }
-            Err(err) => {
-                tracing::warn!(
-                    conversation_id = target_conversation_id,
-                    event_id,
-                    "[session-message] idle inject failed: {err}"
-                );
-                if let Err(release_err) = collaboration_service::release_store_only_batch(
-                    conn,
-                    target_conversation_id,
-                    &batch,
-                )
-                .await
-                {
-                    tracing::error!(
-                        conversation_id = target_conversation_id,
-                        event_id,
-                        "[session-message] could not release failed inject: {release_err}"
-                    );
-                }
-                false
-            }
-        }
     }
 
     /// A non-running handle for handler-only tests. Queue mutations remain
@@ -654,14 +419,6 @@ impl PromptQueueRuntime {
             }
             Err(err) => tracing::error!("[prompt-queue] pending scan failed: {err}"),
         }
-        match collaboration_service::pending_store_only_conversation_ids(&self.db.conn).await {
-            Ok(ids) => {
-                for id in ids {
-                    self.process(id).await;
-                }
-            }
-            Err(err) => tracing::error!("[session-message] parked-mail scan failed: {err}"),
-        }
     }
 
     async fn on_acp_event(&self, event: &crate::acp::EventEnvelope) {
@@ -766,8 +523,6 @@ impl PromptQueueRuntime {
         if turn_in_flight {
             if native_steering_available {
                 self.process_native_steer(&row, &connection_id).await;
-                self.deliver_parked_session_messages(conversation_id)
-                    .await;
             }
             return;
         }
@@ -785,10 +540,6 @@ impl PromptQueueRuntime {
                 item
             }
             Ok(None) => {
-                // Mailbox idle-start without inbox: a letter parked during a
-                // long turn (or before this connection came up) starts now.
-                self.deliver_parked_session_messages(conversation_id)
-                    .await;
                 return;
             }
             Err(err) => {
@@ -942,40 +693,6 @@ impl PromptQueueRuntime {
             .map(|row| row.id)
     }
 
-    async fn deliver_parked_session_messages(&self, conversation_id: i32) {
-        let event_id = match collaboration_service::oldest_pending_store_only_event_id(
-            &self.db.conn,
-            conversation_id,
-        )
-        .await
-        {
-            Ok(Some(event_id)) => event_id,
-            Ok(None) => return,
-            Err(err) => {
-                tracing::warn!(
-                    conversation_id,
-                    "[session-message] could not list parked mail: {err}"
-                );
-                return;
-            }
-        };
-        let (wake_tx, wake_rx) = mpsc::unbounded_channel();
-        drop(wake_rx);
-        let injected = PromptQueueHandle {
-            wake_tx,
-            manager: self.manager.clone_ref(),
-        }
-        .deliver_session_message_now(&self.db.conn, conversation_id, &event_id)
-        .await;
-        if injected {
-            tracing::info!(
-                conversation_id,
-                event_id,
-                "[session-message] parked letter injected after the Session went idle"
-            );
-        }
-    }
-
     async fn process_native_steer(&self, row: &conversation::Model, connection_id: &str) {
         let claimed = match prompt_queue_service::claim_head(
             &self.db.conn,
@@ -996,6 +713,10 @@ impl PromptQueueRuntime {
             }
         };
         if claimed.origin_event_id.is_none() {
+            self.release_busy(&claimed).await;
+            return;
+        }
+        if claimed.delivery_hint != Some(CollaborationDeliveryHint::SteerIfSupported) {
             self.release_busy(&claimed).await;
             return;
         }
@@ -1313,13 +1034,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn store_only_session_message_starts_an_idle_turn() {
+    async fn deliver_only_does_not_start_an_idle_turn() {
         let path = "/tmp/codeg-session-message-idle-inject";
         let (db, folder_id, target, manager, bus) = setup(path).await;
         let source = seed_conversation(&db, folder_id, AgentType::ClaudeCode).await;
         let mut commands =
             bind_live_connection(&manager, "active", path, folder_id, target).await;
-        let sent = collaboration_service::send(
+        collaboration_service::send(
             &db.conn,
             SendCollaborationMessageInput {
                 source_conversation_id: source,
@@ -1335,46 +1056,25 @@ mod tests {
         )
         .await
         .expect("persist store_only");
-        let (handle, task) = build_prompt_queue_runtime(
+        let (_handle, task) = build_prompt_queue_runtime(
             db.conn.clone(),
             manager.clone_ref(),
             EventEmitter::Noop,
             bus,
         );
-        handle
-            .deliver_session_message_now(&db.conn, target, &sent.event_id)
-            .await;
         drop(task);
-
-        let command = tokio::time::timeout(StdDuration::from_secs(2), commands.recv())
+        assert!(commands.try_recv().is_err());
+        let inbound = collaboration_service::feed(&db.conn, target, None)
             .await
-            .expect("idle inject timeout")
-            .expect("prompt command");
-        let ConnectionCommand::Prompt {
-            blocks,
-            dispatch_ack,
-            ..
-        } = command
-        else {
-            panic!("idle Session message must start a turn");
-        };
-        let PromptInputBlock::Text { text } = &blocks[0] else {
-            panic!("expected text envelope");
-        };
-        assert!(text.contains("PING idle"));
-        if let Some(ack) = dispatch_ack {
-            let _ = ack.send(());
-        }
-        wait_until(|| async {
-            collaboration_service::feed(&db.conn, target, None)
-                .await
-                .is_ok_and(|feed| feed.inbound[0].state == CollaborationDeliveryState::Embedded)
-        })
-        .await;
+            .unwrap()
+            .inbound
+            .remove(0);
+        assert_eq!(inbound.state, CollaborationDeliveryState::Pending);
+        assert!(inbound.agent_received_at.is_none());
     }
 
     #[tokio::test]
-    async fn store_only_session_message_steers_a_busy_native_turn() {
+    async fn deliver_only_does_not_steer_a_busy_native_turn() {
         let path = "/tmp/codeg-session-message-busy-steer";
         let (db, folder_id, target, manager, bus) = setup(path).await;
         let source = seed_conversation(&db, folder_id, AgentType::ClaudeCode).await;
@@ -1386,7 +1086,7 @@ mod tests {
             state.turn_in_flight = true;
             state.native_steering_available = true;
         }
-        let sent = collaboration_service::send(
+        collaboration_service::send(
             &db.conn,
             SendCollaborationMessageInput {
                 source_conversation_id: source,
@@ -1402,36 +1102,21 @@ mod tests {
         )
         .await
         .expect("persist store_only");
-        let (handle, task) = build_prompt_queue_runtime(
+        let (_handle, task) = build_prompt_queue_runtime(
             db.conn.clone(),
             manager.clone_ref(),
             EventEmitter::Noop,
             bus,
         );
-        let event_id = sent.event_id.clone();
-        let conn = db.conn.clone();
-        let deliver = tokio::spawn(async move {
-            handle
-                .deliver_session_message_now(&conn, target, &event_id)
-                .await;
-        });
-        let command = tokio::time::timeout(StdDuration::from_secs(2), commands.recv())
-            .await
-            .expect("steer timeout")
-            .expect("steer command");
-        let ConnectionCommand::Steer { text, reply } = command else {
-            panic!("busy Session message must steer");
-        };
-        assert!(text.contains("PING steer"));
-        reply.send(Ok(SteerOutcome::Injected)).expect("steer reply");
-        deliver.await.expect("deliver task");
         drop(task);
-        wait_until(|| async {
-            collaboration_service::feed(&db.conn, target, None)
-                .await
-                .is_ok_and(|feed| feed.inbound[0].state == CollaborationDeliveryState::Embedded)
-        })
-        .await;
+        assert!(commands.try_recv().is_err());
+        let inbound = collaboration_service::feed(&db.conn, target, None)
+            .await
+            .unwrap()
+            .inbound
+            .remove(0);
+        assert_eq!(inbound.state, CollaborationDeliveryState::Pending);
+        assert!(inbound.agent_received_at.is_none());
     }
 
     #[tokio::test]
@@ -1447,7 +1132,7 @@ mod tests {
             state.turn_in_flight = true;
             state.native_steering_available = false;
         }
-        let sent = collaboration_service::send(
+        collaboration_service::send(
             &db.conn,
             SendCollaborationMessageInput {
                 source_conversation_id: source,
@@ -1463,15 +1148,12 @@ mod tests {
         )
         .await
         .expect("persist store_only");
-        let (handle, task) = build_prompt_queue_runtime(
+        let (_handle, task) = build_prompt_queue_runtime(
             db.conn.clone(),
             manager.clone_ref(),
             EventEmitter::Noop,
             bus,
         );
-        handle
-            .deliver_session_message_now(&db.conn, target, &sent.event_id)
-            .await;
         drop(task);
         assert!(
             commands.try_recv().is_err(),
@@ -1487,7 +1169,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn parked_store_only_starts_after_turn_complete() {
+    async fn deliver_only_does_not_start_a_turn_after_turn_complete() {
         let path = "/tmp/codeg-session-message-idle-wakeup";
         let (db, folder_id, target, manager, bus) = setup(path).await;
         let source = seed_conversation(&db, folder_id, AgentType::ClaudeCode).await;
@@ -1499,7 +1181,7 @@ mod tests {
             state.turn_in_flight = true;
             state.native_steering_available = false;
         }
-        let sent = collaboration_service::send(
+        collaboration_service::send(
             &db.conn,
             SendCollaborationMessageInput {
                 source_conversation_id: source,
@@ -1515,16 +1197,13 @@ mod tests {
         )
         .await
         .expect("persist store_only");
-        let (handle, task) = build_prompt_queue_runtime(
+        let (_handle, task) = build_prompt_queue_runtime(
             db.conn.clone(),
             manager.clone_ref(),
             EventEmitter::Noop,
             bus.clone(),
         );
         let worker = tokio::spawn(task);
-        handle
-            .deliver_session_message_now(&db.conn, target, &sent.event_id)
-            .await;
         assert!(
             commands.try_recv().is_err(),
             "busy-without-steer must park until the long turn ends"
@@ -1540,20 +1219,15 @@ mod tests {
                 agent_type: "codex".into(),
             },
         }));
-        let command = tokio::time::timeout(StdDuration::from_secs(2), commands.recv())
+        tokio::time::sleep(StdDuration::from_millis(80)).await;
+        assert!(commands.try_recv().is_err());
+        let inbound = collaboration_service::feed(&db.conn, target, None)
             .await
-            .expect("idle wakeup timeout")
-            .expect("prompt after TurnComplete");
-        let ConnectionCommand::Prompt { blocks, dispatch_ack, .. } = command else {
-            panic!("parked Session message must start a turn once idle");
-        };
-        let PromptInputBlock::Text { text } = &blocks[0] else {
-            panic!("expected text envelope");
-        };
-        assert!(text.contains("PING after long task"));
-        if let Some(ack) = dispatch_ack {
-            let _ = ack.send(());
-        }
+            .unwrap()
+            .inbound
+            .remove(0);
+        assert_eq!(inbound.state, CollaborationDeliveryState::Pending);
+        assert!(inbound.agent_received_at.is_none());
         worker.abort();
     }
 
@@ -1595,8 +1269,8 @@ mod tests {
         let PromptInputBlock::Text { text } = &blocks[0] else {
             panic!("expected text envelope");
         };
-        assert!(text.contains("PING queue idle"));
-        assert!(text.contains("Do the work in the body now"));
+        assert!(!text.contains("PING queue idle"));
+        assert!(text.contains("Call read_message"));
         dispatch_ack
             .expect("collaboration dispatch acknowledgement")
             .send(())
@@ -1630,11 +1304,14 @@ mod tests {
             bus,
         );
         let worker = tokio::spawn(task);
+        let mut input =
+            collaboration_input(source, target, "send-core-steer", "PING queue steer");
+        input.delivery_hint = CollaborationDeliveryHint::SteerIfSupported;
         crate::commands::collaboration::collaboration_send_core(
             &db.conn,
             &EventEmitter::Noop,
             &handle,
-            collaboration_input(source, target, "send-core-steer", "PING queue steer"),
+            input,
         )
         .await
         .expect("send_core");
@@ -1646,7 +1323,8 @@ mod tests {
         let ConnectionCommand::Steer { text, reply } = command else {
             panic!("busy Session message must steer");
         };
-        assert!(text.contains("PING queue steer"));
+        assert!(!text.contains("PING queue steer"));
+        assert!(text.contains("Call read_message"));
         reply.send(Ok(SteerOutcome::Injected)).expect("steer reply");
         wait_until(|| async {
             collaboration_service::feed(&db.conn, target, None)
@@ -1658,7 +1336,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn already_injected_session_message_is_not_delivered_again() {
+    async fn explicit_queue_wake_does_not_convert_deliver_only_mail() {
         let path = "/tmp/codeg-session-message-no-replay";
         let (db, folder_id, target, manager, bus) = setup(path).await;
         let source = seed_conversation(&db, folder_id, AgentType::ClaudeCode).await;
@@ -1686,26 +1364,24 @@ mod tests {
         )
         .await
         .expect("persist");
-        collaboration_service::mark_session_message_injected(
-            &db.conn,
-            target,
-            &sent.event_id,
-            "steer-already",
-        )
-        .await
-        .expect("mark injected");
         let (handle, task) = build_prompt_queue_runtime(
             db.conn.clone(),
             manager.clone_ref(),
             EventEmitter::Noop,
             bus,
         );
-        let injected = handle
-            .deliver_session_message_now(&db.conn, target, &sent.event_id)
-            .await;
-        drop(task);
-        assert!(!injected, "embedded mail must not be steered again");
+        let worker = tokio::spawn(task);
+        handle.wake(target);
+        tokio::time::sleep(StdDuration::from_millis(80)).await;
         assert!(commands.try_recv().is_err());
+        let inbound = collaboration_service::feed(&db.conn, target, None)
+            .await
+            .unwrap()
+            .inbound
+            .remove(0);
+        assert_eq!(inbound.event_id, sent.event_id);
+        assert_eq!(inbound.state, CollaborationDeliveryState::Pending);
+        worker.abort();
     }
 
     #[tokio::test]
@@ -1783,8 +1459,9 @@ mod tests {
         let PromptInputBlock::Text { text } = &blocks[0] else {
             panic!("expected stable text envelope");
         };
-        assert!(text.contains("live user turn from another persistent Session"));
-        assert!(text.contains("--- message ---\nreview this claim\n"));
+        assert!(text.contains("durable mailbox notification"));
+        assert!(text.contains("Call read_message"));
+        assert!(!text.contains("review this claim"));
         assert_eq!(
             user_message.as_ref().map(|(id, _)| id.as_str()),
             Some(sent.deliveries[0].id.as_str())
@@ -1858,6 +1535,9 @@ mod tests {
                 .is_ok_and(|feed| feed.inbound[0].state == CollaborationDeliveryState::Embedded)
         })
         .await;
+        collaboration_service::mark_agent_read(&db.conn, target, &sent.event_id)
+            .await
+            .unwrap();
 
         let state = manager.get_state("active").await.expect("state");
         {
@@ -2154,8 +1834,9 @@ mod tests {
         let ConnectionCommand::Steer { text, reply } = command else {
             panic!("expected native steer command");
         };
-        assert!(text.contains("live user turn from another persistent Session"));
-        assert!(text.contains("--- message ---\ncorrect the premise\n"));
+        assert!(text.contains("durable mailbox notification"));
+        assert!(text.contains("Call read_message"));
+        assert!(!text.contains("correct the premise"));
         reply.send(Ok(SteerOutcome::Injected)).expect("steer reply");
 
         wait_until(|| async {

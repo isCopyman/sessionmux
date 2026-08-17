@@ -1,7 +1,7 @@
 //! Periodic mailbox reminder sweep.
 //!
 //! New unread mail is due immediately. Inject via native steering when that
-//! channel is live; otherwise cancel the current turn and send the digest.
+//! channel is live; otherwise enqueue the digest behind the current turn.
 //! Idle Sessions get a host-authored digest turn. Closed Sessions wait.
 
 use std::time::Duration;
@@ -128,8 +128,7 @@ async fn dispatch_target(
                 Err(error) => Err(error.to_string()),
             }
         }
-        CollaborationReminderLane::IdleStart
-        | CollaborationReminderLane::ForceInterruptSend => {
+        CollaborationReminderLane::IdleStart | CollaborationReminderLane::QueueAfterTurn => {
             let item = EnqueuePromptQueueItem {
                 conversation_id: target.conversation_id,
                 id: format!("mailbox-reminder-{}", uuid::Uuid::new_v4()),
@@ -148,16 +147,6 @@ async fn dispatch_target(
             prompt_queue_enqueue_core(conn, emitter, prompt_queue, item)
                 .await
                 .map_err(|error| error.to_string())?;
-            if lane == CollaborationReminderLane::ForceInterruptSend {
-                if let Some(connection_id) = connection_id {
-                    if let Err(error) = manager.cancel(conn, &connection_id).await {
-                        tracing::warn!(
-                            "[collaboration-reminder] cancel for {} failed: {error}",
-                            target.conversation_id
-                        );
-                    }
-                }
-            }
             Ok(true)
         }
         CollaborationReminderLane::HoldClosed

@@ -187,39 +187,6 @@ pub async fn snapshot(
     snapshot_on(conn, conversation_id).await
 }
 
-/// Whether the current FIFO head is a collaboration `invoke_when_idle`
-/// delivery. Those items force-deliver: inject if native steering exists,
-/// otherwise cancel the current turn.
-pub(crate) async fn head_is_collaboration_invoke<C: ConnectionTrait>(
-    conn: &C,
-    conversation_id: i32,
-) -> Result<bool, DbError> {
-    let row = conn
-        .query_one(statement(
-            "SELECT d.id FROM conversation_prompt_queue_item q \
-             JOIN collaboration_delivery d \
-               ON d.event_id = q.origin_event_id \
-              AND d.target_conversation_id = q.conversation_id \
-             WHERE q.id = ( \
-               SELECT id FROM conversation_prompt_queue_item \
-               WHERE conversation_id = ? AND state = 'queued' \
-               ORDER BY position ASC, created_at ASC, id ASC LIMIT 1 \
-             ) AND q.conversation_id = ? AND q.state = 'queued' \
-               AND d.invocation_policy = 'invoke_when_idle' \
-               AND NOT EXISTS ( \
-                 SELECT 1 FROM conversation_prompt_queue_state s \
-                 WHERE s.conversation_id = ? AND s.paused_reason IS NOT NULL \
-               )",
-            vec![
-                conversation_id.into(),
-                conversation_id.into(),
-                conversation_id.into(),
-            ],
-        ))
-        .await?;
-    Ok(row.is_some())
-}
-
 pub(crate) async fn collaboration_dispatch_enabled<C: ConnectionTrait>(
     conn: &C,
 ) -> Result<bool, DbError> {
