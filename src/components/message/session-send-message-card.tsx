@@ -3,22 +3,28 @@
 import { useMemo } from "react"
 import { useTranslations } from "next-intl"
 
+import { cn } from "@/lib/utils"
 import {
   parseSessionSendMessageEventId,
   parseSessionSendMessageInput,
 } from "@/lib/session-send-message-tool"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
-import { ContentPartsRenderer } from "./content-parts-renderer"
+import { useSessionLetterUiStore } from "@/stores/session-letter-ui-store"
+import { CollapsibleUserMessage } from "./collapsible-user-message"
+import { SessionLetterPreviewToggle } from "./session-letter-render-toggle"
 import { SessionMailPeerChip } from "./session-mail-peer-chip"
 
 export function SessionSendMessageCard({
+  letterKey,
   input,
   output = null,
 }: {
+  letterKey: string
   input: string | null
   output?: string | null
 }) {
   const t = useTranslations("Collaboration")
+  const focusedEventId = useSessionLetterUiStore((state) => state.focusedEventId)
   const parsed = parseSessionSendMessageInput(input)
   const conversations = useAppWorkspaceStore((state) => state.conversations)
   const targetIds = parsed?.targetSessionIds ?? []
@@ -26,37 +32,48 @@ export function SessionSendMessageCard({
     () => [{ type: "text" as const, text: parsed?.content ?? "" }],
     [parsed?.content]
   )
+  const eventId = parseSessionSendMessageEventId(output)
 
   if (!parsed || targetIds.length === 0) return null
 
-  const eventId = parseSessionSendMessageEventId(output)
-
   return (
-    <article
-      className="w-full max-w-[min(40rem,88%)] rounded-lg border border-border bg-muted/30 px-3 py-2.5"
+    <div
+      className="group/letter flex w-fit max-w-[40rem] items-end gap-0.5"
       data-session-send-message=""
+      data-letter-event-id={eventId ?? undefined}
       data-target-session-id={targetIds[0]}
     >
-      <header className="mb-1.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-        {targetIds.map((targetId, index) => {
-          const target = conversations.find(
-            (conversation) => conversation.id === targetId
-          )
-          return (
-            <SessionMailPeerChip
-              key={targetId}
-              conversationId={targetId}
-              title={target?.title}
-              agentType={target?.agent_type}
-              eventId={eventId}
-              prefix={index === 0 ? t("toPrefix") : ""}
-            />
-          )
-        })}
-      </header>
-      <div className="text-sm">
-        <ContentPartsRenderer parts={bodyParts} role="assistant" />
-      </div>
-    </article>
+      <article
+        className={cn(
+          "min-w-0 rounded-lg border border-border bg-muted/30 px-3 py-2.5",
+          eventId &&
+            focusedEventId === eventId &&
+            "ring-2 ring-primary/35"
+        )}
+      >
+        <header className="mb-1.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+          {targetIds.map((targetId, index) => {
+            const target = conversations.find(
+              (conversation) => conversation.id === targetId
+            )
+            return (
+              <SessionMailPeerChip
+                key={targetId}
+                conversationId={targetId}
+                title={target?.title}
+                agentType={target?.agent_type}
+                eventId={eventId}
+                prefix={index === 0 ? t("toPrefix") : ""}
+              />
+            )
+          })}
+        </header>
+        <CollapsibleUserMessage parts={bodyParts} role="assistant" />
+      </article>
+      <SessionLetterPreviewToggle
+        letterKey={letterKey}
+        className="mb-0.5 opacity-0 transition-opacity group-hover/letter:opacity-100 group-focus-within/letter:opacity-100"
+      />
+    </div>
   )
 }

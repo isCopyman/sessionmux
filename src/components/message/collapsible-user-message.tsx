@@ -19,8 +19,10 @@ import { ContentPartsRenderer } from "./content-parts-renderer"
  */
 export const CollapsibleUserMessage = memo(function CollapsibleUserMessage({
   parts,
+  role = "user",
 }: {
   parts: AdaptedContentPart[]
+  role?: "user" | "assistant"
 }) {
   const t = useTranslations("Folder.chat.messageList")
   const { contentRef, contentId, isOverflowing, expanded, toggle } =
@@ -40,7 +42,7 @@ export const CollapsibleUserMessage = memo(function CollapsibleUserMessage({
           clipped && isOverflowing && "collapsed-content-fade"
         )}
       >
-        <ContentPartsRenderer parts={parts} role="user" />
+        <ContentPartsRenderer parts={parts} role={role} />
       </div>
       {isOverflowing && (
         <button

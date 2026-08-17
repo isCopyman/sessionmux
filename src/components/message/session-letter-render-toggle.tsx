@@ -23,8 +23,8 @@ export function SessionLetterPreviewToggle({
     <button
       type="button"
       className={cn(
-        "inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-border/70 bg-background text-muted-foreground shadow-xs transition-colors hover:bg-muted hover:text-foreground",
-        raw && "bg-muted text-foreground",
+        "inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground",
+        raw && "text-foreground",
         className
       )}
       aria-pressed={raw}
@@ -53,16 +53,16 @@ export function SessionLetterFrame({
   return (
     <div
       className={cn(
-        "group/letter relative w-full",
+        "group/letter flex w-fit max-w-full items-end gap-0.5",
         focused && "rounded-lg ring-2 ring-primary/35"
       )}
       data-session-letter-frame=""
       data-letter-event-id={eventId ?? undefined}
     >
-      {children}
+      <div className="min-w-0">{children}</div>
       <SessionLetterPreviewToggle
         letterKey={letterKey}
-        className="pointer-events-none absolute right-1 bottom-1 opacity-0 transition-opacity group-hover/letter:pointer-events-auto group-hover/letter:opacity-100 group-focus-within/letter:pointer-events-auto group-focus-within/letter:opacity-100"
+        className="mb-0.5 opacity-0 transition-opacity group-hover/letter:opacity-100 group-focus-within/letter:opacity-100"
       />
     </div>
   )
