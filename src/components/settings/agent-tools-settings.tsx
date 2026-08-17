@@ -39,6 +39,7 @@ import {
   SettingsSaveBar,
   SettingsSection,
 } from "@/components/shared/settings-section"
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Switch } from "@/components/ui/switch"
 import {
   getChatAuthoringSettings,
@@ -53,6 +54,10 @@ import {
   setSessionInfoSettings,
 } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
+import {
+  useSessionLetterRenderStore,
+  type SessionLetterRenderMode,
+} from "@/stores/session-letter-render-store"
 import { primeFeedbackEnabled } from "@/hooks/use-feedback-enabled"
 
 /** One field per switch, flattened across the four backend groups. */
@@ -135,6 +140,8 @@ const TOOL_ROWS = [
 
 export function AgentToolsSettingsSection() {
   const t = useTranslations("AgentToolsSettings")
+  const letterRender = useSessionLetterRenderStore((state) => state.mode)
+  const setLetterRender = useSessionLetterRenderStore((state) => state.setMode)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [values, setValues] = useState<AgentToolValues>(DEFAULTS)
@@ -303,6 +310,33 @@ export function AgentToolsSettingsSection() {
             }
           />
         ))}
+      </SettingCard>
+
+      <SettingCard>
+        <SettingRow
+          icon={MessagesSquare}
+          title={t("letterRenderLabel")}
+          description={t("letterRenderHint")}
+          control={
+            <RadioGroup
+              value={letterRender}
+              onValueChange={(value) =>
+                setLetterRender(value as SessionLetterRenderMode)
+              }
+              className="flex flex-col gap-2"
+              disabled={loading}
+            >
+              <label className="flex items-center gap-2 text-sm">
+                <RadioGroupItem value="custom" id="session-letter-render-custom" />
+                {t("letterRenderCustom")}
+              </label>
+              <label className="flex items-center gap-2 text-sm">
+                <RadioGroupItem value="mcp" id="session-letter-render-mcp" />
+                {t("letterRenderMcp")}
+              </label>
+            </RadioGroup>
+          }
+        />
       </SettingCard>
 
       <SettingsSaveBar

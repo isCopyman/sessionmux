@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import {
+  extractCollaborationEnvelopes,
   parseCollaborationMessageEnvelope,
   stripProjectedCollaborationEnvelopes,
 } from "./collaboration-message-envelope"
@@ -34,6 +35,12 @@ function envelope(
 }
 
 describe("parseCollaborationMessageEnvelope", () => {
+  it("lists complete envelopes in document order", () => {
+    expect(extractCollaborationEnvelopes(`${envelope()}\nkeep`).map((item) => item.body)).toEqual([
+      "review this",
+    ])
+  })
+
   it("extracts stable identity metadata and preserves a multiline body", () => {
     expect(parseCollaborationMessageEnvelope(envelope({}, "one\ntwo"))).toEqual(
       expect.objectContaining({

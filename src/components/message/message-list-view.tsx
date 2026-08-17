@@ -86,8 +86,14 @@ import {
   revealConversationFindRange,
   clearConversationFindHighlights,
 } from "@/lib/conversation-find-highlight"
-import { CollaborationMessageCard } from "./collaboration-message-card"
-import { stripProjectedCollaborationEnvelopes } from "./collaboration-message-envelope"
+import {
+  CollaborationMessageCard,
+  SessionMailFromBadge,
+} from "./collaboration-message-card"
+import {
+  extractCollaborationEnvelopes,
+  stripProjectedCollaborationEnvelopes,
+} from "./collaboration-message-envelope"
 import {
   resolveCollaborationTimelineId,
   useCollaborationTimeline,
@@ -131,6 +137,11 @@ interface MessageListViewProps {
   onViewStateChange?: (state: VirtualizedThreadViewState) => void
 }
 
+export interface SessionMailAttribution {
+  conversationId: number
+  agentType?: string | null
+}
+
 export interface ResolvedMessageGroup {
   id: string
   role: "user" | "assistant" | "system"
@@ -147,6 +158,8 @@ export interface ResolvedMessageGroup {
    * post-turn metadata patch may sit on any sub-turn, not just the last.
    */
   completed_at?: string | null
+  /** Inbound Session letter folded into this user turn (prompt chrome). */
+  sessionMail?: SessionMailAttribution | null
 }
 
 export type ThreadRenderItem =
@@ -226,60 +239,73 @@ function threadItemTimeMs(item: ThreadRenderItem): number | null {
 }
 
 /**
- * Place inbound and outbound Session letters on the transcript. Prefer the
- * exact Turn that consumed inbound mail; otherwise insert by createdAt so
- * cards sit next to the work they belong to instead of piling on the composer.
+ * Fold inbound Session letters into the user-prompt turn they arrived as.
+ * Outbound letters stay in the assistant turn as the send_message tool.
+ * Pending inbound that has no Turn yet is inserted by createdAt as a
+ * prompt-styled card.
  */
 export function applyCollaborationTimelineProjection(
   items: ThreadRenderItem[],
   deliveries: CollaborationDelivery[],
-  outbound: CollaborationDelivery[] = []
+  _outbound: CollaborationDelivery[] = []
 ): ThreadRenderItem[] {
-  const hasVisibleInbound = deliveries.some(
+  const inbound = deliveries.filter(
     (delivery) => delivery.state !== "dismissed"
   )
-  const hasVisibleOutbound = outbound.some(
-    (delivery) => delivery.state !== "dismissed"
-  )
-  if (!hasVisibleInbound && !hasVisibleOutbound) {
+  if (inbound.length === 0) {
     return items
   }
 
+  const byEventId = new Map(
+    inbound.map((delivery) => [delivery.eventId, delivery])
+  )
   const byTurn = new Map<string, CollaborationDelivery[]>()
-  for (const delivery of deliveries) {
-    if (delivery.state === "dismissed") continue
+  for (const delivery of inbound) {
     if (!delivery.embeddedTurnRef) continue
     const existing = byTurn.get(delivery.embeddedTurnRef)
     if (existing) existing.push(delivery)
     else byTurn.set(delivery.embeddedTurnRef, [delivery])
   }
-
-  const allEventIds = new Set(
-    deliveries
-      .filter((delivery) => delivery.state !== "dismissed")
-      .map((delivery) => delivery.eventId)
-  )
+  const allEventIds = new Set(inbound.map((delivery) => delivery.eventId))
   const projected: ThreadRenderItem[] = []
   const used = new Set<string>()
+
+  const attributionFor = (
+    matched: CollaborationDelivery[]
+  ): SessionMailAttribution | null => {
+    const first = matched[0]
+    if (!first) return null
+    return {
+      conversationId: first.source.conversationId,
+      agentType: first.source.agentType,
+    }
+  }
+
   for (const item of items) {
     if (item.kind !== "turn" || item.group.role !== "user") {
       projected.push(item)
       continue
     }
-    const deliveriesForTurn = byTurn.get(item.group.id)
-    if (deliveriesForTurn) {
-      for (const delivery of deliveriesForTurn) {
-        used.add(delivery.id)
-        projected.push({
-          key: `collaboration-${delivery.id}`,
-          kind: "collaboration",
-          delivery,
-          direction: "inbound",
-        })
+
+    const matched: CollaborationDelivery[] = []
+    const seen = new Set<string>()
+    const pushMatch = (delivery: CollaborationDelivery | undefined) => {
+      if (!delivery || seen.has(delivery.id)) return
+      seen.add(delivery.id)
+      matched.push(delivery)
+    }
+    for (const delivery of byTurn.get(item.group.id) ?? []) {
+      pushMatch(delivery)
+    }
+    for (const part of item.group.parts) {
+      if (part.type !== "text") continue
+      for (const envelope of extractCollaborationEnvelopes(part.text)) {
+        pushMatch(byEventId.get(envelope.eventId))
       }
     }
+    for (const delivery of matched) used.add(delivery.id)
 
-    let changed = false
+    let changed = matched.length > 0
     const parts = item.group.parts.flatMap((part): AdaptedContentPart[] => {
       if (part.type !== "text") return [part]
       const text = stripProjectedCollaborationEnvelopes(part.text, allEventIds)
@@ -287,16 +313,30 @@ export function applyCollaborationTimelineProjection(
       changed = true
       return text.length > 0 ? [{ ...part, text }] : []
     })
+    if (matched.length > 0 && parts.every((part) => part.type !== "text")) {
+      const body = matched
+        .map((delivery) => delivery.body)
+        .filter((text) => text.length > 0)
+        .join("\n\n")
+      if (body) parts.unshift({ type: "text", text: body })
+    }
     const nextItem = changed
-      ? { ...item, group: { ...item.group, parts } }
+      ? {
+          ...item,
+          group: {
+            ...item.group,
+            parts,
+            sessionMail: attributionFor(matched) ?? item.group.sessionMail,
+          },
+        }
       : item
     if (!isEmptyTurnItem(nextItem)) projected.push(nextItem)
   }
 
-  const insertByTime = (
-    delivery: CollaborationDelivery,
-    direction: "inbound" | "outbound"
-  ) => {
+  const unmatched = inbound
+    .filter((delivery) => !used.has(delivery.id))
+    .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt) || 0)
+  for (const delivery of unmatched) {
     const created = Date.parse(delivery.createdAt)
     let insertAt = projected.length
     if (!Number.isNaN(created)) {
@@ -307,23 +347,11 @@ export function applyCollaborationTimelineProjection(
       if (idx >= 0) insertAt = idx
     }
     projected.splice(insertAt, 0, {
-      key: `collaboration-${direction}-${delivery.id}`,
+      key: `collaboration-inbound-${delivery.id}`,
       kind: "collaboration",
       delivery,
-      direction,
+      direction: "inbound",
     })
-  }
-
-  const unmatched = deliveries
-    .filter(
-      (delivery) => delivery.state !== "dismissed" && !used.has(delivery.id)
-    )
-    .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt) || 0)
-  for (const delivery of unmatched) {
-    insertByTime(delivery, "inbound")
-  }
-  for (const delivery of outbound.filter((item) => item.state !== "dismissed")) {
-    insertByTime(delivery, "outbound")
   }
   return projected
 }
@@ -687,12 +715,20 @@ const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
           <UserImageAttachments images={group.images} className="self-end" />
         ) : null}
         {group.role === "user" ? (
-          <div className="group/user-msg flex w-fit ml-auto max-w-full items-start gap-1">
-            <UserMessageTaskButton parts={group.parts} />
-            <UserMessageCopyButton parts={group.parts} />
-            <MessageContent data-conversation-search-content>
-              <CollapsibleUserMessage parts={group.parts} />
-            </MessageContent>
+          <div className="flex w-fit max-w-full flex-col items-end self-end">
+            {group.sessionMail ? (
+              <SessionMailFromBadge
+                conversationId={group.sessionMail.conversationId}
+                agentType={group.sessionMail.agentType}
+              />
+            ) : null}
+            <div className="group/user-msg flex w-fit max-w-full items-start gap-1">
+              <UserMessageTaskButton parts={group.parts} />
+              <UserMessageCopyButton parts={group.parts} />
+              <MessageContent data-conversation-search-content>
+                <CollapsibleUserMessage parts={group.parts} />
+              </MessageContent>
+            </div>
           </div>
         ) : (
           <MessageContent data-conversation-search-content>
@@ -1030,13 +1066,7 @@ export function MessageListView({
         case "typing":
           return <PendingTypingIndicator />
         case "collaboration":
-          return (
-            <CollaborationMessageCard
-              delivery={item.delivery}
-              direction={item.direction}
-              currentConversationId={conversationId}
-            />
-          )
+          return <CollaborationMessageCard delivery={item.delivery} />
         case "compaction":
           // Chrome-less centered divider between turns (no avatar / stats footer).
           return (

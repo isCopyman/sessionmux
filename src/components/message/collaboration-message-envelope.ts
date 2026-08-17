@@ -82,6 +82,38 @@ export function parseCollaborationMessageEnvelope(
  * or unprojected text stays visible verbatim so this adapter cannot hide
  * Harness history when the projection is incomplete.
  */
+/** Find complete V1 envelopes in transcript text, in order. */
+export function extractCollaborationEnvelopes(
+  text: string
+): CollaborationMessageEnvelope[] {
+  if (!text.includes(PREFIX)) return []
+  const lines = text.split("\n")
+  const found: CollaborationMessageEnvelope[] = []
+  let index = 0
+  while (index < lines.length) {
+    const first = lines[index]
+    const eventId =
+      first.startsWith(PREFIX) && first.endsWith(">>>")
+        ? first.slice(PREFIX.length, -3)
+        : null
+    if (eventId) {
+      const endMarker = `${END_PREFIX}${eventId}>>>`
+      const endIndex = lines.indexOf(endMarker, index + 1)
+      if (endIndex >= 0) {
+        const candidate = lines.slice(index, endIndex + 1).join("\n")
+        const parsed = parseCollaborationMessageEnvelope(candidate)
+        if (parsed) {
+          found.push(parsed)
+          index = endIndex + 1
+          continue
+        }
+      }
+    }
+    index += 1
+  }
+  return found
+}
+
 export function stripProjectedCollaborationEnvelopes(
   text: string,
   projectedEventIds: ReadonlySet<string>

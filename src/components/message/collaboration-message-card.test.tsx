@@ -13,7 +13,11 @@ const api = vi.hoisted(() => ({ markCollaborationSeen: vi.fn() }))
 
 vi.mock("next-intl", () => ({
   useTranslations: () => (key: string, values?: Record<string, unknown>) =>
-    values?.name ? `${key}:${values.name}` : key,
+    values?.id != null
+      ? `${key}:${values.id}`
+      : values?.name
+        ? `${key}:${values.name}`
+        : key,
 }))
 vi.mock("@/contexts/tab-context", () => ({
   useTabActions: () => tabs,
@@ -27,6 +31,13 @@ vi.mock("./content-parts-renderer", () => ({
   ContentPartsRenderer: ({ parts }: { parts: Array<{ text?: string }> }) => (
     <p>{parts.map((part) => part.text).join("")}</p>
   ),
+}))
+vi.mock("./collapsible-user-message", () => ({
+  CollapsibleUserMessage: ({
+    parts,
+  }: {
+    parts: Array<{ text?: string }>
+  }) => <p>{parts.map((part) => part.text).join("")}</p>,
 }))
 
 import { CollaborationMessageCard } from "./collaboration-message-card"
@@ -83,7 +94,7 @@ beforeEach(() => {
 })
 
 describe("CollaborationMessageCard", () => {
-  it("renders the inbound source and body and can open that Session", () => {
+  it("renders inbound mail as a user prompt with a Session source mark", () => {
     render(
       <CollaborationMessageCard
         delivery={delivery()}
@@ -91,59 +102,13 @@ describe("CollaborationMessageCard", () => {
       />
     )
 
-    expect(screen.getByText("inbound")).toBeInTheDocument()
-    expect(screen.getByText("transcriptFrom:Reviewer")).toBeInTheDocument()
-    expect(screen.getByText("Please check the proof.")).toBeInTheDocument()
-    expect(screen.queryByText("stateNeedsReply")).not.toBeInTheDocument()
-    expect(
-      screen.queryByRole("button", { name: "reply" })
-    ).not.toBeInTheDocument()
-
-    fireEvent.click(screen.getByRole("button", { name: "openSession" }))
-    expect(tabs.openTab).toHaveBeenCalledWith(10, 1, "codex", true, "Reviewer")
-  })
-
-  it("renders the outbound target and body and can open that Session", () => {
-    render(
-      <CollaborationMessageCard
-        delivery={delivery()}
-        direction="outbound"
-        currentConversationId={1}
-      />
-    )
-
-    expect(screen.getByText("outbound")).toBeInTheDocument()
-    expect(screen.getByText("transcriptTo:Worker")).toBeInTheDocument()
+    expect(screen.getByText(/fromSession:1/)).toBeInTheDocument()
     expect(screen.getByText("Please check the proof.")).toBeInTheDocument()
     expect(
-      document.querySelector("[data-collaboration-direction='outbound']")
+      document.querySelector("[data-collaboration-direction='inbound']")
     ).not.toBeNull()
 
     fireEvent.click(screen.getByRole("button", { name: "openSession" }))
-    expect(tabs.openTab).toHaveBeenCalledWith(
-      10,
-      2,
-      "claude_code",
-      true,
-      "Worker"
-    )
-  })
-
-  it("falls back to Session id when the peer title is a long first prompt", () => {
-    render(
-      <CollaborationMessageCard
-        delivery={delivery({
-          source: {
-            conversationId: 99,
-            title:
-              "You are Session A-v2 for a Codeg session-message test. Reply with exactly SESSION_A_READY and wait.",
-            agentType: "codex",
-            folderPath: "/repo",
-            backend: "current",
-          },
-        })}
-      />
-    )
-    expect(screen.getByText("transcriptFrom:Session 99")).toBeInTheDocument()
+    expect(tabs.openTab).toHaveBeenCalledWith(10, 1, "codex", true, "Reviewer")
   })
 })

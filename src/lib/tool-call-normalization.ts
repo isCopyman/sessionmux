@@ -494,6 +494,8 @@ export function normalizeToolName(toolName: string): string {
   // collapse every separator to the canonical name the renderer dispatches on.
   if (/[^a-z0-9]check_user_feedback$/.test(canonical))
     return "check_user_feedback"
+  if (/[^a-z0-9]send_message$/.test(canonical) || canonical === "send_message")
+    return "send_message"
 
   const freeform = inferFromFreeformName(trimmed)
   if (freeform) return freeform

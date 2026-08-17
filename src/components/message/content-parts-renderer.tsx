@@ -46,6 +46,7 @@ import {
 import { AgentToolCallPart } from "./agent-tool-call"
 import { AskQuestionResultCard } from "./ask-question-result-card"
 import { CollabAgentCard } from "./collab-agent-card"
+import { SessionSendMessageCard } from "./session-send-message-card"
 import {
   ContextCompactionCard,
   isContextCompactionMeta,
@@ -67,6 +68,11 @@ import {
   WAIT_TOOL_NAME,
 } from "@/lib/shell-session-tool"
 import { COLLAB_AGENT_TOOL_NAME } from "@/lib/collab-tool"
+import {
+  isSessionSendMessageToolName,
+  parseSessionSendMessageInput,
+} from "@/lib/session-send-message-tool"
+import { useSessionLetterRenderStore } from "@/stores/session-letter-render-store"
 import { BackgroundTaskCard } from "./background-task-card"
 import { GeneratedImagesBlock } from "./generated-images-block"
 import { GoalRunPart, GoalToolCallPart } from "./goal-tool-call"
@@ -2234,6 +2240,7 @@ const ToolCallPart = memo(function ToolCallPart({
   part: Extract<AdaptedContentPart, { type: "tool-call" }>
 }) {
   const t = useTranslations("Folder.chat.contentParts")
+  const letterRender = useSessionLetterRenderStore((state) => state.mode)
   const [manualOpen, setManualOpen] = useState(false)
   const normalizedToolName = useMemo(
     () => normalizeToolName(part.toolName),
@@ -2598,6 +2605,14 @@ const ToolCallPart = memo(function ToolCallPart({
         state={part.state}
       />
     )
+  }
+
+  if (
+    letterRender === "custom" &&
+    isSessionSendMessageToolName(normalizedToolName) &&
+    parseSessionSendMessageInput(part.input ?? null)
+  ) {
+    return <SessionSendMessageCard input={part.input ?? null} />
   }
 
   // codeg-mcp ask_user_question: render the asked question(s) and the user's

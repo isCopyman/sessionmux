@@ -66,6 +66,12 @@ describe("isAgentLikeToolName", () => {
     expect(isAgentLikeToolName("codeg-delegate:delegate_to_agent")).toBe(true)
   })
 
+  it("treats send_message as a standalone Session-letter tool", () => {
+    expect(isAgentLikeToolName("send_message")).toBe(true)
+    expect(isAgentLikeToolName("mcp__codeg-mcp__send_message")).toBe(true)
+    expect(isAgentLikeToolName("codeg-mcp/send_message")).toBe(true)
+  })
+
   it("matches the delegation companion tools across host naming conventions", () => {
     for (const tool of ["get_delegation_status", "cancel_delegation"]) {
       // Bare canonical form (live-streaming path, post-inferLiveToolName)

@@ -1,4 +1,5 @@
 import { COLLAB_AGENT_TOOL_NAME } from "@/lib/collab-tool"
+import { isSessionSendMessageToolName } from "@/lib/session-send-message-tool"
 import { isShellSessionToolName } from "@/lib/shell-session-tool"
 
 export type ToolKindLabel =
@@ -54,6 +55,7 @@ export function isAgentLikeToolName(toolName: string): boolean {
   // compact card, so it breaks the run and renders standalone, like the other
   // agent-like tools, rather than folding into a generic tool-group.
   if (name === COLLAB_AGENT_TOOL_NAME) return true
+  if (isSessionSendMessageToolName(name)) return true
   if (
     name === "delegate_to_agent" ||
     name === "get_delegation_status" ||

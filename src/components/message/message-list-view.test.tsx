@@ -125,31 +125,29 @@ const COLLABORATION_ENVELOPE = [
 ].join("\n")
 
 describe("applyCollaborationTimelineProjection", () => {
-  it("places the delivery before its exact Turn and removes only its envelope", () => {
+  it("folds the letter into the user prompt and removes only its envelope", () => {
     const result = applyCollaborationTimelineProjection(
       [userItem("turn-1", `${COLLABORATION_ENVELOPE}\nactual prompt`)],
       [collaborationDelivery()]
     )
-    expect(result.map((item) => item.kind)).toEqual(["collaboration", "turn"])
-    const user = result[1] as TurnItem
+    expect(result.map((item) => item.kind)).toEqual(["turn"])
+    const user = result[0] as TurnItem
     expect(user.group.parts).toEqual([{ type: "text", text: "actual prompt" }])
+    expect(user.group.sessionMail).toEqual({
+      conversationId: 42,
+      agentType: "codex",
+    })
   })
 
-  it("keeps fan-out deliveries as separate cards on the same Turn", () => {
+  it("restores the letter body when the Turn is only the envelope", () => {
     const result = applyCollaborationTimelineProjection(
       [userItem("turn-1", COLLABORATION_ENVELOPE)],
-      [
-        collaborationDelivery(),
-        collaborationDelivery({
-          id: "delivery-sibling",
-          eventId: "event-sibling",
-        }),
-      ]
+      [collaborationDelivery()]
     )
-    expect(result.map((item) => item.kind)).toEqual([
-      "collaboration",
-      "collaboration",
-    ])
+    expect(result.map((item) => item.kind)).toEqual(["turn"])
+    const user = result[0] as TurnItem
+    expect(user.group.parts).toEqual([{ type: "text", text: "review this" }])
+    expect(user.group.sessionMail?.conversationId).toBe(42)
   })
 
   it("still shows a message when its Turn is not in the loaded window", () => {
@@ -196,12 +194,14 @@ describe("applyCollaborationTimelineProjection", () => {
     ])
   })
 
-  it("strips the envelope even when the transcript Turn id does not match", () => {
+  it("folds the envelope even when the transcript Turn id does not match", () => {
     const result = applyCollaborationTimelineProjection(
       [userItem("parser-turn-id", COLLABORATION_ENVELOPE)],
       [collaborationDelivery({ embeddedTurnRef: "session-msg-xyz" })]
     )
-    expect(result.map((item) => item.kind)).toEqual(["collaboration"])
+    expect(result.map((item) => item.kind)).toEqual(["turn"])
+    const user = result[0] as TurnItem
+    expect(user.group.parts).toEqual([{ type: "text", text: "review this" }])
   })
 
   it("appends a pending inbound message to the timeline", () => {
@@ -220,7 +220,7 @@ describe("applyCollaborationTimelineProjection", () => {
     expect(result.map((item) => item.kind)).toEqual(["turn", "collaboration"])
   })
 
-  it("projects outbound letters onto the sender timeline with the body", () => {
+  it("does not project outbound letters as separate timeline cards", () => {
     const result = applyCollaborationTimelineProjection(
       [userItem("turn-1", "ordinary prompt")],
       [],
@@ -231,12 +231,7 @@ describe("applyCollaborationTimelineProjection", () => {
         }),
       ]
     )
-    expect(result.map((item) => item.kind)).toEqual(["turn", "collaboration"])
-    const card = result[1]
-    expect(card.kind).toBe("collaboration")
-    if (card.kind !== "collaboration") return
-    expect(card.direction).toBe("outbound")
-    expect(card.delivery.body).toBe("please review the proof")
+    expect(result.map((item) => item.kind)).toEqual(["turn"])
   })
 })
 
