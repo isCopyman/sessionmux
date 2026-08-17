@@ -101,9 +101,15 @@ pnpm build
 不要把 `resource path ..\out doesn't exist` 误判成 Rust 业务代码错误。它表示 Tauri build script
 在真正检查 Rust 代码前缺少前端资源。
 
-### 4.3 为验收使用隔离数据目录
+### 4.3 数据目录：默认直接用开发实例，隔离目录留给破坏性验收
 
-不要直接拿用户正在使用的正式数据做自动化。最安全的是建立空白 Desktop 验收目录：
+日常验收的**默认路径是直接连正在运行的开发实例**（`pnpm tauri dev` + CDP 9222，
+见 4.5/4.6）：它的 `codeg-dev.db` 本身就是测试数据（含「多session交流测试工作台」等
+固定场景），不需要每次另建目录。先用 `Get-Process codeg | Select StartTime` 对比最近
+后端提交时间，确认实例后端不是旧版（见 10.3 HMR 混合态），再开始验收。
+
+以下两类情况才建立空白隔离目录：批量自动化可能污染测试工作台数据时；需要空白初态或
+真实历史快照时。不要直接拿正式使用数据做自动化：
 
 ```powershell
 $desktopData = Join-Path (Get-Location) '.artifacts/desktop-validation/data'
@@ -550,3 +556,20 @@ Desktop 调试分层与 WebView2 CDP 验证记录；历史记录只用于找回�
   和逾期催办在目标关闭时会启动/恢复该 Session（`session_dispatcher.rs`，
   复用 `spawn_agent` / resume，不是第二套 spawn）。工作台没有标签时仍会打开
   标签，方便人看着投递过程。
+- **HMR 混合态（2026-08-18）**：`pnpm tauri dev` 里前端随保存热更，Rust 后端停在
+  进程启动那一刻。改后端后不重启实例，测到的是「新前端 + 旧后端」——新增行为测不到，
+  新前端读新增字段还会拿到 `undefined`。两条纪律：改后端后的行为验收必须先重启
+  `pnpm tauri dev`（用进程 `StartTime` 对比提交时间判新旧）；前端读后端新增字段必须
+  容忍缺失（队列 `source` 徽章因此在 `fromWire` 里缺省为 `user`，否则旧后端下
+  `t(undefined)` 直接炸队列组件）。
+- **server 模式冒烟层（2026-08-18）**：调度/信箱类后端改动可先用 `codeg-server`
+  （必然是新后端）+ HTTP API + 便宜模型跑行为链路，再到 Desktop 实例做 UI 层验收。
+  一次可用的组合：临时 `CODEG_DATA_DIR` + `CODEG_TOKEN` 起 server；
+  `add_folder_to_history`/`create_conversation` 造会话；`collaboration_send`
+  （包一层 `{ input: … }`）发 `expects_reply` 信；`session_timer_create` 建 2s grace
+  timer；重启 server 验证 timer 重启播种后入队；`acp_connect` + `acp_prompt`
+  （带 `conversationId`，首轮 prompt 才把连接绑定到会话并建立身份）让目标真跑一轮，
+  用 MCP `send_message` 回信解除义务。注意：**必须同时编译 `codeg-mcp` 并放在
+  `codeg-server` 同目录**，否则 MCP 注入按设计静默跳过，Agent 会找不到协作工具；
+  API 直造的会话在首轮 prompt 前没有身份，dispatcher 对它 `SkippedNoIdentity`
+  不自动拉起是设计内行为。两层证据各自记录，不得互相冒充。
