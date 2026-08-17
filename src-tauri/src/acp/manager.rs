@@ -4217,6 +4217,7 @@ mod tests {
                     display_text: "first".into(),
                 },
                 mode_id: None,
+                source: crate::models::PromptQueueSource::User,
             },
         )
         .await
@@ -6421,6 +6422,7 @@ mod tests {
                     display_text: "still belongs to C1".into(),
                 },
                 mode_id: None,
+                source: crate::models::PromptQueueSource::User,
             },
         )
         .await

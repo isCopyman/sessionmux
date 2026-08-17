@@ -1281,6 +1281,7 @@ async fn send_with_initially_inactive_targets_guarded(
                     &event_id,
                     &delivery_id,
                     pause_reason,
+                    crate::models::prompt_queue::PromptQueueSource::Collaboration,
                 )
                 .await?;
             }
@@ -1653,6 +1654,17 @@ pub async fn list_overdue_reminder_targets(
                       AND d.agent_received_at IS NOT NULL \
                       AND datetime(d.agent_received_at) <= datetime('now', '-{REPLY_AFTER_SECS} seconds') \
                       THEN 1 ELSE 0 END) AS overdue_reply, \
+                 MAX(CASE \
+                      WHEN d.invocation_policy = 'invoke_when_idle' \
+                       AND d.agent_received_at IS NULL AND d.state <> 'dismissed' \
+                       AND datetime(d.created_at) <= datetime('now', '-{UNREAD_AFTER_SECS} seconds') \
+                      THEN datetime(d.created_at, '+{UNREAD_AFTER_SECS} seconds') \
+                      WHEN d.obligation_state = 'awaiting_reply' \
+                       AND d.state <> 'dismissed' AND d.state <> 'failed' \
+                       AND d.agent_received_at IS NOT NULL \
+                       AND datetime(d.agent_received_at) <= datetime('now', '-{REPLY_AFTER_SECS} seconds') \
+                      THEN datetime(d.agent_received_at, '+{REPLY_AFTER_SECS} seconds') \
+                      END) AS newest_due_at, \
                  COALESCE(s.reminder_repeat_count, 0) AS reminder_repeat_count, \
                  s.reminder_last_at AS reminder_last_at \
                  FROM collaboration_delivery d \
@@ -1675,11 +1687,23 @@ pub async fn list_overdue_reminder_targets(
             let raw: i64 = row.try_get("", column)?;
             Ok(u32::try_from(raw.max(0)).unwrap_or(u32::MAX))
         };
-        let reminder_repeat_count = count("reminder_repeat_count")?;
+        let stored_repeat_count = count("reminder_repeat_count")?;
+        let reminder_last_at = parse_optional_timestamp(&row, "reminder_last_at")?;
+        let newest_due_at = parse_optional_timestamp(&row, "newest_due_at")?;
+        // The repeat cap guards one debt episode, not the Session forever. A
+        // member that became due after the last reminder (new mail, or read
+        // mail whose reply clock just elapsed) starts a fresh episode with a
+        // fresh budget; otherwise unread-phase nags would permanently starve
+        // the read-awaiting-reply phase.
+        let fresh_debt = match (newest_due_at, reminder_last_at) {
+            (Some(due), Some(last)) => due > last,
+            (Some(_), None) => true,
+            (None, _) => false,
+        };
+        let reminder_repeat_count = if fresh_debt { 0 } else { stored_repeat_count };
         if reminder_repeat_count >= MAX_REMINDER_REPEATS {
             continue;
         }
-        let reminder_last_at = parse_optional_timestamp(&row, "reminder_last_at")?;
         if reminder_last_at.is_some_and(|at| reminder_in_cooldown(at, now)) {
             continue;
         }
@@ -1752,19 +1776,27 @@ async fn overdue_reminder_letters(
     Ok(letters)
 }
 
+/// Persist that one reminder went out. `completed_repeat_count` is the
+/// effective count the sweep observed on its snapshot (0 when a fresh debt
+/// episode just reset the budget), so the stored counter follows the episode
+/// instead of accumulating across the Session's whole life.
 pub async fn record_successful_reminder(
     conn: &DatabaseConnection,
     conversation_id: i32,
+    completed_repeat_count: u32,
 ) -> Result<(), DbError> {
     let txn = conn.begin().await?;
     ensure_state(&txn, conversation_id).await?;
     txn.execute(statement(
         "UPDATE conversation_collaboration_state \
          SET reminder_last_at = CURRENT_TIMESTAMP, \
-             reminder_repeat_count = reminder_repeat_count + 1, \
+             reminder_repeat_count = ?, \
              updated_at = CURRENT_TIMESTAMP \
          WHERE conversation_id = ?",
-        vec![conversation_id.into()],
+        vec![
+            i64::from(completed_repeat_count.saturating_add(1)).into(),
+            conversation_id.into(),
+        ],
     ))
     .await?;
     txn.commit().await?;
@@ -1789,6 +1821,85 @@ pub async fn reset_idle_reminder_cursors(conn: &DatabaseConnection) -> Result<()
     ))
     .await?;
     Ok(())
+}
+
+/// Outbound letters this Session sent that still owe it a reply. This is the
+/// implicit "I am waiting for someone" declaration the idle-continuation
+/// timer consults before nagging: sending with expects_reply opened the
+/// obligation, and the peer's reply (or no_reply_needed) closes it.
+#[derive(Debug, Clone, Default)]
+pub struct OutboundAwaitingSummary {
+    pub letter_count: u32,
+    pub oldest_since: Option<DateTime<Utc>>,
+    /// Peer Session ids ordered by how long they have kept us waiting.
+    pub peer_conversation_ids: Vec<i32>,
+}
+
+pub async fn outbound_awaiting_summary(
+    conn: &DatabaseConnection,
+    source_conversation_id: i32,
+) -> Result<OutboundAwaitingSummary, DbError> {
+    let rows = conn
+        .query_all(statement(
+            "SELECT d.target_conversation_id AS peer_id, \
+                    COUNT(*) AS letters, \
+                    MIN(datetime(COALESCE(d.obligation_created_at, d.created_at))) AS oldest_since \
+             FROM collaboration_delivery d \
+             JOIN collaboration_event e ON e.id = d.event_id \
+             JOIN conversation c ON c.id = d.target_conversation_id AND c.deleted_at IS NULL \
+             WHERE e.source_conversation_id = ? \
+               AND d.obligation_state = 'awaiting_reply' \
+               AND d.state <> 'dismissed' AND d.state <> 'failed' \
+             GROUP BY d.target_conversation_id \
+             ORDER BY oldest_since ASC",
+            vec![source_conversation_id.into()],
+        ))
+        .await?;
+    let mut summary = OutboundAwaitingSummary::default();
+    for row in rows {
+        let letters: i64 = row.try_get("", "letters")?;
+        summary.letter_count = summary
+            .letter_count
+            .saturating_add(u32::try_from(letters.max(0)).unwrap_or(u32::MAX));
+        let oldest = parse_optional_timestamp(&row, "oldest_since")?;
+        if summary.oldest_since.is_none() {
+            summary.oldest_since = oldest;
+        }
+        summary
+            .peer_conversation_ids
+            .push(row.try_get("", "peer_id")?);
+    }
+    Ok(summary)
+}
+
+/// The newest moment the mailbox produced real information for this Session:
+/// an inbound letter arriving, or one of its own outbound reply obligations
+/// getting resolved. The idle-continuation timer compares this against its
+/// last fire to decide whether a poke would repeat already-known state.
+pub async fn latest_mailbox_info_at(
+    conn: &DatabaseConnection,
+    conversation_id: i32,
+) -> Result<Option<DateTime<Utc>>, DbError> {
+    let row = conn
+        .query_one(statement(
+            "SELECT MAX(ts) AS ts FROM ( \
+                 SELECT MAX(datetime(d.created_at)) AS ts \
+                 FROM collaboration_delivery d \
+                 WHERE d.target_conversation_id = ? \
+                 UNION ALL \
+                 SELECT MAX(datetime(d.obligation_resolved_at)) AS ts \
+                 FROM collaboration_delivery d \
+                 JOIN collaboration_event e ON e.id = d.event_id \
+                 WHERE e.source_conversation_id = ? \
+                   AND d.obligation_resolved_at IS NOT NULL \
+             )",
+            vec![conversation_id.into(), conversation_id.into()],
+        ))
+        .await?;
+    match row {
+        Some(row) => parse_optional_timestamp(&row, "ts"),
+        None => Ok(None),
+    }
 }
 
 pub struct CollaborationMutationResult {
@@ -3381,13 +3492,82 @@ mod tests {
         assert_eq!(after_human_open.len(), 1);
         assert_eq!(after_human_open[0].overdue_unread, 1);
 
-        record_successful_reminder(&db.conn, target).await.unwrap();
+        record_successful_reminder(&db.conn, target, 0)
+            .await
+            .unwrap();
         assert!(
             list_overdue_reminder_targets(&db.conn)
                 .await
                 .unwrap()
                 .is_empty(),
             "cooldown after a successful reminder must suppress the next scan"
+        );
+    }
+
+    #[tokio::test]
+    async fn reply_phase_gets_a_fresh_reminder_budget_after_unread_nags() {
+        let (db, source, target, _) = seeded_memory().await;
+        let mut letter = invoke_input(source, vec![target], "starved-reply", "answer me");
+        letter.expects_reply = true;
+        let sent = send(&db.conn, letter).await.unwrap();
+        // The unread phase burned the whole per-episode budget, and the last
+        // nag happened after the letter arrived (nothing newer became due).
+        db.conn
+            .execute(Statement::from_sql_and_values(
+                DbBackend::Sqlite,
+                "UPDATE collaboration_delivery \
+                 SET created_at = datetime('now', '-30 minutes') \
+                 WHERE event_id = ?",
+                vec![sent.event_id.clone().into()],
+            ))
+            .await
+            .unwrap();
+        record_successful_reminder(&db.conn, target, 2).await.unwrap();
+        db.conn
+            .execute(Statement::from_sql_and_values(
+                DbBackend::Sqlite,
+                "UPDATE conversation_collaboration_state \
+                 SET reminder_last_at = datetime('now', '-6 minutes') \
+                 WHERE conversation_id = ?",
+                vec![target.into()],
+            ))
+            .await
+            .unwrap();
+        assert!(
+            list_overdue_reminder_targets(&db.conn)
+                .await
+                .unwrap()
+                .is_empty(),
+            "an exhausted budget with no newer debt must stay silent"
+        );
+
+        // The Agent then reads the letter and its five-minute reply clock
+        // elapses: that member became due AFTER the last reminder, so the
+        // read-awaiting-reply phase must get its own budget.
+        mark_agent_read(&db.conn, target, &sent.event_id)
+            .await
+            .unwrap();
+        db.conn
+            .execute(Statement::from_sql_and_values(
+                DbBackend::Sqlite,
+                "UPDATE collaboration_delivery \
+                 SET agent_received_at = datetime('now', '-5 minutes', '-10 seconds') \
+                 WHERE event_id = ?",
+                vec![sent.event_id.clone().into()],
+            ))
+            .await
+            .unwrap();
+        let overdue = list_overdue_reminder_targets(&db.conn).await.unwrap();
+        assert_eq!(
+            overdue.len(),
+            1,
+            "read-awaiting-reply must not be starved by unread-phase nags"
+        );
+        assert_eq!(overdue[0].conversation_id, target);
+        assert_eq!(overdue[0].overdue_reply, 1);
+        assert_eq!(
+            overdue[0].reminder_repeat_count, 0,
+            "a fresh debt episode restarts the repeat budget"
         );
     }
 

@@ -58,9 +58,12 @@ pub async fn sweep_once(
     for target in targets {
         match dispatch_target(conn, manager, prompt_queue, emitter, &target).await {
             Ok(true) => {
-                if let Err(error) =
-                    collaboration_service::record_successful_reminder(conn, target.conversation_id)
-                        .await
+                if let Err(error) = collaboration_service::record_successful_reminder(
+                    conn,
+                    target.conversation_id,
+                    target.reminder_repeat_count,
+                )
+                .await
                 {
                     tracing::warn!(
                         "[collaboration-reminder] could not record reminder for {}: {error}",
@@ -179,6 +182,7 @@ async fn enqueue_mailbox_attention(
                 "mailbox-attention:{}:{}",
                 letter.event_id, target.reminder_repeat_count
             ),
+            crate::models::PromptQueueSource::Reminder,
         )
         .await
         .map_err(|error| error.to_string())?;
@@ -205,6 +209,7 @@ async fn enqueue_mailbox_attention(
             display_text: digest,
         },
         mode_id: None,
+        source: crate::models::PromptQueueSource::Reminder,
     };
     prompt_queue_enqueue_core(conn, emitter, prompt_queue, item)
         .await

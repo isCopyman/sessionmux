@@ -22,6 +22,18 @@ pub struct SessionTimerInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_fired_at: Option<DateTime<Utc>>,
     pub fire_count: i32,
+    /// Consecutive continuations that fired while the Session was waiting on
+    /// unanswered outbound letters and no new information had arrived. Resets
+    /// to zero on any real news (inbound letter, resolved obligation) and on
+    /// every user edit.
+    pub strike_count: i32,
+    /// Set when the no-progress brake parked this timer. `enabled` stays
+    /// true: new mailbox information or a user edit clears this
+    /// automatically.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_paused_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_pause_reason: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

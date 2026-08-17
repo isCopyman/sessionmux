@@ -10,10 +10,20 @@ use crate::db::entities::conversation;
 use crate::db::error::DbError;
 use crate::models::prompt_queue::{
     ClaimedPromptQueueItem, EnqueuePromptQueueItem, PromptQueueDraft, PromptQueueItem,
-    PromptQueueItemState, PromptQueueSnapshot,
+    PromptQueueItemState, PromptQueueSnapshot, PromptQueueSource,
 };
 
 const MAX_QUEUE_ITEMS: usize = 1_000;
+/// Dispatch order: the user's own follow-ups first, then letters and mailbox
+/// reminders, then idle-continuation timers; FIFO inside each class. This is
+/// the single ordering every head inspection and claim must share.
+const CLASS_ORDER_SQL: &str = "CASE source \
+     WHEN 'user' THEN 0 WHEN 'collaboration' THEN 1 WHEN 'reminder' THEN 1 \
+     ELSE 2 END ASC, position ASC, created_at ASC, id ASC";
+/// Same ordering with the `q.` alias for queries that join other tables.
+const CLASS_ORDER_SQL_Q: &str = "CASE q.source \
+     WHEN 'user' THEN 0 WHEN 'collaboration' THEN 1 WHEN 'reminder' THEN 1 \
+     ELSE 2 END ASC, q.position ASC, q.created_at ASC, q.id ASC";
 const MAX_DISPLAY_TEXT_BYTES: usize = 1_000_000;
 const UNKNOWN_DISPATCH_REASON: &str = "dispatch_outcome_unknown";
 pub const SESSION_COLLABORATION_ENABLED_KEY: &str = "session_collaboration.enabled";
@@ -41,6 +51,9 @@ fn parse_item(row: &QueryResult) -> Result<PromptQueueItem, DbError> {
     let state_raw: String = row.try_get("", "state")?;
     let state = PromptQueueItemState::parse(&state_raw)
         .ok_or_else(|| validation(format!("Unknown prompt queue state: {state_raw}")))?;
+    let source_raw: String = row.try_get("", "source")?;
+    let source = PromptQueueSource::parse(&source_raw)
+        .ok_or_else(|| validation(format!("Unknown prompt queue source: {source_raw}")))?;
     let draft_json: Option<String> = row.try_get("", "draft_json")?;
     let draft = draft_json
         .map(|value| {
@@ -56,6 +69,7 @@ fn parse_item(row: &QueryResult) -> Result<PromptQueueItem, DbError> {
         origin_event_id: row.try_get("", "origin_event_id")?,
         mode_id: row.try_get("", "mode_id")?,
         state,
+        source,
         client_dedupe_id: row.try_get("", "client_dedupe_id")?,
         attempts: row.try_get("", "attempts")?,
         paused_reason: row.try_get("", "paused_reason")?,
@@ -164,10 +178,13 @@ async fn snapshot_on<C: ConnectionTrait>(
     let (revision, paused_reason) = state_row(conn, conversation_id).await?;
     let rows = conn
         .query_all(statement(
-            "SELECT id, conversation_id, position, draft_json, origin_event_id, mode_id, \
-                    state, client_dedupe_id, attempts, paused_reason, created_at, updated_at \
-             FROM conversation_prompt_queue_item WHERE conversation_id = ? \
-             ORDER BY position ASC, created_at ASC, id ASC",
+            &format!(
+                "SELECT id, conversation_id, position, draft_json, origin_event_id, mode_id, \
+                        state, source, client_dedupe_id, attempts, paused_reason, \
+                        created_at, updated_at \
+                 FROM conversation_prompt_queue_item WHERE conversation_id = ? \
+                 ORDER BY {CLASS_ORDER_SQL}"
+            ),
             vec![conversation_id.into()],
         ))
         .await?;
@@ -293,11 +310,14 @@ pub(crate) async fn send_is_admitted(
 ) -> Result<bool, DbError> {
     let row = conn
         .query_one(statement(
-            "SELECT q.id, q.state, s.paused_reason \
-             FROM conversation_prompt_queue_item q \
-             LEFT JOIN conversation_prompt_queue_state s ON s.conversation_id = q.conversation_id \
-             WHERE q.conversation_id = ? \
-             ORDER BY q.position ASC, q.created_at ASC, q.id ASC LIMIT 1",
+            &format!(
+                "SELECT q.id, q.state, s.paused_reason \
+                 FROM conversation_prompt_queue_item q \
+                 LEFT JOIN conversation_prompt_queue_state s \
+                   ON s.conversation_id = q.conversation_id \
+                 WHERE q.conversation_id = ? \
+                 ORDER BY {CLASS_ORDER_SQL_Q} LIMIT 1"
+            ),
             vec![conversation_id.into()],
         ))
         .await?;
@@ -371,14 +391,15 @@ pub async fn enqueue(
     txn.execute(statement(
         "INSERT INTO conversation_prompt_queue_item \
          (id, conversation_id, position, draft_json, origin_event_id, mode_id, state, \
-          client_dedupe_id, attempts, created_at, updated_at) \
-         VALUES (?, ?, ?, ?, NULL, ?, 'queued', ?, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+          source, client_dedupe_id, attempts, created_at, updated_at) \
+         VALUES (?, ?, ?, ?, NULL, ?, 'queued', ?, ?, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
         vec![
             input.id.into(),
             input.conversation_id.into(),
             position.into(),
             draft_json.into(),
             input.mode_id.into(),
+            input.source.as_str().into(),
             input.client_dedupe_id.into(),
         ],
     ))
@@ -398,6 +419,7 @@ pub(crate) async fn enqueue_origin_in_transaction(
     origin_event_id: &str,
     client_dedupe_id: &str,
     initial_pause_reason: Option<&str>,
+    source: PromptQueueSource,
 ) -> Result<bool, DbError> {
     validate_id("Queue item id", item_id)?;
     validate_id("Queue origin event id", origin_event_id)?;
@@ -448,14 +470,15 @@ pub(crate) async fn enqueue_origin_in_transaction(
     txn.execute(statement(
         "INSERT INTO conversation_prompt_queue_item \
          (id, conversation_id, position, draft_json, origin_event_id, mode_id, state, \
-          client_dedupe_id, attempts, paused_reason, created_at, updated_at) \
-         VALUES (?, ?, ?, NULL, ?, NULL, ?, ?, 0, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+          source, client_dedupe_id, attempts, paused_reason, created_at, updated_at) \
+         VALUES (?, ?, ?, NULL, ?, NULL, ?, ?, ?, 0, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
         vec![
             item_id.into(),
             conversation_id.into(),
             position.into(),
             origin_event_id.into(),
             state.into(),
+            source.as_str().into(),
             client_dedupe_id.into(),
             paused_reason.into(),
         ],
@@ -534,8 +557,10 @@ pub async fn reorder(
     verify_revision(&txn, conversation_id, expected_revision).await?;
     let rows = txn
         .query_all(statement(
-            "SELECT id, state, draft_json, position FROM conversation_prompt_queue_item \
-             WHERE conversation_id = ? ORDER BY position ASC, created_at ASC, id ASC",
+            &format!(
+                "SELECT id, state, draft_json, position FROM conversation_prompt_queue_item \
+                 WHERE conversation_id = ? ORDER BY {CLASS_ORDER_SQL}"
+            ),
             vec![conversation_id.into()],
         ))
         .await?;
@@ -547,7 +572,7 @@ pub async fn reorder(
         })
         .map(|row| row.try_get::<String>("", "id"))
         .collect::<Result<Vec<_>, _>>()?;
-    let ordinary_positions = rows
+    let mut ordinary_positions = rows
         .iter()
         .filter_map(|row| {
             row.try_get::<Option<String>>("", "draft_json")
@@ -556,6 +581,10 @@ pub async fn reorder(
                 .and_then(|_| row.try_get::<i32>("", "position").ok())
         })
         .collect::<Vec<_>>();
+    // Class-ordered rows no longer walk positions monotonically. The slot
+    // pool must be ascending so that "earlier in the requested order" always
+    // maps to "smaller position" (dispatch order inside each class).
+    ordinary_positions.sort_unstable();
     if rows.iter().any(|row| {
         row.try_get::<String>("", "state")
             .is_ok_and(|state| state == "claimed")
@@ -747,11 +776,49 @@ pub async fn retry_item(
     snapshot_on(conn, conversation_id).await
 }
 
+/// Claim the class-ordered head of the queue: the item an idle Session must
+/// run next.
 pub(crate) async fn claim_head(
     conn: &DatabaseConnection,
     conversation_id: i32,
     worker_id: &str,
     lease: Duration,
+) -> Result<Option<(ClaimedPromptQueueItem, PromptQueueSnapshot)>, DbError> {
+    let head_selector = format!(
+        "SELECT id FROM conversation_prompt_queue_item \
+         WHERE conversation_id = ? AND state = 'queued' \
+         ORDER BY {CLASS_ORDER_SQL} LIMIT 1"
+    );
+    claim_by_selector(conn, conversation_id, worker_id, lease, &head_selector).await
+}
+
+/// Claim the first queued letter whose sender asked for a native steer. A
+/// busy Session cannot run the class-ordered head, but a steer does not
+/// consume the turn slot, so it may legitimately skip past queued user
+/// drafts — those still own the next full turn.
+pub(crate) async fn claim_first_steerable(
+    conn: &DatabaseConnection,
+    conversation_id: i32,
+    worker_id: &str,
+    lease: Duration,
+) -> Result<Option<(ClaimedPromptQueueItem, PromptQueueSnapshot)>, DbError> {
+    let steer_selector = format!(
+        "SELECT q.id FROM conversation_prompt_queue_item q \
+         JOIN collaboration_delivery cd ON cd.id = q.id \
+         WHERE q.conversation_id = ? AND q.state = 'queued' \
+           AND q.origin_event_id IS NOT NULL \
+           AND cd.delivery_hint = 'steer_if_supported' \
+         ORDER BY {CLASS_ORDER_SQL_Q} LIMIT 1"
+    );
+    claim_by_selector(conn, conversation_id, worker_id, lease, &steer_selector).await
+}
+
+async fn claim_by_selector(
+    conn: &DatabaseConnection,
+    conversation_id: i32,
+    worker_id: &str,
+    lease: Duration,
+    head_selector: &str,
 ) -> Result<Option<(ClaimedPromptQueueItem, PromptQueueSnapshot)>, DbError> {
     let txn = conn.begin().await?;
     ensure_state(&txn, conversation_id).await?;
@@ -767,16 +834,14 @@ pub(crate) async fn claim_head(
     // equivalent of Codex Desktop's per-message acquire lock.
     let Some(row) = txn
         .query_one(statement(
-            "UPDATE conversation_prompt_queue_item \
-             SET state = 'claimed', claimed_by = ?, claim_expires_at = ?, \
-                 dispatch_started_at = NULL, attempts = attempts + 1, \
-                 updated_at = CURRENT_TIMESTAMP \
-             WHERE id = ( \
-                 SELECT id FROM conversation_prompt_queue_item \
-                 WHERE conversation_id = ? AND state = 'queued' \
-                 ORDER BY position ASC, created_at ASC, id ASC LIMIT 1 \
-             ) AND conversation_id = ? AND state = 'queued' \
-             RETURNING id, conversation_id, draft_json, origin_event_id, mode_id",
+            &format!(
+                "UPDATE conversation_prompt_queue_item \
+                 SET state = 'claimed', claimed_by = ?, claim_expires_at = ?, \
+                     dispatch_started_at = NULL, attempts = attempts + 1, \
+                     updated_at = CURRENT_TIMESTAMP \
+                 WHERE id = ({head_selector}) AND conversation_id = ? AND state = 'queued' \
+                 RETURNING id, conversation_id, draft_json, origin_event_id, mode_id"
+            ),
             vec![
                 worker_id.into(),
                 expires_at.into(),
@@ -1233,7 +1298,7 @@ pub(crate) async fn has_pending_mailbox_attention(
                   AND state IN ('queued', 'claimed') \
                   AND (\
                     origin_event_id IS NOT NULL \
-                    OR client_dedupe_id LIKE 'mailbox-attention:%'\
+                    OR source = 'reminder'\
                   )\
              ) AS found",
             vec![conversation_id.into()],
@@ -1250,6 +1315,7 @@ pub async fn enqueue_origin(
     item_id: &str,
     origin_event_id: &str,
     client_dedupe_id: &str,
+    source: PromptQueueSource,
 ) -> Result<bool, DbError> {
     let txn = conn.begin().await?;
     let inserted = enqueue_origin_in_transaction(
@@ -1259,6 +1325,7 @@ pub async fn enqueue_origin(
         origin_event_id,
         client_dedupe_id,
         None,
+        source,
     )
     .await?;
     txn.commit().await?;
@@ -1315,6 +1382,7 @@ mod tests {
             client_dedupe_id: id.to_string(),
             draft: draft(text),
             mode_id: None,
+            source: PromptQueueSource::User,
         }
     }
 
@@ -1464,8 +1532,131 @@ mod tests {
         .await
         .expect("reorder visible drafts only");
         assert_eq!(reordered.items.len(), 2);
-        assert_eq!(reordered.items[0].id, origin_id);
-        assert_eq!(reordered.items[1].id, "ordinary");
+        // Class order runs the user's own draft ahead of the letter.
+        assert_eq!(reordered.items[0].id, "ordinary");
+        assert_eq!(reordered.items[1].id, origin_id);
+    }
+
+    #[tokio::test]
+    async fn claim_walks_classes_user_then_letter_then_timer() {
+        let (db, target) = seeded_memory().await;
+        let target_row = conversation::Entity::find_by_id(target)
+            .one(&db.conn)
+            .await
+            .unwrap()
+            .unwrap();
+        let source = seed_conversation(&db, target_row.folder_id, AgentType::ClaudeCode).await;
+        // Arrival order deliberately inverts the class order.
+        let mut timer_item = input(target, "timer-continuation", "continue the objective");
+        timer_item.source = PromptQueueSource::Timer;
+        enqueue(&db.conn, timer_item).await.expect("timer enqueue");
+        let sent = collaboration_service::send(
+            &db.conn,
+            SendCollaborationMessageInput {
+                source_conversation_id: source,
+                target_conversation_ids: vec![target],
+                subject: "Letter".into(),
+                body: "before the timer".into(),
+                client_dedupe_id: "class-order-letter".into(),
+                invocation_policy: CollaborationInvocationPolicy::InvokeWhenIdle,
+                delivery_hint: CollaborationDeliveryHint::Default,
+                expects_reply: false,
+                urgency: CollaborationUrgency::Normal,
+                reply_to_event_id: None,
+            },
+        )
+        .await
+        .expect("send letter");
+        enqueue(&db.conn, input(target, "user-draft", "the user's own follow-up"))
+            .await
+            .expect("user enqueue");
+
+        let mut claimed_order = Vec::new();
+        for _ in 0..3 {
+            let (claim, _) = claim_head(&db.conn, target, "worker", Duration::seconds(30))
+                .await
+                .expect("claim")
+                .expect("head");
+            claimed_order.push(claim.id.clone());
+            assert!(
+                mark_dispatch_started(&db.conn, &claim, Duration::seconds(30))
+                    .await
+                    .expect("mark dispatch")
+            );
+            accept_claim(&db.conn, &claim).await.expect("accept");
+        }
+        assert_eq!(
+            claimed_order,
+            vec![
+                "user-draft".to_string(),
+                sent.deliveries[0].id.clone(),
+                "timer-continuation".to_string(),
+            ],
+            "dispatch order is user > letter > timer regardless of arrival"
+        );
+    }
+
+    #[tokio::test]
+    async fn steerable_claim_skips_queued_user_drafts() {
+        let (db, target) = seeded_memory().await;
+        let target_row = conversation::Entity::find_by_id(target)
+            .one(&db.conn)
+            .await
+            .unwrap()
+            .unwrap();
+        let source = seed_conversation(&db, target_row.folder_id, AgentType::ClaudeCode).await;
+        enqueue(&db.conn, input(target, "blocking-draft", "runs on next idle"))
+            .await
+            .expect("user enqueue");
+        assert!(
+            claim_first_steerable(&db.conn, target, "worker", Duration::seconds(30))
+                .await
+                .expect("steer claim")
+                .is_none(),
+            "no steer-hinted letter means nothing to inject"
+        );
+
+        let sent = collaboration_service::send(
+            &db.conn,
+            SendCollaborationMessageInput {
+                source_conversation_id: source,
+                target_conversation_ids: vec![target],
+                subject: "Steer me".into(),
+                body: "urgent correction".into(),
+                client_dedupe_id: "steer-behind-draft".into(),
+                invocation_policy: CollaborationInvocationPolicy::InvokeWhenIdle,
+                delivery_hint: CollaborationDeliveryHint::SteerIfSupported,
+                expects_reply: false,
+                urgency: CollaborationUrgency::Normal,
+                reply_to_event_id: None,
+            },
+        )
+        .await
+        .expect("send steer letter");
+        let (claim, _) = claim_first_steerable(&db.conn, target, "worker", Duration::seconds(30))
+            .await
+            .expect("steer claim")
+            .expect("the steer letter is claimable behind the user draft");
+        assert_eq!(claim.id, sent.deliveries[0].id);
+        assert_eq!(
+            claim.delivery_hint,
+            Some(CollaborationDeliveryHint::SteerIfSupported)
+        );
+        // The steer succeeds and consumes only the letter item.
+        assert!(
+            mark_dispatch_started(&db.conn, &claim, Duration::seconds(30))
+                .await
+                .expect("mark steer dispatch")
+        );
+        accept_claim(&db.conn, &claim).await.expect("accept steer");
+        let (head, _) = claim_head(&db.conn, target, "worker", Duration::seconds(30))
+            .await
+            .expect("head claim")
+            .expect("head");
+        assert_eq!(
+            head.id, "blocking-draft",
+            "the user's draft still owns the next full turn"
+        );
     }
 
     #[tokio::test]

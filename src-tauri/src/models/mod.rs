@@ -52,7 +52,7 @@ pub use message::{
 pub use quick_message::QuickMessageInfo;
 pub use prompt_queue::{
     EnqueuePromptQueueItem, PromptQueueDraft, PromptQueueItem, PromptQueueItemState,
-    PromptQueueSnapshot,
+    PromptQueueSnapshot, PromptQueueSource,
 };
 pub use remote_workspace_connection::RemoteWorkspaceConnectionInfo;
 pub use token_usage::{

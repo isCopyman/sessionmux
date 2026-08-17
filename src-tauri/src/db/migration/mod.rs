@@ -52,6 +52,7 @@ mod m20260817_000001_conversation_harness_internal;
 mod m20260817_000001_work_task_conversation_title;
 mod m20260817_000002_collaboration_reminder;
 mod m20260817_000003_collaboration_letter_subject;
+mod m20260818_000001_message_scheduler;
 pub struct Migrator;
 
 #[async_trait::async_trait]
@@ -110,6 +111,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260817_000001_work_task_conversation_title::Migration),
             Box::new(m20260817_000002_collaboration_reminder::Migration),
             Box::new(m20260817_000003_collaboration_letter_subject::Migration),
+            Box::new(m20260818_000001_message_scheduler::Migration),
         ]
     }
 }

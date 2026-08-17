@@ -11,6 +11,46 @@ pub struct PromptQueueDraft {
     pub display_text: String,
 }
 
+/// Who put this item into the execution queue. The scheduler claims by
+/// class first (user > collaboration/reminder > timer), FIFO inside a class:
+/// a person's own follow-ups always run before automation, and automation
+/// can never jump a letter the user is expecting the Agent to read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PromptQueueSource {
+    User,
+    Collaboration,
+    Reminder,
+    Timer,
+}
+
+impl Default for PromptQueueSource {
+    fn default() -> Self {
+        Self::User
+    }
+}
+
+impl PromptQueueSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::Collaboration => "collaboration",
+            Self::Reminder => "reminder",
+            Self::Timer => "timer",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "user" => Some(Self::User),
+            "collaboration" => Some(Self::Collaboration),
+            "reminder" => Some(Self::Reminder),
+            "timer" => Some(Self::Timer),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PromptQueueItemState {
@@ -51,6 +91,7 @@ pub struct PromptQueueItem {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mode_id: Option<String>,
     pub state: PromptQueueItemState,
+    pub source: PromptQueueSource,
     pub client_dedupe_id: String,
     pub attempts: i32,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -78,6 +119,10 @@ pub struct EnqueuePromptQueueItem {
     pub draft: PromptQueueDraft,
     #[serde(default)]
     pub mode_id: Option<String>,
+    /// Scheduling class. Clients never send this: the enqueue commands pin
+    /// 'user', and only host runtimes (timer, reminder) submit other values.
+    #[serde(default, skip_deserializing)]
+    pub source: PromptQueueSource,
 }
 
 #[derive(Debug, Clone)]

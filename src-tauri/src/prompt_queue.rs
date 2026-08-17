@@ -799,7 +799,11 @@ impl PromptQueueRuntime {
     }
 
     async fn process_native_steer(&self, row: &conversation::Model, connection_id: &str) {
-        let claimed = match prompt_queue_service::claim_head(
+        // A busy Session cannot run the class-ordered head, but a native steer
+        // does not consume the turn slot, so the claim skips directly to the
+        // first letter whose sender asked for it. Queued user drafts are not
+        // bypassed for a turn: they still own the next idle dispatch.
+        let claimed = match prompt_queue_service::claim_first_steerable(
             &self.db.conn,
             row.id,
             &self.worker_id,
@@ -1031,6 +1035,7 @@ mod tests {
                 display_text: text.to_string(),
             },
             mode_id: None,
+            source: crate::models::PromptQueueSource::User,
         }
     }
 
