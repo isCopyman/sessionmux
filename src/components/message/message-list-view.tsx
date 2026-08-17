@@ -209,11 +209,25 @@ export function singletonSourceTurns(turn: MessageTurn): MessageTurn[] {
   return cached
 }
 
+function threadItemTimeMs(item: ThreadRenderItem): number | null {
+  if (item.kind === "turn") {
+    const raw =
+      item.sourceTurns[0]?.timestamp || item.group.completed_at || null
+    if (!raw) return null
+    const ms = Date.parse(raw)
+    return Number.isNaN(ms) ? null : ms
+  }
+  if (item.kind === "collaboration") {
+    const ms = Date.parse(item.delivery.createdAt)
+    return Number.isNaN(ms) ? null : ms
+  }
+  return null
+}
+
 /**
- * Place authoritative inbound collaboration deliveries immediately before the
- * persisted Harness Turn that embedded them. This function is deliberately
- * defensive even though the backend projection already applies the lifecycle
- * filter: pending or partially transitioned data must never become transcript.
+ * Place inbound Session letters on the transcript. Prefer the exact Turn
+ * that consumed them; otherwise insert by createdAt so cards sit next to
+ * the work they triggered instead of piling up on the composer.
  */
 export function applyCollaborationTimelineProjection(
   items: ThreadRenderItem[],
@@ -268,9 +282,25 @@ export function applyCollaborationTimelineProjection(
       : item
     if (!isEmptyTurnItem(nextItem)) projected.push(nextItem)
   }
-  for (const delivery of deliveries) {
-    if (delivery.state === "dismissed" || used.has(delivery.id)) continue
-    projected.push({
+
+  const unmatched = deliveries
+    .filter(
+      (delivery) => delivery.state !== "dismissed" && !used.has(delivery.id)
+    )
+    .sort(
+      (a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt) || 0
+    )
+  for (const delivery of unmatched) {
+    const created = Date.parse(delivery.createdAt)
+    let insertAt = projected.length
+    if (!Number.isNaN(created)) {
+      const idx = projected.findIndex((item) => {
+        const time = threadItemTimeMs(item)
+        return time != null && time > created
+      })
+      if (idx >= 0) insertAt = idx
+    }
+    projected.splice(insertAt, 0, {
       key: `collaboration-${delivery.id}`,
       kind: "collaboration",
       delivery,

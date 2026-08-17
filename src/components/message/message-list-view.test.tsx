@@ -161,6 +161,41 @@ describe("applyCollaborationTimelineProjection", () => {
     expect(result.map((item) => item.kind)).toEqual(["turn", "collaboration"])
   })
 
+  it("inserts unmatched letters by time instead of dumping them on the composer", () => {
+    const early = userItem("early", "first human prompt")
+    early.sourceTurns = [
+      {
+        id: "early",
+        role: "user",
+        blocks: [],
+        timestamp: "2026-08-17T05:00:00.000Z",
+      },
+    ]
+    const late = userItem("late", "later human prompt")
+    late.sourceTurns = [
+      {
+        id: "late",
+        role: "user",
+        blocks: [],
+        timestamp: "2026-08-17T05:30:00.000Z",
+      },
+    ]
+    const result = applyCollaborationTimelineProjection(
+      [early, late],
+      [
+        collaborationDelivery({
+          embeddedTurnRef: "session-msg-other",
+          createdAt: "2026-08-17T05:10:00.000Z",
+        }),
+      ]
+    )
+    expect(result.map((item) => item.kind)).toEqual([
+      "turn",
+      "collaboration",
+      "turn",
+    ])
+  })
+
   it("strips the envelope even when the transcript Turn id does not match", () => {
     const result = applyCollaborationTimelineProjection(
       [userItem("parser-turn-id", COLLABORATION_ENVELOPE)],
