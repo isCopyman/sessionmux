@@ -5072,6 +5072,7 @@
     "threadsEmpty": "还没有往来线程",
     "untitledSubject": "（无主题）",
     "letterSubject": "主题",
+    "replyToSubject": "回复：{subject}",
     "letterRenderToMcp": "显示原始 MCP 工具",
     "letterRenderToCustom": "显示自定义信件卡片",
     "to": "发给 {name}",

@@ -25,6 +25,7 @@ import {
   type TabsChanged,
 } from "@/lib/types"
 import { subscribeSessionWarmCacheLimit } from "@/lib/session-warm-cache-settings"
+import { useOpenQueuedMailboxSessions } from "@/hooks/use-open-queued-mailbox-sessions"
 
 export type { TabItem }
 export { useTabStore, useTabActions } from "@/stores/tab-store"
@@ -74,6 +75,8 @@ export function TabProvider({ children }: TabProviderProps) {
   const tabsHydrated = useTabStore((s) => s.tabsHydrated)
   const saveReconcileTick = useTabStore((s) => s.saveReconcileTick)
   const reseedTick = useTabStore((s) => s.reseedTick)
+
+  useOpenQueuedMailboxSessions()
 
   // ── Runtime dependency injection ─────────────────────────────────────────────
   // Labels first (declared before hydrate) so seed titles are translated before

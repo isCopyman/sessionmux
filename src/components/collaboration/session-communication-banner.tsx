@@ -385,6 +385,18 @@ export function SessionCommunicationBannerView({
                   })}
             </span>
           </p>
+          {delivery.replyToEventId ? (
+            <p className="mt-1 truncate text-[11px] text-muted-foreground">
+              {t("replyToSubject", {
+                subject:
+                  letterSubjectLine(
+                    [...feed.inbound, ...feed.outbound].find(
+                      (item) => item.eventId === delivery.replyToEventId
+                    )?.subject
+                  ) || delivery.replyToEventId.slice(0, 8),
+              })}
+            </p>
+          ) : null}
           <p className="mt-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
             {t("letterSubject")}
           </p>

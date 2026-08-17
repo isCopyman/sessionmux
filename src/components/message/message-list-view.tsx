@@ -92,7 +92,8 @@ import {
   SessionMailFromBadge,
   SessionMailSystemBadge,
 } from "./collaboration-message-card"
-import { SessionLetterBody } from "./session-letter-body"
+import { SessionMailCard } from "./session-mail-card"
+import { SessionMailLookupProvider } from "./session-mail-lookup"
 import { useSessionLetterUiStore } from "@/stores/session-letter-ui-store"
 import {
   extractCollaborationEnvelopes,
@@ -768,7 +769,9 @@ const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
   isResponseComplete?: boolean
   sourceTurns?: MessageTurn[]
 }) {
-  const focusedEventId = useSessionLetterUiStore((state) => state.focusedEventId)
+  const focusedEventId = useSessionLetterUiStore(
+    (state) => state.focusedEventId
+  )
   const mailEventId = group.sessionMail?.eventIds[0]
   if (group.role === "system") {
     return <CollapsibleSystemMessage group={group} />
@@ -788,7 +791,19 @@ const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
         {group.role === "user" && group.images.length > 0 ? (
           <UserImageAttachments images={group.images} className="self-end" />
         ) : null}
-        {group.role === "user" ? (
+        {group.role === "user" && group.sessionMail?.source === "session" ? (
+          <SessionMailCard
+            direction="inbound"
+            eventId={mailEventId}
+            fromConversationId={group.sessionMail.conversationId}
+            fromTitle={group.sessionMail.title}
+            fromAgentType={group.sessionMail.agentType}
+            subject={group.sessionMail.letterTitle}
+            body={group.parts
+              .map((part) => (part.type === "text" ? part.text : ""))
+              .join("\n\n")}
+          />
+        ) : group.role === "user" ? (
           <div className="flex w-fit max-w-full flex-col items-end self-end">
             {group.sessionMail?.source === "system" ? (
               <SessionMailSystemBadge />
@@ -804,17 +819,7 @@ const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
               <UserMessageTaskButton parts={group.parts} />
               <UserMessageCopyButton parts={group.parts} />
               <MessageContent data-conversation-search-content>
-                {group.sessionMail?.source === "session" &&
-                group.parts.every((part) => part.type === "text") ? (
-                  <SessionLetterBody
-                    subject={group.sessionMail.letterTitle}
-                    body={group.parts
-                      .map((part) => (part.type === "text" ? part.text : ""))
-                      .join("\n\n")}
-                  />
-                ) : (
-                  <CollapsibleUserMessage parts={group.parts} />
-                )}
+                <CollapsibleUserMessage parts={group.parts} />
               </MessageContent>
             </div>
           </div>
@@ -1192,11 +1197,15 @@ export function MessageListView({
   // the MessageScrollProvider subtree) can drive scrollToIndex.
   const scrollApiRef = useRef<MessageScrollContextValue | null>(null)
   const messageListRootRef = useRef<HTMLDivElement | null>(null)
-  const pendingLetterFocus = useSessionLetterUiStore((state) => state.pendingFocus)
+  const pendingLetterFocus = useSessionLetterUiStore(
+    (state) => state.pendingFocus
+  )
   const consumeLetterFocus = useSessionLetterUiStore(
     (state) => state.consumeFocus
   )
-  const markLetterFocused = useSessionLetterUiStore((state) => state.markFocused)
+  const markLetterFocused = useSessionLetterUiStore(
+    (state) => state.markFocused
+  )
 
   useEffect(() => {
     if (
@@ -1205,10 +1214,7 @@ export function MessageListView({
     ) {
       return
     }
-    const index = findLetterThreadIndex(
-      threadItems,
-      pendingLetterFocus.eventId
-    )
+    const index = findLetterThreadIndex(threadItems, pendingLetterFocus.eventId)
     if (index < 0) return
     const eventId = pendingLetterFocus.eventId
     consumeLetterFocus(conversationId)
@@ -1582,55 +1588,59 @@ export function MessageListView({
   }
 
   return (
-    <div
-      ref={messageListRootRef}
-      className="relative flex h-full min-h-0 flex-col"
+    <SessionMailLookupProvider
+      inbound={collaborationTimeline.inbound}
+      outbound={collaborationTimeline.outbound}
     >
-      {findOpen && (
-        <ConversationFindBar
-          query={findQuery}
-          current={activeFindMatch ? currentFindMatchIndex + 1 : 0}
-          total={findMatches.length}
-          searching={searchingOlderHistory}
-          focusToken={findFocusToken}
-          onQueryChange={handleFindQueryChange}
-          onNext={handleNextFindMatch}
-          onPrevious={handlePreviousFindMatch}
-          onClose={closeFind}
-        />
-      )}
-      <MessageThread
-        className="flex-1 min-h-0"
-        initial={initialViewState?.atBottom === false ? false : "instant"}
-        resize={shouldUseSmoothResize ? "smooth" : undefined}
+      <div
+        ref={messageListRootRef}
+        className="relative flex h-full min-h-0 flex-col"
       >
-        <AutoScrollOnSend signal={sendSignal} />
-        <VirtualizedMessageThread
-          items={threadItems}
-          getItemKey={getThreadItemKey}
-          renderItem={renderThreadItem}
-          emptyState={emptyState}
-          scrollApiRef={scrollApiRef}
-          hasOlder={hasOlderTurns}
-          isLoadingOlder={loadingOlderTurns}
-          onLoadOlder={handleLoadOlder}
-          loadOlderLabel={t("loadEarlier")}
-          loadingOlderLabel={t("loadingEarlier")}
-          prependEpoch={session?.olderTurnsPrependEpoch ?? 0}
-          prependScopeKey={conversationId}
-          initialViewState={initialViewState}
-          onViewStateChange={onViewStateChange}
-        />
-        <MessageThreadScrollButton />
-      </MessageThread>
-      {liveMessage && connStatus === "prompting" && (
-        <LiveTurnStats
-          message={liveMessage}
-          agentType={agentType}
-          isStreaming={connStatus === "prompting"}
-        />
-      )}
-      {/* Shared overlay stack pinned to the inline-start edge (top-left in LTR,
+        {findOpen && (
+          <ConversationFindBar
+            query={findQuery}
+            current={activeFindMatch ? currentFindMatchIndex + 1 : 0}
+            total={findMatches.length}
+            searching={searchingOlderHistory}
+            focusToken={findFocusToken}
+            onQueryChange={handleFindQueryChange}
+            onNext={handleNextFindMatch}
+            onPrevious={handlePreviousFindMatch}
+            onClose={closeFind}
+          />
+        )}
+        <MessageThread
+          className="flex-1 min-h-0"
+          initial={initialViewState?.atBottom === false ? false : "instant"}
+          resize={shouldUseSmoothResize ? "smooth" : undefined}
+        >
+          <AutoScrollOnSend signal={sendSignal} />
+          <VirtualizedMessageThread
+            items={threadItems}
+            getItemKey={getThreadItemKey}
+            renderItem={renderThreadItem}
+            emptyState={emptyState}
+            scrollApiRef={scrollApiRef}
+            hasOlder={hasOlderTurns}
+            isLoadingOlder={loadingOlderTurns}
+            onLoadOlder={handleLoadOlder}
+            loadOlderLabel={t("loadEarlier")}
+            loadingOlderLabel={t("loadingEarlier")}
+            prependEpoch={session?.olderTurnsPrependEpoch ?? 0}
+            prependScopeKey={conversationId}
+            initialViewState={initialViewState}
+            onViewStateChange={onViewStateChange}
+          />
+          <MessageThreadScrollButton />
+        </MessageThread>
+        {liveMessage && connStatus === "prompting" && (
+          <LiveTurnStats
+            message={liveMessage}
+            agentType={agentType}
+            isStreaming={connStatus === "prompting"}
+          />
+        )}
+        {/* Shared overlay stack pinned to the inline-start edge (top-left in LTR,
           top-right in RTL). A flex column keeps the order stable regardless of
           each panel's expand/collapse height: the message navigator first, then
           the plan panel. Empty panels render null and
@@ -1639,25 +1649,26 @@ export function MessageListView({
           edge), rounded on the end side — that expand toward the inline-end on
           hover. Logical `start-0` + `items-start` keep the anchor and the bullet
           on the same side, so the whole stack mirrors cleanly in RTL. */}
-      <div className="pointer-events-none absolute start-0 top-4 z-20 flex max-w-[min(22rem,calc(100%-2rem))] flex-col items-start gap-2">
-        {showMessageNav && userMessageCount > 0 && (
-          <ConversationMessageNav
-            count={userMessageCount}
-            expanded={navExpanded}
-            onToggle={setNavExpanded}
-            entries={navEntries}
-            scrollApiRef={scrollApiRef}
+        <div className="pointer-events-none absolute start-0 top-4 z-20 flex max-w-[min(22rem,calc(100%-2rem))] flex-col items-start gap-2">
+          {showMessageNav && userMessageCount > 0 && (
+            <ConversationMessageNav
+              count={userMessageCount}
+              expanded={navExpanded}
+              onToggle={setNavExpanded}
+              entries={navEntries}
+              scrollApiRef={scrollApiRef}
+            />
+          )}
+          <AgentPlanOverlay
+            key={agentPlanOverlayKey}
+            message={liveMessage ?? null}
+            entries={historicalPlanEntries}
+            planKey={historicalPlanKey}
+            defaultExpanded={false}
+            isStreaming={connStatus === "prompting"}
           />
-        )}
-        <AgentPlanOverlay
-          key={agentPlanOverlayKey}
-          message={liveMessage ?? null}
-          entries={historicalPlanEntries}
-          planKey={historicalPlanKey}
-          defaultExpanded={false}
-          isStreaming={connStatus === "prompting"}
-        />
+        </div>
       </div>
-    </div>
+    </SessionMailLookupProvider>
   )
 }

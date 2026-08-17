@@ -5072,6 +5072,7 @@
     "threadsEmpty": "No conversations yet",
     "untitledSubject": "(No subject)",
     "letterSubject": "Subject",
+    "replyToSubject": "Re: {subject}",
     "letterRenderToMcp": "Show raw MCP tools",
     "letterRenderToCustom": "Show custom letter cards",
     "to": "To {name}",

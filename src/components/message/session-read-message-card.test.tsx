@@ -51,6 +51,7 @@ describe("SessionReadMessageCard", () => {
 
     expect(screen.getByText("From")).toBeInTheDocument()
     expect(screen.getByText("Session C")).toBeInTheDocument()
+    expect(document.querySelector("[data-session-mail-card='inbound']")).not.toBeNull()
     expect(screen.getByText("Need review")).toBeInTheDocument()
     expect(screen.getByText("please check claim 3")).toBeInTheDocument()
     expect(screen.getByText("Read, awaiting reply")).toBeInTheDocument()

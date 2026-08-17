@@ -545,3 +545,7 @@ Desktop 调试分层与 WebView2 CDP 验证记录；历史记录只用于找回�
   列表琥珀标签。当时过了 10 分钟也没有系统催办：扫描曾只认
   `invoke_when_idle`，把已读的 `store_only` 信排除了；连接停在 `connecting` 还会被
   当成未接通而不投递。这两处已修。不要用立刻回完的 PING/PONG 冒充催办已测。
+- 没有单独的 `session_dispatcher.rs`。队列、空闲投递和催办都走 PromptQueue。
+  `store_only` 仍不单独起 Turn。`invoke_when_idle` 在目标没有工作台标签时会打开
+  该 Session（走现有连接生命周期，像人点开再发）。完全没有连接时 PromptQueue
+  仍不会自己 spawn ACP；要看见催办/投递，目标标签得被打开或已经连上。
