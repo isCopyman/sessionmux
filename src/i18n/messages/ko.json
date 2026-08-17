@@ -1653,7 +1653,8 @@
         "newSession": "새 세션",
         "deleteTitle": "Delete this collection?",
         "deleteDescription": "Sessions in “{name}” become Unclassified and nested collections move up one level. No session or running agent is deleted.",
-        "operationFailed": "Collection operation failed: {message}"
+        "operationFailed": "Collection operation failed: {message}",
+        "dragSessionCount": "세션 {count}개"
       },
       "manageConversations": {
         "title": "세션 센터",
@@ -1730,6 +1731,9 @@
         "toastRestored": "{count}개 세션을 복원했습니다",
         "toastCollectionMoved": "Moved {count} session(s) to a collection",
         "toastOpened": "세션 {count}개를 현재 워크벤치에 추가했습니다",
+        "clearSelection": "선택 해제",
+        "addToWorkbench": "워크벤치에 추가",
+        "bulkActions": "세션 작업",
         "toastOpFailed": "작업 실패: {message}"
       },
       "sectionPinned": "고정됨",

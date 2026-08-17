@@ -108,10 +108,6 @@ import {
   listAllConversations,
   listConversationCollectionRefs,
   listConversationWorkbenchRefs,
-  listOpenedTabs,
-  listWorkbenchTabs,
-  saveOpenedTabs,
-  saveWorkbenchTabs,
   searchSessionContent,
   updateConversationArchive,
   updateConversationStatus,
@@ -124,7 +120,6 @@ import type {
   ConversationStatus,
   DbConversationSummary,
   MessageTurn,
-  OpenedTab,
 } from "@/lib/types"
 import { ALL_AGENT_TYPES, STATUS_ORDER } from "@/lib/types"
 import { getAgentLabel } from "@/lib/custom-agents"
@@ -135,6 +130,10 @@ import {
 } from "@/lib/folder-display"
 import { cn } from "@/lib/utils"
 import { formatConversationTitle } from "@/lib/conversation-title"
+import {
+  appendConversationsToWorkbench,
+  SESSION_CENTER_TAB_ORIGIN,
+} from "@/lib/workbench-session-tabs"
 import { toErrorMessage } from "@/lib/app-error"
 import { ConversationStatusDot } from "@/components/conversations/conversation-status-dot"
 import { useCollaborationUnreadOverview } from "@/hooks/use-collaboration-unread-overview"
@@ -168,104 +167,6 @@ type BranchFilter =
 const ALL_BRANCHES: BranchFilter = { kind: "all" }
 
 type WorkbenchFilter = "all" | "unopened" | number
-
-const SESSION_CENTER_TAB_ORIGIN = "session-center"
-
-function conversationIdsInTabs(items: OpenedTab[]): Set<number> {
-  const ids = new Set<number>()
-  for (const item of items) {
-    if (item.conversation_id != null) ids.add(item.conversation_id)
-  }
-  return ids
-}
-
-function appendConversationTabs(
-  existing: OpenedTab[],
-  conversations: DbConversationSummary[]
-): { items: OpenedTab[]; added: number; skipped: number } {
-  const present = conversationIdsInTabs(existing)
-  const toAdd = conversations.filter(
-    (conversation) => !present.has(conversation.id)
-  )
-  const skipped = conversations.length - toAdd.length
-  if (toAdd.length === 0) {
-    return { items: existing, added: 0, skipped }
-  }
-  const nextPosition =
-    existing.length === 0
-      ? 0
-      : Math.max(...existing.map((item) => item.position)) + 1
-  return {
-    items: [
-      ...existing,
-      ...toAdd.map((conversation, index) => ({
-        id: 0,
-        folder_id: conversation.folder_id,
-        conversation_id: conversation.id,
-        agent_type: conversation.agent_type,
-        position: nextPosition + index,
-        is_active: false,
-        is_pinned: true,
-      })),
-    ],
-    added: toAdd.length,
-    skipped,
-  }
-}
-
-async function listTabsForWorkbench(workbenchId: number) {
-  return workbenchId === 1 ? listOpenedTabs() : listWorkbenchTabs(workbenchId)
-}
-
-async function saveTabsForWorkbench(
-  workbenchId: number,
-  items: OpenedTab[],
-  expectedVersion: number
-) {
-  return workbenchId === 1
-    ? saveOpenedTabs(items, expectedVersion, SESSION_CENTER_TAB_ORIGIN)
-    : saveWorkbenchTabs(
-        workbenchId,
-        items,
-        expectedVersion,
-        SESSION_CENTER_TAB_ORIGIN
-      )
-}
-
-async function appendConversationsToWorkbench(
-  workbenchId: number,
-  conversations: DbConversationSummary[]
-): Promise<{ added: number; skipped: number }> {
-  const snapshot = await listTabsForWorkbench(workbenchId)
-  let planned = appendConversationTabs(snapshot.items, conversations)
-  if (planned.added === 0) {
-    return { added: 0, skipped: planned.skipped }
-  }
-
-  let outcome = await saveTabsForWorkbench(
-    workbenchId,
-    planned.items,
-    snapshot.version
-  )
-  if (outcome.accepted) {
-    return { added: planned.added, skipped: planned.skipped }
-  }
-
-  planned = appendConversationTabs(outcome.tabs, conversations)
-  if (planned.added === 0) {
-    return { added: 0, skipped: planned.skipped }
-  }
-
-  outcome = await saveTabsForWorkbench(
-    workbenchId,
-    planned.items,
-    outcome.version
-  )
-  if (!outcome.accepted) {
-    throw new Error("Workbench changed concurrently; please retry")
-  }
-  return { added: planned.added, skipped: planned.skipped }
-}
 
 type SessionSearchScope = "all" | "metadata" | "content"
 
@@ -1539,7 +1440,8 @@ export function ConversationManageDialog({
 
         const result = await appendConversationsToWorkbench(
           workbenchId,
-          selectedConversations
+          selectedConversations,
+          SESSION_CENTER_TAB_ORIGIN
         )
         if (result.added > 0) {
           try {

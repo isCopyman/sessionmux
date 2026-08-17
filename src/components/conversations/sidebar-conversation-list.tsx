@@ -114,7 +114,9 @@ import {
   worktreeHeaderAlias,
   type SidebarRow,
 } from "./sidebar-conversation-grouping"
+import { useSessionMultiSelect } from "@/hooks/use-session-multi-select"
 import { useSubsessionSync } from "@/hooks/use-subsession-sync"
+import { SessionBulkActionBar } from "./session-bulk-action-bar"
 import { SidebarSectionHeader } from "./sidebar-section-header"
 import { ConversationManageDialog } from "./conversation-manage-dialog"
 import { CloneDialog } from "@/components/layout/clone-dialog"
@@ -153,6 +155,10 @@ import {
 import { cn } from "@/lib/utils"
 import { FolderAliasLabel } from "./folder-alias-label"
 import { toErrorMessage } from "@/lib/app-error"
+import {
+  sessionClickIntent,
+  uniqueOrderedIds,
+} from "@/lib/session-multi-select"
 
 // Layout effect on the client (so the sticky overlay is positioned before
 // paint) but a no-op-safe passive effect during the static-export prerender.
@@ -787,6 +793,13 @@ export function SidebarConversationList({
     openChatModeTab,
   } = useTabActions()
   const { openConversations } = useWorkbenchRoute()
+  const {
+    selected: multiSelected,
+    apply: applyMultiSelect,
+    clear: clearMultiSelect,
+  } = useSessionMultiSelect<DbConversationSummary>()
+  const multiSelectedRef = useRef(multiSelected)
+  multiSelectedRef.current = multiSelected
 
   const folderIndex = useMemo(() => {
     const map = new Map<
@@ -1309,6 +1322,26 @@ export function SidebarConversationList({
   // Latest snapshots for the imperative scroll/drag code paths, refreshed every
   // render so the window listeners and scrollToActive read current values
   // without being torn down and re-subscribed.
+  const visibleSessionIds = useMemo(
+    () =>
+      uniqueOrderedIds(
+        rows.flatMap((row) =>
+          row.kind === "conversation" ? [row.conversation.id] : []
+        )
+      ),
+    [rows]
+  )
+  const conversationById = useMemo(
+    () =>
+      new Map(
+        conversations.map((conversation) => [conversation.id, conversation])
+      ),
+    [conversations]
+  )
+  const conversationByIdRef = useRef(conversationById)
+  conversationByIdRef.current = conversationById
+  const visibleSessionIdsRef = useRef(visibleSessionIds)
+  visibleSessionIdsRef.current = visibleSessionIds
   const rowsRef = useRef<SidebarRow[]>(rows)
   rowsRef.current = rows
   reorderableFolderIdsRef.current = reorderableFolderIds
@@ -1759,13 +1792,46 @@ export function SidebarConversationList({
   // is what keeps these references stable across status events — the linchpin
   // for the card `memo` actually bailing out (see Phase 1 of the perf plan).
   const handleSelect = useCallback(
-    (id: number, agentType: string, folderId: number) => {
+    (
+      id: number,
+      agentType: string,
+      folderId: number,
+      event?: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }
+    ) => {
+      const intent = sessionClickIntent(event)
+      if (intent !== "open") {
+        const conversation = conversationByIdRef.current.get(id)
+        if (conversation) {
+          applyMultiSelect(
+            conversation,
+            intent,
+            visibleSessionIdsRef.current,
+            (lookupId) => conversationByIdRef.current.get(lookupId)
+          )
+        }
+        return
+      }
+      if (multiSelectedRef.current.size > 0) clearMultiSelect()
       // Selecting a conversation returns to the conversation workspace if a
       // workbench route (e.g. Automations) was taking over the content region.
       openConversations()
       openTab(folderId, id, agentType as Parameters<typeof openTab>[2], true)
     },
-    [openTab, openConversations]
+    [applyMultiSelect, clearMultiSelect, openConversations, openTab]
+  )
+
+  const handleToggleSelect = useCallback(
+    (id: number) => {
+      const conversation = conversationByIdRef.current.get(id)
+      if (!conversation) return
+      applyMultiSelect(
+        conversation,
+        "toggle",
+        visibleSessionIdsRef.current,
+        (lookupId) => conversationByIdRef.current.get(lookupId)
+      )
+    },
+    [applyMultiSelect]
   )
 
   const handleDoubleClick = useCallback(
@@ -2471,12 +2537,15 @@ export function SidebarConversationList({
           selectedConversation?.agentType === conv.agent_type &&
           selectedConversation?.id === conv.id
         }
+        isMultiSelected={multiSelected.has(conv.id)}
+        multiSelectActive={multiSelected.size > 0}
         isOpenInTab={openTabKeys.has(`${conv.agent_type}:${conv.id}`)}
         timeLabel={formatRelative(
           sortMode === "updated" ? conv.updated_at : conv.created_at,
           now
         )}
         onSelect={handleSelect}
+        onToggleSelect={handleToggleSelect}
         onDoubleClick={handleDoubleClick}
         onOpenInSplit={handleOpenInSplit}
         onRename={handleRename}
@@ -2694,6 +2763,13 @@ export function SidebarConversationList({
           </ContextMenuContent>
         </ContextMenu>
       )}
+
+      {multiSelected.size > 0 ? (
+        <SessionBulkActionBar
+          selected={multiSelected}
+          onClear={clearMultiSelect}
+        />
+      ) : null}
 
       <AlertDialog
         open={removeConfirm !== null}

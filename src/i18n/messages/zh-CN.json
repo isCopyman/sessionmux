@@ -1653,7 +1653,8 @@
         "newSession": "新建会话",
         "deleteTitle": "删除这个分类？",
         "deleteDescription": "“{name}”中的会话将变为未分类，子分类上移一级。不会删除任何会话或运行中的智能体。",
-        "operationFailed": "分类操作失败：{message}"
+        "operationFailed": "分类操作失败：{message}",
+        "dragSessionCount": "{count} 个会话"
       },
       "manageConversations": {
         "title": "会话中心",
@@ -1730,6 +1731,9 @@
         "toastRestored": "已恢复 {count} 个会话",
         "toastCollectionMoved": "已移动 {count} 个会话的分类",
         "toastOpened": "已将 {count} 个会话加入当前工作台",
+        "clearSelection": "清除选择",
+        "addToWorkbench": "加入工作台",
+        "bulkActions": "会话操作",
         "toastOpFailed": "操作失败：{message}"
       },
       "sectionPinned": "已置顶",

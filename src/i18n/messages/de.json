@@ -1653,7 +1653,8 @@
         "newSession": "Neue Sitzung",
         "deleteTitle": "Delete this collection?",
         "deleteDescription": "Sessions in “{name}” become Unclassified and nested collections move up one level. No session or running agent is deleted.",
-        "operationFailed": "Collection operation failed: {message}"
+        "operationFailed": "Collection operation failed: {message}",
+        "dragSessionCount": "{count} Sitzungen"
       },
       "manageConversations": {
         "title": "Sitzungszentrale",
@@ -1730,6 +1731,9 @@
         "toastRestored": "{count} Sitzung(en) wiederhergestellt",
         "toastCollectionMoved": "Moved {count} session(s) to a collection",
         "toastOpened": "{count} Sitzung(en) zur aktuellen Workbench hinzugefügt",
+        "clearSelection": "Auswahl aufheben",
+        "addToWorkbench": "Zur Workbench hinzufügen",
+        "bulkActions": "Sitzungsaktionen",
         "toastOpFailed": "Aktion fehlgeschlagen: {message}"
       },
       "sectionPinned": "Angeheftet",

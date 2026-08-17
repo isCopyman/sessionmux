@@ -1653,7 +1653,8 @@
         "newSession": "新增工作階段",
         "deleteTitle": "Delete this collection?",
         "deleteDescription": "Sessions in “{name}” become Unclassified and nested collections move up one level. No session or running agent is deleted.",
-        "operationFailed": "Collection operation failed: {message}"
+        "operationFailed": "Collection operation failed: {message}",
+        "dragSessionCount": "{count} 個會話"
       },
       "manageConversations": {
         "title": "會話中心",
@@ -1730,6 +1731,9 @@
         "toastRestored": "已恢復 {count} 個會話",
         "toastCollectionMoved": "Moved {count} session(s) to a collection",
         "toastOpened": "已將 {count} 個會話加入目前工作台",
+        "clearSelection": "清除選取",
+        "addToWorkbench": "加入工作台",
+        "bulkActions": "會話操作",
         "toastOpFailed": "操作失敗：{message}"
       },
       "sectionPinned": "已置頂",

@@ -202,7 +202,57 @@ describe("SidebarConversationCard pin action", () => {
   })
 })
 
+describe("SidebarConversationCard multi-select", () => {
+  beforeEach(() => {
+    onSelect.mockClear()
+  })
 
+  it("forwards modifier keys so the list can toggle without opening", () => {
+    const { getByText } = renderWithIntl(
+      <SidebarConversationCard
+        conversation={conv(3)}
+        isSelected={false}
+        timeLabel=""
+        onSelect={onSelect}
+        onDoubleClick={onDoubleClick}
+        onRename={onRename}
+        onDelete={onDelete}
+        onStatusChange={onStatusChange}
+        onToggleSelect={vi.fn()}
+      />
+    )
+    fireEvent.click(getByText("conv-3"), { ctrlKey: true })
+    expect(onSelect).toHaveBeenCalledWith(
+      3,
+      "claude_code",
+      1,
+      expect.objectContaining({ ctrlKey: true, shiftKey: false })
+    )
+  })
+
+  it("keeps the agent icon visible while the row is checked", () => {
+    const { container, getByText } = renderWithIntl(
+      <SidebarConversationCard
+        conversation={conv(4)}
+        isSelected={false}
+        isMultiSelected
+        multiSelectActive
+        timeLabel=""
+        onSelect={onSelect}
+        onDoubleClick={onDoubleClick}
+        onRename={onRename}
+        onDelete={onDelete}
+        onStatusChange={onStatusChange}
+        onToggleSelect={vi.fn()}
+      />
+    )
+    expect(getByText("conv-4")).toBeTruthy()
+    expect(
+      container.querySelector('[data-session-checked="true"]')
+    ).toBeTruthy()
+    expect(container.querySelector(".opacity-0 svg")).toBeNull()
+  })
+})
 
 describe("SidebarConversationCard explicit pane placement", () => {
   beforeEach(() => {

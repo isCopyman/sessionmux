@@ -1653,7 +1653,8 @@
         "newSession": "新しいセッション",
         "deleteTitle": "Delete this collection?",
         "deleteDescription": "Sessions in “{name}” become Unclassified and nested collections move up one level. No session or running agent is deleted.",
-        "operationFailed": "Collection operation failed: {message}"
+        "operationFailed": "Collection operation failed: {message}",
+        "dragSessionCount": "{count} 件のセッション"
       },
       "manageConversations": {
         "title": "セッションセンター",
@@ -1730,6 +1731,9 @@
         "toastRestored": "{count} 件のセッションを復元しました",
         "toastCollectionMoved": "Moved {count} session(s) to a collection",
         "toastOpened": "{count} 件のセッションを現在のワークベンチに追加しました",
+        "clearSelection": "選択を解除",
+        "addToWorkbench": "ワークベンチに追加",
+        "bulkActions": "セッション操作",
         "toastOpFailed": "操作に失敗しました: {message}"
       },
       "sectionPinned": "ピン留め",

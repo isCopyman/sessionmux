@@ -27,6 +27,7 @@ import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 import {
   Archive,
+  CheckSquare,
   ChevronDown,
   ChevronRight,
   Circle,
@@ -34,16 +35,19 @@ import {
   FolderInput,
   FolderOpen,
   FolderPlus,
+  FolderTree,
   Inbox,
   Info,
   Loader2,
   MoreHorizontal,
+  PanelsTopLeft,
   Pencil,
   PanelBottomOpen,
   PanelRightOpen,
   Pin,
   PinOff,
   Plus,
+  Square,
   SquarePen,
   Trash2,
 } from "lucide-react"
@@ -91,6 +95,7 @@ import {
 } from "@/components/ui/select"
 import { AgentIcon } from "@/components/agent-icon"
 import { ConversationStatusDot } from "@/components/conversations/conversation-status-dot"
+import { SessionBulkActionBar } from "@/components/conversations/session-bulk-action-bar"
 import { SessionDetailsDialog } from "@/components/conversations/session-details-dialog"
 import {
   TreeDndBindings,
@@ -98,6 +103,8 @@ import {
   canDropSessionOnTarget,
   collectionPlacementForRoot,
   collectionPlacementForRow,
+  sessionDragPayload,
+  sessionIdsInDrag,
   type CollectionDropTarget,
   type CollectionTreeDrag,
   type SessionTreeDrag,
@@ -106,6 +113,7 @@ import {
 } from "@/components/collections/collection-tree-dnd"
 
 import { useImeGuard } from "@/hooks/use-ime-guard"
+import { useSessionMultiSelect } from "@/hooks/use-session-multi-select"
 import {
   assignConversationsToCollection,
   deleteConversation,
@@ -115,7 +123,14 @@ import {
   updateConversationStatus,
   updateConversationTitle,
 } from "@/lib/api"
+import { visibleCollectionSessionIds } from "@/lib/collection-session-order"
 import { formatConversationTitle } from "@/lib/conversation-title"
+import { sessionClickIntent } from "@/lib/session-multi-select"
+import {
+  archiveSessions,
+  deleteSessions,
+  moveSessionsToCollection,
+} from "@/lib/session-bulk-operations"
 import type {
   AgentType,
   CollectionInfo,
@@ -130,6 +145,7 @@ import { useCollectionStore } from "@/stores/collection-store"
 import { useOrganizationRevisionStore } from "@/stores/organization-revision-store"
 import type { SidebarSortMode } from "@/lib/sidebar-view-mode-storage"
 import { useTabActions, useTabStore } from "@/contexts/tab-context"
+import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
 
 type OpenScope = number | "unclassified"
 type TreeDropIntent =
@@ -237,6 +253,7 @@ export const CollectionTree = forwardRef<
   const tSidebar = useTranslations("Folder.sidebar")
   const tCommon = useTranslations("Folder.common")
   const tConversation = useTranslations("Folder.conversationCard")
+  const tManage = useTranslations("Folder.sidebar.manageConversations")
   const tStatus = useTranslations("Folder.statusLabels")
   const tDetails = useTranslations("Folder.sessionDetails")
   const ime = useImeGuard()
@@ -264,7 +281,9 @@ export const CollectionTree = forwardRef<
   )
   const activeTabId = useTabStore((state) => state.activeTabId)
   const tabs = useTabStore((state) => state.tabs)
-  const { closeConversationTab } = useTabActions()
+  const { closeConversationTab, openTab } = useTabActions()
+  const { openConversations } = useWorkbenchRoute()
+  const multiSelect = useSessionMultiSelect<DbConversationSummary>()
   const organizationRevision = useOrganizationRevisionStore(
     (state) => state.revision
   )
@@ -305,6 +324,7 @@ export const CollectionTree = forwardRef<
     useState<DbConversationSummary | null>(null)
   const [sessionDetails, setSessionDetails] =
     useState<DbConversationSummary | null>(null)
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false)
   const scrollContainerRef = useRef<HTMLDivElement>(null)
   const pendingLocateActiveRef = useRef(false)
   const [locateRequest, setLocateRequest] = useState(0)
@@ -453,6 +473,48 @@ export const CollectionTree = forwardRef<
     return grouped
   }, [folderById, membershipByConversation, visibleConversations])
 
+  const conversationById = useMemo(
+    () =>
+      new Map(
+        visibleConversations.map((conversation) => [
+          conversation.id,
+          conversation,
+        ])
+      ),
+    [visibleConversations]
+  )
+  const rootFolderIdByConversation = useMemo(() => {
+    const next = new Map<number, number>()
+    for (const conversation of visibleConversations) {
+      const folder = folderById.get(conversation.folder_id)
+      if (!folder) continue
+      next.set(conversation.id, folder.parent_id ?? folder.id)
+    }
+    return next
+  }, [folderById, visibleConversations])
+
+  const visibleSessionIds = useMemo(
+    () =>
+      visibleCollectionSessionIds({
+        pathRoots,
+        childrenByParent: children,
+        conversationsByCollection,
+        unclassifiedByRoot,
+        expanded,
+        collapsedPaths,
+        collapsedUnclassified,
+      }),
+    [
+      children,
+      collapsedPaths,
+      collapsedUnclassified,
+      conversationsByCollection,
+      expanded,
+      pathRoots,
+      unclassifiedByRoot,
+    ]
+  )
+
   const sessionCountByRoot = useMemo(() => {
     const result = new Map<number, number>()
     for (const conversation of visibleConversations) {
@@ -566,7 +628,8 @@ export const CollectionTree = forwardRef<
       rootId,
       collectionId,
       membershipByConversation.get(payload.conversationId) ?? null,
-      movingConversationId != null
+      movingConversationId != null,
+      membershipByConversation
     )
   }
 
@@ -577,17 +640,21 @@ export const CollectionTree = forwardRef<
   ) => {
     if (!canDropSession(payload, rootId, collectionId)) return
 
+    const movingIds = sessionIdsInDrag(payload).filter(
+      (id) => (membershipByConversation.get(id) ?? null) !== collectionId
+    )
+    if (movingIds.length === 0) return
+
     setDropTarget(null)
     setMovingConversationId(payload.conversationId)
     try {
-      await assignConversationsToCollection(
-        [payload.conversationId],
-        collectionId
-      )
+      await assignConversationsToCollection(movingIds, collectionId)
       setMembershipByConversation((current) => {
         const next = new Map(current)
-        if (collectionId == null) next.delete(payload.conversationId)
-        else next.set(payload.conversationId, collectionId)
+        for (const id of movingIds) {
+          if (collectionId == null) next.delete(id)
+          else next.set(id, collectionId)
+        }
         return next
       })
       if (collectionId == null) {
@@ -599,6 +666,7 @@ export const CollectionTree = forwardRef<
       } else {
         setExpanded((current) => new Set(current).add(collectionId))
       }
+      if (movingIds.length > 1) multiSelect.clear()
     } catch (error) {
       toast.error(t("operationFailed", { message: toErrorMessage(error) }))
     } finally {
@@ -903,6 +971,87 @@ export const CollectionTree = forwardRef<
     }
   }
 
+  const selectedSessions = () => [...multiSelect.selected.values()]
+
+  const handleBulkArchive = async () => {
+    const conversations = selectedSessions()
+    if (conversations.length === 0) return
+    try {
+      await archiveSessions(conversations)
+      toast.success(tManage("toastArchived", { count: conversations.length }))
+      multiSelect.clear()
+    } catch (error) {
+      toast.error(t("operationFailed", { message: toErrorMessage(error) }))
+    }
+  }
+
+  const handleBulkMove = async (collectionId: number | null) => {
+    const conversations = selectedSessions()
+    if (conversations.length === 0) return
+    try {
+      await moveSessionsToCollection(
+        conversations.map((conversation) => conversation.id),
+        collectionId
+      )
+      toast.success(
+        tManage("toastCollectionMoved", { count: conversations.length })
+      )
+      multiSelect.clear()
+    } catch (error) {
+      toast.error(t("operationFailed", { message: toErrorMessage(error) }))
+    }
+  }
+
+  const handleBulkAddToCurrentWorkbench = () => {
+    const conversations = selectedSessions()
+    if (conversations.length === 0) return
+    openConversations()
+    for (const conversation of conversations) {
+      openTab(
+        conversation.folder_id,
+        conversation.id,
+        conversation.agent_type,
+        true,
+        formatConversationTitle(conversation.title)
+      )
+    }
+    toast.success(tManage("toastOpened", { count: conversations.length }))
+    multiSelect.clear()
+  }
+
+  const handleBulkDelete = async () => {
+    const conversations = selectedSessions()
+    if (conversations.length === 0) return
+    try {
+      await deleteSessions(conversations, closeConversationTab)
+      toast.success(tManage("toastDeleted", { count: conversations.length }))
+      setBulkDeleteOpen(false)
+      multiSelect.clear()
+    } catch (error) {
+      toast.error(t("operationFailed", { message: toErrorMessage(error) }))
+    }
+  }
+
+  const lookupVisibleSession = (id: number) => conversationById.get(id)
+
+  const handleSessionActivate = (
+    conversation: DbConversationSummary,
+    event?: { ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean }
+  ) => {
+    const intent = sessionClickIntent(event)
+    if (intent !== "open") {
+      multiSelect.apply(
+        conversation,
+        intent,
+        visibleSessionIds,
+        lookupVisibleSession
+      )
+      return
+    }
+    if (multiSelect.selected.size > 0) multiSelect.clear()
+    onOpenSession?.(conversation)
+  }
+
   const handleSessionTreeKey = (
     event: { key: string; preventDefault: () => void },
     conversation: DbConversationSummary
@@ -917,6 +1066,13 @@ export const CollectionTree = forwardRef<
     }
     if (event.key === "Delete") {
       event.preventDefault()
+      if (
+        multiSelect.selected.size > 1 &&
+        multiSelect.selected.has(conversation.id)
+      ) {
+        setBulkDeleteOpen(true)
+        return
+      }
       setSessionDelete(conversation)
     }
   }
@@ -942,20 +1098,41 @@ export const CollectionTree = forwardRef<
     collectionId: number | null
   ) => {
     const selected = conversation.id === activeConversationId
+    const checked = multiSelect.selected.has(conversation.id)
+    const multiSelectActive = multiSelect.selected.size > 0
+    const bulkMenu =
+      multiSelectActive && checked && multiSelect.selected.size > 1
     const rootId = sessionRootId(conversation)
     const dropKey = rootId == null ? null : dragTargetKey(rootId, collectionId)
     const isPinned = conversation.pinned_at != null
+    const title =
+      formatConversationTitle(conversation.title) ||
+      tConversation("untitledConversation")
+    const dragPayload =
+      rootId == null
+        ? null
+        : sessionDragPayload({
+            grabbedId: conversation.id,
+            grabbedRootFolderId: rootId,
+            grabbedLabel: title,
+            selectedIds: [...multiSelect.selected.keys()],
+            rootFolderIdByConversation,
+          })
+    const dragIds = dragPayload ? sessionIdsInDrag(dragPayload) : []
+    const groupDragging =
+      activeTreeDrag?.kind === "session" &&
+      sessionIdsInDrag(activeTreeDrag).includes(conversation.id)
     const row = (
       <TreeDndBindings
         dragId={`session:${conversation.id}`}
-        dragData={{
-          kind: "session",
-          conversationId: conversation.id,
-          rootFolderId: rootId ?? -1,
-          label:
-            formatConversationTitle(conversation.title) ||
-            tConversation("untitledConversation"),
-        }}
+        dragData={
+          dragPayload ?? {
+            kind: "session",
+            conversationId: conversation.id,
+            rootFolderId: -1,
+            label: title,
+          }
+        }
         dropId={`session-bucket:${conversation.id}`}
         dropData={{
           kind: "session-bucket",
@@ -967,62 +1144,107 @@ export const CollectionTree = forwardRef<
         }
       >
         {({ setNodeRef, attributes, listeners, isDragging }) => (
-          <button
-            ref={setNodeRef}
-            type="button"
-            {...attributes}
-            {...listeners}
-            data-conversation-id={conversation.id}
-            data-session-root-id={rootId ?? undefined}
-            data-session-collection-id={
-              collectionId == null ? "" : String(collectionId)
-            }
-            data-focused-session={selected ? "true" : undefined}
-            data-session-dragging={isDragging ? "true" : undefined}
-            data-session-drop-target={
-              dropKey != null && dropTarget === dropKey ? "true" : undefined
-            }
-            aria-current={selected ? "page" : undefined}
-            title={formatConversationTitle(conversation.title)}
+          <div
             className={cn(
-              "flex h-7 w-full min-w-0 cursor-grab touch-none items-center gap-1.5 rounded-md pe-2 text-start text-xs hover:bg-sidebar-accent active:cursor-grabbing focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
+              "group flex min-w-0 items-center rounded-md hover:bg-sidebar-accent",
               selected &&
                 "bg-primary/8 text-primary ring-1 ring-inset ring-primary/30",
+              checked &&
+                "bg-sidebar-primary/12 ring-1 ring-inset ring-primary/25",
               dropKey != null &&
                 dropTarget === dropKey &&
                 "bg-primary/10 ring-1 ring-inset ring-primary/45",
-              isDragging && "opacity-45",
-              movingConversationId === conversation.id &&
+              (isDragging || groupDragging) && "opacity-45",
+              (movingConversationId === conversation.id ||
+                (movingConversationId != null &&
+                  dragIds.includes(conversation.id))) &&
                 "pointer-events-none opacity-55"
             )}
-            style={{ paddingInlineStart: `${1.75 + depth * 0.75}rem` }}
-            onClick={() => onOpenSession?.(conversation)}
-            onKeyDown={(event) => {
-              listeners?.onKeyDown?.(event)
-              if (!event.defaultPrevented) {
-                handleSessionTreeKey(event, conversation)
-              }
-            }}
+            style={{ paddingInlineStart: `${0.75 + depth * 0.75}rem` }}
           >
-            <span
-              aria-hidden
-              className="relative flex h-3.5 w-3.5 shrink-0 items-center justify-center"
+            <button
+              type="button"
+              tabIndex={-1}
+              data-session-select={conversation.id}
+              aria-pressed={checked}
+              aria-label={tManage("selectConversation", { title })}
+              className={cn(
+                "flex h-4 w-0 shrink-0 items-center justify-center overflow-hidden rounded-sm text-muted-foreground hover:text-foreground",
+                "opacity-0 pointer-events-none",
+                "group-hover:h-4 group-hover:w-4 group-hover:opacity-100 group-hover:pointer-events-auto",
+                (multiSelectActive || checked) &&
+                  "h-4 w-4 opacity-100 pointer-events-auto"
+              )}
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={(event) => {
+                event.preventDefault()
+                event.stopPropagation()
+                multiSelect.apply(
+                  conversation,
+                  "toggle",
+                  visibleSessionIds,
+                  lookupVisibleSession
+                )
+              }}
             >
-              <AgentIcon
-                agentType={conversation.agent_type}
-                className="h-3 w-3"
-              />
-              <ConversationStatusDot
-                status={conversation.status as ConversationStatus}
-                size="sm"
-                className="absolute -bottom-0.5 -right-0.5 ring-1 ring-sidebar"
-              />
-            </span>
-            <span className="min-w-0 flex-1 truncate">
-              {formatConversationTitle(conversation.title) ||
-                tConversation("untitledConversation")}
-            </span>
-          </button>
+              {checked ? (
+                <CheckSquare className="h-3.5 w-3.5 text-primary" />
+              ) : (
+                <Square className="h-3.5 w-3.5" />
+              )}
+            </button>
+            <button
+              ref={setNodeRef}
+              type="button"
+              {...attributes}
+              {...listeners}
+              data-conversation-id={conversation.id}
+              data-session-root-id={rootId ?? undefined}
+              data-session-collection-id={
+                collectionId == null ? "" : String(collectionId)
+              }
+              data-focused-session={selected ? "true" : undefined}
+              data-session-checked={checked ? "true" : undefined}
+              data-session-drag-ids={
+                dragIds.length > 0 ? dragIds.join(",") : undefined
+              }
+              data-session-dragging={isDragging ? "true" : undefined}
+              data-session-drop-target={
+                dropKey != null && dropTarget === dropKey ? "true" : undefined
+              }
+              aria-current={selected ? "page" : undefined}
+              title={title}
+              className={cn(
+                "flex h-7 min-w-0 flex-1 cursor-grab touch-none items-center gap-1.5 pe-2 text-start text-xs active:cursor-grabbing focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
+                (multiSelectActive || checked) && "ps-1",
+                "group-hover:ps-1"
+              )}
+              onClick={(event) => handleSessionActivate(conversation, event)}
+              onKeyDown={(event) => {
+                listeners?.onKeyDown?.(event)
+                if (!event.defaultPrevented) {
+                  handleSessionTreeKey(event, conversation)
+                }
+              }}
+            >
+              <span
+                aria-hidden
+                data-session-agent-icon=""
+                className="relative flex h-3.5 w-3.5 shrink-0 items-center justify-center"
+              >
+                <AgentIcon
+                  agentType={conversation.agent_type}
+                  className="h-3 w-3"
+                />
+                <ConversationStatusDot
+                  status={conversation.status as ConversationStatus}
+                  size="sm"
+                  className="absolute -bottom-0.5 -right-0.5 ring-1 ring-sidebar"
+                />
+              </span>
+              <span className="min-w-0 flex-1 truncate">{title}</span>
+            </button>
+          </div>
         )}
       </TreeDndBindings>
     )
@@ -1032,99 +1254,144 @@ export const CollectionTree = forwardRef<
           <div className="min-w-0">{row}</div>
         </ContextMenuTrigger>
         <ContextMenuContent>
-          {onOpenSessionInSplit ? (
+          {bulkMenu ? (
             <>
-              <ContextMenuItem
-                onSelect={() => onOpenSessionInSplit(conversation, "right")}
-              >
-                <PanelRightOpen className="h-4 w-4" />
-                {tConversation("openRight")}
+              <ContextMenuItem onSelect={() => void handleBulkArchive()}>
+                <Archive className="h-4 w-4" />
+                {tManage("archiveSelected")}
               </ContextMenuItem>
-              <ContextMenuItem
-                onSelect={() => onOpenSessionInSplit(conversation, "down")}
-              >
-                <PanelBottomOpen className="h-4 w-4" />
-                {tConversation("openDown")}
+              <ContextMenuSub>
+                <ContextMenuSubTrigger>
+                  <FolderTree className="h-4 w-4" />
+                  {tManage("moveToCollection")}
+                </ContextMenuSubTrigger>
+                <ContextMenuSubContent className="max-h-72 overflow-y-auto">
+                  <ContextMenuItem onSelect={() => void handleBulkMove(null)}>
+                    {tManage("collectionUnclassified")}
+                  </ContextMenuItem>
+                  {options.map(({ item, depth: optionDepth }) => (
+                    <ContextMenuItem
+                      key={item.id}
+                      onSelect={() => void handleBulkMove(item.id)}
+                    >
+                      <span className="truncate">
+                        {optionDepth > 0 ? `${"· ".repeat(optionDepth)}` : ""}
+                        {item.name}
+                      </span>
+                    </ContextMenuItem>
+                  ))}
+                </ContextMenuSubContent>
+              </ContextMenuSub>
+              <ContextMenuItem onSelect={handleBulkAddToCurrentWorkbench}>
+                <PanelsTopLeft className="h-4 w-4" />
+                {tManage("addToWorkbench")}
               </ContextMenuItem>
               <ContextMenuSeparator />
+              <ContextMenuItem
+                variant="destructive"
+                onSelect={() => setBulkDeleteOpen(true)}
+              >
+                <Trash2 className="h-4 w-4" />
+                {tManage("deleteSelected")}
+              </ContextMenuItem>
             </>
-          ) : null}
-          {onNewSession && rootId != null ? (
+          ) : (
             <>
-              <ContextMenuItem onSelect={() => onNewSession(rootId)}>
-                <SquarePen className="h-4 w-4" />
-                {tConversation("newConversation")}
+              {onOpenSessionInSplit ? (
+                <>
+                  <ContextMenuItem
+                    onSelect={() => onOpenSessionInSplit(conversation, "right")}
+                  >
+                    <PanelRightOpen className="h-4 w-4" />
+                    {tConversation("openRight")}
+                  </ContextMenuItem>
+                  <ContextMenuItem
+                    onSelect={() => onOpenSessionInSplit(conversation, "down")}
+                  >
+                    <PanelBottomOpen className="h-4 w-4" />
+                    {tConversation("openDown")}
+                  </ContextMenuItem>
+                  <ContextMenuSeparator />
+                </>
+              ) : null}
+              {onNewSession && rootId != null ? (
+                <>
+                  <ContextMenuItem onSelect={() => onNewSession(rootId)}>
+                    <SquarePen className="h-4 w-4" />
+                    {tConversation("newConversation")}
+                  </ContextMenuItem>
+                  <ContextMenuSeparator />
+                </>
+              ) : null}
+              <ContextMenuItem
+                onSelect={() =>
+                  setSessionRename({
+                    conversation,
+                    value: conversation.title ?? "",
+                  })
+                }
+              >
+                <Pencil className="h-4 w-4" />
+                {tConversation("rename")}
+                <span className="ms-auto text-[10px] text-muted-foreground">
+                  F2
+                </span>
+              </ContextMenuItem>
+              <ContextMenuItem
+                onSelect={() => void handleSessionPin(conversation, !isPinned)}
+              >
+                {isPinned ? (
+                  <PinOff className="h-4 w-4" />
+                ) : (
+                  <Pin className="h-4 w-4" />
+                )}
+                {isPinned ? tConversation("unpin") : tConversation("pin")}
+              </ContextMenuItem>
+              <ContextMenuItem
+                onSelect={() => void handleSessionArchive(conversation)}
+              >
+                <Archive className="h-4 w-4" />
+                {tConversation("archive")}
+              </ContextMenuItem>
+              <ContextMenuItem onSelect={() => setSessionDetails(conversation)}>
+                <Info className="h-4 w-4" />
+                {tDetails("menuLabel")}
               </ContextMenuItem>
               <ContextMenuSeparator />
+              <ContextMenuSub>
+                <ContextMenuSubTrigger>
+                  <Circle className="h-4 w-4" />
+                  {tConversation("status")}
+                </ContextMenuSubTrigger>
+                <ContextMenuSubContent>
+                  {STATUS_ORDER.filter(
+                    (status) => status !== conversation.status
+                  ).map((status) => (
+                    <ContextMenuItem
+                      key={status}
+                      onSelect={() =>
+                        void handleSessionStatus(conversation, status)
+                      }
+                    >
+                      <ConversationStatusDot status={status} />
+                      {tStatus(status)}
+                    </ContextMenuItem>
+                  ))}
+                </ContextMenuSubContent>
+              </ContextMenuSub>
+              <ContextMenuSeparator />
+              <ContextMenuItem
+                variant="destructive"
+                onSelect={() => setSessionDelete(conversation)}
+              >
+                <Trash2 className="h-4 w-4" />
+                {tConversation("delete")}
+                <span className="ms-auto text-[10px] text-muted-foreground">
+                  Del
+                </span>
+              </ContextMenuItem>
             </>
-          ) : null}
-          <ContextMenuItem
-            onSelect={() =>
-              setSessionRename({
-                conversation,
-                value: conversation.title ?? "",
-              })
-            }
-          >
-            <Pencil className="h-4 w-4" />
-            {tConversation("rename")}
-            <span className="ms-auto text-[10px] text-muted-foreground">
-              F2
-            </span>
-          </ContextMenuItem>
-          <ContextMenuItem
-            onSelect={() => void handleSessionPin(conversation, !isPinned)}
-          >
-            {isPinned ? (
-              <PinOff className="h-4 w-4" />
-            ) : (
-              <Pin className="h-4 w-4" />
-            )}
-            {isPinned ? tConversation("unpin") : tConversation("pin")}
-          </ContextMenuItem>
-          <ContextMenuItem
-            onSelect={() => void handleSessionArchive(conversation)}
-          >
-            <Archive className="h-4 w-4" />
-            {tConversation("archive")}
-          </ContextMenuItem>
-          <ContextMenuItem onSelect={() => setSessionDetails(conversation)}>
-            <Info className="h-4 w-4" />
-            {tDetails("menuLabel")}
-          </ContextMenuItem>
-          <ContextMenuSeparator />
-          <ContextMenuSub>
-            <ContextMenuSubTrigger>
-              <Circle className="h-4 w-4" />
-              {tConversation("status")}
-            </ContextMenuSubTrigger>
-            <ContextMenuSubContent>
-              {STATUS_ORDER.filter(
-                (status) => status !== conversation.status
-              ).map((status) => (
-                <ContextMenuItem
-                  key={status}
-                  onSelect={() =>
-                    void handleSessionStatus(conversation, status)
-                  }
-                >
-                  <ConversationStatusDot status={status} />
-                  {tStatus(status)}
-                </ContextMenuItem>
-              ))}
-            </ContextMenuSubContent>
-          </ContextMenuSub>
-          <ContextMenuSeparator />
-          <ContextMenuItem
-            variant="destructive"
-            onSelect={() => setSessionDelete(conversation)}
-          >
-            <Trash2 className="h-4 w-4" />
-            {tConversation("delete")}
-            <span className="ms-auto text-[10px] text-muted-foreground">
-              Del
-            </span>
-          </ContextMenuItem>
+          )}
         </ContextMenuContent>
       </ContextMenu>
     )
@@ -1692,6 +1959,13 @@ export const CollectionTree = forwardRef<
           )}
         </div>
 
+        {multiSelect.selected.size > 0 ? (
+          <SessionBulkActionBar
+            selected={multiSelect.selected}
+            onClear={multiSelect.clear}
+          />
+        ) : null}
+
         <Dialog
           open={sessionRename != null}
           onOpenChange={(open) => !open && setSessionRename(null)}
@@ -1724,6 +1998,30 @@ export const CollectionTree = forwardRef<
             </DialogFooter>
           </DialogContent>
         </Dialog>
+
+        <AlertDialog
+          open={bulkDeleteOpen}
+          onOpenChange={(open) => !open && setBulkDeleteOpen(false)}
+        >
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>
+                {tManage("confirmDeleteTitle", {
+                  count: multiSelect.selected.size,
+                })}
+              </AlertDialogTitle>
+              <AlertDialogDescription>
+                {tManage("confirmDeleteDescription")}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>{tConversation("cancel")}</AlertDialogCancel>
+              <AlertDialogAction onClick={() => void handleBulkDelete()}>
+                {tCommon("confirm")}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
 
         <AlertDialog
           open={sessionDelete != null}
@@ -1858,7 +2156,14 @@ export const CollectionTree = forwardRef<
                   ) : (
                     <Circle className="h-3 w-3 shrink-0 fill-current" />
                   )}
-                  <span className="truncate">{activeTreeDrag.label}</span>
+                  <span className="truncate">
+                    {activeTreeDrag.kind === "session" &&
+                    sessionIdsInDrag(activeTreeDrag).length > 1
+                      ? t("dragSessionCount", {
+                          count: sessionIdsInDrag(activeTreeDrag).length,
+                        })
+                      : activeTreeDrag.label}
+                  </span>
                 </div>
               ) : null}
             </DragOverlay>,

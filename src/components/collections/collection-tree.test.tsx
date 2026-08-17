@@ -9,6 +9,8 @@ import {
   canDropSessionOnTarget,
   collectionPlacementForRoot,
   collectionPlacementForRow,
+  sessionDragPayload,
+  sessionIdsInDrag,
 } from "./collection-tree-dnd"
 import enMessages from "@/i18n/messages/en.json"
 import type { DbConversationSummary } from "@/lib/types"
@@ -31,6 +33,8 @@ const h = vi.hoisted(() => ({
   applyConversationUpsert: vi.fn(),
   applyConversationRemove: vi.fn(),
   closeConversationTab: vi.fn(),
+  openTab: vi.fn(),
+  openConversations: vi.fn(),
   conversations: [
     {
       id: 101,
@@ -164,68 +168,47 @@ vi.mock("@/stores/collection-store", () => ({
     }),
 }))
 
-vi.mock("@/stores/app-workspace-store", () => ({
-  useAppWorkspaceStore: (selector: (state: unknown) => unknown) =>
-    selector({
-      conversations: h.conversations,
-      activeFolderId: 7,
-      folders: [
-        {
-          id: 7,
-          name: "project",
-          alias: null,
-          path: "/tmp/project",
-          parent_id: null,
-          kind: "regular",
-        },
-        {
-          id: 8,
-          name: "experiment",
-          alias: null,
-          path: "/tmp/project-worktrees/experiment",
-          parent_id: 7,
-          kind: "worktree",
-        },
-        {
-          id: 9,
-          name: "other-project",
-          alias: null,
-          path: "/tmp/other-project",
-          parent_id: null,
-          kind: "regular",
-        },
-      ],
-      updateConversationLocal: h.updateConversationLocal,
-      applyConversationUpsert: h.applyConversationUpsert,
-      applyConversationRemove: h.applyConversationRemove,
-      allFolders: [
-        {
-          id: 7,
-          name: "project",
-          alias: null,
-          path: "/tmp/project",
-          parent_id: null,
-          kind: "regular",
-        },
-        {
-          id: 8,
-          name: "experiment",
-          alias: null,
-          path: "/tmp/project-worktrees/experiment",
-          parent_id: 7,
-          kind: "worktree",
-        },
-        {
-          id: 9,
-          name: "other-project",
-          alias: null,
-          path: "/tmp/other-project",
-          parent_id: null,
-          kind: "regular",
-        },
-      ],
-    }),
-}))
+vi.mock("@/stores/app-workspace-store", () => {
+  const folders = [
+    {
+      id: 7,
+      name: "project",
+      alias: null,
+      path: "/tmp/project",
+      parent_id: null,
+      kind: "regular",
+    },
+    {
+      id: 8,
+      name: "experiment",
+      alias: null,
+      path: "/tmp/project-worktrees/experiment",
+      parent_id: 7,
+      kind: "worktree",
+    },
+    {
+      id: 9,
+      name: "other-project",
+      alias: null,
+      path: "/tmp/other-project",
+      parent_id: null,
+      kind: "regular",
+    },
+  ]
+  const state = {
+    conversations: h.conversations,
+    activeFolderId: 7,
+    folders,
+    updateConversationLocal: h.updateConversationLocal,
+    applyConversationUpsert: h.applyConversationUpsert,
+    applyConversationRemove: h.applyConversationRemove,
+    allFolders: folders,
+  }
+  const useAppWorkspaceStore = (selector: (value: typeof state) => unknown) =>
+    selector(state)
+  useAppWorkspaceStore.getState = () => state
+  return { useAppWorkspaceStore }
+})
 
 vi.mock("@/contexts/tab-context", () => ({
   useTabStore: (selector: (state: unknown) => unknown) =>
@@ -235,7 +218,30 @@ vi.mock("@/contexts/tab-context", () => ({
     }),
   useTabActions: () => ({
     closeConversationTab: h.closeConversationTab,
+    openTab: h.openTab,
   }),
+}))
+
+vi.mock("@/contexts/workbench-route-context", () => ({
+  useWorkbenchRoute: () => ({ openConversations: h.openConversations }),
+}))
+
+vi.mock("@/stores/tab-store", () => ({
+  useTabStore: (selector: (state: unknown) => unknown) =>
+    selector({
+      activeWorkbenchId: 1,
+      rawTabs: [],
+    }),
+}))
+
+vi.mock("@/stores/workbench-store", () => ({
+  useWorkbenchStore: (selector: (state: unknown) => unknown) =>
+    selector({
+      items: [{ id: 1, name: "Main", position: 0, is_pinned: false }],
+      hydrated: true,
+      hydrate: vi.fn(),
+      createOnly: vi.fn(),
+    }),
 }))
 
 vi.mock("@/components/conversations/session-details-dialog", () => ({
@@ -471,6 +477,39 @@ describe("CollectionTree", () => {
     ).toBe(false)
   })
 
+  it("drags every selected Session on the same Path together", () => {
+    const payload = sessionDragPayload({
+      grabbedId: 102,
+      grabbedRootFolderId: 7,
+      grabbedLabel: "Loose notes",
+      selectedIds: [102, 103, 104],
+      rootFolderIdByConversation: new Map([
+        [102, 7],
+        [103, 7],
+        [104, 9],
+      ]),
+    })
+    expect(sessionIdsInDrag(payload)).toEqual([102, 103])
+    expect(canDropSessionOnTarget(payload, 7, 10, null, false, new Map())).toBe(
+      true
+    )
+  })
+
+  it("keeps a plain drag on an unselected Session as a single move", () => {
+    const payload = sessionDragPayload({
+      grabbedId: 102,
+      grabbedRootFolderId: 7,
+      grabbedLabel: "Loose notes",
+      selectedIds: [101, 103],
+      rootFolderIdByConversation: new Map([
+        [101, 7],
+        [102, 7],
+        [103, 7],
+      ]),
+    })
+    expect(sessionIdsInDrag(payload)).toEqual([102])
+  })
+
   it("rejects Session drops across canonical Paths", () => {
     expect(
       canDropSessionOnTarget(
@@ -599,6 +638,85 @@ describe("CollectionTree", () => {
     research.focus()
     fireEvent.keyDown(research, { key: "F2" })
     expect(await screen.findByText("Rename collection")).toBeTruthy()
+  })
+
+  it("selects multiple Sessions with modifier clicks and archives them", async () => {
+    const onOpenSession = vi.fn()
+    renderTree(vi.fn(), { showSessions: true, onOpenSession })
+    const looseNotes = await screen.findByRole("button", {
+      name: "Loose notes",
+    })
+    fireEvent.click(looseNotes, { ctrlKey: true })
+    fireEvent.click(
+      screen.getByRole("button", { name: "Worktree experiment" }),
+      { ctrlKey: true }
+    )
+
+    expect(onOpenSession).not.toHaveBeenCalled()
+    expect(await screen.findByText("2 selected")).toBeTruthy()
+    const checkedRow = document.querySelector('[data-session-checked="true"]')
+    expect(checkedRow?.querySelector("[data-session-agent-icon]")).toBeTruthy()
+    expect(
+      checkedRow
+        ?.querySelector("[data-session-agent-icon]")
+        ?.classList.contains("opacity-0")
+    ).toBe(false)
+
+    await userEvent.click(screen.getByRole("button", { name: "Archive" }))
+    await waitFor(() => {
+      expect(h.updateArchive).toHaveBeenCalledWith(102, true)
+      expect(h.updateArchive).toHaveBeenCalledWith(103, true)
+    })
+    expect(screen.queryByText("2 selected")).toBeNull()
+  })
+
+  it("marks same-Path selected Sessions as one drag group", async () => {
+    renderTree(vi.fn(), { showSessions: true })
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Loose notes" }),
+      {
+        ctrlKey: true,
+      }
+    )
+    fireEvent.click(
+      screen.getByRole("button", { name: "Worktree experiment" }),
+      { ctrlKey: true }
+    )
+    expect(
+      document
+        .querySelector('[data-conversation-id="102"]')
+        ?.getAttribute("data-session-drag-ids")
+    ).toBe("102,103")
+    expect(
+      document
+        .querySelector('[data-conversation-id="104"]')
+        ?.getAttribute("data-session-drag-ids")
+    ).toBe("104")
+  })
+
+  it("requires confirmation before deleting the selected Sessions", async () => {
+    h.deleteConversation.mockResolvedValue(undefined)
+    renderTree(vi.fn(), { showSessions: true })
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Loose notes" }),
+      {
+        ctrlKey: true,
+      }
+    )
+    fireEvent.click(
+      screen.getByRole("button", { name: "Worktree experiment" }),
+      { ctrlKey: true }
+    )
+
+    await userEvent.click(screen.getByRole("button", { name: "Delete" }))
+    expect(h.deleteConversation).not.toHaveBeenCalled()
+    expect(await screen.findByText("Delete 2 conversation(s)?")).toBeTruthy()
+
+    await userEvent.click(screen.getByRole("button", { name: "Confirm" }))
+    await waitFor(() => {
+      expect(h.deleteConversation).toHaveBeenCalledWith(102)
+      expect(h.deleteConversation).toHaveBeenCalledWith(103)
+    })
   })
 
   it("uses another Session's Collection as the Session drop target", () => {

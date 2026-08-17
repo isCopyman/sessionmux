@@ -13,8 +13,51 @@ import type { CollectionInfo } from "@/lib/types"
 export type SessionTreeDrag = {
   kind: "session"
   conversationId: number
+  /** Sessions that will move together. Always includes `conversationId`. */
+  conversationIds?: number[]
   rootFolderId: number
   label: string
+}
+
+export function sessionIdsInDrag(payload: SessionTreeDrag): number[] {
+  const ids =
+    payload.conversationIds && payload.conversationIds.length > 0
+      ? payload.conversationIds
+      : [payload.conversationId]
+  const seen = new Set<number>()
+  const result: number[] = []
+  for (const id of ids) {
+    if (seen.has(id)) continue
+    seen.add(id)
+    result.push(id)
+  }
+  if (!seen.has(payload.conversationId)) {
+    result.unshift(payload.conversationId)
+  }
+  return result
+}
+
+export function sessionDragPayload(args: {
+  grabbedId: number
+  grabbedRootFolderId: number
+  grabbedLabel: string
+  selectedIds: readonly number[]
+  rootFolderIdByConversation: ReadonlyMap<number, number>
+}): SessionTreeDrag {
+  const selectedOnPath = args.selectedIds.filter(
+    (id) => args.rootFolderIdByConversation.get(id) === args.grabbedRootFolderId
+  )
+  const ids =
+    selectedOnPath.includes(args.grabbedId) && selectedOnPath.length > 1
+      ? selectedOnPath
+      : [args.grabbedId]
+  return {
+    kind: "session",
+    conversationId: args.grabbedId,
+    conversationIds: ids,
+    rootFolderId: args.grabbedRootFolderId,
+    label: args.grabbedLabel,
+  }
 }
 
 export type CollectionTreeDrag = {
@@ -55,13 +98,19 @@ export function canDropSessionOnTarget(
   rootFolderId: number,
   collectionId: number | null,
   currentCollectionId: number | null,
-  busy = false
+  busy = false,
+  membershipByConversation?: ReadonlyMap<number, number>
 ) {
-  return (
-    !busy &&
-    payload.rootFolderId === rootFolderId &&
-    currentCollectionId !== collectionId
-  )
+  if (busy || payload.rootFolderId !== rootFolderId) return false
+  return sessionIdsInDrag(payload).some((id) => {
+    const current =
+      membershipByConversation != null
+        ? (membershipByConversation.get(id) ?? null)
+        : id === payload.conversationId
+          ? currentCollectionId
+          : null
+    return current !== collectionId
+  })
 }
 
 function descendants(items: CollectionInfo[], id: number) {

@@ -12,11 +12,13 @@ import {
   PinOff,
   Archive,
   CheckCircle2,
+  CheckSquare,
   FolderX,
   Info,
   ChevronRight,
   PanelRightOpen,
   PanelBottomOpen,
+  Square,
 } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { useImeGuard } from "@/hooks/use-ime-guard"
@@ -95,7 +97,7 @@ export function SubsessionAncestorRails({ depth }: { depth: number }) {
           style={{
             top: "-0.0625rem",
             bottom: "-0.0625rem",
-            left: `calc(0.875rem + ${level} * ${CONV_RAIL_DEPTH_STEP})`,
+            left: `calc(0.875rem + var(--conv-select-gutter, 0px) + ${level} * ${CONV_RAIL_DEPTH_STEP})`,
             width: "0.125rem",
             transform: "translateX(-50%)",
           }}
@@ -111,7 +113,15 @@ interface SidebarConversationCardProps {
   isOpenInTab?: boolean
 
   timeLabel?: string
-  onSelect: (id: number, agentType: string, folderId: number) => void
+  onSelect: (
+    id: number,
+    agentType: string,
+    folderId: number,
+    event?: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }
+  ) => void
+  isMultiSelected?: boolean
+  multiSelectActive?: boolean
+  onToggleSelect?: (id: number) => void
   onDoubleClick?: (id: number, agentType: string, folderId: number) => void
   onOpenInSplit?: (
     id: number,
@@ -143,6 +153,9 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
 
   timeLabel,
   onSelect,
+  isMultiSelected = false,
+  multiSelectActive = false,
+  onToggleSelect,
   onDoubleClick,
   onOpenInSplit,
   onRename,
@@ -159,6 +172,7 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
   const t = useTranslations("Folder.conversationCard")
   const ime = useImeGuard()
   const tSidebar = useTranslations("Folder.sidebar")
+  const tManage = useTranslations("Folder.sidebar.manageConversations")
   const tStatus = useTranslations("Folder.statusLabels")
   const tDetails = useTranslations("Folder.sessionDetails")
   const [renameOpen, setRenameOpen] = useState(false)
@@ -166,14 +180,21 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
   const [detailsOpen, setDetailsOpen] = useState(false)
   const [renameValue, setRenameValue] = useState("")
 
-  const handleClick = useCallback(() => {
-    onSelect(conversation.id, conversation.agent_type, conversation.folder_id)
-  }, [
-    onSelect,
-    conversation.id,
-    conversation.agent_type,
-    conversation.folder_id,
-  ])
+  const handleClick = useCallback(
+    (event: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }) => {
+      onSelect(
+        conversation.id,
+        conversation.agent_type,
+        conversation.folder_id,
+        {
+          ctrlKey: event.ctrlKey,
+          metaKey: event.metaKey,
+          shiftKey: event.shiftKey,
+        }
+      )
+    },
+    [onSelect, conversation.id, conversation.agent_type, conversation.folder_id]
+  )
 
   const handleDblClick = useCallback(() => {
     onDoubleClick?.(
@@ -239,11 +260,15 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
             // before; the rail, agent icon, status dot, and button padding all
             // key off this var so the whole row indents cohesively.
             style={
-              depth > 0
+              onToggleSelect
                 ? ({
-                    "--conv-rail-axis": `calc(0.875rem + ${depth} * ${CONV_RAIL_DEPTH_STEP})`,
+                    "--conv-rail-axis": `calc(0.875rem + var(--conv-select-gutter, 0px) + ${depth} * ${CONV_RAIL_DEPTH_STEP})`,
                   } as CSSProperties)
-                : undefined
+                : depth > 0
+                  ? ({
+                      "--conv-rail-axis": `calc(0.875rem + ${depth} * ${CONV_RAIL_DEPTH_STEP})`,
+                    } as CSSProperties)
+                  : undefined
             }
           >
             <div
@@ -251,13 +276,19 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                 "group relative flex h-[1.9375rem] w-full items-center",
                 "rounded-full text-sidebar-foreground",
                 "transition-colors duration-[120ms]",
+                onToggleSelect && "hover:[--conv-select-gutter:0.875rem]",
+                (multiSelectActive || isMultiSelected) &&
+                  "[--conv-select-gutter:0.875rem]",
                 isSelected
                   ? "bg-sidebar-primary/8"
-                  : "hover:bg-[color-mix(in_oklab,var(--sidebar-accent),var(--sidebar-foreground)_2%)]"
+                  : isMultiSelected
+                    ? "bg-sidebar-primary/12"
+                    : "hover:bg-[color-mix(in_oklab,var(--sidebar-accent),var(--sidebar-foreground)_2%)]"
               )}
             >
               <button
                 data-conversation-id={conversation.id}
+                data-session-checked={isMultiSelected ? "true" : undefined}
                 onClick={handleClick}
                 onDoubleClick={handleDblClick}
                 onKeyDown={(event) => {
@@ -368,6 +399,42 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                   forbids nested buttons) with `stopPropagation` so a toggle never
                   selects the row; pointer events stay off until revealed so a
                   click on the icon area still selects the row when not hovering. */}
+              {onToggleSelect && (
+                <button
+                  type="button"
+                  tabIndex={-1}
+                  data-session-select={conversation.id}
+                  aria-pressed={isMultiSelected}
+                  aria-label={tManage("selectConversation", {
+                    title:
+                      formatConversationTitle(conversation.title) ||
+                      t("untitledConversation"),
+                  })}
+                  className={cn(
+                    "absolute top-0 bottom-0 z-20 flex items-center justify-center",
+                    "cursor-pointer outline-none",
+                    "opacity-0 pointer-events-none transition-opacity duration-150",
+                    "group-hover:opacity-100 group-hover:pointer-events-auto",
+                    "group-focus-within:opacity-100 group-focus-within:pointer-events-auto",
+                    (multiSelectActive || isMultiSelected) &&
+                      "opacity-100 pointer-events-auto"
+                  )}
+                  style={{
+                    left: "calc(var(--conv-rail-axis, 0.875rem) - 0.875rem)",
+                    width: "0.875rem",
+                  }}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onToggleSelect(conversation.id)
+                  }}
+                >
+                  {isMultiSelected ? (
+                    <CheckSquare className="h-3.5 w-3.5 text-primary" />
+                  ) : (
+                    <Square className="h-3.5 w-3.5 text-muted-foreground/80" />
+                  )}
+                </button>
+              )}
               {hasChildren && onToggleExpand && (
                 <button
                   type="button"
