@@ -106,7 +106,7 @@ pnpm build
 不要直接拿用户正在使用的正式数据做自动化。最安全的是建立空白 Desktop 验收目录：
 
 ```powershell
-$desktopData = Join-Path (Get-Location) '.tmp-desktop-validation-data'
+$desktopData = Join-Path (Get-Location) '.artifacts/desktop-validation/data'
 New-Item -ItemType Directory -Force -Path $desktopData | Out-Null
 $desktopData = (Resolve-Path -LiteralPath $desktopData).Path
 $env:CODEG_DATA_DIR = $desktopData
@@ -125,12 +125,26 @@ $env:CODEG_HOME = $desktopData
 
 结束验收后先停止进程，再处理临时目录。不要在进程仍运行时递归删除数据目录。
 
+### 4.3.1 测试产物统一放在哪里
+
+仓库根目录不再堆放 `.tmp-*.png`、一次性 `.mjs`、CDP 返回 JSON 或测试数据库。统一规则：
+
+- 本地、可删除的完整验收产物放在 `.artifacts/desktop-validation/<功能名>/`；
+- 一次性 CDP 脚本也放在同一目录，用完可连同场景目录删除；
+- 只有会长期复用的脚本才进入 `scripts/`，并同时补充参数说明和错误处理；
+- 只有需要进入产品文档的精选截图才放入 `docs/`，普通调试截图不提交；
+- `.artifacts/`、历史根目录 `.tmp-*`、Playwright 默认输出均由 `.gitignore` 排除。
+
+每次验收结束应保留一个简短结果文件，记录分支、commit、场景、断言、截图名和新错误；无需
+保留几十张过程截图。清理前必须先确认对应 Desktop/Server 进程已经停止。
+
 ### 4.4 只跑与改动相称的自动测试
 
 前端局部改动先跑相关测试：
 
 ```powershell
 pnpm exec vitest run <相关测试文件...>
+pnpm exec eslint <本批修改的前端文件...> --max-warnings=0
 pnpm exec tsc --noEmit
 ```
 
@@ -351,6 +365,22 @@ Provider 的成功推断所有 Adapter 都成功。
 5. B 收到、交给 Agent、回复分别显示不同状态；
 6. 回复回到 A，并能跳转到来源 Session；
 7. 完全重启 Desktop 后，消息和投递状态仍存在。
+
+### 5.6 Collection 与 Session 树拖放
+
+若改动涉及左侧 Collection 树，至少用真实 Desktop 验证：
+
+1. 轻点 Session 或 Collection 仍是普通打开/展开，不会误触拖动；
+2. 移动超过激活阈值后才出现浮动预览；
+3. Session 可拖入同一路径下的 Collection、Unclassified 或另一个 Session 所在 Collection；
+4. Session 不能跨 canonical Path，拖回当前位置不产生重复请求；
+5. Collection 行顶部/中部/底部分别显示“之前/内部/之后”的稳定反馈；
+6. Collection 不能移入自身、后代或另一 Path，放下失败时树结构不变；
+7. 拖动时列表可自动滚动，放下或取消后高亮与浮层完全清理；
+8. “新建分类”直接在触发位置创建，只有显式“移动”操作才显示目标层级选择器。
+
+组件测试重点验证放置规则和 API 参数；指针命中、浮层、自动滚动与 Tauri WebView 兼容性必须
+由真实 Desktop 场景补齐，不要用 JSDOM 原生 `dragStart/drop` 冒充指针拖放验收。
 
 ## 6. 常见失败如何判断
 

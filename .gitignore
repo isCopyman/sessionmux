@@ -36,6 +36,10 @@ public/vs
 coverage/
 *.snap.new
 .vitest-cache/
+/.artifacts/
+/.tmp-*
+/playwright-report/
+/test-results/
 
 # macOS signing material. Keep certificates and exported private keys out of git.
 *.cer

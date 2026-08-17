@@ -1,13 +1,20 @@
 "use client"
 
+import { useEffect, useMemo, useState, type ReactNode } from "react"
+import { createPortal } from "react-dom"
 import {
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type DragEvent,
-  type ReactNode,
-} from "react"
+  DndContext,
+  DragOverlay,
+  KeyboardSensor,
+  PointerSensor,
+  pointerWithin,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+  type DragMoveEvent,
+  type DragOverEvent,
+  type DragStartEvent,
+} from "@dnd-kit/core"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 import {
@@ -77,6 +84,18 @@ import {
 import { AgentIcon } from "@/components/agent-icon"
 import { ConversationStatusDot } from "@/components/conversations/conversation-status-dot"
 import { SessionDetailsDialog } from "@/components/conversations/session-details-dialog"
+import {
+  TreeDndBindings,
+  TreeDropBindings,
+  canDropSessionOnTarget,
+  collectionPlacementForRoot,
+  collectionPlacementForRow,
+  type CollectionDropTarget,
+  type CollectionTreeDrag,
+  type SessionTreeDrag,
+  type TreeDragData,
+  type TreeDropData,
+} from "@/components/collections/collection-tree-dnd"
 
 import { useImeGuard } from "@/hooks/use-ime-guard"
 import {
@@ -105,24 +124,13 @@ import type { SidebarSortMode } from "@/lib/sidebar-view-mode-storage"
 import { useTabActions, useTabStore } from "@/contexts/tab-context"
 
 type OpenScope = number | "unclassified"
-type SessionDragPayload = {
-  conversationId: number
-  rootFolderId: number
-}
-type CollectionDragPayload = {
-  collectionId: number
-  rootFolderId: number | null
-}
-type CollectionDropTarget = {
-  targetCollectionId: number | null
-  rootFolderId: number | null
-  parentId: number | null
-  index: number
-  position: "before" | "inside" | "after" | "root"
-}
-
-const SESSION_TREE_DRAG_MIME = "application/x-codeg-session-tree"
-const COLLECTION_TREE_DRAG_MIME = "application/x-codeg-collection-tree"
+type TreeDropIntent =
+  | {
+      kind: "session"
+      rootFolderId: number
+      collectionId: number | null
+    }
+  | { kind: "collection"; placement: CollectionDropTarget }
 
 type EditorState =
   | {
@@ -259,16 +267,11 @@ export function CollectionTree({
   const [rootFolderId, setRootFolderId] = useState<number | null>(null)
   const [pending, setPending] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<CollectionInfo | null>(null)
-  const sessionDragRef = useRef<SessionDragPayload | null>(null)
-  const [draggingConversationId, setDraggingConversationId] = useState<
-    number | null
-  >(null)
+  const [activeTreeDrag, setActiveTreeDrag] = useState<TreeDragData | null>(
+    null
+  )
   const [dropTarget, setDropTarget] = useState<string | null>(null)
   const [movingConversationId, setMovingConversationId] = useState<
-    number | null
-  >(null)
-  const collectionDragRef = useRef<CollectionDragPayload | null>(null)
-  const [draggingCollectionId, setDraggingCollectionId] = useState<
     number | null
   >(null)
   const [collectionDropTarget, setCollectionDropTarget] =
@@ -284,6 +287,10 @@ export function CollectionTree({
     useState<DbConversationSummary | null>(null)
   const [sessionDetails, setSessionDetails] =
     useState<DbConversationSummary | null>(null)
+  const dndSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor)
+  )
 
   const activeConversationId = useMemo(
     () => tabs.find((tab) => tab.id === activeTabId)?.conversationId ?? null,
@@ -459,77 +466,26 @@ export function CollectionTree({
   const dragTargetKey = (rootId: number, collectionId: number | null) =>
     `${rootId}:${collectionId ?? "unclassified"}`
 
-  const canDropSession = (rootId: number, collectionId: number | null) => {
-    const payload = sessionDragRef.current
-    if (!payload || movingConversationId != null) return false
-    if (payload.rootFolderId !== rootId) return false
-    return (
-      (membershipByConversation.get(payload.conversationId) ?? null) !==
-      collectionId
-    )
-  }
-
-  const beginSessionDrag = (
-    event: DragEvent<HTMLButtonElement>,
-    conversation: DbConversationSummary
-  ) => {
-    const rootId = sessionRootId(conversation)
-    if (rootId == null || movingConversationId != null) {
-      event.preventDefault()
-      return
-    }
-    const payload = {
-      conversationId: conversation.id,
-      rootFolderId: rootId,
-    }
-    sessionDragRef.current = payload
-    setDraggingConversationId(conversation.id)
-    event.dataTransfer.effectAllowed = "move"
-    event.dataTransfer.setData(SESSION_TREE_DRAG_MIME, JSON.stringify(payload))
-    event.dataTransfer.setData(
-      "text/plain",
-      formatConversationTitle(conversation.title) ||
-        tConversation("untitledConversation")
-    )
-    event.dataTransfer.setDragImage?.(event.currentTarget, 18, 14)
-  }
-
-  const finishSessionDrag = () => {
-    sessionDragRef.current = null
-    setDraggingConversationId(null)
-    setDropTarget(null)
-  }
-
-  const handleSessionDragOver = (
-    event: DragEvent<HTMLElement>,
+  const canDropSession = (
+    payload: SessionTreeDrag,
     rootId: number,
     collectionId: number | null
   ) => {
-    if (!canDropSession(rootId, collectionId)) {
-      event.dataTransfer.dropEffect = "none"
-      setDropTarget(null)
-      return
-    }
-    event.preventDefault()
-    event.dataTransfer.dropEffect = "move"
-    setDropTarget(dragTargetKey(rootId, collectionId))
+    return canDropSessionOnTarget(
+      payload,
+      rootId,
+      collectionId,
+      membershipByConversation.get(payload.conversationId) ?? null,
+      movingConversationId != null
+    )
   }
 
-  const handleSessionDragLeave = (event: DragEvent<HTMLElement>) => {
-    const related = event.relatedTarget
-    if (related instanceof Node && event.currentTarget.contains(related)) return
-    setDropTarget(null)
-  }
-
-  const handleSessionDrop = async (
-    event: DragEvent<HTMLElement>,
+  const applySessionMove = async (
+    payload: SessionTreeDrag,
     rootId: number,
     collectionId: number | null
   ) => {
-    if (!canDropSession(rootId, collectionId)) return
-    event.preventDefault()
-    const payload = sessionDragRef.current
-    if (!payload) return
+    if (!canDropSession(payload, rootId, collectionId)) return
 
     setDropTarget(null)
     setMovingConversationId(payload.conversationId)
@@ -557,171 +513,41 @@ export function CollectionTree({
       toast.error(t("operationFailed", { message: toErrorMessage(error) }))
     } finally {
       setMovingConversationId(null)
-      finishSessionDrag()
     }
   }
 
-  const beginCollectionDrag = (
-    event: DragEvent<HTMLButtonElement>,
-    item: CollectionInfo
-  ) => {
-    if (placingCollectionId != null) {
-      event.preventDefault()
-      return
-    }
-    const payload = {
-      collectionId: item.id,
-      rootFolderId: item.root_folder_id ?? null,
-    }
-    collectionDragRef.current = payload
-    setDraggingCollectionId(item.id)
-    event.dataTransfer.effectAllowed = "move"
-    event.dataTransfer.setData(
-      COLLECTION_TREE_DRAG_MIME,
-      JSON.stringify(payload)
-    )
-    event.dataTransfer.setData("text/plain", item.name)
-    event.dataTransfer.setDragImage?.(event.currentTarget, 18, 14)
-  }
-
-  const finishCollectionDrag = () => {
-    collectionDragRef.current = null
-    setDraggingCollectionId(null)
-    setCollectionDropTarget(null)
-  }
-
-  const collectionPlacementChanged = (
-    payload: CollectionDragPayload,
-    parent: number | null,
-    index: number
-  ) => {
-    const moving = collectionById.get(payload.collectionId)
-    if (!moving || moving.parent_id !== parent) return true
-    const currentIndex = (children.get(parent) ?? [])
-      .filter(
-        (candidate) =>
-          (candidate.root_folder_id ?? null) === payload.rootFolderId
-      )
-      .findIndex((candidate) => candidate.id === payload.collectionId)
-    return currentIndex !== index
-  }
-
-  const collectionRowPlacement = (
-    event: DragEvent<HTMLElement>,
-    target: CollectionInfo
+  const collectionPlacementAt = (
+    payload: CollectionTreeDrag,
+    target: CollectionInfo,
+    rect: Pick<DOMRect, "top" | "height">,
+    clientY: number
   ): CollectionDropTarget | null => {
-    const payload = collectionDragRef.current
-    if (
-      !payload ||
-      placingCollectionId != null ||
-      payload.rootFolderId !== (target.root_folder_id ?? null)
-    ) {
-      return null
-    }
-
-    const rect = event.currentTarget.getBoundingClientRect()
-    const ratio =
-      rect.height > 0 ? (event.clientY - rect.top) / rect.height : 0.5
-    const position = ratio < 0.25 ? "before" : ratio > 0.75 ? "after" : "inside"
-    const invalidParents = descendants(items, payload.collectionId)
-    if (target.id === payload.collectionId) return null
-
-    if (position === "inside") {
-      if (invalidParents.has(target.id)) return null
-      const index = (children.get(target.id) ?? []).filter(
-        (candidate) => candidate.id !== payload.collectionId
-      ).length
-      if (!collectionPlacementChanged(payload, target.id, index)) return null
-      return {
-        targetCollectionId: target.id,
-        rootFolderId: payload.rootFolderId,
-        parentId: target.id,
-        index,
-        position,
-      }
-    }
-
-    const parent = target.parent_id
-    if (parent != null && invalidParents.has(parent)) return null
-    const siblings = (children.get(parent) ?? []).filter(
-      (candidate) =>
-        candidate.id !== payload.collectionId &&
-        (candidate.root_folder_id ?? null) === payload.rootFolderId
+    return collectionPlacementForRow(
+      payload,
+      target,
+      rect,
+      clientY,
+      items,
+      placingCollectionId != null
     )
-    const targetIndex = siblings.findIndex(
-      (candidate) => candidate.id === target.id
-    )
-    if (targetIndex < 0) return null
-    const index = targetIndex + (position === "after" ? 1 : 0)
-    if (!collectionPlacementChanged(payload, parent, index)) return null
-    return {
-      targetCollectionId: target.id,
-      rootFolderId: payload.rootFolderId,
-      parentId: parent,
-      index,
-      position,
-    }
   }
 
   const collectionRootPlacement = (
+    payload: CollectionTreeDrag,
     rootId: number | null
   ): CollectionDropTarget | null => {
-    const payload = collectionDragRef.current
-    if (
-      !payload ||
-      placingCollectionId != null ||
-      payload.rootFolderId !== rootId
-    ) {
-      return null
-    }
-    const index = (children.get(null) ?? []).filter(
-      (candidate) =>
-        candidate.id !== payload.collectionId &&
-        (candidate.root_folder_id ?? null) === rootId
-    ).length
-    if (!collectionPlacementChanged(payload, null, index)) return null
-    return {
-      targetCollectionId: null,
-      rootFolderId: rootId,
-      parentId: null,
-      index,
-      position: "root",
-    }
+    return collectionPlacementForRoot(
+      payload,
+      rootId,
+      items,
+      placingCollectionId != null
+    )
   }
 
-  const handleCollectionRowDragOver = (
-    event: DragEvent<HTMLElement>,
-    item: CollectionInfo
+  const applyCollectionPlace = async (
+    payload: CollectionTreeDrag,
+    placement: CollectionDropTarget
   ) => {
-    if (!collectionDragRef.current) {
-      handleSessionDragOver(event, item.root_folder_id ?? -1, item.id)
-      return
-    }
-    const placement = collectionRowPlacement(event, item)
-    if (!placement) {
-      event.dataTransfer.dropEffect = "none"
-      setCollectionDropTarget(null)
-      return
-    }
-    event.preventDefault()
-    event.dataTransfer.dropEffect = "move"
-    setCollectionDropTarget(placement)
-  }
-
-  const handleCollectionDragLeave = (event: DragEvent<HTMLElement>) => {
-    const related = event.relatedTarget
-    if (related instanceof Node && event.currentTarget.contains(related)) return
-    if (collectionDragRef.current) setCollectionDropTarget(null)
-    else handleSessionDragLeave(event)
-  }
-
-  const commitCollectionPlacement = async (
-    event: DragEvent<HTMLElement>,
-    placement: CollectionDropTarget | null
-  ) => {
-    const payload = collectionDragRef.current
-    if (!payload || !placement) return
-    event.preventDefault()
     setCollectionDropTarget(null)
     setPlacingCollectionId(payload.collectionId)
     try {
@@ -740,41 +566,115 @@ export function CollectionTree({
       toast.error(t("operationFailed", { message: toErrorMessage(error) }))
     } finally {
       setPlacingCollectionId(null)
-      finishCollectionDrag()
     }
   }
 
-  const handleCollectionRowDrop = (
-    event: DragEvent<HTMLElement>,
-    item: CollectionInfo
+  const pointerYForDrag = (
+    event: DragMoveEvent | DragOverEvent | DragEndEvent
   ) => {
-    if (!collectionDragRef.current) {
-      void handleSessionDrop(event, item.root_folder_id ?? -1, item.id)
-      return
+    const activator = event.activatorEvent
+    if ("clientY" in activator && typeof activator.clientY === "number") {
+      return activator.clientY + event.delta.y
     }
-    void commitCollectionPlacement(event, collectionRowPlacement(event, item))
+    const translated = event.active.rect.current.translated
+    return translated
+      ? translated.top + translated.height / 2
+      : (event.over?.rect.top ?? 0) + (event.over?.rect.height ?? 0) / 2
   }
 
-  const handleCollectionRootDragOver = (
-    event: DragEvent<HTMLElement>,
-    rootId: number | null
-  ) => {
-    const placement = collectionRootPlacement(rootId)
-    if (!placement) {
-      event.dataTransfer.dropEffect = "none"
+  const resolveTreeDropIntent = (
+    event: DragMoveEvent | DragOverEvent | DragEndEvent
+  ): TreeDropIntent | null => {
+    const dragged = event.active.data.current as TreeDragData | undefined
+    const target = event.over?.data.current as TreeDropData | undefined
+    if (!dragged || !target) return null
+
+    if (dragged.kind === "session") {
+      const destination =
+        target.kind === "session-bucket"
+          ? target
+          : target.kind === "collection-row"
+            ? {
+                rootFolderId: target.rootFolderId,
+                collectionId: target.collectionId,
+              }
+            : null
+      if (
+        !destination ||
+        typeof destination.rootFolderId !== "number" ||
+        !canDropSession(
+          dragged,
+          destination.rootFolderId,
+          destination.collectionId
+        )
+      ) {
+        return null
+      }
+      return {
+        kind: "session",
+        rootFolderId: destination.rootFolderId,
+        collectionId: destination.collectionId,
+      }
+    }
+
+    if (target.kind === "collection-row") {
+      const item = collectionById.get(target.collectionId)
+      if (!item) return null
+      const placement = collectionPlacementAt(
+        dragged,
+        item,
+        event.over!.rect,
+        pointerYForDrag(event)
+      )
+      return placement ? { kind: "collection", placement } : null
+    }
+    if (target.kind === "collection-root") {
+      const placement = collectionRootPlacement(dragged, target.rootFolderId)
+      return placement ? { kind: "collection", placement } : null
+    }
+    return null
+  }
+
+  const showTreeDropIntent = (intent: TreeDropIntent | null) => {
+    if (intent?.kind === "session") {
+      setDropTarget(dragTargetKey(intent.rootFolderId, intent.collectionId))
       setCollectionDropTarget(null)
       return
     }
-    event.preventDefault()
-    event.dataTransfer.dropEffect = "move"
-    setCollectionDropTarget(placement)
+    setDropTarget(null)
+    setCollectionDropTarget(
+      intent?.kind === "collection" ? intent.placement : null
+    )
   }
 
-  const handleCollectionRootDrop = (
-    event: DragEvent<HTMLElement>,
-    rootId: number | null
-  ) => {
-    void commitCollectionPlacement(event, collectionRootPlacement(rootId))
+  const handleTreeDragStart = (event: DragStartEvent) => {
+    const dragged = event.active.data.current as TreeDragData | undefined
+    if (!dragged) return
+    setActiveTreeDrag(dragged)
+    showTreeDropIntent(null)
+  }
+
+  const handleTreeDragMove = (event: DragMoveEvent | DragOverEvent) => {
+    showTreeDropIntent(resolveTreeDropIntent(event))
+  }
+
+  const clearTreeDrag = () => {
+    setActiveTreeDrag(null)
+    showTreeDropIntent(null)
+  }
+
+  const handleTreeDragEnd = (event: DragEndEvent) => {
+    const dragged = event.active.data.current as TreeDragData | undefined
+    const intent = resolveTreeDropIntent(event)
+    clearTreeDrag()
+    if (!dragged || !intent) return
+    if (dragged.kind === "session" && intent.kind === "session") {
+      void applySessionMove(dragged, intent.rootFolderId, intent.collectionId)
+      return
+    }
+    if (dragged.kind === "collection" && intent.kind === "collection") {
+      void applyCollectionPlace(dragged, intent.placement)
+    }
   }
 
   const openEditor = (next: EditorState) => {
@@ -956,61 +856,85 @@ export function CollectionTree({
     const dropKey = rootId == null ? null : dragTargetKey(rootId, collectionId)
     const isPinned = conversation.pinned_at != null
     const row = (
-      <button
-        type="button"
-        draggable={showSessions && movingConversationId == null}
-        data-conversation-id={conversation.id}
-        data-focused-session={selected ? "true" : undefined}
-        data-session-dragging={
-          draggingConversationId === conversation.id ? "true" : undefined
-        }
-        data-session-drop-target={
-          dropKey != null && dropTarget === dropKey ? "true" : undefined
-        }
-        aria-current={selected ? "page" : undefined}
-        title={formatConversationTitle(conversation.title)}
-        className={cn(
-          "flex h-7 w-full min-w-0 cursor-grab items-center gap-1.5 rounded-md pe-2 text-start text-xs hover:bg-sidebar-accent active:cursor-grabbing focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
-          selected &&
-            "bg-primary/8 text-primary ring-1 ring-inset ring-primary/30",
-          dropKey != null &&
-            dropTarget === dropKey &&
-            "bg-primary/10 ring-1 ring-inset ring-primary/45",
-          draggingConversationId === conversation.id && "opacity-45",
-          movingConversationId === conversation.id &&
-            "pointer-events-none opacity-55"
-        )}
-        style={{ paddingInlineStart: `${1.75 + depth * 0.75}rem` }}
-        onClick={() => onOpenSession?.(conversation)}
-        onKeyDown={(event) => handleSessionTreeKey(event, conversation)}
-        onDragStart={(event) => beginSessionDrag(event, conversation)}
-        onDragEnd={finishSessionDrag}
-        onDragOver={(event) => {
-          if (rootId == null) return
-          handleSessionDragOver(event, rootId, collectionId)
+      <TreeDndBindings
+        dragId={`session:${conversation.id}`}
+        dragData={{
+          kind: "session",
+          conversationId: conversation.id,
+          rootFolderId: rootId ?? -1,
+          label:
+            formatConversationTitle(conversation.title) ||
+            tConversation("untitledConversation"),
         }}
-        onDragLeave={handleSessionDragLeave}
-        onDrop={(event) => {
-          if (rootId == null) return
-          void handleSessionDrop(event, rootId, collectionId)
+        dropId={`session-bucket:${conversation.id}`}
+        dropData={{
+          kind: "session-bucket",
+          rootFolderId: rootId ?? -1,
+          collectionId,
         }}
+        disabled={
+          !showSessions || rootId == null || movingConversationId != null
+        }
       >
-        <span
-          aria-hidden
-          className="relative flex h-3.5 w-3.5 shrink-0 items-center justify-center"
-        >
-          <AgentIcon agentType={conversation.agent_type} className="h-3 w-3" />
-          <ConversationStatusDot
-            status={conversation.status as ConversationStatus}
-            size="sm"
-            className="absolute -bottom-0.5 -right-0.5 ring-1 ring-sidebar"
-          />
-        </span>
-        <span className="min-w-0 flex-1 truncate">
-          {formatConversationTitle(conversation.title) ||
-            tConversation("untitledConversation")}
-        </span>
-      </button>
+        {({ setNodeRef, attributes, listeners, isDragging }) => (
+          <button
+            ref={setNodeRef}
+            type="button"
+            {...attributes}
+            {...listeners}
+            data-conversation-id={conversation.id}
+            data-session-root-id={rootId ?? undefined}
+            data-session-collection-id={
+              collectionId == null ? "" : String(collectionId)
+            }
+            data-focused-session={selected ? "true" : undefined}
+            data-session-dragging={isDragging ? "true" : undefined}
+            data-session-drop-target={
+              dropKey != null && dropTarget === dropKey ? "true" : undefined
+            }
+            aria-current={selected ? "page" : undefined}
+            title={formatConversationTitle(conversation.title)}
+            className={cn(
+              "flex h-7 w-full min-w-0 cursor-grab touch-none items-center gap-1.5 rounded-md pe-2 text-start text-xs hover:bg-sidebar-accent active:cursor-grabbing focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
+              selected &&
+                "bg-primary/8 text-primary ring-1 ring-inset ring-primary/30",
+              dropKey != null &&
+                dropTarget === dropKey &&
+                "bg-primary/10 ring-1 ring-inset ring-primary/45",
+              isDragging && "opacity-45",
+              movingConversationId === conversation.id &&
+                "pointer-events-none opacity-55"
+            )}
+            style={{ paddingInlineStart: `${1.75 + depth * 0.75}rem` }}
+            onClick={() => onOpenSession?.(conversation)}
+            onKeyDown={(event) => {
+              listeners?.onKeyDown?.(event)
+              if (!event.defaultPrevented) {
+                handleSessionTreeKey(event, conversation)
+              }
+            }}
+          >
+            <span
+              aria-hidden
+              className="relative flex h-3.5 w-3.5 shrink-0 items-center justify-center"
+            >
+              <AgentIcon
+                agentType={conversation.agent_type}
+                className="h-3 w-3"
+              />
+              <ConversationStatusDot
+                status={conversation.status as ConversationStatus}
+                size="sm"
+                className="absolute -bottom-0.5 -right-0.5 ring-1 ring-sidebar"
+              />
+            </span>
+            <span className="min-w-0 flex-1 truncate">
+              {formatConversationTitle(conversation.title) ||
+                tConversation("untitledConversation")}
+            </span>
+          </button>
+        )}
+      </TreeDndBindings>
     )
     return (
       <ContextMenu key={conversation.id}>
@@ -1135,62 +1059,296 @@ export function CollectionTree({
         const expandable = childItems.length > 0 || memberSessions.length > 0
         const isExpanded = expanded.has(item.id)
         return (
-          <div key={item.id}>
+          <TreeDndBindings
+            key={item.id}
+            dragId={`collection:${item.id}`}
+            dragData={{
+              kind: "collection",
+              collectionId: item.id,
+              rootFolderId: item.root_folder_id ?? null,
+              label: item.name,
+            }}
+            dropId={`collection-row:${item.id}`}
+            dropData={{
+              kind: "collection-row",
+              collectionId: item.id,
+              rootFolderId: item.root_folder_id ?? null,
+            }}
+            disabled={placingCollectionId != null}
+          >
+            {({ setNodeRef, attributes, listeners, isDragging }) => (
+              <div>
+                <div
+                  ref={setNodeRef}
+                  data-collection-id={item.id}
+                  data-collection-root-id={item.root_folder_id ?? undefined}
+                  data-collection-drop-position={
+                    collectionDropTarget?.targetCollectionId === item.id
+                      ? collectionDropTarget.position
+                      : undefined
+                  }
+                  data-session-drop-target={
+                    dropTarget ===
+                    dragTargetKey(item.root_folder_id ?? -1, item.id)
+                      ? "true"
+                      : undefined
+                  }
+                  className={cn(
+                    "group relative flex h-7 min-w-0 items-center rounded-md pe-1 hover:bg-sidebar-accent",
+                    dropTarget ===
+                      dragTargetKey(item.root_folder_id ?? -1, item.id) &&
+                      "bg-primary/10 ring-1 ring-inset ring-primary/45",
+                    activeTreeDrag?.kind === "session" &&
+                      canDropSession(
+                        activeTreeDrag,
+                        item.root_folder_id ?? -1,
+                        item.id
+                      ) &&
+                      "ring-1 ring-dashed ring-primary/30",
+                    collectionDropTarget?.targetCollectionId === item.id &&
+                      collectionDropTarget.position === "inside" &&
+                      "bg-primary/10 ring-1 ring-inset ring-primary/45",
+                    isDragging && "opacity-45",
+                    placingCollectionId === item.id &&
+                      "pointer-events-none opacity-55"
+                  )}
+                  style={{ paddingInlineStart: `${0.25 + depth * 0.75}rem` }}
+                >
+                  {collectionDropTarget?.targetCollectionId === item.id &&
+                  (collectionDropTarget.position === "before" ||
+                    collectionDropTarget.position === "after") ? (
+                    <span
+                      aria-hidden
+                      className={cn(
+                        "pointer-events-none absolute inset-x-1 z-10 h-0.5 rounded-full bg-primary",
+                        collectionDropTarget.position === "before"
+                          ? "-top-px"
+                          : "-bottom-px"
+                      )}
+                    />
+                  ) : null}
+                  <button
+                    type="button"
+                    className={cn(
+                      "flex h-6 w-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground",
+                      !expandable && "pointer-events-none opacity-0"
+                    )}
+                    aria-label={isExpanded ? t("collapse") : t("expand")}
+                    onClick={() =>
+                      setExpanded((current) => {
+                        const next = new Set(current)
+                        if (next.has(item.id)) next.delete(item.id)
+                        else next.add(item.id)
+                        return next
+                      })
+                    }
+                  >
+                    {isExpanded ? (
+                      <ChevronDown className="h-3.5 w-3.5" />
+                    ) : (
+                      <ChevronRight className="h-3.5 w-3.5 rtl:rotate-180" />
+                    )}
+                  </button>
+                  <ContextMenu>
+                    <ContextMenuTrigger asChild>
+                      <div className="flex min-h-0 min-w-0 flex-1">
+                        <button
+                          type="button"
+                          {...attributes}
+                          {...listeners}
+                          data-collection-dragging={
+                            isDragging ? "true" : undefined
+                          }
+                          className="flex h-full min-w-0 flex-1 cursor-grab touch-none items-center gap-1.5 text-start text-xs active:cursor-grabbing"
+                          title={item.name}
+                          aria-label={item.name}
+                          onKeyDown={(event) => {
+                            listeners?.onKeyDown?.(event)
+                            if (!event.defaultPrevented) {
+                              handleCollectionTreeKey(event, item)
+                            }
+                          }}
+                          onClick={() => {
+                            if (!showSessions) {
+                              onOpenScope(item.id)
+                              return
+                            }
+                            setExpanded((current) => {
+                              const next = new Set(current)
+                              if (next.has(item.id)) next.delete(item.id)
+                              else next.add(item.id)
+                              return next
+                            })
+                          }}
+                        >
+                          {isExpanded ? (
+                            <FolderOpen className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                          ) : (
+                            <Folder className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                          )}
+                          <span className="truncate">{item.name}</span>
+                          {showSessions && memberSessions.length > 0 ? (
+                            <span className="ms-auto shrink-0 text-[10px] text-muted-foreground">
+                              {memberSessions.length}
+                            </span>
+                          ) : null}
+                        </button>
+                      </div>
+                    </ContextMenuTrigger>
+                    <ContextMenuContent>
+                      <ContextMenuItem onSelect={() => onOpenScope(item.id)}>
+                        <FolderOpen className="h-4 w-4" />
+                        {t("openInSessionCenter")}
+                      </ContextMenuItem>
+                      <ContextMenuItem
+                        onSelect={() =>
+                          openEditor({ mode: "create", parentId: item.id })
+                        }
+                      >
+                        <FolderPlus className="h-4 w-4" />
+                        {t("newChild")}
+                      </ContextMenuItem>
+                      <ContextMenuItem
+                        onSelect={() => openEditor({ mode: "rename", item })}
+                      >
+                        <Pencil className="h-4 w-4" />
+                        {t("rename")}
+                        <span className="ms-auto text-[10px] text-muted-foreground">
+                          F2
+                        </span>
+                      </ContextMenuItem>
+                      <ContextMenuItem
+                        onSelect={() => openEditor({ mode: "move", item })}
+                      >
+                        <FolderInput className="h-4 w-4" />
+                        {t("move")}
+                      </ContextMenuItem>
+                      <ContextMenuSeparator />
+                      <ContextMenuItem
+                        variant="destructive"
+                        onSelect={() => setDeleteTarget(item)}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                        {t("delete")}
+                        <span className="ms-auto text-[10px] text-muted-foreground">
+                          Del
+                        </span>
+                      </ContextMenuItem>
+                    </ContextMenuContent>
+                  </ContextMenu>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        size="icon-sm"
+                        variant="ghost"
+                        className="h-6 w-6 shrink-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100"
+                        aria-label={t("actions", { name: item.name })}
+                      >
+                        <MoreHorizontal className="h-3.5 w-3.5" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem onSelect={() => onOpenScope(item.id)}>
+                        <FolderOpen className="h-4 w-4" />
+                        {t("openInSessionCenter")}
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        onSelect={() =>
+                          openEditor({ mode: "create", parentId: item.id })
+                        }
+                      >
+                        <FolderPlus className="h-4 w-4" />
+                        {t("newChild")}
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        onSelect={() => openEditor({ mode: "rename", item })}
+                      >
+                        <Pencil className="h-4 w-4" />
+                        {t("rename")}
+                        <span className="ms-auto text-[10px] text-muted-foreground">
+                          F2
+                        </span>
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        onSelect={() => openEditor({ mode: "move", item })}
+                      >
+                        <FolderInput className="h-4 w-4" />
+                        {t("move")}
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        variant="destructive"
+                        onSelect={() => setDeleteTarget(item)}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                        {t("delete")}
+                        <span className="ms-auto text-[10px] text-muted-foreground">
+                          Del
+                        </span>
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
+                {isExpanded ? (
+                  <>
+                    {memberSessions.map((session) =>
+                      renderSession(session, depth + 1, item.id)
+                    )}
+                    {renderItems(item.id, depth + 1, rootFolderId)}
+                  </>
+                ) : null}
+              </div>
+            )}
+          </TreeDndBindings>
+        )
+      })
+
+  const renderUnclassified = (
+    rootFolderId: number,
+    sessions: DbConversationSummary[]
+  ) => {
+    const isExpanded = !collapsedUnclassified.has(rootFolderId)
+    return (
+      <TreeDropBindings
+        key={`unclassified:${rootFolderId}`}
+        dropId={`unclassified:${rootFolderId}`}
+        dropData={{
+          kind: "session-bucket",
+          rootFolderId,
+          collectionId: null,
+        }}
+        disabled={false}
+      >
+        {({ setNodeRef }) => (
+          <div>
             <div
-              data-collection-id={item.id}
-              data-collection-root-id={item.root_folder_id ?? undefined}
-              data-collection-drop-position={
-                collectionDropTarget?.targetCollectionId === item.id
-                  ? collectionDropTarget.position
-                  : undefined
-              }
+              ref={setNodeRef}
+              data-unclassified-root-id={rootFolderId}
               data-session-drop-target={
-                dropTarget === dragTargetKey(item.root_folder_id ?? -1, item.id)
+                dropTarget === dragTargetKey(rootFolderId, null)
                   ? "true"
                   : undefined
               }
               className={cn(
-                "group relative flex h-7 min-w-0 items-center rounded-md pe-1 hover:bg-sidebar-accent",
-                dropTarget ===
-                  dragTargetKey(item.root_folder_id ?? -1, item.id) &&
+                "group flex h-7 min-w-0 items-center rounded-md pe-1 ps-4 hover:bg-sidebar-accent",
+                dropTarget === dragTargetKey(rootFolderId, null) &&
                   "bg-primary/10 ring-1 ring-inset ring-primary/45",
-                collectionDropTarget?.targetCollectionId === item.id &&
-                  collectionDropTarget.position === "inside" &&
-                  "bg-primary/10 ring-1 ring-inset ring-primary/45",
-                draggingCollectionId === item.id && "opacity-45",
-                placingCollectionId === item.id &&
-                  "pointer-events-none opacity-55"
+                activeTreeDrag?.kind === "session" &&
+                  canDropSession(activeTreeDrag, rootFolderId, null) &&
+                  "ring-1 ring-dashed ring-primary/30"
               )}
-              style={{ paddingInlineStart: `${0.25 + depth * 0.75}rem` }}
-              onDragOver={(event) => handleCollectionRowDragOver(event, item)}
-              onDragLeave={handleCollectionDragLeave}
-              onDrop={(event) => handleCollectionRowDrop(event, item)}
             >
-              {collectionDropTarget?.targetCollectionId === item.id &&
-              (collectionDropTarget.position === "before" ||
-                collectionDropTarget.position === "after") ? (
-                <span
-                  aria-hidden
-                  className={cn(
-                    "pointer-events-none absolute inset-x-1 z-10 h-0.5 rounded-full bg-primary",
-                    collectionDropTarget.position === "before"
-                      ? "-top-px"
-                      : "-bottom-px"
-                  )}
-                />
-              ) : null}
               <button
                 type="button"
                 className={cn(
                   "flex h-6 w-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground",
-                  !expandable && "pointer-events-none opacity-0"
+                  sessions.length === 0 && "pointer-events-none opacity-0"
                 )}
                 aria-label={isExpanded ? t("collapse") : t("expand")}
                 onClick={() =>
-                  setExpanded((current) => {
+                  setCollapsedUnclassified((current) => {
                     const next = new Set(current)
-                    if (next.has(item.id)) next.delete(item.id)
-                    else next.add(item.id)
+                    if (next.has(rootFolderId)) next.delete(rootFolderId)
+                    else next.add(rootFolderId)
                     return next
                   })
                 }
@@ -1201,238 +1359,44 @@ export function CollectionTree({
                   <ChevronRight className="h-3.5 w-3.5 rtl:rotate-180" />
                 )}
               </button>
-              <ContextMenu>
-                <ContextMenuTrigger asChild>
-                  <div className="flex min-h-0 min-w-0 flex-1">
-                    <button
-                      type="button"
-                      draggable={placingCollectionId == null}
-                      data-collection-dragging={
-                        draggingCollectionId === item.id ? "true" : undefined
-                      }
-                      className="flex h-full min-w-0 flex-1 cursor-grab items-center gap-1.5 text-start text-xs active:cursor-grabbing"
-                      title={item.name}
-                      aria-label={item.name}
-                      onKeyDown={(event) =>
-                        handleCollectionTreeKey(event, item)
-                      }
-                      onDragStart={(event) => beginCollectionDrag(event, item)}
-                      onDragEnd={finishCollectionDrag}
-                      onClick={() => {
-                        if (!showSessions) {
-                          onOpenScope(item.id)
-                          return
-                        }
-                        setExpanded((current) => {
-                          const next = new Set(current)
-                          if (next.has(item.id)) next.delete(item.id)
-                          else next.add(item.id)
-                          return next
-                        })
-                      }}
-                    >
-                      {isExpanded ? (
-                        <FolderOpen className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                      ) : (
-                        <Folder className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                      )}
-                      <span className="truncate">{item.name}</span>
-                      {showSessions && memberSessions.length > 0 ? (
-                        <span className="ms-auto shrink-0 text-[10px] text-muted-foreground">
-                          {memberSessions.length}
-                        </span>
-                      ) : null}
-                    </button>
-                  </div>
-                </ContextMenuTrigger>
-                <ContextMenuContent>
-                  <ContextMenuItem onSelect={() => onOpenScope(item.id)}>
-                    <FolderOpen className="h-4 w-4" />
-                    {t("openInSessionCenter")}
-                  </ContextMenuItem>
-                  <ContextMenuItem
-                    onSelect={() =>
-                      openEditor({ mode: "create", parentId: item.id })
-                    }
-                  >
-                    <FolderPlus className="h-4 w-4" />
-                    {t("newChild")}
-                  </ContextMenuItem>
-                  <ContextMenuItem
-                    onSelect={() => openEditor({ mode: "rename", item })}
-                  >
-                    <Pencil className="h-4 w-4" />
-                    {t("rename")}
-                    <span className="ms-auto text-[10px] text-muted-foreground">
-                      F2
-                    </span>
-                  </ContextMenuItem>
-                  <ContextMenuItem
-                    onSelect={() => openEditor({ mode: "move", item })}
-                  >
-                    <FolderInput className="h-4 w-4" />
-                    {t("move")}
-                  </ContextMenuItem>
-                  <ContextMenuSeparator />
-                  <ContextMenuItem
-                    variant="destructive"
-                    onSelect={() => setDeleteTarget(item)}
-                  >
-                    <Trash2 className="h-4 w-4" />
-                    {t("delete")}
-                    <span className="ms-auto text-[10px] text-muted-foreground">
-                      Del
-                    </span>
-                  </ContextMenuItem>
-                </ContextMenuContent>
-              </ContextMenu>
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    size="icon-sm"
-                    variant="ghost"
-                    className="h-6 w-6 shrink-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100"
-                    aria-label={t("actions", { name: item.name })}
-                  >
-                    <MoreHorizontal className="h-3.5 w-3.5" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end">
-                  <DropdownMenuItem onSelect={() => onOpenScope(item.id)}>
-                    <FolderOpen className="h-4 w-4" />
-                    {t("openInSessionCenter")}
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    onSelect={() =>
-                      openEditor({ mode: "create", parentId: item.id })
-                    }
-                  >
-                    <FolderPlus className="h-4 w-4" />
-                    {t("newChild")}
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    onSelect={() => openEditor({ mode: "rename", item })}
-                  >
-                    <Pencil className="h-4 w-4" />
-                    {t("rename")}
-                    <span className="ms-auto text-[10px] text-muted-foreground">
-                      F2
-                    </span>
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    onSelect={() => openEditor({ mode: "move", item })}
-                  >
-                    <FolderInput className="h-4 w-4" />
-                    {t("move")}
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    variant="destructive"
-                    onSelect={() => setDeleteTarget(item)}
-                  >
-                    <Trash2 className="h-4 w-4" />
-                    {t("delete")}
-                    <span className="ms-auto text-[10px] text-muted-foreground">
-                      Del
-                    </span>
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
+              <button
+                type="button"
+                className="flex h-full min-w-0 flex-1 items-center gap-1.5 text-start text-xs"
+                aria-label={t("unclassified")}
+                onClick={() => {
+                  if (sessions.length === 0) return
+                  setCollapsedUnclassified((current) => {
+                    const next = new Set(current)
+                    if (next.has(rootFolderId)) next.delete(rootFolderId)
+                    else next.add(rootFolderId)
+                    return next
+                  })
+                }}
+              >
+                <Inbox className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                <span className="truncate">{t("unclassified")}</span>
+                {sessions.length > 0 ? (
+                  <span className="ms-auto shrink-0 text-[10px] text-muted-foreground">
+                    {sessions.length}
+                  </span>
+                ) : null}
+              </button>
+              <Button
+                size="icon-sm"
+                variant="ghost"
+                className="h-6 w-6 shrink-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+                aria-label={t("openInSessionCenter")}
+                onClick={() => onOpenScope("unclassified")}
+              >
+                <MoreHorizontal className="h-3.5 w-3.5" />
+              </Button>
             </div>
-            {isExpanded ? (
-              <>
-                {memberSessions.map((session) =>
-                  renderSession(session, depth + 1, item.id)
-                )}
-                {renderItems(item.id, depth + 1, rootFolderId)}
-              </>
-            ) : null}
+            {isExpanded
+              ? sessions.map((session) => renderSession(session, 1, null))
+              : null}
           </div>
-        )
-      })
-
-  const renderUnclassified = (
-    rootFolderId: number,
-    sessions: DbConversationSummary[]
-  ) => {
-    const isExpanded = !collapsedUnclassified.has(rootFolderId)
-    return (
-      <div key={`unclassified:${rootFolderId}`}>
-        <div
-          data-unclassified-root-id={rootFolderId}
-          data-session-drop-target={
-            dropTarget === dragTargetKey(rootFolderId, null)
-              ? "true"
-              : undefined
-          }
-          className={cn(
-            "group flex h-7 min-w-0 items-center rounded-md pe-1 ps-4 hover:bg-sidebar-accent",
-            dropTarget === dragTargetKey(rootFolderId, null) &&
-              "bg-primary/10 ring-1 ring-inset ring-primary/45"
-          )}
-          onDragOver={(event) =>
-            handleSessionDragOver(event, rootFolderId, null)
-          }
-          onDragLeave={handleSessionDragLeave}
-          onDrop={(event) => void handleSessionDrop(event, rootFolderId, null)}
-        >
-          <button
-            type="button"
-            className={cn(
-              "flex h-6 w-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground",
-              sessions.length === 0 && "pointer-events-none opacity-0"
-            )}
-            aria-label={isExpanded ? t("collapse") : t("expand")}
-            onClick={() =>
-              setCollapsedUnclassified((current) => {
-                const next = new Set(current)
-                if (next.has(rootFolderId)) next.delete(rootFolderId)
-                else next.add(rootFolderId)
-                return next
-              })
-            }
-          >
-            {isExpanded ? (
-              <ChevronDown className="h-3.5 w-3.5" />
-            ) : (
-              <ChevronRight className="h-3.5 w-3.5 rtl:rotate-180" />
-            )}
-          </button>
-          <button
-            type="button"
-            className="flex h-full min-w-0 flex-1 items-center gap-1.5 text-start text-xs"
-            aria-label={t("unclassified")}
-            onClick={() => {
-              if (sessions.length === 0) return
-              setCollapsedUnclassified((current) => {
-                const next = new Set(current)
-                if (next.has(rootFolderId)) next.delete(rootFolderId)
-                else next.add(rootFolderId)
-                return next
-              })
-            }}
-          >
-            <Inbox className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-            <span className="truncate">{t("unclassified")}</span>
-            {sessions.length > 0 ? (
-              <span className="ms-auto shrink-0 text-[10px] text-muted-foreground">
-                {sessions.length}
-              </span>
-            ) : null}
-          </button>
-          <Button
-            size="icon-sm"
-            variant="ghost"
-            className="h-6 w-6 shrink-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
-            aria-label={t("openInSessionCenter")}
-            onClick={() => onOpenScope("unclassified")}
-          >
-            <MoreHorizontal className="h-3.5 w-3.5" />
-          </Button>
-        </div>
-        {isExpanded
-          ? sessions.map((session) => renderSession(session, 1, null))
-          : null}
-      </div>
+        )}
+      </TreeDropBindings>
     )
   }
 
@@ -1444,348 +1408,372 @@ export function CollectionTree({
     )
     const expandable = rootCollections.length > 0 || sessions.length > 0
     return (
-      <div key={root.id} data-collection-path={root.id}>
-        <div
-          data-collection-root-drop={
-            collectionDropTarget?.position === "root" &&
-            collectionDropTarget.rootFolderId === root.id
-              ? "true"
-              : undefined
-          }
-          className={cn(
-            "group flex h-8 min-w-0 items-center rounded-md pe-1 hover:bg-sidebar-accent",
-            root.id === canonicalActiveRootId && "bg-sidebar-primary/8",
-            collectionDropTarget?.position === "root" &&
-              collectionDropTarget.rootFolderId === root.id &&
-              "bg-primary/10 ring-1 ring-inset ring-primary/45"
-          )}
-          onDragOver={(event) => {
-            if (collectionDragRef.current) {
-              handleCollectionRootDragOver(event, root.id)
-            }
-          }}
-          onDragLeave={(event) => {
-            if (collectionDragRef.current) handleCollectionDragLeave(event)
-          }}
-          onDrop={(event) => {
-            if (collectionDragRef.current) {
-              handleCollectionRootDrop(event, root.id)
-            }
-          }}
-        >
-          <button
-            type="button"
-            className={cn(
-              "flex h-6 w-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground",
-              !expandable && "pointer-events-none opacity-0"
-            )}
-            aria-label={`${isExpanded ? t("collapse") : t("expand")} ${root.name}`}
-            onClick={() =>
-              setCollapsedPaths((current) => {
-                const next = new Set(current)
-                if (next.has(root.id)) next.delete(root.id)
-                else next.add(root.id)
-                return next
-              })
-            }
-          >
-            {isExpanded ? (
-              <ChevronDown className="h-3.5 w-3.5" />
-            ) : (
-              <ChevronRight className="h-3.5 w-3.5 rtl:rotate-180" />
-            )}
-          </button>
-          <button
-            type="button"
-            title={`${root.name}\n${root.path}`}
-            className="flex h-full min-w-0 flex-1 items-center gap-1.5 text-start text-xs font-medium"
-            onClick={() =>
-              setCollapsedPaths((current) => {
-                const next = new Set(current)
-                if (next.has(root.id)) next.delete(root.id)
-                else next.add(root.id)
-                return next
-              })
-            }
-          >
-            {isExpanded ? (
-              <FolderOpen className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-            ) : (
-              <Folder className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-            )}
-            <span className="truncate">{root.alias || root.name}</span>
-            <span className="ms-auto shrink-0 text-[10px] font-normal text-muted-foreground">
-              {sessionCountByRoot.get(root.id) ?? 0}
-            </span>
-          </button>
-          {onNewSession ? (
-            <Button
-              size="icon-sm"
-              variant="ghost"
-              className="h-6 w-6 shrink-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
-              aria-label={`${tSidebar("newChat")} · ${root.alias || root.name}`}
-              onClick={() => onNewSession(root.id)}
+      <TreeDropBindings
+        key={root.id}
+        dropId={`collection-root:${root.id}`}
+        dropData={{ kind: "collection-root", rootFolderId: root.id }}
+        disabled={false}
+      >
+        {({ setNodeRef }) => (
+          <div data-collection-path={root.id}>
+            <div
+              ref={setNodeRef}
+              data-collection-root-drop={
+                collectionDropTarget?.position === "root" &&
+                collectionDropTarget.rootFolderId === root.id
+                  ? "true"
+                  : undefined
+              }
+              className={cn(
+                "group flex h-8 min-w-0 items-center rounded-md pe-1 hover:bg-sidebar-accent",
+                root.id === canonicalActiveRootId && "bg-sidebar-primary/8",
+                collectionDropTarget?.position === "root" &&
+                  collectionDropTarget.rootFolderId === root.id &&
+                  "bg-primary/10 ring-1 ring-inset ring-primary/45"
+              )}
             >
-              <SquarePen className="h-3.5 w-3.5" />
-            </Button>
-          ) : null}
-          <Button
-            size="icon-sm"
-            variant="ghost"
-            className="h-6 w-6 shrink-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
-            aria-label={`${t("newRoot")} · ${root.alias || root.name}`}
-            onClick={() =>
-              openEditor({
-                mode: "create",
-                parentId: null,
-                rootFolderId: root.id,
-              })
-            }
-          >
-            <FolderPlus className="h-3.5 w-3.5" />
-          </Button>
-        </div>
-        {isExpanded ? (
-          <>
-            {renderItems(null, 1, root.id)}
-            {renderUnclassified(root.id, sessions)}
-          </>
-        ) : null}
-      </div>
+              <button
+                type="button"
+                className={cn(
+                  "flex h-6 w-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground",
+                  !expandable && "pointer-events-none opacity-0"
+                )}
+                aria-label={`${isExpanded ? t("collapse") : t("expand")} ${root.name}`}
+                onClick={() =>
+                  setCollapsedPaths((current) => {
+                    const next = new Set(current)
+                    if (next.has(root.id)) next.delete(root.id)
+                    else next.add(root.id)
+                    return next
+                  })
+                }
+              >
+                {isExpanded ? (
+                  <ChevronDown className="h-3.5 w-3.5" />
+                ) : (
+                  <ChevronRight className="h-3.5 w-3.5 rtl:rotate-180" />
+                )}
+              </button>
+              <button
+                type="button"
+                title={`${root.name}\n${root.path}`}
+                className="flex h-full min-w-0 flex-1 items-center gap-1.5 text-start text-xs font-medium"
+                onClick={() =>
+                  setCollapsedPaths((current) => {
+                    const next = new Set(current)
+                    if (next.has(root.id)) next.delete(root.id)
+                    else next.add(root.id)
+                    return next
+                  })
+                }
+              >
+                {isExpanded ? (
+                  <FolderOpen className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                ) : (
+                  <Folder className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                )}
+                <span className="truncate">{root.alias || root.name}</span>
+                <span className="ms-auto shrink-0 text-[10px] font-normal text-muted-foreground">
+                  {sessionCountByRoot.get(root.id) ?? 0}
+                </span>
+              </button>
+              {onNewSession ? (
+                <Button
+                  size="icon-sm"
+                  variant="ghost"
+                  className="h-6 w-6 shrink-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+                  aria-label={`${tSidebar("newChat")} · ${root.alias || root.name}`}
+                  onClick={() => onNewSession(root.id)}
+                >
+                  <SquarePen className="h-3.5 w-3.5" />
+                </Button>
+              ) : null}
+              <Button
+                size="icon-sm"
+                variant="ghost"
+                className="h-6 w-6 shrink-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+                aria-label={`${t("newRoot")} · ${root.alias || root.name}`}
+                onClick={() =>
+                  openEditor({
+                    mode: "create",
+                    parentId: null,
+                    rootFolderId: root.id,
+                  })
+                }
+              >
+                <FolderPlus className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+            {isExpanded ? (
+              <>
+                {renderItems(null, 1, root.id)}
+                {renderUnclassified(root.id, sessions)}
+              </>
+            ) : null}
+          </div>
+        )}
+      </TreeDropBindings>
     )
   }
 
   return (
-    <section
-      className={cn(
-        "border-b border-border/40 px-1.5 pb-1.5",
-        showSessions && "flex min-h-0 flex-1 flex-col"
-      )}
+    <DndContext
+      sensors={dndSensors}
+      collisionDetection={pointerWithin}
+      onDragStart={handleTreeDragStart}
+      onDragMove={handleTreeDragMove}
+      onDragOver={handleTreeDragMove}
+      onDragCancel={clearTreeDrag}
+      onDragEnd={handleTreeDragEnd}
     >
-      <div className="flex h-7 items-center px-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-        <span className="min-w-0 flex-1 truncate">{t("title")}</span>
-        <Button
-          size="icon-sm"
-          variant="ghost"
-          className="h-6 w-6"
-          aria-label={t("newRoot")}
-          onClick={() => openEditor({ mode: "create", parentId: null })}
-        >
-          <Plus className="h-3.5 w-3.5" />
-        </Button>
-      </div>
-      <div
+      <section
         className={cn(
-          "overflow-y-auto",
-          showSessions ? "min-h-0 flex-1" : "max-h-40"
+          "border-b border-border/40 px-1.5 pb-1.5",
+          showSessions && "flex min-h-0 flex-1 flex-col"
         )}
       >
-        {showSessions && membershipsLoading && conversationIdsKey !== "" ? (
-          <div className="flex h-7 items-center justify-center text-muted-foreground">
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          </div>
-        ) : null}
-        {loading && items.length === 0 && pathRoots.length === 0 ? (
-          <div className="flex h-8 items-center justify-center text-muted-foreground">
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          </div>
-        ) : showSessions ? (
-          <>
-            {pathRoots.map(renderPath)}
-            {/* Legacy Collections created before canonical Path ownership was
+        <div className="flex h-7 items-center px-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+          <span className="min-w-0 flex-1 truncate">{t("title")}</span>
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            className="h-6 w-6"
+            aria-label={t("newRoot")}
+            onClick={() => openEditor({ mode: "create", parentId: null })}
+          >
+            <Plus className="h-3.5 w-3.5" />
+          </Button>
+        </div>
+        <div
+          className={cn(
+            "overflow-y-auto",
+            showSessions ? "min-h-0 flex-1" : "max-h-40"
+          )}
+        >
+          {showSessions && membershipsLoading && conversationIdsKey !== "" ? (
+            <div className="flex h-7 items-center justify-center text-muted-foreground">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            </div>
+          ) : null}
+          {loading && items.length === 0 && pathRoots.length === 0 ? (
+            <div className="flex h-8 items-center justify-center text-muted-foreground">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            </div>
+          ) : showSessions ? (
+            <>
+              {pathRoots.map(renderPath)}
+              {/* Legacy Collections created before canonical Path ownership was
                 introduced stay reachable instead of silently disappearing. */}
-            {renderItems(null, 0, null)}
-            {pathRoots.length === 0 && items.length === 0 ? (
+              {renderItems(null, 0, null)}
+              {pathRoots.length === 0 && items.length === 0 ? (
+                <button
+                  type="button"
+                  className="w-full px-2 py-1.5 text-start text-xs text-muted-foreground hover:text-foreground"
+                  onClick={() => openEditor({ mode: "create", parentId: null })}
+                >
+                  {t("empty")}
+                </button>
+              ) : null}
+            </>
+          ) : (
+            <>
               <button
                 type="button"
-                className="w-full px-2 py-1.5 text-start text-xs text-muted-foreground hover:text-foreground"
-                onClick={() => openEditor({ mode: "create", parentId: null })}
+                className="flex h-7 w-full min-w-0 items-center gap-1.5 rounded-md px-2 text-start text-xs hover:bg-sidebar-accent"
+                aria-label={t("unclassified")}
+                onClick={() => onOpenScope("unclassified")}
               >
-                {t("empty")}
+                <Inbox className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                <span className="truncate">{t("unclassified")}</span>
               </button>
-            ) : null}
-          </>
-        ) : (
-          <>
-            <button
-              type="button"
-              className="flex h-7 w-full min-w-0 items-center gap-1.5 rounded-md px-2 text-start text-xs hover:bg-sidebar-accent"
-              aria-label={t("unclassified")}
-              onClick={() => onOpenScope("unclassified")}
-            >
-              <Inbox className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-              <span className="truncate">{t("unclassified")}</span>
-            </button>
-            {items.length === 0 ? (
-              <button
-                type="button"
-                className="w-full px-2 py-1.5 text-start text-xs text-muted-foreground hover:text-foreground"
-                onClick={() => openEditor({ mode: "create", parentId: null })}
-              >
-                {t("empty")}
-              </button>
-            ) : (
-              renderItems(null)
-            )}
-          </>
-        )}
-      </div>
+              {items.length === 0 ? (
+                <button
+                  type="button"
+                  className="w-full px-2 py-1.5 text-start text-xs text-muted-foreground hover:text-foreground"
+                  onClick={() => openEditor({ mode: "create", parentId: null })}
+                >
+                  {t("empty")}
+                </button>
+              ) : (
+                renderItems(null)
+              )}
+            </>
+          )}
+        </div>
 
-      <Dialog
-        open={sessionRename != null}
-        onOpenChange={(open) => !open && setSessionRename(null)}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>{tConversation("renameConversation")}</DialogTitle>
-          </DialogHeader>
-          <Input
-            value={sessionRename?.value ?? ""}
-            onChange={(event) =>
-              setSessionRename((current) =>
-                current ? { ...current, value: event.target.value } : current
-              )
-            }
-            {...ime.props}
-            onKeyDown={(event) => {
-              if (ime.isComposing(event)) return
-              if (event.key === "Enter") void handleSessionRename()
-            }}
-            autoFocus
+        <Dialog
+          open={sessionRename != null}
+          onOpenChange={(open) => !open && setSessionRename(null)}
+        >
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>{tConversation("renameConversation")}</DialogTitle>
+            </DialogHeader>
+            <Input
+              value={sessionRename?.value ?? ""}
+              onChange={(event) =>
+                setSessionRename((current) =>
+                  current ? { ...current, value: event.target.value } : current
+                )
+              }
+              {...ime.props}
+              onKeyDown={(event) => {
+                if (ime.isComposing(event)) return
+                if (event.key === "Enter") void handleSessionRename()
+              }}
+              autoFocus
+            />
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setSessionRename(null)}>
+                {tConversation("cancel")}
+              </Button>
+              <Button onClick={() => void handleSessionRename()}>
+                {tConversation("save")}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        <AlertDialog
+          open={sessionDelete != null}
+          onOpenChange={(open) => !open && setSessionDelete(null)}
+        >
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>
+                {tConversation("deleteConversationTitle")}
+              </AlertDialogTitle>
+              <AlertDialogDescription>
+                {tConversation("deleteConversationDescription", {
+                  title:
+                    formatConversationTitle(sessionDelete?.title) ||
+                    tConversation("untitledConversation"),
+                })}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>{tConversation("cancel")}</AlertDialogCancel>
+              <AlertDialogAction onClick={() => void handleSessionDelete()}>
+                {tConversation("delete")}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+
+        {sessionDetails ? (
+          <SessionDetailsDialog
+            open
+            onOpenChange={(open) => !open && setSessionDetails(null)}
+            summary={sessionDetails}
           />
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setSessionRename(null)}>
-              {tConversation("cancel")}
-            </Button>
-            <Button onClick={() => void handleSessionRename()}>
-              {tConversation("save")}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        ) : null}
 
-      <AlertDialog
-        open={sessionDelete != null}
-        onOpenChange={(open) => !open && setSessionDelete(null)}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>
-              {tConversation("deleteConversationTitle")}
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              {tConversation("deleteConversationDescription", {
-                title:
-                  formatConversationTitle(sessionDelete?.title) ||
-                  tConversation("untitledConversation"),
-              })}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>{tConversation("cancel")}</AlertDialogCancel>
-            <AlertDialogAction onClick={() => void handleSessionDelete()}>
-              {tConversation("delete")}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
-      {sessionDetails ? (
-        <SessionDetailsDialog
-          open
-          onOpenChange={(open) => !open && setSessionDetails(null)}
-          summary={sessionDetails}
-        />
-      ) : null}
-
-      <Dialog
-        open={editor != null}
-        onOpenChange={(open) => !open && setEditor(null)}
-      >
-        <DialogContent className="max-w-sm">
-          <DialogHeader>
-            <DialogTitle>
-              {editor?.mode === "create"
-                ? t("createTitle")
-                : editor?.mode === "rename"
-                  ? t("renameTitle")
-                  : t("moveTitle")}
-            </DialogTitle>
-          </DialogHeader>
-          <div className="space-y-3">
-            {editor?.mode !== "move" ? (
-              <Input
-                autoFocus
-                value={name}
-                maxLength={80}
-                placeholder={t("namePlaceholder")}
-                onChange={(event) => setName(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") void submitEditor()
-                }}
-              />
-            ) : null}
-            {editor?.mode !== "rename" ? (
-              <Select
-                value={parentId == null ? "root" : String(parentId)}
-                onValueChange={(value) =>
-                  setParentId(value === "root" ? null : Number(value))
-                }
+        <Dialog
+          open={editor != null}
+          onOpenChange={(open) => !open && setEditor(null)}
+        >
+          <DialogContent className="max-w-sm">
+            <DialogHeader>
+              <DialogTitle>
+                {editor?.mode === "create"
+                  ? t("createTitle")
+                  : editor?.mode === "rename"
+                    ? t("renameTitle")
+                    : t("moveTitle")}
+              </DialogTitle>
+            </DialogHeader>
+            <div className="space-y-3">
+              {editor?.mode !== "move" ? (
+                <Input
+                  autoFocus
+                  value={name}
+                  maxLength={80}
+                  placeholder={t("namePlaceholder")}
+                  onChange={(event) => setName(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") void submitEditor()
+                  }}
+                />
+              ) : null}
+              {editor?.mode === "move" ? (
+                <Select
+                  value={parentId == null ? "root" : String(parentId)}
+                  onValueChange={(value) =>
+                    setParentId(value === "root" ? null : Number(value))
+                  }
+                >
+                  <SelectTrigger aria-label={t("parentLabel")}>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="root">{t("root")}</SelectItem>
+                    {options
+                      .filter(({ item }) => !invalidMoveParents.has(item.id))
+                      .map(({ item, depth }) => (
+                        <SelectItem key={item.id} value={String(item.id)}>
+                          {depth > 0 ? `${"· ".repeat(depth)}` : ""}
+                          {item.name}
+                        </SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
+              ) : null}
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setEditor(null)}>
+                {tCommon("cancel")}
+              </Button>
+              <Button
+                disabled={pending || (editor?.mode !== "move" && !name.trim())}
+                onClick={() => void submitEditor()}
               >
-                <SelectTrigger aria-label={t("parentLabel")}>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="root">{t("root")}</SelectItem>
-                  {options
-                    .filter(({ item }) => !invalidMoveParents.has(item.id))
-                    .map(({ item, depth }) => (
-                      <SelectItem key={item.id} value={String(item.id)}>
-                        {depth > 0 ? `${"· ".repeat(depth)}` : ""}
-                        {item.name}
-                      </SelectItem>
-                    ))}
-                </SelectContent>
-              </Select>
-            ) : null}
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setEditor(null)}>
-              {tCommon("cancel")}
-            </Button>
-            <Button
-              disabled={pending || (editor?.mode !== "move" && !name.trim())}
-              onClick={() => void submitEditor()}
-            >
-              {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-              {tCommon("confirm")}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+                {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                {tCommon("confirm")}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
-      <AlertDialog
-        open={deleteTarget != null}
-        onOpenChange={(open) => !open && setDeleteTarget(null)}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>{t("deleteTitle")}</AlertDialogTitle>
-            <AlertDialogDescription>
-              {t("deleteDescription", { name: deleteTarget?.name ?? "" })}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>{tCommon("cancel")}</AlertDialogCancel>
-            <AlertDialogAction
-              disabled={pending}
-              onClick={() => void confirmDelete()}
-            >
-              {tCommon("confirm")}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-    </section>
+        <AlertDialog
+          open={deleteTarget != null}
+          onOpenChange={(open) => !open && setDeleteTarget(null)}
+        >
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>{t("deleteTitle")}</AlertDialogTitle>
+              <AlertDialogDescription>
+                {t("deleteDescription", { name: deleteTarget?.name ?? "" })}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>{tCommon("cancel")}</AlertDialogCancel>
+              <AlertDialogAction
+                disabled={pending}
+                onClick={() => void confirmDelete()}
+              >
+                {tCommon("confirm")}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      </section>
+      {typeof document !== "undefined"
+        ? createPortal(
+            <DragOverlay dropAnimation={null}>
+              {activeTreeDrag ? (
+                <div className="flex max-w-72 items-center gap-2 rounded-md border border-primary/35 bg-popover px-3 py-2 text-xs text-popover-foreground shadow-lg">
+                  {activeTreeDrag.kind === "collection" ? (
+                    <Folder className="h-3.5 w-3.5 shrink-0" />
+                  ) : (
+                    <Circle className="h-3 w-3 shrink-0 fill-current" />
+                  )}
+                  <span className="truncate">{activeTreeDrag.label}</span>
+                </div>
+              ) : null}
+            </DragOverlay>,
+            document.body
+          )
+        : null}
+    </DndContext>
   )
 }

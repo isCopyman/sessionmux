@@ -4,6 +4,11 @@ import { NextIntlClientProvider } from "next-intl"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { CollectionTree } from "./collection-tree"
+import {
+  canDropSessionOnTarget,
+  collectionPlacementForRoot,
+  collectionPlacementForRow,
+} from "./collection-tree-dnd"
 import enMessages from "@/i18n/messages/en.json"
 import type { DbConversationSummary } from "@/lib/types"
 
@@ -246,41 +251,18 @@ vi.mock("@/lib/api", () => ({
   deleteConversation: h.deleteConversation,
 }))
 
-function createDataTransfer() {
-  const values = new Map<string, string>()
-  const types: string[] = []
-  return {
-    dropEffect: "none",
-    effectAllowed: "none",
-    files: [],
-    items: [],
-    types,
-    clearData: vi.fn((type?: string) => {
-      if (type) values.delete(type)
-      else values.clear()
-    }),
-    getData: vi.fn((type: string) => values.get(type) ?? ""),
-    setData: vi.fn((type: string, value: string) => {
-      values.set(type, value)
-      if (!types.includes(type)) types.push(type)
-    }),
-    setDragImage: vi.fn(),
-  } as unknown as DataTransfer
-}
-
-function fireDragAt(
-  target: Element,
-  type: "dragover" | "drop",
-  dataTransfer: DataTransfer,
-  clientY: number
-) {
-  const event = new Event(type, { bubbles: true, cancelable: true })
-  Object.defineProperties(event, {
-    dataTransfer: { value: dataTransfer },
-    clientY: { value: clientY },
-  })
-  fireEvent(target, event)
-}
+const rect = (top: number, height = 28): DOMRect =>
+  ({
+    x: 0,
+    y: top,
+    top,
+    left: 0,
+    right: 220,
+    bottom: top + height,
+    width: 220,
+    height,
+    toJSON: () => ({}),
+  }) as DOMRect
 
 function renderTree(
   onOpenScope = vi.fn(),
@@ -340,11 +322,29 @@ describe("CollectionTree", () => {
   it("creates a top-level Collection without touching execution folders", async () => {
     const { user, onOpenScope } = renderTree()
     await user.click(screen.getByRole("button", { name: "New collection" }))
+    expect(screen.queryByRole("combobox")).toBeNull()
     await user.type(screen.getByPlaceholderText("Collection name"), "Writing")
     await user.click(screen.getByRole("button", { name: "Confirm" }))
 
     expect(h.create).toHaveBeenCalledWith("Writing", null, 7)
     expect(onOpenScope).toHaveBeenCalledWith(14)
+  })
+
+  it("creates a nested Collection at the invoked level without a parent picker", async () => {
+    renderTree()
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Research" }))
+    await userEvent.click(
+      screen.getByRole("menuitem", { name: "New nested collection" })
+    )
+
+    expect(screen.queryByRole("combobox")).toBeNull()
+    await userEvent.type(
+      screen.getByPlaceholderText("Collection name"),
+      "Subtopic"
+    )
+    await userEvent.click(screen.getByRole("button", { name: "Confirm" }))
+
+    expect(h.create).toHaveBeenCalledWith("Subtopic", 10, 7)
   })
 
   it("expands Collections into inline Sessions and keeps Unclassified visible", async () => {
@@ -393,165 +393,149 @@ describe("CollectionTree", () => {
     )
   })
 
-  it("moves a Session into a Collection without changing its Path", async () => {
-    renderTree(vi.fn(), { showSessions: true })
-    const source = (await screen.findByText("Loose notes")).closest("button")!
-    const target = document.querySelector('[data-collection-id="10"]')!
-    const dataTransfer = createDataTransfer()
-
-    fireEvent.dragStart(source, { dataTransfer })
-    fireEvent.dragOver(target, { dataTransfer })
-    expect(target.getAttribute("data-session-drop-target")).toBe("true")
-    fireEvent.drop(target, { dataTransfer })
-
-    await waitFor(() =>
-      expect(h.assignCollection).toHaveBeenCalledWith([102], 10)
-    )
-    await waitFor(() =>
-      expect(
-        document.querySelector('[data-collection-id="10"]')?.parentElement
-          ?.textContent
-      ).toContain("Loose notes")
-    )
+  it("accepts a Session Collection change without changing its Path", () => {
+    expect(
+      canDropSessionOnTarget(
+        {
+          kind: "session",
+          conversationId: 102,
+          rootFolderId: 7,
+          label: "Loose notes",
+        },
+        7,
+        10,
+        null
+      )
+    ).toBe(true)
   })
 
-  it("moves a classified Session back to Unclassified", async () => {
-    const { user } = renderTree(vi.fn(), { showSessions: true })
-    await user.click(screen.getByRole("button", { name: "Research" }))
-    await user.click(screen.getByRole("button", { name: "Sources" }))
-    const source = (await screen.findByText("Evidence review")).closest(
-      "button"
-    )!
-    const target = document.querySelector('[data-unclassified-root-id="7"]')!
-    const dataTransfer = createDataTransfer()
-
-    fireEvent.dragStart(source, { dataTransfer })
-    fireEvent.dragOver(target, { dataTransfer })
-    fireEvent.drop(target, { dataTransfer })
-
-    await waitFor(() =>
-      expect(h.assignCollection).toHaveBeenCalledWith([101], null)
-    )
-    await waitFor(() =>
-      expect(target.parentElement?.textContent).toContain("Evidence review")
-    )
+  it("accepts moving a classified Session back to Unclassified", () => {
+    expect(
+      canDropSessionOnTarget(
+        {
+          kind: "session",
+          conversationId: 101,
+          rootFolderId: 7,
+          label: "Evidence review",
+        },
+        7,
+        null,
+        11
+      )
+    ).toBe(true)
   })
 
-  it("does not move a Session to its current Collection", async () => {
-    const { user } = renderTree(vi.fn(), { showSessions: true })
-    await user.click(screen.getByRole("button", { name: "Research" }))
-    await user.click(screen.getByRole("button", { name: "Sources" }))
-    const source = (await screen.findByText("Evidence review")).closest(
-      "button"
-    )!
-    const target = document.querySelector('[data-collection-id="11"]')!
-    const dataTransfer = createDataTransfer()
-
-    fireEvent.dragStart(source, { dataTransfer })
-    fireEvent.dragOver(target, { dataTransfer })
-    fireEvent.drop(target, { dataTransfer })
-
-    expect(h.assignCollection).not.toHaveBeenCalled()
-    expect(target.getAttribute("data-session-drop-target")).toBeNull()
+  it("does not move a Session to its current Collection", () => {
+    expect(
+      canDropSessionOnTarget(
+        {
+          kind: "session",
+          conversationId: 101,
+          rootFolderId: 7,
+          label: "Evidence review",
+        },
+        7,
+        11,
+        11
+      )
+    ).toBe(false)
   })
 
-  it("rejects Collection drops across canonical Paths", async () => {
-    renderTree(vi.fn(), { showSessions: true })
-    const source = (await screen.findByText("Loose notes")).closest("button")!
-    const target = document.querySelector('[data-collection-id="12"]')!
-    const dataTransfer = createDataTransfer()
-
-    fireEvent.dragStart(source, { dataTransfer })
-    fireEvent.dragOver(target, { dataTransfer })
-    fireEvent.drop(target, { dataTransfer })
-
-    expect(dataTransfer.dropEffect).toBe("none")
-    expect(h.assignCollection).not.toHaveBeenCalled()
-    expect(target.getAttribute("data-session-drop-target")).toBeNull()
+  it("rejects Session drops across canonical Paths", () => {
+    expect(
+      canDropSessionOnTarget(
+        {
+          kind: "session",
+          conversationId: 102,
+          rootFolderId: 7,
+          label: "Loose notes",
+        },
+        9,
+        12,
+        null
+      )
+    ).toBe(false)
   })
 
-  it("reorders Collections with an explicit before insertion line", async () => {
-    renderTree(vi.fn(), { showSessions: true })
-    const source = screen.getByRole("button", { name: "Writing" })
-    const target = document.querySelector('[data-collection-id="10"]')!
-    vi.spyOn(target, "getBoundingClientRect").mockReturnValue({
-      x: 0,
-      y: 100,
-      top: 100,
-      left: 0,
-      right: 220,
-      bottom: 128,
-      width: 220,
-      height: 28,
-      toJSON: () => ({}),
-    })
-    const dataTransfer = createDataTransfer()
-
-    fireEvent.dragStart(source, { dataTransfer })
-    fireDragAt(target, "dragover", dataTransfer, 102)
-    expect(target.getAttribute("data-collection-drop-position")).toBe("before")
-    fireDragAt(target, "drop", dataTransfer, 102)
-
-    await waitFor(() => expect(h.place).toHaveBeenCalledWith(13, null, 0))
+  it("resolves the top quarter of a Collection row as before", () => {
+    expect(
+      collectionPlacementForRow(
+        {
+          kind: "collection",
+          collectionId: 13,
+          rootFolderId: 7,
+          label: "Writing",
+        },
+        h.items[0],
+        rect(100),
+        102,
+        h.items
+      )
+    ).toMatchObject({ parentId: null, index: 0, position: "before" })
   })
 
-  it("nests a Collection when dropped in the center of another row", async () => {
-    renderTree(vi.fn(), { showSessions: true })
-    const source = screen.getByRole("button", { name: "Writing" })
-    const target = document.querySelector('[data-collection-id="10"]')!
-    vi.spyOn(target, "getBoundingClientRect").mockReturnValue({
-      x: 0,
-      y: 100,
-      top: 100,
-      left: 0,
-      right: 220,
-      bottom: 128,
-      width: 220,
-      height: 28,
-      toJSON: () => ({}),
-    })
-    const dataTransfer = createDataTransfer()
-
-    fireEvent.dragStart(source, { dataTransfer })
-    fireDragAt(target, "dragover", dataTransfer, 114)
-    expect(target.getAttribute("data-collection-drop-position")).toBe("inside")
-    fireDragAt(target, "drop", dataTransfer, 114)
-
-    await waitFor(() => expect(h.place).toHaveBeenCalledWith(13, 10, 1))
+  it("resolves the center of a Collection row as nesting", () => {
+    expect(
+      collectionPlacementForRow(
+        {
+          kind: "collection",
+          collectionId: 13,
+          rootFolderId: 7,
+          label: "Writing",
+        },
+        h.items[0],
+        rect(100),
+        114,
+        h.items
+      )
+    ).toMatchObject({ parentId: 10, index: 1, position: "inside" })
   })
 
-  it("promotes a nested Collection by dropping it on the Path header", async () => {
-    const { user } = renderTree(vi.fn(), { showSessions: true })
-    await user.click(screen.getByRole("button", { name: "Research" }))
-    const source = screen.getByRole("button", { name: "Sources" })
-    const target = document.querySelector('[data-collection-path="7"] > div')!
-    const dataTransfer = createDataTransfer()
-
-    fireEvent.dragStart(source, { dataTransfer })
-    fireEvent.dragOver(target, { dataTransfer })
-    expect(target.getAttribute("data-collection-root-drop")).toBe("true")
-    fireEvent.drop(target, { dataTransfer })
-
-    await waitFor(() => expect(h.place).toHaveBeenCalledWith(11, null, 2))
+  it("promotes a nested Collection when dropped on its Path header", () => {
+    expect(
+      collectionPlacementForRoot(
+        {
+          kind: "collection",
+          collectionId: 11,
+          rootFolderId: 7,
+          label: "Sources",
+        },
+        7,
+        h.items
+      )
+    ).toMatchObject({ parentId: null, index: 2, position: "root" })
   })
 
-  it("rejects Collection cycles and cross-Path placement", async () => {
-    const { user } = renderTree(vi.fn(), { showSessions: true })
-    await user.click(screen.getByRole("button", { name: "Research" }))
-    const dataTransfer = createDataTransfer()
-    const research = screen.getByRole("button", { name: "Research" })
-    const sources = document.querySelector('[data-collection-id="11"]')!
-    const other = document.querySelector('[data-collection-id="12"]')!
+  it("does not persist a Collection when it is dropped back in place", () => {
+    expect(
+      collectionPlacementForRow(
+        {
+          kind: "collection",
+          collectionId: 10,
+          rootFolderId: 7,
+          label: "Research",
+        },
+        h.items[3],
+        rect(100),
+        102,
+        h.items
+      )
+    ).toBeNull()
+  })
 
-    fireEvent.dragStart(research, { dataTransfer })
-    fireEvent.dragOver(sources, { dataTransfer })
-    fireEvent.drop(sources, { dataTransfer })
-    fireEvent.dragOver(other, { dataTransfer })
-    fireEvent.drop(other, { dataTransfer })
-
-    expect(h.place).not.toHaveBeenCalled()
-    expect(sources.getAttribute("data-collection-drop-position")).toBeNull()
-    expect(other.getAttribute("data-collection-drop-position")).toBeNull()
+  it("rejects Collection cycles and cross-Path placement", () => {
+    const research = {
+      kind: "collection" as const,
+      collectionId: 10,
+      rootFolderId: 7,
+      label: "Research",
+    }
+    expect(
+      collectionPlacementForRow(research, h.items[1], rect(100), 114, h.items)
+    ).toBeNull()
+    expect(
+      collectionPlacementForRow(research, h.items[2], rect(100), 114, h.items)
+    ).toBeNull()
   })
 
   it("renames a Session from the tree context menu", async () => {
@@ -587,23 +571,19 @@ describe("CollectionTree", () => {
     expect(await screen.findByText("Rename collection")).toBeTruthy()
   })
 
-  it("moves a Session by dropping it on another Session in the same Path", async () => {
-    const { user } = renderTree(vi.fn(), { showSessions: true })
-    await user.click(screen.getByRole("button", { name: "Research" }))
-    await user.click(screen.getByTitle("Sources"))
-    const source = (await screen.findByText("Loose notes")).closest("button")!
-    const target = (await screen.findByText("Evidence review")).closest(
-      "button"
-    )!
-    const dataTransfer = createDataTransfer()
-
-    fireEvent.dragStart(source, { dataTransfer })
-    fireEvent.dragOver(target, { dataTransfer })
-    expect(target.getAttribute("data-session-drop-target")).toBe("true")
-    fireEvent.drop(target, { dataTransfer })
-
-    await waitFor(() =>
-      expect(h.assignCollection).toHaveBeenCalledWith([102], 11)
-    )
+  it("uses another Session's Collection as the Session drop target", () => {
+    expect(
+      canDropSessionOnTarget(
+        {
+          kind: "session",
+          conversationId: 102,
+          rootFolderId: 7,
+          label: "Loose notes",
+        },
+        7,
+        11,
+        null
+      )
+    ).toBe(true)
   })
 })
