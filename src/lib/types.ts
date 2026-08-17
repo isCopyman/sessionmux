@@ -1177,6 +1177,13 @@ export interface PromptDraft {
 
 export type PromptQueueItemState = "queued" | "claimed" | "paused"
 
+/**
+ * Scheduling class assigned by the backend (clients cannot set it). The
+ * worker claims by class first (user > collaboration/reminder > timer),
+ * FIFO inside a class; snapshots come back in the same order.
+ */
+export type PromptQueueSource = "user" | "collaboration" | "reminder" | "timer"
+
 export interface PromptQueueItem {
   id: string
   conversationId: number
@@ -1185,6 +1192,7 @@ export interface PromptQueueItem {
   originEventId?: string | null
   modeId?: string | null
   state: PromptQueueItemState
+  source: PromptQueueSource
   clientDedupeId: string
   attempts: number
   pausedReason?: string | null
@@ -1207,6 +1215,17 @@ export interface SessionTimer {
   enabled: boolean
   lastFiredAt?: string | null
   fireCount: number
+  /**
+   * Consecutive fires with unanswered outbound letters and no new mailbox
+   * information. Any real news or user edit resets it to zero.
+   */
+  strikeCount: number
+  /**
+   * Set when the no-progress brake parked this timer (enabled stays true).
+   * New mailbox information or any user update clears it automatically.
+   */
+  autoPausedAt?: string | null
+  autoPauseReason?: string | null
   createdAt: string
   updatedAt: string
 }

@@ -38,8 +38,16 @@ const timer = {
   promptText: "Read docs/current-task.md and continue",
   enabled: true,
   fireCount: 0,
+  strikeCount: 0,
   createdAt: "2026-08-16T00:00:00Z",
   updatedAt: "2026-08-16T00:00:00Z",
+}
+
+const autoPausedTimer = {
+  ...timer,
+  strikeCount: 3,
+  autoPausedAt: "2026-08-18T00:00:00Z",
+  autoPauseReason: "waiting_no_progress",
 }
 
 describe("SessionTimers", () => {
@@ -101,6 +109,40 @@ describe("SessionTimers", () => {
     fireEvent.click(screen.getByTitle("Delete"))
     await waitFor(() =>
       expect(deleteSessionTimer).toHaveBeenCalledWith(7, "t1")
+    )
+  })
+
+  it("surfaces the backoff auto-pause without flipping enabled", async () => {
+    listSessionTimers.mockResolvedValue([autoPausedTimer])
+    renderTimers()
+    fireEvent.click(screen.getByRole("button", { name: /idle continue/i }))
+    await screen.findByText(autoPausedTimer.promptText)
+
+    expect(screen.getByText(/paused by backoff/i)).toBeInTheDocument()
+    // enabled is still true, so the row keeps the Pause toggle (not Resume).
+    expect(screen.getByTitle("Pause")).toBeInTheDocument()
+  })
+
+  it("resumes an auto-paused timer with one click", async () => {
+    listSessionTimers.mockResolvedValue([autoPausedTimer])
+    updateSessionTimer.mockResolvedValue({
+      ...timer,
+      updatedAt: "2026-08-18T00:01:00Z",
+    })
+    renderTimers()
+    fireEvent.click(screen.getByRole("button", { name: /idle continue/i }))
+    await screen.findByText(/paused by backoff/i)
+
+    fireEvent.click(screen.getByRole("button", { name: "Resume now" }))
+    await waitFor(() =>
+      expect(updateSessionTimer).toHaveBeenCalledWith(
+        7,
+        "t1",
+        expect.objectContaining({
+          enabled: true,
+          expectedUpdatedAt: autoPausedTimer.updatedAt,
+        })
+      )
     )
   })
 

@@ -3400,6 +3400,8 @@
         "edit": "Modifier",
         "save": "Enregistrer",
         "cancel": "Annuler",
+        "autoPaused": "Mis en pause par le backoff — aucune nouvelle en attendant les réponses. Toute nouvelle information le relance automatiquement.",
+        "resumeNow": "Reprendre maintenant",
         "errors": {
           "emptyPrompt": "L'invite ne peut pas être vide"
         }
@@ -4285,7 +4287,6 @@
     "sessionInfoHint": "Permet aux agents de consulter une session que vous mentionnez dans votre message (un badge de session) pour lire son titre, son agent, son statut, son espace de travail, sa consommation de jetons et ses messages récents.",
     "collaborationLabel": "Collaboration entre sessions",
     "collaborationHint": "Permet aux agents de trouver des sessions persistantes par identifiant stable et de leur envoyer des messages durables.",
-
     "automationsLabel": "Créer des automatisations",
     "automationsHint": "Enregistre la conversation comme une automatisation qui s'exécute selon un planning. Désactivé par défaut : elle démarre ensuite des agents d'elle-même.",
     "workTasksLabel": "Créer des tâches à faire",

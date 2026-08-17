@@ -121,52 +121,70 @@ export function SessionTimers({
                       </button>
                     </div>
                   ) : (
-                    <div className="flex items-center gap-1.5">
-                      <span
-                        className={cn(
-                          "h-1.5 w-1.5 shrink-0 rounded-full",
-                          timer.enabled
-                            ? "bg-primary"
-                            : "bg-muted-foreground/50"
-                        )}
-                      />
-                      <span
-                        className="min-w-0 flex-1 truncate text-foreground/80"
-                        title={timer.promptText}
-                      >
-                        {timer.promptText}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => startEdit(timer.id, timer.promptText)}
-                        className="shrink-0 rounded-sm p-0.5 text-muted-foreground hover:bg-muted-foreground/15"
-                        title={t("edit")}
-                      >
-                        <PencilIcon className="h-3 w-3" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          update(timer.id, { enabled: !timer.enabled })
-                        }
-                        className="shrink-0 rounded-sm p-0.5 text-muted-foreground hover:bg-muted-foreground/15"
-                        title={timer.enabled ? t("pause") : t("resume")}
-                      >
-                        {timer.enabled ? (
-                          <PauseIcon className="h-3 w-3" />
-                        ) : (
-                          <PlayIcon className="h-3 w-3" />
-                        )}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => remove(timer.id)}
-                        className="shrink-0 rounded-sm p-0.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                        title={t("delete")}
-                      >
-                        <Trash2Icon className="h-3 w-3" />
-                      </button>
-                    </div>
+                    <>
+                      <div className="flex items-center gap-1.5">
+                        <span
+                          className={cn(
+                            "h-1.5 w-1.5 shrink-0 rounded-full",
+                            timer.enabled
+                              ? timer.autoPausedAt
+                                ? "bg-amber-500"
+                                : "bg-primary"
+                              : "bg-muted-foreground/50"
+                          )}
+                        />
+                        <span
+                          className="min-w-0 flex-1 truncate text-foreground/80"
+                          title={timer.promptText}
+                        >
+                          {timer.promptText}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => startEdit(timer.id, timer.promptText)}
+                          className="shrink-0 rounded-sm p-0.5 text-muted-foreground hover:bg-muted-foreground/15"
+                          title={t("edit")}
+                        >
+                          <PencilIcon className="h-3 w-3" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            update(timer.id, { enabled: !timer.enabled })
+                          }
+                          className="shrink-0 rounded-sm p-0.5 text-muted-foreground hover:bg-muted-foreground/15"
+                          title={timer.enabled ? t("pause") : t("resume")}
+                        >
+                          {timer.enabled ? (
+                            <PauseIcon className="h-3 w-3" />
+                          ) : (
+                            <PlayIcon className="h-3 w-3" />
+                          )}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => remove(timer.id)}
+                          className="shrink-0 rounded-sm p-0.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                          title={t("delete")}
+                        >
+                          <Trash2Icon className="h-3 w-3" />
+                        </button>
+                      </div>
+                      {timer.autoPausedAt != null && (
+                        <div className="mt-1 flex items-center gap-1.5 rounded-sm bg-amber-500/15 px-1.5 py-1">
+                          <span className="min-w-0 flex-1 text-[10px] leading-relaxed text-amber-800 dark:text-amber-300">
+                            {t("autoPaused")}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => update(timer.id, { enabled: true })}
+                            className="shrink-0 rounded-sm border border-amber-500/40 px-1.5 py-0.5 text-[10px] font-medium text-amber-800 transition-colors hover:bg-amber-500/20 dark:text-amber-300"
+                          >
+                            {t("resumeNow")}
+                          </button>
+                        </div>
+                      )}
+                    </>
                   )}
                 </li>
               ))}

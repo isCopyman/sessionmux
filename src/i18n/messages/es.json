@@ -3400,6 +3400,8 @@
         "edit": "Editar",
         "save": "Guardar",
         "cancel": "Cancelar",
+        "autoPaused": "Pausado por espera progresiva: sin novedades mientras se esperaban respuestas. La nueva información lo reanuda automáticamente.",
+        "resumeNow": "Reanudar ahora",
         "errors": {
           "emptyPrompt": "La indicación no puede estar vacía"
         }
@@ -4285,7 +4287,6 @@
     "sessionInfoHint": "Permite que los agentes consulten una sesión que mencionas en tu mensaje (una insignia de sesión) para leer su título, agente, estado, espacio de trabajo, uso de tokens y mensajes recientes.",
     "collaborationLabel": "Colaboración entre sesiones",
     "collaborationHint": "Permite que los agentes encuentren sesiones persistentes por ID estable y les envíen mensajes duraderos.",
-
     "automationsLabel": "Crear automatizaciones",
     "automationsHint": "Guarda la conversación como una automatización que se ejecuta según un horario. Desactivado por defecto: luego inicia agentes por su cuenta.",
     "workTasksLabel": "Crear tareas pendientes",

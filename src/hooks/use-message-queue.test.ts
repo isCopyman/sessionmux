@@ -63,6 +63,7 @@ function snapshot(
       originEventId: null,
       modeId: null,
       state: row.state ?? "queued",
+      source: "user" as const,
       clientDedupeId: row.id,
       attempts: 0,
       pausedReason: null,

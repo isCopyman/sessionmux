@@ -3400,6 +3400,8 @@
         "edit": "编辑",
         "save": "保存",
         "cancel": "取消",
+        "autoPaused": "已退避暂停：等待回信期间连续无新信息。收到新信息会自动恢复。",
+        "resumeNow": "立即恢复",
         "errors": {
           "emptyPrompt": "定时器提示词不能为空"
         }
