@@ -3,6 +3,8 @@ import type { CollaborationDelivery } from "@/lib/types"
 import {
   isAgentUnread,
   mailHumanStatus,
+  mailNoReplyNeeded,
+  mailStatusLabelKey,
   mailStatusVisual,
 } from "./mail-human-status"
 
@@ -84,5 +86,60 @@ describe("mailHumanStatus", () => {
         })
       )
     ).toBe("replied")
+  })
+})
+
+describe("mailStatusLabelKey", () => {
+  it("mirrors every reply-cycle status by direction so 已回复 is never ambiguous", () => {
+    expect(mailStatusLabelKey("unread", "inbound")).toBe("mailUnread")
+    expect(mailStatusLabelKey("unread", "outbound")).toBe("mailOutUnread")
+    expect(mailStatusLabelKey("read", "inbound")).toBe("mailRead")
+    expect(mailStatusLabelKey("read", "outbound")).toBe("mailOutRead")
+    expect(mailStatusLabelKey("read_awaiting", "inbound")).toBe(
+      "mailReadAwaitingReply"
+    )
+    expect(mailStatusLabelKey("read_awaiting", "outbound")).toBe(
+      "mailOutAwaitingReply"
+    )
+    expect(mailStatusLabelKey("replied", "inbound")).toBe("mailReplied")
+    expect(mailStatusLabelKey("replied", "outbound")).toBe("mailOutReplied")
+  })
+
+  it("keeps terminal delivery failures direction-neutral", () => {
+    expect(mailStatusLabelKey("failed", "inbound")).toBe("mailFailed")
+    expect(mailStatusLabelKey("failed", "outbound")).toBe("mailFailed")
+    expect(mailStatusLabelKey("dismissed", "outbound")).toBe("mailDismissed")
+  })
+})
+
+describe("mailNoReplyNeeded", () => {
+  it("is true for FYI mail and for obligations waived without a reply", () => {
+    expect(mailNoReplyNeeded(delivery({ expectsReply: false }))).toBe(true)
+    expect(
+      mailNoReplyNeeded(
+        delivery({
+          expectsReply: true,
+          obligationState: "resolved",
+          replyReceived: false,
+        })
+      )
+    ).toBe(true)
+  })
+
+  it("is false while a reply is owed or after a real reply arrived", () => {
+    expect(
+      mailNoReplyNeeded(
+        delivery({ expectsReply: true, obligationState: "awaiting_reply" })
+      )
+    ).toBe(false)
+    expect(
+      mailNoReplyNeeded(
+        delivery({
+          expectsReply: true,
+          obligationState: "resolved",
+          replyReceived: true,
+        })
+      )
+    ).toBe(false)
   })
 })

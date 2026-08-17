@@ -7,7 +7,10 @@ import { cn } from "@/lib/utils"
 import { letterSubjectLine, letterListPreview } from "@/lib/conversation-title"
 import {
   mailHumanStatus,
+  mailNoReplyNeeded,
+  mailStatusLabelKey,
   mailStatusVisual,
+  type MailDirection,
   type MailHumanStatus,
 } from "@/lib/mail-human-status"
 import { useSessionLetterUiStore } from "@/stores/session-letter-ui-store"
@@ -16,27 +19,33 @@ import { SessionLetterBody } from "./session-letter-body"
 import { SessionMailPeerChip } from "./session-mail-peer-chip"
 import { useMailDelivery } from "./session-mail-lookup"
 
-export function SessionMailStatusChip({ status }: { status: MailHumanStatus }) {
+export function SessionMailStatusChip({
+  status,
+  direction = "inbound",
+}: {
+  status: MailHumanStatus
+  direction?: MailDirection
+}) {
   const t = useTranslations("Collaboration")
   const tone = mailStatusVisual(status)
-  const label =
-    status === "failed"
-      ? t("mailFailed")
-      : status === "dismissed"
-        ? t("mailDismissed")
-        : status === "unread"
-          ? t("mailUnread")
-          : status === "read_awaiting"
-            ? t("mailReadAwaitingReply")
-            : status === "replied"
-              ? t("mailReplied")
-              : t("mailRead")
   return (
     <span
       data-mail-status={status}
       className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${tone.chip}`}
     >
-      {label}
+      {t(mailStatusLabelKey(status, direction))}
+    </span>
+  )
+}
+
+export function SessionMailNoReplyChip() {
+  const t = useTranslations("Collaboration")
+  return (
+    <span
+      data-mail-no-reply=""
+      className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground"
+    >
+      {t("noReplyNeeded")}
     </span>
   )
 }
@@ -52,6 +61,7 @@ export function SessionMailCard({
   body,
   replyToEventId,
   status,
+  expectsReply,
   letterKey,
   action,
 }: {
@@ -65,6 +75,7 @@ export function SessionMailCard({
   body: string
   replyToEventId?: string | null
   status?: MailHumanStatus | null
+  expectsReply?: boolean | null
   letterKey?: string
   action?: "opened" | "sent"
 }) {
@@ -74,6 +85,8 @@ export function SessionMailCard({
   const requestFocus = useSessionLetterUiStore((state) => state.requestFocus)
   const resolvedStatus = status ?? (live ? mailHumanStatus(live) : null)
   const tone = resolvedStatus ? mailStatusVisual(resolvedStatus) : null
+  // FYI badge: known-false expects_reply, or a duty later waived by the peer.
+  const noReplyNeeded = live ? mailNoReplyNeeded(live) : expectsReply === false
   const parentSubject =
     letterSubjectLine(parent?.subject) ||
     letterListPreview(parent?.subject, parent?.body, 32)
@@ -87,12 +100,15 @@ export function SessionMailCard({
       data-session-mail-card={direction}
       data-letter-event-id={eventId ?? undefined}
       className={cn(
+        // Letters live on the agent's side of the timeline: the right column
+        // stays reserved for what the human typed. Direction is carried by the
+        // card itself (icon, tint, 来自/发给), not by alignment.
         "group/letter w-full max-w-[36rem] overflow-hidden rounded-lg border",
         direction === "inbound" &&
           "self-start border-sky-500/30 bg-sky-500/[0.05]",
-        direction === "outbound" &&
-          "ml-auto self-end border-border bg-muted/55",
-        direction === "system" && "self-start border-dashed bg-muted/25"
+        direction === "outbound" && "self-start border-border bg-muted/55",
+        direction === "system" &&
+          "mx-auto self-center border-dashed bg-muted/25"
       )}
     >
       <div className="flex">
@@ -135,8 +151,12 @@ export function SessionMailCard({
                 ))
               : null}
             {resolvedStatus ? (
-              <SessionMailStatusChip status={resolvedStatus} />
+              <SessionMailStatusChip
+                status={resolvedStatus}
+                direction={direction}
+              />
             ) : null}
+            {noReplyNeeded ? <SessionMailNoReplyChip /> : null}
             {letterKey ? (
               <SessionLetterActions
                 letterKey={letterKey}

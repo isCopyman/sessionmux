@@ -17,7 +17,10 @@ describe("session send_message tool", () => {
   it("reads the event id from a send_message result", () => {
     expect(
       parseSessionSendMessageEventId(
-        JSON.stringify({ accepted: true, event_id: "b80f5bea-2dd6-41b5-8a07-b68d49fe269a" })
+        JSON.stringify({
+          accepted: true,
+          event_id: "b80f5bea-2dd6-41b5-8a07-b68d49fe269a",
+        })
       )
     ).toBe("b80f5bea-2dd6-41b5-8a07-b68d49fe269a")
     expect(
@@ -35,6 +38,23 @@ describe("session send_message tool", () => {
           content: "123",
         })
       )
-    ).toEqual({ targetSessionIds: [287], title: "", content: "123" })
+    ).toEqual({
+      targetSessionIds: [287],
+      title: "",
+      content: "123",
+      expectsReply: true,
+    })
+  })
+
+  it("treats only an explicit expects_reply false as an FYI letter", () => {
+    expect(
+      parseSessionSendMessageInput(
+        JSON.stringify({
+          target_session_ids: [287],
+          content: "FYI",
+          expects_reply: false,
+        })
+      )?.expectsReply
+    ).toBe(false)
   })
 })

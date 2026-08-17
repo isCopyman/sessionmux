@@ -10,6 +10,8 @@ export function parseSessionSendMessageInput(input: string | null): {
   targetSessionIds: number[]
   title: string
   content: string
+  /** Tool schema default is true; only an explicit false marks an FYI letter. */
+  expectsReply: boolean
 } | null {
   if (!input) return null
   const trimmed = input.trim()
@@ -35,13 +37,15 @@ export function parseSessionSendMessageInput(input: string | null): {
           ? record.subject.trim()
           : ""
     if (targetSessionIds.length === 0 || !content) return null
-    return { targetSessionIds, title, content }
+    const expectsReply = record.expects_reply !== false
+    return { targetSessionIds, title, content, expectsReply }
   } catch {
     return null
   }
 }
 
-const EVENT_ID_RE = /[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/
+const EVENT_ID_RE =
+  /[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/
 
 export function parseSessionSendMessageEventId(
   output: string | null
@@ -62,8 +66,6 @@ export function parseSessionSendMessageEventId(
       // Fall through to the prose form from the MCP companion.
     }
   }
-  const match = trimmed.match(
-    new RegExp(`event (${EVENT_ID_RE.source})`, "i")
-  )
+  const match = trimmed.match(new RegExp(`event (${EVENT_ID_RE.source})`, "i"))
   return match?.[1] ?? null
 }

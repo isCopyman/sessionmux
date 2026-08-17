@@ -157,7 +157,7 @@ describe("SessionCommunicationBanner", () => {
     ).not.toBeInTheDocument()
   })
 
-  it("offers inbox, sent, and thread views", () => {
+  it("groups a reply chain into one thread and shows both sides of it", () => {
     hook.feed = {
       conversationId: 2,
       revision: 1,
@@ -169,15 +169,36 @@ describe("SessionCommunicationBanner", () => {
           eventId: "event-out",
           replyToEventId: "event-1",
           subject: "Re: evidence",
+          source: {
+            conversationId: 2,
+            title: "Writer",
+            agentType: "claude_code",
+            folderPath: "/thesis",
+            backend: "current",
+          },
+          target: {
+            conversationId: 1,
+            title: "Logic reviewer",
+            agentType: "codex",
+            folderPath: "/thesis",
+            backend: "current",
+          },
         }),
       ],
     }
     render(<SessionCommunicationBanner conversationId={2} />)
     fireEvent.click(screen.getByRole("button", { name: /panelTitle/ }))
     expect(document.querySelector("[data-mailbox-panel]")).not.toBeNull()
-    expect(screen.getByRole("tab", { name: "inboxLabel" })).toBeInTheDocument()
-    fireEvent.click(screen.getByRole("tab", { name: "threadsLabel" }))
-    expect(screen.getByText("threadCount")).toBeInTheDocument()
+    // The inbox lists the letter once; the reading pane shows the whole
+    // exchange, our reply included.
+    expect(document.querySelectorAll("[data-letter-row]")).toHaveLength(1)
+    expect(
+      document.querySelector("[data-thread-letter='inbound']")
+    ).not.toBeNull()
+    expect(
+      document.querySelector("[data-thread-letter='outbound']")
+    ).not.toBeNull()
+    expect(screen.getAllByText("threadCount").length).toBeGreaterThan(0)
   })
 
   it("splits a letter into subject and body like a mail client", () => {
@@ -196,7 +217,9 @@ describe("SessionCommunicationBanner", () => {
     render(<SessionCommunicationBanner conversationId={2} />)
     fireEvent.click(screen.getByRole("button", { name: /panelTitle/ }))
     expect(screen.getAllByText("Proof review").length).toBeGreaterThan(1)
-    expect(screen.getByText("letterSubject")).toBeInTheDocument()
+    expect(
+      document.querySelector("[data-collaboration-subject]")?.textContent
+    ).toBe("Proof review")
     expect(
       screen.getAllByText("The evidence does not support the last sentence.")
         .length
@@ -264,7 +287,6 @@ describe("SessionCommunicationBanner", () => {
         .length
     ).toBeGreaterThan(0)
     expect(screen.getByText("from:Logic reviewer")).toBeInTheDocument()
-    expect(screen.getByText("letterSubject")).toBeInTheDocument()
     expect(screen.getAllByText("untitledSubject").length).toBeGreaterThan(0)
     expect(
       document.querySelector("[data-collaboration-banner]")
@@ -330,9 +352,24 @@ describe("SessionCommunicationBanner", () => {
         delivery({
           id: "delivery-outbound",
           eventId: "event-outbound",
+          subject: "Status report",
           expectsReply: true,
           replyReceived: true,
           obligationState: "resolved",
+          source: {
+            conversationId: 2,
+            title: "Writer",
+            agentType: "claude_code",
+            folderPath: "/thesis",
+            backend: "current",
+          },
+          target: {
+            conversationId: 1,
+            title: "Logic reviewer",
+            agentType: "codex",
+            folderPath: "/thesis",
+            backend: "current",
+          },
         }),
       ],
     }
@@ -340,8 +377,10 @@ describe("SessionCommunicationBanner", () => {
     fireEvent.click(screen.getByRole("button", { name: /panelTitle/ }))
 
     expect(screen.getAllByText("mailUnread").length).toBeGreaterThan(0)
-    fireEvent.click(screen.getByRole("tab", { name: "sentLabel" }))
-    expect(screen.getAllByText("mailReplied").length).toBeGreaterThan(0)
+    fireEvent.click(screen.getByRole("tab", { name: /sentLabel/ }))
+    fireEvent.click(screen.getAllByText("Status report")[0])
+    expect(screen.getAllByText("mailOutReplied").length).toBeGreaterThan(0)
+    expect(screen.queryByText("mailReplied")).not.toBeInTheDocument()
   })
 
   it("marks an inbound request as replied and an outbound request as waiting", () => {
@@ -360,8 +399,23 @@ describe("SessionCommunicationBanner", () => {
         delivery({
           id: "delivery-outbound",
           eventId: "event-outbound",
+          subject: "Ping D",
           expectsReply: true,
           obligationState: "awaiting_reply",
+          source: {
+            conversationId: 2,
+            title: "Writer",
+            agentType: "claude_code",
+            folderPath: "/thesis",
+            backend: "current",
+          },
+          target: {
+            conversationId: 1,
+            title: "Logic reviewer",
+            agentType: "codex",
+            folderPath: "/thesis",
+            backend: "current",
+          },
         }),
       ],
     }
@@ -369,8 +423,108 @@ describe("SessionCommunicationBanner", () => {
     fireEvent.click(screen.getByRole("button", { name: /panelTitle/ }))
 
     expect(screen.getAllByText("mailReplied").length).toBeGreaterThan(0)
-    fireEvent.click(screen.getByRole("tab", { name: "sentLabel" }))
-    expect(screen.getAllByText("mailUnread").length).toBeGreaterThan(0)
+    fireEvent.click(screen.getByRole("tab", { name: /sentLabel/ }))
+    fireEvent.click(screen.getAllByText("Ping D")[0])
+    expect(screen.getAllByText("mailOutUnread").length).toBeGreaterThan(0)
+    expect(screen.getAllByText("stateAwaitingReply").length).toBeGreaterThan(0)
+  })
+
+  it("keeps inbox and sent as flat audit lists that open the reply chain", () => {
+    hook.feed = {
+      conversationId: 2,
+      revision: 2,
+      unreadCount: 1,
+      inbound: [delivery()],
+      outbound: [
+        delivery({
+          id: "delivery-outbound",
+          eventId: "event-outbound",
+          subject: "Ping D",
+          body: "PING-D body",
+          expectsReply: true,
+          obligationState: "awaiting_reply",
+          source: {
+            conversationId: 2,
+            title: "Writer",
+            agentType: "claude_code",
+            folderPath: "/thesis",
+            backend: "current",
+          },
+          target: {
+            conversationId: 1,
+            title: "Logic reviewer",
+            agentType: "codex",
+            folderPath: "/thesis",
+            backend: "current",
+          },
+        }),
+      ],
+    }
+    render(<SessionCommunicationBanner conversationId={2} />)
+    fireEvent.click(screen.getByRole("button", { name: /panelTitle/ }))
+
+    // The inbound thread is selected by default; the sent letter's chain
+    // is not on screen yet.
+    expect(document.querySelector("[data-thread-letter='outbound']")).toBeNull()
+
+    fireEvent.click(screen.getByRole("tab", { name: /sentLabel/ }))
+    const row = document.querySelector("[data-letter-row='outbound']")
+    expect(row).not.toBeNull()
+    // Flat rows speak the outbound vocabulary too.
+    expect(row?.textContent).toContain("mailOutUnread")
+
+    fireEvent.click(row as HTMLElement)
+    expect(
+      document.querySelector("[data-thread-letter='outbound']")
+    ).not.toBeNull()
+  })
+
+  it("searches letters and shields the mailbox from the page context menu", () => {
+    hook.feed = {
+      conversationId: 2,
+      revision: 1,
+      unreadCount: 1,
+      inbound: [
+        delivery({ subject: "Proof review", body: "check claim three" }),
+        delivery({
+          id: "delivery-2",
+          eventId: "event-2",
+          subject: "Deploy done",
+          body: "all green",
+        }),
+      ],
+      outbound: [],
+    }
+    const ancestorContextMenu = vi.fn()
+    render(
+      <div onContextMenu={ancestorContextMenu}>
+        <SessionCommunicationBanner conversationId={2} />
+      </div>
+    )
+    fireEvent.click(screen.getByRole("button", { name: /panelTitle/ }))
+
+    expect(document.querySelectorAll("[data-letter-row]")).toHaveLength(2)
+    fireEvent.change(
+      screen.getByRole("textbox", { name: "mailSearchPlaceholder" }),
+      {
+        target: { value: "deploy" },
+      }
+    )
+    expect(document.querySelectorAll("[data-letter-row]")).toHaveLength(1)
+    expect(screen.getAllByText("Deploy done").length).toBeGreaterThan(0)
+    fireEvent.change(
+      screen.getByRole("textbox", { name: "mailSearchPlaceholder" }),
+      {
+        target: { value: "no-such-letter" },
+      }
+    )
+    expect(document.querySelectorAll("[data-letter-row]")).toHaveLength(0)
+    expect(screen.getByText("mailFilterEmpty")).toBeInTheDocument()
+
+    fireEvent.contextMenu(
+      document.querySelector("[data-mailbox-panel]") as HTMLElement
+    )
+    expect(ancestorContextMenu).not.toHaveBeenCalled()
   })
 
   it("does not let a human waive an Agent reply obligation", () => {

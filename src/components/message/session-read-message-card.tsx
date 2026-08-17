@@ -43,6 +43,7 @@ function SessionReadMessageCardView({
               ? "read_awaiting"
               : "read"
         }
+        expectsReply={live?.expectsReply ?? letter.expectsReply}
         letterKey={letterKey}
         action="opened"
       />

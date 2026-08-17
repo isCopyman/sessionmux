@@ -9,6 +9,56 @@ export type MailHumanStatus =
   | "replied"
   | "read"
 
+export type MailDirection = "inbound" | "outbound" | "system"
+
+/**
+ * i18n key (Collaboration namespace) for a status chip. The same delivery
+ * fact reads differently per side: an inbound chip talks about this session
+ * ("needs reply"), an outbound chip talks about the recipient ("awaiting
+ * reply"). Reusing one label for both is what made 已回复 ambiguous.
+ */
+export function mailStatusLabelKey(
+  status: MailHumanStatus,
+  direction: MailDirection
+): string {
+  if (direction === "outbound") {
+    switch (status) {
+      case "unread":
+        return "mailOutUnread"
+      case "read":
+        return "mailOutRead"
+      case "read_awaiting":
+        return "mailOutAwaitingReply"
+      case "replied":
+        return "mailOutReplied"
+      case "failed":
+        return "mailFailed"
+      case "dismissed":
+        return "mailDismissed"
+    }
+  }
+  switch (status) {
+    case "unread":
+      return "mailUnread"
+    case "read":
+      return "mailRead"
+    case "read_awaiting":
+      return "mailReadAwaitingReply"
+    case "replied":
+      return "mailReplied"
+    case "failed":
+      return "mailFailed"
+    case "dismissed":
+      return "mailDismissed"
+  }
+}
+
+/** No open reply duty: FYI from birth, or later waived via no_reply_needed. */
+export function mailNoReplyNeeded(delivery: CollaborationDelivery): boolean {
+  if (!delivery.expectsReply) return true
+  return delivery.obligationState === "resolved" && !delivery.replyReceived
+}
+
 export function mailHumanStatus(
   delivery: CollaborationDelivery
 ): MailHumanStatus {

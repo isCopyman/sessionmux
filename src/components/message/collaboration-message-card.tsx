@@ -35,6 +35,7 @@ export function CollaborationMessageCard({
         body={delivery.body}
         replyToEventId={delivery.replyToEventId}
         status={mailHumanStatus(delivery)}
+        expectsReply={delivery.expectsReply}
       />
     </article>
   )

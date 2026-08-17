@@ -77,4 +77,24 @@ describe("SessionSendMessageCard", () => {
       screen.getByRole("button", { name: "Show raw MCP tools" })
     ).toBeTruthy()
   })
+
+  it("keeps letters on the agent side and labels FYI mail as needing no reply", () => {
+    renderWithIntl(
+      <SessionSendMessageCard
+        letterKey="tool-2"
+        input={JSON.stringify({
+          target_session_ids: [291],
+          content: "FYI: deploy done",
+          expects_reply: false,
+        })}
+      />
+    )
+
+    const card = document.querySelector("[data-session-mail-card='outbound']")
+    expect(card).not.toBeNull()
+    // The right column is reserved for what the human typed.
+    expect(card?.className).toContain("self-start")
+    expect(card?.className).not.toContain("self-end")
+    expect(screen.getByText("No reply needed")).toBeInTheDocument()
+  })
 })

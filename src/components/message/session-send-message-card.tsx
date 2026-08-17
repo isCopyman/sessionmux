@@ -32,6 +32,7 @@ export function SessionSendMessageCard({
         body={parsed.content}
         replyToEventId={live?.replyToEventId}
         status={live ? mailHumanStatus(live) : null}
+        expectsReply={live?.expectsReply ?? parsed.expectsReply}
         letterKey={letterKey}
         action="sent"
       />

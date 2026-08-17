@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import type { CollaborationDelivery } from "@/lib/types"
-import { groupMailThreads } from "./mail-threads"
+import { groupMailThreads, summarizeMailThread } from "./mail-threads"
 
 function letter(
   eventId: string,
@@ -63,5 +63,57 @@ describe("groupMailThreads", () => {
     expect(threads[0]?.rootEventId).toBe("e1")
     expect(threads[0]?.subject).toBe("Need review")
     expect(threads[0]?.items.map((item) => item.eventId)).toEqual(["e1", "e2"])
+  })
+})
+
+describe("summarizeMailThread", () => {
+  it("splits reply duty by side: needsReply is mine, awaitingReply is theirs", () => {
+    // Seen from session 2: e1 arrived and owes a reply, e2 went back out on the
+    // same chain and now waits for the peer.
+    const inboundOwed = letter("e1", {
+      obligationState: "awaiting_reply",
+    })
+    const outboundWaiting = letter("e2", {
+      replyToEventId: "e1",
+      obligationState: "awaiting_reply",
+      source: {
+        conversationId: 2,
+        title: "B",
+        agentType: "claude_code",
+        folderPath: "/",
+        backend: "current",
+      },
+      target: {
+        conversationId: 1,
+        title: "A",
+        agentType: "codex",
+        folderPath: "/",
+        backend: "current",
+      },
+      createdAt: "2026-08-18T00:02:00Z",
+    })
+    const threads = groupMailThreads([inboundOwed, outboundWaiting])
+    expect(threads).toHaveLength(1)
+    const summary = summarizeMailThread(threads[0]!, 2)
+    expect(summary.needsReply).toBe(true)
+    expect(summary.awaitingReply).toBe(true)
+    expect(summary.unreadCount).toBe(1)
+    expect(summary.peerIds).toEqual([1])
+    expect(summary.latestAt).toBe("2026-08-18T00:02:00Z")
+  })
+
+  it("counts only inbound letters the agent has not received as unread", () => {
+    const receivedInbound = letter("e1", {
+      agentReceivedAt: "2026-08-18T00:01:00Z",
+    })
+    const [thread] = groupMailThreads([receivedInbound])
+    expect(summarizeMailThread(thread!, 2).unreadCount).toBe(0)
+    expect(summarizeMailThread(thread!, 2).failed).toBe(false)
+  })
+
+  it("flags a failed delivery anywhere in the thread", () => {
+    const failed = letter("e1", { state: "failed" })
+    const [thread] = groupMailThreads([failed])
+    expect(summarizeMailThread(thread!, 2).failed).toBe(true)
   })
 })
