@@ -54,6 +54,17 @@ Human Inbox 需要一次正式的地址模型迁移：当前 `source_conversatio
 实施时应显式增加 author/target kind 与可空 Session 引用，或在迁移中重建相应表；不能另建一套
 与 Collaboration 生命周期重复的 `human_message` 真相源。
 
+> **开放分歧（待拍板，2026-08-18 对账时标注）**：同日的消息调度会话对 v1 存储层给出了
+> 不同提案——独立小表 `human_notice`（完全不动 collaboration 表），MCP 加 `notify_user`
+> 或让 `send_message` 支持 target `human`；理由是快速落地、避免动大表、人类本就不进
+> 义务机器。本节结论则要求做正式地址模型迁移、禁止第二真相源；理由是避免两套生命
+> 周期漂移。两个方案在行为层完全一致（绝不 spawn turn、人类不欠回执、回复排入来源
+> Session 的统一队列、全局铃铛 UI + 已读），分歧仅在存储层：独立投影小表 vs
+> collaboration 地址模型扩展。实施 H1 前需要用户拍板选一个，不能两个都做。
+> 代码里 `ReminderAudience::Human` 与 `HumanOverlay` lane 已占位
+> （[`collaboration_reminder.rs`](../../src-tauri/src/acp/collaboration_reminder.rs)，注释
+> "not implemented"），两个方案都能接上这个入口。
+
 ### 0.3 Room 需要一个对象，但不需要第二套消息引擎
 
 Room 与多收件人邮件的差异只有一个，却是不可省略的差异：**公共可见性**。
@@ -66,6 +77,19 @@ Room 与多收件人邮件的差异只有一个，却是不可省略的差异：
 所以 Room 是“成员集合 + 公共账本投影 + 路由策略”，不是另一套 Mailbox、PromptQueue 或 Agent
 生命周期。最小实现只需在现有 Collaboration 之上增加 Room/Member、event scope/room reference
 与公共顺序；所有实际执行仍进入现有 per-Session Dispatcher。
+
+戳醒成员直接复用 2026-08-18 落地的统一消息调度（见
+[Trigger RFC 第 0 节](./SESSION-TRIGGERS-GOALS-AUTOMATION-RFC.zh-CN.md)）：room poke 生成的
+队列项就是 collaboration 类（user > collaboration/reminder > timer 的第二类），类内 FIFO，
+不需要 Room 专属调度器。回复链深度保险丝（`MAX_AGENT_REPLY_CHAIN_DEPTH = 4`，刻意防
+Agent 对喷）不因 Room 引入而放宽——Room Thread 的链深继承同一计数。
+
+### 0.4 list_inbox 过滤维持显式参数，不折叠成 DSL
+
+用户问过“过滤能不能收成一个变量”。结论：维持现状。`box` / `filter` / `peer_session_id`
+三个参数本就是可自由 AND 组合的正交轴；收成一个 DSL 字符串会失去 schema 枚举校验，拼写
+错误静默失败——对弱模型 Agent（deepseek/kimi 档位）是灾难。等过滤维度真的超过 4 个，再
+折叠成一个**结构化 where 对象**（仍是 JSON 严格校验，不是自由字符串）。
 
 ## 1. 决策摘要
 
