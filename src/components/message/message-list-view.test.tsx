@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 
 import {
   applyCollaborationTimelineProjection,
+  findLetterThreadIndex,
   mergeConsecutiveAssistantTurns,
   singletonSourceTurns,
   type MergedAssistantRunCache,
@@ -137,6 +138,7 @@ describe("applyCollaborationTimelineProjection", () => {
       conversationId: 42,
       title: "Reviewer",
       agentType: "codex",
+      eventIds: ["b80f5bea-2dd6-41b5-8a07-b68d49fe269a"],
     })
   })
 
@@ -219,6 +221,17 @@ describe("applyCollaborationTimelineProjection", () => {
       ]
     )
     expect(result.map((item) => item.kind)).toEqual(["turn", "collaboration"])
+  })
+
+  it("finds the inbound letter thread index by event id", () => {
+    const items = applyCollaborationTimelineProjection(
+      [userItem("turn-1", COLLABORATION_ENVELOPE)],
+      [collaborationDelivery()]
+    )
+    expect(
+      findLetterThreadIndex(items, "b80f5bea-2dd6-41b5-8a07-b68d49fe269a")
+    ).toBe(0)
+    expect(findLetterThreadIndex(items, "missing-event")).toBe(-1)
   })
 
   it("does not project outbound letters as separate timeline cards", () => {

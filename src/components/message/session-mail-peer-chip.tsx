@@ -10,16 +10,19 @@ import {
 } from "@/lib/conversation-title"
 import type { AgentType } from "@/lib/types"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
+import { useSessionLetterUiStore } from "@/stores/session-letter-ui-store"
 
 export function SessionMailPeerChip({
   conversationId,
   title,
   agentType,
+  eventId,
   prefix,
 }: {
   conversationId: number
   title?: string | null
   agentType?: string | null
+  eventId?: string | null
   prefix: string
 }) {
   const conversations = useAppWorkspaceStore((state) => state.conversations)
@@ -27,6 +30,7 @@ export function SessionMailPeerChip({
     (conversation) => conversation.id === conversationId
   )
   const { openTab } = useTabActions()
+  const requestFocus = useSessionLetterUiStore((state) => state.requestFocus)
   const fullTitle =
     formatConversationTitle(peerConversation?.title ?? title) ||
     `Session ${conversationId}`
@@ -47,6 +51,7 @@ export function SessionMailPeerChip({
         disabled={!peerConversation}
         onClick={() => {
           if (!peerConversation) return
+          if (eventId) requestFocus(peerConversation.id, eventId)
           openTab(
             peerConversation.folder_id,
             peerConversation.id,
@@ -83,10 +88,12 @@ export function SessionMailFromBadge({
   conversationId,
   title,
   agentType,
+  eventId,
 }: {
   conversationId: number
   title?: string | null
   agentType?: string | null
+  eventId?: string | null
 }) {
   const t = useTranslations("Collaboration")
   return (
@@ -95,6 +102,7 @@ export function SessionMailFromBadge({
         conversationId={conversationId}
         title={title}
         agentType={agentType}
+        eventId={eventId}
         prefix={t("fromPrefix")}
       />
     </div>

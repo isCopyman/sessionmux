@@ -25,6 +25,7 @@ export function CollaborationMessageCard({
   return (
     <article
       data-conversation-search-content
+      data-letter-event-id={delivery.eventId}
       data-collaboration-event-id={delivery.eventId}
       data-collaboration-delivery-id={delivery.id}
       data-collaboration-direction="inbound"
@@ -36,6 +37,7 @@ export function CollaborationMessageCard({
             conversationId={delivery.source.conversationId}
             title={delivery.source.title}
             agentType={delivery.source.agentType}
+            eventId={delivery.eventId}
           />
           <div className="group/user-msg flex w-fit max-w-full items-start gap-1">
             <MessageContent data-collaboration-body>

@@ -33,3 +33,30 @@ export function parseSessionSendMessageInput(input: string | null): {
     return null
   }
 }
+
+const EVENT_ID_RE = /[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/
+
+export function parseSessionSendMessageEventId(
+  output: string | null
+): string | null {
+  if (!output) return null
+  const trimmed = output.trim()
+  if (trimmed.startsWith("{")) {
+    try {
+      const parsed: unknown = JSON.parse(trimmed)
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        const record = parsed as Record<string, unknown>
+        const eventId = record.event_id ?? record.eventId
+        if (typeof eventId === "string" && EVENT_ID_RE.test(eventId)) {
+          return eventId
+        }
+      }
+    } catch {
+      // Fall through to the prose form from the MCP companion.
+    }
+  }
+  const match = trimmed.match(
+    new RegExp(`event (${EVENT_ID_RE.source})`, "i")
+  )
+  return match?.[1] ?? null
+}

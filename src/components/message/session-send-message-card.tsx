@@ -3,16 +3,20 @@
 import { useMemo } from "react"
 import { useTranslations } from "next-intl"
 
-import { parseSessionSendMessageInput } from "@/lib/session-send-message-tool"
+import {
+  parseSessionSendMessageEventId,
+  parseSessionSendMessageInput,
+} from "@/lib/session-send-message-tool"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { ContentPartsRenderer } from "./content-parts-renderer"
-import { SessionLetterRenderToggle } from "./session-letter-render-toggle"
 import { SessionMailPeerChip } from "./session-mail-peer-chip"
 
 export function SessionSendMessageCard({
   input,
+  output = null,
 }: {
   input: string | null
+  output?: string | null
 }) {
   const t = useTranslations("Collaboration")
   const parsed = parseSessionSendMessageInput(input)
@@ -44,10 +48,10 @@ export function SessionSendMessageCard({
           conversationId={targetId}
           title={target?.title}
           agentType={target?.agent_type}
+          eventId={parseSessionSendMessageEventId(output)}
           prefix={t("toPrefix")}
         />
         {extra ? <span className="shrink-0">{extra}</span> : null}
-        <SessionLetterRenderToggle compact className="ml-auto" />
       </header>
       <div className="text-sm">
         <ContentPartsRenderer parts={bodyParts} role="assistant" />

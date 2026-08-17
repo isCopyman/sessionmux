@@ -62,7 +62,6 @@ import {
   type ActiveSessionDetails,
 } from "./active-session-details"
 import { SessionDetailsDialog } from "./session-details-dialog"
-import { SessionLetterRenderToggle } from "@/components/message/session-letter-render-toggle"
 
 interface ConversationDetailHeaderProps {
   tabId: string
@@ -260,8 +259,7 @@ export const ConversationDetailHeader = memo(function ConversationDetailHeader({
           {displayTitle}
         </span>
       </div>
-      <div className="flex shrink-0 items-center gap-0.5">
-        <SessionLetterRenderToggle />
+      <div className="flex shrink-0 items-center">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button

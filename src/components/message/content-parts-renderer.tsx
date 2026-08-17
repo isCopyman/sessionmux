@@ -47,6 +47,7 @@ import { AgentToolCallPart } from "./agent-tool-call"
 import { AskQuestionResultCard } from "./ask-question-result-card"
 import { CollabAgentCard } from "./collab-agent-card"
 import { SessionSendMessageCard } from "./session-send-message-card"
+import { SessionLetterFrame } from "./session-letter-render-toggle"
 import {
   ContextCompactionCard,
   isContextCompactionMeta,
@@ -70,9 +71,10 @@ import {
 import { COLLAB_AGENT_TOOL_NAME } from "@/lib/collab-tool"
 import {
   isSessionSendMessageToolName,
+  parseSessionSendMessageEventId,
   parseSessionSendMessageInput,
 } from "@/lib/session-send-message-tool"
-import { useSessionLetterRenderStore } from "@/stores/session-letter-render-store"
+import { useSessionLetterUiStore } from "@/stores/session-letter-ui-store"
 import { BackgroundTaskCard } from "./background-task-card"
 import { GeneratedImagesBlock } from "./generated-images-block"
 import { GoalRunPart, GoalToolCallPart } from "./goal-tool-call"
@@ -2240,7 +2242,9 @@ const ToolCallPart = memo(function ToolCallPart({
   part: Extract<AdaptedContentPart, { type: "tool-call" }>
 }) {
   const t = useTranslations("Folder.chat.contentParts")
-  const letterRender = useSessionLetterRenderStore((state) => state.mode)
+  const previewMcp = useSessionLetterUiStore((state) =>
+    state.isMcpPreview(part.toolCallId)
+  )
   const [manualOpen, setManualOpen] = useState(false)
   const normalizedToolName = useMemo(
     () => normalizeToolName(part.toolName),
@@ -2607,12 +2611,24 @@ const ToolCallPart = memo(function ToolCallPart({
     )
   }
 
-  if (
-    letterRender === "custom" &&
-    isSessionSendMessageToolName(normalizedToolName) &&
-    parseSessionSendMessageInput(part.input ?? null)
-  ) {
-    return <SessionSendMessageCard input={part.input ?? null} />
+  const sendMessageInput = isSessionSendMessageToolName(normalizedToolName)
+    ? parseSessionSendMessageInput(part.input ?? null)
+    : null
+  const sendMessageEventId = sendMessageInput
+    ? parseSessionSendMessageEventId(part.output ?? null)
+    : null
+  if (sendMessageInput && !previewMcp) {
+    return (
+      <SessionLetterFrame
+        letterKey={part.toolCallId}
+        eventId={sendMessageEventId}
+      >
+        <SessionSendMessageCard
+          input={part.input ?? null}
+          output={part.output ?? null}
+        />
+      </SessionLetterFrame>
+    )
   }
 
   // codeg-mcp ask_user_question: render the asked question(s) and the user's
@@ -2705,7 +2721,7 @@ const ToolCallPart = memo(function ToolCallPart({
 
   const open = (isRunning && (isCommandTool || hasLiveOutput)) || manualOpen
 
-  return (
+  const genericTool = (
     <Tool open={open} onOpenChange={setManualOpen}>
       <ToolHeader
         type="dynamic-tool"
@@ -2779,6 +2795,18 @@ const ToolCallPart = memo(function ToolCallPart({
       </ToolContent>
     </Tool>
   )
+
+  if (sendMessageInput && previewMcp) {
+    return (
+      <SessionLetterFrame
+        letterKey={part.toolCallId}
+        eventId={sendMessageEventId}
+      >
+        {genericTool}
+      </SessionLetterFrame>
+    )
+  }
+  return genericTool
 })
 
 const ToolResultPart = memo(function ToolResultPart({

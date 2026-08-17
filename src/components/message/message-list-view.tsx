@@ -62,7 +62,7 @@ import type {
   ConnectionStatus,
   MessageTurn,
 } from "@/lib/types"
-import { copyTextToClipboard } from "@/lib/utils"
+import { cn, copyTextToClipboard } from "@/lib/utils"
 import {
   VirtualizedMessageThread,
   type VirtualizedThreadViewState,
@@ -90,6 +90,7 @@ import {
   CollaborationMessageCard,
   SessionMailFromBadge,
 } from "./collaboration-message-card"
+import { useSessionLetterUiStore } from "@/stores/session-letter-ui-store"
 import {
   extractCollaborationEnvelopes,
   stripProjectedCollaborationEnvelopes,
@@ -141,6 +142,7 @@ export interface SessionMailAttribution {
   conversationId: number
   title?: string | null
   agentType?: string | null
+  eventIds: string[]
 }
 
 export interface ResolvedMessageGroup {
@@ -280,6 +282,7 @@ export function applyCollaborationTimelineProjection(
       conversationId: first.source.conversationId,
       title: first.source.title,
       agentType: first.source.agentType,
+      eventIds: matched.map((delivery) => delivery.eventId),
     }
   }
 
@@ -356,6 +359,26 @@ export function applyCollaborationTimelineProjection(
     })
   }
   return projected
+}
+
+export function findLetterThreadIndex(
+  items: ThreadRenderItem[],
+  eventId: string
+): number {
+  return items.findIndex((item) => {
+    if (item.kind === "collaboration") {
+      return item.delivery.eventId === eventId
+    }
+    if (item.kind !== "turn") return false
+    if (item.group.sessionMail?.eventIds.includes(eventId)) return true
+    return item.sourceTurns.some((turn) => {
+      try {
+        return JSON.stringify(turn.blocks).includes(eventId)
+      } catch {
+        return false
+      }
+    })
+  })
 }
 
 const CollapsibleSystemMessage = memo(function CollapsibleSystemMessage({
@@ -706,12 +729,22 @@ const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
   isResponseComplete?: boolean
   sourceTurns?: MessageTurn[]
 }) {
+  const focusedEventId = useSessionLetterUiStore((state) => state.focusedEventId)
+  const mailEventId = group.sessionMail?.eventIds[0]
   if (group.role === "system") {
     return <CollapsibleSystemMessage group={group} />
   }
 
   return (
-    <div className={dimmed ? "opacity-70" : undefined}>
+    <div
+      className={cn(
+        dimmed && "opacity-70",
+        mailEventId &&
+          focusedEventId === mailEventId &&
+          "rounded-lg ring-2 ring-primary/35"
+      )}
+      data-letter-event-id={mailEventId}
+    >
       <Message from={group.role}>
         {group.role === "user" && group.images.length > 0 ? (
           <UserImageAttachments images={group.images} className="self-end" />
@@ -723,6 +756,7 @@ const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
                 conversationId={group.sessionMail.conversationId}
                 title={group.sessionMail.title}
                 agentType={group.sessionMail.agentType}
+                eventId={group.sessionMail.eventIds[0]}
               />
             ) : null}
             <div className="group/user-msg flex w-fit max-w-full items-start gap-1">
@@ -1107,6 +1141,41 @@ export function MessageListView({
   // the MessageScrollProvider subtree) can drive scrollToIndex.
   const scrollApiRef = useRef<MessageScrollContextValue | null>(null)
   const messageListRootRef = useRef<HTMLDivElement | null>(null)
+  const pendingLetterFocus = useSessionLetterUiStore((state) => state.pendingFocus)
+  const consumeLetterFocus = useSessionLetterUiStore(
+    (state) => state.consumeFocus
+  )
+  const markLetterFocused = useSessionLetterUiStore((state) => state.markFocused)
+
+  useEffect(() => {
+    if (
+      pendingLetterFocus == null ||
+      pendingLetterFocus.conversationId !== conversationId
+    ) {
+      return
+    }
+    const index = findLetterThreadIndex(
+      threadItems,
+      pendingLetterFocus.eventId
+    )
+    if (index < 0) return
+    const eventId = pendingLetterFocus.eventId
+    consumeLetterFocus(conversationId)
+    markLetterFocused(eventId)
+    const frame = window.requestAnimationFrame(() => {
+      scrollApiRef.current?.scrollToIndex(index, {
+        align: "center",
+        smooth: true,
+      })
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [
+    conversationId,
+    threadItems,
+    pendingLetterFocus,
+    consumeLetterFocus,
+    markLetterFocused,
+  ])
   const pendingFindScrollMatchIdRef = useRef<string | null>(null)
 
   // --- Find in this Session ---------------------------------------------------
