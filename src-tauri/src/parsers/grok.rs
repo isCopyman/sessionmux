@@ -1049,7 +1049,8 @@ fn user_chunk_to_block(update: &Value) -> Option<ContentBlock> {
                 }
             }
         }
-        // Native ACP image content — the live send path as of grok 1.0.2.
+        // Native ACP image content — the live send path for every grok that
+        // decodes the format (see `normalize_grok_image_blocks`).
         "image" => {
             let data = content.get("data").and_then(Value::as_str)?;
             Some(ContentBlock::Image {
@@ -1358,7 +1359,9 @@ fn grok_mcp_input_preview(input: &Value) -> Option<String> {
 /// bloat vector (many strings, long arrays, JSON/UTF-8 escaping that expands
 /// bytes) — a single per-field cap could not. Converges in O(log budget) passes;
 /// an already-small value returns on the first pass unchanged.
-fn cap_json_to_budget(value: &Value, budget: usize) -> Option<String> {
+/// `pub(crate)`: the DeepSeek parser bounds its oversized tool arguments with
+/// the same valid-JSON guarantee (`deepseek_tool_input_preview`).
+pub(crate) fn cap_json_to_budget(value: &Value, budget: usize) -> Option<String> {
     let mut per_string = budget;
     loop {
         let serialized = serde_json::to_string(&cap_json_string_values(value, per_string)).ok()?;
@@ -2105,9 +2108,10 @@ mod tests {
 
     #[test]
     fn merges_prompt_text_and_native_image_into_one_user_turn() {
-        // Live grok 1.0.2 echoes a native ACP image as its own
-        // `user_message_chunk` (same `promptIndex` as the prose). Same merge
-        // rule as the legacy resource-blob shape below.
+        // Grok echoes a native ACP image as its own `user_message_chunk` (same
+        // `promptIndex` as the prose) — the shape captured from a live 1.0.0 and
+        // re-checked on 1.0.3. Same merge rule as the legacy resource-blob shape
+        // below.
         let updates = concat!(
             r#"{"method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"这是什么"},"_meta":{"modelId":"grok-4.6","promptIndex":0}}},"timestamp":1783584019}"#,
             "\n",

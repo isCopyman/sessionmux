@@ -48,6 +48,7 @@ mod m20260816_000003_collaboration_interrupt;
 mod m20260816_000004_collaboration_reply_index;
 mod m20260816_000005_collaboration_mailbox;
 mod m20260817_000001_conversation_harness_internal;
+mod m20260817_000001_work_task_conversation_title;
 mod m20260817_000002_collaboration_reminder;
 pub struct Migrator;
 
@@ -103,6 +104,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260816_000004_collaboration_reply_index::Migration),
             Box::new(m20260816_000005_collaboration_mailbox::Migration),
             Box::new(m20260817_000001_conversation_harness_internal::Migration),
+            Box::new(m20260817_000001_work_task_conversation_title::Migration),
             Box::new(m20260817_000002_collaboration_reminder::Migration),
         ]
     }
