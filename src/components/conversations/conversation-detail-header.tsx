@@ -2,12 +2,10 @@
 
 import { memo, useCallback, useState } from "react"
 import {
-  Braces,
   ChevronRight,
   Circle,
   EllipsisVertical,
   Info,
-  Mails,
   Pencil,
   Pin,
   PinOff,
@@ -64,7 +62,7 @@ import {
   type ActiveSessionDetails,
 } from "./active-session-details"
 import { SessionDetailsDialog } from "./session-details-dialog"
-import { useSessionLetterRenderStore } from "@/stores/session-letter-render-store"
+import { SessionLetterRenderToggle } from "@/components/message/session-letter-render-toggle"
 
 interface ConversationDetailHeaderProps {
   tabId: string
@@ -106,9 +104,6 @@ export const ConversationDetailHeader = memo(function ConversationDetailHeader({
   const t = useTranslations("Folder.conversationCard")
   const ime = useImeGuard()
   const tConv = useTranslations("Folder.conversation")
-  const tMail = useTranslations("Collaboration")
-  const letterRender = useSessionLetterRenderStore((state) => state.mode)
-  const setLetterRender = useSessionLetterRenderStore((state) => state.setMode)
   const tStatus = useTranslations("Folder.statusLabels")
   const tDetails = useTranslations("Folder.sessionDetails")
   const { closeTab, openNewConversationTab } = useTabActions()
@@ -265,31 +260,8 @@ export const ConversationDetailHeader = memo(function ConversationDetailHeader({
           {displayTitle}
         </span>
       </div>
-      <div className="flex shrink-0 items-center">
-        <button
-          type="button"
-          className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-muted-foreground/60 transition-colors hover:text-foreground"
-          aria-pressed={letterRender === "mcp"}
-          aria-label={
-            letterRender === "custom"
-              ? tMail("letterRenderToMcp")
-              : tMail("letterRenderToCustom")
-          }
-          title={
-            letterRender === "custom"
-              ? tMail("letterRenderToMcp")
-              : tMail("letterRenderToCustom")
-          }
-          onClick={() =>
-            setLetterRender(letterRender === "custom" ? "mcp" : "custom")
-          }
-        >
-          {letterRender === "custom" ? (
-            <Mails className="h-4 w-4" />
-          ) : (
-            <Braces className="h-4 w-4" />
-          )}
-        </button>
+      <div className="flex shrink-0 items-center gap-0.5">
+        <SessionLetterRenderToggle />
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button
