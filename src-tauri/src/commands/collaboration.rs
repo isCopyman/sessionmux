@@ -8,8 +8,8 @@ use serde::{Deserialize, Serialize};
 use crate::acp::manager::ConnectionManager;
 use crate::acp::session_collaboration::{
     SessionAddress, SessionCollaborationAccess, SessionCollaborationConfig,
-    SessionCollaborationRuntimeConfig, SessionListOutcome, SessionMessageDeliveryMode,
-    SessionMessageDeliveryOutcome, SessionMessageSpec, SessionSendOutcome, MAX_SESSION_LIST_LIMIT,
+    SessionCollaborationRuntimeConfig, SessionListOutcome, SessionMessageDeliveryOutcome,
+    SessionMessageSpec, SessionSendOutcome, MAX_SESSION_LIST_LIMIT,
 };
 use crate::app_error::AppCommandError;
 use crate::db::service::{
