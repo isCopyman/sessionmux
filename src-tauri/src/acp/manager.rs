@@ -2097,6 +2097,11 @@ impl ConnectionManager {
                         origin_cwd: Set(current.origin_cwd.clone()),
                         harness_internal: Set(false),
                         codeg_owned: Set(true),
+                        // A fork continues the same work: it inherits the
+                        // source Session's pinned model / thinking effort and
+                        // diverges only when the user re-picks in the fork.
+                        preferred_mode_id: Set(current.preferred_mode_id.clone()),
+                        preferred_config_values: Set(current.preferred_config_values.clone()),
                     };
                     let inserted = forked.insert(txn).await?;
 

@@ -487,6 +487,8 @@ async fn import_one(
         origin_cwd: Set(None),
         harness_internal: Set(false),
         codeg_owned: Set(false),
+        preferred_mode_id: Set(None),
+        preferred_config_values: Set(None),
     };
     conv.insert(conn).await?;
     Ok(ImportOutcome::Imported)
@@ -1070,6 +1072,8 @@ mod tests {
             origin_cwd: Set(None),
             harness_internal: Set(false),
             codeg_owned: Set(false),
+            preferred_mode_id: Set(None),
+            preferred_config_values: Set(None),
         }
         .insert(&db.conn)
         .await

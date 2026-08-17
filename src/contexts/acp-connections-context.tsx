@@ -4809,7 +4809,11 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
           workingDir,
           sessionId,
           savedPrefs.modeId,
-          savedPrefs.configValues
+          savedPrefs.configValues,
+          // An existing conversation reconnects with its own pinned model /
+          // thinking effort / mode; the agent-level template above only fills
+          // the keys this Session never chose.
+          conversationId
         )
 
         // If disconnect was requested while connect was in flight, tear down
@@ -5073,12 +5077,18 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       // Capture identity BEFORE teardown. `sessionId` is what makes the new
       // process resume this conversation (session/load) rather than start fresh.
       const { agentType, workingDir, sessionId } = conn
+      // The store entry doesn't hold the conversation id; the remembered
+      // connect request does — without it the restart would lose the
+      // Session's pinned model / thinking effort.
+      const conversationId =
+        lastConnectParamsRef.current.get(contextKey)?.conversationId
       const tornDown = await disconnect(contextKey)
       await connect(
         contextKey,
         agentType,
         workingDir ?? undefined,
-        sessionId ?? undefined
+        sessionId ?? undefined,
+        conversationId
       )
       // Reconnect regardless — the user is left with a working connection
       // either way — but an unconfirmed teardown means the old process may

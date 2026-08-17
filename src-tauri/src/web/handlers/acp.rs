@@ -72,6 +72,10 @@ pub struct AcpConnectParams {
     pub preferred_mode_id: Option<String>,
     #[serde(default)]
     pub preferred_config_values: Option<BTreeMap<String, String>>,
+    /// When connecting an existing conversation, its own pinned selector
+    /// preferences override the agent-level template above.
+    #[serde(default)]
+    pub conversation_id: Option<i32>,
 }
 
 pub async fn acp_connect(
@@ -97,6 +101,15 @@ pub async fn acp_connect(
         .await
         .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
 
+    let (preferred_mode_id, preferred_config_values) =
+        acp_commands::resolve_connect_selector_prefs(
+            db,
+            params.conversation_id,
+            params.preferred_mode_id,
+            params.preferred_config_values.unwrap_or_default(),
+        )
+        .await;
+
     let emitter = state.emitter.clone();
     let connection_id = manager
         .spawn_agent(
@@ -106,8 +119,8 @@ pub async fn acp_connect(
             runtime_env,
             "web".to_string(),
             emitter,
-            params.preferred_mode_id,
-            params.preferred_config_values.unwrap_or_default(),
+            preferred_mode_id,
+            preferred_config_values,
         )
         .await
         .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
@@ -340,9 +353,16 @@ pub async fn acp_set_mode(
 ) -> Result<Json<()>, AppCommandError> {
     let manager = &state.connection_manager;
     manager
-        .set_mode(&params.connection_id, params.mode_id)
+        .set_mode(&params.connection_id, params.mode_id.clone())
         .await
         .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    acp_commands::persist_mode_choice_for_connection(
+        &state.db,
+        manager,
+        &params.connection_id,
+        &params.mode_id,
+    )
+    .await;
     Ok(Json(()))
 }
 
@@ -360,9 +380,21 @@ pub async fn acp_set_config_option(
 ) -> Result<Json<()>, AppCommandError> {
     let manager = &state.connection_manager;
     manager
-        .set_config_option(&params.connection_id, params.config_id, params.value_id)
+        .set_config_option(
+            &params.connection_id,
+            params.config_id.clone(),
+            params.value_id.clone(),
+        )
         .await
         .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    acp_commands::persist_config_choice_for_connection(
+        &state.db,
+        manager,
+        &params.connection_id,
+        &params.config_id,
+        &params.value_id,
+    )
+    .await;
     Ok(Json(()))
 }
 

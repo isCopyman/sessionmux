@@ -9307,6 +9307,94 @@ pub(crate) async fn acp_update_agent_preferences_and_refresh(
     Ok(refresh_config_staleness(manager, db, data_dir, &[agent_type], ConfigStaleKind::AgentConfig).await)
 }
 
+/// Resolve the selector preferences a fresh connection launches with: the
+/// conversation's own pinned choices override the agent-level template the
+/// client sent (its localStorage prefs), so one Session's model or thinking
+/// effort never leaks into another Session of the same agent.
+pub(crate) async fn resolve_connect_selector_prefs(
+    db: &AppDatabase,
+    conversation_id: Option<i32>,
+    template_mode_id: Option<String>,
+    template_config_values: BTreeMap<String, String>,
+) -> (Option<String>, BTreeMap<String, String>) {
+    let Some(conversation_id) = conversation_id else {
+        return (template_mode_id, template_config_values);
+    };
+    match crate::db::service::conversation_service::selector_prefs(&db.conn, conversation_id).await
+    {
+        Ok((pinned_mode, pinned_values)) => {
+            let mode = pinned_mode.or(template_mode_id);
+            let mut values = template_config_values;
+            // Per-key: a Session pin wins, unpinned keys keep the template.
+            values.extend(pinned_values);
+            (mode, values)
+        }
+        Err(error) => {
+            tracing::warn!(
+                "[ACP] selector prefs lookup failed for conversation {conversation_id}: {error}"
+            );
+            (template_mode_id, template_config_values)
+        }
+    }
+}
+
+/// Pin an explicit mode choice to the conversation the connection is bound
+/// to. A connection not yet linked to a conversation (draft before its first
+/// prompt) is a silent no-op — the agent-level template still covers it.
+pub(crate) async fn persist_mode_choice_for_connection(
+    db: &AppDatabase,
+    manager: &ConnectionManager,
+    connection_id: &str,
+    mode_id: &str,
+) {
+    let conversation_id = match manager.get_state(connection_id).await {
+        Some(state) => state.read().await.conversation_id,
+        None => None,
+    };
+    let Some(conversation_id) = conversation_id else {
+        return;
+    };
+    if let Err(error) = crate::db::service::conversation_service::set_selector_mode(
+        &db.conn,
+        conversation_id,
+        mode_id,
+    )
+    .await
+    {
+        tracing::warn!("[ACP] could not pin mode for conversation {conversation_id}: {error}");
+    }
+}
+
+/// Pin one selector value (model / thinking effort / …) to the bound
+/// conversation. Same linkage rules as [`persist_mode_choice_for_connection`].
+pub(crate) async fn persist_config_choice_for_connection(
+    db: &AppDatabase,
+    manager: &ConnectionManager,
+    connection_id: &str,
+    config_id: &str,
+    value_id: &str,
+) {
+    let conversation_id = match manager.get_state(connection_id).await {
+        Some(state) => state.read().await.conversation_id,
+        None => None,
+    };
+    let Some(conversation_id) = conversation_id else {
+        return;
+    };
+    if let Err(error) = crate::db::service::conversation_service::merge_selector_config_value(
+        &db.conn,
+        conversation_id,
+        config_id,
+        value_id,
+    )
+    .await
+    {
+        tracing::warn!(
+            "[ACP] could not pin config {config_id} for conversation {conversation_id}: {error}"
+        );
+    }
+}
+
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 #[allow(clippy::too_many_arguments)]
@@ -9316,6 +9404,7 @@ pub async fn acp_connect(
     session_id: Option<String>,
     preferred_mode_id: Option<String>,
     preferred_config_values: Option<BTreeMap<String, String>>,
+    conversation_id: Option<i32>,
     manager: State<'_, ConnectionManager>,
     db: State<'_, AppDatabase>,
     app_handle: tauri::AppHandle,
@@ -9339,6 +9428,14 @@ pub async fn acp_connect(
     // can prompt the user to install it from Agent Settings.
     verify_agent_installed(agent_type).await?;
 
+    let (preferred_mode_id, preferred_config_values) = resolve_connect_selector_prefs(
+        &db,
+        conversation_id,
+        preferred_mode_id,
+        preferred_config_values.unwrap_or_default(),
+    )
+    .await;
+
     let emitter = EventEmitter::Tauri(app_handle);
     manager
         .spawn_agent(
@@ -9349,7 +9446,7 @@ pub async fn acp_connect(
             window.label().to_string(),
             emitter,
             preferred_mode_id,
-            preferred_config_values.unwrap_or_default(),
+            preferred_config_values,
         )
         .await
 }
@@ -9385,8 +9482,11 @@ pub async fn acp_set_mode(
     connection_id: String,
     mode_id: String,
     manager: State<'_, ConnectionManager>,
+    db: State<'_, AppDatabase>,
 ) -> Result<(), AcpError> {
-    manager.set_mode(&connection_id, mode_id).await
+    manager.set_mode(&connection_id, mode_id.clone()).await?;
+    persist_mode_choice_for_connection(&db, &manager, &connection_id, &mode_id).await;
+    Ok(())
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -9396,10 +9496,14 @@ pub async fn acp_set_config_option(
     config_id: String,
     value_id: String,
     manager: State<'_, ConnectionManager>,
+    db: State<'_, AppDatabase>,
 ) -> Result<(), AcpError> {
     manager
-        .set_config_option(&connection_id, config_id, value_id)
-        .await
+        .set_config_option(&connection_id, config_id.clone(), value_id.clone())
+        .await?;
+    persist_config_choice_for_connection(&db, &manager, &connection_id, &config_id, &value_id)
+        .await;
+    Ok(())
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -12182,6 +12286,118 @@ pub(crate) async fn codex_poll_device_code_core(
         refresh_token: Some(tokens.refresh_token),
         account_id: Some(account_id),
     })
+}
+
+#[cfg(test)]
+mod selector_prefs_tests {
+    use super::*;
+    use crate::db::service::conversation_service;
+    use crate::db::test_helpers::{fresh_in_memory_db, seed_conversation, seed_folder};
+
+    #[tokio::test]
+    async fn session_pins_override_the_agent_template_per_key() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/selector-prefs").await;
+        let conversation_id = seed_conversation(&db, folder_id, AgentType::ClaudeCode).await;
+
+        conversation_service::merge_selector_config_value(
+            &db.conn,
+            conversation_id,
+            "model",
+            "kimi-k3",
+        )
+        .await
+        .expect("pin model");
+        conversation_service::set_selector_mode(&db.conn, conversation_id, "acceptEdits")
+            .await
+            .expect("pin mode");
+
+        let mut template = BTreeMap::new();
+        template.insert("model".to_string(), "opus-4.6".to_string());
+        template.insert("thinking".to_string(), "high".to_string());
+
+        let (mode, values) = resolve_connect_selector_prefs(
+            &db,
+            Some(conversation_id),
+            Some("default".to_string()),
+            template,
+        )
+        .await;
+
+        // The Session's pinned model wins; the never-pinned thinking level
+        // still falls through from the template.
+        assert_eq!(mode.as_deref(), Some("acceptEdits"));
+        assert_eq!(values.get("model").map(String::as_str), Some("kimi-k3"));
+        assert_eq!(values.get("thinking").map(String::as_str), Some("high"));
+    }
+
+    #[tokio::test]
+    async fn merging_one_choice_keeps_the_others_and_survives_reload() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/selector-prefs-merge").await;
+        let conversation_id = seed_conversation(&db, folder_id, AgentType::ClaudeCode).await;
+
+        conversation_service::merge_selector_config_value(
+            &db.conn,
+            conversation_id,
+            "model",
+            "kimi-k3",
+        )
+        .await
+        .expect("pin model");
+        conversation_service::merge_selector_config_value(
+            &db.conn,
+            conversation_id,
+            "thinking",
+            "low",
+        )
+        .await
+        .expect("pin thinking");
+        // Changing the model later must not drop the pinned thinking level.
+        conversation_service::merge_selector_config_value(
+            &db.conn,
+            conversation_id,
+            "model",
+            "deepseek-v4-flash",
+        )
+        .await
+        .expect("re-pin model");
+
+        let (_, values) = conversation_service::selector_prefs(&db.conn, conversation_id)
+            .await
+            .expect("read prefs");
+        assert_eq!(
+            values.get("model").map(String::as_str),
+            Some("deepseek-v4-flash")
+        );
+        assert_eq!(values.get("thinking").map(String::as_str), Some("low"));
+    }
+
+    #[tokio::test]
+    async fn a_conversation_without_pins_keeps_the_template_untouched() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/selector-prefs-none").await;
+        let conversation_id = seed_conversation(&db, folder_id, AgentType::Codex).await;
+
+        let mut template = BTreeMap::new();
+        template.insert("model".to_string(), "grok-4".to_string());
+        let (mode, values) = resolve_connect_selector_prefs(
+            &db,
+            Some(conversation_id),
+            Some("default".to_string()),
+            template.clone(),
+        )
+        .await;
+        assert_eq!(mode.as_deref(), Some("default"));
+        assert_eq!(values, template);
+
+        // No conversation at all (a draft) is a pure pass-through too.
+        let (mode, values) =
+            resolve_connect_selector_prefs(&db, None, Some("plan".to_string()), template.clone())
+                .await;
+        assert_eq!(mode.as_deref(), Some("plan"));
+        assert_eq!(values, template);
+    }
 }
 
 #[cfg(test)]

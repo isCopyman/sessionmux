@@ -78,6 +78,14 @@ pub struct Model {
     /// True when this row is a Harness-internal subagent that should stay out
     /// of ordinary Session projections. Native files are never deleted.
     pub harness_internal: bool,
+    /// Per-Session ACP mode choice (e.g. permission mode). NULL = no
+    /// Session-level pick yet; the agent-level template applies on connect.
+    pub preferred_mode_id: Option<String>,
+    /// Per-Session selector choices as a JSON object of configId → valueId
+    /// (model, thinking effort, …). Written when the user changes a selector
+    /// in this Session; read back on every (re)connect so one Session's model
+    /// never leaks into another's.
+    pub preferred_config_values: Option<String>,
     /// True when Codeg itself created the Session (user, Host Control,
     /// automation, fork). Those rows stay visible even if native metadata
     /// later says `thread_source=subagent`.

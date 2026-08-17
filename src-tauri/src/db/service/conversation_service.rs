@@ -85,6 +85,8 @@ async fn create_inner(
         origin_cwd: Set(None),
         harness_internal: Set(false),
         codeg_owned: Set(true),
+        preferred_mode_id: Set(None),
+        preferred_config_values: Set(None),
     };
     Ok(model.insert(conn).await?)
 }
@@ -738,6 +740,76 @@ pub async fn list_children(
     let mut summaries: Vec<DbConversationSummary> = rows.into_iter().map(conv_to_summary).collect();
     fill_child_counts(conn, &mut summaries).await?;
     Ok(summaries)
+}
+
+/// Per-Session selector preferences: the pinned ACP mode and configId →
+/// valueId choices (model, thinking effort, …) this conversation should
+/// reconnect with. A missing row or unparsable JSON degrades to "no pins".
+pub async fn selector_prefs(
+    conn: &DatabaseConnection,
+    conversation_id: i32,
+) -> Result<(Option<String>, std::collections::BTreeMap<String, String>), DbError> {
+    let Some(row) = conversation::Entity::find_by_id(conversation_id)
+        .one(conn)
+        .await?
+    else {
+        return Ok((None, Default::default()));
+    };
+    let values = row
+        .preferred_config_values
+        .as_deref()
+        .and_then(|raw| serde_json::from_str(raw).ok())
+        .unwrap_or_default();
+    Ok((row.preferred_mode_id, values))
+}
+
+/// Pin the Session's ACP mode. Like pinning, this is a view/launch preference:
+/// it never bumps `updated_at`.
+pub async fn set_selector_mode(
+    conn: &DatabaseConnection,
+    conversation_id: i32,
+    mode_id: &str,
+) -> Result<(), DbError> {
+    let Some(row) = conversation::Entity::find_by_id(conversation_id)
+        .one(conn)
+        .await?
+    else {
+        return Ok(());
+    };
+    let mut active: conversation::ActiveModel = row.into();
+    active.preferred_mode_id = Set(Some(mode_id.to_string()));
+    active.updated_at = NotSet;
+    active.update(conn).await?;
+    Ok(())
+}
+
+/// Merge one selector choice into the Session's pinned set without disturbing
+/// the others (changing the model must not drop a pinned thinking effort).
+pub async fn merge_selector_config_value(
+    conn: &DatabaseConnection,
+    conversation_id: i32,
+    config_id: &str,
+    value_id: &str,
+) -> Result<(), DbError> {
+    let Some(row) = conversation::Entity::find_by_id(conversation_id)
+        .one(conn)
+        .await?
+    else {
+        return Ok(());
+    };
+    let mut values: std::collections::BTreeMap<String, String> = row
+        .preferred_config_values
+        .as_deref()
+        .and_then(|raw| serde_json::from_str(raw).ok())
+        .unwrap_or_default();
+    values.insert(config_id.to_string(), value_id.to_string());
+    let serialized = serde_json::to_string(&values)
+        .map_err(|err| DbError::Validation(format!("selector prefs serialize: {err}")))?;
+    let mut active: conversation::ActiveModel = row.into();
+    active.preferred_config_values = Set(Some(serialized));
+    active.updated_at = NotSet;
+    active.update(conn).await?;
+    Ok(())
 }
 
 /// Insert a historical child row for compatibility tests. Production releases
