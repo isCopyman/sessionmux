@@ -139,6 +139,7 @@ interface MessageListViewProps {
 
 export interface SessionMailAttribution {
   conversationId: number
+  title?: string | null
   agentType?: string | null
 }
 
@@ -277,6 +278,7 @@ export function applyCollaborationTimelineProjection(
     if (!first) return null
     return {
       conversationId: first.source.conversationId,
+      title: first.source.title,
       agentType: first.source.agentType,
     }
   }
@@ -719,6 +721,7 @@ const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
             {group.sessionMail ? (
               <SessionMailFromBadge
                 conversationId={group.sessionMail.conversationId}
+                title={group.sessionMail.title}
                 agentType={group.sessionMail.agentType}
               />
             ) : null}

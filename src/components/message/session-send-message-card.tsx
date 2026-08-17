@@ -6,7 +6,10 @@ import { useTranslations } from "next-intl"
 
 import { Button } from "@/components/ui/button"
 import { useTabActions } from "@/contexts/tab-context"
-import { formatConversationTitle } from "@/lib/conversation-title"
+import {
+  formatConversationTitle,
+  formatSessionMailName,
+} from "@/lib/conversation-title"
 import { parseSessionSendMessageInput } from "@/lib/session-send-message-tool"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { ContentPartsRenderer } from "./content-parts-renderer"
@@ -31,6 +34,7 @@ export function SessionSendMessageCard({
 
   if (!parsed || targetId == null) return null
 
+  const name = formatSessionMailName(target?.title, targetId)
   const extra =
     parsed.targetSessionIds.length > 1
       ? ` +${parsed.targetSessionIds.length - 1}`
@@ -43,13 +47,13 @@ export function SessionSendMessageCard({
       data-target-session-id={targetId}
     >
       <header className="mb-1.5 flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
-        <span className="truncate font-medium text-foreground">
-          {t("toSession", { id: targetId })}
+        <span
+          className="truncate font-medium text-foreground"
+          title={target?.title ?? name}
+        >
+          {t("toSession", { name })}
           {extra}
         </span>
-        {target?.agent_type ? (
-          <span className="truncate">{target.agent_type}</span>
-        ) : null}
         <Button
           type="button"
           size="icon"

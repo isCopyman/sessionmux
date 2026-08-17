@@ -135,6 +135,7 @@ describe("applyCollaborationTimelineProjection", () => {
     expect(user.group.parts).toEqual([{ type: "text", text: "actual prompt" }])
     expect(user.group.sessionMail).toEqual({
       conversationId: 42,
+      title: "Reviewer",
       agentType: "codex",
     })
   })

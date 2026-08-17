@@ -19,3 +19,17 @@ export function formatConversationTitle(
 ): string {
   return foldReferenceLinks(title)
 }
+
+/** Short label for Session-letter chrome. Empty titles fall back to the id. */
+export const SESSION_MAIL_NAME_MAX = 12
+
+export function formatSessionMailName(
+  title: string | null | undefined,
+  conversationId: number
+): string {
+  const raw = formatConversationTitle(title).trim()
+  if (!raw) return `Session ${conversationId}`
+  const chars = [...raw]
+  if (chars.length <= SESSION_MAIL_NAME_MAX) return raw
+  return `${chars.slice(0, SESSION_MAIL_NAME_MAX).join("")}…`
+}

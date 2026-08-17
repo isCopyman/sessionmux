@@ -7,16 +7,20 @@ import { useTranslations } from "next-intl"
 import { Message, MessageContent } from "@/components/ai-elements/message"
 import { Button } from "@/components/ui/button"
 import { useTabActions } from "@/contexts/tab-context"
-import { formatConversationTitle } from "@/lib/conversation-title"
+import {
+  formatConversationTitle,
+  formatSessionMailName,
+} from "@/lib/conversation-title"
 import type { CollaborationDelivery } from "@/lib/types"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { CollapsibleUserMessage } from "./collapsible-user-message"
 
 export function SessionMailFromBadge({
   conversationId,
-  agentType,
+  title,
 }: {
   conversationId: number
+  title?: string | null
   agentType?: string | null
 }) {
   const t = useTranslations("Collaboration")
@@ -25,12 +29,15 @@ export function SessionMailFromBadge({
     (conversation) => conversation.id === conversationId
   )
   const { openTab } = useTabActions()
+  const name = formatSessionMailName(
+    peerConversation?.title ?? title,
+    conversationId
+  )
 
   return (
     <div className="mb-1 flex w-fit max-w-full items-center gap-1 self-end text-[0.6875rem] text-muted-foreground">
-      <span className="truncate">
-        {t("fromSession", { id: conversationId })}
-        {agentType ? ` · ${agentType}` : ""}
+      <span className="truncate" title={peerConversation?.title ?? title ?? name}>
+        {t("fromSession", { name })}
       </span>
       <Button
         type="button"
@@ -82,6 +89,7 @@ export function CollaborationMessageCard({
         <div className="flex w-fit max-w-full flex-col items-end self-end">
           <SessionMailFromBadge
             conversationId={delivery.source.conversationId}
+            title={delivery.source.title}
             agentType={delivery.source.agentType}
           />
           <div className="group/user-msg flex w-fit max-w-full items-start gap-1">

@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest"
 
-import { formatConversationTitle } from "./conversation-title"
+import {
+  formatConversationTitle,
+  formatSessionMailName,
+} from "./conversation-title"
 
 describe("formatConversationTitle", () => {
   it("returns an empty string for nullish titles", () => {
@@ -146,6 +149,26 @@ describe("formatConversationTitle", () => {
     const prefix = "x".repeat(50_000)
     expect(formatConversationTitle(`${prefix} [a](file:///a)`)).toBe(
       `${prefix} a`
+    )
+  })
+})
+
+describe("formatSessionMailName", () => {
+  it("falls back to Session id when the title is empty", () => {
+    expect(formatSessionMailName(null, 290)).toBe("Session 290")
+    expect(formatSessionMailName("   ", 291)).toBe("Session 291")
+  })
+
+  it("keeps short names and clips long ones to 12 characters", () => {
+    expect(formatSessionMailName("Reviewer", 1)).toBe("Reviewer")
+    expect(
+      formatSessionMailName(
+        "You are Session D. Reply with exactly D_READY.",
+        291
+      )
+    ).toBe("You are Sess…")
+    expect(formatSessionMailName("一二三四五六七八九十十一十二多余", 3)).toBe(
+      "一二三四五六七八九十十一…"
     )
   })
 })

@@ -51,6 +51,14 @@ vi.mock("@/stores/conversation-runtime-store", () => ({
 vi.mock("./session-details-dialog", () => ({
   SessionDetailsDialog: () => null,
 }))
+vi.mock("@/stores/session-letter-render-store", () => ({
+  useSessionLetterRenderStore: (
+    selector: (state: {
+      mode: "custom" | "mcp"
+      setMode: (mode: "custom" | "mcp") => void
+    }) => unknown
+  ) => selector({ mode: "custom", setMode: () => {} }),
+}))
 // The header now embeds the folder picker (self-contained, store-driven); stub
 // it so these tests exercise only the header's own menu/dialog logic.
 vi.mock("@/components/chat/conversation-context-bar", () => ({

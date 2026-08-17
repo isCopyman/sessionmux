@@ -102,7 +102,7 @@ describe("CollaborationMessageCard", () => {
       />
     )
 
-    expect(screen.getByText(/fromSession:1/)).toBeInTheDocument()
+    expect(screen.getByText("fromSession:Reviewer")).toBeInTheDocument()
     expect(screen.getByText("Please check the proof.")).toBeInTheDocument()
     expect(
       document.querySelector("[data-collaboration-direction='inbound']")
