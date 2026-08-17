@@ -573,3 +573,11 @@ Desktop 调试分层与 WebView2 CDP 验证记录；历史记录只用于找回�
   `codeg-server` 同目录**，否则 MCP 注入按设计静默跳过，Agent 会找不到协作工具；
   API 直造的会话在首轮 prompt 前没有身份，dispatcher 对它 `SkippedNoIdentity`
   不自动拉起是设计内行为。两层证据各自记录，不得互相冒充。
+- **测试用模型纪律（2026-08-18，用户定）**：真机验收优先用 **Grok harness**（便宜且
+  聪明）。必须用 Claude Code 时**一定显式钉便宜档模型**（k3 / deepseek-v4-flash 档），
+  不得裸 `acp_connect`——默认档位可能映射到 Opus/fable 级别的贵模型，一轮冒烟就烧掉
+  不成比例的钱。钉法：`acp_connect` 传 `preferredConfigValues`（如
+  `{ "model": "<便宜档 valueId>" }`，valueId 以 `acp_describe_agent_options` 或该
+  agent 的 `session_config_options` 事件为准）；或先在 UI 的模型选择器为该测试会话
+  选好便宜档——2026-08-18 起选择器选择按会话固化（`conversation.preferred_*` 列，
+  连接时会话级覆盖 agent 级模板），测试会话钉一次即永久生效，不再影响其他会话。
