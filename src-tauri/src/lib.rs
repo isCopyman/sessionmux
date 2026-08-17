@@ -40,6 +40,7 @@ pub mod pets;
 pub mod preferences;
 pub mod process;
 pub mod prompt_queue;
+pub mod session_timer;
 pub mod supervise;
 mod terminal;
 pub mod turn_timings;
@@ -73,6 +74,7 @@ mod tauri_app {
         model_provider as model_provider_commands, notification,
         office_tools as office_tools_commands, pet as pet_commands, project_boot,
         prompt_queue as prompt_queue_commands, question as question_commands,
+        session_timer as session_timer_commands,
         quick_messages as quick_messages_commands, remote_proxy as remote_proxy_commands,
         remote_workspace as remote_workspace_commands, science as science_commands,
         session_info as session_info_commands, session_search as session_search_commands,
@@ -345,6 +347,24 @@ mod tauri_app {
                             reminder_emitter,
                         ),
                     );
+                }
+
+                // Session Timer engine: fires due wake-ups into the queue
+                // above. Same subscribe-before-spawn discipline.
+                {
+                    let (handle, task) = crate::session_timer::build_session_timer_runtime(
+                        app.state::<db::AppDatabase>().conn.clone(),
+                        app.state::<ConnectionManager>().clone_ref(),
+                        web::event_bridge::EventEmitter::Tauri(app.handle().clone()),
+                        app.state::<std::sync::Arc<crate::acp::InternalEventBus>>()
+                            .inner()
+                            .clone(),
+                        app.state::<crate::prompt_queue::PromptQueueHandle>()
+                            .inner()
+                            .clone(),
+                    );
+                    app.manage(handle);
+                    tauri::async_runtime::spawn(task);
                 }
 
                 // Restore and apply saved system proxy settings before any network operation.
@@ -1260,6 +1280,10 @@ mod tauri_app {
                 acp_commands::acp_set_mode,
                 acp_commands::acp_set_config_option,
                 acp_commands::acp_goal_control,
+                session_timer_commands::session_timer_list,
+                session_timer_commands::session_timer_create,
+                session_timer_commands::session_timer_update,
+                session_timer_commands::session_timer_delete,
                 acp_commands::acp_describe_agent_options,
                 acp_commands::acp_cancel,
                 acp_commands::acp_fork,

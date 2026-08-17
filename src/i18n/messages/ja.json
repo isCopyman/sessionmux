@@ -3382,6 +3382,23 @@
       "proposedPlan": {
         "title": "提案された計画",
         "planning": "計画中…"
+      },
+      "sessionTimers": {
+        "title": "タイマー",
+        "count": "{count} 件のタイマー",
+        "promptLabel": "タイマーのプロンプト",
+        "promptPlaceholder": "ターン完了後、このセッションは次に何を続けますか？",
+        "fileHint": "長期タスクの詳細計画はプロジェクトファイルに保存し、ここではそのファイルを読んで続行するよう指示します。",
+        "add": "追加",
+        "pause": "一時停止",
+        "resume": "再開",
+        "delete": "削除",
+        "edit": "編集",
+        "save": "保存",
+        "cancel": "キャンセル",
+        "errors": {
+          "emptyPrompt": "プロンプトを入力してください"
+        }
       }
     },
     "diffPreview": {

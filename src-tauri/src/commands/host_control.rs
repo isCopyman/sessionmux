@@ -28,6 +28,7 @@ use crate::commands::conversations::{
 };
 use crate::commands::host_control_session::SessionHostControlProvider;
 use crate::commands::host_control_organization::OrganizationHostControl;
+use crate::commands::host_control_timer::TimerHostControl;
 use crate::db::entities::conversation::ConversationKind;
 use crate::db::service::conversation_service;
 use crate::db::AppDatabase;
@@ -73,6 +74,7 @@ pub struct DbSessionHostControl {
     config: HostControlRuntimeConfig,
     session_lifecycle: SessionHostControlProvider,
     organization: OrganizationHostControl,
+    timer: TimerHostControl,
     /// Held across a write so concurrent replays cannot both pass the lookup.
     writes: Mutex<IdempotencyCache>,
 }
@@ -93,6 +95,7 @@ impl DbSessionHostControl {
             data_dir,
         );
         let organization = OrganizationHostControl::new(db.clone(), emitter.clone());
+        let timer = TimerHostControl::new(db.clone(), emitter.clone());
         Self {
             db,
             emitter,
@@ -100,6 +103,7 @@ impl DbSessionHostControl {
             config,
             session_lifecycle,
             organization,
+            timer,
             writes: Mutex::new(IdempotencyCache::default()),
         }
     }
@@ -111,6 +115,7 @@ impl DbSessionHostControl {
         let session_lifecycle =
             SessionHostControlProvider::isolated_for_tests(Arc::clone(&db), emitter.clone());
         let organization = OrganizationHostControl::new(db.clone(), emitter.clone());
+        let timer = TimerHostControl::new(db.clone(), emitter.clone());
         Self {
             db,
             emitter,
@@ -118,6 +123,7 @@ impl DbSessionHostControl {
             config: HostControlRuntimeConfig::new(),
             session_lifecycle,
             organization,
+            timer,
             writes: Mutex::new(IdempotencyCache::default()),
         }
     }
@@ -261,6 +267,7 @@ impl DbSessionHostControl {
             capabilities.extend(SessionHostControlProvider::capabilities());
         }
         capabilities.extend(OrganizationHostControl::capabilities(writes_allowed));
+        capabilities.extend(TimerHostControl::capabilities(writes_allowed));
         capabilities
     }
 
@@ -623,6 +630,23 @@ impl HostControlAccess for DbSessionHostControl {
                     )
                 } else {
                     self.organization
+                        .use_action(&caller, request_id, action, input)
+                        .await
+                }
+            }
+            _ if TimerHostControl::access_for(&action).is_some() => {
+                if matches!(
+                    TimerHostControl::access_for(&action),
+                    Some(HostControlAccessLevel::Write)
+                ) && (!config.writes_enabled || !caller.writes_allowed)
+                {
+                    HostControlUseOutcome::rejected(
+                        request_id,
+                        action,
+                        "This Session's live Host policy does not allow Host Control writes.",
+                    )
+                } else {
+                    self.timer
                         .use_action(&caller, request_id, action, input)
                         .await
                 }

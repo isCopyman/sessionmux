@@ -101,6 +101,9 @@ import type {
   PromptInputBlock,
   PromptDraft,
   PromptQueueSnapshot,
+  SessionTimer,
+  CreateSessionTimerInput,
+  UpdateSessionTimerInput,
   CollaborationFeed,
   CollaborationTimelineProjection,
   CollaborationUnreadOverview,
@@ -1997,6 +2000,44 @@ export async function getPromptQueue(
   conversationId: number
 ): Promise<PromptQueueSnapshot> {
   return getTransport().call("prompt_queue_get", { conversationId })
+}
+
+/** Session Timers (RFC P2): per-session wake-ups injected through the prompt
+ *  queue when they come due. */
+export const SESSION_TIMER_CHANGED_EVENT = "session-timer://changed"
+
+export async function listSessionTimers(
+  conversationId: number
+): Promise<SessionTimer[]> {
+  return getTransport().call("session_timer_list", { conversationId })
+}
+
+export async function createSessionTimer(
+  input: CreateSessionTimerInput
+): Promise<SessionTimer> {
+  return getTransport().call("session_timer_create", { input })
+}
+
+export async function updateSessionTimer(
+  conversationId: number,
+  id: string,
+  input: UpdateSessionTimerInput
+): Promise<SessionTimer> {
+  return getTransport().call("session_timer_update", {
+    conversationId,
+    id,
+    input,
+  })
+}
+
+export async function deleteSessionTimer(
+  conversationId: number,
+  id: string
+): Promise<void> {
+  return getTransport().call("session_timer_delete", {
+    conversationId,
+    id,
+  })
 }
 
 export async function enqueuePromptQueueItem(input: {

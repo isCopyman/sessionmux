@@ -11,6 +11,7 @@ pub mod pet;
 pub mod prompt_queue;
 pub mod quick_message;
 pub mod remote_workspace_connection;
+pub mod session_timer;
 pub mod system;
 pub mod token_usage;
 pub mod work_task;

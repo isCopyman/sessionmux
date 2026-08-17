@@ -963,7 +963,9 @@ mod tests {
     use super::*;
     use crate::acp::connection::ConnectionCommand;
     use crate::acp::internal_bus::EventBusMetrics;
-    use crate::acp::session_collaboration::SessionInboxFilter;
+    use crate::acp::session_collaboration::{
+        SessionInboxFilter, SessionMessageDeliveryMode,
+    };
     use crate::acp::InternalEventBus;
     use crate::db::test_helpers::{fresh_in_memory_db, seed_conversation, seed_folder};
     use crate::models::{

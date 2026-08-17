@@ -1288,6 +1288,20 @@ pub fn build_router(
             "/delete_workbench",
             post(handlers::workbenches::delete_workbench),
         )
+        // ─── Session Timers: idle continuation through the Session queue ───
+        .route("/session_timer_list", post(handlers::session_timer::list))
+        .route(
+            "/session_timer_create",
+            post(handlers::session_timer::create),
+        )
+        .route(
+            "/session_timer_update",
+            post(handlers::session_timer::update),
+        )
+        .route(
+            "/session_timer_delete",
+            post(handlers::session_timer::delete),
+        )
         // ─── Backend-authoritative Session follow-up queue ───
         .route("/prompt_queue_get", post(handlers::prompt_queue::get))
         .route(

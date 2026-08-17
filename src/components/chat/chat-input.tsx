@@ -18,6 +18,7 @@ import {
   type ComposerInjectContent,
 } from "@/components/chat/message-input"
 import { MessageQueueDisplay } from "@/components/chat/message-queue-display"
+import { SessionTimers } from "@/components/chat/session-timers"
 import { cn } from "@/lib/utils"
 
 interface ChatInputProps {
@@ -46,6 +47,9 @@ interface ChatInputProps {
    *  tab when tiled across multiple sessions; passed through to MessageInput. */
   showActiveFlow?: boolean
   queue?: QueuedMessage[]
+  /** Session Timers anchor: the conversation the composer belongs to. The
+   *  timers popover rides with the queue display and needs the durable id. */
+  conversationId?: number | null
   onEnqueue?: (draft: PromptDraft, modeId: string | null) => void
   onQueueReorder?: (items: QueuedMessage[]) => void
   onQueueEdit?: (id: string) => void
@@ -118,6 +122,7 @@ export const ChatInput = memo(function ChatInput({
   onQueueRetry,
   onQueueResume,
   queuePausedReason,
+  conversationId,
   editingItemId,
   editingDraftText,
   editingDraftBlocks,
@@ -161,6 +166,7 @@ export const ChatInput = memo(function ChatInput({
         if (event.pointerType !== "mouse") event.stopPropagation()
       }}
     >
+      <SessionTimers conversationId={conversationId} />
       {queue &&
         queue.length > 0 &&
         onQueueReorder &&

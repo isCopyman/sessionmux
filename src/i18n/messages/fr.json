@@ -3382,6 +3382,23 @@
       "proposedPlan": {
         "title": "Plan proposé",
         "planning": "Planification…"
+      },
+      "sessionTimers": {
+        "title": "Minuteries",
+        "count": "{count, plural, one {# minuterie} other {# minuteries}}",
+        "promptLabel": "Invite de la minuterie",
+        "promptPlaceholder": "Que doit poursuivre cette session après avoir terminé un tour ?",
+        "fileHint": "Pour un travail long, conservez le plan détaillé dans un fichier du projet et demandez ici de le lire puis de continuer.",
+        "add": "Ajouter",
+        "pause": "Suspendre",
+        "resume": "Reprendre",
+        "delete": "Supprimer",
+        "edit": "Modifier",
+        "save": "Enregistrer",
+        "cancel": "Annuler",
+        "errors": {
+          "emptyPrompt": "L'invite ne peut pas être vide"
+        }
       }
     },
     "diffPreview": {

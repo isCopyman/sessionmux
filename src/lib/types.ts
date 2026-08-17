@@ -1199,6 +1199,32 @@ export interface PromptQueueSnapshot {
   items: PromptQueueItem[]
 }
 
+export interface SessionTimer {
+  id: string
+  conversationId: number
+  idleGraceSecs: number
+  promptText: string
+  enabled: boolean
+  lastFiredAt?: string | null
+  fireCount: number
+  createdAt: string
+  updatedAt: string
+}
+
+export interface CreateSessionTimerInput {
+  conversationId: number
+  promptText: string
+  idleGraceSecs?: number
+  clientDedupeId?: string | null
+}
+
+export interface UpdateSessionTimerInput {
+  promptText?: string
+  enabled?: boolean
+  idleGraceSecs?: number
+  expectedUpdatedAt: string
+}
+
 export type CollaborationInvocationPolicy = "store_only" | "invoke_when_idle"
 export type CollaborationDeliveryHint = "default" | "steer_if_supported"
 export type CollaborationUrgency = "normal" | "urgent"

@@ -3382,6 +3382,23 @@
       "proposedPlan": {
         "title": "Vorgeschlagener Plan",
         "planning": "Wird geplant…"
+      },
+      "sessionTimers": {
+        "title": "Timer",
+        "count": "{count, plural, one {# Timer} other {# Timer}}",
+        "promptLabel": "Timer-Prompt",
+        "promptPlaceholder": "Was soll diese Session nach Abschluss eines Turns fortsetzen?",
+        "fileHint": "Lege bei langen Aufgaben den detaillierten Plan in einer Projektdatei ab und verweise hier darauf.",
+        "add": "Hinzufügen",
+        "pause": "Pausieren",
+        "resume": "Fortsetzen",
+        "delete": "Löschen",
+        "edit": "Bearbeiten",
+        "save": "Speichern",
+        "cancel": "Abbrechen",
+        "errors": {
+          "emptyPrompt": "Die Prompt darf nicht leer sein"
+        }
       }
     },
     "diffPreview": {

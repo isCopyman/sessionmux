@@ -3382,6 +3382,23 @@
       "proposedPlan": {
         "title": "計劃提案",
         "planning": "規劃中…"
+      },
+      "sessionTimers": {
+        "title": "計時器",
+        "count": "{count} 個計時器",
+        "promptLabel": "計時器提示詞",
+        "promptPlaceholder": "這個會話完成一輪後，下一步要繼續做什麼？",
+        "fileHint": "長期任務建議把詳細計畫寫在專案檔案裡，這裡只要求會話讀取該檔案並繼續。",
+        "add": "新增計時器",
+        "pause": "暫停",
+        "resume": "恢復",
+        "delete": "刪除",
+        "edit": "編輯",
+        "save": "儲存",
+        "cancel": "取消",
+        "errors": {
+          "emptyPrompt": "計時器提示詞不能為空"
+        }
       }
     },
     "diffPreview": {

@@ -31,6 +31,7 @@ pub mod quick_messages;
 pub mod science;
 pub mod session_search;
 pub mod session_info;
+pub mod session_timer;
 pub mod system_settings;
 pub mod terminal;
 pub mod token_usage;

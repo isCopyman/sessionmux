@@ -261,6 +261,14 @@ async fn async_main() -> ExitCode {
         emitter.clone(),
         acp_event_bus.clone(),
     );
+    let (session_timer, session_timer_task) =
+        codeg_lib::session_timer::build_session_timer_runtime(
+            db.conn.clone(),
+            connection_manager.clone_ref(),
+            emitter.clone(),
+            acp_event_bus.clone(),
+            prompt_queue.clone(),
+        );
     let (
         codeg_mcp_tokens,
         codeg_mcp_socket_path,
@@ -279,6 +287,7 @@ async fn async_main() -> ExitCode {
         acp_event_bus: acp_event_bus.clone(),
         emitter,
         prompt_queue,
+        session_timer,
         data_dir,
         web_server_state: WebServerState::new(),
         chat_channel_manager: codeg_lib::app_state::default_chat_channel_manager(),
@@ -298,6 +307,7 @@ async fn async_main() -> ExitCode {
         update_state: codeg_lib::app_state::default_update_state(),
     });
     tokio::spawn(prompt_queue_task);
+    tokio::spawn(session_timer_task);
     tokio::spawn(codeg_lib::collaboration_reminder_runtime::reminder_sweep_task(
         state.db.conn.clone(),
         state.connection_manager.clone_ref(),

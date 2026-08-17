@@ -10,6 +10,10 @@ pub enum DbError {
     NotFound(String),
     #[error("validation error: {0}")]
     Validation(String),
+    /// A compare-and-swap guard lost the race (stale revision, or another
+    /// process claimed the same transition first). Retry by re-reading.
+    #[error("conflict: {0}")]
+    Conflict(String),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 }

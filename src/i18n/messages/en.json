@@ -3382,6 +3382,23 @@
       "proposedPlan": {
         "title": "Proposed plan",
         "planning": "Planning…"
+      },
+      "sessionTimers": {
+        "title": "Idle continue",
+        "count": "{count, plural, one {# timer} other {# timers}}",
+        "promptLabel": "Continuation prompt",
+        "promptPlaceholder": "What should this Session do after it finishes a turn?",
+        "fileHint": "For long work, keep the detailed plan in a project file and tell the Session to read it here.",
+        "add": "Keep continuing",
+        "pause": "Pause",
+        "resume": "Resume",
+        "delete": "Delete",
+        "edit": "Edit",
+        "save": "Save",
+        "cancel": "Cancel",
+        "errors": {
+          "emptyPrompt": "The timer prompt must not be empty"
+        }
       }
     },
     "diffPreview": {

@@ -3382,6 +3382,23 @@
       "proposedPlan": {
         "title": "Plan propuesto",
         "planning": "Planificando…"
+      },
+      "sessionTimers": {
+        "title": "Temporizadores",
+        "count": "{count, plural, one {# temporizador} other {# temporizadores}}",
+        "promptLabel": "Indicación del temporizador",
+        "promptPlaceholder": "¿Qué debe continuar esta sesión después de terminar un turno?",
+        "fileHint": "Para trabajos largos, guarda el plan detallado en un archivo del proyecto e indica aquí que lo lea y continúe.",
+        "add": "Añadir",
+        "pause": "Pausar",
+        "resume": "Reanudar",
+        "delete": "Eliminar",
+        "edit": "Editar",
+        "save": "Guardar",
+        "cancel": "Cancelar",
+        "errors": {
+          "emptyPrompt": "La indicación no puede estar vacía"
+        }
       }
     },
     "diffPreview": {

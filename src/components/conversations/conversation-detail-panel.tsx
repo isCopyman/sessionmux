@@ -1981,6 +1981,7 @@ const ConversationTabView = memo(function ConversationTabView({
 
   return (
     <ConversationShell
+      conversationId={effectiveConversationId}
       topBanner={
         <>
           <SessionConfigStaleBanner contextKey={tabId} />

@@ -33,6 +33,7 @@ import { PlanApprovalCard } from "@/components/chat/plan-approval-card"
 
 interface ConversationShellProps {
   status: ConnectionStatus | null
+  conversationId?: number | null
   promptCapabilities: PromptCapabilitiesInfo
   defaultPath?: string
   agentName?: string
@@ -132,6 +133,7 @@ interface ConversationShellProps {
 
 export function ConversationShell({
   status,
+  conversationId,
   promptCapabilities,
   defaultPath,
   agentName,
@@ -299,6 +301,7 @@ export function ConversationShell({
           <div className="mx-auto w-full max-w-3xl">
             <ChatInput
               status={status}
+              conversationId={conversationId}
               promptCapabilities={promptCapabilities}
               defaultPath={defaultPath}
               agentName={agentName}

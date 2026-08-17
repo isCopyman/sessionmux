@@ -3382,6 +3382,23 @@
       "proposedPlan": {
         "title": "제안된 계획",
         "planning": "계획 중…"
+      },
+      "sessionTimers": {
+        "title": "타이머",
+        "count": "타이머 {count}개",
+        "promptLabel": "타이머 프롬프트",
+        "promptPlaceholder": "턴을 마친 뒤 이 세션이 계속할 작업은 무엇인가요?",
+        "fileHint": "장기 작업의 상세 계획은 프로젝트 파일에 두고, 여기서는 그 파일을 읽고 계속하도록 지시하세요.",
+        "add": "추가",
+        "pause": "일시정지",
+        "resume": "재개",
+        "delete": "삭제",
+        "edit": "편집",
+        "save": "저장",
+        "cancel": "취소",
+        "errors": {
+          "emptyPrompt": "프롬프트를 입력하세요"
+        }
       }
     },
     "diffPreview": {

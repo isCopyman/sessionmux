@@ -782,6 +782,10 @@ pub(crate) async fn do_start_web_server_tauri(
             .state::<crate::prompt_queue::PromptQueueHandle>()
             .inner()
             .clone(),
+        session_timer: app
+            .state::<crate::session_timer::SessionTimerHandle>()
+            .inner()
+            .clone(),
         // Resolve through the effective data dir so a custom
         // `CODEG_DATA_DIR` reaches the credential helper and any HTTP
         // handler that reads `state.data_dir`.

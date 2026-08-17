@@ -26,6 +26,9 @@ pub struct AppState {
     /// Wake handle for the process-wide backend-authoritative Session
     /// follow-up queue. The worker itself is spawned once per backend process.
     pub prompt_queue: crate::prompt_queue::PromptQueueHandle,
+    /// Wake handle for the Session Timer engine (RFC P2). CRUD commands wake
+    /// it so a just-created due timer doesn't wait for the next sweep.
+    pub session_timer: crate::session_timer::SessionTimerHandle,
     pub data_dir: PathBuf,
     pub web_server_state: WebServerState,
     pub chat_channel_manager: ChatChannelManager,
@@ -206,6 +209,7 @@ impl AppState {
             acp_event_bus,
             emitter,
             prompt_queue: crate::prompt_queue::PromptQueueHandle::disconnected_for_test(),
+            session_timer: crate::session_timer::SessionTimerHandle::disconnected_for_test(),
             data_dir,
             web_server_state: crate::web::WebServerState::new(),
             chat_channel_manager: default_chat_channel_manager(),

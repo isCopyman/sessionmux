@@ -3382,6 +3382,23 @@
       "proposedPlan": {
         "title": "计划提案",
         "planning": "规划中…"
+      },
+      "sessionTimers": {
+        "title": "空闲后继续",
+        "count": "{count} 个定时器",
+        "promptLabel": "继续任务提示词",
+        "promptPlaceholder": "这个会话完成一轮后，下一步要继续做什么？",
+        "fileHint": "长期任务建议把详细计划写在项目文件里，这里只要求会话读取该文件并继续。",
+        "add": "持续推进",
+        "pause": "暂停",
+        "resume": "恢复",
+        "delete": "删除",
+        "edit": "编辑",
+        "save": "保存",
+        "cancel": "取消",
+        "errors": {
+          "emptyPrompt": "定时器提示词不能为空"
+        }
       }
     },
     "diffPreview": {

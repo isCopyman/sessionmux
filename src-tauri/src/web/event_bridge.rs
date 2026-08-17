@@ -302,6 +302,18 @@ pub const PROMPT_QUEUE_CHANGED_EVENT: &str = "prompt-queue://changed";
 /// Cross-client invalidation for persistent Session-to-Session communication.
 pub const COLLABORATION_CHANGED_EVENT: &str = "collaboration://changed";
 
+/// Cross-client invalidation for Session Timer state. Like
+/// [`AUTOMATION_CHANGED_EVENT`] this carries only ids — clients refetch the
+/// affected conversation's timers. Fires on CRUD mutations and after each
+/// continuation occurrence is claimed.
+pub const SESSION_TIMER_CHANGED_EVENT: &str = "session-timer://changed";
+
+/// Payload for [`SESSION_TIMER_CHANGED_EVENT`].
+#[derive(Debug, Clone, Serialize)]
+pub struct SessionTimerChanged {
+    pub conversation_ids: Vec<i32>,
+}
+
 /// Payload for the [`TABS_CHANGED_EVENT`] side-channel. Carries the full
 /// conversation-bound tab set (a snapshot, not a delta) so every client
 /// converges idempotently — matching the full-replacement save semantics.
