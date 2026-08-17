@@ -75,11 +75,10 @@ impl PromptQueueHandle {
         Ok(is_connected)
     }
 
-    /// Persist-then-insert for Session messages. Steer into the current turn
-    /// when that channel exists; otherwise start a new turn. A missing or busy
-    /// runtime without steering keeps the durable row for the next ordinary
-    /// turn. This does not enqueue a follow-up.
-    /// Returns true when the letter was injected (steer or a started turn).
+    /// Inject a leftover `store_only` Session letter: steer into the current
+    /// turn when that channel exists, otherwise start a new turn. New mail
+    /// goes through the ordinary prompt queue instead. Returns true when the
+    /// letter was injected (steer or a started turn).
     pub async fn deliver_session_message_now(
         &self,
         conn: &sea_orm::DatabaseConnection,
@@ -1559,6 +1558,106 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn send_core_starts_an_idle_turn_through_the_human_queue() {
+        let path = "/tmp/codeg-session-message-send-core-idle";
+        let (db, folder_id, target, manager, bus) = setup(path).await;
+        let source = seed_conversation(&db, folder_id, AgentType::ClaudeCode).await;
+        let mut commands =
+            bind_live_connection(&manager, "active", path, folder_id, target).await;
+        let (handle, task) = build_prompt_queue_runtime(
+            db.conn.clone(),
+            manager.clone_ref(),
+            EventEmitter::Noop,
+            bus,
+        );
+        let worker = tokio::spawn(task);
+        crate::commands::collaboration::collaboration_send_core(
+            &db.conn,
+            &EventEmitter::Noop,
+            &handle,
+            collaboration_input(source, target, "send-core-idle", "PING queue idle"),
+        )
+        .await
+        .expect("send_core");
+
+        let command = tokio::time::timeout(StdDuration::from_secs(2), commands.recv())
+            .await
+            .expect("idle queue timeout")
+            .expect("prompt command");
+        let ConnectionCommand::Prompt {
+            blocks,
+            dispatch_ack,
+            ..
+        } = command
+        else {
+            panic!("idle Session message must start a turn");
+        };
+        let PromptInputBlock::Text { text } = &blocks[0] else {
+            panic!("expected text envelope");
+        };
+        assert!(text.contains("PING queue idle"));
+        assert!(text.contains("Do the work in the body now"));
+        dispatch_ack
+            .expect("collaboration dispatch acknowledgement")
+            .send(())
+            .unwrap();
+        wait_until(|| async {
+            collaboration_service::feed(&db.conn, target, None)
+                .await
+                .is_ok_and(|feed| feed.inbound[0].state == CollaborationDeliveryState::Embedded)
+        })
+        .await;
+        worker.abort();
+    }
+
+    #[tokio::test]
+    async fn send_core_steers_a_busy_native_turn() {
+        let path = "/tmp/codeg-session-message-send-core-steer";
+        let (db, folder_id, target, manager, bus) = setup(path).await;
+        let source = seed_conversation(&db, folder_id, AgentType::ClaudeCode).await;
+        let mut commands =
+            bind_live_connection(&manager, "active", path, folder_id, target).await;
+        let state = manager.get_state("active").await.expect("state");
+        {
+            let mut state = state.write().await;
+            state.turn_in_flight = true;
+            state.native_steering_available = true;
+        }
+        let (handle, task) = build_prompt_queue_runtime(
+            db.conn.clone(),
+            manager.clone_ref(),
+            EventEmitter::Noop,
+            bus,
+        );
+        let worker = tokio::spawn(task);
+        crate::commands::collaboration::collaboration_send_core(
+            &db.conn,
+            &EventEmitter::Noop,
+            &handle,
+            collaboration_input(source, target, "send-core-steer", "PING queue steer"),
+        )
+        .await
+        .expect("send_core");
+
+        let command = tokio::time::timeout(StdDuration::from_secs(2), commands.recv())
+            .await
+            .expect("steer timeout")
+            .expect("steer command");
+        let ConnectionCommand::Steer { text, reply } = command else {
+            panic!("busy Session message must steer");
+        };
+        assert!(text.contains("PING queue steer"));
+        reply.send(Ok(SteerOutcome::Injected)).expect("steer reply");
+        wait_until(|| async {
+            collaboration_service::feed(&db.conn, target, None)
+                .await
+                .is_ok_and(|feed| feed.inbound[0].state == CollaborationDeliveryState::Embedded)
+        })
+        .await;
+        worker.abort();
+    }
+
+    #[tokio::test]
     async fn already_injected_session_message_is_not_delivered_again() {
         let path = "/tmp/codeg-session-message-no-replay";
         let (db, folder_id, target, manager, bus) = setup(path).await;
@@ -1684,7 +1783,7 @@ mod tests {
         let PromptInputBlock::Text { text } = &blocks[0] else {
             panic!("expected stable text envelope");
         };
-        assert!(text.contains("message from another persistent Session"));
+        assert!(text.contains("live user turn from another persistent Session"));
         assert!(text.contains("--- message ---\nreview this claim\n"));
         assert_eq!(
             user_message.as_ref().map(|(id, _)| id.as_str()),
@@ -2055,7 +2154,7 @@ mod tests {
         let ConnectionCommand::Steer { text, reply } = command else {
             panic!("expected native steer command");
         };
-        assert!(text.contains("message from another persistent Session"));
+        assert!(text.contains("live user turn from another persistent Session"));
         assert!(text.contains("--- message ---\ncorrect the premise\n"));
         reply.send(Ok(SteerOutcome::Injected)).expect("steer reply");
 

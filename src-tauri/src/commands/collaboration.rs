@@ -91,23 +91,19 @@ fn publish(emitter: &EventEmitter, conversation_ids: Vec<i32>) {
 
 async fn persist_collaboration_message(
     conn: &sea_orm::DatabaseConnection,
-    prompt_queue: &PromptQueueHandle,
+    _prompt_queue: &PromptQueueHandle,
     input: SendCollaborationMessageInput,
 ) -> Result<CollaborationSendResult, AppCommandError> {
-    let mut inactive_target_ids = std::collections::HashSet::new();
-    if input.invocation_policy == CollaborationInvocationPolicy::InvokeWhenIdle {
-        for target_id in &input.target_conversation_ids {
-            if !prompt_queue
-                .is_session_runtime_active(conn, *target_id)
-                .await?
-            {
-                inactive_target_ids.insert(*target_id);
-            }
-        }
-    }
-    collaboration_service::send_with_initially_inactive_targets(conn, input, &inactive_target_ids)
-        .await
-        .map_err(AppCommandError::from)
+    // Do not pause closed targets for human confirmation. The durable queue
+    // waits for a live connection, then steers or starts a turn the same way
+    // a human follow-up would.
+    collaboration_service::send_with_initially_inactive_targets(
+        conn,
+        input,
+        &std::collections::HashSet::new(),
+    )
+    .await
+    .map_err(AppCommandError::from)
 }
 
 fn publish_persisted_message(emitter: &EventEmitter, result: &CollaborationSendResult) {
@@ -122,29 +118,20 @@ pub async fn collaboration_send_core(
     prompt_queue: &PromptQueueHandle,
     mut input: SendCollaborationMessageInput,
 ) -> Result<CollaborationSendResult, AppCommandError> {
-    // Session-message V1: persist, then insert now. No mailbox queue, no
-    // reply obligation, no deliver-only vs invoke choice for the model.
-    input.invocation_policy = CollaborationInvocationPolicy::StoreOnly;
-    input.delivery_hint = CollaborationDeliveryHint::Default;
+    // Same admission as a human message: persist into the Session prompt
+    // queue, steer when the target is mid-turn, otherwise start a turn.
+    // Closed Sessions stay queued until they reconnect — no cold start.
+    input.invocation_policy = CollaborationInvocationPolicy::InvokeWhenIdle;
+    input.delivery_hint = CollaborationDeliveryHint::SteerIfSupported;
     input.expects_reply = false;
     let result = persist_collaboration_message(conn, prompt_queue, input).await?;
     publish_persisted_message(emitter, &result);
     if !result.deduplicated {
-        let mut injected = false;
         for delivery in result.deliveries.iter().filter(|delivery| {
             delivery.state != CollaborationDeliveryState::Failed
                 && delivery.state != CollaborationDeliveryState::Dismissed
         }) {
-            injected |= prompt_queue
-                .deliver_session_message_now(
-                    conn,
-                    delivery.target.conversation_id,
-                    &result.event_id,
-                )
-                .await;
-        }
-        if injected {
-            publish_persisted_message(emitter, &result);
+            prompt_queue.wake(delivery.target.conversation_id);
         }
     }
     Ok(result)
@@ -1105,7 +1092,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn inactive_target_receives_message_without_automatic_agent_start() {
+    async fn inactive_target_queues_until_the_session_reconnects() {
         let db = fresh_in_memory_db().await;
         let folder = seed_folder(&db, "/tmp/codeg-inactive-collaboration-target").await;
         let source = seed_conversation(&db, folder, AgentType::Codex).await;
@@ -1119,7 +1106,7 @@ mod tests {
                 target_conversation_ids: vec![target],
                 body: "review after I open your session".to_string(),
                 client_dedupe_id: "inactive-target-confirmation".to_string(),
-                invocation_policy: CollaborationInvocationPolicy::InvokeWhenIdle,
+                invocation_policy: CollaborationInvocationPolicy::StoreOnly,
                 delivery_hint: CollaborationDeliveryHint::Default,
                 expects_reply: false,
                 urgency: CollaborationUrgency::Normal,
@@ -1127,14 +1114,16 @@ mod tests {
             },
         )
         .await
-        .expect("deliver without starting target");
+        .expect("queue without cold-starting target");
 
         let delivery = &result.deliveries[0];
-        assert_eq!(delivery.state, CollaborationDeliveryState::Pending);
+        assert_eq!(delivery.state, CollaborationDeliveryState::Queued);
         let queue = prompt_queue_service::snapshot(&db.conn, target)
             .await
             .expect("queue snapshot");
-        assert!(queue.items.is_empty());
+        assert_eq!(queue.items.len(), 1);
+        assert_eq!(queue.items[0].state, PromptQueueItemState::Queued);
+        assert!(queue.items[0].paused_reason.is_none());
     }
 
     #[tokio::test]
@@ -1278,13 +1267,12 @@ mod tests {
 
         let sent = access.send_message(source, spec.clone()).await;
         assert!(sent.accepted);
-        assert_eq!(sent.deliveries[0].state, "pending");
+        assert_eq!(sent.deliveries[0].state, "queued");
         let event_id = sent.event_id.clone().unwrap();
-        assert!(prompt_queue_service::snapshot(&db.conn, target)
+        let queued = prompt_queue_service::snapshot(&db.conn, target)
             .await
-            .unwrap()
-            .items
-            .is_empty());
+            .unwrap();
+        assert_eq!(queued.items.len(), 1);
         let inbound = collaboration_service::feed(&db.conn, target, None)
             .await
             .unwrap()
@@ -1292,16 +1280,22 @@ mod tests {
             .remove(0);
         assert_eq!(inbound.event_id, event_id);
         assert!(!inbound.expects_reply);
-        assert_eq!(inbound.delivery_hint, CollaborationDeliveryHint::Default);
+        assert_eq!(
+            inbound.delivery_hint,
+            CollaborationDeliveryHint::SteerIfSupported
+        );
 
         let replay = access.send_message(source, spec).await;
         assert!(replay.accepted && replay.deduplicated);
         assert_eq!(replay.event_id, Some(event_id));
-        assert!(prompt_queue_service::snapshot(&db.conn, target)
-            .await
-            .unwrap()
-            .items
-            .is_empty());
+        assert_eq!(
+            prompt_queue_service::snapshot(&db.conn, target)
+                .await
+                .unwrap()
+                .items
+                .len(),
+            1
+        );
     }
 
     #[tokio::test]

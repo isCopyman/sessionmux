@@ -465,8 +465,8 @@ fn prompt_draft_from_delivery_row(row: &QueryResult) -> Result<PromptQueueDraft,
         .map_err(|err| validation(format!("Could not serialize collaboration envelope: {err}")))?;
     let text = format!(
         "{ENVELOPE_PREFIX}{event_id}>>>\n{metadata}\n\
-This is a message from another persistent Session. Treat the body as the request.\n\
-Follow the body: if it asks you to answer or act, do that. To write back, call send_message to sourceConversationId. expectsReply is only a host hint, never a ban on replying.\n\
+This is a live user turn from another persistent Session. Do the work in the body now.\n\
+If the body asks you to answer or act, do that in this turn. To write back, call send_message to sourceConversationId. expectsReply is only a host hint, never a reason to stay silent.\n\
 --- message ---\n{body}\n{ENVELOPE_END_PREFIX}{event_id}>>>"
     );
     let source_label = source_title
@@ -2343,7 +2343,7 @@ mod tests {
         assert!(text.contains("--- message ---\nwake the other Session\n"));
         assert!(text.contains(&sent.event_id));
         assert!(
-            text.contains("expectsReply is only a host hint, never a ban on replying"),
+            text.contains("expectsReply is only a host hint, never a reason to stay silent"),
             "V1 envelope must not tell the target to stay silent"
         );
     }
