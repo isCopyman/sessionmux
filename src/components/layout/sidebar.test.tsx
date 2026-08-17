@@ -220,16 +220,8 @@ describe("Sidebar — fixed New chat / Search region", () => {
     expect(getByText("Session Center Dialog")).toBeTruthy()
   })
 
-  it("opens Session Center scoped from the Collection tree", async () => {
-    const user = userEvent.setup()
+  it("opens Session Center scoped from the Collection tree", () => {
     const { getByText } = renderSidebar()
-    await user.click(screen.getByRole("button", { name: "View options" }))
-    await user.click(
-      screen.getByRole("menuitemradio", { name: "By Collection" })
-    )
-    // Radix keeps the just-closed modal menu inert for one frame in jsdom;
-    // dispatching the Collection action directly tests Sidebar routing rather
-    // than the menu library's animation cleanup.
     fireEvent.click(getByText("Research collection"))
     expect(spies.sessionCenterOpen).toBe(true)
     expect(spies.sessionCenterCollection).toBe(42)
@@ -243,45 +235,42 @@ describe("Sidebar — fixed New chat / Search region", () => {
     expect(getByText("Ctrl+K")).toBeTruthy()
   })
 
-  it("defaults to Workbench + single-cwd run-location organization", () => {
+  it("defaults to Workbench + path-rooted Collection organization", () => {
     renderSidebar()
     expect(screen.getByText("Workbench tree")).toBeTruthy()
-    expect(spies.listProps).not.toBeNull()
-    expect(spies.collectionShowsSessions).toBe(false)
+    expect(spies.collectionShowsSessions).toBe(true)
+    expect(spies.listProps).toBeNull()
   })
 
-  it("can switch to semantic Collections without changing Session cwd", async () => {
+  it("creates a Session at the Collection root's execution path", async () => {
     const user = userEvent.setup()
     renderSidebar()
 
-    await user.click(screen.getByRole("button", { name: "View options" }))
-    await user.click(
-      screen.getByRole("menuitemradio", { name: "By Collection" })
-    )
-
     expect(spies.collectionShowsSessions).toBe(true)
-    expect(localStorage.getItem("workspace:sidebar-organization-mode")).toBe(
-      "collections"
-    )
-
-    await user.keyboard("{Escape}")
     await user.click(
       screen.getByRole("button", { name: "New session at path" })
     )
     expect(spies.openNewConversationTab).toHaveBeenCalledWith(7, "/x")
   })
 
-  it("keeps organization choice in View options instead of a second tab row", async () => {
+  it("exposes Collection as a one-click header toggle", async () => {
     const user = userEvent.setup()
     renderSidebar()
 
+    const toggle = screen.getByRole("button", { name: "By run location" })
+    expect(toggle).toHaveAttribute("aria-pressed", "true")
+    await user.click(toggle)
     expect(
-      screen.queryByRole("tablist", { name: "Organize sessions" })
-    ).toBeNull()
+      screen.getByRole("button", { name: "By Collection" })
+    ).toHaveAttribute("aria-pressed", "false")
+    expect(localStorage.getItem("workspace:sidebar-organization-mode")).toBe(
+      "locations"
+    )
+
     await user.click(screen.getByRole("button", { name: "View options" }))
     expect(
-      screen.getByRole("menuitemradio", { name: "By run location" })
-    ).toHaveAttribute("aria-checked", "true")
+      screen.queryByRole("menuitemradio", { name: "By run location" })
+    ).toBeNull()
   })
 
   it("falls back to chat mode (never disabled) when no folder is active", () => {

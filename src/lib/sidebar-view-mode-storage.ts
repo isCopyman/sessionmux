@@ -255,20 +255,20 @@ export function saveSortMode(value: SidebarSortMode): void {
 }
 
 /**
- * The primary Session library view. A Session has one execution Folder/cwd, so
- * the established location tree remains the safest default and preserves the
- * path-scoped create/import affordances. Collections are an optional semantic
- * organization view selected from View options; changing it never mutates cwd.
+ * The primary Session library view. Collections keep the execution Folder/cwd
+ * as their root while adding optional semantic nesting beneath it, so they are
+ * the richer default without changing where a Session runs. The location-only
+ * tree remains available as a one-click fallback view.
  */
 export function loadOrganizationMode(): SidebarOrganizationMode {
-  if (typeof window === "undefined") return "locations"
+  if (typeof window === "undefined") return "collections"
   try {
     const raw = localStorage.getItem(ORGANIZATION_MODE_KEY)
     if (raw === "locations" || raw === "collections") return raw
   } catch {
     /* ignore */
   }
-  return "locations"
+  return "collections"
 }
 
 export function saveOrganizationMode(value: SidebarOrganizationMode): void {

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import {
   Crosshair,
+  FolderTree,
   Funnel,
   LibraryBig,
   ListChevronsDownUp,
@@ -168,7 +169,7 @@ export function Sidebar() {
   const [showRecent, setShowRecent] = useState(true)
   const [sortMode, setSortMode] = useState<SidebarSortMode>("created")
   const [organizationMode, setOrganizationMode] =
-    useState<SidebarOrganizationMode>("locations")
+    useState<SidebarOrganizationMode>("collections")
   const [sectionOrder, setSectionOrder] = useState<SidebarSectionOrder>(
     DEFAULT_SECTION_ORDER
   )
@@ -206,11 +207,13 @@ export function Sidebar() {
     setSectionOrder(loadSectionOrder())
   }, [])
 
-  const handleSetOrganizationMode = useCallback((value: string) => {
-    const mode: SidebarOrganizationMode =
-      value === "locations" ? "locations" : "collections"
-    setOrganizationMode(mode)
-    saveOrganizationMode(mode)
+  const handleToggleOrganizationMode = useCallback(() => {
+    setOrganizationMode((current) => {
+      const next: SidebarOrganizationMode =
+        current === "collections" ? "locations" : "collections"
+      saveOrganizationMode(next)
+      return next
+    })
   }, [])
 
   const handleSetShowCompleted = useCallback((value: boolean) => {
@@ -362,6 +365,29 @@ export function Sidebar() {
             window's top edge, so its empty space must move the window. */}
         <div data-tauri-drag-region className="h-full min-w-0 flex-1" />
         <div className="flex items-center gap-0.5">
+          <Button
+            variant="ghost"
+            size="icon"
+            className={cn(
+              "h-6 w-6 shrink-0 text-muted-foreground",
+              organizationMode === "collections" &&
+                "bg-sidebar-primary/10 text-primary"
+            )}
+            onClick={handleToggleOrganizationMode}
+            title={
+              organizationMode === "collections"
+                ? t("organizeByLocations")
+                : t("organizeByCollections")
+            }
+            aria-label={
+              organizationMode === "collections"
+                ? t("organizeByLocations")
+                : t("organizeByCollections")
+            }
+            aria-pressed={organizationMode === "collections"}
+          >
+            <FolderTree aria-hidden="true" className="h-3.5 w-3.5" />
+          </Button>
           {/* Locate the active conversation in the list below (moved here from
               the conversation detail header). Always shown, sitting just before
               the view-options funnel. The sidebar is unmounted while collapsed,
@@ -439,25 +465,6 @@ export function Sidebar() {
                   list, and flipping two of them used to cost two round trips
                   through the trigger. The expand/collapse-all entry above is
                   the one real action here, so it still closes. */}
-              <DropdownMenuLabel>{t("organizeBy")}</DropdownMenuLabel>
-              <DropdownMenuRadioGroup
-                value={organizationMode}
-                onValueChange={handleSetOrganizationMode}
-              >
-                <DropdownMenuRadioItem
-                  value="collections"
-                  onSelect={(event) => event.preventDefault()}
-                >
-                  {t("organizeByCollections")}
-                </DropdownMenuRadioItem>
-                <DropdownMenuRadioItem
-                  value="locations"
-                  onSelect={(event) => event.preventDefault()}
-                >
-                  {t("organizeByLocations")}
-                </DropdownMenuRadioItem>
-              </DropdownMenuRadioGroup>
-              <DropdownMenuSeparator />
               <DropdownMenuCheckboxItem
                 checked={showCompleted}
                 onCheckedChange={handleSetShowCompleted}

@@ -137,15 +137,15 @@ describe("loadShowRecent", () => {
 describe("organization mode", () => {
   beforeEach(() => localStorage.clear())
 
-  it("defaults to execution locations and persists semantic Collections", () => {
-    expect(loadOrganizationMode()).toBe("locations")
-    saveOrganizationMode("collections")
+  it("defaults to semantic Collections and persists execution locations", () => {
     expect(loadOrganizationMode()).toBe("collections")
+    saveOrganizationMode("locations")
+    expect(loadOrganizationMode()).toBe("locations")
   })
 
   it("ignores an unknown stored mode", () => {
     localStorage.setItem("workspace:sidebar-organization-mode", "folders-v0")
-    expect(loadOrganizationMode()).toBe("locations")
+    expect(loadOrganizationMode()).toBe("collections")
   })
 })
 
