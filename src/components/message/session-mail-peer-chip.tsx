@@ -1,5 +1,6 @@
 "use client"
 
+import { Mail } from "lucide-react"
 import { useTranslations } from "next-intl"
 
 import { ReferenceBadge } from "@/components/chat/composer/badges/reference-badge"
@@ -105,6 +106,21 @@ export function SessionMailFromBadge({
         eventId={eventId}
         prefix={t("fromPrefix")}
       />
+    </div>
+  )
+}
+
+export function SessionMailSystemBadge() {
+  const t = useTranslations("Collaboration")
+  return (
+    <div
+      data-mail-system-badge=""
+      className="mb-1 flex w-fit max-w-full items-center self-end text-[0.6875rem] text-muted-foreground"
+    >
+      <span className="inline-flex items-center gap-1 rounded-full border border-border bg-muted/70 px-2 py-0.5 font-medium">
+        <Mail className="h-3 w-3" aria-hidden="true" />
+        {t("fromMailSystem")}
+      </span>
     </div>
   )
 }

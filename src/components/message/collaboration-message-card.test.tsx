@@ -62,6 +62,7 @@ function delivery(
       folderPath: "/repo",
       backend: "current",
     },
+    subject: "Proof review",
     body: "Please check the proof.",
     replyToEventId: null,
     expectsReply: true,
@@ -105,6 +106,7 @@ describe("CollaborationMessageCard", () => {
     expect(screen.getByText("fromPrefix")).toBeInTheDocument()
     expect(screen.getByText("Reviewer")).toBeInTheDocument()
     expect(screen.getByText("#1")).toBeInTheDocument()
+    expect(screen.getByText("Proof review")).toBeInTheDocument()
     expect(screen.getByText("Please check the proof.")).toBeInTheDocument()
     expect(
       document.querySelector("[data-collaboration-direction='inbound']")

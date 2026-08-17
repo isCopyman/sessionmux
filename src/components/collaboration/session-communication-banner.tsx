@@ -1,25 +1,35 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
-import {
-  ArrowUpRight,
-  ChevronDown,
-  ChevronUp,
-  Inbox,
-  MessageSquareMore,
-  RotateCcw,
-  X,
-} from "lucide-react"
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
+import { ArrowUpRight, Inbox, Mail, RotateCcw, Send, X } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { Button } from "@/components/ui/button"
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover"
 import { useTabActions } from "@/contexts/tab-context"
 import {
   useCollaborationFeed,
   type UseCollaborationFeedReturn,
 } from "@/hooks/use-collaboration-feed"
-import { formatConversationTitle } from "@/lib/conversation-title"
+import {
+  formatConversationTitle,
+  letterBodySnippet,
+  letterListPreview,
+  letterSubjectLine,
+  resolveLiveSessionTitle,
+} from "@/lib/conversation-title"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import type { CollaborationDelivery } from "@/lib/types"
+import {
+  isAgentUnread,
+  mailHumanStatus,
+  mailStatusVisual,
+  type MailHumanStatus,
+} from "@/lib/mail-human-status"
+import { groupMailThreads, type MailThread } from "@/lib/mail-threads"
 const COLLABORATION_DISABLED_REASON = "session_collaboration_disabled"
 
 interface SessionCommunicationBannerProps {
@@ -31,12 +41,39 @@ interface SessionCommunicationBannerViewProps extends SessionCommunicationBanner
 }
 
 function participantLabel(
-  participant: CollaborationDelivery["source"],
+  conversationId: number,
+  snapshotTitle: string | null | undefined,
+  liveTitle: string | null | undefined,
   untitled: (values: { id: number }) => string
 ) {
-  return (
-    participant.title?.trim() || untitled({ id: participant.conversationId })
-  )
+  const live = liveTitle?.trim()
+  const snapshot = snapshotTitle?.trim()
+  if (!live && !snapshot) return untitled({ id: conversationId })
+  return resolveLiveSessionTitle({
+    conversationId,
+    liveTitle,
+    snapshotTitle,
+  })
+}
+
+function formatMailTime(iso: string): string {
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return ""
+  const now = new Date()
+  const sameDay =
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate()
+  return sameDay
+    ? date.toLocaleTimeString(undefined, {
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    : date.toLocaleDateString(undefined, { month: "short", day: "numeric" })
+}
+
+function subjectOf(delivery: CollaborationDelivery, untitled: string): string {
+  return letterSubjectLine(delivery.subject) || untitled
 }
 
 export function SessionCommunicationBanner({
@@ -57,6 +94,12 @@ export function SessionCommunicationBannerView({
 }: SessionCommunicationBannerViewProps) {
   const t = useTranslations("Collaboration")
   const [expanded, setExpanded] = useState(false)
+  const [view, setView] = useState<"inbox" | "sent" | "threads">("inbox")
+  const [selectedDeliveryId, setSelectedDeliveryId] = useState<string | null>(
+    null
+  )
+  const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
   const conversations = useAppWorkspaceStore((state) => state.conversations)
   const conversationById = useMemo(
     () =>
@@ -68,6 +111,10 @@ export function SessionCommunicationBannerView({
   const { openTab } = useTabActions()
   const { feed, hydrated, markSeen, dismiss, restore, retry } = collaboration
   const total = feed.inbound.length + feed.outbound.length
+  const inboxUnread = feed.inbound.filter(isAgentUnread).length
+  const inboxAwaiting = feed.inbound.filter(
+    (delivery) => delivery.obligationState === "awaiting_reply"
+  ).length
   const unreadIds = useMemo(
     () =>
       feed.inbound
@@ -79,10 +126,50 @@ export function SessionCommunicationBannerView({
         .map((delivery) => delivery.id),
     [feed.inbound]
   )
+  const threads = useMemo(
+    () => groupMailThreads([...feed.inbound, ...feed.outbound]),
+    [feed.inbound, feed.outbound]
+  )
 
   useEffect(() => {
     if (expanded && unreadIds.length > 0) void markSeen(unreadIds)
   }, [expanded, markSeen, unreadIds])
+
+  useEffect(() => {
+    const node = triggerRef.current
+    if (!node || !expanded) return
+    if (typeof IntersectionObserver === "undefined") return
+    let seenVisible = false
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (!entry) return
+        if (entry.isIntersecting) {
+          seenVisible = true
+          return
+        }
+        if (seenVisible) setExpanded(false)
+      },
+      { threshold: 0.05 }
+    )
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [expanded])
+
+  const visibleDeliveryIds =
+    view === "inbox"
+      ? feed.inbound.map((delivery) => delivery.id)
+      : view === "sent"
+        ? feed.outbound.map((delivery) => delivery.id)
+        : []
+  const activeDeliveryId =
+    selectedDeliveryId && visibleDeliveryIds.includes(selectedDeliveryId)
+      ? selectedDeliveryId
+      : (visibleDeliveryIds[0] ?? null)
+  const activeThreadId =
+    selectedThreadId &&
+    threads.some((thread) => thread.rootEventId === selectedThreadId)
+      ? selectedThreadId
+      : (threads[0]?.rootEventId ?? null)
 
   if (!hydrated || conversationId == null || total === 0) return null
 
@@ -138,6 +225,24 @@ export function SessionCommunicationBannerView({
       : t("stateAwaitingReply")
   }
 
+  const mailStatusLabel = (delivery: CollaborationDelivery) => {
+    const status: MailHumanStatus = mailHumanStatus(delivery)
+    switch (status) {
+      case "failed":
+        return t("mailFailed")
+      case "dismissed":
+        return t("mailDismissed")
+      case "unread":
+        return t("mailUnread")
+      case "read_awaiting":
+        return t("mailReadAwaitingReply")
+      case "replied":
+        return t("mailReplied")
+      case "read":
+        return t("mailRead")
+    }
+  }
+
   const openSession = (targetConversationId: number) => {
     const conversation = conversationById.get(targetConversationId)
     if (!conversation) return
@@ -150,277 +255,410 @@ export function SessionCommunicationBannerView({
     )
   }
 
+  const peerName = (
+    conversationIdValue: number,
+    snapshotTitle: string | null | undefined
+  ) =>
+    participantLabel(
+      conversationIdValue,
+      snapshotTitle,
+      conversationById.get(conversationIdValue)?.title,
+      (values) => t("untitled", values)
+    )
+
+  const statusChip = (delivery: CollaborationDelivery) => {
+    const status = mailHumanStatus(delivery)
+    const tone = mailStatusVisual(status)
+    return (
+      <span
+        data-mail-status={status}
+        className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${tone.chip}`}
+      >
+        {mailStatusLabel(delivery)}
+      </span>
+    )
+  }
+
+  const deliveryActions = (delivery: CollaborationDelivery) => {
+    const peerId =
+      delivery.source.conversationId === conversationId
+        ? delivery.target.conversationId
+        : delivery.source.conversationId
+    return (
+      <div className="flex shrink-0 items-center">
+        {conversationById.has(peerId) ? (
+          <Button
+            type="button"
+            size="icon"
+            variant="ghost"
+            className="h-6 w-6"
+            title={t("openSession")}
+            aria-label={t("openSession")}
+            onClick={() => openSession(peerId)}
+          >
+            <ArrowUpRight className="h-3.5 w-3.5" />
+          </Button>
+        ) : null}
+        {(delivery.state === "failed" ||
+          (delivery.state === "queued" &&
+            delivery.queueState === "paused" &&
+            delivery.queuePausedReason !== COLLABORATION_DISABLED_REASON)) &&
+        delivery.invocationPolicy === "invoke_when_idle" ? (
+          delivery.state === "queued" && delivery.queueState === "paused" ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className="h-6 px-2 text-[11px]"
+              title={t("startProcessing")}
+              aria-label={t("startProcessing")}
+              onClick={() => void retry(delivery.queueItemId || delivery.id)}
+            >
+              {t("startProcessing")}
+            </Button>
+          ) : (
+            <Button
+              type="button"
+              size="icon"
+              variant="ghost"
+              className="h-6 w-6"
+              title={t("retry")}
+              aria-label={t("retry")}
+              onClick={() => void retry(delivery.queueItemId || delivery.id)}
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+            </Button>
+          )
+        ) : null}
+        {delivery.state === "pending" ? (
+          <Button
+            type="button"
+            size="icon"
+            variant="ghost"
+            className="h-6 w-6"
+            title={t("dismiss")}
+            aria-label={t("dismiss")}
+            onClick={() => void dismiss(delivery.id)}
+          >
+            <X className="h-3.5 w-3.5" />
+          </Button>
+        ) : null}
+        {delivery.state === "dismissed" &&
+        delivery.invocationPolicy === "store_only" ? (
+          <Button
+            type="button"
+            size="icon"
+            variant="ghost"
+            className="h-6 w-6"
+            title={t("restore")}
+            aria-label={t("restore")}
+            onClick={() => void restore(delivery.id)}
+          >
+            <RotateCcw className="h-3.5 w-3.5" />
+          </Button>
+        ) : null}
+      </div>
+    )
+  }
+
+  const letterDetail = (
+    delivery: CollaborationDelivery,
+    direction: "inbound" | "outbound"
+  ) => (
+    <div className="space-y-1.5 border-t border-border/60 bg-muted/25 px-2.5 py-2">
+      <div className="flex items-start gap-2">
+        <div className="min-w-0 flex-1">
+          <p className="text-[11px] text-muted-foreground">
+            <span>
+              {direction === "inbound"
+                ? t("from", {
+                    name: peerName(
+                      delivery.source.conversationId,
+                      delivery.source.title
+                    ),
+                  })
+                : t("to", {
+                    name: peerName(
+                      delivery.target.conversationId,
+                      delivery.target.title
+                    ),
+                  })}
+            </span>
+          </p>
+          <p className="mt-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+            {t("letterSubject")}
+          </p>
+          <p className="text-[13px] font-semibold leading-snug">
+            {subjectOf(delivery, t("untitledSubject"))}
+          </p>
+          <div className="mt-1 flex flex-wrap items-center gap-1">
+            {statusChip(delivery)}
+            {replyState(delivery, direction) &&
+            mailHumanStatus(delivery) !== "read_awaiting" &&
+            mailHumanStatus(delivery) !== "replied" ? (
+              <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                {replyState(delivery, direction)}
+              </span>
+            ) : null}
+            {invocationState(delivery) &&
+            delivery.state !== "embedded" &&
+            delivery.state !== "pending" ? (
+              <span className="text-[11px] text-muted-foreground">
+                {invocationState(delivery)}
+              </span>
+            ) : null}
+          </div>
+        </div>
+        {deliveryActions(delivery)}
+      </div>
+      {delivery.body ? (
+        <p
+          data-collaboration-letter-preview={delivery.id}
+          className="rounded-md bg-background/80 px-2.5 py-2 text-[13px] leading-relaxed whitespace-pre-wrap break-words"
+        >
+          {delivery.body}
+        </p>
+      ) : null}
+      {delivery.error ? (
+        <p className="break-words text-[11px] text-destructive">
+          {delivery.error}
+        </p>
+      ) : null}
+      {delivery.interruptError ? (
+        <p className="break-words text-[11px] text-destructive">
+          {delivery.interruptError}
+        </p>
+      ) : null}
+    </div>
+  )
+
+  const renderMailList = (
+    items: CollaborationDelivery[],
+    direction: "inbound" | "outbound",
+    emptyLabel: string
+  ) => {
+    if (items.length === 0) {
+      return (
+        <p className="px-3 py-6 text-center text-xs text-muted-foreground">
+          {emptyLabel}
+        </p>
+      )
+    }
+    return (
+      <div className="max-h-[min(22rem,56vh)] overflow-y-auto">
+        {items.map((delivery) => {
+          const unread = isAgentUnread(delivery)
+          const status = mailHumanStatus(delivery)
+          const tone = mailStatusVisual(status)
+          const peer =
+            direction === "inbound"
+              ? peerName(delivery.source.conversationId, delivery.source.title)
+              : peerName(delivery.target.conversationId, delivery.target.title)
+          const selectedRow = delivery.id === activeDeliveryId
+          const snippet = letterBodySnippet(delivery.body, 56)
+          const subject = subjectOf(delivery, t("untitledSubject"))
+          return (
+            <div
+              key={delivery.id}
+              className={`border-b border-border/50 last:border-b-0 ${
+                selectedRow ? "bg-muted/60" : "hover:bg-muted/35"
+              }`}
+            >
+              <button
+                type="button"
+                aria-current={selectedRow ? "true" : undefined}
+                data-mail-status={status}
+                className="flex w-full items-stretch text-left"
+                onClick={() =>
+                  setSelectedDeliveryId((current) =>
+                    current === delivery.id ? null : delivery.id
+                  )
+                }
+              >
+                <span className={`w-0.5 shrink-0 ${tone.bar}`} />
+                <span className="flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5">
+                  <span
+                    className={`w-[5.5rem] shrink-0 truncate text-[11px] ${
+                      unread
+                        ? "font-semibold text-foreground"
+                        : "text-muted-foreground"
+                    }`}
+                  >
+                    {peer}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate text-[12px] leading-5">
+                    <span className={unread ? "font-semibold" : "font-medium"}>
+                      {subject}
+                    </span>
+                    {snippet ? (
+                      <span className="text-muted-foreground">
+                        {" — "}
+                        {snippet}
+                      </span>
+                    ) : null}
+                  </span>
+                  {statusChip(delivery)}
+                  <span className="w-12 shrink-0 text-right text-[10px] text-muted-foreground">
+                    {formatMailTime(delivery.createdAt)}
+                  </span>
+                </span>
+              </button>
+              {selectedRow ? letterDetail(delivery, direction) : null}
+            </div>
+          )
+        })}
+      </div>
+    )
+  }
+
+  const renderThreadWorkspace = (items: MailThread[]): ReactNode => {
+    if (items.length === 0) {
+      return (
+        <p className="px-3 py-6 text-center text-xs text-muted-foreground">
+          {t("threadsEmpty")}
+        </p>
+      )
+    }
+    return (
+      <div className="max-h-[min(22rem,56vh)] overflow-y-auto">
+        {items.map((thread) => {
+          const latest = thread.items[thread.items.length - 1]
+          const unread = thread.items.some(isAgentUnread)
+          const selectedRow = thread.rootEventId === activeThreadId
+          const latestStatus = latest ? mailHumanStatus(latest) : "read"
+          const tone = mailStatusVisual(latestStatus)
+          return (
+            <div
+              key={thread.rootEventId}
+              className={`border-b border-border/50 last:border-b-0 ${
+                selectedRow ? "bg-muted/60" : "hover:bg-muted/35"
+              }`}
+            >
+              <button
+                type="button"
+                aria-current={selectedRow ? "true" : undefined}
+                className="flex w-full items-stretch text-left"
+                onClick={() =>
+                  setSelectedThreadId((current) =>
+                    current === thread.rootEventId ? null : thread.rootEventId
+                  )
+                }
+              >
+                <span className={`w-0.5 shrink-0 ${tone.bar}`} />
+                <span className="flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5">
+                  <span
+                    className={`min-w-0 flex-1 truncate text-[12px] ${
+                      unread ? "font-semibold" : "font-medium"
+                    }`}
+                  >
+                    {thread.subject}
+                  </span>
+                  <span className="shrink-0 text-[11px] text-muted-foreground">
+                    {t("threadCount", { count: thread.items.length })}
+                  </span>
+                  {latest ? statusChip(latest) : null}
+                </span>
+              </button>
+              {selectedRow ? (
+                <div className="space-y-1.5 px-2 pb-2">
+                  {thread.items.map((delivery) => {
+                    const outbound =
+                      delivery.source.conversationId === conversationId
+                    return (
+                      <article
+                        key={delivery.id}
+                        className="overflow-hidden rounded-md border border-border/70"
+                      >
+                        {letterDetail(
+                          delivery,
+                          outbound ? "outbound" : "inbound"
+                        )}
+                      </article>
+                    )
+                  })}
+                </div>
+              ) : null}
+            </div>
+          )
+        })}
+      </div>
+    )
+  }
+
   return (
     <section
       data-collaboration-banner=""
-      className="border-b border-border/60 bg-background/80 backdrop-blur-sm"
+      className="border-b border-border/60 bg-background/80"
     >
-      <div className="mx-auto max-w-3xl px-4 py-1.5">
-        <div className="flex items-center gap-1">
-          <button
-            type="button"
-            onClick={() => setExpanded((current) => !current)}
-            className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-1 py-1 text-left text-xs transition-colors hover:bg-muted/50"
-          >
-            <MessageSquareMore className="h-4 w-4 text-muted-foreground" />
-            <span className="font-medium">{t("panelTitle")}</span>
-            <span className="text-muted-foreground">
-              {t("messageCount", { count: total })}
-            </span>
-            <span className="ml-auto text-muted-foreground">
-              {expanded ? (
-                <ChevronUp className="h-4 w-4" />
-              ) : (
-                <ChevronDown className="h-4 w-4" />
-              )}
-            </span>
-          </button>
+      <Popover open={expanded} onOpenChange={setExpanded}>
+        <div className="flex items-center px-3 py-1">
+          <PopoverTrigger asChild>
+            <button
+              ref={triggerRef}
+              type="button"
+              className="inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-md px-1.5 py-0.5 text-left text-xs transition-colors hover:bg-muted/60"
+            >
+              <Mail className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              <span className="font-medium">{t("panelTitle")}</span>
+              {inboxUnread > 0 ? (
+                <span className="rounded-full bg-sky-500/15 px-1.5 py-px text-[10px] font-semibold text-sky-700 dark:text-sky-300">
+                  {t("unreadCount", { count: inboxUnread })}
+                </span>
+              ) : null}
+              {inboxAwaiting > 0 ? (
+                <span className="rounded-full bg-amber-500/15 px-1.5 py-px text-[10px] font-semibold text-amber-800 dark:text-amber-300">
+                  {t("awaitingReplyCount", { count: inboxAwaiting })}
+                </span>
+              ) : null}
+              <span className="truncate text-muted-foreground">
+                {t("inboxCount", { count: feed.inbound.length })}
+                {feed.outbound.length > 0
+                  ? ` · ${t("sentCount", { count: feed.outbound.length })}`
+                  : ""}
+              </span>
+            </button>
+          </PopoverTrigger>
         </div>
-
-        {expanded ? (
-          <div className="space-y-3 pb-2 pt-1">
-            {feed.inbound.length > 0 ? (
-              <div className="space-y-1.5">
-                <p className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                  <Inbox className="h-3.5 w-3.5" />
-                  {t("inbound")}
-                </p>
-                {feed.inbound.map((delivery) => (
-                  <article
-                    key={delivery.id}
-                    className="rounded-lg border bg-card/70 px-3 py-2 text-sm"
-                  >
-                    <div className="flex items-start gap-2">
-                      <div className="min-w-0 flex-1">
-                        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
-                          <span className="font-medium">
-                            {t("from", {
-                              name: participantLabel(
-                                delivery.source,
-                                (values) => t("untitled", values)
-                              ),
-                            })}
-                          </span>
-                          <span className="text-muted-foreground">
-                            {delivery.source.agentType || t("unknownHarness")}
-                          </span>
-                          {!delivery.agentReceivedAt &&
-                          delivery.state !== "dismissed" ? (
-                            <span className="h-1.5 w-1.5 rounded-full bg-primary" />
-                          ) : null}
-                          {delivery.urgency === "urgent" ? (
-                            <span className="rounded bg-destructive/10 px-1.5 py-0.5 text-[10px] font-medium text-destructive">
-                              {t("markUrgent")}
-                            </span>
-                          ) : null}
-                          {replyState(delivery, "inbound") ? (
-                            <span
-                              className={
-                                delivery.obligationState === "resolved"
-                                  ? "rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground"
-                                  : "rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-400"
-                              }
-                            >
-                              {replyState(delivery, "inbound")}
-                            </span>
-                          ) : null}
-                        </div>
-                        <p className="mt-1 whitespace-pre-wrap break-words leading-relaxed">
-                          {delivery.body}
-                        </p>
-                        <p className="mt-1 text-[11px] text-muted-foreground">
-                          {invocationState(delivery)}
-                        </p>
-                        {delivery.error ? (
-                          <p className="mt-1 break-words text-[11px] text-destructive">
-                            {delivery.error}
-                          </p>
-                        ) : null}
-                        {delivery.interruptError ? (
-                          <p className="mt-1 break-words text-[11px] text-destructive">
-                            {delivery.interruptError}
-                          </p>
-                        ) : null}
-                      </div>
-                      <div className="flex shrink-0 items-center">
-                        {conversationById.has(
-                          delivery.source.conversationId
-                        ) ? (
-                          <Button
-                            type="button"
-                            size="icon"
-                            variant="ghost"
-                            className="h-7 w-7"
-                            title={t("openSession")}
-                            aria-label={t("openSession")}
-                            onClick={() =>
-                              openSession(delivery.source.conversationId)
-                            }
-                          >
-                            <ArrowUpRight className="h-3.5 w-3.5" />
-                          </Button>
-                        ) : null}
-                        {(delivery.state === "failed" ||
-                          (delivery.state === "queued" &&
-                            delivery.queueState === "paused" &&
-                            delivery.queuePausedReason !==
-                              COLLABORATION_DISABLED_REASON)) &&
-                        delivery.invocationPolicy === "invoke_when_idle" ? (
-                          delivery.state === "queued" &&
-                          delivery.queueState === "paused" ? (
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="ghost"
-                              className="h-7 px-2 text-[11px]"
-                              title={t("startProcessing")}
-                              aria-label={t("startProcessing")}
-                              onClick={() =>
-                                void retry(delivery.queueItemId || delivery.id)
-                              }
-                            >
-                              {t("startProcessing")}
-                            </Button>
-                          ) : (
-                            <Button
-                              type="button"
-                              size="icon"
-                              variant="ghost"
-                              className="h-7 w-7"
-                              title={t("retry")}
-                              aria-label={t("retry")}
-                              onClick={() =>
-                                void retry(delivery.queueItemId || delivery.id)
-                              }
-                            >
-                              <RotateCcw className="h-3.5 w-3.5" />
-                            </Button>
-                          )
-                        ) : null}
-                        {delivery.state === "pending" ? (
-                          <Button
-                            type="button"
-                            size="icon"
-                            variant="ghost"
-                            className="h-7 w-7"
-                            title={t("dismiss")}
-                            aria-label={t("dismiss")}
-                            onClick={() => void dismiss(delivery.id)}
-                          >
-                            <X className="h-3.5 w-3.5" />
-                          </Button>
-                        ) : null}
-                        {delivery.state === "dismissed" &&
-                        delivery.invocationPolicy === "store_only" ? (
-                          <Button
-                            type="button"
-                            size="icon"
-                            variant="ghost"
-                            className="h-7 w-7"
-                            title={t("restore")}
-                            aria-label={t("restore")}
-                            onClick={() => void restore(delivery.id)}
-                          >
-                            <RotateCcw className="h-3.5 w-3.5" />
-                          </Button>
-                        ) : null}
-                      </div>
-                    </div>
-                  </article>
-                ))}
-              </div>
-            ) : null}
-
-            {feed.outbound.length > 0 ? (
-              <div className="space-y-1.5">
-                <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                  {t("outbound")}
-                </p>
-                {feed.outbound.map((delivery) => (
-                  <article
-                    key={delivery.id}
-                    className="rounded-lg border bg-muted/30 px-3 py-2 text-sm"
-                  >
-                    <div className="flex items-start gap-2">
-                      <div className="min-w-0 flex-1">
-                        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
-                          <span className="font-medium">
-                            {t("to", {
-                              name: participantLabel(
-                                delivery.target,
-                                (values) => t("untitled", values)
-                              ),
-                            })}
-                          </span>
-                          <span className="text-muted-foreground">
-                            {delivery.state === "failed"
-                              ? t("stateFailed")
-                              : delivery.state === "dismissed"
-                                ? t("stateDismissedByTarget")
-                                : delivery.attentionState === "opened"
-                                  ? t("stateSeen")
-                                  : t("stateDelivered")}
-                          </span>
-                          {delivery.state !== "failed" &&
-                          delivery.state !== "dismissed" ? (
-                            <span className="text-muted-foreground">
-                              {invocationState(delivery)}
-                            </span>
-                          ) : null}
-                          {delivery.urgency === "urgent" ? (
-                            <span className="rounded bg-destructive/10 px-1.5 py-0.5 text-[10px] font-medium text-destructive">
-                              {t("markUrgent")}
-                            </span>
-                          ) : null}
-                          {replyState(delivery, "outbound") ? (
-                            <span
-                              className={
-                                delivery.obligationState === "resolved"
-                                  ? "rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground"
-                                  : "rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-400"
-                              }
-                            >
-                              {replyState(delivery, "outbound")}
-                            </span>
-                          ) : null}
-                        </div>
-                        <p className="mt-1 whitespace-pre-wrap break-words leading-relaxed">
-                          {delivery.body}
-                        </p>
-                        {delivery.error ? (
-                          <p className="mt-1 break-words text-[11px] text-destructive">
-                            {delivery.error}
-                          </p>
-                        ) : null}
-                        {delivery.interruptError ? (
-                          <p className="mt-1 break-words text-[11px] text-destructive">
-                            {delivery.interruptError}
-                          </p>
-                        ) : null}
-                      </div>
-                      {conversationById.has(delivery.target.conversationId) ? (
-                        <Button
-                          type="button"
-                          size="icon"
-                          variant="ghost"
-                          className="h-7 w-7 shrink-0"
-                          title={t("openSession")}
-                          aria-label={t("openSession")}
-                          onClick={() =>
-                            openSession(delivery.target.conversationId)
-                          }
-                        >
-                          <ArrowUpRight className="h-3.5 w-3.5" />
-                        </Button>
-                      ) : null}
-                    </div>
-                  </article>
-                ))}
-              </div>
-            ) : null}
+        <PopoverContent
+          align="start"
+          sideOffset={4}
+          data-mailbox-panel=""
+          className="w-[min(28rem,calc(100vw-1.25rem))] gap-0 overflow-hidden rounded-xl p-0"
+        >
+          <div role="tablist" className="flex gap-0.5 border-b bg-muted/40 p-1">
+            {(
+              [
+                ["inbox", t("inboxLabel"), Inbox],
+                ["sent", t("sentLabel"), Send],
+                ["threads", t("threadsLabel"), Mail],
+              ] as const
+            ).map(([id, label, Icon]) => (
+              <button
+                key={id}
+                type="button"
+                role="tab"
+                aria-selected={view === id}
+                className={`inline-flex flex-1 items-center justify-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium ${
+                  view === id
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+                onClick={() => setView(id)}
+              >
+                <Icon className="h-3 w-3" aria-hidden="true" />
+                {label}
+              </button>
+            ))}
           </div>
-        ) : null}
-      </div>
+          {view === "inbox"
+            ? renderMailList(feed.inbound, "inbound", t("inboxEmpty"))
+            : null}
+          {view === "sent"
+            ? renderMailList(feed.outbound, "outbound", t("sentEmpty"))
+            : null}
+          {view === "threads" ? renderThreadWorkspace(threads) : null}
+        </PopoverContent>
+      </Popover>
     </section>
   )
 }
@@ -434,6 +672,14 @@ export function SessionPendingContextBar({
 }: SessionPendingContextBarProps) {
   const t = useTranslations("Collaboration")
   const [expanded, setExpanded] = useState(false)
+  const conversations = useAppWorkspaceStore((state) => state.conversations)
+  const conversationById = useMemo(
+    () =>
+      new Map(
+        conversations.map((conversation) => [conversation.id, conversation])
+      ),
+    [conversations]
+  )
   const { feed, hydrated, markSeen, dismiss } = collaboration
   const pending = useMemo(
     () =>
@@ -480,19 +726,27 @@ export function SessionPendingContextBar({
         </Button>
       </div>
       {expanded ? (
-        <div className="divide-y border-t border-amber-500/20">
+        <div className="max-h-40 divide-y overflow-y-auto border-t border-amber-500/20">
           {pending.map((delivery) => (
             <div key={delivery.id} className="flex items-start gap-2 px-3 py-2">
               <div className="min-w-0 flex-1">
                 <p className="font-medium">
                   {t("from", {
-                    name: participantLabel(delivery.source, (values) =>
-                      t("untitled", values)
+                    name: participantLabel(
+                      delivery.source.conversationId,
+                      delivery.source.title,
+                      conversationById.get(delivery.source.conversationId)
+                        ?.title,
+                      (values) => t("untitled", values)
                     ),
                   })}
                 </p>
-                <p className="mt-0.5 max-h-10 overflow-hidden whitespace-pre-wrap break-words text-muted-foreground">
-                  {delivery.body}
+                <p className="mt-0.5 truncate font-medium">
+                  {subjectOf(delivery, t("untitledSubject"))}
+                </p>
+                <p className="truncate text-muted-foreground">
+                  {letterBodySnippet(delivery.body) ||
+                    letterListPreview(delivery.subject, delivery.body)}
                 </p>
               </div>
               <Button

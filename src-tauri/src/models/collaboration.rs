@@ -207,6 +207,8 @@ pub struct CollaborationDeliveryView {
     pub event_id: String,
     pub source: CollaborationSessionSnapshot,
     pub target: CollaborationSessionSnapshot,
+    #[serde(default)]
+    pub subject: String,
     pub body: String,
     pub reply_to_event_id: Option<String>,
     pub expects_reply: bool,
@@ -294,6 +296,9 @@ pub struct CollaborationUnreadOverview {
 pub struct SendCollaborationMessageInput {
     pub source_conversation_id: i32,
     pub target_conversation_ids: Vec<i32>,
+    /// Email-style letter title. Required for new mail.
+    #[serde(default)]
+    pub subject: String,
     pub body: String,
     pub client_dedupe_id: String,
     #[serde(default = "default_invocation_policy")]
@@ -306,6 +311,29 @@ pub struct SendCollaborationMessageInput {
     pub urgency: CollaborationUrgency,
     #[serde(default)]
     pub reply_to_event_id: Option<String>,
+}
+
+impl SendCollaborationMessageInput {
+    pub fn letter(
+        source_conversation_id: i32,
+        target_conversation_ids: Vec<i32>,
+        client_dedupe_id: impl Into<String>,
+        subject: impl Into<String>,
+        body: impl Into<String>,
+    ) -> Self {
+        Self {
+            source_conversation_id,
+            target_conversation_ids,
+            subject: subject.into(),
+            body: body.into(),
+            client_dedupe_id: client_dedupe_id.into(),
+            invocation_policy: default_invocation_policy(),
+            delivery_hint: default_delivery_hint(),
+            expects_reply: false,
+            urgency: default_urgency(),
+            reply_to_event_id: None,
+        }
+    }
 }
 
 fn default_invocation_policy() -> CollaborationInvocationPolicy {

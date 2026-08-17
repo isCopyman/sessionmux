@@ -938,6 +938,7 @@ mod tests {
         SendCollaborationMessageInput {
             source_conversation_id,
             target_conversation_ids: vec![target_conversation_id],
+            subject: "Test letter".into(),
             body: body.to_string(),
             client_dedupe_id: dedupe.to_string(),
             invocation_policy: CollaborationInvocationPolicy::InvokeWhenIdle,
@@ -1045,6 +1046,7 @@ mod tests {
             SendCollaborationMessageInput {
                 source_conversation_id: source,
                 target_conversation_ids: vec![target],
+            subject: "Test letter".into(),
                 body: "PING idle".into(),
                 client_dedupe_id: "idle-inject".into(),
                 invocation_policy: CollaborationInvocationPolicy::StoreOnly,
@@ -1091,6 +1093,7 @@ mod tests {
             SendCollaborationMessageInput {
                 source_conversation_id: source,
                 target_conversation_ids: vec![target],
+            subject: "Test letter".into(),
                 body: "PING steer".into(),
                 client_dedupe_id: "busy-steer".into(),
                 invocation_policy: CollaborationInvocationPolicy::StoreOnly,
@@ -1137,6 +1140,7 @@ mod tests {
             SendCollaborationMessageInput {
                 source_conversation_id: source,
                 target_conversation_ids: vec![target],
+            subject: "Test letter".into(),
                 body: "PING park".into(),
                 client_dedupe_id: "busy-park".into(),
                 invocation_policy: CollaborationInvocationPolicy::StoreOnly,
@@ -1186,6 +1190,7 @@ mod tests {
             SendCollaborationMessageInput {
                 source_conversation_id: source,
                 target_conversation_ids: vec![target],
+            subject: "Test letter".into(),
                 body: "PING after long task".into(),
                 client_dedupe_id: "idle-wakeup".into(),
                 invocation_policy: CollaborationInvocationPolicy::StoreOnly,
@@ -1353,6 +1358,7 @@ mod tests {
             SendCollaborationMessageInput {
                 source_conversation_id: source,
                 target_conversation_ids: vec![target],
+            subject: "Test letter".into(),
                 body: "already consumed".into(),
                 client_dedupe_id: "no-replay".into(),
                 invocation_policy: CollaborationInvocationPolicy::StoreOnly,

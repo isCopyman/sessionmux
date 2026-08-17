@@ -144,10 +144,10 @@
   },
   {
     "name": "send_message",
-    "description": "Send a durable mailbox message from this persistent Session to one or more existing Codeg Sessions by stable numeric id. This is Session-to-Session communication, not delegation: the target keeps its own full conversation, receives a compact event notification, and reads the immutable body with read_message(event_id). Default delivery_mode is queue: persist first, then let the target's EXISTING runtime process the notification when idle; Codeg never cold-starts a closed Session. deliver_only persists and displays the message without starting a target turn. delivery_hint=steer_if_supported is non-destructive: Codeg injects only the notification through a proven native steering channel, otherwise it remains in the durable queue. A queued or delivered result does NOT mean the target has read, completed, or answered it. For a request that needs an answer, keep expects_reply true (the default). To answer an inbound message, target only its from_session_id and set reply_to_event_id to its event_id. Use expects_reply false for FYI/notifications. Do not invent names, parse plain-text @ mentions yourself, or send to the calling Session.",
+    "description": "Send a durable mailbox letter from this persistent Session to one or more existing Codeg Sessions by stable numeric id. Letters have a short title (like an email subject) and a body. The target receives a Codeg system notice with the title only; it must call read_message(event_id) to open the body. This is Session-to-Session communication, not delegation. Default delivery_mode is queue: persist first, then let the target's EXISTING runtime process the notice when idle; Codeg never cold-starts a closed Session. deliver_only persists and displays without starting a target turn. A queued or delivered result does NOT mean the target has read or answered. For a request that needs an answer, keep expects_reply true (the default). To answer, target only from_session_id and set reply_to_event_id. Do not invent names or send to the calling Session.",
     "inputSchema": {
       "type": "object",
-      "required": ["target_session_ids", "content"],
+      "required": ["target_session_ids", "title", "content"],
       "properties": {
         "target_session_ids": {
           "type": "array",
@@ -156,10 +156,16 @@
           "items": { "type": "integer", "minimum": 1 },
           "description": "One or more stable numeric Session ids from a codeg://session/<id> reference or list_sessions."
         },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "Short letter title, like an email subject. Shown in list_inbox and system reminders. Do not put the full body here."
+        },
         "content": {
           "type": "string",
           "minLength": 1,
-          "description": "The complete message the target Session needs. Only this content and source metadata are delivered; the target does not inherit your whole transcript."
+          "description": "The letter body. Only returned by read_message; not copied into the system notice or list_inbox."
         },
         "delivery_mode": {
           "type": "string",
@@ -184,7 +190,7 @@
   },
   {
     "name": "list_inbox",
-    "description": "List this Session's Agent mailbox. Default filter is open: unread letters plus letters that still expect a reply. Results are newest first and include a short preview only — call read_message with event_id to open a letter. Listing does not mark mail as read. A human opening the Session or the 往来 strip never consumes this mailbox.",
+    "description": "List this Session's Agent mailbox. Default filter is open: unread letters plus letters that still expect a reply. Results are newest first and include the letter title only — call read_message with event_id to open the body. Listing does not mark mail as read. A human opening the Session never consumes this mailbox.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -204,7 +210,7 @@
   },
   {
     "name": "read_message",
-    "description": "Open one inbound Agent mailbox letter by event_id and return its full body. Opening marks the letter read for this Agent so unread reminders stop. It does not send a reply and does not clear a reply obligation. If expects_reply is true, answer with send_message targeting from_session_id and setting reply_to_event_id. Do not invent event ids.",
+    "description": "Open one inbound Agent mailbox letter by event_id and return its title and full body. Opening marks the letter read for this Agent so unread reminders stop. It does not send a reply and does not clear a reply obligation. If expects_reply is true, answer with send_message targeting from_session_id and setting reply_to_event_id. Do not invent event ids.",
     "inputSchema": {
       "type": "object",
       "required": ["event_id"],

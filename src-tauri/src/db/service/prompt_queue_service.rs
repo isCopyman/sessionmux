@@ -1362,6 +1362,7 @@ mod tests {
             SendCollaborationMessageInput {
                 source_conversation_id: source,
                 target_conversation_ids: vec![target],
+            subject: "Test letter".into(),
                 body: "immutable external input".to_string(),
                 client_dedupe_id: "protected-origin".to_string(),
                 invocation_policy: CollaborationInvocationPolicy::InvokeWhenIdle,
@@ -1600,6 +1601,7 @@ mod tests {
             SendCollaborationMessageInput {
                 source_conversation_id: source,
                 target_conversation_ids: vec![target],
+            subject: "Test letter".into(),
                 body: "possibly accepted".to_string(),
                 client_dedupe_id: "unknown-collaboration-dispatch".to_string(),
                 invocation_policy: CollaborationInvocationPolicy::InvokeWhenIdle,
@@ -1656,6 +1658,7 @@ mod tests {
             SendCollaborationMessageInput {
                 source_conversation_id: source,
                 target_conversation_ids: vec![target],
+            subject: "Test letter".into(),
                 body: "retry with a new turn identity".to_string(),
                 client_dedupe_id: "collaboration-retry-identity".to_string(),
                 invocation_policy: CollaborationInvocationPolicy::InvokeWhenIdle,
@@ -1711,6 +1714,7 @@ mod tests {
             SendCollaborationMessageInput {
                 source_conversation_id: source,
                 target_conversation_ids: vec![target],
+            subject: "Test letter".into(),
                 body: "wait for an explicit start".to_string(),
                 client_dedupe_id: "inactive-collaboration-confirmation".to_string(),
                 invocation_policy: CollaborationInvocationPolicy::InvokeWhenIdle,
@@ -1765,6 +1769,7 @@ mod tests {
             SendCollaborationMessageInput {
                 source_conversation_id: source,
                 target_conversation_ids: vec![target],
+            subject: "Test letter".into(),
                 body: "freeze this cross-session request".to_string(),
                 client_dedupe_id: "collaboration-policy-freeze".to_string(),
                 invocation_policy: CollaborationInvocationPolicy::InvokeWhenIdle,
@@ -1842,6 +1847,7 @@ mod tests {
             SendCollaborationMessageInput {
                 source_conversation_id: source,
                 target_conversation_ids: vec![target],
+            subject: "Test letter".into(),
                 body: "must stop before the harness".to_string(),
                 client_dedupe_id: "collaboration-policy-boundary".to_string(),
                 invocation_policy: CollaborationInvocationPolicy::InvokeWhenIdle,

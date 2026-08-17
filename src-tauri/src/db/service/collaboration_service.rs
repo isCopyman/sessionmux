@@ -178,7 +178,8 @@ const DELIVERY_SELECT: &str = "SELECT d.id, d.event_id, d.target_conversation_id
             i.state AS interrupt_state, i.error AS interrupt_error, \
             d.created_at, d.updated_at, e.source_conversation_id, \
             e.source_title_snapshot, e.source_agent_type_snapshot, \
-            e.source_folder_path_snapshot, e.source_backend_snapshot, e.body, \
+            e.source_folder_path_snapshot, e.source_backend_snapshot, \
+            e.subject, e.body, \
             e.reply_to_event_id, e.expects_reply, \
             EXISTS (SELECT 1 FROM collaboration_event reply \
               WHERE reply.reply_to_event_id = e.id \
@@ -254,6 +255,9 @@ fn parse_delivery(row: &QueryResult) -> Result<CollaborationDeliveryView, DbErro
             folder_path: row.try_get("", "target_folder_path_snapshot")?,
             backend: "current".to_string(),
         },
+        subject: row
+            .try_get::<Option<String>>("", "subject")?
+            .unwrap_or_default(),
         body: row.try_get("", "body")?,
         reply_to_event_id: row.try_get("", "reply_to_event_id")?,
         expects_reply: expects_reply != 0,
@@ -324,17 +328,24 @@ async fn validate_dedupe_payload<C: ConnectionTrait>(
 ) -> Result<(), DbError> {
     let row = conn
         .query_one(statement(
-            "SELECT body, reply_to_event_id, expects_reply, urgency \
+            "SELECT subject, body, reply_to_event_id, expects_reply, urgency \
              FROM collaboration_event WHERE id = ?",
             vec![event_id.into()],
         ))
         .await?
         .ok_or_else(|| DbError::NotFound(format!("Collaboration event {event_id}")))?;
+    let subject: String = row
+        .try_get::<Option<String>>("", "subject")?
+        .unwrap_or_default();
     let body: String = row.try_get("", "body")?;
     let reply_to: Option<String> = row.try_get("", "reply_to_event_id")?;
     let expects_reply: i64 = row.try_get("", "expects_reply")?;
     let urgency: String = row.try_get("", "urgency")?;
-    if body != input.body
+    let expected_subject =
+        crate::acp::session_collaboration::normalize_letter_title(&input.subject)
+            .unwrap_or_else(|_| input.subject.trim().to_string());
+    if subject != expected_subject
+        || body != input.body
         || reply_to != input.reply_to_event_id
         || (expects_reply != 0) != input.expects_reply
         || urgency != input.urgency.as_str()
@@ -402,6 +413,8 @@ pub(crate) async fn child_chain_depth<C: ConnectionTrait>(
 }
 
 fn validate_input(input: &SendCollaborationMessageInput) -> Result<Vec<i32>, DbError> {
+    crate::acp::session_collaboration::normalize_letter_title(&input.subject)
+        .map_err(validation)?;
     if input.body.trim().is_empty() {
         return Err(validation("Collaboration message body cannot be empty"));
     }
@@ -449,33 +462,47 @@ fn prompt_draft_from_delivery_row(row: &QueryResult) -> Result<PromptQueueDraft,
     let source_folder_path: Option<String> = row.try_get("", "source_folder_path_snapshot")?;
     let reply_to_event_id: Option<String> = row.try_get("", "reply_to_event_id")?;
     let expects_reply: i64 = row.try_get("", "effective_expects_reply")?;
+    let subject: String = row
+        .try_get::<Option<String>>("", "subject")?
+        .unwrap_or_default();
+    let body: String = row.try_get::<Option<String>>("", "body")?.unwrap_or_default();
+    let letter_title =
+        crate::acp::session_collaboration::letter_title(&subject, &body);
+    let source_label = source_title
+        .as_deref()
+        .filter(|title| !title.trim().is_empty())
+        .unwrap_or("Untitled Session");
     let metadata = serde_json::json!({
         "version": ENVELOPE_VERSION,
+        "kind": "system_notify",
         "eventId": event_id,
         "deliveryId": delivery_id,
         "sourceConversationId": source_conversation_id,
         "sourceTitle": source_title,
         "sourceAgentType": source_agent_type,
         "sourceFolderPath": source_folder_path,
+        "letterTitle": letter_title,
         "expectsReply": expects_reply != 0,
         "replyToEventId": reply_to_event_id,
     });
     let metadata = serde_json::to_string(&metadata)
         .map_err(|err| validation(format!("Could not serialize collaboration envelope: {err}")))?;
+    let reply_hint = if expects_reply != 0 {
+        " This letter expects a reply after you read it."
+    } else {
+        ""
+    };
     let text = format!(
         "{ENVELOPE_PREFIX}{event_id}>>>\n{metadata}\n\
-This is a durable mailbox notification from another persistent Session. The message body is not duplicated into this prompt.\n\
-Call read_message with event_id={event_id} to read the full message. If it expects a reply, answer with send_message to sourceConversationId and set reply_to_event_id={event_id}.\n\
+This is a Codeg system mailbox notice. It is not a message from Session {source_conversation_id}. The letter body is not in this prompt.\n\
+Unread from {source_label} (#{source_conversation_id}): 《{letter_title}》.{reply_hint}\n\
+Call list_inbox to see titles. Call read_message with event_id={event_id} to open the body. If a reply is needed, send_message to sourceConversationId and set reply_to_event_id={event_id}.\n\
 --- message ---\n\
 {ENVELOPE_END_PREFIX}{event_id}>>>"
     );
-    let source_label = source_title
-        .as_deref()
-        .filter(|title| !title.trim().is_empty())
-        .unwrap_or("Untitled Session");
     Ok(PromptQueueDraft {
         blocks: vec![PromptInputBlock::Text { text }],
-        display_text: format!("New Session message from {source_label}"),
+        display_text: format!("Codeg mailbox: {letter_title}"),
     })
 }
 
@@ -490,7 +517,8 @@ pub(crate) async fn prompt_draft_for_origin<C: ConnectionTrait>(
                     CASE WHEN d.obligation_state = 'awaiting_reply' THEN 1 ELSE 0 END \
                         AS effective_expects_reply, \
                     e.source_conversation_id, e.source_title_snapshot, \
-                    e.source_agent_type_snapshot, e.source_folder_path_snapshot \
+                    e.source_agent_type_snapshot, e.source_folder_path_snapshot, \
+                    e.subject, e.body \
              FROM collaboration_delivery d \
              JOIN collaboration_event e ON e.id = d.event_id \
              WHERE d.event_id = ? AND d.target_conversation_id = ? \
@@ -544,7 +572,8 @@ pub(crate) async fn claim_pending_store_only_for_turn(
                         CASE WHEN d.obligation_state = 'awaiting_reply' THEN 1 ELSE 0 END \
                             AS effective_expects_reply, \
                         e.source_conversation_id, e.source_title_snapshot, \
-                        e.source_agent_type_snapshot, e.source_folder_path_snapshot \
+                        e.source_agent_type_snapshot, e.source_folder_path_snapshot, \
+                        e.subject, e.body \
                  FROM collaboration_delivery d \
                  JOIN collaboration_event e ON e.id = d.event_id \
                  WHERE d.target_conversation_id = ? \
@@ -915,6 +944,7 @@ pub(crate) async fn auto_reply_for_completed_turn(
         SendCollaborationMessageInput {
             source_conversation_id: target_conversation_id,
             target_conversation_ids: vec![original_source_conversation_id],
+            subject: "Auto reply".into(),
             body,
             // The completed queue message id contains the execution attempt.
             // A real retry is a second turn and must be allowed to publish its
@@ -1081,13 +1111,15 @@ async fn send_with_initially_inactive_targets_guarded(
     }
 
     let event_id = uuid::Uuid::new_v4().to_string();
+    let subject = crate::acp::session_collaboration::normalize_letter_title(&input.subject)
+        .map_err(validation)?;
     let inserted = if let Some(guard) = reply_guard.as_ref() {
         txn.execute(statement(
             "INSERT OR IGNORE INTO collaboration_event \
              (id, source_conversation_id, source_title_snapshot, source_agent_type_snapshot, \
-              source_folder_path_snapshot, source_backend_snapshot, body, reply_to_event_id, \
+              source_folder_path_snapshot, source_backend_snapshot, subject, body, reply_to_event_id, \
               expects_reply, urgency, client_dedupe_id, chain_depth, created_at) \
-             SELECT ?, ?, ?, ?, ?, 'current', ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP \
+             SELECT ?, ?, ?, ?, ?, 'current', ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP \
              WHERE NOT EXISTS ( \
                  SELECT 1 FROM collaboration_event reply \
                  WHERE reply.reply_to_event_id = ? \
@@ -1099,6 +1131,7 @@ async fn send_with_initially_inactive_targets_guarded(
                 source.title.clone().into(),
                 source.agent_type.clone().into(),
                 source.folder_path.clone().into(),
+                subject.clone().into(),
                 input.body.clone().into(),
                 input.reply_to_event_id.clone().into(),
                 (input.expects_reply as i32).into(),
@@ -1114,15 +1147,16 @@ async fn send_with_initially_inactive_targets_guarded(
         txn.execute(statement(
             "INSERT OR IGNORE INTO collaboration_event \
          (id, source_conversation_id, source_title_snapshot, source_agent_type_snapshot, \
-          source_folder_path_snapshot, source_backend_snapshot, body, reply_to_event_id, \
+          source_folder_path_snapshot, source_backend_snapshot, subject, body, reply_to_event_id, \
           expects_reply, urgency, client_dedupe_id, chain_depth, created_at) \
-         VALUES (?, ?, ?, ?, ?, 'current', ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
+         VALUES (?, ?, ?, ?, ?, 'current', ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
             vec![
                 event_id.clone().into(),
                 source.id.into(),
                 source.title.clone().into(),
                 source.agent_type.clone().into(),
                 source.folder_path.clone().into(),
+                subject.clone().into(),
                 input.body.clone().into(),
                 input.reply_to_event_id.clone().into(),
                 (input.expects_reply as i32).into(),
@@ -1574,6 +1608,7 @@ pub struct ReminderTargetSnapshot {
     pub overdue_reply: u32,
     pub reminder_repeat_count: u32,
     pub reminder_last_at: Option<DateTime<Utc>>,
+    pub letters: Vec<crate::acp::collaboration_reminder::ReminderLetterLine>,
 }
 
 /// Sessions whose Agent mailbox is overdue for a host reminder.
@@ -1627,15 +1662,73 @@ pub async fn list_overdue_reminder_targets(
         if reminder_last_at.is_some_and(|at| reminder_in_cooldown(at, now)) {
             continue;
         }
+        let conversation_id: i32 = row.try_get("", "conversation_id")?;
         targets.push(ReminderTargetSnapshot {
-            conversation_id: row.try_get("", "conversation_id")?,
+            conversation_id,
             overdue_unread: count("overdue_unread")?,
             overdue_reply: count("overdue_reply")?,
             reminder_repeat_count,
             reminder_last_at,
+            letters: Vec::new(),
         });
     }
+    for target in &mut targets {
+        target.letters = overdue_reminder_letters(conn, target.conversation_id).await?;
+    }
     Ok(targets)
+}
+
+async fn overdue_reminder_letters(
+    conn: &DatabaseConnection,
+    conversation_id: i32,
+) -> Result<Vec<crate::acp::collaboration_reminder::ReminderLetterLine>, DbError> {
+    use crate::acp::collaboration_reminder::{REPLY_AFTER_SECS, UNREAD_AFTER_SECS};
+    let rows = conn
+        .query_all(statement(
+            &format!(
+                "SELECT e.id AS event_id, e.subject, e.body, \
+                        e.source_conversation_id, e.source_title_snapshot, \
+                        CASE WHEN d.obligation_state = 'awaiting_reply' \
+                             AND d.agent_received_at IS NOT NULL \
+                             AND d.agent_received_at <= datetime('now', '-{REPLY_AFTER_SECS} seconds') \
+                             THEN 1 ELSE 0 END AS awaiting_reply \
+                 FROM collaboration_delivery d \
+                 JOIN collaboration_event e ON e.id = d.event_id \
+                 WHERE d.target_conversation_id = ? \
+                   AND d.invocation_policy = 'invoke_when_idle' \
+                   AND d.state <> 'dismissed' \
+                   AND ( \
+                        (d.agent_received_at IS NULL \
+                         AND d.created_at <= datetime('now', '-{UNREAD_AFTER_SECS} seconds')) \
+                     OR (d.obligation_state = 'awaiting_reply' \
+                         AND d.agent_received_at IS NOT NULL \
+                         AND d.agent_received_at <= datetime('now', '-{REPLY_AFTER_SECS} seconds')) \
+                   ) \
+                 ORDER BY d.created_at ASC LIMIT 8"
+            ),
+            vec![conversation_id.into()],
+        ))
+        .await?;
+    let mut letters = Vec::new();
+    for row in rows {
+        let subject: String = row
+            .try_get::<Option<String>>("", "subject")?
+            .unwrap_or_default();
+        let body: String = row.try_get::<Option<String>>("", "body")?.unwrap_or_default();
+        let from_title: Option<String> = row.try_get("", "source_title_snapshot")?;
+        let from_session_id: i32 = row.try_get("", "source_conversation_id")?;
+        let awaiting: i64 = row.try_get("", "awaiting_reply")?;
+        letters.push(crate::acp::collaboration_reminder::ReminderLetterLine {
+            event_id: row.try_get("", "event_id")?,
+            from_session_id,
+            from_title: from_title
+                .filter(|title| !title.trim().is_empty())
+                .unwrap_or_else(|| format!("Session {from_session_id}")),
+            letter_title: crate::acp::session_collaboration::letter_title(&subject, &body),
+            awaiting_reply: awaiting != 0,
+        });
+    }
+    Ok(letters)
 }
 
 pub async fn record_successful_reminder(
@@ -1881,17 +1974,7 @@ mod tests {
         dedupe: &str,
         body: &str,
     ) -> SendCollaborationMessageInput {
-        SendCollaborationMessageInput {
-            source_conversation_id: source,
-            target_conversation_ids: targets,
-            body: body.to_string(),
-            client_dedupe_id: dedupe.to_string(),
-            invocation_policy: CollaborationInvocationPolicy::StoreOnly,
-            delivery_hint: CollaborationDeliveryHint::Default,
-            expects_reply: false,
-            urgency: CollaborationUrgency::Normal,
-            reply_to_event_id: None,
-        }
+        SendCollaborationMessageInput::letter(source, targets, dedupe, "Test letter", body)
     }
 
     fn invoke_input(
@@ -2071,6 +2154,7 @@ mod tests {
         assert!(attached[0].contains(&first.event_id));
         assert!(attached[1].contains(&second.event_id));
         assert!(attached.iter().all(|text| text.contains("Call read_message")));
+        assert!(attached.iter().all(|text| text.contains("Codeg system mailbox notice")));
         assert!(attached.iter().all(|text| !text.contains("review note")));
         assert!(
             claim_pending_store_only_for_turn(&db.conn, target, "another-turn")

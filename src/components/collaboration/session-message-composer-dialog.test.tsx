@@ -98,6 +98,9 @@ describe("SessionMessageComposerDialog", () => {
     expect(screen.getByTitle("completed")).toBeInTheDocument()
     fireEvent.click(screen.getByRole("button", { name: /Reviewer/ }))
     fireEvent.click(screen.getByRole("button", { name: /Researcher/ }))
+    fireEvent.change(screen.getByPlaceholderText("letterTitlePlaceholder"), {
+      target: { value: "Compare claims" },
+    })
     fireEvent.change(screen.getByPlaceholderText("bodyPlaceholder"), {
       target: { value: "Please compare these claims" },
     })
@@ -108,6 +111,7 @@ describe("SessionMessageComposerDialog", () => {
       expect.objectContaining({
         sourceConversationId: 1,
         targetConversationIds: [2, 3],
+        subject: "Compare claims",
         body: "Please compare these claims",
         clientDedupeId: expect.any(String),
         invocationPolicy: "store_only",
@@ -136,6 +140,9 @@ describe("SessionMessageComposerDialog", () => {
     ).not.toBeInTheDocument()
     expect(screen.getByRole("button", { name: /Reviewer/ })).toBeDisabled()
 
+    fireEvent.change(screen.getByPlaceholderText("letterTitlePlaceholder"), {
+      target: { value: "Resolved" },
+    })
     fireEvent.change(screen.getByPlaceholderText("bodyPlaceholder"), {
       target: { value: "That resolves the concern" },
     })
@@ -146,6 +153,7 @@ describe("SessionMessageComposerDialog", () => {
       expect.objectContaining({
         sourceConversationId: 1,
         targetConversationIds: [2],
+        subject: "Resolved",
         body: "That resolves the concern",
         replyToEventId: "event-original",
       })
@@ -178,6 +186,9 @@ describe("SessionMessageComposerDialog", () => {
     )
     fireEvent.click(screen.getByRole("radio", { name: "invokeWhenIdle" }))
     fireEvent.click(screen.getByRole("button", { name: /Reviewer/ }))
+    fireEvent.change(screen.getByPlaceholderText("letterTitlePlaceholder"), {
+      target: { value: "After this turn" },
+    })
     fireEvent.change(screen.getByPlaceholderText("bodyPlaceholder"), {
       target: { value: "Read this after the current turn" },
     })
@@ -202,6 +213,9 @@ describe("SessionMessageComposerDialog", () => {
     )
     fireEvent.click(screen.getByRole("button", { name: /Reviewer/ }))
     fireEvent.click(screen.getByRole("checkbox", { name: "requestReply" }))
+    fireEvent.change(screen.getByPlaceholderText("letterTitlePlaceholder"), {
+      target: { value: "Need a review" },
+    })
     fireEvent.change(screen.getByPlaceholderText("bodyPlaceholder"), {
       target: { value: "Review this and report the result" },
     })
@@ -250,6 +264,9 @@ describe("SessionMessageComposerDialog", () => {
     )
 
     expect(screen.getByText("selectedCount:count=2")).toBeInTheDocument()
+    fireEvent.change(screen.getByPlaceholderText("letterTitlePlaceholder"), {
+      target: { value: "Compare claims" },
+    })
     fireEvent.click(screen.getByRole("button", { name: /^send$/ }))
 
     await waitFor(() => expect(api.send).toHaveBeenCalledTimes(1))
@@ -257,6 +274,7 @@ describe("SessionMessageComposerDialog", () => {
       expect.objectContaining({
         sourceConversationId: 1,
         targetConversationIds: expect.arrayContaining([2, 3]),
+        subject: "Compare claims",
         body: "Please compare these claims",
       })
     )
@@ -274,6 +292,9 @@ describe("SessionMessageComposerDialog", () => {
         onSent={onSent}
       />
     )
+    fireEvent.change(screen.getByPlaceholderText("letterTitlePlaceholder"), {
+      target: { value: "Compare claims" },
+    })
     fireEvent.click(screen.getByRole("button", { name: /^send$/ }))
 
     await waitFor(() => expect(onSent).toHaveBeenCalledWith({ count: 2 }))

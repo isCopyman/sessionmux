@@ -1031,6 +1031,7 @@ mod tests {
                 token: "tok".into(),
                 spec: crate::acp::session_collaboration::SessionMessageSpec {
                     target_session_ids: vec![7],
+                    title: "Review".into(),
                     content: "review".into(),
                     delivery_mode:
                         crate::acp::session_collaboration::SessionMessageDeliveryMode::Queue,

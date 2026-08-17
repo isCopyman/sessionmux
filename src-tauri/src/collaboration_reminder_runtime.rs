@@ -9,8 +9,8 @@ use std::time::Duration;
 use sea_orm::DatabaseConnection;
 
 use crate::acp::collaboration_reminder::{
-    choose_reminder_lane, reminder_digest_text, CollaborationReminderLane, ReminderAudience,
-    ReminderRuntime, ReminderTargetState, REMINDER_SCAN_SECS,
+    choose_reminder_lane, reminder_digest_text_with_letters, CollaborationReminderLane,
+    ReminderAudience, ReminderRuntime, ReminderTargetState, REMINDER_SCAN_SECS,
 };
 use crate::acp::manager::ConnectionManager;
 use crate::acp::types::{ConnectionStatus, PromptInputBlock};
@@ -81,7 +81,11 @@ async fn dispatch_target(
     emitter: &EventEmitter,
     target: &collaboration_service::ReminderTargetSnapshot,
 ) -> Result<bool, String> {
-    let digest = reminder_digest_text(target.overdue_unread, target.overdue_reply);
+    let digest = reminder_digest_text_with_letters(
+        target.overdue_unread,
+        target.overdue_reply,
+        &target.letters,
+    );
     if digest.is_empty() {
         return Ok(false);
     }

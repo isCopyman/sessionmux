@@ -19,6 +19,7 @@ pub const MAX_SESSION_MESSAGE_TARGETS: usize = 16;
 pub const DEFAULT_INBOX_LIMIT: u32 = 20;
 pub const MAX_INBOX_LIMIT: u32 = 50;
 pub const INBOX_PREVIEW_CHARS: usize = 160;
+pub const MAX_LETTER_TITLE_CHARS: usize = 120;
 
 pub fn inbox_preview(body: &str) -> String {
     let collapsed = body.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -27,6 +28,29 @@ pub fn inbox_preview(body: &str) -> String {
         preview.push('…');
     }
     preview
+}
+
+/// Email-style letter title. New mail must supply this; legacy empty
+/// subjects fall back to a body preview so old rows stay listable.
+pub fn letter_title(subject: &str, body: &str) -> String {
+    let trimmed = subject.split_whitespace().collect::<Vec<_>>().join(" ");
+    if !trimmed.is_empty() {
+        return trimmed.chars().take(MAX_LETTER_TITLE_CHARS).collect();
+    }
+    inbox_preview(body)
+}
+
+pub fn normalize_letter_title(subject: &str) -> Result<String, String> {
+    let trimmed = subject.split_whitespace().collect::<Vec<_>>().join(" ");
+    if trimmed.is_empty() {
+        return Err("send_message requires a non-empty `title` (letter subject)".to_string());
+    }
+    if trimmed.chars().count() > MAX_LETTER_TITLE_CHARS {
+        return Err(format!(
+            "send_message `title` must be at most {MAX_LETTER_TITLE_CHARS} characters"
+        ));
+    }
+    Ok(trimmed)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -80,6 +104,8 @@ impl SessionListOutcome {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionMessageSpec {
     pub target_session_ids: Vec<i32>,
+    /// Short letter title, like an email subject. Required for new mail.
+    pub title: String,
     pub content: String,
     pub delivery_mode: SessionMessageDeliveryMode,
     /// Best-effort, non-destructive hint. The Host may inject into a currently
@@ -143,6 +169,7 @@ pub struct SessionInboxItem {
     pub from_session_id: i32,
     pub from_title: Option<String>,
     pub from_agent_type: Option<String>,
+    pub title: String,
     pub preview: String,
     pub unread: bool,
     pub expects_reply: bool,
@@ -190,6 +217,8 @@ pub struct SessionMessageReadOutcome {
     pub from_title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub from_agent_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub body: Option<String>,
     pub expects_reply: bool,
@@ -298,6 +327,15 @@ mod tests {
         let preview = inbox_preview(&long);
         assert!(preview.chars().count() <= INBOX_PREVIEW_CHARS + 1);
         assert!(preview.ends_with('…'));
+    }
+
+    #[test]
+    fn letter_title_prefers_subject_and_falls_back_to_body() {
+        assert_eq!(letter_title("  Review  claim  ", "long body"), "Review claim");
+        assert_eq!(letter_title("   ", "hello   world"), "hello world");
+        assert!(normalize_letter_title("").is_err());
+        assert!(normalize_letter_title(&"x".repeat(MAX_LETTER_TITLE_CHARS + 1)).is_err());
+        assert_eq!(normalize_letter_title("  Ping  ").unwrap(), "Ping");
     }
 
     #[test]

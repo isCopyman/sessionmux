@@ -9,7 +9,7 @@ import {
 } from "@/lib/session-send-message-tool"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { useSessionLetterUiStore } from "@/stores/session-letter-ui-store"
-import { CollapsibleUserMessage } from "./collapsible-user-message"
+import { SessionLetterBody } from "./session-letter-body"
 import { SessionLetterActions } from "./session-letter-render-toggle"
 import { SessionMailPeerChip } from "./session-mail-peer-chip"
 
@@ -30,7 +30,7 @@ export function SessionSendMessageCard({
   const conversations = useAppWorkspaceStore((state) => state.conversations)
   const targetIds = parsed?.targetSessionIds ?? []
   const content = parsed?.content ?? ""
-  const bodyParts = [{ type: "text" as const, text: content }]
+  const subject = parsed?.title ?? ""
   const eventId = parseSessionSendMessageEventId(output)
 
   if (!parsed || targetIds.length === 0) return null
@@ -65,7 +65,7 @@ export function SessionSendMessageCard({
             )
           })}
         </header>
-        <CollapsibleUserMessage parts={bodyParts} role="assistant" />
+        <SessionLetterBody subject={subject} body={content} />
       </article>
       <SessionLetterActions letterKey={letterKey} copyText={content} />
     </div>

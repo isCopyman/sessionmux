@@ -1,13 +1,14 @@
 "use client"
 
-import { useMemo } from "react"
-
 import { Message, MessageContent } from "@/components/ai-elements/message"
 import type { CollaborationDelivery } from "@/lib/types"
-import { CollapsibleUserMessage } from "./collapsible-user-message"
+import { SessionLetterBody } from "./session-letter-body"
 import { SessionMailFromBadge } from "./session-mail-peer-chip"
 
-export { SessionMailFromBadge } from "./session-mail-peer-chip"
+export {
+  SessionMailFromBadge,
+  SessionMailSystemBadge,
+} from "./session-mail-peer-chip"
 
 /** Pending inbound letter that is not a Harness user turn yet — same chrome. */
 export function CollaborationMessageCard({
@@ -17,11 +18,6 @@ export function CollaborationMessageCard({
   direction?: "inbound" | "outbound"
   currentConversationId?: number
 }) {
-  const bodyParts = useMemo(
-    () => [{ type: "text" as const, text: delivery.body }],
-    [delivery.body]
-  )
-
   return (
     <article
       data-conversation-search-content
@@ -41,7 +37,10 @@ export function CollaborationMessageCard({
           />
           <div className="group/user-msg flex w-fit max-w-full items-start gap-1">
             <MessageContent data-collaboration-body>
-              <CollapsibleUserMessage parts={bodyParts} />
+              <SessionLetterBody
+                subject={delivery.subject}
+                body={delivery.body}
+              />
             </MessageContent>
           </div>
         </div>

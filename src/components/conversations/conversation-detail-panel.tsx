@@ -59,6 +59,11 @@ import { useAdvertisedGoalActions } from "@/hooks/use-goal-actions"
 import { ConversationShell } from "@/components/chat/conversation-shell"
 
 import { SessionConfigStaleBanner } from "@/components/chat/session-config-stale-banner"
+import {
+  SessionCommunicationBanner,
+  SessionPendingContextBar,
+} from "@/components/collaboration/session-communication-banner"
+import { useCollaborationFeed } from "@/hooks/use-collaboration-feed"
 import { PiProjectTrustBanner } from "@/components/chat/pi-project-trust-banner"
 import { BackgroundTasksChip } from "@/components/chat/background-tasks-chip"
 import { FeedbackNotesDisplay } from "@/components/chat/feedback-notes-display"
@@ -356,6 +361,7 @@ const ConversationTabView = memo(function ConversationTabView({
     number | null
   >(null)
   const dbConversationId = conversationId ?? createdConversationId
+  const collaboration = useCollaborationFeed(dbConversationId)
   const [draftAgentType, setDraftAgentType] = useState<AgentType>(agentType)
   const selectedAgent = conversationId != null ? agentType : draftAgentType
   // Seed from localStorage so the React state reflects the user's saved
@@ -1984,6 +1990,11 @@ const ConversationTabView = memo(function ConversationTabView({
       conversationId={effectiveConversationId}
       topBanner={
         <>
+          {hasPersistedConversation ? (
+            <SessionCommunicationBanner
+              conversationId={effectiveConversationId}
+            />
+          ) : null}
           <SessionConfigStaleBanner contextKey={tabId} />
           <PiProjectTrustBanner
             contextKey={tabId}
@@ -2036,6 +2047,9 @@ const ConversationTabView = memo(function ConversationTabView({
       composerBanner={acpLoadErrorBanner}
       feedbackList={
         <>
+          {hasPersistedConversation ? (
+            <SessionPendingContextBar collaboration={collaboration} />
+          ) : null}
           {feedback.showList ? (
             <FeedbackNotesDisplay notes={feedback.notes} />
           ) : null}
@@ -2294,6 +2308,8 @@ export function ConversationDetailPanel() {
   const conversations = useAppWorkspaceStore((s) => s.conversations)
   const allFolders = useAppWorkspaceStore((s) => s.allFolders)
   const tabs = useTabStore((s) => s.tabs)
+  const tabsHydrated = useTabStore((s) => s.tabsHydrated)
+  const dissolveGroup = useTabStore((s) => s.dissolveGroup)
   const activeWorkbenchId = useTabStore((s) => s.activeWorkbenchId)
   const activeTabId = useTabStore((s) => s.activeTabId)
   const groupLayout = useTabStore((s) => s.groupLayout)
@@ -2650,6 +2666,15 @@ export function ConversationDetailPanel() {
     }
     return byGroup
   }, [tabs, groupOf, groupLayout, orderedGroupIds])
+
+  useEffect(() => {
+    if (!tabsHydrated || orderedGroupIds.length < 2) return
+    for (const groupId of orderedGroupIds) {
+      if ((tabsByGroup.get(groupId)?.length ?? 0) === 0) {
+        dissolveGroup(groupId)
+      }
+    }
+  }, [dissolveGroup, orderedGroupIds, tabsByGroup, tabsHydrated])
 
   const tileTabRefs = useRef<Map<string, HTMLDivElement | null>>(new Map())
   const groupContainerRef = useRef<HTMLDivElement | null>(null)

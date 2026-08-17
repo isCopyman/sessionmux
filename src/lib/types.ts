@@ -1264,6 +1264,7 @@ export interface CollaborationDelivery {
   eventId: string
   source: CollaborationSessionSnapshot
   target: CollaborationSessionSnapshot
+  subject?: string
   body: string
   replyToEventId?: string | null
   expectsReply: boolean
@@ -1331,6 +1332,7 @@ export interface CollaborationUnreadOverview {
 export interface SendCollaborationMessageInput {
   sourceConversationId: number
   targetConversationIds: number[]
+  subject: string
   body: string
   clientDedupeId: string
   invocationPolicy?: CollaborationInvocationPolicy

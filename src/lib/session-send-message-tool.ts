@@ -8,6 +8,7 @@ export function isSessionSendMessageToolName(toolName: string): boolean {
 
 export function parseSessionSendMessageInput(input: string | null): {
   targetSessionIds: number[]
+  title: string
   content: string
 } | null {
   if (!input) return null
@@ -27,8 +28,14 @@ export function parseSessionSendMessageInput(input: string | null): {
     )
     const content =
       typeof record.content === "string" ? record.content.trim() : ""
+    const title =
+      typeof record.title === "string"
+        ? record.title.trim()
+        : typeof record.subject === "string"
+          ? record.subject.trim()
+          : ""
     if (targetSessionIds.length === 0 || !content) return null
-    return { targetSessionIds, content }
+    return { targetSessionIds, title, content }
   } catch {
     return null
   }

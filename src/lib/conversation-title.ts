@@ -33,3 +33,45 @@ export function formatSessionMailName(
   if (chars.length <= SESSION_MAIL_NAME_MAX) return raw
   return `${chars.slice(0, SESSION_MAIL_NAME_MAX).join("")}…`
 }
+
+/** Prefer the live Session title; snapshot is only a fallback after delete. */
+export function resolveLiveSessionTitle(args: {
+  conversationId: number
+  liveTitle?: string | null
+  snapshotTitle?: string | null
+}): string {
+  const live = formatConversationTitle(args.liveTitle).trim()
+  if (live) return live
+  const snapshot = formatConversationTitle(args.snapshotTitle).trim()
+  if (snapshot) return snapshot
+  return `Session ${args.conversationId}`
+}
+
+function clipCollapsed(text: string, maxChars: number): string {
+  const collapsed = text.split(/\s+/).join(" ").trim()
+  if (!collapsed) return ""
+  const chars = [...collapsed]
+  if (chars.length <= maxChars) return collapsed
+  return `${chars.slice(0, maxChars).join("")}…`
+}
+
+/** Subject first; legacy letters fall back to a clipped body. */
+export function letterListPreview(
+  subject?: string | null,
+  body?: string | null,
+  maxChars = 80
+): string {
+  const title = subject?.trim()
+  if (title) return title
+  return clipCollapsed(body ?? "", maxChars)
+}
+
+/** One-line body preview for a mail-list second line. */
+export function letterBodySnippet(body?: string | null, maxChars = 72): string {
+  return clipCollapsed(body ?? "", maxChars)
+}
+
+/** Visible subject; empty subjects stay empty so the caller can show a fallback. */
+export function letterSubjectLine(subject?: string | null): string {
+  return subject?.trim() ?? ""
+}

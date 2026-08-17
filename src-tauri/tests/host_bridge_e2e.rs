@@ -388,6 +388,7 @@ async fn real_host_bridge_routes_session_message_from_token_bound_source() {
             token: "trusted-token".to_string(),
             spec: SessionMessageSpec {
                 target_session_ids: vec![7, 8],
+                title: "Test letter".into(),
                 content: "Please compare the evidence.".to_string(),
                 delivery_mode: SessionMessageDeliveryMode::Queue,
                 steer_if_supported: false,
@@ -506,6 +507,7 @@ async fn real_host_bridge_round_trips_reply_status_through_host_core() {
             token: "token-a".to_string(),
             spec: SessionMessageSpec {
                 target_session_ids: vec![session_b],
+                title: "Test letter".into(),
                 content: "Please review this change.".to_string(),
                 delivery_mode: SessionMessageDeliveryMode::DeliverOnly,
                 steer_if_supported: false,
@@ -551,6 +553,7 @@ async fn real_host_bridge_round_trips_reply_status_through_host_core() {
             token: "token-b".to_string(),
             spec: SessionMessageSpec {
                 target_session_ids: vec![session_a],
+                title: "Test letter".into(),
                 content: "Looks good.".to_string(),
                 delivery_mode: SessionMessageDeliveryMode::DeliverOnly,
                 steer_if_supported: false,
@@ -841,6 +844,7 @@ async fn public_mcp_creates_organizes_and_replies_through_host_core() {
             token: "token-a".to_string(),
             spec: SessionMessageSpec {
                 target_session_ids: vec![session_b],
+                title: "Test letter".into(),
                 content: "Please review this change.".to_string(),
                 delivery_mode: SessionMessageDeliveryMode::DeliverOnly,
                 steer_if_supported: false,
@@ -874,6 +878,7 @@ async fn public_mcp_creates_organizes_and_replies_through_host_core() {
             token: "token-b".to_string(),
             spec: SessionMessageSpec {
                 target_session_ids: vec![session_a],
+                title: "Test letter".into(),
                 content: "Reviewed.".to_string(),
                 delivery_mode: SessionMessageDeliveryMode::DeliverOnly,
                 steer_if_supported: false,

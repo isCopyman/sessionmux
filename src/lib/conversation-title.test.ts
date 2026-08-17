@@ -3,6 +3,10 @@ import { describe, expect, it } from "vitest"
 import {
   formatConversationTitle,
   formatSessionMailName,
+  letterBodySnippet,
+  letterListPreview,
+  letterSubjectLine,
+  resolveLiveSessionTitle,
 } from "./conversation-title"
 
 describe("formatConversationTitle", () => {
@@ -170,5 +174,48 @@ describe("formatSessionMailName", () => {
     expect(formatSessionMailName("一二三四五六七八九十十一十二多余", 3)).toBe(
       "一二三四五六七八九十十一…"
     )
+  })
+})
+
+describe("resolveLiveSessionTitle", () => {
+  it("prefers the current Session title over the send-time snapshot", () => {
+    expect(
+      resolveLiveSessionTitle({
+        conversationId: 290,
+        liveTitle: "Session C",
+        snapshotTitle: "You are Session C. Reply with exactly C_READY.",
+      })
+    ).toBe("Session C")
+  })
+
+  it("falls back to the snapshot when the Session is gone", () => {
+    expect(
+      resolveLiveSessionTitle({
+        conversationId: 290,
+        liveTitle: null,
+        snapshotTitle: "Session C",
+      })
+    ).toBe("Session C")
+  })
+})
+
+describe("letterListPreview", () => {
+  it("uses the subject and only falls back to a clipped body", () => {
+    expect(letterListPreview("Review claim 3", "please review claim 3…")).toBe(
+      "Review claim 3"
+    )
+    expect(letterListPreview("  ", "hello   world")).toBe("hello world")
+    expect(letterListPreview("", "x".repeat(90)).endsWith("…")).toBe(true)
+  })
+})
+
+describe("letterBodySnippet", () => {
+  it("clips the body independently of the subject", () => {
+    expect(letterSubjectLine("  Review claim 3 ")).toBe("Review claim 3")
+    expect(letterSubjectLine("   ")).toBe("")
+    expect(letterBodySnippet("please   check claim 3")).toBe(
+      "please check claim 3"
+    )
+    expect(letterBodySnippet("x".repeat(90)).endsWith("…")).toBe(true)
   })
 })

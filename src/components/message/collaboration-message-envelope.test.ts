@@ -112,6 +112,8 @@ describe("parseCollaborationMessageEnvelope", () => {
     ].join("\n")
 
     expect(parseCollaborationMessageEnvelope(text)?.body).toBe("")
+    expect(parseCollaborationMessageEnvelope(text)?.kind).toBe("system_notify")
+    expect(parseCollaborationMessageEnvelope(envelope())?.kind).toBe("letter")
     expect(
       stripProjectedCollaborationEnvelopes(`${text}\nkeep`, new Set([EVENT_ID]))
     ).toBe("keep")

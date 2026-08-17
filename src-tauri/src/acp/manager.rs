@@ -4258,6 +4258,7 @@ mod tests {
             SendCollaborationMessageInput {
                 source_conversation_id: source,
                 target_conversation_ids: vec![target],
+            subject: "Test letter".into(),
                 body: "mail from another Harness".into(),
                 client_dedupe_id: "chat-store-only".into(),
                 invocation_policy: CollaborationInvocationPolicy::StoreOnly,
@@ -4746,6 +4747,7 @@ mod tests {
             SendCollaborationMessageInput {
                 source_conversation_id: source,
                 target_conversation_ids: vec![target],
+            subject: "Test letter".into(),
                 body: "compare this evidence".to_string(),
                 client_dedupe_id: "cross-harness-natural-turn".to_string(),
                 invocation_policy: CollaborationInvocationPolicy::StoreOnly,
@@ -4858,6 +4860,7 @@ mod tests {
             SendCollaborationMessageInput {
                 source_conversation_id: source,
                 target_conversation_ids: vec![target],
+            subject: "Test letter".into(),
                 body: "do not replay an uncertain delivery".into(),
                 client_dedupe_id: "cross-harness-unknown".into(),
                 invocation_policy: CollaborationInvocationPolicy::StoreOnly,
@@ -4928,6 +4931,7 @@ mod tests {
             SendCollaborationMessageInput {
                 source_conversation_id: source,
                 target_conversation_ids: vec![target],
+            subject: "Test letter".into(),
                 body: "retry after a known failure".to_string(),
                 client_dedupe_id: "cross-harness-failed-turn".to_string(),
                 invocation_policy: CollaborationInvocationPolicy::StoreOnly,
@@ -6426,6 +6430,7 @@ mod tests {
             SendCollaborationMessageInput {
                 source_conversation_id: source,
                 target_conversation_ids: vec![c1.id],
+            subject: "Test letter".into(),
                 body: "mail addressed to immutable C1".into(),
                 client_dedupe_id: "fork-mail-c1".into(),
                 invocation_policy: CollaborationInvocationPolicy::StoreOnly,

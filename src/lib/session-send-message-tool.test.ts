@@ -35,6 +35,6 @@ describe("session send_message tool", () => {
           content: "123",
         })
       )
-    ).toEqual({ targetSessionIds: [287], content: "123" })
+    ).toEqual({ targetSessionIds: [287], title: "", content: "123" })
   })
 })

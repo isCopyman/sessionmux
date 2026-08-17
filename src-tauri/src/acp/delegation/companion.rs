@@ -506,6 +506,15 @@ async fn build_tools_call_spawn(
                 Ok(ids) => ids,
                 Err(message) => return LineAction::Respond(err(id, -32602, message)),
             };
+            let title = match arguments
+                .get("title")
+                .and_then(|value| value.as_str())
+                .ok_or_else(|| "send_message requires a non-empty `title` string".to_string())
+                .and_then(crate::acp::session_collaboration::normalize_letter_title)
+            {
+                Ok(title) => title,
+                Err(message) => return LineAction::Respond(err(id, -32602, message)),
+            };
             let content = arguments
                 .get("content")
                 .and_then(|value| value.as_str())
@@ -567,6 +576,7 @@ async fn build_tools_call_spawn(
                 token: ctx.token.clone(),
                 spec: SessionMessageSpec {
                     target_session_ids,
+                    title,
                     content,
                     delivery_mode,
                     steer_if_supported,
@@ -1451,7 +1461,7 @@ pub fn render_session_inbox_result(outcome: &Value) -> Value {
             format!("Inbox is empty. Unread: {unread}. Awaiting reply: {awaiting}.")
         } else {
             let mut lines = vec![format!(
-                "Inbox: {unread} unread, {awaiting} awaiting reply. Open a letter with read_message(event_id)."
+                "Inbox: {unread} unread, {awaiting} awaiting reply. Titles only — open a letter with read_message(event_id)."
             )];
             for item in items {
                 let event_id = item
@@ -1466,7 +1476,11 @@ pub fn render_session_inbox_result(outcome: &Value) -> Value {
                     .get("from_title")
                     .and_then(Value::as_str)
                     .unwrap_or("Untitled Session");
-                let preview = item.get("preview").and_then(Value::as_str).unwrap_or("");
+                let title = item
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .or_else(|| item.get("preview").and_then(Value::as_str))
+                    .unwrap_or("(untitled)");
                 let mut flags = Vec::new();
                 if item.get("unread").and_then(Value::as_bool).unwrap_or(false) {
                     flags.push("unread");
@@ -1484,7 +1498,7 @@ pub fn render_session_inbox_result(outcome: &Value) -> Value {
                     format!(" [{}]", flags.join(", "))
                 };
                 lines.push(format!(
-                    "- {event_id} from {from_id} {from_title}{flag_text}: {preview}"
+                    "- {event_id} from {from_id} {from_title}{flag_text}: 《{title}》"
                 ));
             }
             if outcome
@@ -1528,6 +1542,10 @@ pub fn render_session_read_result(outcome: &Value) -> Value {
             .get("from_title")
             .and_then(Value::as_str)
             .unwrap_or("Untitled Session");
+        let title = outcome
+            .get("title")
+            .and_then(Value::as_str)
+            .unwrap_or("(untitled)");
         let body = outcome.get("body").and_then(Value::as_str).unwrap_or("");
         let expects_reply = outcome
             .get("expects_reply")
@@ -1535,6 +1553,7 @@ pub fn render_session_read_result(outcome: &Value) -> Value {
             .unwrap_or(false);
         let mut lines = vec![
             format!("Opened letter {event_id} from {from_id} {from_title}."),
+            format!("Title: {title}"),
             "Opening this letter marks it read for the Agent mailbox.".to_string(),
         ];
         if expects_reply {
@@ -2021,6 +2040,7 @@ mod tests {
             "jsonrpc": "2.0", "id": 41, "method": "tools/call",
             "params": { "name": "send_message", "arguments": {
                 "target_session_ids": [7, "8", 7],
+                "title": "Please review",
                 "content": "Please review this.",
                 "delivery_mode": "queue",
                 "delivery_hint": "steer_if_supported",
@@ -2094,12 +2114,13 @@ mod tests {
         }
 
         for arguments in [
-            serde_json::json!({ "target_session_ids": [], "content": "x" }),
-            serde_json::json!({ "target_session_ids": ["bad"], "content": "x" }),
-            serde_json::json!({ "target_session_ids": [7], "content": " " }),
-            serde_json::json!({ "target_session_ids": [7], "content": "x", "delivery_mode": "interrupt" }),
-            serde_json::json!({ "target_session_ids": [7], "content": "x", "delivery_hint": "interrupt" }),
-            serde_json::json!({ "target_session_ids": [7], "content": "x", "delivery_mode": "deliver_only", "delivery_hint": "steer_if_supported" }),
+            serde_json::json!({ "target_session_ids": [], "title": "t", "content": "x" }),
+            serde_json::json!({ "target_session_ids": ["bad"], "title": "t", "content": "x" }),
+            serde_json::json!({ "target_session_ids": [7], "title": "t", "content": " " }),
+            serde_json::json!({ "target_session_ids": [7], "content": "x" }),
+            serde_json::json!({ "target_session_ids": [7], "title": "t", "content": "x", "delivery_mode": "interrupt" }),
+            serde_json::json!({ "target_session_ids": [7], "title": "t", "content": "x", "delivery_hint": "interrupt" }),
+            serde_json::json!({ "target_session_ids": [7], "title": "t", "content": "x", "delivery_mode": "deliver_only", "delivery_hint": "steer_if_supported" }),
         ] {
             let line = serde_json::json!({
                 "jsonrpc": "2.0", "id": 42, "method": "tools/call",

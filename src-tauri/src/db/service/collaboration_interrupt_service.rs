@@ -628,6 +628,7 @@ mod tests {
             SendCollaborationMessageInput {
                 source_conversation_id: source,
                 target_conversation_ids: vec![target],
+            subject: "Test letter".into(),
                 body: "Review the new evidence".to_string(),
                 client_dedupe_id: dedupe.to_string(),
                 invocation_policy: CollaborationInvocationPolicy::InvokeWhenIdle,

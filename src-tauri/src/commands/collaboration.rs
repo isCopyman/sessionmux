@@ -552,6 +552,7 @@ impl SessionCollaborationAccess for DbSessionCollaboration {
             SendCollaborationMessageInput {
                 source_conversation_id: source_session_id,
                 target_conversation_ids: spec.target_session_ids,
+                subject: spec.title,
                 body: spec.content,
                 client_dedupe_id: spec.client_dedupe_id,
                 invocation_policy: match spec.delivery_mode {
@@ -603,7 +604,7 @@ impl SessionCollaborationAccess for DbSessionCollaboration {
         limit: u32,
     ) -> crate::acp::session_collaboration::SessionInboxOutcome {
         use crate::acp::session_collaboration::{
-            inbox_preview, SessionInboxItem, SessionInboxOutcome, MAX_INBOX_LIMIT,
+            SessionInboxItem, SessionInboxOutcome, MAX_INBOX_LIMIT,
         };
         if !self.config.is_enabled().await {
             return SessionInboxOutcome::unavailable(
@@ -651,7 +652,14 @@ impl SessionCollaborationAccess for DbSessionCollaboration {
                     from_session_id: item.source.conversation_id,
                     from_title: item.source.title,
                     from_agent_type: item.source.agent_type,
-                    preview: inbox_preview(&item.body),
+                    title: crate::acp::session_collaboration::letter_title(
+                        &item.subject,
+                        &item.body,
+                    ),
+                    preview: crate::acp::session_collaboration::letter_title(
+                        &item.subject,
+                        &item.body,
+                    ),
                     unread: item.agent_received_at.is_none(),
                     expects_reply: item.expects_reply,
                     obligation_state: item.obligation_state.as_str().to_string(),
@@ -706,6 +714,10 @@ impl SessionCollaborationAccess for DbSessionCollaboration {
             from_session_id: Some(item.source.conversation_id),
             from_title: item.source.title,
             from_agent_type: item.source.agent_type,
+            title: Some(crate::acp::session_collaboration::letter_title(
+                &item.subject,
+                &item.body,
+            )),
             body: Some(item.body),
             expects_reply: item.expects_reply,
             reply_to_event_id: item.reply_to_event_id,
@@ -1059,6 +1071,7 @@ mod tests {
             SendCollaborationMessageInput {
                 source_conversation_id: source,
                 target_conversation_ids: vec![target],
+            subject: "Test letter".into(),
                 body: "review".to_string(),
                 client_dedupe_id: "command-send".to_string(),
                 invocation_policy: CollaborationInvocationPolicy::StoreOnly,
@@ -1087,6 +1100,7 @@ mod tests {
             SendCollaborationMessageInput {
                 source_conversation_id: source,
                 target_conversation_ids: vec![target],
+            subject: "Test letter".into(),
                 body: "review".to_string(),
                 client_dedupe_id: "command-send".to_string(),
                 invocation_policy: CollaborationInvocationPolicy::StoreOnly,
@@ -1115,6 +1129,7 @@ mod tests {
             SendCollaborationMessageInput {
                 source_conversation_id: source,
                 target_conversation_ids: vec![target],
+            subject: "Test letter".into(),
                 body: "review after I open your session".to_string(),
                 client_dedupe_id: "inactive-target-confirmation".to_string(),
                 invocation_policy: CollaborationInvocationPolicy::InvokeWhenIdle,
@@ -1154,6 +1169,7 @@ mod tests {
                 message: SendCollaborationMessageInput {
                     source_conversation_id: source,
                     target_conversation_ids: vec![target],
+            subject: "Test letter".into(),
                     body: "change direction".into(),
                     client_dedupe_id: "atomic-interrupt-message".into(),
                     invocation_policy: CollaborationInvocationPolicy::StoreOnly,
@@ -1205,6 +1221,7 @@ mod tests {
                 message: SendCollaborationMessageInput {
                     source_conversation_id: source,
                     target_conversation_ids: vec![target],
+            subject: "Test letter".into(),
                     body: "run next".into(),
                     client_dedupe_id: "idle-interrupt-message".into(),
                     invocation_policy: CollaborationInvocationPolicy::InvokeWhenIdle,
@@ -1268,6 +1285,7 @@ mod tests {
         let access = enabled_agent_access(&db, EventEmitter::Noop).await;
         let spec = SessionMessageSpec {
             target_session_ids: vec![target],
+            title: "Test letter".into(),
             content: "check the argument".into(),
             delivery_mode: SessionMessageDeliveryMode::Queue,
             steer_if_supported: true,
@@ -1326,7 +1344,8 @@ mod tests {
                     source,
                     SessionMessageSpec {
                         target_session_ids: vec![target],
-                        content: format!("reply at depth {depth}"),
+                        title: "Test letter".into(),
+            content: format!("reply at depth {depth}"),
                         delivery_mode: SessionMessageDeliveryMode::DeliverOnly,
                         steer_if_supported: false,
                         expects_reply: true,
@@ -1389,7 +1408,8 @@ mod tests {
                 source,
                 SessionMessageSpec {
                     target_session_ids: vec![target],
-                    content: "must not land".into(),
+                    title: "Test letter".into(),
+            content: "must not land".into(),
                     delivery_mode: SessionMessageDeliveryMode::Queue,
                     steer_if_supported: false,
                     expects_reply: true,
@@ -1442,6 +1462,7 @@ mod tests {
             SendCollaborationMessageInput {
                 source_conversation_id: source,
                 target_conversation_ids: vec![target],
+            subject: "Test letter".into(),
                 body: "wait until collaboration is enabled again".into(),
                 client_dedupe_id: "setting-policy-transition".into(),
                 invocation_policy: CollaborationInvocationPolicy::InvokeWhenIdle,
@@ -1507,6 +1528,7 @@ mod tests {
             SendCollaborationMessageInput {
                 source_conversation_id: source,
                 target_conversation_ids: vec![target],
+                subject: "Review claim 3".into(),
                 body: "please review claim 3 in the methods section".to_string(),
                 client_dedupe_id: "agent-inbox-letter".to_string(),
                 invocation_policy: CollaborationInvocationPolicy::StoreOnly,
@@ -1529,10 +1551,13 @@ mod tests {
         assert_eq!(listed.items[0].event_id, sent.event_id);
         assert!(listed.items[0].unread);
         assert!(listed.items[0].expects_reply);
-        assert!(listed.items[0].preview.contains("please review claim 3"));
+        assert_eq!(listed.items[0].title, "Review claim 3");
+        assert_eq!(listed.items[0].preview, "Review claim 3");
+        assert!(!listed.items[0].preview.contains("methods section"));
 
         let opened = access.read_message(target, sent.event_id.clone()).await;
         assert!(opened.available);
+        assert_eq!(opened.title.as_deref(), Some("Review claim 3"));
         assert_eq!(
             opened.body.as_deref(),
             Some("please review claim 3 in the methods section")

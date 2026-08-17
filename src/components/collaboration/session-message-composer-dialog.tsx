@@ -73,6 +73,7 @@ export function SessionMessageComposerDialog({
   const [selected, setSelected] = useState<Set<number>>(
     () => new Set(presetTargets)
   )
+  const [subject, setSubject] = useState("")
   const [body, setBody] = useState(initialBody)
   const [invocationPolicy, setInvocationPolicy] =
     useState<CollaborationInvocationPolicy>("store_only")
@@ -139,6 +140,8 @@ export function SessionMessageComposerDialog({
   const canSend =
     sourceConversationId != null &&
     selected.size > 0 &&
+    subject.trim().length > 0 &&
+    subject.trim().length <= 120 &&
     body.trim().length > 0 &&
     !bodyTooLarge &&
     !sending
@@ -146,6 +149,7 @@ export function SessionMessageComposerDialog({
   const reset = () => {
     setQuery("")
     setSelected(new Set(presetTargets))
+    setSubject("")
     setBody(initialBody)
     setInvocationPolicy("store_only")
     setDeliveryHint("default")
@@ -174,6 +178,7 @@ export function SessionMessageComposerDialog({
       const result = await sendCollaborationMessage({
         sourceConversationId,
         targetConversationIds: [...selected],
+        subject: subject.trim(),
         body,
         clientDedupeId: randomUUID(),
         invocationPolicy,
@@ -344,12 +349,19 @@ export function SessionMessageComposerDialog({
         </ScrollArea>
 
         <div className="space-y-1.5">
+          <Input
+            value={subject}
+            onChange={(event) => setSubject(event.target.value)}
+            placeholder={t("letterTitlePlaceholder")}
+            maxLength={120}
+            autoFocus
+            data-collaboration-subject=""
+          />
           <Textarea
             value={body}
             onChange={(event) => setBody(event.target.value)}
             placeholder={t("bodyPlaceholder")}
             rows={5}
-            autoFocus
             data-collaboration-body=""
           />
           <div className="flex justify-between text-xs text-muted-foreground">

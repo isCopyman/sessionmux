@@ -48,6 +48,7 @@ import { AgentToolCallPart } from "./agent-tool-call"
 import { AskQuestionResultCard } from "./ask-question-result-card"
 import { CollabAgentCard } from "./collab-agent-card"
 import { SessionSendMessageCard } from "./session-send-message-card"
+import { SessionReadMessageCard } from "./session-read-message-card"
 import { SessionLetterFrame } from "./session-letter-render-toggle"
 import {
   ContextCompactionCard,
@@ -75,6 +76,7 @@ import {
   parseSessionSendMessageEventId,
   parseSessionSendMessageInput,
 } from "@/lib/session-send-message-tool"
+import { isSessionReadMessageToolName } from "@/lib/session-read-message-tool"
 import { useSessionLetterUiStore } from "@/stores/session-letter-ui-store"
 import { BackgroundTaskCard } from "./background-task-card"
 import { GeneratedImagesBlock } from "./generated-images-block"
@@ -2630,6 +2632,19 @@ const ToolCallPart = memo(function ToolCallPart({
         letterKey={part.toolCallId}
         input={part.input ?? null}
         output={part.output ?? null}
+      />
+    )
+  }
+
+  if (
+    isSessionReadMessageToolName(normalizedToolName) &&
+    !previewMcp &&
+    part.output
+  ) {
+    return (
+      <SessionReadMessageCard
+        letterKey={part.toolCallId}
+        output={part.output}
       />
     )
   }

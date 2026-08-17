@@ -139,6 +139,8 @@ describe("applyCollaborationTimelineProjection", () => {
       title: "Reviewer",
       agentType: "codex",
       eventIds: ["b80f5bea-2dd6-41b5-8a07-b68d49fe269a"],
+      source: "session",
+      letterTitle: null,
     })
   })
 
@@ -232,6 +234,48 @@ describe("applyCollaborationTimelineProjection", () => {
       findLetterThreadIndex(items, "b80f5bea-2dd6-41b5-8a07-b68d49fe269a")
     ).toBe(0)
     expect(findLetterThreadIndex(items, "missing-event")).toBe(-1)
+  })
+
+  it("projects a system mailbox notice as a title-only system turn", () => {
+    const notifyEnvelope = [
+      "<<<CODEG_SESSION_MESSAGE_V1:b80f5bea-2dd6-41b5-8a07-b68d49fe269a>>>",
+      JSON.stringify({
+        version: 1,
+        kind: "system_notify",
+        eventId: "b80f5bea-2dd6-41b5-8a07-b68d49fe269a",
+        deliveryId: "delivery-1",
+        sourceConversationId: 42,
+        sourceTitle: "Reviewer",
+        sourceAgentType: "codex",
+        sourceFolderPath: "/repo",
+        letterTitle: "Need review",
+        expectsReply: true,
+        replyToEventId: null,
+      }),
+      "This is a Codeg system mailbox notice. The letter body is not in this prompt.",
+      "--- message ---",
+      "<<<END_CODEG_SESSION_MESSAGE_V1:b80f5bea-2dd6-41b5-8a07-b68d49fe269a>>>",
+    ].join("\n")
+    const result = applyCollaborationTimelineProjection(
+      [userItem("turn-1", notifyEnvelope)],
+      [
+        collaborationDelivery({
+          subject: "Need review",
+          body: "please check claim 3 in private",
+        }),
+      ]
+    )
+    expect(result.map((item) => item.kind)).toEqual(["turn"])
+    const user = result[0] as TurnItem
+    expect(user.group.parts).toEqual([{ type: "text", text: "Need review" }])
+    expect(user.group.sessionMail).toEqual({
+      conversationId: 42,
+      title: "Reviewer",
+      agentType: "codex",
+      eventIds: ["b80f5bea-2dd6-41b5-8a07-b68d49fe269a"],
+      source: "system",
+      letterTitle: "Need review",
+    })
   })
 
   it("does not project outbound letters as separate timeline cards", () => {

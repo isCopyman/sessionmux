@@ -157,6 +157,52 @@ describe("SessionCommunicationBanner", () => {
     ).not.toBeInTheDocument()
   })
 
+  it("offers inbox, sent, and thread views", () => {
+    hook.feed = {
+      conversationId: 2,
+      revision: 1,
+      unreadCount: 1,
+      inbound: [delivery()],
+      outbound: [
+        delivery({
+          id: "delivery-out",
+          eventId: "event-out",
+          replyToEventId: "event-1",
+          subject: "Re: evidence",
+        }),
+      ],
+    }
+    render(<SessionCommunicationBanner conversationId={2} />)
+    fireEvent.click(screen.getByRole("button", { name: /panelTitle/ }))
+    expect(document.querySelector("[data-mailbox-panel]")).not.toBeNull()
+    expect(screen.getByRole("tab", { name: "inboxLabel" })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("tab", { name: "threadsLabel" }))
+    expect(screen.getByText("threadCount")).toBeInTheDocument()
+  })
+
+  it("splits a letter into subject and body like a mail client", () => {
+    hook.feed = {
+      conversationId: 2,
+      revision: 1,
+      unreadCount: 1,
+      inbound: [
+        delivery({
+          subject: "Proof review",
+          body: "The evidence does not support the last sentence.",
+        }),
+      ],
+      outbound: [],
+    }
+    render(<SessionCommunicationBanner conversationId={2} />)
+    fireEvent.click(screen.getByRole("button", { name: /panelTitle/ }))
+    expect(screen.getAllByText("Proof review").length).toBeGreaterThan(1)
+    expect(screen.getByText("letterSubject")).toBeInTheDocument()
+    expect(
+      screen.getAllByText("The evidence does not support the last sentence.")
+        .length
+    ).toBeGreaterThan(0)
+  })
+
   it("does not offer a human compose action on the Agent mailbox strip", () => {
     render(<SessionCommunicationBanner conversationId={2} />)
 
@@ -164,6 +210,46 @@ describe("SessionCommunicationBanner", () => {
       screen.queryByRole("button", { name: "sendMenu" })
     ).not.toBeInTheDocument()
     expect(screen.queryByTestId("reply-dialog")).not.toBeInTheDocument()
+  })
+
+  it("uses the live Session title instead of the send-time snapshot", () => {
+    hook.feed = {
+      conversationId: 2,
+      revision: 1,
+      unreadCount: 1,
+      inbound: [
+        delivery({
+          source: {
+            conversationId: 1,
+            title: "You are Session C. Reply with exactly C_READY.",
+            agentType: "codex",
+            folderPath: "/thesis",
+            backend: "current",
+          },
+        }),
+      ],
+      outbound: [],
+    }
+    workspace.conversations = [
+      {
+        id: 1,
+        folder_id: 10,
+        title: "Session C",
+        agent_type: "codex",
+      },
+      {
+        id: 2,
+        folder_id: 10,
+        title: "Session D",
+        agent_type: "claude_code",
+      },
+    ]
+    render(<SessionCommunicationBanner conversationId={2} />)
+    fireEvent.click(screen.getByRole("button", { name: /panelTitle/ }))
+    expect(screen.getByText("from:Session C")).toBeInTheDocument()
+    expect(
+      screen.queryByText(/You are Session C\. Reply with exactly C_READY/)
+    ).not.toBeInTheDocument()
   })
 
   it("shows communication outside the native transcript and marks it read", () => {
@@ -174,10 +260,17 @@ describe("SessionCommunicationBanner", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /panelTitle/ }))
     expect(
-      screen.getByText("The evidence does not support the last sentence.")
-    ).toBeInTheDocument()
+      screen.getAllByText("The evidence does not support the last sentence.")
+        .length
+    ).toBeGreaterThan(0)
     expect(screen.getByText("from:Logic reviewer")).toBeInTheDocument()
-    expect(screen.getByText("stateStoreOnly")).toBeInTheDocument()
+    expect(screen.getByText("letterSubject")).toBeInTheDocument()
+    expect(screen.getAllByText("untitledSubject").length).toBeGreaterThan(0)
+    expect(
+      document.querySelector("[data-collaboration-banner]")
+    ).toBeInTheDocument()
+    expect(screen.getAllByText("mailUnread").length).toBeGreaterThan(0)
+    expect(document.querySelector("[data-mail-status='unread']")).not.toBeNull()
 
     expect(hook.markSeen).toHaveBeenCalledWith(["delivery-1"])
   })
@@ -246,8 +339,9 @@ describe("SessionCommunicationBanner", () => {
     render(<SessionCommunicationBanner conversationId={2} />)
     fireEvent.click(screen.getByRole("button", { name: /panelTitle/ }))
 
-    expect(screen.getByText("stateNeedsReply")).toBeInTheDocument()
-    expect(screen.getByText("stateReplyReceived")).toBeInTheDocument()
+    expect(screen.getAllByText("mailUnread").length).toBeGreaterThan(0)
+    fireEvent.click(screen.getByRole("tab", { name: "sentLabel" }))
+    expect(screen.getAllByText("mailReplied").length).toBeGreaterThan(0)
   })
 
   it("marks an inbound request as replied and an outbound request as waiting", () => {
@@ -274,8 +368,9 @@ describe("SessionCommunicationBanner", () => {
     render(<SessionCommunicationBanner conversationId={2} />)
     fireEvent.click(screen.getByRole("button", { name: /panelTitle/ }))
 
-    expect(screen.getByText("stateReplied")).toBeInTheDocument()
-    expect(screen.getByText("stateAwaitingReply")).toBeInTheDocument()
+    expect(screen.getAllByText("mailReplied").length).toBeGreaterThan(0)
+    fireEvent.click(screen.getByRole("tab", { name: "sentLabel" }))
+    expect(screen.getAllByText("mailUnread").length).toBeGreaterThan(0)
   })
 
   it("does not let a human waive an Agent reply obligation", () => {
@@ -314,8 +409,9 @@ describe("SessionCommunicationBanner", () => {
     render(<SessionCommunicationBanner conversationId={2} />)
     fireEvent.click(screen.getByRole("button", { name: /panelTitle/ }))
 
+    expect(screen.getAllByText("mailUnread").length).toBeGreaterThan(0)
     expect(screen.getByText("noReplyNeeded")).toBeInTheDocument()
-    expect(screen.queryByText("stateReplied")).not.toBeInTheDocument()
+    expect(screen.queryByText("mailReplied")).not.toBeInTheDocument()
   })
 
   it("keeps a deleted or unavailable source readable without offering broken actions", () => {

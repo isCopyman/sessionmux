@@ -6,6 +6,8 @@ export interface CollaborationMessageEnvelope {
   sourceTitle: string | null
   sourceAgentType: string
   sourceFolderPath: string | null
+  letterTitle: string | null
+  kind: "system_notify" | "letter"
   expectsReply: boolean
   replyToEventId: string | null
   body: string
@@ -61,6 +63,18 @@ export function parseCollaborationMessageEnvelope(
   ) {
     return null
   }
+  const letterTitle = optionalString(metadata.letterTitle)
+    ? metadata.letterTitle
+    : null
+  const body = lines.slice(separatorIndex + 1, -1).join("\n")
+  const kind =
+    metadata.kind === "letter"
+      ? "letter"
+      : metadata.kind === "system_notify"
+        ? "system_notify"
+        : body.trim().length > 0
+          ? "letter"
+          : "system_notify"
 
   return {
     version: 1,
@@ -70,9 +84,11 @@ export function parseCollaborationMessageEnvelope(
     sourceTitle: metadata.sourceTitle,
     sourceAgentType: metadata.sourceAgentType,
     sourceFolderPath: metadata.sourceFolderPath,
+    letterTitle,
+    kind,
     expectsReply: metadata.expectsReply,
     replyToEventId: metadata.replyToEventId,
-    body: lines.slice(separatorIndex + 1, -1).join("\n"),
+    body,
   }
 }
 

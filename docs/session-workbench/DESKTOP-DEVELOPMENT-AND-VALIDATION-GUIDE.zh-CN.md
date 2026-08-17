@@ -485,3 +485,63 @@ git diff -- <本批文件>
 历史过程通过本地 ctx 恢复，主要对应 Session `4b3a16bf-6d96-7bd8-b061-e402b4e3deeb` 中的
 Desktop 调试分层与 WebView2 CDP 验证记录；历史记录只用于找回做法，若与当前源码冲突，以
 当前 `package.json`、`src-tauri/tauri.conf.json`、`src-tauri/src/lib.rs` 和测试配置为准。
+
+## 10. Mailbox / 多 Session 交互验收（2026-08-18）
+
+此前只测“发得出、回得来”不够。Mailbox 改动后必须再验：通知不含正文、读信渲染成信、
+往来面板是收件箱/发件箱/往来线程，以及分屏在关标签后不会留下空白栏。
+
+### 10.1 必看的 UI 事实
+
+- 时间线里的**系统提醒**必须有「来自邮件系统」标记，样式复用 user prompt 气泡，
+  不得伪装成某个 Session 说的话。徽章只在信封 `kind=system_notify`（或无 kind 且正文
+  为空）时出现；旧信封若把正文写进 prompt，前端会当成来自 Session 的信。
+- Agent 调用 `read_message` 后，工具结果渲染成**信件**：主题 + 正文 + 来自 Session
+  标记。不要只剩折叠的 MCP 原文，也不要在时间线再复制一张无标记的第二份正文。
+- 往来是**会话内悬浮面板**，不要做成第三条分屏。触发条只占一行；点开后浮在时间线
+  上，不挤掉对话。列表一行：发件人、主题 — 摘要、彩色状态。点行再展开主题+正文。
+  视图至少有收件箱、发件箱、往来（按 `reply_to_event_id` 串成线程）。
+- 状态颜色：未读蓝、已读未回琥珀、已回复绿、失败红、已读灰。
+- 状态对人只说：未读 / 已读 / 已读未回 / 已回复。不要把「已加入 Agent 会话」当已读。
+- 没有主题的旧信显示「（无主题）」，不要把整段正文当成主题标题。
+
+### 10.2 Desktop 再测清单（debug `codeg-dev.db`，Thesis 工作台）
+
+1. 打开「多session交流测试工作台」。若只剩 `newConversation` 而 Session C/D 在 Thesis
+   目录里，把它们拖回工作台；空分栏应自动收掉。
+2. 截图：往来面板收件箱、发件箱、往来三个视图。确认列表是主题行、阅读窗才是全文。
+3. C 向 D `send_message`（必须有 `title` + `content`）。D 时间线出现系统提醒徽章，
+   提醒里只有标题，没有全文。若当前 debug exe 早于 subject 迁移，发出的信会没有主题
+   ——这是后端进程旧了，不是前端坏了；要验主题必须先停掉占用锁的 `codeg.exe` 再重编。
+4. D `read_message`。时间线出现信件卡（主题+正文+来自 Session C），原卡变为 Agent 已读。
+5. D 用 `reply_to_event_id` 回复。C 收件箱/往来线程看到同一串。
+6. 忙碌且不能 steer 的 Session：不得被自动 cancel。
+7. 关掉一个分屏里的标签后，空白栏消失。
+8. 展开往来面板后再看长会话/多轮：历史 `send_message` 卡、PING/PONG 链和滚动位置还在。
+   验完把面板收起来，否则阅读窗会把时间线压到只剩一小条。
+
+每次验收把截图放到 `.artifacts/desktop-validation/mailbox-retest/`，并在
+`result.md` 写：场景、截图路径、库里的 event/delivery/receipt、是否回归。
+
+### 10.3 测试后的感悟
+
+- Composer 的 DOM 插入不会点亮发送按钮，验收发信应走 Tauri `acp_prompt`、
+  `collaboration_send` 或真人点击。
+- `/model haiku` 不能和正文写在同一行，会被当成模型名。
+- 工作台标签和往来快照不是同一件事：Session 改名后，往来必须显示当前名。
+- 「测过一次」不能证明现在还能工作。Mailbox UI、Dispatcher 和分屏任何一批改动之后，
+  都要重跑 10.2，不能只引用旧截图。
+- 分屏时 DOM 里会挂着未选中标签的往来面板（`visibility: hidden`）。按坐标点「往来信件」
+  可能点到隐藏那一层；只点 `visibility === "visible"` 的 banner，或先读
+  `getBoundingClientRect` 再点。
+- 正在跑的 debug `codeg.exe` 会锁住 `tauri-build`。只改前端时靠 Next HMR；要验
+  `subject` / `system_notify` 信封必须先停进程再重编，不能把旧 exe 的空主题当成产品回归。
+- `invoke_when_idle` 仍会在目标空闲时注入通知。2026-08-18 的 UI 再测里，C=290 发给
+  D=291 后 D 自行 `read_message`（`agent_receipt_ref=inbox_read`）并在时间线渲染成
+  prompt 样式信件卡；旧的 MAILBOX-PING → PONG → ACK 多轮链还在。
+- 「已读未回」要单独测：`expects_reply=true` + `store_only`，再让目标只
+  `read_message`、禁止 `send_message`。2026-08-18 用 event `ef6bccdd-…` 得到
+  `obligation=awaiting_reply`、`replyReceived=false`、触发条「1 封已读未回」、
+  列表琥珀标签。5 分钟后的系统催办 digest 另测；时钟在
+  `collaboration_reminder.rs`（`REPLY_AFTER_SECS=300`），不要用立刻回复的 PING/PONG
+  冒充催办已测。

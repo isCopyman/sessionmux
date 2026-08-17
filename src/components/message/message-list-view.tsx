@@ -90,7 +90,9 @@ import {
 import {
   CollaborationMessageCard,
   SessionMailFromBadge,
+  SessionMailSystemBadge,
 } from "./collaboration-message-card"
+import { SessionLetterBody } from "./session-letter-body"
 import { useSessionLetterUiStore } from "@/stores/session-letter-ui-store"
 import {
   extractCollaborationEnvelopes,
@@ -144,6 +146,8 @@ export interface SessionMailAttribution {
   title?: string | null
   agentType?: string | null
   eventIds: string[]
+  source?: "session" | "system"
+  letterTitle?: string | null
 }
 
 export interface ResolvedMessageGroup {
@@ -274,19 +278,6 @@ export function applyCollaborationTimelineProjection(
   const projected: ThreadRenderItem[] = []
   const used = new Set<string>()
 
-  const attributionFor = (
-    matched: CollaborationDelivery[]
-  ): SessionMailAttribution | null => {
-    const first = matched[0]
-    if (!first) return null
-    return {
-      conversationId: first.source.conversationId,
-      title: first.source.title,
-      agentType: first.source.agentType,
-      eventIds: matched.map((delivery) => delivery.eventId),
-    }
-  }
-
   for (const item of items) {
     if (item.kind !== "turn" || item.group.role !== "user") {
       projected.push(item)
@@ -312,6 +303,23 @@ export function applyCollaborationTimelineProjection(
     for (const delivery of matched) used.add(delivery.id)
 
     let changed = matched.length > 0
+    let systemNotify = false
+    let letterTitle: string | null = null
+    for (const part of item.group.parts) {
+      if (part.type !== "text") continue
+      for (const envelope of extractCollaborationEnvelopes(part.text)) {
+        if (envelope.kind === "system_notify") {
+          systemNotify = true
+        }
+        if (envelope.letterTitle?.trim()) {
+          letterTitle = envelope.letterTitle.trim()
+        }
+      }
+    }
+    if (!letterTitle) {
+      const subject = matched[0]?.subject?.trim()
+      if (subject) letterTitle = subject
+    }
     const parts = item.group.parts.flatMap((part): AdaptedContentPart[] => {
       if (part.type !== "text") return [part]
       const text = stripProjectedCollaborationEnvelopes(part.text, allEventIds)
@@ -320,19 +328,48 @@ export function applyCollaborationTimelineProjection(
       return text.length > 0 ? [{ ...part, text }] : []
     })
     if (matched.length > 0 && parts.every((part) => part.type !== "text")) {
-      const body = matched
-        .map((delivery) => delivery.body)
-        .filter((text) => text.length > 0)
-        .join("\n\n")
-      if (body) parts.unshift({ type: "text", text: body })
+      if (systemNotify) {
+        if (letterTitle) {
+          parts.unshift({ type: "text", text: letterTitle })
+          changed = true
+        }
+      } else {
+        const body = matched
+          .map((delivery) => delivery.body)
+          .filter((text) => text.length > 0)
+          .join("\n\n")
+        if (body) {
+          parts.unshift({ type: "text", text: body })
+          changed = true
+        }
+      }
     }
+    const sessionMail = systemNotify
+      ? {
+          conversationId: matched[0]?.source.conversationId ?? 0,
+          title: matched[0]?.source.title,
+          agentType: matched[0]?.source.agentType,
+          eventIds: matched.map((delivery) => delivery.eventId),
+          source: "system" as const,
+          letterTitle,
+        }
+      : matched.length > 0
+        ? {
+            conversationId: matched[0].source.conversationId,
+            title: matched[0].source.title,
+            agentType: matched[0].source.agentType,
+            eventIds: matched.map((delivery) => delivery.eventId),
+            source: "session" as const,
+            letterTitle,
+          }
+        : item.group.sessionMail
     const nextItem = changed
       ? {
           ...item,
           group: {
             ...item.group,
             parts,
-            sessionMail: attributionFor(matched) ?? item.group.sessionMail,
+            sessionMail,
           },
         }
       : item
@@ -753,7 +790,9 @@ const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
         ) : null}
         {group.role === "user" ? (
           <div className="flex w-fit max-w-full flex-col items-end self-end">
-            {group.sessionMail ? (
+            {group.sessionMail?.source === "system" ? (
+              <SessionMailSystemBadge />
+            ) : group.sessionMail ? (
               <SessionMailFromBadge
                 conversationId={group.sessionMail.conversationId}
                 title={group.sessionMail.title}
@@ -765,7 +804,17 @@ const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
               <UserMessageTaskButton parts={group.parts} />
               <UserMessageCopyButton parts={group.parts} />
               <MessageContent data-conversation-search-content>
-                <CollapsibleUserMessage parts={group.parts} />
+                {group.sessionMail?.source === "session" &&
+                group.parts.every((part) => part.type === "text") ? (
+                  <SessionLetterBody
+                    subject={group.sessionMail.letterTitle}
+                    body={group.parts
+                      .map((part) => (part.type === "text" ? part.text : ""))
+                      .join("\n\n")}
+                  />
+                ) : (
+                  <CollapsibleUserMessage parts={group.parts} />
+                )}
               </MessageContent>
             </div>
           </div>
