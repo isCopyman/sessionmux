@@ -30,7 +30,7 @@ function projection(
   conversationId: number,
   revision: number
 ): CollaborationTimelineProjection {
-  return { conversationId, revision, inbound: [] }
+  return { conversationId, revision, inbound: [], outbound: [] }
 }
 
 beforeEach(() => {

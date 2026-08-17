@@ -1277,6 +1277,7 @@ export interface CollaborationTimelineProjection {
   conversationId: number
   revision: number
   inbound: CollaborationDelivery[]
+  outbound: CollaborationDelivery[]
 }
 
 export interface CollaborationUnreadSession {

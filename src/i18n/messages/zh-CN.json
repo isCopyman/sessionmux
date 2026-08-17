@@ -1650,6 +1650,7 @@
         "parentLabel": "上级分类",
         "root": "顶层",
         "openInSessionCenter": "在会话中心打开",
+        "newSession": "新建会话",
         "deleteTitle": "删除这个分类？",
         "deleteDescription": "“{name}”中的会话将变为未分类，子分类上移一级。不会删除任何会话或运行中的智能体。",
         "operationFailed": "分类操作失败：{message}"
@@ -5023,6 +5024,7 @@
     "outbound": "发出的消息",
     "from": "来自 {name}",
     "transcriptFrom": "来自 {name} 的会话消息",
+    "transcriptTo": "发给 {name} 的会话消息",
     "to": "发给 {name}",
     "unknownHarness": "未知 Harness",
     "stateDismissed": "已忽略，不会进入 Agent 上下文",

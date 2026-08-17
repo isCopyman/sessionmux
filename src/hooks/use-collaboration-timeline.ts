@@ -13,6 +13,7 @@ const EMPTY_PROJECTION: CollaborationTimelineProjection = {
   conversationId: 0,
   revision: 0,
   inbound: [],
+  outbound: [],
 }
 
 /** Persisted Session id for timeline fetch. Draft tabs keep a negative

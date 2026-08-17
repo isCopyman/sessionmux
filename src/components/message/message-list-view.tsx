@@ -170,6 +170,7 @@ export type ThreadRenderItem =
       key: string
       kind: "collaboration"
       delivery: CollaborationDelivery
+      direction: "inbound" | "outbound"
     }
   | {
       // A context-compaction event hoisted OUT of an assistant turn into its own
@@ -225,14 +226,25 @@ function threadItemTimeMs(item: ThreadRenderItem): number | null {
 }
 
 /**
- * Place inbound Session letters on the transcript. Prefer the exact Turn
- * that consumed them; otherwise insert by createdAt so cards sit next to
- * the work they triggered instead of piling up on the composer.
+ * Place inbound and outbound Session letters on the transcript. Prefer the
+ * exact Turn that consumed inbound mail; otherwise insert by createdAt so
+ * cards sit next to the work they belong to instead of piling on the composer.
  */
 export function applyCollaborationTimelineProjection(
   items: ThreadRenderItem[],
-  deliveries: CollaborationDelivery[]
+  deliveries: CollaborationDelivery[],
+  outbound: CollaborationDelivery[] = []
 ): ThreadRenderItem[] {
+  const hasVisibleInbound = deliveries.some(
+    (delivery) => delivery.state !== "dismissed"
+  )
+  const hasVisibleOutbound = outbound.some(
+    (delivery) => delivery.state !== "dismissed"
+  )
+  if (!hasVisibleInbound && !hasVisibleOutbound) {
+    return items
+  }
+
   const byTurn = new Map<string, CollaborationDelivery[]>()
   for (const delivery of deliveries) {
     if (delivery.state === "dismissed") continue
@@ -240,9 +252,6 @@ export function applyCollaborationTimelineProjection(
     const existing = byTurn.get(delivery.embeddedTurnRef)
     if (existing) existing.push(delivery)
     else byTurn.set(delivery.embeddedTurnRef, [delivery])
-  }
-  if (byTurn.size === 0 && deliveries.every((d) => d.state === "dismissed")) {
-    return items
   }
 
   const allEventIds = new Set(
@@ -265,6 +274,7 @@ export function applyCollaborationTimelineProjection(
           key: `collaboration-${delivery.id}`,
           kind: "collaboration",
           delivery,
+          direction: "inbound",
         })
       }
     }
@@ -283,14 +293,10 @@ export function applyCollaborationTimelineProjection(
     if (!isEmptyTurnItem(nextItem)) projected.push(nextItem)
   }
 
-  const unmatched = deliveries
-    .filter(
-      (delivery) => delivery.state !== "dismissed" && !used.has(delivery.id)
-    )
-    .sort(
-      (a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt) || 0
-    )
-  for (const delivery of unmatched) {
+  const insertByTime = (
+    delivery: CollaborationDelivery,
+    direction: "inbound" | "outbound"
+  ) => {
     const created = Date.parse(delivery.createdAt)
     let insertAt = projected.length
     if (!Number.isNaN(created)) {
@@ -301,10 +307,23 @@ export function applyCollaborationTimelineProjection(
       if (idx >= 0) insertAt = idx
     }
     projected.splice(insertAt, 0, {
-      key: `collaboration-${delivery.id}`,
+      key: `collaboration-${direction}-${delivery.id}`,
       kind: "collaboration",
       delivery,
+      direction,
     })
+  }
+
+  const unmatched = deliveries
+    .filter(
+      (delivery) => delivery.state !== "dismissed" && !used.has(delivery.id)
+    )
+    .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt) || 0)
+  for (const delivery of unmatched) {
+    insertByTime(delivery, "inbound")
+  }
+  for (const delivery of outbound.filter((item) => item.state !== "dismissed")) {
+    insertByTime(delivery, "outbound")
   }
   return projected
 }
@@ -905,7 +924,8 @@ export function MessageListView({
     const items = mergeConsecutiveAssistantTurns(
       applyCollaborationTimelineProjection(
         rawItems,
-        collaborationTimeline.inbound
+        collaborationTimeline.inbound,
+        collaborationTimeline.outbound ?? []
       ),
       mergedRunCache
     )
@@ -964,6 +984,7 @@ export function MessageListView({
     groupCache,
     mergedRunCache,
     collaborationTimeline.inbound,
+    collaborationTimeline.outbound,
   ])
 
   const historicalPlanEntries = useMemo(
@@ -1010,12 +1031,11 @@ export function MessageListView({
           return <PendingTypingIndicator />
         case "collaboration":
           return (
-            <Message from="assistant">
-              <CollaborationMessageCard
-                delivery={item.delivery}
-                currentConversationId={conversationId}
-              />
-            </Message>
+            <CollaborationMessageCard
+              delivery={item.delivery}
+              direction={item.direction}
+              currentConversationId={conversationId}
+            />
           )
         case "compaction":
           // Chrome-less centered divider between turns (no avatar / stats footer).

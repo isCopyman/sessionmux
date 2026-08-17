@@ -1650,6 +1650,7 @@
         "parentLabel": "Parent collection",
         "root": "Top level",
         "openInSessionCenter": "在工作階段中心開啟",
+        "newSession": "新增工作階段",
         "deleteTitle": "Delete this collection?",
         "deleteDescription": "Sessions in “{name}” become Unclassified and nested collections move up one level. No session or running agent is deleted.",
         "operationFailed": "Collection operation failed: {message}"
@@ -5023,6 +5024,7 @@
     "outbound": "Sent",
     "from": "From {name}",
     "transcriptFrom": "Message from {name}",
+    "transcriptTo": "Message to {name}",
     "to": "To {name}",
     "unknownHarness": "Unknown harness",
     "stateDismissed": "Dismissed; it will not enter the agent context",

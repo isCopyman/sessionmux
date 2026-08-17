@@ -1557,15 +1557,15 @@ async fn delivery_participants_by_event(
     ))
 }
 
-/// Project inbound Session messages into the target conversation timeline.
-/// Pending deliveries appear immediately; embedded ones stay anchored to the
-/// turn that consumed them.
+/// Project this Session's inbound and outbound letters onto its timeline.
+/// Pending inbound appears immediately; outbound is the same durable body
+/// the sender already committed.
 pub async fn timeline_projection(
     conn: &DatabaseConnection,
     conversation_id: i32,
 ) -> Result<CollaborationTimelineProjection, DbError> {
     require_live_session(conn, conversation_id).await?;
-    let rows = conn
+    let inbound_rows = conn
         .query_all(statement(
             &format!(
                 "{DELIVERY_SELECT} WHERE d.target_conversation_id = ? \
@@ -1575,10 +1575,24 @@ pub async fn timeline_projection(
             vec![conversation_id.into()],
         ))
         .await?;
+    let outbound_rows = conn
+        .query_all(statement(
+            &format!(
+                "{DELIVERY_SELECT} WHERE e.source_conversation_id = ? \
+                 AND d.state <> 'dismissed' \
+                 ORDER BY d.created_at ASC, d.id ASC"
+            ),
+            vec![conversation_id.into()],
+        ))
+        .await?;
     Ok(CollaborationTimelineProjection {
         conversation_id,
         revision: revision(conn, conversation_id).await?,
-        inbound: rows
+        inbound: inbound_rows
+            .iter()
+            .map(parse_delivery)
+            .collect::<Result<Vec<_>, _>>()?,
+        outbound: outbound_rows
             .iter()
             .map(parse_delivery)
             .collect::<Result<Vec<_>, _>>()?,
@@ -2123,6 +2137,16 @@ mod tests {
 
         let sibling = timeline_projection(&db.conn, target_b).await.unwrap();
         assert_eq!(sibling.inbound.len(), 1);
+
+        let source_view = timeline_projection(&db.conn, source).await.unwrap();
+        assert!(source_view.inbound.is_empty());
+        assert!(
+            source_view
+                .outbound
+                .iter()
+                .any(|delivery| delivery.body == "project me once"),
+            "the sender timeline must render the outbound letter body"
+        );
     }
 
     #[tokio::test]

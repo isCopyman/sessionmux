@@ -6,6 +6,7 @@ const tabs = vi.hoisted(() => ({ openTab: vi.fn() }))
 const workspace = vi.hoisted(() => ({
   conversations: [
     { id: 1, folder_id: 10, title: "Reviewer", agent_type: "codex" },
+    { id: 2, folder_id: 10, title: "Worker", agent_type: "claude_code" },
   ],
 }))
 const api = vi.hoisted(() => ({ markCollaborationSeen: vi.fn() }))
@@ -30,7 +31,9 @@ vi.mock("./content-parts-renderer", () => ({
 
 import { CollaborationMessageCard } from "./collaboration-message-card"
 
-function delivery(): CollaborationDelivery {
+function delivery(
+  overrides: Partial<CollaborationDelivery> = {}
+): CollaborationDelivery {
   return {
     id: "delivery-1",
     eventId: "event-1",
@@ -41,7 +44,13 @@ function delivery(): CollaborationDelivery {
       folderPath: "/repo",
       backend: "current",
     },
-    target: { conversationId: 2, backend: "current" },
+    target: {
+      conversationId: 2,
+      title: "Worker",
+      agentType: "claude_code",
+      folderPath: "/repo",
+      backend: "current",
+    },
     body: "Please check the proof.",
     replyToEventId: null,
     expectsReply: true,
@@ -64,6 +73,7 @@ function delivery(): CollaborationDelivery {
     error: null,
     createdAt: "2026-08-16T00:00:00Z",
     updatedAt: "2026-08-16T00:01:00Z",
+    ...overrides,
   }
 }
 
@@ -73,7 +83,7 @@ beforeEach(() => {
 })
 
 describe("CollaborationMessageCard", () => {
-  it("renders the source and body and can open that Session", () => {
+  it("renders the inbound source and body and can open that Session", () => {
     render(
       <CollaborationMessageCard
         delivery={delivery()}
@@ -81,7 +91,8 @@ describe("CollaborationMessageCard", () => {
       />
     )
 
-    expect(screen.getByText("transcriptFrom:Session 1")).toBeInTheDocument()
+    expect(screen.getByText("inbound")).toBeInTheDocument()
+    expect(screen.getByText("transcriptFrom:Reviewer")).toBeInTheDocument()
     expect(screen.getByText("Please check the proof.")).toBeInTheDocument()
     expect(screen.queryByText("stateNeedsReply")).not.toBeInTheDocument()
     expect(
@@ -90,5 +101,49 @@ describe("CollaborationMessageCard", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "openSession" }))
     expect(tabs.openTab).toHaveBeenCalledWith(10, 1, "codex", true, "Reviewer")
+  })
+
+  it("renders the outbound target and body and can open that Session", () => {
+    render(
+      <CollaborationMessageCard
+        delivery={delivery()}
+        direction="outbound"
+        currentConversationId={1}
+      />
+    )
+
+    expect(screen.getByText("outbound")).toBeInTheDocument()
+    expect(screen.getByText("transcriptTo:Worker")).toBeInTheDocument()
+    expect(screen.getByText("Please check the proof.")).toBeInTheDocument()
+    expect(
+      document.querySelector("[data-collaboration-direction='outbound']")
+    ).not.toBeNull()
+
+    fireEvent.click(screen.getByRole("button", { name: "openSession" }))
+    expect(tabs.openTab).toHaveBeenCalledWith(
+      10,
+      2,
+      "claude_code",
+      true,
+      "Worker"
+    )
+  })
+
+  it("falls back to Session id when the peer title is a long first prompt", () => {
+    render(
+      <CollaborationMessageCard
+        delivery={delivery({
+          source: {
+            conversationId: 99,
+            title:
+              "You are Session A-v2 for a Codeg session-message test. Reply with exactly SESSION_A_READY and wait.",
+            agentType: "codex",
+            folderPath: "/repo",
+            backend: "current",
+          },
+        })}
+      />
+    )
+    expect(screen.getByText("transcriptFrom:Session 99")).toBeInTheDocument()
   })
 })

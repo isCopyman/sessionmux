@@ -264,6 +264,8 @@ pub struct CollaborationTimelineProjection {
     pub conversation_id: i32,
     pub revision: i64,
     pub inbound: Vec<CollaborationDeliveryView>,
+    #[serde(default)]
+    pub outbound: Vec<CollaborationDeliveryView>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

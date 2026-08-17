@@ -219,6 +219,25 @@ describe("applyCollaborationTimelineProjection", () => {
     )
     expect(result.map((item) => item.kind)).toEqual(["turn", "collaboration"])
   })
+
+  it("projects outbound letters onto the sender timeline with the body", () => {
+    const result = applyCollaborationTimelineProjection(
+      [userItem("turn-1", "ordinary prompt")],
+      [],
+      [
+        collaborationDelivery({
+          body: "please review the proof",
+          embeddedTurnRef: null,
+        }),
+      ]
+    )
+    expect(result.map((item) => item.kind)).toEqual(["turn", "collaboration"])
+    const card = result[1]
+    expect(card.kind).toBe("collaboration")
+    if (card.kind !== "collaboration") return
+    expect(card.direction).toBe("outbound")
+    expect(card.delivery.body).toBe("please review the proof")
+  })
 })
 
 describe("singletonSourceTurns", () => {
