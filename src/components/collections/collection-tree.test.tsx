@@ -1,9 +1,10 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { NextIntlClientProvider } from "next-intl"
+import { createRef, type RefObject } from "react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
-import { CollectionTree } from "./collection-tree"
+import { CollectionTree, type CollectionTreeHandle } from "./collection-tree"
 import {
   canDropSessionOnTarget,
   collectionPlacementForRoot,
@@ -274,11 +275,17 @@ function renderTree(
       direction: "right" | "down"
     ) => void
     onNewSession?: (rootFolderId: number) => void
+    treeRef?: RefObject<CollectionTreeHandle | null>
   } = {}
 ) {
+  const { treeRef, ...treeOptions } = options
   render(
     <NextIntlClientProvider locale="en" messages={enMessages}>
-      <CollectionTree onOpenScope={onOpenScope} {...options} />
+      <CollectionTree
+        ref={treeRef}
+        onOpenScope={onOpenScope}
+        {...treeOptions}
+      />
     </NextIntlClientProvider>
   )
   return { user: userEvent.setup(), onOpenScope }
@@ -317,6 +324,29 @@ describe("CollectionTree", () => {
     await user.click(screen.getByTitle("Sources"))
 
     expect(onOpenScope).toHaveBeenCalledWith(11)
+  })
+
+  it("expands and scrolls to the active Session", async () => {
+    const scrollIntoView = vi.fn()
+    HTMLElement.prototype.scrollIntoView = scrollIntoView
+    const treeRef = createRef<CollectionTreeHandle>()
+    const { user } = renderTree(vi.fn(), { showSessions: true, treeRef })
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Loose notes" })).toBeTruthy()
+    )
+    await user.click(screen.getByText("project").closest("button")!)
+    expect(screen.queryByRole("button", { name: "Loose notes" })).toBeNull()
+
+    act(() => treeRef.current?.scrollToActive())
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Loose notes" })).toBeTruthy()
+    )
+    expect(scrollIntoView).toHaveBeenCalledWith({
+      behavior: "smooth",
+      block: "center",
+    })
   })
 
   it("creates a top-level Collection without touching execution folders", async () => {

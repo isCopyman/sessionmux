@@ -72,7 +72,10 @@ import { SidebarSectionOrderControl } from "./sidebar-section-order-control"
 import { cn } from "@/lib/utils"
 import { WorkbenchTree } from "@/components/workbench/workbench-tree"
 import { ConversationManageDialog } from "@/components/conversations/conversation-manage-dialog"
-import { CollectionTree } from "@/components/collections/collection-tree"
+import {
+  CollectionTree,
+  type CollectionTreeHandle,
+} from "@/components/collections/collection-tree"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 
 // Keyboard-shortcut hint at the trailing edge of the New chat / Search rows.
@@ -154,6 +157,7 @@ export function Sidebar() {
   const { shortcuts } = useShortcutSettings()
   const isMobile = useIsMobile()
   const listRef = useRef<SidebarConversationListHandle>(null)
+  const collectionTreeRef = useRef<CollectionTreeHandle>(null)
   // On desktop the header's top-left is owned by the fixed window-chrome overlay
   // (sidebar toggle + remote); reserve exactly its width so the view controls
   // and drag region clear it. The reserve scales with the app zoom to track the
@@ -392,18 +396,20 @@ export function Sidebar() {
               the conversation detail header). Always shown, sitting just before
               the view-options funnel. The sidebar is unmounted while collapsed,
               so `listRef` is live whenever this button is visible. */}
-          {organizationMode === "locations" ? (
-            <Button
-              variant="ghost"
-              size="icon"
-              className="h-6 w-6 shrink-0 text-muted-foreground"
-              onClick={() => listRef.current?.scrollToActive()}
-              title={t("locateActiveConversation")}
-              aria-label={t("locateActiveConversation")}
-            >
-              <Crosshair aria-hidden="true" className="h-3.5 w-3.5" />
-            </Button>
-          ) : null}
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-6 w-6 shrink-0 text-muted-foreground"
+            onClick={() =>
+              organizationMode === "collections"
+                ? collectionTreeRef.current?.scrollToActive()
+                : listRef.current?.scrollToActive()
+            }
+            title={t("locateActiveConversation")}
+            aria-label={t("locateActiveConversation")}
+          >
+            <Crosshair aria-hidden="true" className="h-3.5 w-3.5" />
+          </Button>
           {/* Expand/collapse-all keeps a standalone header button on mobile; on
               desktop it's folded into the view-options menu below. */}
           {isMobile && organizationMode === "locations" && (
@@ -608,6 +614,7 @@ export function Sidebar() {
 
       {organizationMode === "collections" ? (
         <CollectionTree
+          ref={collectionTreeRef}
           showSessions
           showCompleted={showCompleted}
           sortMode={sortMode}

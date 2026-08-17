@@ -1,6 +1,14 @@
 "use client"
 
-import { useEffect, useMemo, useState, type ReactNode } from "react"
+import {
+  forwardRef,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react"
 import { createPortal } from "react-dom"
 import {
   DndContext,
@@ -158,6 +166,10 @@ interface CollectionTreeProps {
   onNewSession?: (rootFolderId: number) => void
 }
 
+export interface CollectionTreeHandle {
+  scrollToActive: () => void
+}
+
 function descendants(items: CollectionInfo[], id: number) {
   const result = new Set<number>([id])
   let changed = true
@@ -205,16 +217,22 @@ function flatOptions(items: CollectionInfo[]) {
   return result
 }
 
-export function CollectionTree({
-  onOpenScope,
-  showSessions = false,
-  showCompleted = false,
-  sortMode = "created",
-  refreshKey = 0,
-  onOpenSession,
-  onOpenSessionInSplit,
-  onNewSession,
-}: CollectionTreeProps) {
+export const CollectionTree = forwardRef<
+  CollectionTreeHandle,
+  CollectionTreeProps
+>(function CollectionTree(
+  {
+    onOpenScope,
+    showSessions = false,
+    showCompleted = false,
+    sortMode = "created",
+    refreshKey = 0,
+    onOpenSession,
+    onOpenSessionInSplit,
+    onNewSession,
+  },
+  ref
+) {
   const t = useTranslations("Folder.sidebar.collections")
   const tSidebar = useTranslations("Folder.sidebar")
   const tCommon = useTranslations("Folder.common")
@@ -287,6 +305,9 @@ export function CollectionTree({
     useState<DbConversationSummary | null>(null)
   const [sessionDetails, setSessionDetails] =
     useState<DbConversationSummary | null>(null)
+  const scrollContainerRef = useRef<HTMLDivElement>(null)
+  const pendingLocateActiveRef = useRef(false)
+  const [locateRequest, setLocateRequest] = useState(0)
   const dndSensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
     useSensor(KeyboardSensor)
@@ -457,6 +478,75 @@ export function CollectionTree({
     const active = allFolders.find((folder) => folder.id === activeFolderId)
     return active ? (active.parent_id ?? active.id) : null
   }, [activeFolderId, allFolders])
+
+  useImperativeHandle(ref, () => ({
+    scrollToActive() {
+      if (activeConversationId == null) return
+      const conversation = visibleConversations.find(
+        (candidate) => candidate.id === activeConversationId
+      )
+      if (!conversation) return
+
+      const collectionId = membershipByConversation.get(conversation.id)
+      const collection =
+        collectionId == null ? undefined : collectionById.get(collectionId)
+      const folder = folderById.get(conversation.folder_id)
+      const rootId =
+        collection?.root_folder_id ??
+        (folder ? (folder.parent_id ?? folder.id) : null)
+
+      if (rootId != null) {
+        setCollapsedPaths((current) => {
+          if (!current.has(rootId)) return current
+          const next = new Set(current)
+          next.delete(rootId)
+          return next
+        })
+      }
+
+      if (collectionId == null) {
+        if (rootId != null) {
+          setCollapsedUnclassified((current) => {
+            if (!current.has(rootId)) return current
+            const next = new Set(current)
+            next.delete(rootId)
+            return next
+          })
+        }
+      } else {
+        setExpanded((current) => {
+          const next = new Set(current)
+          let cursor: number | null = collectionId
+          while (cursor != null) {
+            next.add(cursor)
+            cursor = collectionById.get(cursor)?.parent_id ?? null
+          }
+          return next
+        })
+      }
+
+      pendingLocateActiveRef.current = true
+      setLocateRequest((current) => current + 1)
+    },
+  }))
+
+  useEffect(() => {
+    if (!pendingLocateActiveRef.current || activeConversationId == null) return
+    const row = scrollContainerRef.current?.querySelector<HTMLElement>(
+      `[data-conversation-id="${activeConversationId}"]`
+    )
+    if (!row) return
+    pendingLocateActiveRef.current = false
+    row.scrollIntoView({ behavior: "smooth", block: "center" })
+  }, [
+    activeConversationId,
+    collapsedPaths,
+    collapsedUnclassified,
+    expanded,
+    membershipByConversation,
+    locateRequest,
+    visibleConversations,
+  ])
 
   const sessionRootId = (conversation: DbConversationSummary) => {
     const folder = folderById.get(conversation.folder_id)
@@ -1545,6 +1635,7 @@ export function CollectionTree({
           </Button>
         </div>
         <div
+          ref={scrollContainerRef}
           className={cn(
             "overflow-y-auto",
             showSessions ? "min-h-0 flex-1" : "max-h-40"
@@ -1776,4 +1867,4 @@ export function CollectionTree({
         : null}
     </DndContext>
   )
-}
+})

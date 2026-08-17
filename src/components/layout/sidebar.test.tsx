@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { NextIntlClientProvider } from "next-intl"
+import { forwardRef, useImperativeHandle } from "react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { Sidebar } from "./sidebar"
@@ -29,6 +30,7 @@ const spies = vi.hoisted(() => ({
   collectionShowsSessions: false,
   workbenchUnread: null as ReadonlyMap<number, number> | null,
   collectionUnread: null as ReadonlyMap<number, number> | null,
+  collectionScrollToActive: vi.fn(),
 }))
 const mockState = vi.hoisted(() => ({
   activeFolder: { id: 7, path: "/x" } as { id: number; path: string } | null,
@@ -60,18 +62,26 @@ vi.mock("@/components/workbench/workbench-tree", () => ({
   },
 }))
 vi.mock("@/components/collections/collection-tree", () => ({
-  CollectionTree: ({
-    onOpenScope,
-    onNewSession,
-    showSessions,
-    unreadByConversation,
-  }: {
-    onOpenScope: (scope: number | "unclassified") => void
-    onNewSession?: (rootFolderId: number) => void
-    showSessions?: boolean
-    unreadByConversation?: ReadonlyMap<number, number>
-  }) => {
+  CollectionTree: forwardRef(function MockCollectionTree(
+    {
+      onOpenScope,
+      onNewSession,
+      showSessions,
+      unreadByConversation,
+    }: {
+      onOpenScope: (scope: number | "unclassified") => void
+      onNewSession?: (rootFolderId: number) => void
+      showSessions?: boolean
+      unreadByConversation?: ReadonlyMap<number, number>
+    },
+    ref
+  ) {
+    useImperativeHandle(ref, () => ({
+      scrollToActive: spies.collectionScrollToActive,
+    }))
+    // eslint-disable-next-line react-hooks/immutability -- test probe captures rendered props
     spies.collectionShowsSessions = showSessions === true
+    // eslint-disable-next-line react-hooks/immutability -- test probe captures rendered props
     spies.collectionUnread = unreadByConversation ?? null
     return (
       <>
@@ -83,7 +93,7 @@ vi.mock("@/components/collections/collection-tree", () => ({
         </button>
       </>
     )
-  },
+  }),
 }))
 vi.mock("@/components/conversations/conversation-manage-dialog", () => ({
   ConversationManageDialog: ({
@@ -184,6 +194,7 @@ describe("Sidebar — fixed New chat / Search region", () => {
     spies.collectionShowsSessions = false
     spies.workbenchUnread = null
     spies.collectionUnread = null
+    spies.collectionScrollToActive.mockClear()
     spies.listProps = null
     mockState.activeFolder = { id: 7, path: "/x" }
   })
@@ -240,6 +251,14 @@ describe("Sidebar — fixed New chat / Search region", () => {
     expect(screen.getByText("Workbench tree")).toBeTruthy()
     expect(spies.collectionShowsSessions).toBe(true)
     expect(spies.listProps).toBeNull()
+  })
+
+  it("locates the active Session inside the Collection tree", () => {
+    renderSidebar()
+    fireEvent.click(
+      screen.getByRole("button", { name: "Locate Active Conversation" })
+    )
+    expect(spies.collectionScrollToActive).toHaveBeenCalledOnce()
   })
 
   it("creates a Session at the Collection root's execution path", async () => {
