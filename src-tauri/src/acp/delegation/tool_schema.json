@@ -144,25 +144,17 @@
   },
   {
     "name": "send_message",
-    "description": "Send a durable mailbox letter, or post to a Room when room_id is set. Letters have a short title and a body. Private mail: the target gets a Codeg system notice with the title only and must call read_message(event_id). Room post: every member can see the body on the Room timeline; only mention targets get a delivery/turn. priority=high (default) tells the target now: steer into the running turn when that channel exists, otherwise stop the turn and deliver; a closed Session is started. priority=normal waits for the target's next ordinary turn — the letter is still for the Agent. For a private reply or a follow-up supplement on the same thread, target the same peer and set reply_to_event_id. Omitting reply_to_event_id starts a new thread. For a Room reply, set the same room_id and reply_to_event_id; do not send a private letter unless asked.",
+    "description": "Send a durable private mailbox letter. Letters have a short title and a body. The target gets a Codeg system notice with the title only and must call read_message(event_id). This is not a Room post — use post_room for shared Rooms. priority=high (default) tells the target now: steer into the running turn when that channel exists, otherwise stop the turn and deliver; a closed Session is started. priority=normal waits for the target's next ordinary turn — the letter is still for the Agent. For a private reply or a follow-up supplement on the same thread, target the same peer and set reply_to_event_id. Omitting reply_to_event_id starts a new thread.",
     "inputSchema": {
       "type": "object",
-      "required": ["title", "content"],
+      "required": ["target_session_ids", "title", "content"],
       "properties": {
         "target_session_ids": {
           "type": "array",
-          "minItems": 0,
+          "minItems": 1,
           "maxItems": 16,
           "items": { "type": "integer", "minimum": 1 },
-          "description": "Private mail: one or more Session ids. Room post: Sessions to @mention. Omit or pass [] with room_id for a record-only Room post."
-        },
-        "room_id": {
-          "type": "string",
-          "description": "When set, post to this Room instead of sending private mail. The caller must already be a member."
-        },
-        "mention_all": {
-          "type": "boolean",
-          "description": "Room only. Mention every other member. Prefer explicit target_session_ids unless @all is intended."
+          "description": "One or more Session ids to receive this private letter. Recipients cannot see each other."
         },
         "title": {
           "type": "string",
@@ -178,7 +170,7 @@
         "priority": {
           "type": "string",
           "enum": ["high", "normal"],
-          "description": "How soon the target Agent should see this letter. high (default): notify now — steer into the running turn if supported, otherwise stop that turn and deliver; start/resume a closed Session. normal: keep it in the mailbox until the next ordinary turn. Both are Agent mail. delivery_mode=queue/deliver_only is a legacy alias for high/normal."
+          "description": "How soon the target Agent should see this letter. high (default): notify now — steer into the running turn if supported, otherwise stop that turn and deliver; start/resume a closed Session. normal: keep it in the mailbox until the next ordinary turn; a closed Session is still started so that turn can happen. Both are Agent mail. delivery_mode=queue/deliver_only is a legacy alias for high/normal."
         },
         "delivery_mode": {
           "type": "string",
@@ -233,7 +225,7 @@
   },
   {
     "name": "read_message",
-    "description": "Open one inbound Agent mailbox letter by event_id and return its title and full body. Opening marks the letter read for this Agent so unread reminders stop. It does not send a reply and does not clear a reply obligation. If expects_reply is true, answer with send_message targeting from_session_id and setting reply_to_event_id. Further supplements to the same letter must also set reply_to_event_id; omitting it starts a new thread. Do not invent event ids.",
+    "description": "Open one inbound Agent mailbox letter by event_id and return its title and full body. Opening marks the letter read for this Agent so unread reminders stop. It does not send a reply and does not clear a reply obligation. If expects_reply is true, answer with send_message targeting from_session_id and setting reply_to_event_id. Further supplements to the same letter must also set reply_to_event_id; omitting it starts a new thread. Do not invent event ids. Do not use this for Room posts — call read_room instead.",
     "inputSchema": {
       "type": "object",
       "required": ["event_id"],
@@ -242,6 +234,94 @@
           "type": "string",
           "minLength": 1,
           "description": "The event_id from list_inbox or from a collaboration reminder/envelope."
+        }
+      }
+    }
+  },
+  {
+    "name": "list_rooms",
+    "description": "List shared Rooms this Session already belongs to. Use this to find a room_id before read_room or post_room. Results include title and member count. Creating a Room or adding members is Host Control (room.create / room.add_member), not this tool.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "Optional case-insensitive filter over Room title and room_id. Omit for recently active Rooms."
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200,
+          "description": "Maximum results. Defaults to 50."
+        }
+      }
+    }
+  },
+  {
+    "name": "read_room",
+    "description": "Read a shared Room timeline this Session belongs to. Returns members and recent posts with full bodies. Room posts never appear in list_inbox. After a Room mention envelope, call this with the given room_id. Reply with post_room using the same room_id and reply_to_event_id; do not send_message a private letter unless asked.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["room_id"],
+      "properties": {
+        "room_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The Room id from list_rooms or a Room mention envelope."
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200,
+          "description": "Maximum timeline events, oldest first. Defaults to 50."
+        }
+      }
+    }
+  },
+  {
+    "name": "post_room",
+    "description": "Post to a shared Room this Session already belongs to. Every member can read the body on the Room timeline. Omit mention_session_ids (and mention_all=false) for a record-only post that wakes nobody. Structured mentions create deliveries and may start a turn. This is not private mail — do not use send_message. For a reply or supplement, set the same room_id and reply_to_event_id.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["room_id", "content"],
+      "properties": {
+        "room_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The Room to post in. The caller must already be a member."
+        },
+        "content": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The post body. Visible to every Room member on the timeline."
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 120,
+          "description": "Optional short title. Unlike mailbox letters, Room posts may omit this."
+        },
+        "mention_session_ids": {
+          "type": "array",
+          "maxItems": 16,
+          "items": { "type": "integer", "minimum": 1 },
+          "description": "Sessions to @mention. Empty or omitted = record-only. Mentions must already be members."
+        },
+        "mention_all": {
+          "type": "boolean",
+          "description": "Mention every other member. Prefer explicit mention_session_ids unless @all is intended."
+        },
+        "priority": {
+          "type": "string",
+          "enum": ["high", "normal"],
+          "description": "How soon mentioned Sessions should see this. high (default when anyone is mentioned): notify now. normal: wait for the next ordinary turn. Record-only posts ignore this because nobody is delivered."
+        },
+        "expects_reply": {
+          "type": "boolean",
+          "description": "Whether mentioned Sessions should answer in the same Room. Defaults to false."
+        },
+        "reply_to_event_id": {
+          "type": "string",
+          "description": "Event id this post continues. Required for replies and later supplements on the same Room thread. Omitting it starts a new root."
         }
       }
     }

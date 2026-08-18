@@ -9,7 +9,8 @@ use super::prompt_queue::PromptQueueItemState;
 /// Senders pick `priority=high|normal`; Host maps it here:
 /// - high → [`Self::InvokeWhenIdle`] (steer if the busy target supports it,
 ///   otherwise interrupt; resume a closed Session)
-/// - normal → [`Self::StoreOnly`] (attach to the next ordinary turn)
+/// - normal → [`Self::StoreOnly`] (attach to the next ordinary turn; resume
+///   a closed Session so that turn can happen)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CollaborationInvocationPolicy {

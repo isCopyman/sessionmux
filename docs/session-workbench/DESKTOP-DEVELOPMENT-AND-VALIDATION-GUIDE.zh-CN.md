@@ -553,8 +553,8 @@ Desktop 调试分层与 WebView2 CDP 验证记录；历史记录只用于找回�
   当成未接通而不投递。这两处已修。不要用立刻回完的 PING/PONG 冒充催办已测。
 - 来信通知和五分钟催办走同一个 Session Dispatcher。发信用 `priority`：
   `high` 立刻通知（能 steer 就注入，否则打断当前轮；关闭 Session 会
-  resume），`normal` 等下一轮自然 Turn。两种都是给 Agent 的信。工作台
-  没有标签时仍会打开标签。
+  resume），`normal` 等下一轮自然 Turn，目标已关闭时同样 resume。两种
+  都是给 Agent 的信。工作台没有标签时仍会打开标签。
 - **HMR 混合态（2026-08-18）**：`pnpm tauri dev` 里前端随保存热更，Rust 后端停在
   进程启动那一刻。改后端后不重启实例，测到的是「新前端 + 旧后端」——新增行为测不到，
   新前端读新增字段还会拿到 `undefined`。两条纪律：改后端后的行为验收必须先重启

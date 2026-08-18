@@ -5067,7 +5067,7 @@
     "priorityHigh": "重要",
     "priorityNormal": "普通",
     "priorityHighDescription": "立刻通知目标 Agent。若它正在工作，有原生插话就插入；否则停止当前轮再投递。",
-    "priorityNormalDescription": "先放进邮箱，等目标 Agent 下一轮再读。仍然是给 Agent 的信。",
+    "priorityNormalDescription": "先放进邮箱，等目标 Agent 下一轮再读。若会话已关闭，仍会启动它。仍然是给 Agent 的信。",
     "storeOnlyDescription": "消息会立即送达并显示，但不会启动或打断目标 Agent。",
     "invokeWhenIdleDescription": "消息会立即送达，并在目标 Agent 当前任务结束后排队处理；关闭的会话恢复后仍需确认才会启动。",
     "steerIfSupportedDescription": "消息会先可靠保存。若忙碌目标明确支持安全的实时插话，Codeg 会在不中断当前任务的情况下插入；否则继续排队。",

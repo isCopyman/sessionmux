@@ -5067,7 +5067,7 @@
     "priorityHigh": "Important",
     "priorityNormal": "Normal",
     "priorityHighDescription": "Notify the target Agent now. If it is working, Codeg injects a notice when steering is available; otherwise it stops that turn.",
-    "priorityNormalDescription": "Keep the letter in the mailbox until the target Agent's next turn. It is still for the Agent.",
+    "priorityNormalDescription": "Keep the letter in the mailbox until the target Agent's next turn. A closed session is still started. It is still for the Agent.",
     "storeOnlyDescription": "The message is delivered and shown now. It will not start or interrupt the target agent.",
     "invokeWhenIdleDescription": "The message is delivered now and queued for the target agent after its current turn. A closed session waits for confirmation after it is resumed.",
     "steerIfSupportedDescription": "The message is durable first. If the busy target supports safe live updates, Codeg inserts it without interrupting; otherwise it stays queued.",

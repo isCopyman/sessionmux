@@ -7,9 +7,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::acp::manager::ConnectionManager;
 use crate::acp::session_collaboration::{
-    SessionAddress, SessionCollaborationAccess, SessionCollaborationConfig,
+    RoomPostSpec, SessionAddress, SessionCollaborationAccess, SessionCollaborationConfig,
     SessionCollaborationRuntimeConfig, SessionListOutcome, SessionMessageDeliveryOutcome,
-    SessionMessageSpec, SessionSendOutcome, MAX_SESSION_LIST_LIMIT,
+    SessionMessageSpec, SessionRoomEvent, SessionRoomListItem, SessionRoomListOutcome,
+    SessionRoomMember, SessionRoomReadOutcome, SessionSendOutcome, MAX_SESSION_LIST_LIMIT,
+    SEND_MESSAGE_ROOM_HINT,
 };
 use crate::acp::types::ConnectionStatus;
 use crate::app_error::AppCommandError;
@@ -28,7 +30,9 @@ use crate::models::{
     SendAndInterruptCollaborationInput, SendAndInterruptCollaborationResult,
     SendCollaborationMessageInput,
 };
+use crate::models::prompt_queue::PromptQueueSource;
 use crate::prompt_queue::PromptQueueHandle;
+use crate::session_dispatcher::connection_is_live;
 use crate::web::event_bridge::{
     emit_event, EventEmitter, COLLABORATION_CHANGED_EVENT, PROMPT_QUEUE_CHANGED_EVENT,
     ROOM_CHANGED_EVENT, SESSION_COLLABORATION_SETTINGS_CHANGED_EVENT,
@@ -181,16 +185,94 @@ async fn deliver_high_priority_now(
     prompt_queue.wake(target_conversation_id);
 }
 
-fn successful_high_targets(result: &CollaborationSendResult) -> impl Iterator<Item = i32> + '_ {
-    result.deliveries.iter().filter_map(|delivery| {
-        if delivery.state == CollaborationDeliveryState::Failed
-            || delivery.state == CollaborationDeliveryState::Dismissed
-        {
-            None
-        } else {
-            Some(delivery.target.conversation_id)
+/// No live Harness means there is no "next turn" to wait for. Normal mail
+/// still has to reach the Agent, so the dispatcher must resume the Session.
+async fn target_is_closed(
+    conn: &sea_orm::DatabaseConnection,
+    manager: Option<&ConnectionManager>,
+    conversation_id: i32,
+) -> bool {
+    let Some(manager) = manager else {
+        return false;
+    };
+    let Ok(Some(row)) = crate::db::entities::conversation::Entity::find_by_id(conversation_id)
+        .one(conn)
+        .await
+    else {
+        return false;
+    };
+    let Some((_, state)) = crate::prompt_queue::active_connection_for_row(manager, &row).await
+    else {
+        return true;
+    };
+    let status = state.read().await.status.clone();
+    !connection_is_live(&status)
+}
+
+async fn wake_closed_session_for_normal_letter(
+    conn: &sea_orm::DatabaseConnection,
+    emitter: &EventEmitter,
+    prompt_queue: &PromptQueueHandle,
+    event_id: &str,
+    delivery_id: &str,
+    target_conversation_id: i32,
+) {
+    let item_id = format!("closed-normal:{delivery_id}");
+    match prompt_queue_service::enqueue_origin(
+        conn,
+        target_conversation_id,
+        &item_id,
+        event_id,
+        &item_id,
+        PromptQueueSource::Collaboration,
+    )
+    .await
+    {
+        Ok(true) => {
+            publish(emitter, vec![target_conversation_id]);
+            if let Ok(snapshot) =
+                prompt_queue_service::snapshot(conn, target_conversation_id).await
+            {
+                emit_event(emitter, PROMPT_QUEUE_CHANGED_EVENT, snapshot);
+            }
         }
-    })
+        Ok(false) => {}
+        Err(err) => tracing::warn!(
+            "[collaboration] could not queue normal letter for closed Session {target_conversation_id}: {err}"
+        ),
+    }
+    prompt_queue.wake(target_conversation_id);
+}
+
+async fn dispatch_persisted_deliveries(
+    conn: &sea_orm::DatabaseConnection,
+    manager: Option<&ConnectionManager>,
+    emitter: &EventEmitter,
+    prompt_queue: &PromptQueueHandle,
+    high: bool,
+    event_id: &str,
+    deliveries: &[crate::models::CollaborationDeliveryView],
+) {
+    for delivery in deliveries.iter().filter(|delivery| {
+        delivery.state != CollaborationDeliveryState::Failed
+            && delivery.state != CollaborationDeliveryState::Dismissed
+    }) {
+        let target = delivery.target.conversation_id;
+        if high {
+            deliver_high_priority_now(conn, manager, emitter, prompt_queue, event_id, target)
+                .await;
+        } else if target_is_closed(conn, manager, target).await {
+            wake_closed_session_for_normal_letter(
+                conn,
+                emitter,
+                prompt_queue,
+                event_id,
+                &delivery.id,
+                target,
+            )
+            .await;
+        }
+    }
 }
 
 pub async fn collaboration_send_core(
@@ -200,27 +282,27 @@ pub async fn collaboration_send_core(
     manager: Option<&ConnectionManager>,
     mut input: SendCollaborationMessageInput,
 ) -> Result<CollaborationSendResult, AppCommandError> {
-    // Persist first. `priority=high` (invoke_when_idle) notifies now: steer
-    // if the busy target supports it, otherwise interrupt. `priority=normal`
-    // waits for the next ordinary turn. Both are Agent mail.
+    // Persist first. `priority=high` notifies now: steer if the busy target
+    // supports it, otherwise interrupt. `priority=normal` waits for the next
+    // ordinary turn when the Session is live, and resumes a closed Session
+    // so the letter can still arrive. Both are Agent mail.
     let high = input.invocation_policy == CollaborationInvocationPolicy::InvokeWhenIdle;
     if high {
         input.delivery_hint = CollaborationDeliveryHint::SteerIfSupported;
     }
     let result = persist_collaboration_message(conn, prompt_queue, input).await?;
     publish_persisted_message(emitter, &result);
-    if high && !result.deduplicated {
-        for target in successful_high_targets(&result) {
-            deliver_high_priority_now(
-                conn,
-                manager,
-                emitter,
-                prompt_queue,
-                &result.event_id,
-                target,
-            )
-            .await;
-        }
+    if !result.deduplicated {
+        dispatch_persisted_deliveries(
+            conn,
+            manager,
+            emitter,
+            prompt_queue,
+            high,
+            &result.event_id,
+            &result.deliveries,
+        )
+        .await;
     }
     Ok(result)
 }
@@ -635,54 +717,8 @@ impl SessionCollaborationAccess for DbSessionCollaboration {
                 "Session collaboration is disabled in Codeg settings.",
             );
         }
-        if let Some(room_id) = spec.room_id.clone() {
-            let priority = spec.resolved_priority();
-            let result = collaboration_room_post_core(
-                &self.db.conn,
-                &self.emitter,
-                &self.prompt_queue,
-                Some(&self.manager),
-                PostRoomMessageInput {
-                    room_id,
-                    source_conversation_id: source_session_id,
-                    target_conversation_ids: spec.target_session_ids,
-                    mention_all: spec.mention_all,
-                    subject: spec.title,
-                    body: spec.content,
-                    client_dedupe_id: spec.client_dedupe_id,
-                    invocation_policy: priority.invocation_policy(),
-                    delivery_hint: if spec.steer_if_supported {
-                        CollaborationDeliveryHint::SteerIfSupported
-                    } else {
-                        CollaborationDeliveryHint::Default
-                    },
-                    expects_reply: spec.expects_reply,
-                    urgency: priority.urgency(),
-                    reply_to_event_id: spec.reply_to_event_id,
-                },
-            )
-            .await;
-            return match result {
-                Ok(result) => SessionSendOutcome {
-                    accepted: true,
-                    source_session_id: Some(source_session_id),
-                    event_id: Some(result.event_id),
-                    deliveries: result
-                        .deliveries
-                        .into_iter()
-                        .map(|delivery| SessionMessageDeliveryOutcome {
-                            target_session_id: delivery.target.conversation_id,
-                            target_title: delivery.target.title,
-                            target_agent_type: delivery.target.agent_type,
-                            state: delivery_state_name(delivery.state),
-                            error: delivery.error,
-                        })
-                        .collect(),
-                    deduplicated: result.deduplicated,
-                    note: Some(format!("Posted to Room {}", result.room_id)),
-                },
-                Err(err) => SessionSendOutcome::rejected(Some(source_session_id), err.to_string()),
-            };
+        if spec.room_id.is_some() || spec.mention_all {
+            return SessionSendOutcome::rejected(Some(source_session_id), SEND_MESSAGE_ROOM_HINT);
         }
         let priority = spec.resolved_priority();
         let result = collaboration_send_core(
@@ -725,6 +761,7 @@ impl SessionCollaborationAccess for DbSessionCollaboration {
                     })
                     .collect(),
                 deduplicated: result.deduplicated,
+                room_id: None,
                 note: None,
             },
             Err(err) => SessionSendOutcome::rejected(Some(source_session_id), err.to_string()),
@@ -874,6 +911,198 @@ impl SessionCollaborationAccess for DbSessionCollaboration {
             obligation_state: Some(item.obligation_state.as_str().to_string()),
             created_at: Some(item.created_at),
             note: None,
+        }
+    }
+
+    async fn list_rooms(
+        &self,
+        caller_session_id: i32,
+        query: Option<String>,
+        limit: u32,
+    ) -> SessionRoomListOutcome {
+        if !self.config.is_enabled().await {
+            return SessionRoomListOutcome::unavailable(
+                Some(caller_session_id),
+                "Session collaboration is disabled in Codeg settings.",
+            );
+        }
+        let rooms = match collaboration_room_service::list_for_member(
+            &self.db.conn,
+            caller_session_id,
+        )
+        .await
+        {
+            Ok(rooms) => rooms,
+            Err(err) => {
+                return SessionRoomListOutcome::unavailable(Some(caller_session_id), err.to_string())
+            }
+        };
+        let query = query
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| value.to_ascii_lowercase());
+        let filtered: Vec<_> = rooms
+            .into_iter()
+            .filter(|room| {
+                query.as_ref().is_none_or(|needle| {
+                    room.title.to_ascii_lowercase().contains(needle)
+                        || room.id.to_ascii_lowercase().contains(needle)
+                })
+            })
+            .collect();
+        let truncated = filtered.len() as u32 > limit;
+        let rooms = filtered
+            .into_iter()
+            .take(limit as usize)
+            .map(|room| SessionRoomListItem {
+                room_id: room.id,
+                title: room.title,
+                member_count: room.member_count,
+                last_event_at: room.last_event_at,
+            })
+            .collect();
+        SessionRoomListOutcome {
+            available: true,
+            caller_session_id: Some(caller_session_id),
+            rooms,
+            truncated,
+            note: None,
+        }
+    }
+
+    async fn read_room(
+        &self,
+        caller_session_id: i32,
+        room_id: String,
+        limit: u32,
+    ) -> SessionRoomReadOutcome {
+        if !self.config.is_enabled().await {
+            return SessionRoomReadOutcome::unavailable(
+                Some(caller_session_id),
+                "Session collaboration is disabled in Codeg settings.",
+            );
+        }
+        if let Err(err) = collaboration_room_service::require_member(
+            &self.db.conn,
+            &room_id,
+            caller_session_id,
+        )
+        .await
+        {
+            return SessionRoomReadOutcome::unavailable(Some(caller_session_id), err.to_string());
+        }
+        let detail = match collaboration_room_service::get(&self.db.conn, &room_id).await {
+            Ok(detail) => detail,
+            Err(err) => {
+                return SessionRoomReadOutcome::unavailable(Some(caller_session_id), err.to_string())
+            }
+        };
+        let timeline = match collaboration_room_service::timeline(
+            &self.db.conn,
+            &room_id,
+            Some(limit),
+        )
+        .await
+        {
+            Ok(timeline) => timeline,
+            Err(err) => {
+                return SessionRoomReadOutcome::unavailable(Some(caller_session_id), err.to_string())
+            }
+        };
+        SessionRoomReadOutcome {
+            available: true,
+            caller_session_id: Some(caller_session_id),
+            room_id: Some(detail.id),
+            title: Some(detail.title),
+            members: detail
+                .members
+                .into_iter()
+                .map(|member| SessionRoomMember {
+                    session_id: member.conversation_id,
+                    title: member.title,
+                    agent_type: member.agent_type,
+                    role: member.role,
+                })
+                .collect(),
+            events: timeline
+                .events
+                .into_iter()
+                .map(|event| SessionRoomEvent {
+                    event_id: event.id,
+                    from_session_id: event.source.conversation_id,
+                    from_title: event.source.title,
+                    title: crate::acp::session_collaboration::letter_title(
+                        &event.subject,
+                        &event.body,
+                    ),
+                    body: event.body,
+                    reply_to_event_id: event.reply_to_event_id,
+                    mention_session_ids: event.mention_conversation_ids,
+                    created_at: event.created_at,
+                })
+                .collect(),
+            truncated: false,
+            note: None,
+        }
+    }
+
+    async fn post_room(&self, source_session_id: i32, spec: RoomPostSpec) -> SessionSendOutcome {
+        if !self.config.is_enabled().await {
+            return SessionSendOutcome::rejected(
+                Some(source_session_id),
+                "Session collaboration is disabled in Codeg settings.",
+            );
+        }
+        let priority = spec.resolved_priority();
+        let result = collaboration_room_post_core(
+            &self.db.conn,
+            &self.emitter,
+            &self.prompt_queue,
+            Some(&self.manager),
+            PostRoomMessageInput {
+                room_id: spec.room_id,
+                source_conversation_id: source_session_id,
+                target_conversation_ids: spec.mention_session_ids,
+                mention_all: spec.mention_all,
+                subject: spec.title,
+                body: spec.content,
+                client_dedupe_id: spec.client_dedupe_id,
+                invocation_policy: priority.invocation_policy(),
+                delivery_hint: if priority
+                    == crate::acp::session_collaboration::SessionMessagePriority::High
+                {
+                    CollaborationDeliveryHint::SteerIfSupported
+                } else {
+                    CollaborationDeliveryHint::Default
+                },
+                expects_reply: spec.expects_reply,
+                urgency: priority.urgency(),
+                reply_to_event_id: spec.reply_to_event_id,
+            },
+        )
+        .await;
+        match result {
+            Ok(result) => SessionSendOutcome {
+                accepted: true,
+                source_session_id: Some(source_session_id),
+                event_id: Some(result.event_id),
+                deliveries: result
+                    .deliveries
+                    .into_iter()
+                    .map(|delivery| SessionMessageDeliveryOutcome {
+                        target_session_id: delivery.target.conversation_id,
+                        target_title: delivery.target.title,
+                        target_agent_type: delivery.target.agent_type,
+                        state: delivery_state_name(delivery.state),
+                        error: delivery.error,
+                    })
+                    .collect(),
+                deduplicated: result.deduplicated,
+                room_id: Some(result.room_id.clone()),
+                note: Some(format!("Posted to Room {}", result.room_id)),
+            },
+            Err(err) => SessionSendOutcome::rejected(Some(source_session_id), err.to_string()),
         }
     }
 }
@@ -1241,22 +1470,16 @@ pub async fn collaboration_room_post_core(
     }
     if !result.deduplicated {
         publish(emitter, result.affected_conversation_ids.clone());
-    }
-    if high && !result.deduplicated {
-        for delivery in result.deliveries.iter().filter(|delivery| {
-            delivery.state != CollaborationDeliveryState::Failed
-                && delivery.state != CollaborationDeliveryState::Dismissed
-        }) {
-            deliver_high_priority_now(
-                conn,
-                manager,
-                emitter,
-                prompt_queue,
-                &result.event_id,
-                delivery.target.conversation_id,
-            )
-            .await;
-        }
+        dispatch_persisted_deliveries(
+            conn,
+            manager,
+            emitter,
+            prompt_queue,
+            high,
+            &result.event_id,
+            &result.deliveries,
+        )
+        .await;
     }
     Ok(result)
 }
@@ -1740,12 +1963,14 @@ mod tests {
             )
             .await;
         assert!(normal.accepted);
-        assert_eq!(normal.deliveries[0].state, "pending");
-        assert!(prompt_queue_service::snapshot(&db.conn, normal_target)
-            .await
-            .unwrap()
-            .items
-            .is_empty());
+        assert_eq!(
+            prompt_queue_service::snapshot(&db.conn, normal_target)
+                .await
+                .unwrap()
+                .items
+                .len(),
+            1
+        );
         let inbound = collaboration_service::feed(&db.conn, normal_target, None)
             .await
             .unwrap()
@@ -1754,6 +1979,48 @@ mod tests {
         assert_eq!(
             inbound.invocation_policy,
             CollaborationInvocationPolicy::StoreOnly
+        );
+        assert_eq!(inbound.state, CollaborationDeliveryState::Queued);
+    }
+
+    #[tokio::test]
+    async fn normal_priority_does_not_wake_a_live_idle_session() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-normal-live").await;
+        let source = seed_conversation(&db, folder, AgentType::Codex).await;
+        let target = seed_conversation(&db, folder, AgentType::ClaudeCode).await;
+        let (manager, prompt_queue, mut commands) = live_queue(&db, folder, target, false).await;
+
+        let result = collaboration_send_core(
+            &db.conn,
+            &EventEmitter::Noop,
+            &prompt_queue,
+            Some(&manager),
+            SendCollaborationMessageInput {
+                source_conversation_id: source,
+                target_conversation_ids: vec![target],
+                subject: "When you have a moment".into(),
+                body: "no rush".into(),
+                client_dedupe_id: "normal-live".into(),
+                invocation_policy: CollaborationInvocationPolicy::StoreOnly,
+                delivery_hint: CollaborationDeliveryHint::Default,
+                expects_reply: false,
+                urgency: CollaborationUrgency::Normal,
+                reply_to_event_id: None,
+            },
+        )
+        .await
+        .expect("send normal");
+
+        assert_eq!(result.deliveries[0].state, CollaborationDeliveryState::Pending);
+        assert!(prompt_queue_service::snapshot(&db.conn, target)
+            .await
+            .unwrap()
+            .items
+            .is_empty());
+        assert!(
+            commands.try_recv().is_err(),
+            "live idle Session must not get a turn for normal mail"
         );
     }
 
@@ -2167,5 +2434,100 @@ mod tests {
             .await;
         assert_eq!(unread.unread_count, 0);
         assert!(unread.items.is_empty());
+    }
+
+    #[tokio::test]
+    async fn send_message_rejects_room_fields_and_post_room_writes_the_timeline() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-agent-room-tools").await;
+        let source = seed_conversation(&db, folder, AgentType::Codex).await;
+        let peer = seed_conversation(&db, folder, AgentType::ClaudeCode).await;
+        let outsider = seed_conversation(&db, folder, AgentType::Gemini).await;
+        let access = enabled_agent_access(&db, EventEmitter::Noop).await;
+        let room = collaboration_room_service::create(
+            &db.conn,
+            CreateCollaborationRoomInput {
+                workbench_id: 1,
+                title: "Plan".into(),
+                member_conversation_ids: vec![source, peer],
+                created_by_conversation_id: source,
+            },
+        )
+        .await
+        .expect("create room");
+
+        let rejected = access
+            .send_message(
+                source,
+                SessionMessageSpec {
+                    target_session_ids: vec![peer],
+                    title: "Wrong tool".into(),
+                    content: "should not become a room post".into(),
+                    delivery_mode: SessionMessageDeliveryMode::Queue,
+                    priority: Default::default(),
+                    steer_if_supported: false,
+                    expects_reply: false,
+                    reply_to_event_id: None,
+                    client_dedupe_id: "legacy-room-send".into(),
+                    room_id: Some(room.id.clone()),
+                    mention_all: false,
+                },
+            )
+            .await;
+        assert!(!rejected.accepted);
+        assert!(rejected
+            .note
+            .as_deref()
+            .unwrap_or("")
+            .contains("post_room"));
+
+        let listed = access.list_rooms(source, None, 50).await;
+        assert!(listed.available);
+        assert_eq!(listed.rooms.len(), 1);
+        assert_eq!(listed.rooms[0].room_id, room.id);
+        assert!(access.list_rooms(outsider, None, 50).await.rooms.is_empty());
+
+        let posted = access
+            .post_room(
+                source,
+                RoomPostSpec {
+                    room_id: room.id.clone(),
+                    title: "Need eyes".into(),
+                    content: "please look at the plan".into(),
+                    mention_session_ids: vec![peer],
+                    mention_all: false,
+                    priority: Some(
+                        crate::acp::session_collaboration::SessionMessagePriority::High,
+                    ),
+                    expects_reply: false,
+                    reply_to_event_id: None,
+                    client_dedupe_id: "mcp:post-room".into(),
+                },
+            )
+            .await;
+        assert!(posted.accepted, "{:?}", posted.note);
+        assert_eq!(posted.room_id.as_deref(), Some(room.id.as_str()));
+        assert_eq!(posted.deliveries.len(), 1);
+        assert_eq!(posted.deliveries[0].target_session_id, peer);
+
+        let timeline = access.read_room(source, room.id.clone(), 50).await;
+        assert!(timeline.available);
+        assert_eq!(timeline.events.len(), 1);
+        assert_eq!(timeline.events[0].body, "please look at the plan");
+        assert_eq!(timeline.events[0].mention_session_ids, vec![peer]);
+
+        let hidden = access.read_room(outsider, room.id.clone(), 50).await;
+        assert!(!hidden.available);
+
+        let mail = access
+            .list_inbox(
+                peer,
+                crate::acp::session_collaboration::SessionMailboxScope::Inbox,
+                SessionInboxFilter::All,
+                None,
+                20,
+            )
+            .await;
+        assert!(mail.items.is_empty());
     }
 }

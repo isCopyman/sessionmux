@@ -20,6 +20,12 @@ pub const DEFAULT_INBOX_LIMIT: u32 = 20;
 pub const MAX_INBOX_LIMIT: u32 = 50;
 pub const INBOX_PREVIEW_CHARS: usize = 160;
 pub const MAX_LETTER_TITLE_CHARS: usize = 120;
+pub const DEFAULT_ROOM_LIST_LIMIT: u32 = 50;
+pub const MAX_ROOM_LIST_LIMIT: u32 = 200;
+pub const DEFAULT_ROOM_READ_LIMIT: u32 = 50;
+pub const MAX_ROOM_READ_LIMIT: u32 = 200;
+pub const SEND_MESSAGE_ROOM_HINT: &str =
+    "send_message is private mailbox mail only. Use post_room to post in a Room.";
 
 pub fn inbox_preview(body: &str) -> String {
     let collapsed = body.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -70,6 +76,7 @@ pub enum SessionMessageDeliveryMode {
 #[serde(rename_all = "snake_case")]
 pub enum SessionMessagePriority {
     /// Persist and attach the letter to the target's next ordinary turn.
+    /// A closed Session is started so that turn can happen.
     Normal,
     /// Tell the target now: steer into the running turn when that channel
     /// exists, otherwise stop the turn and deliver. Closed Sessions resume.
@@ -165,12 +172,47 @@ pub struct SessionMessageSpec {
     /// Companion-generated from the parent connection + MCP request id. The
     /// model cannot spoof the sender or pick a key that collides with UI sends.
     pub client_dedupe_id: String,
-    /// When set, this is a Room post, not a private letter. Empty
-    /// `target_session_ids` means record-only. Mentions still create deliveries.
+    /// Legacy field. New companions omit it; Host Core rejects a value so an
+    /// old companion cannot post to a Room through `send_message`.
     #[serde(default)]
     pub room_id: Option<String>,
     #[serde(default)]
     pub mention_all: bool,
+}
+
+/// Agent-supplied Room post after companion-side validation. Source Session
+/// is filled in by the listener from the launch token.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RoomPostSpec {
+    pub room_id: String,
+    /// Optional short title. Empty is allowed; Room posts are timeline
+    /// messages, not mailbox letters.
+    #[serde(default)]
+    pub title: String,
+    pub content: String,
+    #[serde(default)]
+    pub mention_session_ids: Vec<i32>,
+    #[serde(default)]
+    pub mention_all: bool,
+    #[serde(default)]
+    pub priority: Option<SessionMessagePriority>,
+    #[serde(default)]
+    pub expects_reply: bool,
+    #[serde(default)]
+    pub reply_to_event_id: Option<String>,
+    pub client_dedupe_id: String,
+}
+
+impl RoomPostSpec {
+    pub fn resolved_priority(&self) -> SessionMessagePriority {
+        self.priority.unwrap_or_else(|| {
+            if self.mention_all || !self.mention_session_ids.is_empty() {
+                SessionMessagePriority::High
+            } else {
+                SessionMessagePriority::Normal
+            }
+        })
+    }
 }
 
 impl SessionMessageSpec {
@@ -198,6 +240,8 @@ pub struct SessionSendOutcome {
     pub event_id: Option<String>,
     pub deliveries: Vec<SessionMessageDeliveryOutcome>,
     pub deduplicated: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub room_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
 }
@@ -331,6 +375,87 @@ impl SessionMessageReadOutcome {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionRoomListItem {
+    pub room_id: String,
+    pub title: String,
+    pub member_count: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_event_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SessionRoomListOutcome {
+    pub available: bool,
+    pub caller_session_id: Option<i32>,
+    pub rooms: Vec<SessionRoomListItem>,
+    pub truncated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+impl SessionRoomListOutcome {
+    pub fn unavailable(caller_session_id: Option<i32>, note: impl Into<String>) -> Self {
+        Self {
+            available: false,
+            caller_session_id,
+            rooms: Vec::new(),
+            truncated: false,
+            note: Some(note.into()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionRoomMember {
+    pub session_id: i32,
+    pub title: Option<String>,
+    pub agent_type: Option<String>,
+    pub role: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionRoomEvent {
+    pub event_id: String,
+    pub from_session_id: i32,
+    pub from_title: Option<String>,
+    pub title: String,
+    pub body: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reply_to_event_id: Option<String>,
+    pub mention_session_ids: Vec<i32>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SessionRoomReadOutcome {
+    pub available: bool,
+    pub caller_session_id: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub room_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    pub members: Vec<SessionRoomMember>,
+    pub events: Vec<SessionRoomEvent>,
+    pub truncated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+impl SessionRoomReadOutcome {
+    pub fn unavailable(caller_session_id: Option<i32>, note: impl Into<String>) -> Self {
+        Self {
+            available: false,
+            caller_session_id,
+            members: Vec::new(),
+            events: Vec::new(),
+            truncated: false,
+            note: Some(note.into()),
+            ..Default::default()
+        }
+    }
+}
+
 impl SessionSendOutcome {
     pub fn rejected(source_session_id: Option<i32>, note: impl Into<String>) -> Self {
         Self {
@@ -339,6 +464,7 @@ impl SessionSendOutcome {
             event_id: None,
             deliveries: Vec::new(),
             deduplicated: false,
+            room_id: None,
             note: Some(note.into()),
         }
     }
@@ -373,6 +499,22 @@ pub trait SessionCollaborationAccess: Send + Sync {
         caller_session_id: i32,
         event_id: String,
     ) -> SessionMessageReadOutcome;
+
+    async fn list_rooms(
+        &self,
+        caller_session_id: i32,
+        query: Option<String>,
+        limit: u32,
+    ) -> SessionRoomListOutcome;
+
+    async fn read_room(
+        &self,
+        caller_session_id: i32,
+        room_id: String,
+        limit: u32,
+    ) -> SessionRoomReadOutcome;
+
+    async fn post_room(&self, source_session_id: i32, spec: RoomPostSpec) -> SessionSendOutcome;
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

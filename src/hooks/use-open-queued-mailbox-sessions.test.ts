@@ -83,7 +83,20 @@ describe("mailboxSessionNeedsWorkbench", () => {
     ).toBe(true)
   })
 
-  it("does not open for store_only mail with no reply obligation", () => {
+  it("does not open for store_only mail waiting on a live Session", () => {
     expect(mailboxSessionNeedsWorkbench(feed([delivery()]))).toBe(false)
+  })
+
+  it("opens a Session for store_only mail queued to wake a closed target", () => {
+    expect(
+      mailboxSessionNeedsWorkbench(
+        feed([
+          delivery({
+            invocationPolicy: "store_only",
+            state: "queued",
+          }),
+        ])
+      )
+    ).toBe(true)
   })
 })

@@ -13,7 +13,6 @@ import { COLLABORATION_CHANGED_EVENT } from "./use-collaboration-feed"
 export function mailboxSessionNeedsWorkbench(feed: CollaborationFeed): boolean {
   return feed.inbound.some((delivery) => {
     const unreadQueued =
-      delivery.invocationPolicy === "invoke_when_idle" &&
       (delivery.state === "queued" || delivery.state === "embedding") &&
       delivery.agentReceivedAt == null
     const awaitingReply =
