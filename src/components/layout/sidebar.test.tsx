@@ -124,6 +124,9 @@ vi.mock("@/contexts/tab-context", () => ({
     openChatModeTab: spies.openChatModeTab,
     openTab: spies.openTab,
   }),
+  useTabStore: (
+    selector: (state: { tabs: []; activeTabId: null }) => unknown
+  ) => selector({ tabs: [], activeTabId: null }),
 }))
 vi.mock("@/contexts/search-dialog-context", () => ({
   useSearchDialog: () => ({ open: false, setOpen: spies.setSearchOpen }),

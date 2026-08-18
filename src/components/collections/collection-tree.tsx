@@ -118,6 +118,7 @@ import { useSessionMultiSelect } from "@/hooks/use-session-multi-select"
 import {
   assignConversationsToCollection,
   assignRoomsToCollection,
+  deleteCollaborationRoom,
   deleteConversation,
   listConversationCollectionRefs,
   updateConversationArchive,
@@ -127,6 +128,7 @@ import {
 } from "@/lib/api"
 import { visibleCollectionSessionIds } from "@/lib/collection-session-order"
 import { formatConversationTitle } from "@/lib/conversation-title"
+import { compareRoomsForSidebar } from "@/lib/room-sidebar-order"
 import { sessionClickIntent } from "@/lib/session-multi-select"
 import {
   archiveSessions,
@@ -154,6 +156,7 @@ import { useWorkbenchStore } from "@/stores/workbench-store"
 import { useOrganizationRevisionStore } from "@/stores/organization-revision-store"
 import type { SidebarSortMode } from "@/lib/sidebar-view-mode-storage"
 import { useTabActions, useTabStore } from "@/contexts/tab-context"
+import { makeRoomTabId } from "@/stores/tab-store"
 import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
 
 type OpenScope = number | "unclassified"
@@ -265,6 +268,7 @@ export const CollectionTree = forwardRef<
   const tManage = useTranslations("Folder.sidebar.manageConversations")
   const tStatus = useTranslations("Folder.statusLabels")
   const tDetails = useTranslations("Folder.sessionDetails")
+  const tRoom = useTranslations("Room")
   const ime = useImeGuard()
   const items = useCollectionStore((state) => state.items)
   const hydrated = useCollectionStore((state) => state.hydrated)
@@ -290,7 +294,7 @@ export const CollectionTree = forwardRef<
   )
   const activeTabId = useTabStore((state) => state.activeTabId)
   const tabs = useTabStore((state) => state.tabs)
-  const { closeConversationTab, openTab } = useTabActions()
+  const { closeConversationTab, closeTab, openTab } = useTabActions()
   const { openConversations } = useWorkbenchRoute()
   const openRoom = useOpenRoom()
   const catalogRooms = useRoomCatalogStore((state) => state.rooms)
@@ -336,6 +340,9 @@ export const CollectionTree = forwardRef<
   } | null>(null)
   const [sessionDelete, setSessionDelete] =
     useState<DbConversationSummary | null>(null)
+  const [roomDelete, setRoomDelete] = useState<CollaborationRoomSummary | null>(
+    null
+  )
   const [sessionDetails, setSessionDetails] =
     useState<DbConversationSummary | null>(null)
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false)
@@ -506,13 +513,6 @@ export const CollectionTree = forwardRef<
       ),
     [visibleConversations]
   )
-  const conversationByIdAll = useMemo(
-    () =>
-      new Map(
-        conversations.map((conversation) => [conversation.id, conversation])
-      ),
-    [conversations]
-  )
   const roomsByCollection = useMemo(() => {
     const grouped = new Map<number, CollaborationRoomSummary[]>()
     if (!showSessions) return grouped
@@ -522,8 +522,11 @@ export const CollectionTree = forwardRef<
       group.push(room)
       grouped.set(room.collectionId, group)
     }
+    for (const rooms of grouped.values()) {
+      rooms.sort((left, right) => compareRoomsForSidebar(left, right, sortMode))
+    }
     return grouped
-  }, [catalogRooms, showSessions])
+  }, [catalogRooms, showSessions, sortMode])
   const roomsByUnclassifiedRoot = useMemo(() => {
     const grouped = new Map<number, CollaborationRoomSummary[]>()
     if (!showSessions) return grouped
@@ -533,8 +536,11 @@ export const CollectionTree = forwardRef<
       group.push(room)
       grouped.set(room.rootFolderId, group)
     }
+    for (const rooms of grouped.values()) {
+      rooms.sort((left, right) => compareRoomsForSidebar(left, right, sortMode))
+    }
     return grouped
-  }, [catalogRooms, showSessions])
+  }, [catalogRooms, showSessions, sortMode])
   const rootFolderIdByConversation = useMemo(() => {
     const next = new Map<number, number>()
     for (const conversation of visibleConversations) {
@@ -606,8 +612,59 @@ export const CollectionTree = forwardRef<
     return active ? (active.parent_id ?? active.id) : null
   }, [activeFolderId, allFolders])
 
+  const expandLocatedItem = (
+    collectionId: number | null | undefined,
+    rootId: number | null
+  ) => {
+    if (rootId != null) {
+      setCollapsedPaths((current) => {
+        if (!current.has(rootId)) return current
+        const next = new Set(current)
+        next.delete(rootId)
+        return next
+      })
+    }
+    if (collectionId == null) {
+      if (rootId != null) {
+        setCollapsedUnclassified((current) => {
+          if (!current.has(rootId)) return current
+          const next = new Set(current)
+          next.delete(rootId)
+          return next
+        })
+      }
+    } else {
+      setExpanded((current) => {
+        const next = new Set(current)
+        let cursor: number | null = collectionId
+        while (cursor != null) {
+          next.add(cursor)
+          cursor = collectionById.get(cursor)?.parent_id ?? null
+        }
+        return next
+      })
+    }
+    pendingLocateActiveRef.current = true
+    setLocateRequest((current) => current + 1)
+  }
+
   useImperativeHandle(ref, () => ({
     scrollToActive() {
+      if (activeRoomId != null) {
+        const room = catalogRooms.find(
+          (candidate) => candidate.id === activeRoomId
+        )
+        if (!room) return
+        const collection =
+          room.collectionId == null
+            ? undefined
+            : collectionById.get(room.collectionId)
+        expandLocatedItem(
+          room.collectionId,
+          collection?.root_folder_id ?? room.rootFolderId ?? null
+        )
+        return
+      }
       if (activeConversationId == null) return
       const conversation = visibleConversations.find(
         (candidate) => candidate.id === activeConversationId
@@ -621,52 +678,27 @@ export const CollectionTree = forwardRef<
       const rootId =
         collection?.root_folder_id ??
         (folder ? (folder.parent_id ?? folder.id) : null)
-
-      if (rootId != null) {
-        setCollapsedPaths((current) => {
-          if (!current.has(rootId)) return current
-          const next = new Set(current)
-          next.delete(rootId)
-          return next
-        })
-      }
-
-      if (collectionId == null) {
-        if (rootId != null) {
-          setCollapsedUnclassified((current) => {
-            if (!current.has(rootId)) return current
-            const next = new Set(current)
-            next.delete(rootId)
-            return next
-          })
-        }
-      } else {
-        setExpanded((current) => {
-          const next = new Set(current)
-          let cursor: number | null = collectionId
-          while (cursor != null) {
-            next.add(cursor)
-            cursor = collectionById.get(cursor)?.parent_id ?? null
-          }
-          return next
-        })
-      }
-
-      pendingLocateActiveRef.current = true
-      setLocateRequest((current) => current + 1)
+      expandLocatedItem(collectionId, rootId)
     },
   }))
 
   useEffect(() => {
-    if (!pendingLocateActiveRef.current || activeConversationId == null) return
-    const row = scrollContainerRef.current?.querySelector<HTMLElement>(
-      `[data-conversation-id="${activeConversationId}"]`
-    )
+    if (!pendingLocateActiveRef.current) return
+    const selector =
+      activeRoomId != null
+        ? `[data-room-id="${CSS.escape(activeRoomId)}"]`
+        : activeConversationId != null
+          ? `[data-conversation-id="${activeConversationId}"]`
+          : null
+    if (selector == null) return
+    const row = scrollContainerRef.current?.querySelector<HTMLElement>(selector)
     if (!row) return
     pendingLocateActiveRef.current = false
     row.scrollIntoView({ behavior: "smooth", block: "center" })
   }, [
     activeConversationId,
+    activeRoomId,
+    catalogRooms,
     collapsedPaths,
     collapsedUnclassified,
     expanded,
@@ -993,6 +1025,18 @@ export const CollectionTree = forwardRef<
       )
       applyConversationRemove(sessionDelete.id)
       setSessionDelete(null)
+    } catch (error) {
+      toast.error(t("operationFailed", { message: toErrorMessage(error) }))
+    }
+  }
+
+  const handleRoomDelete = async () => {
+    if (!roomDelete) return
+    try {
+      await deleteCollaborationRoom(roomDelete.id)
+      closeTab(makeRoomTabId(roomDelete.id))
+      await useRoomCatalogStore.getState().refresh()
+      setRoomDelete(null)
     } catch (error) {
       toast.error(t("operationFailed", { message: toErrorMessage(error) }))
     }
@@ -1540,6 +1584,14 @@ export const CollectionTree = forwardRef<
               ))}
             </ContextMenuSubContent>
           </ContextMenuSub>
+          <ContextMenuSeparator />
+          <ContextMenuItem
+            variant="destructive"
+            onSelect={() => setRoomDelete(room)}
+          >
+            <Trash2 className="h-4 w-4" />
+            {tRoom("delete")}
+          </ContextMenuItem>
         </ContextMenuContent>
       </ContextMenu>
     )
@@ -2217,6 +2269,26 @@ export const CollectionTree = forwardRef<
               <AlertDialogCancel>{tConversation("cancel")}</AlertDialogCancel>
               <AlertDialogAction onClick={() => void handleSessionDelete()}>
                 {tConversation("delete")}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+
+        <AlertDialog
+          open={roomDelete != null}
+          onOpenChange={(open) => !open && setRoomDelete(null)}
+        >
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>{tRoom("deleteTitle")}</AlertDialogTitle>
+              <AlertDialogDescription>
+                {tRoom("deleteConfirm")}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>{tRoom("cancel")}</AlertDialogCancel>
+              <AlertDialogAction onClick={() => void handleRoomDelete()}>
+                {tRoom("delete")}
               </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>

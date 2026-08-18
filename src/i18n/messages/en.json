@@ -5210,6 +5210,7 @@
     "jumpToQuote": "Jump to quoted post",
     "showMembers": "Show members",
     "hideMembers": "Hide members",
+    "moreActions": "More actions",
     "speakingAs": "Post as",
     "timelineEmpty": "No messages yet. You speak first; Sessions answer when mentioned.",
     "mentioned": "@ {names}",

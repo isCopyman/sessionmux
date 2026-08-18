@@ -5210,6 +5210,7 @@
     "jumpToQuote": "인용된 글로 이동",
     "showMembers": "멤버 보기",
     "hideMembers": "멤버 숨기기",
+    "moreActions": "더보기",
     "speakingAs": "다음으로 보내기",
     "timelineEmpty": "아직 메시지가 없습니다",
     "mentioned": "@ {names}",

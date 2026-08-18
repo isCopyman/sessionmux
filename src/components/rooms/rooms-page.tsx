@@ -2,11 +2,14 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
+  EllipsisVertical,
   MessagesSquare,
+  Pencil,
   Plus,
   Reply,
   Send,
   Trash2,
+  UserPlus,
   UserRound,
   Users,
   X,
@@ -26,6 +29,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Textarea } from "@/components/ui/textarea"
@@ -108,6 +118,36 @@ function sameSpeaker(a: RoomTimelineEvent, b: RoomTimelineEvent) {
   return a.source.conversationId === b.source.conversationId
 }
 
+function RoomReplyButton({
+  label,
+  hint,
+  compact = false,
+  onReply,
+}: {
+  label: string
+  hint: string
+  compact?: boolean
+  onReply: () => void
+}) {
+  return (
+    <Button
+      type="button"
+      size="sm"
+      variant="ghost"
+      className={cn(
+        "h-6 shrink-0 text-[11px] text-muted-foreground opacity-0 group-hover:opacity-100 group-focus-within:opacity-100",
+        compact ? "w-6 px-0" : "px-1.5"
+      )}
+      title={hint}
+      aria-label={label}
+      onClick={onReply}
+    >
+      <Reply className="size-3" />
+      {compact ? null : label}
+    </Button>
+  )
+}
+
 function RoomSpeakerAvatar({
   human,
   agentType,
@@ -188,8 +228,6 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
   const [body, setBody] = useState("")
   const [mentionAll, setMentionAll] = useState(false)
   const [mentioned, setMentioned] = useState<number[]>([])
-  const [expectsReply, setExpectsReply] = useState(false)
-  const expectsReplyTouchedRef = useRef(false)
   const [pending, setPending] = useState(false)
   const [titleDraft, setTitleDraft] = useState<string | null>(null)
   const [addOpen, setAddOpen] = useState(false)
@@ -322,21 +360,6 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
       behavior: "smooth",
     })
   }, [])
-  const hasMention = useMemo(() => {
-    if (mentionAll || mentioned.length > 0) return true
-    if (mentionAllFromText(body)) return true
-    if (sessionIdsFromText(body).length > 0) return true
-    if (!detail) return false
-    return (
-      sessionIdsFromAtAliases(body, detail.members, (id) =>
-        t("untitled", { id })
-      ).length > 0
-    )
-  }, [body, detail, mentionAll, mentioned, t])
-  useEffect(() => {
-    if (expectsReplyTouchedRef.current) return
-    setExpectsReply(hasMention)
-  }, [hasMention])
   const applyComposerToken = useCallback((token: string, add: boolean) => {
     setBody((current) =>
       add
@@ -389,14 +412,12 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
           mentionAllNext || targets.length > 0
             ? "invoke_when_idle"
             : "store_only",
-        expectsReply,
+        expectsReply: mentionAllNext || targets.length > 0,
         replyToEventId: replyTo?.id ?? null,
       })
       setBody("")
       setMentioned([])
       setMentionAll(false)
-      setExpectsReply(false)
-      expectsReplyTouchedRef.current = false
       setReplyTo(null)
       toast.success(t("posted"))
       await reload()
@@ -407,17 +428,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
     } finally {
       setPending(false)
     }
-  }, [
-    body,
-    detail,
-    expectsReply,
-    mentionAll,
-    mentioned,
-    reload,
-    replyTo,
-    roomId,
-    t,
-  ])
+  }, [body, detail, mentionAll, mentioned, reload, replyTo, roomId, t])
 
   const handleRename = useCallback(async () => {
     if (!detail || titleDraft == null) return
@@ -561,21 +572,43 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
           >
             <Users className="h-3.5 w-3.5" />
           </Button>
-          <Button
-            type="button"
-            size="icon-sm"
-            variant="ghost"
-            className="h-7 w-7 text-muted-foreground hover:text-destructive"
-            aria-label={t("delete")}
-            onClick={() => setDeleteOpen(true)}
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                type="button"
+                size="icon-sm"
+                variant="ghost"
+                className="h-7 w-7 text-muted-foreground"
+                aria-label={t("moreActions")}
+                title={t("moreActions")}
+              >
+                <EllipsisVertical className="h-3.5 w-3.5" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onSelect={() => setTitleDraft(detail.title)}>
+                <Pencil className="h-4 w-4" />
+                {t("rename")}
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => setAddOpen(true)}>
+                <UserPlus className="h-4 w-4" />
+                {t("addMember")}
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                variant="destructive"
+                onSelect={() => setDeleteOpen(true)}
+              >
+                <Trash2 className="h-4 w-4" />
+                {t("delete")}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </div>
       <div className="flex min-h-0 flex-1">
         <ScrollArea className="min-w-0 flex-1">
-          <div className="flex flex-col py-2">
+          <div className="mx-auto flex w-full max-w-3xl flex-col py-2">
             {truncated ? (
               <div className="flex justify-center py-2">
                 <Button
@@ -632,12 +665,19 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
                     key={event.id}
                     id={`room-event-${event.id}`}
                     className={cn(
-                      "group relative flex gap-3 px-4 hover:bg-muted/40",
+                      "group flex gap-3 px-4 hover:bg-muted/40",
                       grouped ? "py-0.5" : "mt-2 py-1.5"
                     )}
                   >
                     {grouped ? (
-                      <span className="w-9 shrink-0" />
+                      <span className="flex w-9 shrink-0 items-start justify-center pt-0.5">
+                        <RoomReplyButton
+                          label={t("reply")}
+                          hint={t("replyHint")}
+                          compact
+                          onReply={() => setReplyTo(event)}
+                        />
+                      </span>
                     ) : (
                       <RoomSpeakerAvatar
                         human={fromYou}
@@ -671,6 +711,11 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
                               {t("needsReplyBadge")}
                             </span>
                           ) : null}
+                          <RoomReplyButton
+                            label={t("reply")}
+                            hint={t("replyHint")}
+                            onReply={() => setReplyTo(event)}
+                          />
                         </div>
                       )}
                       {event.replyToEventId ? (
@@ -708,17 +753,6 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
                         onOpenSession={openSession}
                       />
                     </div>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="ghost"
-                      className="absolute top-1.5 right-3 h-6 px-1.5 text-[11px] text-muted-foreground opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
-                      title={t("replyHint")}
-                      onClick={() => setReplyTo(event)}
-                    >
-                      <Reply className="size-3" />
-                      {t("reply")}
-                    </Button>
                   </article>
                 )
               })
@@ -791,117 +825,100 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
           </aside>
         ) : null}
       </div>
-      <div className="border-t border-border/60 p-3">
-        <p className="mb-2 text-[11px] text-muted-foreground">
-          {replyTo
-            ? t("replyWakeHint", { name: speakerName(replyTo) })
-            : t("wakeHint")}
-        </p>
-        {replyTo ? (
-          <div className="mb-2 flex items-center justify-between gap-2 rounded-md bg-muted/50 px-2 py-1 text-xs">
-            <span className="min-w-0 truncate">
-              {t("replyTo", { name: speakerName(replyTo) })}
-            </span>
+      <div className="border-t border-border/60">
+        <div className="mx-auto w-full max-w-3xl p-3">
+          <p className="mb-2 text-[11px] text-muted-foreground">
+            {replyTo
+              ? t("replyWakeHint", { name: speakerName(replyTo) })
+              : t("wakeHint")}
+          </p>
+          {replyTo ? (
+            <div className="mb-2 flex items-center justify-between gap-2 rounded-md bg-muted/50 px-2 py-1 text-xs">
+              <span className="min-w-0 truncate">
+                {t("replyTo", { name: speakerName(replyTo) })}
+              </span>
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                className="h-6 shrink-0 px-1.5 text-[11px]"
+                onClick={() => setReplyTo(null)}
+              >
+                {t("cancelReply")}
+              </Button>
+            </div>
+          ) : null}
+          <div className="mb-2 flex flex-wrap items-center gap-2 text-xs">
             <Button
               type="button"
               size="sm"
-              variant="ghost"
-              className="h-6 shrink-0 px-1.5 text-[11px]"
-              onClick={() => setReplyTo(null)}
+              variant={mentionAll ? "default" : "outline"}
+              className="h-7 px-2 text-xs"
+              onClick={() => {
+                const next = !mentionAll
+                setMentionAll(next)
+                if (next) {
+                  setMentioned([])
+                  applyComposerToken(t("mentionAll"), true)
+                } else {
+                  applyComposerToken(t("mentionAll"), false)
+                  applyComposerToken("@all", false)
+                  applyComposerToken("@everyone", false)
+                }
+              }}
             >
-              {t("cancelReply")}
+              {t("mentionAll")}
+            </Button>
+            {detail.members.map((member) => {
+              const active = mentionSet.has(member.conversationId)
+              return (
+                <Button
+                  key={member.conversationId}
+                  type="button"
+                  size="sm"
+                  variant={active ? "default" : "outline"}
+                  className="h-7 px-2 text-xs"
+                  disabled={mentionAll}
+                  onClick={() => {
+                    const label = memberLabel(member, (id) =>
+                      t("untitled", { id })
+                    )
+                    const token = mentionMarkdownForSession(
+                      label,
+                      member.conversationId
+                    )
+                    const next = !active
+                    setMentioned((current) =>
+                      next
+                        ? [...current, member.conversationId]
+                        : current.filter((id) => id !== member.conversationId)
+                    )
+                    applyComposerToken(token, next)
+                  }}
+                >
+                  @{memberLabel(member, (id) => t("untitled", { id }))}
+                </Button>
+              )
+            })}
+          </div>
+          <Textarea
+            ref={composerRef}
+            value={body}
+            onChange={(event) => setBody(event.target.value)}
+            placeholder={t("composerPlaceholder")}
+            className="min-h-20 resize-none"
+          />
+          <div className="mt-2 flex items-center justify-end gap-2">
+            <Button
+              type="button"
+              size="sm"
+              disabled={!canPost}
+              onClick={() => void handlePost()}
+            >
+              <Send className="h-3.5 w-3.5" />
+              {t("send")}
             </Button>
           </div>
-        ) : null}
-        <div className="mb-2 flex flex-wrap items-center gap-2 text-xs">
-          <Button
-            type="button"
-            size="sm"
-            variant={mentionAll ? "default" : "outline"}
-            className="h-7 px-2 text-xs"
-            onClick={() => {
-              const next = !mentionAll
-              setMentionAll(next)
-              if (next) {
-                setMentioned([])
-                applyComposerToken(t("mentionAll"), true)
-              } else {
-                applyComposerToken(t("mentionAll"), false)
-                applyComposerToken("@all", false)
-                applyComposerToken("@everyone", false)
-              }
-            }}
-          >
-            {t("mentionAll")}
-          </Button>
-          {detail.members.map((member) => {
-            const active = mentionSet.has(member.conversationId)
-            return (
-              <Button
-                key={member.conversationId}
-                type="button"
-                size="sm"
-                variant={active ? "default" : "outline"}
-                className="h-7 px-2 text-xs"
-                disabled={mentionAll}
-                onClick={() => {
-                  const label = memberLabel(member, (id) =>
-                    t("untitled", { id })
-                  )
-                  const token = mentionMarkdownForSession(
-                    label,
-                    member.conversationId
-                  )
-                  const next = !active
-                  setMentioned((current) =>
-                    next
-                      ? [...current, member.conversationId]
-                      : current.filter((id) => id !== member.conversationId)
-                  )
-                  applyComposerToken(token, next)
-                }}
-              >
-                @{memberLabel(member, (id) => t("untitled", { id }))}
-              </Button>
-            )
-          })}
-        </div>
-        <Textarea
-          ref={composerRef}
-          value={body}
-          onChange={(event) => setBody(event.target.value)}
-          placeholder={t("composerPlaceholder")}
-          className="min-h-20 resize-none"
-        />
-        <div className="mt-2 flex items-center justify-between gap-2">
-          <label className="flex min-w-0 cursor-pointer items-start gap-2">
-            <Checkbox
-              checked={expectsReply}
-              onCheckedChange={(checked) => {
-                expectsReplyTouchedRef.current = true
-                setExpectsReply(checked === true)
-              }}
-              aria-label={t("requestReply")}
-              className="mt-0.5"
-            />
-            <span className="min-w-0">
-              <span className="block text-xs font-medium">
-                {t("requestReply")}
-              </span>
-              <span className="block text-[11px] text-muted-foreground">
-                {t("requestReplyDescription")}
-              </span>
-            </span>
-          </label>
-          <Button
-            type="button"
-            size="sm"
-            disabled={!canPost}
-            onClick={() => void handlePost()}
-          >
-            <Send className="h-3.5 w-3.5" />
-            {t("send")}
-          </Button>
         </div>
       </div>
 

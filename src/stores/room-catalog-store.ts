@@ -3,6 +3,7 @@ import { create } from "zustand"
 import { listWorkbenchRooms } from "@/lib/api"
 import { subscribe } from "@/lib/platform"
 import { ROOM_CHANGED_EVENT } from "@/lib/room-events"
+import { sortRoomsForSidebar } from "@/lib/room-sidebar-order"
 import type { CollaborationRoomSummary, RoomChanged } from "@/lib/types"
 import { useWorkbenchStore } from "@/stores/workbench-store"
 
@@ -29,11 +30,7 @@ async function loadAllRooms(): Promise<CollaborationRoomSummary[]> {
   for (const list of lists) {
     for (const room of list) byId.set(room.id, room)
   }
-  return [...byId.values()].sort(
-    (left, right) =>
-      Date.parse(right.updatedAt) - Date.parse(left.updatedAt) ||
-      left.id.localeCompare(right.id)
-  )
+  return sortRoomsForSidebar([...byId.values()], "created")
 }
 
 export const useRoomCatalogStore = create<RoomCatalogState>((set) => ({

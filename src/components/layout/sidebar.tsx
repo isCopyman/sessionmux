@@ -17,7 +17,7 @@ import {
 import { useTranslations } from "next-intl"
 import { useActiveFolder } from "@/contexts/active-folder-context"
 import { useSidebarContext } from "@/contexts/sidebar-context"
-import { useTabActions } from "@/contexts/tab-context"
+import { useTabActions, useTabStore } from "@/contexts/tab-context"
 import { useSearchDialog } from "@/contexts/search-dialog-context"
 import { useAutomationsView } from "@/contexts/automations-view-context"
 import { useTasksView } from "@/contexts/tasks-view-context"
@@ -158,6 +158,11 @@ export function Sidebar() {
   const isMobile = useIsMobile()
   const listRef = useRef<SidebarConversationListHandle>(null)
   const collectionTreeRef = useRef<CollectionTreeHandle>(null)
+  const pendingLocateRef = useRef(false)
+  const activeTabKind = useTabStore((state) => {
+    const tab = state.tabs.find((item) => item.id === state.activeTabId)
+    return tab?.kind ?? null
+  })
   // On desktop the header's top-left is owned by the fixed window-chrome overlay
   // (sidebar toggle + remote); reserve exactly its width so the view controls
   // and drag region clear it. The reserve scales with the app zoom to track the
@@ -219,6 +224,30 @@ export function Sidebar() {
       return next
     })
   }, [])
+
+  const handleLocateActive = useCallback(() => {
+    if (activeTabKind === "room") {
+      if (organizationMode !== "collections") {
+        pendingLocateRef.current = true
+        setOrganizationMode("collections")
+        saveOrganizationMode("collections")
+        return
+      }
+      collectionTreeRef.current?.scrollToActive()
+      return
+    }
+    if (organizationMode === "collections") {
+      collectionTreeRef.current?.scrollToActive()
+    } else {
+      listRef.current?.scrollToActive()
+    }
+  }, [activeTabKind, organizationMode])
+
+  useEffect(() => {
+    if (!pendingLocateRef.current || organizationMode !== "collections") return
+    pendingLocateRef.current = false
+    collectionTreeRef.current?.scrollToActive()
+  }, [organizationMode])
 
   const handleSetShowCompleted = useCallback((value: boolean) => {
     setShowCompleted(value)
@@ -400,11 +429,7 @@ export function Sidebar() {
             variant="ghost"
             size="icon"
             className="h-6 w-6 shrink-0 text-muted-foreground"
-            onClick={() =>
-              organizationMode === "collections"
-                ? collectionTreeRef.current?.scrollToActive()
-                : listRef.current?.scrollToActive()
-            }
+            onClick={handleLocateActive}
             title={t("locateActiveConversation")}
             aria-label={t("locateActiveConversation")}
           >

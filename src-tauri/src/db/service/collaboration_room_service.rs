@@ -717,7 +717,7 @@ pub async fn mark_seen(
     let txn = conn.begin().await?;
     txn.execute(statement(
         "UPDATE collaboration_room \
-         SET last_seen_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP \
+         SET last_seen_at = CURRENT_TIMESTAMP \
          WHERE id = ?",
         vec![room_id.into()],
     ))
@@ -1584,9 +1584,15 @@ mod tests {
         .unwrap();
         let listed = list(&db.conn, 1).await.unwrap();
         assert_eq!(listed[0].unread_count, 1);
+        let updated_before = get(&db.conn, &room.id).await.unwrap().updated_at;
         mark_seen(&db.conn, &room.id, Some(a)).await.unwrap();
         let listed = list(&db.conn, 1).await.unwrap();
         assert_eq!(listed[0].unread_count, 0);
+        assert_eq!(
+            get(&db.conn, &room.id).await.unwrap().updated_at,
+            updated_before,
+            "opening a Room must not reshuffle the sidebar by bumping updated_at"
+        );
 
         add_members(
             &db.conn,

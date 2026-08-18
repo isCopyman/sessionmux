@@ -5210,6 +5210,7 @@
     "jumpToQuote": "跳到被引用的帖子",
     "showMembers": "显示成员",
     "hideMembers": "收起成员",
+    "moreActions": "更多操作",
     "speakingAs": "以谁的身份发送",
     "timelineEmpty": "还没有消息。你先说，被 @ 的 Session 才会开口。",
     "mentioned": "@ {names}",

@@ -142,7 +142,7 @@ function roomToTreeSession(
     agentType: creator?.agent_type ?? "claude_code",
     title: room.title,
     liveTabId,
-    updatedAt: room.updatedAt,
+    updatedAt: room.lastEventAt ?? room.createdAt,
     tabOrder,
   }
 }

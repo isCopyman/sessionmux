@@ -5210,6 +5210,7 @@
     "jumpToQuote": "Aller au message cité",
     "showMembers": "Afficher les membres",
     "hideMembers": "Masquer les membres",
+    "moreActions": "Plus d'actions",
     "speakingAs": "Publier en tant que",
     "timelineEmpty": "Aucun message pour le moment",
     "mentioned": "@ {names}",

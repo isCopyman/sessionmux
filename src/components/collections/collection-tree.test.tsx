@@ -34,9 +34,17 @@ const h = vi.hoisted(() => ({
   applyConversationUpsert: vi.fn(),
   applyConversationRemove: vi.fn(),
   closeConversationTab: vi.fn(),
+  closeTab: vi.fn(),
   openTab: vi.fn(),
   openConversations: vi.fn(),
   openRoom: vi.fn(),
+  deleteRoom: vi.fn(),
+  activeTab: {
+    id: "conv-102",
+    kind: "conversation" as "conversation" | "room",
+    conversationId: 102 as number | null,
+    roomId: undefined as string | undefined,
+  },
   rooms: [] as Array<{
     id: string
     workbenchId: number
@@ -48,6 +56,7 @@ const h = vi.hoisted(() => ({
     unreadCount: number
     updatedAt: string
     createdAt: string
+    lastEventAt?: string | null
   }>,
   conversations: [
     {
@@ -227,11 +236,19 @@ vi.mock("@/stores/app-workspace-store", () => {
 vi.mock("@/contexts/tab-context", () => ({
   useTabStore: (selector: (state: unknown) => unknown) =>
     selector({
-      activeTabId: "conv-102",
-      tabs: [{ id: "conv-102", conversationId: 102 }],
+      activeTabId: h.activeTab.id,
+      tabs: [
+        {
+          id: h.activeTab.id,
+          kind: h.activeTab.kind,
+          conversationId: h.activeTab.conversationId,
+          roomId: h.activeTab.roomId,
+        },
+      ],
     }),
   useTabActions: () => ({
     closeConversationTab: h.closeConversationTab,
+    closeTab: h.closeTab,
     openTab: h.openTab,
   }),
 }))
@@ -246,6 +263,7 @@ vi.mock("@/stores/tab-store", () => ({
       activeWorkbenchId: 1,
       rawTabs: [],
     }),
+  makeRoomTabId: (roomId: string) => `room-${roomId}`,
 }))
 
 vi.mock("@/stores/workbench-store", () => ({
@@ -287,6 +305,7 @@ vi.mock("@/lib/api", () => ({
   updateConversationPinned: h.updatePinned,
   updateConversationStatus: h.updateStatus,
   deleteConversation: h.deleteConversation,
+  deleteCollaborationRoom: h.deleteRoom,
 }))
 
 const rect = (top: number, height = 28): DOMRect =>
@@ -332,6 +351,11 @@ describe("CollectionTree", () => {
   beforeEach(() => {
     vi.clearAllMocks()
     h.rooms.length = 0
+    h.activeTab.id = "conv-102"
+    h.activeTab.kind = "conversation"
+    h.activeTab.conversationId = 102
+    h.activeTab.roomId = undefined
+    h.deleteRoom.mockResolvedValue(undefined)
     h.create.mockResolvedValue({
       id: 14,
       root_folder_id: 7,
@@ -363,6 +387,45 @@ describe("CollectionTree", () => {
     await user.click(screen.getByTitle("Sources"))
 
     expect(onOpenScope).toHaveBeenCalledWith(11)
+  })
+
+  it("expands and scrolls to the active Room", async () => {
+    const scrollIntoView = vi.fn()
+    HTMLElement.prototype.scrollIntoView = scrollIntoView
+    h.rooms.push({
+      id: "rm_notes",
+      workbenchId: 1,
+      title: "Notes room",
+      createdByConversationId: 102,
+      collectionId: null,
+      rootFolderId: 7,
+      memberCount: 2,
+      unreadCount: 0,
+      createdAt: "2026-06-04T00:00:00.000Z",
+      updatedAt: "2026-06-04T00:00:00.000Z",
+    })
+    h.activeTab.id = "room-rm_notes"
+    h.activeTab.kind = "room"
+    h.activeTab.conversationId = null
+    h.activeTab.roomId = "rm_notes"
+    const treeRef = createRef<CollectionTreeHandle>()
+    const { user } = renderTree(vi.fn(), { showSessions: true, treeRef })
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Notes room" })).toBeTruthy()
+    )
+    await user.click(screen.getByText("project").closest("button")!)
+    expect(screen.queryByRole("button", { name: "Notes room" })).toBeNull()
+
+    act(() => treeRef.current?.scrollToActive())
+
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Notes room" })).toBeTruthy()
+    )
+    expect(scrollIntoView).toHaveBeenCalledWith({
+      behavior: "smooth",
+      block: "center",
+    })
   })
 
   it("expands and scrolls to the active Session", async () => {
@@ -831,6 +894,45 @@ describe("CollectionTree", () => {
     ).toBeTruthy()
   })
 
+  it("keeps Collection Rooms in created order when one is newer-updated", async () => {
+    h.rooms.push(
+      {
+        id: "rm_opened",
+        workbenchId: 1,
+        title: "Opened room",
+        createdByConversationId: 102,
+        collectionId: 11,
+        rootFolderId: 7,
+        memberCount: 2,
+        unreadCount: 0,
+        createdAt: "2026-06-01T00:00:00.000Z",
+        updatedAt: "2026-08-19T12:00:00.000Z",
+        lastEventAt: "2026-06-01T01:00:00.000Z",
+      },
+      {
+        id: "rm_later",
+        workbenchId: 1,
+        title: "Later room",
+        createdByConversationId: 102,
+        collectionId: 11,
+        rootFolderId: 7,
+        memberCount: 2,
+        unreadCount: 0,
+        createdAt: "2026-06-04T00:00:00.000Z",
+        updatedAt: "2026-06-04T00:00:00.000Z",
+        lastEventAt: "2026-06-04T00:00:00.000Z",
+      }
+    )
+    const { user } = renderTree(vi.fn(), { showSessions: true })
+    await user.click(screen.getByRole("button", { name: "Research" }))
+    await user.click(screen.getByTitle("Sources"))
+    const later = await screen.findByRole("button", { name: "Later room" })
+    const opened = screen.getByRole("button", { name: "Opened room" })
+    expect(
+      later.compareDocumentPosition(opened) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+  })
+
   it("opens a Room from its Collection context menu", async () => {
     h.rooms.push({
       id: "rm_menu",
@@ -845,7 +947,9 @@ describe("CollectionTree", () => {
       updatedAt: "2026-06-04T00:00:00.000Z",
     })
     renderTree(vi.fn(), { showSessions: true })
-    fireEvent.contextMenu(await screen.findByRole("button", { name: "Menu room" }))
+    fireEvent.contextMenu(
+      await screen.findByRole("button", { name: "Menu room" })
+    )
     await userEvent.click(screen.getByRole("menuitem", { name: "Open room" }))
     await waitFor(() => {
       expect(h.openRoom).toHaveBeenCalledWith(

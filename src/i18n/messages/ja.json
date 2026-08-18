@@ -5210,6 +5210,7 @@
     "jumpToQuote": "引用元へ移動",
     "showMembers": "メンバーを表示",
     "hideMembers": "メンバーを隠す",
+    "moreActions": "その他",
     "speakingAs": "投稿者",
     "timelineEmpty": "メッセージはまだありません",
     "mentioned": "@ {names}",

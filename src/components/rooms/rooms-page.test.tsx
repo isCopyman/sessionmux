@@ -5,6 +5,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
 import { NextIntlClientProvider } from "next-intl"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -257,7 +258,10 @@ describe("RoomWorkspace", () => {
     renderRoom()
 
     expect(await screen.findByText("newest post")).toBeTruthy()
-    fireEvent.click(screen.getByRole("button", { name: "Reply" }))
+    const reply = screen.getByRole("button", { name: "Reply" })
+    expect(reply.className).not.toMatch(/absolute/)
+    expect(reply.closest("div")?.textContent).toContain("Planner")
+    fireEvent.click(reply)
     expect(screen.getByText("Replying to Planner")).toBeTruthy()
     expect(
       screen.getByText(
@@ -381,7 +385,11 @@ describe("RoomWorkspace", () => {
     renderRoom()
 
     expect(await screen.findByText("newest post")).toBeTruthy()
-    fireEvent.click(screen.getByRole("button", { name: "Delete room" }))
+    const user = userEvent.setup()
+    await user.click(screen.getByRole("button", { name: "More actions" }))
+    await user.click(
+      await screen.findByRole("menuitem", { name: "Delete room" })
+    )
     const dialog = await screen.findByRole("dialog")
     expect(within(dialog).getByText("Delete this room?")).toBeTruthy()
     fireEvent.click(within(dialog).getByRole("button", { name: "Delete room" }))
@@ -455,53 +463,14 @@ describe("RoomWorkspace", () => {
     expect(scrollIntoView).toHaveBeenCalled()
   })
 
-  it("turns Needs a reply on with the first @ and does not sneak it back on", async () => {
+  it("does not show a needs-reply switch in the host composer", async () => {
     api.getCollaborationRoomTimeline.mockResolvedValue(timeline([event()]))
     renderRoom()
     await screen.findByText("newest post")
-
-    const box = screen.getByRole("checkbox", { name: "Needs a reply" })
-    expect(
-      box.getAttribute("data-state") ?? box.getAttribute("aria-checked")
-    ).not.toBe("checked")
-    expect(box.getAttribute("data-state")).not.toBe("checked")
-    expect(box.getAttribute("aria-checked")).not.toBe("true")
-
-    fireEvent.click(screen.getByRole("button", { name: "@Planner" }))
-    await waitFor(() => {
-      const next = screen.getByRole("checkbox", { name: "Needs a reply" })
-      expect(
-        next.getAttribute("data-state") === "checked" ||
-          next.getAttribute("aria-checked") === "true"
-      ).toBe(true)
-    })
-
-    fireEvent.click(screen.getByRole("checkbox", { name: "Needs a reply" }))
-    await waitFor(() => {
-      const next = screen.getByRole("checkbox", { name: "Needs a reply" })
-      expect(next.getAttribute("data-state")).not.toBe("checked")
-      expect(next.getAttribute("aria-checked")).not.toBe("true")
-    })
-
-    fireEvent.click(screen.getByRole("button", { name: "@all" }))
-    expect(
-      screen
-        .getByRole("checkbox", { name: "Needs a reply" })
-        .getAttribute("data-state")
-    ).not.toBe("checked")
-
-    fireEvent.click(screen.getByRole("button", { name: "Send" }))
-    await waitFor(() => {
-      expect(api.postCollaborationRoomMessage).toHaveBeenCalledWith(
-        expect.objectContaining({
-          roomId,
-          expectsReply: false,
-        })
-      )
-    })
+    expect(screen.queryByRole("checkbox", { name: "Needs a reply" })).toBeNull()
   })
 
-  it("posts expectsReply when @ is used and the switch is left on", async () => {
+  it("posts expectsReply when a Session is mentioned", async () => {
     api.getCollaborationRoomTimeline.mockResolvedValue(timeline([event()]))
     renderRoom()
     await screen.findByText("newest post")

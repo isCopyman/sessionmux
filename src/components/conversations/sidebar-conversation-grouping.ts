@@ -1,3 +1,4 @@
+import { sortRoomsForSidebar } from "@/lib/room-sidebar-order"
 import type {
   CollaborationRoomSummary,
   DbConversationSummary,
@@ -575,7 +576,7 @@ export function attachRoomsToSidebarRows(
   for (const [rootId, list] of byRoot) {
     const index = lastIndexForRoot.get(rootId)
     if (index == null) continue
-    inserts.set(index, list)
+    inserts.set(index, sortRoomsForSidebar(list, "created"))
   }
   if (inserts.size === 0) return rows
 
