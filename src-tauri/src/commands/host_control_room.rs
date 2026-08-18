@@ -103,7 +103,10 @@ impl RoomHostControl {
                                 "items": { "type": "integer", "minimum": 1 }
                             },
                             "mention_all": { "type": "boolean", "default": false },
-                            "reply_to_event_id": { "type": "string" }
+                            "reply_to_event_id": {
+                                "type": "string",
+                                "description": "Event id this post continues. Required for replies and later supplements on the same Room thread. Omitting it starts a new root."
+                            }
                         }
                     }),
                 ),

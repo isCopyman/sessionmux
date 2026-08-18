@@ -36,6 +36,7 @@ Session Center、可选内容全文检索、单窗口拖边吸附，以及 Colle
 - [Session Runtime 生命周期 RFC](./SESSION-RUNTIME-LIFECYCLE-RFC.zh-CN.md)：统一 Session/ACP/Turn、PromptQueue、Mailbox、Dispatcher、崩溃恢复与未来等待点的事实和拟议语义。
 - [Host 控制面与 Agent 可编程工作台 RFC](./HOST-CONTROL-SURFACE-RFC.zh-CN.md)：把现有 delegation 解释为 Session 生命周期组合预设，并统一记录 Session 启动、持续通信、Workbench/资源操控、Skill + 渐进式 MCP 控制路径及外部实现依据。
 - [Delegation Removal 与共享 Host Bridge 审计](./DELEGATION-SUBSYSTEM-AUDIT.zh-CN.md)：旧三工具直接移除；逐层区分应删除的 task_id/Broker/专属 UI 与必须保留的 companion、可信身份、transport、普通 MCP 工具和可复用视觉 primitive。
+- [群聊、Mailbox 与人类角色](./ROOM-VS-MAILBOX-DESIGN.zh-CN.md)：Mailbox 是否私聊、群聊还缺哪些协议、人类三条入口、CCCC 对照；**先审这篇再改 Room 代码**。
 - [群聊面板与 Session 协作 RFC](./GROUP-CONVERSATION-RFC.zh-CN.md)：Room 作为内容面板、Session 成员、共享/私聊边界、显式目标、上下文摄入和协作链限制。
 - [AgentBus 协作子 RFC](./AGENTBUS-COLLABORATION-RFC.zh-CN.md)：Codeg 原生 Delivery Router、跨 App/主机 AgentBus、`wait` 降级与未托管边界 Adapter。
 - [GitHub Issue 与需求追踪](./ISSUE-TRACKER.zh-CN.md)：已提交问题、状态、RFC 条目和实施里程碑的对应关系。

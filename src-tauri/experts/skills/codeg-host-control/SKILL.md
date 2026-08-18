@@ -68,7 +68,8 @@ the idempotency key outside model-controlled arguments.
 - `room.add_member`: add an existing Session to a Room you already belong to.
 - `room.post`: store-only Room post. It does not wake anyone. To `@` a
   member and enqueue a turn, use `send_message` with `room_id` (see
-  `codeg-session-collaboration`).
+  `codeg-session-collaboration`). A follow-up on the same Room thread
+  must set `reply_to_event_id`; omitting it starts a new root.
 
 Room posts are never private mail. Do not answer a Room mention with
 `send_message` that omits `room_id`.

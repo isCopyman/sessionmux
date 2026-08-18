@@ -144,7 +144,7 @@
   },
   {
     "name": "send_message",
-    "description": "Send a durable mailbox letter, or post to a Room when room_id is set. Letters have a short title and a body. Private mail: the target gets a Codeg system notice with the title only and must call read_message(event_id). Room post: every member can see the body on the Room timeline; only mention targets get a delivery/turn. Default delivery_mode is queue. deliver_only persists without starting a target turn. For a private reply, target only from_session_id and set reply_to_event_id. For a Room reply, set the same room_id and reply_to_event_id; do not send a private letter unless asked.",
+    "description": "Send a durable mailbox letter, or post to a Room when room_id is set. Letters have a short title and a body. Private mail: Codeg queues a system notice (title only) and the target must call read_message(event_id); a closed target is started so the notice can arrive. Room post: every member can see the body on the Room timeline; only mention targets get a delivery/turn. delivery_mode is always queue — every letter must be delivered to the Agent. For a private reply or a follow-up supplement on the same thread, target the same peer and set reply_to_event_id. Omitting reply_to_event_id starts a new thread. For a Room reply, set the same room_id and reply_to_event_id; do not send a private letter unless asked.",
     "inputSchema": {
       "type": "object",
       "required": ["title", "content"],
@@ -177,8 +177,8 @@
         },
         "delivery_mode": {
           "type": "string",
-          "enum": ["queue", "deliver_only"],
-          "description": "queue (default): persist and enqueue for the target's existing runtime when idle. deliver_only: persist/display only, with no automatic Agent turn."
+          "enum": ["queue"],
+          "description": "Always queue. Every letter is persisted and delivered to the target Agent. deliver_only is no longer accepted as a distinct mode."
         },
         "delivery_hint": {
           "type": "string",
@@ -191,7 +191,7 @@
         },
         "reply_to_event_id": {
           "type": "string",
-          "description": "When replying to an inbound collaboration message, its eventId. A reply must target only that event's source Session. Omit for a new message."
+          "description": "Event id of the letter this continues. Required for the first reply and for later supplements on the same thread (point at the inbound event_id, or at your last send in that thread). Omitting it creates a new root with no parent. Private follow-ups must target the same peer as that letter. The first linked reply clears expects_reply debt; later supplements stay on the thread and do not reopen it unless expects_reply is true again."
         }
       }
     }
@@ -228,7 +228,7 @@
   },
   {
     "name": "read_message",
-    "description": "Open one inbound Agent mailbox letter by event_id and return its title and full body. Opening marks the letter read for this Agent so unread reminders stop. It does not send a reply and does not clear a reply obligation. If expects_reply is true, answer with send_message targeting from_session_id and setting reply_to_event_id. Do not invent event ids.",
+    "description": "Open one inbound Agent mailbox letter by event_id and return its title and full body. Opening marks the letter read for this Agent so unread reminders stop. It does not send a reply and does not clear a reply obligation. If expects_reply is true, answer with send_message targeting from_session_id and setting reply_to_event_id. Further supplements to the same letter must also set reply_to_event_id; omitting it starts a new thread. Do not invent event ids.",
     "inputSchema": {
       "type": "object",
       "required": ["event_id"],

@@ -86,7 +86,9 @@ Inbox 与 Outbox 也不是两套消息：接收方 Inbox 是“该 Session 作�
 Outbox 是“该 Session 作为来源”的同一 event 及其 per-target Delivery 投影。接收方更新 Attention、
 Agent receipt、reply 或 resolve 后，发送方看到的状态必须由同一 collaboration revision 联动刷新。
 回复是新的不可变 event，通过 `reply_to_event_id` 组成链；fan-out 只共享一份原事件正文，每个目标
-仍拥有独立 Delivery 和生命周期。
+仍拥有独立 Delivery 和生命周期。同一 Thread 允许多封回信和补充：第一封 linked reply 清偿
+`expects_reply`；其后补充仍必须带 `reply_to_event_id`（指向原信，或指向自己在该线程刚发出的那封）。
+省略父节点会开一个新根，往来续不上。催办不是第二封用户信。
 
 ### 3.3 Harness turn：上下文事实
 
@@ -166,13 +168,14 @@ target = human   （别名 user）
   收件箱列举成普通可 Resume Session；
 - 普通 Session 地址与 `human` 互斥：一封 Delivery 要么给某个 Session，要么给人类。
 
-人仍然可以旁观任一 Session 的往来（监督、排错、手动代发），但旁观只增加 Human Mailbox 或调试
-视图里的副本状态，不改 Agent Mailbox 的未读、已读未回和回复债。
+人仍然可以旁观任一 Session 的往来（监督、排错），但旁观只增加调试视图里的副本状态，不改
+Agent Mailbox 的未读、已读未回和回复债。人不能占用某个 Agent 的邮箱代回或代发；要指点某个
+Session，打开它的输入框。写给 `human` 的信只在 Human Inbox 回复。
 
 写给 `human`/`user`、且尚未被人类消费或仍欠人类回复的信，Desktop 应用**系统悬浮窗 / 通知条**
 提醒，而不是为此启动任何一个 Session。悬浮窗只引用原 `event_id` 和短摘要（谁、要不要回、几封），
 不复制正文，也不把点击「我看过了」写成某个 Agent Session 的 receipt。需要人回复的信，人在
-Human Inbox 或往来里写出回复后，才清偿该 Delivery。
+Human Inbox 写出回复后，才清偿该 Delivery。不能在某个 Agent 的往来面板里代回。
 
 ### 3.6 Session 勿扰（以后，bonus）
 
@@ -428,8 +431,11 @@ mailbox Delivery 独占触发且目标唯一可判定的 Turn，才允许兜底�
 认领，不能退回到让每个可见窗口各自判断一次的旧式 effect。
 
 **【实现注记 2026-08-18】** 产品已授权：需要送达 Agent 的信件（`invoke_when_idle`
-与逾期催办）在目标关闭时由 Session Dispatcher 启动/恢复该 Session。`store_only`
-仍不单独起 Turn。fan-out 仍受目标个数上限约束。
+与逾期催办）在目标关闭时由 Session Dispatcher 启动/恢复该 Session。fan-out 仍受目标个数上限约束。
+
+**【实现注记 2026-08-19】** 新私信一律 `invoke_when_idle`。`deliver_only` /
+`store_only` 不再作为发信选项：每封信都必须投递给目标 Agent。旧行仍可被
+自然 Turn 或催办消化。
 
 已关闭 Session 原先默认不因一条 Agent 消息自动冷启动。否则一次 fan-out 可能未经用户同意启动多个
 CLI、消耗 Token 并触发工具权限。当前实现改为由统一 Dispatcher 决定启动，而不是各入口自行 spawn。

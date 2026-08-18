@@ -538,13 +538,14 @@ async fn build_tools_call_spawn(
                 .and_then(|value| value.as_str())
                 .unwrap_or("queue")
             {
-                "queue" => SessionMessageDeliveryMode::Queue,
-                "deliver_only" => SessionMessageDeliveryMode::DeliverOnly,
+                // Older companions may still send deliver_only. Every letter
+                // must be delivered to the target Agent, so coerce to queue.
+                "queue" | "deliver_only" => SessionMessageDeliveryMode::Queue,
                 _ => {
                     return LineAction::Respond(err(
                         id,
                         -32602,
-                        "send_message `delivery_mode` must be queue or deliver_only",
+                        "send_message `delivery_mode` must be queue",
                     ))
                 }
             };
@@ -569,13 +570,6 @@ async fn build_tools_call_spawn(
                     ))
                 }
             };
-            if steer_if_supported && delivery_mode == SessionMessageDeliveryMode::DeliverOnly {
-                return LineAction::Respond(err(
-                    id,
-                    -32602,
-                    "send_message `steer_if_supported` requires delivery_mode=queue",
-                ));
-            }
             let room_id = arguments
                 .get("room_id")
                 .and_then(|value| value.as_str())
@@ -1631,6 +1625,9 @@ pub fn render_session_read_result(outcome: &Value) -> Value {
                 "This letter expects a reply. Use send_message with target_session_ids=[{from_id}], reply_to_event_id={event_id}, expects_reply=false."
             ));
         }
+        lines.push(format!(
+            "Follow-ups that continue this letter must also set reply_to_event_id={event_id} (or the event_id you last sent on this thread). Omitting it starts a new thread."
+        ));
         lines.push("--- message ---".to_string());
         lines.push(body.to_string());
         lines.join("\n")
@@ -2190,7 +2187,6 @@ mod tests {
             serde_json::json!({ "target_session_ids": [7], "content": "x" }),
             serde_json::json!({ "target_session_ids": [7], "title": "t", "content": "x", "delivery_mode": "interrupt" }),
             serde_json::json!({ "target_session_ids": [7], "title": "t", "content": "x", "delivery_hint": "interrupt" }),
-            serde_json::json!({ "target_session_ids": [7], "title": "t", "content": "x", "delivery_mode": "deliver_only", "delivery_hint": "steer_if_supported" }),
         ] {
             let line = serde_json::json!({
                 "jsonrpc": "2.0", "id": 42, "method": "tools/call",

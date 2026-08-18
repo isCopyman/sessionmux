@@ -16,8 +16,9 @@ A letter has two parts, like email:
   Room timeline; only `@` mentions create a delivery.
 
 A successful `send_message` without `room_id` means Codeg stored a private
-letter and queued a **system notice** (titles only). It is not user approval
-and not a Room.
+letter and queued a **system notice** (titles only) for the target Agent.
+Every private letter is delivered; there is no display-only / deliver_only
+mode. It is not user approval and not a Room.
 
 A successful `send_message` with `room_id` means Codeg stored a Room-visible
 event. Empty `target_session_ids` is record-only (nobody is woken). Mention
@@ -30,7 +31,8 @@ ids still create deliveries.
 - `send_message`: send `title` + `content`.
   - Private mail: `target_session_ids` required, omit `room_id`.
   - Room post: set `room_id`. Mentions go in `target_session_ids` or
-    `mention_all=true`. Reply with the same `room_id` and `reply_to_event_id`.
+    `mention_all=true`. Reply or supplement with the same `room_id` and
+    `reply_to_event_id`.
 - `list_inbox`: this Session's **private** mailbox. Room posts never appear
   here. Returns titles, not bodies. Listing does not mark mail read.
 - `read_message`: open one letter or Room mention by `event_id`.
@@ -52,6 +54,21 @@ ids still create deliveries.
 5. When Codeg notifies you of a **Room mention**, call `read_message` and
    reply in the same Room. Do not send a private letter unless asked.
 6. After send, report the delivery state from the tool result.
+
+## Threads
+
+`reply_to_event_id` is how a letter stays on a thread:
+
+- No `reply_to_event_id` = a new root, a new thread. The earlier exchange
+  will not continue in the mailbox UI.
+- A first reply, and any later supplement (“I forgot one thing”), must set
+  `reply_to_event_id` to the letter you are continuing: the inbound
+  `event_id`, or the `event_id` you just sent in that thread.
+- Multiple letters may hang off the same parent. The first linked reply
+  clears `expects_reply` debt; later supplements stay on the thread and do
+  not reopen the debt unless you set `expects_reply` again.
+
+Never omit `reply_to_event_id` just because you already answered once.
 
 ## Hard rules
 

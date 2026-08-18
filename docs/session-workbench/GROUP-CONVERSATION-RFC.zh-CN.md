@@ -1,7 +1,8 @@
 # Codeg 群聊面板与 Session 协作 RFC
 
-> 状态：R1 已落地（2026-08-18），邮件与 Room 隔离；H1 / R2 未做  
+> 状态：R1 存储已落地（2026-08-18），邮件与 Room 隔离；H1 / R2 未做。人类作者与 UI 心智未拍板，见同伴文档。  
 > 最近调研：2026-08-18
+> 先读：[群聊、Mailbox 与人类角色](./ROOM-VS-MAILBOX-DESIGN.zh-CN.md)  
 > 定位：定义多个持久 Session 如何在一个共享面板中交流，以及共享可见、运行时投递和模型上下文之间的边界。  
 > 前置条件：稳定的 Session 身份、Resume、Workbench、多视图同步和统一 Delivery Router。
 
@@ -31,7 +32,8 @@ Room Thread                             某条公共根消息下面的回复串
 - 当前数据库的作者和目标仍然都是数值 `conversation_id`。RFC 中的 `human` 保留地址尚未进入
   schema、MCP 或 UI。Room 成员、公共时间线和 `visibility=room` 已在 R1 落地；Human Inbox 未做。
 
-因此，“没有父节点就是新 Thread，有 `reply_to_event_id` 就沿用原 Thread”已经可用，不需要为了
+因此，“没有父节点就是新 Thread，有 `reply_to_event_id` 就沿用原 Thread”已经可用。对同一封信的
+第二封、第三封补充也必须带 `reply_to`，否则会被当成新根。不需要为了
 direct mail 再创建 `thread` 表。当前 UI 数据量下向上遍历足够；等后端分页、Room 时间线和全局
 Thread 搜索需要不加载祖先即可查询时，再把根事件 ID 物化到 event 行并建立索引。这个字段可以叫
 `thread_root_event_id`，但值仍复用根 `event_id`，不是第二套随机身份。
@@ -184,6 +186,9 @@ Room 成员直接引用已有持久 Session，Thread 继续由根 event 和 `rep
 ## 4. 产品对象
 
 ### 4.1 Room / Group Conversation
+
+Room 是单独的一等 item：身份是这段共享讨论，不是成员名单。同一批 Session 可以同时存在于多个
+Room；新建 Room 不要求成员组合与已有 Room 不同。
 
 Room 是一段持久共享时间线及其成员引用：
 

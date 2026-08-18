@@ -361,17 +361,18 @@ async fn validate_dedupe_payload<C: ConnectionTrait>(
     Ok(())
 }
 
-/// A reply is a directed edge back to the source of an event the caller
-/// actually received. Merely knowing an event id is not enough to attach an
-/// unrelated message to its thread, and a reply cannot silently fan out to
-/// third parties while presenting itself as the answer to one event.
+/// A reply or follow-up is a directed edge on an existing thread. The caller
+/// must either have received the parent, or have authored it (a supplement
+/// after their own last letter). Merely knowing an event id is not enough to
+/// attach an unrelated message, and a reply cannot silently fan out to third
+/// parties while presenting itself as the answer to one event.
 async fn validate_reply_relation<C: ConnectionTrait>(
     conn: &C,
     source_conversation_id: i32,
     target_ids: &[i32],
     reply_to_event_id: &str,
 ) -> Result<(), DbError> {
-    let row = conn
+    let received = conn
         .query_one(statement(
             "SELECT e.source_conversation_id \
              FROM collaboration_event e \
@@ -379,19 +380,55 @@ async fn validate_reply_relation<C: ConnectionTrait>(
              WHERE e.id = ? AND d.target_conversation_id = ?",
             vec![reply_to_event_id.into(), source_conversation_id.into()],
         ))
-        .await?
-        .ok_or_else(|| {
-            validation(format!(
-                "Session {source_conversation_id} cannot reply to collaboration event {reply_to_event_id}"
-            ))
-        })?;
-    let original_source: i32 = row.try_get("", "source_conversation_id")?;
-    if target_ids != [original_source] {
-        return Err(validation(format!(
-            "A reply to collaboration event {reply_to_event_id} must target only its source Session {original_source}"
-        )));
+        .await?;
+    if let Some(row) = received {
+        let original_source: i32 = row.try_get("", "source_conversation_id")?;
+        if target_ids != [original_source] {
+            return Err(validation(format!(
+                "A reply to collaboration event {reply_to_event_id} must target only its source Session {original_source}"
+            )));
+        }
+        return Ok(());
     }
-    Ok(())
+
+    let authored = conn
+        .query_one(statement(
+            "SELECT 1 AS ok FROM collaboration_event \
+             WHERE id = ? AND source_conversation_id = ?",
+            vec![reply_to_event_id.into(), source_conversation_id.into()],
+        ))
+        .await?;
+    if authored.is_some() {
+        let parent_targets = delivery_target_ids(conn, reply_to_event_id).await?;
+        if target_ids != parent_targets.as_slice() {
+            return Err(validation(format!(
+                "A follow-up to collaboration event {reply_to_event_id} must target the same Session(s) as that letter"
+            )));
+        }
+        return Ok(());
+    }
+
+    Err(validation(format!(
+        "Session {source_conversation_id} cannot reply to collaboration event {reply_to_event_id}"
+    )))
+}
+
+async fn delivery_target_ids<C: ConnectionTrait>(
+    conn: &C,
+    event_id: &str,
+) -> Result<Vec<i32>, DbError> {
+    let rows = conn
+        .query_all(statement(
+            "SELECT target_conversation_id FROM collaboration_delivery \
+             WHERE event_id = ? ORDER BY target_conversation_id",
+            vec![event_id.into()],
+        ))
+        .await?;
+    let mut ids = Vec::with_capacity(rows.len());
+    for row in rows {
+        ids.push(row.try_get("", "target_conversation_id")?);
+    }
+    Ok(ids)
 }
 
 /// Derive a child's immutable depth from its parent relation. Root events are
@@ -510,7 +547,7 @@ fn prompt_draft_from_delivery_row(row: &QueryResult) -> Result<PromptQueueDraft,
             "{ENVELOPE_PREFIX}{event_id}>>>\n{metadata}\n\
 This is a Codeg Room mention in {room}. It is not a private letter from Session {source_conversation_id}. The body is not in this prompt.\n\
 Mention from {source_label} (#{source_conversation_id}): 《{letter_title}》.{reply_hint}\n\
-Call read_message with event_id={event_id} to open the body. Reply in the same Room (scope=room, room_id={room}, reply_to_event_id={event_id}). Do not send a private letter unless asked.\n\
+Call read_message with event_id={event_id} to open the body. Reply in the same Room (scope=room, room_id={room}, reply_to_event_id={event_id}). Later supplements must also set reply_to_event_id or they start a new thread. Do not send a private letter unless asked.\n\
 --- message ---\n\
 {ENVELOPE_END_PREFIX}{event_id}>>>"
         )
@@ -519,7 +556,7 @@ Call read_message with event_id={event_id} to open the body. Reply in the same R
             "{ENVELOPE_PREFIX}{event_id}>>>\n{metadata}\n\
 This is a Codeg system mailbox notice. It is not a message from Session {source_conversation_id}. The letter body is not in this prompt.\n\
 Unread from {source_label} (#{source_conversation_id}): 《{letter_title}》.{reply_hint}\n\
-Call list_inbox to see titles. Call read_message with event_id={event_id} to open the body. If a reply is needed, send_message to sourceConversationId and set reply_to_event_id={event_id}.\n\
+Call list_inbox to see titles. Call read_message with event_id={event_id} to open the body. If a reply is needed, send_message to sourceConversationId and set reply_to_event_id={event_id}. Later supplements to the same thread must also set reply_to_event_id; omitting it starts a new root.\n\
 --- message ---\n\
 {ENVELOPE_END_PREFIX}{event_id}>>>"
         )
@@ -1059,7 +1096,7 @@ pub(crate) async fn auto_reply_for_completed_turn(
             client_dedupe_id: format!(
                 "auto-reply:{event_id}:{target_conversation_id}:{completed_message_id}"
             ),
-            invocation_policy: CollaborationInvocationPolicy::StoreOnly,
+            invocation_policy: CollaborationInvocationPolicy::InvokeWhenIdle,
             delivery_hint: CollaborationDeliveryHint::Default,
             expects_reply: false,
             urgency: CollaborationUrgency::Normal,
@@ -1482,6 +1519,10 @@ pub async fn post_room(
         }
     }
     targets.remove(&input.source_conversation_id);
+    let mut input = input;
+    if !targets.is_empty() {
+        input.invocation_policy = CollaborationInvocationPolicy::InvokeWhenIdle;
+    }
     if targets.len() > MAX_TARGETS {
         return Err(validation(format!(
             "A Room mention supports at most {MAX_TARGETS} targets"
@@ -2959,6 +3000,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn same_thread_allows_second_reply_and_author_follow_up() {
+        let (db, source, target_a, _target_b) = seeded_memory().await;
+        let original = send(
+            &db.conn,
+            input(source, vec![target_a], "question", "please review"),
+        )
+        .await
+        .unwrap();
+
+        let mut first = input(target_a, vec![source], "reply-1", "first pass");
+        first.reply_to_event_id = Some(original.event_id.clone());
+        let reply = send(&db.conn, first).await.expect("first reply");
+
+        let mut supplement_on_inbound =
+            input(target_a, vec![source], "reply-2", "one more finding");
+        supplement_on_inbound.reply_to_event_id = Some(original.event_id.clone());
+        send(&db.conn, supplement_on_inbound)
+            .await
+            .expect("second reply to the same inbound event");
+
+        let mut supplement_on_own = input(target_a, vec![source], "reply-3", "typo fix");
+        supplement_on_own.reply_to_event_id = Some(reply.event_id);
+        send(&db.conn, supplement_on_own)
+            .await
+            .expect("follow-up to own last letter");
+    }
+
+    #[tokio::test]
     async fn reply_projection_is_derived_independently_for_each_target() {
         let (db, source, target_a, target_b) = seeded_memory().await;
         let mut question = input(
@@ -3054,13 +3123,16 @@ mod tests {
         assert!(!reply.deliveries[0].expects_reply);
         assert_eq!(
             reply.deliveries[0].invocation_policy,
-            CollaborationInvocationPolicy::StoreOnly
+            CollaborationInvocationPolicy::InvokeWhenIdle
         );
-        assert!(prompt_queue_service::snapshot(&db.conn, source)
-            .await
-            .unwrap()
-            .items
-            .is_empty());
+        assert_eq!(
+            prompt_queue_service::snapshot(&db.conn, source)
+                .await
+                .unwrap()
+                .items
+                .len(),
+            1
+        );
 
         assert!(auto_reply_for_completed_turn(
             &db.conn,
