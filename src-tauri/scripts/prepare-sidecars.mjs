@@ -100,13 +100,15 @@ function main() {
     { stdio: "inherit", cwd: SRC_TAURI }
   )
 
-  const built = join(
-    SRC_TAURI,
-    "target",
-    target,
-    "release",
-    `${BIN_NAME}${ext}`
-  )
+  // Honour CARGO_TARGET_DIR: cargo writes there when it is set, and copying
+  // from the default src-tauri/target would silently stage a STALE binary
+  // from an earlier non-redirected build. A companion older than the listener
+  // speaks an incompatible broker schema (the frame carries no version), so a
+  // stale sidecar surfaces as opaque "decode: missing field" bridge errors.
+  const targetRoot = process.env.CARGO_TARGET_DIR
+    ? resolve(process.env.CARGO_TARGET_DIR)
+    : join(SRC_TAURI, "target")
+  const built = join(targetRoot, target, "release", `${BIN_NAME}${ext}`)
   if (!existsSync(built)) {
     die(`expected ${built} after cargo build, but it does not exist`)
   }
