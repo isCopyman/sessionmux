@@ -150,6 +150,8 @@ describe("split group shell source shape", () => {
     expect(shellBody.slice(headerIdx, contentIdx)).toContain(
       "<ConversationDetailHeader"
     )
+    expect(source).toContain('activeTab.kind !== "room"')
+    expect(source).toContain('selTab.kind === "room" ? null')
     // No fragment/wrapper around the trio — that would make the flip shift
     // slots and remount the content subtree.
     expect(shellBody.slice(stripIdx, contentIdx)).not.toContain("<>")

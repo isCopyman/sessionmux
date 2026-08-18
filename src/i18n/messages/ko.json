@@ -5193,6 +5193,7 @@
     "create": "룸 만들기",
     "members": "멤버",
     "memberCount": "멤버 {count}명",
+    "uncategorized": "미분류",
     "recordOnly": "기록만",
     "mentionAll": "@all",
     "mentionHuman": "@human",

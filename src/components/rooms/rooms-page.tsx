@@ -37,6 +37,7 @@ import {
   mentionsHumanFromText,
   sessionIdsFromText,
 } from "@/lib/collaboration-session-mentions"
+import { useCollectionStore } from "@/stores/collection-store"
 import { useRoomCatalogStore } from "@/stores/room-catalog-store"
 import type {
   AgentType,
@@ -71,6 +72,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
   const t = useTranslations("Room")
   const { openTab } = useTabActions()
   const conversations = useAppWorkspaceStore((state) => state.conversations)
+  const collections = useCollectionStore((state) => state.items)
   const [detail, setDetail] = useState<CollaborationRoomDetail | null>(null)
   const [events, setEvents] = useState<RoomTimelineEvent[]>([])
   const [truncated, setTruncated] = useState(false)
@@ -337,6 +339,12 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
             />
           )}
           <p className="truncate text-[11px] text-muted-foreground">
+            {(detail.collectionId != null
+              ? collections.find(
+                  (collection) => collection.id === detail.collectionId
+                )?.name
+              : null) ?? t("uncategorized")}
+            {" · "}
             {t("memberCount", { count: detail.members.length })}
           </p>
         </div>

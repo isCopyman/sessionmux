@@ -5193,6 +5193,7 @@
     "create": "Create room",
     "members": "Members",
     "memberCount": "{count} members",
+    "uncategorized": "Uncategorized",
     "recordOnly": "Record only",
     "mentionAll": "@all",
     "mentionHuman": "@human",

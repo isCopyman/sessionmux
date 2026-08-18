@@ -5193,6 +5193,7 @@
     "create": "建群",
     "members": "成員",
     "memberCount": "{count} 位成員",
+    "uncategorized": "未分類",
     "recordOnly": "僅記錄",
     "mentionAll": "@全體",
     "mentionHuman": "@人類",

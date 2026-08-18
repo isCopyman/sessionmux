@@ -5193,6 +5193,7 @@
     "create": "Créer une salle",
     "members": "Membres",
     "memberCount": "{count} membres",
+    "uncategorized": "Non classé",
     "recordOnly": "Enregistrer seulement",
     "mentionAll": "@tous",
     "mentionHuman": "@human",

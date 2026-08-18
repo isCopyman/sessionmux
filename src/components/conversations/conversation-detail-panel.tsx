@@ -2845,15 +2845,17 @@ export function ConversationDetailPanel() {
               }
             }}
           >
-            <ConversationDetailHeader
-              tabId={selTab.id}
-              conversationId={selTab.conversationId}
-              runtimeConversationId={selTab.runtimeConversationId ?? null}
-              folderId={selTab.folderId}
-              folderPath={selTabFolder?.path}
-              title={selTab.title}
-              status={selTab.status as ConversationStatus | undefined}
-            />
+            {selTab.kind === "room" ? null : (
+              <ConversationDetailHeader
+                tabId={selTab.id}
+                conversationId={selTab.conversationId}
+                runtimeConversationId={selTab.runtimeConversationId ?? null}
+                folderId={selTab.folderId}
+                folderPath={selTabFolder?.path}
+                title={selTab.title}
+                status={selTab.status as ConversationStatus | undefined}
+              />
+            )}
           </div>
         )}
         <div className="relative min-h-0 flex-1 overflow-hidden">
@@ -2905,7 +2907,7 @@ export function ConversationDetailPanel() {
   return (
     <>
       <div className="flex h-full min-h-0 flex-col overflow-hidden">
-        {!isSplit && activeTab && (
+        {!isSplit && activeTab && activeTab.kind !== "room" && (
           <ConversationDetailHeader
             tabId={activeTab.id}
             conversationId={activeTab.conversationId}

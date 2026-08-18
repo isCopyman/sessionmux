@@ -5193,6 +5193,7 @@
     "create": "Raum erstellen",
     "members": "Mitglieder",
     "memberCount": "{count} Mitglieder",
+    "uncategorized": "Nicht kategorisiert",
     "recordOnly": "Nur speichern",
     "mentionAll": "@alle",
     "mentionHuman": "@human",

@@ -5193,6 +5193,7 @@
     "create": "ルームを作成",
     "members": "メンバー",
     "memberCount": "{count} 人",
+    "uncategorized": "未分類",
     "recordOnly": "記録のみ",
     "mentionAll": "@all",
     "mentionHuman": "@human",

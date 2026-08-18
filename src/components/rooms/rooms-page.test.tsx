@@ -41,6 +41,12 @@ vi.mock("@/stores/app-workspace-store", () => ({
     selector({ conversations: [] }),
 }))
 
+vi.mock("@/stores/collection-store", () => ({
+  useCollectionStore: (
+    selector: (state: { items: { id: number; name: string }[] }) => unknown
+  ) => selector({ items: [{ id: 7, name: "Research" }] }),
+}))
+
 vi.mock("@/stores/room-catalog-store", () => {
   const useRoomCatalogStore = () => ({ rooms: [], hydrated: true })
   useRoomCatalogStore.getState = () => ({ refresh: api.refreshCatalog })
@@ -160,11 +166,23 @@ describe("RoomWorkspace", () => {
     renderRoom()
 
     expect(await screen.findByText("newest post")).toBeTruthy()
-    expect(screen.getByText("1 members")).toBeTruthy()
+    expect(screen.getByText("Uncategorized · 1 members")).toBeTruthy()
     expect(screen.queryByText("You host this room")).toBeNull()
     expect(screen.queryByText("owner")).toBeNull()
     expect(screen.queryByRole("button", { name: "@human" })).toBeNull()
     expect(screen.getByRole("button", { name: "@all" })).toBeTruthy()
+  })
+
+  it("shows the Collection name instead of a Session folder breadcrumb", async () => {
+    api.getCollaborationRoom.mockResolvedValue({
+      ...roomDetail(),
+      collectionId: 7,
+    })
+    api.getCollaborationRoomTimeline.mockResolvedValue(timeline([event()]))
+    renderRoom()
+
+    expect(await screen.findByText("Research · 1 members")).toBeTruthy()
+    expect(screen.queryByText("Uncategorized · 1 members")).toBeNull()
   })
 
   it("posts a reply against the selected event", async () => {
