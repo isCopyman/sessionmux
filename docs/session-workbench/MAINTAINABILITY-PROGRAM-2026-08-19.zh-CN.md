@@ -201,6 +201,12 @@ server 名等），工作区常驻大量未提交 WIP（含一次 cargo fmt 全�
   能否承载；把可承载的写成 codeg-multi-agent skill 的新 reference playbook——除通用编码外，
   覆盖**科研写作（论文分节起草-互评-合稿）、长文/叙事（大纲-分段-一致性审）**等场景。
   红线不变：不冻结角色、不做 persona 包、@ 纪律、密送无 CC。
+- **G10 fork/rewind 能力调研（2026-08-19 凌晨用户新增）**：Session 的 fork、rewind、
+  按消息位置 fork——ACP 未必原生支持，调研替代路径。底子=SESSION-HISTORY-CAPABILITIES-RFC
+  （未参加今晚对账，先核新鲜度）+ codeg 已有整会话 fork 活体（67974819 fork 继承 pin）。
+  调研轴：各 harness 原生能力（claude --fork-session//rewind、gemini checkpoint 等）×
+  ACP wire 可见性 × 三条候选路（协议路/原生文件手术路——codeg 有全套 parsers 可截断改写/
+  重放路）× parent_id 不许复用的谱系字段约束。产出能力矩阵+最小可用切片建议，进晨报。
 - **G9 host control 扩权设计（用户新增，出方案待点头）**：是否让 agent 经 MCP 操作"用户级"
   行为——拉群已有（room.create），布局已有一部分（workbench.place_session），**缺的是改既有
   Session 的模型/推理强度**（后端 acp_set_mode/acp_set_config_option 已有会话级 pin 机制，
@@ -379,6 +385,32 @@ b) **对自己**默认开放（agent 按任务阶段自调推理强度，真实�
 都可被 list_sessions 寻址与冷启动（这是能力不是 bug）；建群/入群不叫醒任何人。
 
 ## 5. 进度日志
+
+### 5.0 断点快照（2026-08-19 04:20 前后，供上下文压缩/接续用）
+
+已入库：47a73c3c（立项）→ c6b1a7ec+65b238f2（G5-1 落地又回滚）→ 508af8a7（G1c 八文档
+对账）→ dccb030c（G1a USAGE 重写）→ 66fdcd2b（G1b 四张 mermaid）→ 0c033b77（决策增量）。
+
+在飞三线：
+- **worker-wipland（主检出）**：存量 WIP 落地。已过 tsc/eslint/vitest 4333 全绿/build/
+  server 门 2429/mcp check/check --all-targets 零错；共享 target 有 DLL 环境阻塞
+  （STATUS_ENTRYPOINT_NOT_FOUND，手册 4.4 已知类型），桌面门升级为 CARGO_TARGET_DIR=
+  %TEMP%\codeg-landing-target 的冷目录全量跑（含集成测试首次真跑）。绿后五笔提交：
+  ①test: repair stale assertions（四处 HEAD 存量债：panel-layout 断言/subscribe mock 带
+  退订/host_bridge_e2e title 字段/delegation_columns 两字段）②style: fmt 107 文件
+  ③feat(mcp) server 拆分 5 文件 ④feat(room) 排序+UX（含 2 个 tsc 修复与 i18n×10）
+  ⑤chore: gitignore target-test-mcp。
+- **worker-cskills（worktree 分支 mp/skills-playbooks）**：提交 1=G2-1 skill 硬伤+
+  experts.toml 8 locale；提交 2=G8 四个 playbook references。完成后由编排会话 merge。
+- **fork-survey（只读）**：G10 fork/rewind 能力矩阵调研。
+
+落地完成后待派：**A 线 worktree**=R1-R6（规格全在 §4.4"今晚修"，注意 R6 落地时同步改
+GROUP-CONVERSATION §0.3 措辞；R3/R4 落地时 USAGE 措辞自动成真无需改）；**B 线 worktree**=
+UI 批 G5-2/3/6a/8/9/13（G5-13 规格在其条目：RichComposer 同款 @ 补全+将唤醒预览）。
+两线收口由编排会话 merge 回 codex/session-message-v1（预期零冲突），随后 G6 全量门 +
+T2 后置截图（CDP 9222 可用，基线在 .artifacts）+ 晨间验收报告 + 记忆更新。
+纪律提醒：K3 工人 idle 不交稿要 SendMessage 催；merge 只由编排会话做；cargo/tauri dev
+进程不许杀；主检出共享 target 跑不了桌面测试（用冷目录或 worktree）。
 
 - 2026-08-19 01:50 立项；四路审计（audit-mcp / audit-skills / audit-comms / audit-ui，全部
   explore-k3）开跑。
