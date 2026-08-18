@@ -2392,6 +2392,170 @@ pub async fn reset_idle_reminder_cursors(conn: &DatabaseConnection) -> Result<()
     Ok(())
 }
 
+/// One open reply obligation, titles only. The tail note on ordinary turns
+/// (compact-safe debt recovery) lists these; the idle-continuation timer only
+/// needs the counts.
+#[derive(Debug, Clone)]
+pub(crate) struct OpenObligationLine {
+    pub event_id: String,
+    pub from_session_id: i32,
+    pub from_title: String,
+    pub letter_title: String,
+    pub is_room: bool,
+    pub room_id: Option<String>,
+    pub agent_received: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct OpenObligationDigest {
+    /// Direct letters this Session owes a reply.
+    pub letters_owed: u32,
+    /// Room `@` mentions this Session owes a reply.
+    pub room_mentions_owed: u32,
+    /// Oldest first, capped; titles derived, bodies never leave the ledger.
+    pub lines: Vec<OpenObligationLine>,
+}
+
+const MAX_OBLIGATION_NOTE_LINES: usize = 8;
+
+/// Snapshot every open reply obligation a Session carries: direct letters it
+/// has not answered plus Room `@` mentions still awaiting its reply.
+pub(crate) async fn open_obligation_digest(
+    conn: &DatabaseConnection,
+    conversation_id: i32,
+) -> Result<OpenObligationDigest, DbError> {
+    let counts = conn
+        .query_one(statement(
+            "SELECT COALESCE(SUM(CASE WHEN COALESCE(e.visibility, 'direct') = 'direct' \
+                     THEN 1 ELSE 0 END), 0) AS letters, \
+                    COALESCE(SUM(CASE WHEN COALESCE(e.visibility, 'direct') = 'room' \
+                     THEN 1 ELSE 0 END), 0) AS room_mentions \
+             FROM collaboration_delivery d \
+             JOIN collaboration_event e ON e.id = d.event_id \
+             WHERE d.target_conversation_id = ? \
+               AND d.obligation_state = 'awaiting_reply' \
+               AND d.state <> 'dismissed' AND d.state <> 'failed'",
+            vec![conversation_id.into()],
+        ))
+        .await?
+        .ok_or_else(|| validation("Could not count open reply obligations"))?;
+    let to_u32 = |raw: i64| u32::try_from(raw.max(0)).unwrap_or(u32::MAX);
+    let letters_owed = to_u32(counts.try_get("", "letters")?);
+    let room_mentions_owed = to_u32(counts.try_get("", "room_mentions")?);
+    let mut digest = OpenObligationDigest {
+        letters_owed,
+        room_mentions_owed,
+        lines: Vec::new(),
+    };
+    if letters_owed == 0 && room_mentions_owed == 0 {
+        return Ok(digest);
+    }
+    let rows = conn
+        .query_all(statement(
+            &format!(
+                "SELECT e.id AS event_id, e.subject, e.body, \
+                        e.source_conversation_id, e.source_title_snapshot, \
+                        COALESCE(e.visibility, 'direct') AS visibility, e.room_id, \
+                        d.agent_received_at IS NOT NULL AS agent_received \
+                 FROM collaboration_delivery d \
+                 JOIN collaboration_event e ON e.id = d.event_id \
+                 WHERE d.target_conversation_id = ? \
+                   AND d.obligation_state = 'awaiting_reply' \
+                   AND d.state <> 'dismissed' AND d.state <> 'failed' \
+                 ORDER BY d.created_at ASC, d.rowid ASC \
+                 LIMIT {MAX_OBLIGATION_NOTE_LINES}"
+            ),
+            vec![conversation_id.into()],
+        ))
+        .await?;
+    for row in rows {
+        let subject: String = row
+            .try_get::<Option<String>>("", "subject")?
+            .unwrap_or_default();
+        let body: String = row
+            .try_get::<Option<String>>("", "body")?
+            .unwrap_or_default();
+        let from_session_id: i32 = row.try_get("", "source_conversation_id")?;
+        let from_title: Option<String> = row.try_get("", "source_title_snapshot")?;
+        let visibility: String = row
+            .try_get::<Option<String>>("", "visibility")?
+            .unwrap_or_else(|| "direct".to_string());
+        let is_room = visibility == "room";
+        digest.lines.push(OpenObligationLine {
+            event_id: row.try_get("", "event_id")?,
+            from_session_id,
+            from_title: from_title
+                .filter(|title| !title.trim().is_empty())
+                .unwrap_or_else(|| format!("Session {from_session_id}")),
+            letter_title: if is_room {
+                crate::acp::session_collaboration::inbox_preview(&body)
+            } else {
+                crate::acp::session_collaboration::letter_title(&subject, &body)
+            },
+            is_room,
+            room_id: row.try_get("", "room_id")?,
+            agent_received: row.try_get::<i64>("", "agent_received")? != 0,
+        });
+    }
+    Ok(digest)
+}
+
+/// Host-authored tail note for an ordinary turn: the titles of this Session's
+/// open reply obligations. A context compact drops every delivered envelope
+/// from the Agent's working memory; re-stating the debts on the next ordinary
+/// turn is the compact-safe recovery — no extra wake, no extra turn. Titles
+/// only, never bodies. Nothing is claimed or transitioned: the note is
+/// recomputed from the ledger each turn, so a lost or crashed dispatch simply
+/// reappears next time.
+pub(crate) async fn open_obligation_note_for_turn(
+    conn: &DatabaseConnection,
+    conversation_id: i32,
+) -> Result<Option<PromptInputBlock>, DbError> {
+    let digest = open_obligation_digest(conn, conversation_id).await?;
+    let total = digest
+        .letters_owed
+        .saturating_add(digest.room_mentions_owed);
+    if total == 0 {
+        return Ok(None);
+    }
+    let mut entries = Vec::with_capacity(digest.lines.len());
+    for line in &digest.lines {
+        let flag = if line.agent_received {
+            "已读未回"
+        } else {
+            "未读"
+        };
+        if line.is_room {
+            entries.push(format!(
+                "群点名《{}》来自 {} #{}（{}，room_id={}，event_id={}）",
+                line.letter_title,
+                line.from_title,
+                line.from_session_id,
+                flag,
+                line.room_id.as_deref().unwrap_or("room"),
+                line.event_id
+            ));
+        } else {
+            entries.push(format!(
+                "《{}》来自 {} #{}（{}，event_id={}）",
+                line.letter_title, line.from_title, line.from_session_id, flag, line.event_id
+            ));
+        }
+    }
+    let listed = u32::try_from(digest.lines.len()).unwrap_or(u32::MAX);
+    let more = if total > listed {
+        format!("，另还有 {} 笔未列出", total - listed)
+    } else {
+        String::new()
+    };
+    let text = format!(
+        "Codeg 宿主附注（系统事实，不是新来信）：你有 {total} 笔未结回复义务{more}：{}。\
+只列标题不含正文；用 list_inbox / read_message 处理信件，用 read_room / post_room 处理群点名，回复后义务自动清账。",
+        entries.join("；")
+    );
+    Ok(Some(PromptInputBlock::Text { text }))
+}
+
 /// Outbound letters this Session sent that still owe it a reply. This is the
 /// implicit "I am waiting for someone" declaration the idle-continuation
 /// timer consults before nagging: sending with expects_reply opened the
@@ -3306,6 +3470,101 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[tokio::test]
+    async fn open_obligation_note_restates_debt_titles_until_the_reply_lands() {
+        let (db, source, target, _) = seeded_memory().await;
+        let mut letter = input(
+            source,
+            vec![target],
+            "note-debt",
+            "body must stay in the ledger",
+        );
+        letter.subject = "Fix the parser".into();
+        letter.expects_reply = true;
+        let sent = send(&db.conn, letter).await.unwrap();
+
+        let note = open_obligation_note_for_turn(&db.conn, target)
+            .await
+            .unwrap()
+            .expect("an open obligation produces a tail note");
+        let PromptInputBlock::Text { text } = note else {
+            panic!("the note is a text block");
+        };
+        assert!(text.contains("Fix the parser"));
+        assert!(text.contains(&sent.event_id));
+        assert!(text.contains("未读"), "the letter never reached a turn yet");
+        assert!(
+            !text.contains("body must stay in the ledger"),
+            "titles only, never bodies"
+        );
+        assert!(
+            open_obligation_note_for_turn(&db.conn, source)
+                .await
+                .unwrap()
+                .is_none(),
+            "the sender carries no debt"
+        );
+
+        let mut reply = input(target, vec![source], "note-reply", "done");
+        reply.reply_to_event_id = Some(sent.event_id);
+        send(&db.conn, reply).await.unwrap();
+        assert!(
+            open_obligation_note_for_turn(&db.conn, target)
+                .await
+                .unwrap()
+                .is_none(),
+            "the reply cleared the debt, so the note stands down"
+        );
+    }
+
+    #[tokio::test]
+    async fn open_obligation_note_marks_room_mentions_with_their_room() {
+        let (db, source, target, _) = seeded_memory().await;
+        let room = collaboration_room_service::create(
+            &db.conn,
+            crate::models::CreateCollaborationRoomInput {
+                workbench_id: 1,
+                title: "Plan".into(),
+                member_conversation_ids: vec![source, target],
+                created_by_conversation_id: source,
+                collection_id: None,
+                root_folder_id: None,
+            },
+        )
+        .await
+        .expect("create room");
+        let posted = post_room(
+            &db.conn,
+            PostRoomMessageInput {
+                room_id: room.id.clone(),
+                source_conversation_id: source,
+                target_conversation_ids: vec![target],
+                mention_all: false,
+                body: "look at the plan".into(),
+                client_dedupe_id: "note-room-1".into(),
+                invocation_policy: CollaborationInvocationPolicy::InvokeWhenIdle,
+                delivery_hint: CollaborationDeliveryHint::Default,
+                expects_reply: true,
+                urgency: CollaborationUrgency::Normal,
+                reply_to_event_id: None,
+                mention_human: false,
+                author_kind: Default::default(),
+            },
+        )
+        .await
+        .expect("post");
+        let note = open_obligation_note_for_turn(&db.conn, target)
+            .await
+            .unwrap()
+            .expect("an unanswered Room mention is an open obligation");
+        let PromptInputBlock::Text { text } = note else {
+            panic!("the note is a text block");
+        };
+        assert!(text.contains("群点名"));
+        assert!(text.contains(&format!("room_id={}", room.id)));
+        assert!(text.contains(&posted.event_id));
     }
 
     #[tokio::test]
