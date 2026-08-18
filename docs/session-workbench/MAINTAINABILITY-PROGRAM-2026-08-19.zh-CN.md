@@ -99,7 +99,8 @@ server 名等），工作区常驻大量未提交 WIP（含一次 cargo fmt 全�
   - G3-1 room.post 死分支修复：把 room.post 加入 access_for 让精心写好的迁移提示真正可达
     （现在 agent 只收到笼统 Unknown action）；顺手给 host_control_room.rs 补基础单测（现为零）。
   - G3-2 room.list / room.list_workbench 双名：ROOM-VS-MAILBOX §13.3 定的过渡别名，**不动**。
-  - G3-3 schema 摘掉 legacy delivery_mode / delivery_hint（解析层保留兼容，防老 companion）。
+  - G3-3 schema 摘掉 legacy delivery_mode / delivery_hint（解析层保留兼容，防老 companion）；
+    同步删 USAGE 第 73 行附近对 delivery_hint 的推荐（high 本就强制 steer_if_supported，字段冗余）。
   - G3-4 session.create 参数 harness → agent_type（与 automation/work_task/输出对齐；保旧名兼容）。
   - G3-5 get_session_info 供 codeg-mailbox 服务器可用（现在 mailbox-only agent 拿得到
     list_sessions 却查不了详情；机制上需允许工具多组归属，实现细节执行时定）。
@@ -140,19 +141,80 @@ server 名等），工作区常驻大量未提交 WIP（含一次 cargo fmt 全�
   - G5-4 ⏸ timer 删除无确认、群成员移除无确认（后者在 rooms-page 脏区；前者需新 i18n key，
     而 i18n 十语文件都在 WIP 区——等落地一并做）。
   - G5-5 ⏸ 建群入口只藏在多选批量条（sidebar 脏区）。
-  - G5-6 ✅ 【2026-08-19 用户拍板：人类写信 UI 不做（对 agent 说话=直接在它对话框打字）；
-    Human Inbox 暂不做】→ SessionMessageComposerDialog 死代码转为**删除包**：删组件+其测试+
-    banner 测试里的陈旧 mock；等 composer-probe 探针确认完整引用集后执行。human_notice
-    存储层两案之争随之封存（不实施，不再列拍板项）。
+  - G5-6 ✅ 【2026-08-19 用户拍板：人类写信 UI 不做；Human Inbox 暂不做】探针已定性：
+    入口摘除是 d7d1bdb4（08-17"mailbox trim"）的**有意红线执行**，组件语义="以某 Session
+    名义发信"，对人类即冒充（后端信箱 INSERT 不写 author_kind，默认 'session'）。执行拆两半：
+    **G5-6a** 删 session-message-composer-dialog.tsx + 其 .test + banner 测试失效 mock 段
+    （全干净文件，今晚做）；**G5-6b** composer 独占 i18n key 十语清扫（i18n 文件在 WIP 区，
+    等落地；孤儿 key 无害可等）。备查：若将来重启"人类发信"，恢复配方=后端 3 处
+    （SendCollaborationMessageInput 加 author_kind、collaboration_service 两个 INSERT 写列、
+    仿 post_room 定 human 账本源）+ 前端 2 处（composer 加人类模式、header/@ 处接回入口）。
   - G5-7 已撤销：信箱对人保持"看/审计"用途，0 信时无入口属合理，不再改。
-- **G6 收口**：全量测试（前端 vitest+build、Rust 桌面+server+mcp 三套）、本文档终版、记忆更新、总结报告。
+  - G5-8 ✅（T2 基线实测新增）：timer 折叠药丸信息量过低（"1 个定时器"看不出在等什么、
+    何时触发）→ 药丸补充下次触发倒计时/状态（基于现行纯退避机制，非已废弃的 autoPaused）。
+  - G5-9 ✅（T2 基线实测新增）：会话中心开着筛选下拉按 Escape 会直接关掉整个 Dialog 而非
+    先收起下拉——分层修复；同时"全部状态/全部消息状态"两个相邻下拉文案难分——并入 G5-3
+    词表统一时一起改文案。
+  - G5-10 ⏸（T2 基线观察）：Room 成员栏入口只有无文字小图标、"N 位成员"文字不可点
+    （rooms-page 脏区，等 WIP 落地）；dev 编译失败白屏无错误遮罩（dev 体验，低优先记账）；
+    信箱横幅视觉权重偏弱（横幅形态是定案，仅在形态内微调，低优先）。
+  - G5-11 ⏸（2026-08-19 用户问答确认方向）：群欠账体系 agent 侧已完备（四计数+needs_reply
+    窗口+共用催办），人侧"全局一眼看谁欠我"只藏在会话中心过滤下拉——侧栏/显眼处补全局
+    欠回复入口（含群与私信聚合）。等 WIP 落地后与 G5-5 徽章去重一并做。
+  - G5-13 ✅高优先（2026-08-19 用户指出：聊天没有补全会很麻烦）：房间输入框无 @ 自动补全
+    面板，药丸是唯一可见途径（手打 @别名 仅在提交时静默解析，零反馈暗门）；Session 输入框
+    的统一 @ 面板（RichComposer + use-composer-mention-labels）现成未接。裁决照 ROOM 设计
+    §12"复用同一套徽章"：房间接入同款补全（会话组限定本群成员+@全体/@human），药丸行降级
+    为"将唤醒：…"实时预览 + @全体小按钮，纪律提示挪进 placeholder，时间线徽章渲染与
+    Session 页对齐。WIP 落地后执行（今晚 UI 批）。
+  - G5-12 ⏸（2026-08-19 用户指出）：侧栏多选模式 Session 有复选框、Room 没有——Room 是
+    一等 item 却进不了批量操作。裁决：**手势拉平、动作按类型过滤**——Room 参与多选，
+    批量条只亮 Room 适用动作（移动分类/加移工作台/删除带确认），归档与"建群"对 Room 置灰，
+    混选亮交集。执行前先产出 Session vs Room 侧栏行为对照表（悬停/右键/拖放/多选/徽章/
+    定位/双击逐项核对），照表系统性修，不逐个打补丁。WIP 落地后执行。
+  - T2 基线产物：.artifacts/desktop-validation/maintainability-program-2026-08-19/
+    （baseline-01..07 + result.md，HEAD 47a73c3c 时拍摄）。
+- **G6 收口与真机验收（2026-08-19 深夜用户加码：详细测试+截图，desktop 端，照手册）**：
+  - T1 自动化：每包相称测试（已在各包纪律里）+ 阶段门全量（vitest+build、cargo 桌面/server/
+    mcp 三套）。
+  - T2 desktop 真机（手册 4.3/4.5/4.6：CDP 9222 连**正在运行的开发实例**，禁止重启它——
+    本编排会话与并行会话都活在里面）：先拍"改动前"基线（侧栏/房间页/信箱 Dialog/时间线
+    信件卡/队列徽章/会话中心过滤器），后拍改动后对照；再用「多session交流测试工作台」
+    现场数据做**多种多 agent 交互**的截图走查。产物入 .artifacts/desktop-validation/
+    maintainability-program-2026-08-19/，附 result.md（分支/commit/场景/断言/新错误）。
+    若实例未开 9222 调试口：标记 BLOCKED（不能为开口重启实例），desktop 层证据改由
+    重启后补验，报告里写明证据层级。
+  - T3 后端行为层冒烟（手册"server 冒烟"路径，验 R1-R6）：codeg-server + 临时数据目录 +
+    钉便宜模型的真 agent（优先 grok harness，claude 必须显式钉 k3/deepseek 档），重点回归：
+    义务挂票在 compact 后重现（R1）、同轮不双戳（R2）、跨通道 reply 被拒（R3）、timer 正文
+    带欠账（R4）、链深 4 强制 expects_reply=false（R6）。注意 HMR 混合态纪律（手册 10.3）：
+    正在跑的 desktop 实例后端不含今晚的 Rust 提交，R 系列的 desktop 层验证留待用户重启后。
+- **G7 架构专审（2026-08-19 深夜用户新增，重要）**：a) 消息调度与优先级的正确性对抗审查
+  （并发/重启/租约边界下的漏派、重派、双戳）；b) **agent compact（上下文压缩）与信件注入
+  的交互**——已注入 turn 的信在 compact 后是否会被 agent 遗忘、义务/催办机制能否兜底、
+  codeg 对各 harness 的 compact 事件感知现状；c) **hooks 取舍**——各 harness hook 能力盘点、
+  该不该用、用在哪些步骤（compact 侦测/turn 边界/义务摘要重注入），给最小可移植方案。
+  产出：分析报告 + 必要小修执行包。
+- **G8 多 agent 工作模式库（用户新增）**：对照 Anthropic《Building effective agents》与
+  多 agent research system 博文的模式（编排者-工人、并行化、路由、评审-优化回环等），
+  逐一判断 Codeg 现有底座（mailbox=分别面试 / room=研讨会 / timer=续航 / host control=开人）
+  能否承载；把可承载的写成 codeg-multi-agent skill 的新 reference playbook——除通用编码外，
+  覆盖**科研写作（论文分节起草-互评-合稿）、长文/叙事（大纲-分段-一致性审）**等场景。
+  红线不变：不冻结角色、不做 persona 包、@ 纪律、密送无 CC。
+- **G9 host control 扩权设计（用户新增，出方案待点头）**：是否让 agent 经 MCP 操作"用户级"
+  行为——拉群已有（room.create），布局已有一部分（workbench.place_session），**缺的是改既有
+  Session 的模型/推理强度**（后端 acp_set_mode/acp_set_config_option 已有会话级 pin 机制，
+  差一层 host control 动作暴露与权限闸）。产出：能力矩阵（已有/缺失/风险）+ 建议动作集
+  + 写闸设计（writes_allowed 保险丝现恒 true，扩权前应先让它真正生效），**实施等用户点头**。
 
 ## 3.5 决策轨 D1：工具面形态——MCP 还是 环境变量+CLI+skill（2026-08-19 用户提出）
 
 用户提出：是否把全部 MCP 换成"环境变量注入 + CLI + skill"，理由是灵活性、且多个参考项目
 如此做。此决策**先于 G3 执行**（若传输形态要换，工具改名就是白干），处理方式：
 
-**结论（2026-08-19 证据齐后定稿）：不做全量替换；三个兼容小刀吸收该提案的真实收益。**
+**结论（2026-08-19 证据齐后定稿）：不做全量替换；三个兼容小刀吸收该提案的真实收益。
+【2026-08-19 深夜用户确认："我支持先用 skill+mcp 不使用 cli"——D1 就此关闭，G3 按 MCP
+形态放行执行。】**
 
 判决证据（transport-evidence 全文报告存档于会话记录）：
 
@@ -185,11 +247,136 @@ server 名等），工作区常驻大量未提交 WIP（含一次 cargo fmt 全�
 - 面向"人和自动化脚本"的 operator CLI（类 cccc-cli send/inbox，走 HTTP 打 codeg-server）
   与 agent 工具面是两回事，不受本决策约束，有真实需求时可另立小项。
 
-## 4. 多 agent 交流与 UI 的设计判断（编排会话本人负责思考，审计后回填）
+## 3.6 决策轨 D2：群共享资料与任务清单——文件为王，Room 只置顶/索引（2026-08-19 采纳）
 
-- mailbox/Room 协议层：设计已由拍板稿冻结且基本落地；本计划聚焦"让 agent 和人真正会用"
-  （文档示例、skill 清晰度、工具描述一致性），不动协议。
-- 待回填：agent 视角链路走查发现的摩擦点；UI 设计空间清单。
+用户问"要不要做群 shared task list / 共享资料展示"。经对照仓考据（Multica Project 资源只有
+github_repo/local_directory 两类指针落 resources.json；CCCC 分 PROJECT.md 冷宪法 +
+coordination.brief + 可选外部记忆；OpenTeams 历史是只读 JSONL 让 agent 自己读；OpenAgents
+的 /v1/files 网盘是"成员不共享磁盘"场景的补丁）与 Codeg 现状（Session 绑 Folder，磁盘即
+共享内存；群 RFC §7/§10 已有 pinned brief + 有界信封 + 只读记录路径的合同；领域模型把
+"共识数据库"排在第一阶段之外），裁决：
+
+- **正文全部落本地文件**（建议约定 `docs/rooms/<room-id>/`：brief.md、tasks.md、共识、
+  产物），git 管历史，人用编辑器改；**Room 只做置顶与路径索引**，点开仍是文件。
+- **任务清单同样文件化**，不新造产品对象，不与 work_task 流水线/通信义务焊死。
+- **今晚生效路径**：该纪律直接写进 G8 playbook（交差=写文件+群里 @ 并贴路径），约定先活，
+  将来的"置顶 brief+路径列表"功能只是露出约定的产物。
+- **不做**：Room 网盘（上传+另存副本）、共识只存 collaboration_event 正文、每轮把资料库
+  打进 prompt。
+- **例外**：成员不同 Folder/远程读不到宿主路径时，给 Room 指定 home Folder 作索引基准；
+  读不到的成员只拿信封短 brief，不假装共享整库。
+- **将来置顶功能的红线**：v1 不给 agent 新增 pin 写工具（工具面刚做完减法），置顶由人挂。
+- 时机：现在不开工；等群 UI 与通道稳定后作为小刀实施。
+
+## 4. 设计判断（编排会话本人思考与裁决，2026-08-19 深夜成稿）
+
+### 4.1 Anthropic 模式 × Codeg 底座逐一裁决
+
+对照《Building effective agents》六模式与多 agent research system 博文，逐一判断 Codeg
+现有机制能否承载（结论：**六个模式全部可承载，其中异步协调一项 Codeg 反而领先博文所述**
+——博文自承 lead 只能同步等一批 subagent 收齐，而 Codeg 的 mailbox+统一调度天然异步）：
+
+| 模式 | Codeg 承载方式 | 判断 |
+|---|---|---|
+| 提示链（顺序流水） | A→B→C 各占一个 Session，mailbox 接力传工件 | 可用；工件必须落文件、信里只传路径+摘要（防 compact 遗忘+防传话失真，博文同款教训） |
+| 路由 | 主持用 list_sessions/get_session_info 选专家再投递 | 可用 |
+| 并行-分片 | mailbox 密送多发（≤16），各自独立干 | 可用，密送=防锚定，正是拍板过的"分别面试" |
+| 并行-投票 | 同题密送 N 份→主持对比；分歧再拉 Room 对质 | 可用，对应既定方法论"先私信收独立判断→分歧拉群→裁判总结" |
+| 编排者-工人 | session.create(+initial_prompt) 开人 + mailbox 派活 + Room 共享现场 = 现有 star 玩法 | 可用；需把博文的派活纪律补进 skill（见 4.2） |
+| 评审-优化回环 | 起草者↔评审者两 Session 往返 | 可用但有设计要点：链深保险丝=4 会截断长回环，**纪律=每一轮评审开新信（引用上一轮，不无限 reply）**——既保住保险丝又允许多轮 |
+| 自治长跑 | 单 Session + continuation timer + ask_user_question 检查点 | 可用，即现有 timer 玩法 |
+
+博文教训中值得成文进 skill 的四条（其余与现状重复）：**派活四要素**（目标/交付格式/工具与
+来源指引/边界，防止两个工人重复劳动）；**用工规模标尺**（简单事实=1 人少量步骤；对比类=
+2-4 人；复杂研究=多人分域——数字按 Codeg 场景校准）；**工件落文件制**（Session 可共享
+folder，交付物写文件、信里传路径，规避"传话游戏"与 compact 失忆）；**编码类任务慎用自由
+并行**（依赖强，改用流水/星型+worktree 隔离——Codeg 有 worktree 支持，博文明说 coding
+是并行多 agent 的坏靶）。
+
+### 4.2 新增 playbook 设计（写入 codeg-multi-agent/references/，红线不变：不冻结角色、
+无 persona 包、@ 纪律、密送无 CC）
+
+- **patterns-map.md**：上表的 agent 视角版 + 派活四要素模板 + 用工规模标尺 + 工件落文件制
+  + 评审回环的"每轮新信"纪律。另补三条一手经验校验（2026-08-19 本编排会话实测）：
+  ①"干完≠交付"是编排最高频故障（当晚 5 个取证 agent 全部完工不交稿需手动催），Codeg 的
+  expects_reply 欠账+催办+自动兜底回复对此结构性免疫——playbook 应教主持：派活信一律
+  expects_reply=true，让欠账机器兜底；②改主意要用 cancel_turn 而不是只追一封信（指令在飞、
+  工人不查信箱的竞速真实发生过）；③并行写同一目录是最大事故面，编码类协作必须 worktree/
+  分 folder 隔离，交付物落文件、信里传路径。
+- **research-writing.md（科研写作）**：大纲（主持）→ 分节起草（密送分片，各节一文件）→
+  交叉互评（背靠背密送收独立意见；分歧才拉 Room 对质）→ 合稿（主持）→ 全文一致性与文风
+  统一（单一编辑 Session，不并行）→ 引用/事实核查（独立核查员，评审-优化回环跑摘要与
+  引言）→ **定稿对稿会**（见下条）。关键裁决修订（2026-08-19 深夜，用户以体制内对稿会
+  类比点破）：评审分两种目标——**找问题用背靠背**（要独立信号，防锚定），**定稿用对稿会**
+  （要收敛，互相听见是功能：跨领域冲突只有摆同一张桌才暴露，主持逐段裁决即质量闸门）。
+  真实流程是并行/串行交替的矩阵，不是单选。
+- **line-review.md（对稿会：逐段收敛定稿，新增）**：稿件放共享 folder 文件；主持每段
+  **开新根帖**引用该段（一段一线程，天然贴合链深 4 保险丝=会议纪律本身）+ @ 点名发言
+  （expects_reply）；needs_reply/awaiting_reply 计数=还有谁没表态，5 分钟催办自动追；
+  主持在两轮之间改文件、下一段引用新版；迟到成员靠读游标补课。零新机制，全部现成。
+- **long-form-writing.md（长文/叙事/讲故事）**：大纲与设定卡（文件）→ 分章**顺序**起草
+  （叙事连续性=强依赖，裁决为提示链而非并行；每章起草者读上一章成品文件）→ 连续性审查员
+  对着设定卡挑矛盾 → 文风统一终审。头脑风暴阶段例外：可用 Room 圆桌或投票并行发散。
+- star.md / planner-coder-reviewer.md 增补派活四要素与规模标尺引用（指针，不复制全文）。
+
+### 4.3 G9 host control 扩权：能力矩阵与裁决建议（待用户点头）
+
+已有：session.create（可带 model/mode/config_values！）/rename/cancel_turn/stop；collection
+全套；workbench create/rename/add/place/remove；timer 全套；room.create/add_member。
+缺口（对照用户点名）：拉群✓已有；布局≈已有（place_session）；**改既有 Session 的模型/
+推理强度✗**——后端 acp_set_mode/acp_set_config_option + 会话级 pin（67974819）都在，只差
+一层 host control 动作暴露。
+建议：a) 新增 `session.set_config`（model/mode/config_values 子集，复用 pin 机制）；
+b) **对自己**默认开放（agent 按任务阶段自调推理强度，真实有用、风险低）；**对其他 Session**
+挂显式写闸（per-agent 设置）；c) 前置条件：先把恒 true 的 `writes_allowed` 保险丝接上真实
+策略再扩权；d) 永不暴露删除类动词。实施排在用户点头 + 后端 WIP 落地之后。
+
+### 4.4 组合行为与架构裁决（2026-08-19 取证齐后，编排会话定案）
+
+调度层总评：claim/租约/幂等三层设计扎实，对抗审查未发现丢信或双投递级别的洞；组合行为
+总评：三组件共用一张账本一条队列，咬合良好，送达顺序确定（user→信件+催办→timer）。
+以下按"今晚修 / 记账待修 / 设计边界写文档"三档定案：
+
+**今晚修（全部位于干净文件，逐包测试+提交）：**
+- R1 **compact 免疫的义务恢复（本轮最重要的行为修复）**：催办预算 3 次用尽后开放义务永久
+  沉默，若 agent 期间发生 compact（正文与 digest 全被摘掉）就彻底忘信。修法采纳"义务挂票"：
+  Session 每次普通 turn 尾部自动附一行"未结义务标题清单"（只标题不含正文、仅在有义务时
+  出现、借道既有 store_only 挂票机制）——compact 后下一轮自动重现，不新增唤醒、不加轮次。
+  否决备选"2 小时心跳"：会反复唤醒空闲会话烧钱。
+- R2 催办 steer 双戳修复：InjectSteer 补查 `collaboration_steered_this_turn`，已 steer 过的
+  轮降级为 QueueAfterTurn（同轮"信封全文+digest 摘要"重复注入是纯浪费）。
+- R3 跨通道清债封堵：私信 reply_to 群事件会清掉群点名的债、而群时间线永远看不到答案。
+  修法与既有 validate_room_reply 对称：send_message 拒绝 reply_to 指向 room 事件，错误信息
+  指引"回群用 post_room"。（群转私聊的正道=新开私信线程，skill 本就这么教。）
+- R4 timer 续跑附宿主欠账事实：到期正文尾注加一行"欠回复 X 封/群点名 Y 条"（2026-08-17
+  拍板本就允许附加"发给谁的消息还没回"类宿主事实，34ae1c36 删的是义务感知**退避**，不是
+  事实附注）；同 commit 删除两个孤儿查询（outbound_awaiting_summary/latest_mailbox_info_at）
+  与三处脱节注释、删 auto_pause 服务函数（模型字段与迁移不动，前端遗留 UI 归 G4-2）。
+- R5 已删会话的 timer 收尸：软删 Session 后其 timer 仍每次到期入队淤积。修在引擎侧：
+  到期候选查询 JOIN conversation 存活（避开 conversation_service.rs 脏区）。
+- R6 链深保险丝补强制（原 G4-1）：depth≥4 的 agent 信强制 expects_reply=false（信照送、
+  不能再挂债），**人类路径不受限**（红线原文），测试同步。落地后 USAGE 第 95 行的表述
+  （"到顶的信不能再挂 expects_reply"）即从"设计"变"事实"，无需再改；GROUP-CONVERSATION
+  §0.3 的"强制拦截列入维护计划"句同 commit 更新为已落地。
+
+**记账待修（后端 WIP 落地后 / 用户点头后）：**
+- pause_queue_if_pending 会让用户 cancel 覆盖 interrupt 的队列冻结原因（低危，修在
+  prompt_queue_service.rs——脏区）；多目标信"队列满整体回滚 vs 目标不存在部分成功"语义
+  不一致 + 发件 agent 无失败回执（同文件脏区）；turn 无看门狗（harness 挂死则该会话永不
+  idle flush，建议"最后事件距今 N 分钟"活性探针，需设计）；被拉群无邀请通知（成员要自己
+  list_rooms 才发现——建议入群时给新成员一条 store_only 邀请函+系统帖，待用户点头）；
+  mention_human 无出口（Human Inbox 已拍板暂不做，先在 Room 面板未读把 mention 单列，
+  归 UI 批次）。
+- **hooks 定案：现在不引入**。ACP 信号面已够宽，13+ harness 中仅 3 家有 hook 机制且注入
+  要碰用户全局 settings（污染 codeg 之外的使用）；R1 挂票已从服务端堵住 compact 主洞。
+  留 RFC 记录：若将来做，首选 Claude PreCompact 单点（compact 感知+义务重注入），前提是
+  验证 claude-agent-acp 转发 settings hooks。
+- compact 期间投递依赖各适配器的排队语义（turn 间 compact 时 codeg 判 idle 照投）——
+  写进文档作为已知边界；Claude live 路径 compact 完全不可见是上游适配器缺口。
+
+**设计边界（写进 G1a 使用文档即可）：** store_only 不进未读催办；缺省=high+expects_reply
+=true；user 排队项会把信件压后一轮（头不合批）；automation/work_task/IM 渠道拉起的会话
+都可被 list_sessions 寻址与冷启动（这是能力不是 bug）；建群/入群不叫醒任何人。
 
 ## 5. 进度日志
 
@@ -204,3 +391,16 @@ server 名等），工作区常驻大量未提交 WIP（含一次 cargo fmt 全�
   c6b1a7ec 抢跑落地，已以 65b238f2 revert（测试回基线 6/6 绿）。教训：执行包开工前核对
   目标机制最近 48h 是否换代。
 - 2026-08-19 02:20 G1c（文档对账修正，8 份）派发 worker-k3 执行中。
+- 2026-08-19 02:48 G1c 完工提交 508af8a7（8 文档 39 处对账修正，验收通过；并纠正简报一处：
+  d81504fc 的巡检 poke 已被 34ae1c36 一并移除）。
+- 2026-08-19 03:00 前后：用户深夜加码（compact/hooks/调度专审、多 agent 模式库、扩权设计、
+  真机测试+截图）；G7/G8/G9/T 系列入计划。arch-compact 与 room-synergy 取证完成，§4.4 裁决
+  定稿（R1-R6 修复包）。D1 由用户确认关闭（skill+MCP，不上 CLI）。
+- 2026-08-19 03:10 G1a 完工提交 dccb030c（USAGE 209 行场景化重写，验收通过；其核实纠正
+  简报两处：reset_delay 纪律方向、timer 正文现状无欠账计数——后者正是 R4 要补的）。
+- 2026-08-19 03:05 T2 基线截图完成（CDP 通，7/7，无新 console 错误；新增 G5-8/9/10）。
+- 2026-08-19 03:15 wip-mapper 归类完成：107 个 Rust 脏文件纯 fmt（含全部大 diff 与三个
+  migration，零 schema 变更）；真特性两组（MCP server 拆分=完整；房间排序+UX=完整但携
+  1 个新 tsc 笔误 + 1 个 HEAD 存量 tsc 死代码错）。落地顺序：修 tsc → 全套测试门 →
+  fmt / MCP 拆分 / 房间 UX / gitignore 四笔提交。警示：01:44 的 cargo 进程疑为 tauri dev
+  父进程，绝不可杀。
