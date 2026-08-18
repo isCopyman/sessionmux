@@ -417,10 +417,26 @@ sort_order = 130
 [expert.display_name]
 en = "Codeg Host Control"
 "zh-CN" = "Codeg 主机控制"
+"zh-TW" = "Codeg 主機控制"
+ja = "Codeg ホストコントロール"
+ko = "Codeg 호스트 컨트롤"
+es = "Control de host Codeg"
+de = "Codeg-Host-Control"
+fr = "Contrôle hôte Codeg"
+pt = "Controle de host Codeg"
+ar = "التحكم في مضيف Codeg"
 
 [expert.description]
 en = "Manages Codeg Sessions through the progressive Codeg MCP gateway."
 "zh-CN" = "通过 Codeg 自有渐进式 MCP 网关管理会话。"
+"zh-TW" = "透過 Codeg 自有漸進式 MCP 閘道管理工作階段。"
+ja = "Codeg 独自のプログレッシブ MCP ゲートウェイを通じてセッションを管理します。"
+ko = "Codeg 자체 점진적 MCP 게이트웨이를 통해 세션을 관리합니다."
+es = "Gestiona sesiones de Codeg a través de la pasarela MCP progresiva de Codeg."
+de = "Verwaltet Codeg-Sitzungen über das progressive Codeg-MCP-Gateway."
+fr = "Gère les sessions Codeg via la passerelle MCP progressive de Codeg."
+pt = "Gerencia sessões Codeg pelo gateway MCP progressivo do Codeg."
+ar = "يدير جلسات Codeg عبر بوابة MCP التدريجية الخاصة بـ Codeg."
 
 
 [[expert]]
@@ -525,10 +541,26 @@ sort_order = 145
 [expert.display_name]
 en = "Codeg Session Timer"
 "zh-CN" = "Codeg 会话续航"
+"zh-TW" = "Codeg 工作階段續航"
+ja = "Codeg セッションタイマー"
+ko = "Codeg 세션 타이머"
+es = "Temporizador de sesión Codeg"
+de = "Codeg-Sitzungs-Timer"
+fr = "Minuteur de session Codeg"
+pt = "Temporizador de sessão Codeg"
+ar = "مؤقّت جلسة Codeg"
 
 [expert.description]
 en = "Keeps the current Session advancing from a durable plan after each completed turn. Call timer.reset_delay after real progress so the reminder delay returns to the shortest interval."
 "zh-CN" = "每轮完成后按持久计划继续推进当前会话。有进展时调用 timer.reset_delay，把催促间隔打回最短。"
+"zh-TW" = "每輪完成後依持久計畫繼續推進目前工作階段。有進展時呼叫 timer.reset_delay，將催促間隔重置為最短。"
+ja = "各ターン完了後、永続的な計画に沿って現在のセッションを前進させ続けます。実質的な進展があったら timer.reset_delay を呼び、リマインド間隔を最短に戻します。"
+ko = "매 턴 완료 후 지속 계획에 따라 현재 세션을 계속 진행합니다. 실질적인 진전이 있으면 timer.reset_delay를 호출해 알림 간격을 가장 짧은 값으로 되돌립니다."
+es = "Mantiene la sesión actual avanzando según un plan duradero tras cada turno completado. Llama a timer.reset_delay tras un progreso real para que el intervalo del recordatorio vuelva al mínimo."
+de = "Hält die aktuelle Sitzung nach jedem abgeschlossenen Turn anhand eines dauerhaften Plans in Gang. Rufe timer.reset_delay nach echtem Fortschritt auf, damit das Erinnerungsintervall wieder auf das kürzeste zurückgesetzt wird."
+fr = "Fait avancer la session courante selon un plan durable après chaque tour terminé. Appelez timer.reset_delay après un progrès réel pour ramener le délai de rappel à l'intervalle le plus court."
+pt = "Mantém a sessão atual avançando a partir de um plano durável após cada turno concluído. Chame timer.reset_delay após progresso real para que o intervalo do lembrete volte ao mais curto."
+ar = "يُبقي الجلسة الحالية تتقدم وفق خطة دائمة بعد كل دورة مكتملة. استدعِ timer.reset_delay بعد تحقق تقدم حقيقي ليعود تأخير التذكير إلى أقصر فترة."
 
 
 [[expert]]
