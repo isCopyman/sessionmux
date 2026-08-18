@@ -1100,7 +1100,6 @@ pub(crate) async fn auto_reply_for_completed_turn(
                 source_conversation_id: target_conversation_id,
                 target_conversation_ids: vec![],
                 mention_all: false,
-                subject: "Auto reply".into(),
                 body,
                 client_dedupe_id: format!(
                     "auto-reply:{event_id}:{target_conversation_id}:{completed_message_id}"
@@ -1526,10 +1525,6 @@ fn validate_room_post(input: &PostRoomMessageInput) -> Result<(), DbError> {
     {
         return Err(validation("steer_if_supported requires invoke_when_idle"));
     }
-    if !input.subject.trim().is_empty() {
-        crate::acp::session_collaboration::normalize_letter_title(&input.subject)
-            .map_err(validation)?;
-    }
     Ok(())
 }
 
@@ -1610,12 +1605,9 @@ pub async fn post_room(
     }
 
     let event_id = uuid::Uuid::new_v4().to_string();
-    let subject = if input.subject.trim().is_empty() {
-        String::new()
-    } else {
-        crate::acp::session_collaboration::normalize_letter_title(&input.subject)
-            .map_err(validation)?
-    };
+    // Room posts are single timeline messages: no subject. The column stays
+    // for old rows and mailbox letters; timeline display derives from body.
+    let subject = String::new();
     let (title_snapshot, agent_snapshot) = if input.author_kind == CollaborationAuthorKind::Human {
         (Some("You".to_string()), "human".to_string())
     } else {

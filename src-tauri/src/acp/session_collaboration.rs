@@ -181,14 +181,11 @@ pub struct SessionMessageSpec {
 }
 
 /// Agent-supplied Room post after companion-side validation. Source Session
-/// is filled in by the listener from the launch token.
+/// is filled in by the listener from the launch token. A Room post is one
+/// timeline message: no title — the content is the whole post.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RoomPostSpec {
     pub room_id: String,
-    /// Optional short title. Empty is allowed; Room posts are timeline
-    /// messages, not mailbox letters.
-    #[serde(default)]
-    pub title: String,
     pub content: String,
     #[serde(default)]
     pub mention_session_ids: Vec<i32>,

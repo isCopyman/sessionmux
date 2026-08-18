@@ -505,8 +505,6 @@ pub struct PostRoomMessageInput {
     pub target_conversation_ids: Vec<i32>,
     #[serde(default)]
     pub mention_all: bool,
-    #[serde(default)]
-    pub subject: String,
     pub body: String,
     pub client_dedupe_id: String,
     #[serde(default = "default_invocation_policy")]

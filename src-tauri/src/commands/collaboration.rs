@@ -1052,7 +1052,6 @@ impl SessionCollaborationAccess for DbSessionCollaboration {
                 source_conversation_id: source_session_id,
                 target_conversation_ids: spec.mention_session_ids,
                 mention_all: spec.mention_all,
-                subject: spec.title,
                 body: spec.content,
                 client_dedupe_id: spec.client_dedupe_id,
                 invocation_policy: priority.invocation_policy(),
@@ -2537,7 +2536,6 @@ mod tests {
                 source,
                 RoomPostSpec {
                     room_id: room.id.clone(),
-                    title: "Need eyes".into(),
                     content: "please look at the plan".into(),
                     mention_session_ids: vec![peer],
                     mention_all: false,

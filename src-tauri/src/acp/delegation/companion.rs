@@ -762,15 +762,6 @@ async fn build_tools_call_spawn(
                     "post_room requires a non-empty `content` string",
                 ));
             };
-            let title = match arguments.get("title").and_then(|value| value.as_str()) {
-                Some(raw) if !raw.trim().is_empty() => {
-                    match crate::acp::session_collaboration::normalize_letter_title(raw) {
-                        Ok(title) => title,
-                        Err(message) => return LineAction::Respond(err(id, -32602, message)),
-                    }
-                }
-                _ => String::new(),
-            };
             let mention_session_ids =
                 match parse_session_id_list(&arguments, "mention_session_ids", true, "post_room") {
                     Ok(ids) => ids,
@@ -810,7 +801,6 @@ async fn build_tools_call_spawn(
                 token: ctx.token.clone(),
                 spec: RoomPostSpec {
                     room_id,
-                    title,
                     content,
                     mention_session_ids,
                     mention_all,

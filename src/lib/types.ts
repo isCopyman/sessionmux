@@ -1430,7 +1430,6 @@ export interface PostRoomMessageInput {
   mentionAll?: boolean
   mentionHuman?: boolean
   authorKind?: "session" | "human"
-  subject?: string
   body: string
   clientDedupeId: string
   invocationPolicy?: CollaborationInvocationPolicy

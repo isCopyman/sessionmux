@@ -1066,7 +1066,7 @@ mod tests {
                 source_session_id,
                 crate::acp::session_collaboration::SessionMessageSpec {
                     target_session_ids: spec.mention_session_ids,
-                    title: spec.title,
+                    title: String::new(),
                     content: spec.content,
                     delivery_mode:
                         crate::acp::session_collaboration::SessionMessageDeliveryMode::Queue,

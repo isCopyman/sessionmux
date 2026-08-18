@@ -289,7 +289,7 @@
   },
   {
     "name": "post_room",
-    "description": "Post to a shared Room this Session already belongs to. Every member can read the body on the Room timeline. Omit mention_session_ids (and mention_all=false) for a record-only post that wakes nobody. Structured mentions create deliveries and may start a turn. Do not expect free-text @names in the body to wake anyone — use mention_session_ids, mention_all, or mention_human. File references in the body are context only. This is not private mail — do not use send_message. For a reply or supplement, set the same room_id and reply_to_event_id.",
+    "description": "Post to a shared Room this Session already belongs to. A Room post is one message — it has no title; the body is the whole post. Every member can read the body on the Room timeline. Omit mention_session_ids (and mention_all=false) for a record-only post that wakes nobody. Structured mentions create deliveries and may start a turn. Do not expect free-text @names in the body to wake anyone — use mention_session_ids, mention_all, or mention_human. File references in the body are context only. This is not private mail — do not use send_message. For a reply or supplement, set the same room_id and reply_to_event_id.",
     "inputSchema": {
       "type": "object",
       "required": ["room_id", "content"],
@@ -303,11 +303,6 @@
           "type": "string",
           "minLength": 1,
           "description": "The post body. Visible to every Room member on the timeline."
-        },
-        "title": {
-          "type": "string",
-          "maxLength": 120,
-          "description": "Optional short title. Unlike mailbox letters, Room posts may omit this."
         },
         "mention_session_ids": {
           "type": "array",

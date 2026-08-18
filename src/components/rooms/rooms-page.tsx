@@ -203,7 +203,6 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
         mentionAll,
         mentionHuman: mentionHumanNext,
         authorKind: "human",
-        subject: text.slice(0, 80),
         body: text,
         clientDedupeId: crypto.randomUUID(),
         invocationPolicy:
