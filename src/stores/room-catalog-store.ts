@@ -12,11 +12,18 @@ interface RoomCatalogState {
   refresh: () => Promise<void>
 }
 
+function workbenchIdsKey(items: { id: number }[]): string {
+  return items.map((item) => item.id).join(",")
+}
+
 async function loadAllRooms(): Promise<CollaborationRoomSummary[]> {
   const workbenches = useWorkbenchStore.getState().items
-  const ids = workbenches.length > 0 ? workbenches.map((item) => item.id) : [1]
+  // Do not fall back to workbench 1. An empty list means Workbenches have not
+  // hydrated yet; claiming "no rooms" from Main alone hides every other
+  // Workbench's Rooms until the next manual refresh.
+  if (workbenches.length === 0) return []
   const lists = await Promise.all(
-    ids.map((workbenchId) => listWorkbenchRooms(workbenchId))
+    workbenches.map((item) => listWorkbenchRooms(item.id))
   )
   const byId = new Map<string, CollaborationRoomSummary>()
   for (const list of lists) {
@@ -39,9 +46,25 @@ export const useRoomCatalogStore = create<RoomCatalogState>((set) => ({
 }))
 
 let subscribed = false
+let lastWorkbenchKey = ""
+let workbenchBound = false
+
+function bindWorkbenchCatalog() {
+  if (workbenchBound || typeof window === "undefined") return
+  workbenchBound = true
+  lastWorkbenchKey = workbenchIdsKey(useWorkbenchStore.getState().items)
+  useWorkbenchStore.subscribe((state) => {
+    const next = workbenchIdsKey(state.items)
+    if (next === lastWorkbenchKey) return
+    lastWorkbenchKey = next
+    void useRoomCatalogStore.getState().refresh()
+  })
+}
 
 export function ensureRoomCatalogSubscription() {
-  if (subscribed || typeof window === "undefined") return
+  if (typeof window === "undefined") return
+  bindWorkbenchCatalog()
+  if (subscribed) return
   subscribed = true
   void subscribe<RoomChanged>(ROOM_CHANGED_EVENT, () => {
     void useRoomCatalogStore.getState().refresh()

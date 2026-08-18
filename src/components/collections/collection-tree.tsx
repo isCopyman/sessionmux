@@ -150,6 +150,7 @@ import { toErrorMessage } from "@/lib/app-error"
 import { cn } from "@/lib/utils"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { useCollectionStore } from "@/stores/collection-store"
+import { useWorkbenchStore } from "@/stores/workbench-store"
 import { useOrganizationRevisionStore } from "@/stores/organization-revision-store"
 import type { SidebarSortMode } from "@/lib/sidebar-view-mode-storage"
 import { useTabActions, useTabStore } from "@/contexts/tab-context"
@@ -293,6 +294,9 @@ export const CollectionTree = forwardRef<
   const { openConversations } = useWorkbenchRoute()
   const openRoom = useOpenRoom()
   const catalogRooms = useRoomCatalogStore((state) => state.rooms)
+  const workbenchIdsKey = useWorkbenchStore((state) =>
+    state.items.map((item) => item.id).join(",")
+  )
   const multiSelect = useSessionMultiSelect<DbConversationSummary>()
   const organizationRevision = useOrganizationRevisionStore(
     (state) => state.revision
@@ -355,7 +359,7 @@ export const CollectionTree = forwardRef<
   useEffect(() => {
     ensureRoomCatalogSubscription()
     void useRoomCatalogStore.getState().refresh()
-  }, [])
+  }, [workbenchIdsKey])
 
   useEffect(() => {
     if (!hydrated) {

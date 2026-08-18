@@ -40,6 +40,7 @@ import {
 } from "lucide-react"
 import { useActiveFolder } from "@/contexts/active-folder-context"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
+import { useWorkbenchStore } from "@/stores/workbench-store"
 import { useTabActions, useTabStore } from "@/contexts/tab-context"
 import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
 import { useTerminalContext } from "@/contexts/terminal-context"
@@ -802,6 +803,9 @@ export function SidebarConversationList({
   const { openConversations } = useWorkbenchRoute()
   const openRoom = useOpenRoom()
   const catalogRooms = useRoomCatalogStore((state) => state.rooms)
+  const workbenchIdsKey = useWorkbenchStore((state) =>
+    state.items.map((item) => item.id).join(",")
+  )
   const {
     selected: multiSelected,
     apply: applyMultiSelect,
@@ -1283,7 +1287,7 @@ export function SidebarConversationList({
   useEffect(() => {
     ensureRoomCatalogSubscription()
     void useRoomCatalogStore.getState().refresh()
-  }, [])
+  }, [workbenchIdsKey])
 
   const conversationRows = useMemo(
     () =>

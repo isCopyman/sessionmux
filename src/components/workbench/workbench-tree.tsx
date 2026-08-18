@@ -216,11 +216,6 @@ export function WorkbenchTree() {
   }, [hydrate, hydrated, t])
 
   useEffect(() => {
-    ensureRoomCatalogSubscription()
-    void useRoomCatalogStore.getState().refresh()
-  }, [])
-
-  useEffect(() => {
     if (!tabsHydrated) return
     setExpanded((current) => new Set(current).add(activeWorkbenchId))
   }, [activeWorkbenchId, tabsHydrated])
@@ -229,6 +224,11 @@ export function WorkbenchTree() {
     () => items.map((item) => item.id).join(","),
     [items]
   )
+
+  useEffect(() => {
+    ensureRoomCatalogSubscription()
+    void useRoomCatalogStore.getState().refresh()
+  }, [workbenchIdsKey])
 
   useEffect(() => {
     if (!hydrated || items.length === 0) return
