@@ -672,7 +672,7 @@ pub async fn timeline(
                     e.created_at \
              FROM collaboration_event e \
              WHERE e.room_id = ? AND COALESCE(e.visibility, 'direct') = 'room' \
-             ORDER BY datetime(e.created_at) ASC, e.id ASC \
+             ORDER BY datetime(e.created_at) ASC, e.rowid ASC \
              LIMIT ?",
             vec![room_id.into(), limit.into()],
         ))
@@ -998,11 +998,14 @@ mod tests {
         assert!(reply.deliveries.is_empty());
         let events = timeline(&db.conn, &room.id, None).await.unwrap().events;
         assert_eq!(events.len(), 2);
+        let reply_event = events
+            .iter()
+            .find(|event| event.body == "here is the room answer")
+            .expect("room reply");
         assert_eq!(
-            events[1].reply_to_event_id.as_deref(),
+            reply_event.reply_to_event_id.as_deref(),
             Some(root.event_id.as_str())
         );
-        assert_eq!(events[1].body, "here is the room answer");
 
         let fanout = send(
             &db.conn,
@@ -1139,9 +1142,25 @@ mod tests {
         .await
         .expect("assign creator");
 
-        let hanging_off_creator = make_room(&db, a, vec![a, b]).await;
-        assert_eq!(hanging_off_creator.collection_id, Some(collection.id));
-        assert_eq!(hanging_off_creator.root_folder_id, Some(folder_id));
+        let not_the_creators_slot = make_room(&db, a, vec![a, b]).await;
+        assert_eq!(
+            not_the_creators_slot.collection_id,
+            None,
+            "a Room does not inherit Collection from the creator Session alone"
+        );
+        assert_eq!(not_the_creators_slot.root_folder_id, Some(folder_id));
+
+        crate::db::service::collection_service::assign_conversations(
+            &db.conn,
+            vec![a, b],
+            Some(collection.id),
+        )
+        .await
+        .expect("assign members");
+
+        let shared_home = make_room(&db, a, vec![a, b]).await;
+        assert_eq!(shared_home.collection_id, Some(collection.id));
+        assert_eq!(shared_home.root_folder_id, Some(folder_id));
 
         let independent = create(
             &db.conn,
@@ -1240,9 +1259,15 @@ mod tests {
         .expect("human post");
         assert!(human.deliveries.is_empty());
         let events = timeline(&db.conn, &room.id, None).await.unwrap().events;
-        let last = events.last().expect("event");
-        assert_eq!(last.author_kind, crate::models::CollaborationAuthorKind::Human);
-        assert!(last.mention_human);
-        assert_eq!(last.source.agent_type.as_deref(), Some("human"));
+        let human_event = events
+            .iter()
+            .find(|event| event.body.contains("codeg://human"))
+            .expect("human event");
+        assert_eq!(
+            human_event.author_kind,
+            crate::models::CollaborationAuthorKind::Human
+        );
+        assert!(human_event.mention_human);
+        assert_eq!(human_event.source.agent_type.as_deref(), Some("human"));
     }
 }
