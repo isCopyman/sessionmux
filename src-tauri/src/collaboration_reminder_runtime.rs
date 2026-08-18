@@ -128,12 +128,35 @@ async fn dispatch_target(
             let Some(connection_id) = connection_id else {
                 return Ok(false);
             };
-            match manager
-                .try_submit_native_feedback(&connection_id, digest)
-                .await
+            // One steer per turn, both directions: if a letter steer already
+            // injected the full envelope into this turn, a reminder digest on
+            // top would repeat it — downgrade to the durable queue. Otherwise
+            // atomically claim the slot so a letter steer later in the same
+            // turn stands down. The flag resets on TurnComplete.
+            let Some(state) = manager.get_state(&connection_id).await else {
+                return Ok(false);
+            };
             {
+                let mut guard = state.write().await;
+                if guard.collaboration_steered_this_turn {
+                    drop(guard);
+                    return enqueue_mailbox_attention(conn, prompt_queue, emitter, target, digest)
+                        .await;
+                }
+                guard.collaboration_steered_this_turn = true;
+            }
+            let outcome = manager
+                .try_submit_native_feedback(&connection_id, digest)
+                .await;
+            match outcome {
                 Ok(Some(_)) => Ok(true),
-                Ok(None) => Ok(false),
+                // Definitely not injected: release this turn's steer slot.
+                Ok(None) => {
+                    state.write().await.collaboration_steered_this_turn = false;
+                    Ok(false)
+                }
+                // Uncertain: keep the slot claimed rather than risk a double
+                // injection later in the same turn.
                 Err(error) => Err(error.to_string()),
             }
         }
@@ -216,4 +239,80 @@ async fn enqueue_mailbox_attention(
         .await
         .map_err(|error| error.to_string())?;
     Ok(true)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::test_helpers::{fresh_in_memory_db, seed_conversation, seed_folder};
+    use crate::models::AgentType;
+    use std::path::PathBuf;
+
+    /// A turn that already swallowed one letter steer must not get a reminder
+    /// digest steered in on top: the reminder downgrades to the durable queue
+    /// and leaves the steer slot claimed.
+    #[tokio::test]
+    async fn reminder_steer_downgrades_to_queue_when_the_turn_was_already_steered() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/codeg-reminder-steer").await;
+        let conversation_id = seed_conversation(&db, folder_id, AgentType::Codex).await;
+        let manager = ConnectionManager::new();
+        let mut commands = manager
+            .insert_test_connection_live(
+                "conn-steered",
+                AgentType::Codex,
+                Some(PathBuf::from("/tmp/codeg-reminder-steer")),
+                EventEmitter::Noop,
+            )
+            .await;
+        let state = manager
+            .get_state("conn-steered")
+            .await
+            .expect("connection state");
+        {
+            let mut guard = state.write().await;
+            guard.conversation_id = Some(conversation_id);
+            guard.folder_id = Some(folder_id);
+            guard.turn_in_flight = true;
+            guard.native_steering_available = true;
+            guard.collaboration_steered_this_turn = true;
+        }
+
+        let target = collaboration_service::ReminderTargetSnapshot {
+            conversation_id,
+            overdue_unread: 1,
+            overdue_reply: 0,
+            reminder_repeat_count: 0,
+            reminder_last_at: None,
+            letters: Vec::new(),
+        };
+        let prompt_queue = PromptQueueHandle::disconnected_for_test();
+        let delivered = dispatch_target(
+            &db.conn,
+            &manager,
+            &prompt_queue,
+            &EventEmitter::Noop,
+            &target,
+        )
+        .await
+        .expect("dispatch");
+
+        assert!(delivered, "the digest still reaches the Session, queued");
+        let snapshot = prompt_queue_service::snapshot(&db.conn, conversation_id)
+            .await
+            .expect("queue snapshot");
+        assert_eq!(
+            snapshot.items.len(),
+            1,
+            "an already-steered turn queues the digest instead of a second injection"
+        );
+        assert!(
+            commands.try_recv().is_err(),
+            "no native steer command may leave for the Harness"
+        );
+        assert!(
+            state.read().await.collaboration_steered_this_turn,
+            "the claimed slot stays claimed until TurnComplete"
+        );
+    }
 }
