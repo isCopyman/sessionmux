@@ -1,6 +1,6 @@
 ---
 name: codeg-host-control
-description: Use when a managed Codeg Agent needs to create, inspect or rename Codeg Sessions, organize Sessions into Collections, or manage and arrange saved Workbenches through Codeg's progressive Host Control MCP.
+description: Use when a managed Codeg Agent needs to create, inspect or rename Codeg Sessions, organize Sessions into Collections, manage saved Workbenches, or create/list shared Rooms through Codeg's progressive Host Control MCP.
 ---
 
 # Codeg Host Control
@@ -59,6 +59,19 @@ the idempotency key outside model-controlled arguments.
   Workbench, focus the Session, and optionally place it in a right/down split.
   Use this UI-affecting action only when the user asked to open or arrange the
   Workbench. `ui_requested` is not proof that a disconnected View applied it.
+
+## Available Room actions
+
+- `room.list`: list Rooms on a Workbench (defaults to Workbench 1).
+- `room.create`: create a shared Room. You become owner; pass at least one
+  other Session id.
+- `room.add_member`: add an existing Session to a Room you already belong to.
+- `room.post`: store-only Room post. It does not wake anyone. To `@` a
+  member and enqueue a turn, use `send_message` with `room_id` (see
+  `codeg-session-collaboration`).
+
+Room posts are never private mail. Do not answer a Room mention with
+`send_message` that omits `room_id`.
 
 Workbench Pane layout, window mounts and focus remain device-local.
 `workbench.place_session` exposes only the existing tab/right/down placement
