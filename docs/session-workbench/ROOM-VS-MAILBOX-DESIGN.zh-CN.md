@@ -1,6 +1,6 @@
 # 群聊、Mailbox 与人类角色
 
-> 状态：设计拍板稿（2026-08-18）。第 13、14 节已落地。归档 Session 的 Room `@` 不再入队唤醒。第 15 节冻结：群历史要搜，不要把 `read_room` 当全文检索。第 16 节：第一次投递带正文，催办仍摘要。队列合并 / 连续 `@` 不打断是下一刀。  
+> 状态：设计拍板稿（2026-08-18）。第 13、14、16、17 节已落地。Mailbox 与 Room **不合并**。未读分三层。`read_room` 已是最近窗口 + `unread=true` 追读。群 `@` 进同一套 5 分钟催办，但不进 inbox。连续 `@` 禁止一条一个 interrupt：steer 一批或等本轮结束再 FlushBatch。  
 > 问题：群聊是不是另一套消息系统？Mailbox 是不是完全私聊？人类该打字还是该发邮件？CCCC 怎么做？  
 > 已有长文：[群聊 RFC](./GROUP-CONVERSATION-RFC.zh-CN.md)、[通信 RFC](./SESSION-COMMUNICATION-RFC.zh-CN.md)、[产品场景](./PRODUCT-SPEC.zh-CN.md#48-建立一个共享讨论室)  
 > 本文只补那三份没讲清的东西：协议边界、人类三条入口、和 CCCC 的真实差别。  
@@ -343,7 +343,7 @@ Agent 看见同一 URI 时靠**已经落地的信封**分流：`kind=room_mentio
 
 要。微信 / Discord / CCCC 都有。新成员补课、老成员找“上次怎么定的”，都不能靠把整本账本塞进一次 `read_room`。
 
-`read_room` 现在不是搜索，连“看最近”都没做好：默认 `LIMIT` 50（服务端最多 200），`ORDER BY created_at ASC`，等于房间变长之后只能看到**最早**的一段。工具文案写 recent，实现是 oldest。人的 Room 面板也是一次性拉 timeline，没有搜索框。
+`read_room` 默认已是**最近 N 条**（服务端最多 200），可用 `before_event_id` 往回翻，`unread=true` 追读游标之后的全部群帖。它仍然不是搜索。人的 Room 面板也还没有搜索框。
 
 现有三套“搜索”不是同一件事，不要合成一个 `search()`：
 
@@ -361,9 +361,9 @@ V1 形状（学 CCCC `search_messages` 和 Discord 的“搜到再跳回上下�
 4. 房间还小，V1 用大小写不敏感的 `LIKE` 即可，先不上 FTS5。
 5. 可抽前端搜索框 / 高亮命中。**禁止**把 ctx、邮箱过滤、群账本并成一个后端函数。
 
-下一刀功能（第 11 节）仍是删 Room API；删 Workbench 不再 CASCADE 出孤儿 `collaboration_event`。`read_room` 改尾窗 + `search_room` 作为独立小刀插在删 Room 之后、Room 回跳之前。文件搬家只插空做，不合并写路径。
+下一刀功能（第 11 节）仍是删 Room API；删 Workbench 不再 CASCADE 出孤儿 `collaboration_event`。`search_room` 作为独立小刀插在删 Room 之后、Room 回跳之前。文件搬家只插空做，不合并写路径。
 
-调度器下一刀：同 Session 排队的通知 claim 时合并；连续 `@` 禁止一条一个 interrupt（能 steer 就 steer，否则等本轮结束再一批投）。人的输入框和“停掉再发”仍单独优先。
+调度器（第 17 节）已落地：同 Session 排队的通知 claim 时合并；连续 `@` 禁止一条一个 interrupt。人的输入框和“停掉再发”仍单独优先。
 
 ## 16. 第一次投递带正文，催办才用系统摘要
 
@@ -379,4 +379,48 @@ Mailbox 和 Room `@` 共用一个 Dispatcher，但第一次进 Turn 的信封不
 群帖没有 title。`kind=room_mention` 的正文就是那条 `content`。没 `@` 的群发言不进调度器。
 
 不要学 CCCC 的 `auto_mark_on_delivery`：塞进 prompt 只证明 Host 投了。
+
+## 17. Mailbox 和 Room 分开还是合并？未读、已读未回、调度
+
+**不合并，不大重构。** 产品、工具、UI 继续两套；底层继续共用 Delivery / Dispatcher。CCCC 可以把群账本按 `to`+游标切成 Inbox，因为它没有独立私信库。Codeg 两条都有，不能把群 `@` 塞进 `list_inbox`。
+
+`@` 我是一种未读，但不是一封邮件。未读是三层，不是两盒倒进一个 inbox：
+
+| 层 | 是什么 | 入口 | 叫醒？ | 催办？ |
+|---|---|---|---|---|
+| Mailbox 未读 | `visibility=direct` 的信 | `list_inbox` / `read_message` / 邮箱角标 | 写信即可投递 | 5 分钟 |
+| 群点名未读 | Room `@` 的 Delivery（`agent_received_at IS NULL`） | `list_rooms.mention_unread_count`；`read_room` 窗口内 consume | 结构化 `@` 才叫醒 | 同一套 5 分钟钟，文案指向 `read_room` / `post_room` |
+| 群频道未读 | 成员游标之后的**全部**群帖（含没 `@` 的） | `list_rooms.unread_count`；`read_room(unread=true)` | **不叫醒** | 不催 |
+
+类比：Slack DM ≠ channel mention ≠ 打开频道追进度。
+
+### 已读未回
+
+Mailbox 已有 5 分钟钟。Room `@` 同样催，但不要让 Agent 去 `list_inbox`。没 `@` 的频道未读不催。`read_room` consume ≠ 清 `expects_reply`；回群必须 `post_room` + `reply_to_event_id`。不要再造第四套 Room inbox 工具。
+
+### Buzz 怎么做，Codeg 对齐什么
+
+Buzz：每频道同时一轮；回合中新 `@` 排队；下一轮 FlushBatch 合成一个 prompt；默认 steer；只有明确 interrupt 才取消当前轮。
+
+Codeg：
+
+- 普通 high / `@` **禁止自动 interrupt**。只 `wake()`。人的“停掉再发”仍走 `collaboration_send_interrupt_core`。
+- Idle：头是 collaboration origin 则再 claim 后续连续 origin（上限 16），合并成一个 prompt。
+- Busy：至多一次 native steer；当前所有 `steer_if_supported` 合成一批；`SessionState.collaboration_steered_this_turn`，TurnComplete 清掉。
+- 一批多封时跳过 auto-reply（同一 `embedded_turn_ref` 多于一条）。Agent 必须自己 `send_message` / `post_room`。
+
+### UI / 生命周期
+
+- 邮箱面板只渲染 Mailbox 层。Room 面板渲染频道未读 + 点名未读。
+- 新成员 `last_read_at = joined_at`，并记下入群时最新 `last_read_event_id`，不继承历史未读。
+- 人打开群面板推进 Host `last_seen_at`；Agent 用自己的成员游标。
+- 不要把 Session 输入框接成第二条写信路径。不要给 `codeg://session/<id>` 加 `?kind=mail`。
+
+### 明确不做
+
+- 不合成 `send(visibility)`。
+- 不把群 `@` 写进 inbox。
+- 不学 CCCC `auto_mark_on_delivery`。
+- 不给用户可调 `delivery_style`。
+- 不在本轮按文件拆 mailbox / room / dispatch（插空再搬）。
 

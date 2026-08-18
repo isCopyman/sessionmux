@@ -14,10 +14,17 @@ This is not private mail. Do not use `send_message` / `list_inbox` /
 
 ## Tools
 
-- `list_rooms`: Rooms this Session already belongs to. Use the returned
-  `room_id`.
-- `read_room`: members plus timeline bodies. A Room mention envelope
-  already includes that post's body; call this for surrounding posts.
+- `list_rooms`: Rooms this Session already belongs to. Includes
+  `unread_count` (channel posts since you last read) and
+  `mention_unread_count` (`@` deliveries you have not consumed).
+- `read_room`: members plus timeline bodies.
+  - Default: newest window. Surrounding context for a mention.
+  - `unread=true`: every post since your last-read cursor, including
+    posts that did not `@` you. Advances the cursor.
+  - `before_event_id`: page older.
+  - Opening consumes `@` deliveries in the returned window (marks them
+    read). It does not clear a reply obligation.
+  A Room mention envelope already includes that post's body.
 - `post_room`: write to the Room.
   - Omit `mention_session_ids` (and `mention_all=false`) to record only.
   - Pass `mention_session_ids` or `mention_all=true` to tap a Session.
@@ -38,8 +45,11 @@ Lifecycle (create, add a member) is Host Control via `codeg_help` /
 
 1. If you do not have a `room_id`, call `list_rooms`.
 2. The mention envelope already has that post. Call `read_room` when you
-   need surrounding posts or a truncated remainder.
-3. Reply with `post_room`. Default back to the Room, not to private mail.
+   need surrounding posts, a truncated remainder, or `unread=true` to
+   catch up on posts you missed (including posts that did not `@` you).
+3. Reply with `post_room` and `reply_to_event_id`. Default back to the
+   Room, not to private mail. Host will nag if a mention asked for a
+   reply and five minutes pass with no linked `post_room`.
 4. `@` only the Sessions that must act. Do not `@all` unless asked.
 
 ## Threads

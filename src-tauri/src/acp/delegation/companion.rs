@@ -714,10 +714,22 @@ async fn build_tools_call_spawn(
             };
             let limit =
                 parse_clamped_limit(&arguments, DEFAULT_ROOM_READ_LIMIT, MAX_ROOM_READ_LIMIT);
+            let unread = arguments
+                .get("unread")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false);
+            let before_event_id = arguments
+                .get("before_event_id")
+                .and_then(|value| value.as_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string);
             let req = BrokerReadRoomRequest {
                 token: ctx.token.clone(),
                 room_id,
                 limit: Some(limit),
+                unread,
+                before_event_id,
             };
             let round_trip =
                 Box::pin(async move { client_read_room_round_trip(&socket, &req).await });
@@ -1900,7 +1912,17 @@ pub fn render_session_room_list_result(outcome: &Value) -> Value {
                     .get("member_count")
                     .and_then(Value::as_u64)
                     .unwrap_or(0);
-                lines.push(format!("- {id}: {title} ({members} members)"));
+                lines.push(format!(
+                    "- {id}: {title} ({members} members, {unread} unread, {mentions} mentions)",
+                    unread = room
+                        .get("unread_count")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0),
+                    mentions = room
+                        .get("mention_unread_count")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0)
+                ));
             }
             if outcome
                 .get("truncated")
@@ -1979,6 +2001,15 @@ pub fn render_session_room_read_result(outcome: &Value) -> Value {
                     "- {event_id} from {from_id} {from_title}{reply_bit}:"
                 ));
                 lines.push(body.to_string());
+            }
+        }
+        if outcome
+            .get("truncated")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            if let Some(note) = outcome.get("note").and_then(Value::as_str) {
+                lines.push(note.to_string());
             }
         }
         lines.join("\n")

@@ -267,25 +267,29 @@ impl PromptQueueRuntime {
     }
 
     async fn emit_origin_change(&self, item: &crate::models::prompt_queue::ClaimedPromptQueueItem) {
-        let Some(event_id) = item.origin_event_id.as_deref() else {
-            return;
-        };
-        match collaboration_service::origin_participants(
-            &self.db.conn,
-            item.conversation_id,
-            event_id,
-        )
-        .await
-        {
-            Ok(conversation_ids) if !conversation_ids.is_empty() => emit_event(
+        let mut conversation_ids = std::collections::BTreeSet::new();
+        for event_id in item.origin_event_ids() {
+            match collaboration_service::origin_participants(
+                &self.db.conn,
+                item.conversation_id,
+                event_id,
+            )
+            .await
+            {
+                Ok(ids) => conversation_ids.extend(ids),
+                Err(err) => tracing::error!(
+                    "[prompt-queue] collaboration invalidation failed for {event_id}: {err}"
+                ),
+            }
+        }
+        if !conversation_ids.is_empty() {
+            emit_event(
                 &self.emitter,
                 COLLABORATION_CHANGED_EVENT,
-                CollaborationChanged { conversation_ids },
-            ),
-            Ok(_) => {}
-            Err(err) => tracing::error!(
-                "[prompt-queue] collaboration invalidation failed for {event_id}: {err}"
-            ),
+                CollaborationChanged {
+                    conversation_ids: conversation_ids.into_iter().collect(),
+                },
+            );
         }
     }
 
@@ -798,11 +802,23 @@ impl PromptQueueRuntime {
             .map(|row| row.id)
     }
 
+    async fn set_collaboration_steered_this_turn(&self, connection_id: &str, value: bool) {
+        if let Some(state) = self.manager.get_state(connection_id).await {
+            state.write().await.collaboration_steered_this_turn = value;
+        }
+    }
+
     async fn process_native_steer(&self, row: &conversation::Model, connection_id: &str) {
         // A busy Session cannot run the class-ordered head, but a native steer
         // does not consume the turn slot, so the claim skips directly to the
         // first letter whose sender asked for it. Queued user drafts are not
-        // bypassed for a turn: they still own the next idle dispatch.
+        // bypassed for a turn: they still own the next idle dispatch. At most
+        // one steer batch runs per turn; later @s wait for idle flush.
+        if let Some(state) = self.manager.get_state(connection_id).await {
+            if state.read().await.collaboration_steered_this_turn {
+                return;
+            }
+        }
         let claimed = match prompt_queue_service::claim_first_steerable(
             &self.db.conn,
             row.id,
@@ -896,6 +912,15 @@ impl PromptQueueRuntime {
                 return;
             }
         };
+        if let Some(state) = self.manager.get_state(connection_id).await {
+            let mut state = state.write().await;
+            if state.collaboration_steered_this_turn {
+                drop(state);
+                self.release_busy(&claimed).await;
+                return;
+            }
+            state.collaboration_steered_this_turn = true;
+        }
         match prompt_queue_service::mark_dispatch_started(
             &self.db.conn,
             &claimed,
@@ -905,6 +930,8 @@ impl PromptQueueRuntime {
         {
             Ok(true) => self.emit_origin_change(&claimed).await,
             Ok(false) => {
+                self.set_collaboration_steered_this_turn(connection_id, false)
+                    .await;
                 if !self.freeze_claim_if_collaboration_disabled(&claimed).await {
                     self.release_busy(&claimed).await;
                 }
@@ -915,6 +942,8 @@ impl PromptQueueRuntime {
                     "[prompt-queue] could not mark steer dispatch for {}: {err}",
                     claimed.id
                 );
+                self.set_collaboration_steered_this_turn(connection_id, false)
+                    .await;
                 self.release_busy(&claimed).await;
                 return;
             }
@@ -926,7 +955,11 @@ impl PromptQueueRuntime {
             .await
         {
             Ok(Some(_)) => self.accept_after_dispatch(&claimed).await,
-            Ok(None) => self.release_busy(&claimed).await,
+            Ok(None) => {
+                self.set_collaboration_steered_this_turn(connection_id, false)
+                    .await;
+                self.release_busy(&claimed).await;
+            }
             Err(err) => {
                 tracing::error!(
                     "[prompt-queue] native steer outcome is uncertain for {}: {err}",
@@ -1989,6 +2022,186 @@ mod tests {
             .items
             .is_empty());
         assert!(commands.try_recv().is_err(), "native steer must not replay");
+        worker.abort();
+    }
+
+    #[tokio::test]
+    async fn idle_flush_sends_consecutive_letters_in_one_prompt() {
+        let path = "/tmp/codeg-collaboration-idle-flush";
+        let (db, folder_id, target, manager, bus) = setup(path).await;
+        let source = seed_conversation(&db, folder_id, AgentType::ClaudeCode).await;
+        let mut commands = bind_live_connection(&manager, "active", path, folder_id, target).await;
+        collaboration_service::send(
+            &db.conn,
+            collaboration_input(source, target, "flush-a", "alpha body"),
+        )
+        .await
+        .expect("first");
+        collaboration_service::send(
+            &db.conn,
+            collaboration_input(source, target, "flush-b", "beta body"),
+        )
+        .await
+        .expect("second");
+        let (_handle, task) =
+            build_prompt_queue_runtime(db.conn.clone(), manager, EventEmitter::Noop, bus);
+        let worker = tokio::spawn(task);
+
+        let command = tokio::time::timeout(StdDuration::from_secs(2), commands.recv())
+            .await
+            .expect("flush timeout")
+            .expect("flush prompt");
+        let ConnectionCommand::Prompt {
+            blocks,
+            dispatch_ack,
+            ..
+        } = command
+        else {
+            panic!("expected one merged prompt");
+        };
+        let text = blocks
+            .iter()
+            .filter_map(|block| match block {
+                PromptInputBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("alpha body"));
+        assert!(text.contains("beta body"));
+        dispatch_ack
+            .expect("collaboration dispatch acknowledgement")
+            .send(())
+            .unwrap();
+        wait_until(|| async {
+            collaboration_service::feed(&db.conn, target, None)
+                .await
+                .is_ok_and(|feed| {
+                    feed.inbound.len() == 2
+                        && feed
+                            .inbound
+                            .iter()
+                            .all(|item| item.state == CollaborationDeliveryState::Embedded)
+                })
+        })
+        .await;
+        assert!(commands.try_recv().is_err(), "flush must be one turn");
+        worker.abort();
+    }
+
+    #[tokio::test]
+    async fn busy_steer_flushes_once_then_holds_later_letters_for_idle() {
+        let path = "/tmp/codeg-collaboration-steer-once";
+        let (db, folder_id, target, manager, bus) = setup(path).await;
+        let source = seed_conversation(&db, folder_id, AgentType::ClaudeCode).await;
+        let mut commands = bind_live_connection(&manager, "active", path, folder_id, target).await;
+        let state = manager.get_state("active").await.expect("state");
+        {
+            let mut state = state.write().await;
+            state.turn_in_flight = true;
+            state.native_steering_available = true;
+        }
+        let mut first = collaboration_input(source, target, "steer-once-a", "first correction");
+        first.delivery_hint = CollaborationDeliveryHint::SteerIfSupported;
+        let mut second = collaboration_input(source, target, "steer-once-b", "second correction");
+        second.delivery_hint = CollaborationDeliveryHint::SteerIfSupported;
+        collaboration_service::send(&db.conn, first)
+            .await
+            .expect("first steer letter");
+        collaboration_service::send(&db.conn, second)
+            .await
+            .expect("second steer letter");
+        let (_handle, task) = build_prompt_queue_runtime(
+            db.conn.clone(),
+            manager.clone_ref(),
+            EventEmitter::Noop,
+            bus.clone(),
+        );
+        let worker = tokio::spawn(task);
+
+        let command = tokio::time::timeout(StdDuration::from_secs(2), commands.recv())
+            .await
+            .expect("steer timeout")
+            .expect("steer command");
+        let ConnectionCommand::Steer { text, reply } = command else {
+            panic!("expected one native steer batch");
+        };
+        assert!(text.contains("first correction"));
+        assert!(text.contains("second correction"));
+        reply.send(Ok(SteerOutcome::Injected)).expect("steer reply");
+        wait_until(|| async {
+            collaboration_service::feed(&db.conn, target, None)
+                .await
+                .is_ok_and(|feed| {
+                    feed.inbound
+                        .iter()
+                        .filter(|item| item.state == CollaborationDeliveryState::Embedded)
+                        .count()
+                        == 2
+                })
+        })
+        .await;
+
+        let mut third = collaboration_input(source, target, "steer-once-c", "after the batch");
+        third.delivery_hint = CollaborationDeliveryHint::SteerIfSupported;
+        collaboration_service::send(&db.conn, third)
+            .await
+            .expect("third letter after steer");
+        let handle = _handle;
+        handle.wake(target);
+        tokio::time::sleep(StdDuration::from_millis(120)).await;
+        assert!(
+            commands.try_recv().is_err(),
+            "a second steer must not fire in the same turn"
+        );
+        assert_eq!(
+            prompt_queue_service::snapshot(&db.conn, target)
+                .await
+                .unwrap()
+                .items
+                .len(),
+            1
+        );
+
+        {
+            let mut state = state.write().await;
+            state.turn_in_flight = false;
+            state.collaboration_steered_this_turn = false;
+        }
+        bus.send(Arc::new(EventEnvelope {
+            seq: 1,
+            connection_id: "active".into(),
+            payload: AcpEvent::TurnComplete {
+                session_id: "native-session".into(),
+                stop_reason: "end_turn".into(),
+                agent_type: "codex".into(),
+            },
+        }));
+        let next = tokio::time::timeout(StdDuration::from_secs(2), commands.recv())
+            .await
+            .expect("idle flush timeout")
+            .expect("idle flush");
+        let ConnectionCommand::Prompt {
+            blocks,
+            dispatch_ack,
+            ..
+        } = next
+        else {
+            panic!("held letter must run as the next idle prompt");
+        };
+        let text = blocks
+            .iter()
+            .filter_map(|block| match block {
+                PromptInputBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("after the batch"));
+        dispatch_ack
+            .expect("collaboration dispatch acknowledgement")
+            .send(())
+            .unwrap();
         worker.abort();
     }
 

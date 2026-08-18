@@ -122,6 +122,8 @@ pub struct ReminderLetterLine {
     pub from_title: String,
     pub letter_title: String,
     pub awaiting_reply: bool,
+    pub is_room: bool,
+    pub room_id: Option<String>,
 }
 
 /// Short host-authored digest. Never includes the original letter body.
@@ -134,22 +136,38 @@ pub fn reminder_digest_text_with_letters(
     awaiting_reply: u32,
     letters: &[ReminderLetterLine],
 ) -> String {
+    let only_room_lines = !letters.is_empty() && letters.iter().all(|item| item.is_room);
+    let has_room = letters.iter().any(|item| item.is_room);
     let mut parts = Vec::new();
     if unread > 0 {
-        parts.push(format!("有 {unread} 封未读会话信件"));
+        if only_room_lines {
+            parts.push(format!("有 {unread} 条未读群点名"));
+        } else if has_room {
+            parts.push(format!("有 {unread} 条未读（信件或群点名）"));
+        } else {
+            parts.push(format!("有 {unread} 封未读会话信件"));
+        }
     }
     if awaiting_reply > 0 {
-        parts.push(format!("有 {awaiting_reply} 封已读但仍需回复的会话信件"));
+        if letters.iter().any(|item| item.is_room && item.awaiting_reply)
+            && letters.iter().any(|item| !item.is_room && item.awaiting_reply)
+        {
+            parts.push(format!("有 {awaiting_reply} 条已读但仍需回复"));
+        } else if letters.iter().any(|item| item.is_room && item.awaiting_reply) {
+            parts.push(format!("有 {awaiting_reply} 条已读未回的群点名"));
+        } else {
+            parts.push(format!("有 {awaiting_reply} 封已读但仍需回复的会话信件"));
+        }
     }
     if parts.is_empty() {
         return String::new();
     }
     let mut text = format!(
-        "Codeg 系统信箱提醒（不是来自某个 Session 的信）：{}。",
+        "Codeg 系统提醒（不是来自某个 Session 的信）：{}。",
         parts.join("；")
     );
     if !letters.is_empty() {
-        text.push_str(" 标题：");
+        text.push_str(" 条目：");
         let lines: Vec<String> = letters
             .iter()
             .take(8)
@@ -159,20 +177,40 @@ pub fn reminder_digest_text_with_letters(
                 } else {
                     "未读"
                 };
-                format!(
-                    "《{}》来自 {} #{}（{}，event_id={}）",
-                    letter.letter_title,
-                    letter.from_title,
-                    letter.from_session_id,
-                    flag,
-                    letter.event_id
-                )
+                if letter.is_room {
+                    let room = letter.room_id.as_deref().unwrap_or("room");
+                    format!(
+                        "群点名《{}》来自 {} #{}（{}，room_id={}，event_id={}）",
+                        letter.letter_title,
+                        letter.from_title,
+                        letter.from_session_id,
+                        flag,
+                        room,
+                        letter.event_id
+                    )
+                } else {
+                    format!(
+                        "《{}》来自 {} #{}（{}，event_id={}）",
+                        letter.letter_title,
+                        letter.from_title,
+                        letter.from_session_id,
+                        flag,
+                        letter.event_id
+                    )
+                }
             })
             .collect();
         text.push_str(&lines.join("；"));
         text.push('。');
     }
-    text.push_str("请用 list_inbox 查看标题，用 read_message 确认已读。催办不含正文。");
+    let has_mail = !only_room_lines;
+    if has_mail && has_room {
+        text.push_str("请用 list_inbox / read_message 处理信件，用 read_room / post_room 处理群点名。催办不含正文。");
+    } else if has_room {
+        text.push_str("请用 read_room 确认已读，用 post_room 回复（设置 reply_to_event_id）。催办不含正文。");
+    } else {
+        text.push_str("请用 list_inbox 查看标题，用 read_message 确认已读。催办不含正文。");
+    }
     text
 }
 
@@ -258,7 +296,7 @@ mod tests {
     fn digest_text_is_chinese_and_does_not_repeat_the_letter_body() {
         assert_eq!(
             reminder_digest_text(2, 1),
-            "Codeg 系统信箱提醒（不是来自某个 Session 的信）：有 2 封未读会话信件；有 1 封已读但仍需回复的会话信件。请用 list_inbox 查看标题，用 read_message 确认已读。催办不含正文。"
+            "Codeg 系统提醒（不是来自某个 Session 的信）：有 2 封未读会话信件；有 1 封已读但仍需回复的会话信件。请用 list_inbox 查看标题，用 read_message 确认已读。催办不含正文。"
         );
         let with_titles = reminder_digest_text_with_letters(
             1,
@@ -269,9 +307,30 @@ mod tests {
                 from_title: "Session C".into(),
                 letter_title: "Ping".into(),
                 awaiting_reply: false,
+                is_room: false,
+                room_id: None,
             }],
         );
         assert!(with_titles.contains("《Ping》来自 Session C #290"));
         assert!(!with_titles.contains("MAILBOX-PING from"));
+
+        let room = reminder_digest_text_with_letters(
+            1,
+            1,
+            &[ReminderLetterLine {
+                event_id: "e2".into(),
+                from_session_id: 12,
+                from_title: "Lead".into(),
+                letter_title: "please look".into(),
+                awaiting_reply: true,
+                is_room: true,
+                room_id: Some("rm_plan".into()),
+            }],
+        );
+        assert!(room.contains("未读群点名") || room.contains("已读未回的群点名"));
+        assert!(room.contains("read_room"));
+        assert!(room.contains("post_room"));
+        assert!(!room.contains("list_inbox"));
+        assert!(!room.contains("please look at the rest of the paper"));
     }
 }

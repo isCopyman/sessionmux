@@ -358,6 +358,10 @@ pub struct SessionState {
     /// opt-in), rerouting subsequent notes to the MCP pull path.
     pub native_steering_available: bool,
 
+    /// One native collaboration steer batch per in-flight turn. Further @ /
+    /// letters wait for TurnComplete, then idle flush merges them.
+    pub collaboration_steered_this_turn: bool,
+
     /// Which `session_info_update` meta key carries goal snapshots for this
     /// connection: `true` ⇒ the provider-neutral `_meta.goal` (adapter
     /// advertised the goal extension at initialize — claude-agent-acp 0.66+,
@@ -532,6 +536,7 @@ impl SessionState {
             codeg_mcp_token: None,
             feedback_tool_available: false,
             native_steering_available: false,
+            collaboration_steered_this_turn: false,
             neutral_goal_channel: false,
             goal_control_method: crate::acp::codex_goal::LEGACY_GOAL_CONTROL_METHOD.to_string(),
             goal_actions: None,
@@ -934,6 +939,7 @@ impl SessionState {
                 // cancel, stop-reason — emit TurnComplete; disconnect/error
                 // discard the state entirely, so no stale flag can outlive them.)
                 self.turn_in_flight = false;
+                self.collaboration_steered_this_turn = false;
                 self.pending_permission = None;
                 // A blocked `ask_user_question` can't outlive its turn: if the
                 // turn ends (cancel / stop) the card is moot. The backend's

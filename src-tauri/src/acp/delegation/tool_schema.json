@@ -240,7 +240,7 @@
   },
   {
     "name": "list_rooms",
-    "description": "List shared Rooms this Session already belongs to. Use this to find a room_id before read_room or post_room. Results include title and member count. Creating a Room or adding members is Host Control (room.create / room.add_member), not this tool.",
+    "description": "List shared Rooms this Session already belongs to. Use this to find a room_id before read_room or post_room. Results include title, member count, channel unread_count (posts since this Session last read), and mention_unread_count (@ deliveries not yet consumed). Creating a Room or adding members is Host Control (room.create / room.add_member), not this tool.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -259,7 +259,7 @@
   },
   {
     "name": "read_room",
-    "description": "Read a shared Room timeline this Session belongs to. Returns members and recent posts with full bodies. Room posts never appear in list_inbox. A Room mention envelope already includes that post's body; call this with the given room_id for surrounding posts. Reply with post_room using the same room_id and reply_to_event_id; do not send_message a private letter unless asked.",
+    "description": "Read a shared Room timeline this Session belongs to. Returns members and posts with full bodies. Default is the newest window. Set unread=true to catch up from this Session's last-read cursor (all posts, not only @mentions) and advance that cursor. Set before_event_id to page older. Opening consumes Room @ deliveries in the returned window but does not clear a reply obligation. Room posts never appear in list_inbox. A Room mention envelope already includes that post's body. Reply with post_room using the same room_id and reply_to_event_id; do not send_message a private letter unless asked.",
     "inputSchema": {
       "type": "object",
       "required": ["room_id"],
@@ -273,7 +273,16 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 200,
-          "description": "Maximum timeline events, oldest first. Defaults to 50."
+          "description": "Maximum timeline events. Defaults to 50."
+        },
+        "unread": {
+          "type": "boolean",
+          "description": "If true, return posts after this Session last read, oldest first, including record-only posts that did not @ this Session. Advances the channel cursor. Defaults to false."
+        },
+        "before_event_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Page older than this event_id. Ignored when unread=true."
         }
       }
     }

@@ -168,6 +168,10 @@ pub struct BrokerReadRoomRequest {
     pub room_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<u32>,
+    #[serde(default)]
+    pub unread: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before_event_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

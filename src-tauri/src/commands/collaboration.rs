@@ -7,13 +7,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::acp::manager::ConnectionManager;
 use crate::acp::session_collaboration::{
-    RoomPostSpec, SessionAddress, SessionCollaborationAccess, SessionCollaborationConfig,
-    SessionCollaborationRuntimeConfig, SessionListOutcome, SessionMessageDeliveryOutcome,
-    SessionMessageSpec, SessionRoomEvent, SessionRoomListItem, SessionRoomListOutcome,
-    SessionRoomMember, SessionRoomReadOutcome, SessionSendOutcome, MAX_SESSION_LIST_LIMIT,
-    SEND_MESSAGE_ROOM_HINT,
+    RoomPostSpec, RoomReadQuery, SessionAddress, SessionCollaborationAccess,
+    SessionCollaborationConfig, SessionCollaborationRuntimeConfig, SessionListOutcome,
+    SessionMessageDeliveryOutcome, SessionMessageSpec, SessionRoomEvent, SessionRoomListItem,
+    SessionRoomListOutcome, SessionRoomMember, SessionRoomReadOutcome, SessionSendOutcome,
+    MAX_SESSION_LIST_LIMIT, SEND_MESSAGE_ROOM_HINT,
 };
-use crate::acp::types::ConnectionStatus;
 use crate::app_error::AppCommandError;
 use crate::db::service::{
     app_metadata_service, collaboration_interrupt_service, collaboration_room_service,
@@ -123,67 +122,6 @@ fn publish_persisted_message(emitter: &EventEmitter, result: &CollaborationSendR
     }
 }
 
-const HIGH_PRIORITY_INTERRUPT_REASON: &str = "High-priority letter";
-
-/// Busy + no native steer → stop the current turn. Otherwise wake: idle
-/// starts a turn, busy+steer injects, closed Sessions resume.
-async fn target_needs_interrupt(
-    conn: &sea_orm::DatabaseConnection,
-    manager: &ConnectionManager,
-    conversation_id: i32,
-) -> bool {
-    let Ok(Some(row)) = crate::db::entities::conversation::Entity::find_by_id(conversation_id)
-        .one(conn)
-        .await
-    else {
-        return false;
-    };
-    let Some((_, state)) = crate::prompt_queue::active_connection_for_row(manager, &row).await
-    else {
-        return false;
-    };
-    let state = state.read().await;
-    state.status == ConnectionStatus::Connected
-        && state.turn_in_flight
-        && !state.native_steering_available
-}
-
-async fn deliver_high_priority_now(
-    conn: &sea_orm::DatabaseConnection,
-    manager: Option<&ConnectionManager>,
-    emitter: &EventEmitter,
-    prompt_queue: &PromptQueueHandle,
-    event_id: &str,
-    target_conversation_id: i32,
-) {
-    let Some(manager) = manager else {
-        prompt_queue.wake(target_conversation_id);
-        return;
-    };
-    if target_needs_interrupt(conn, manager, target_conversation_id).await {
-        let interrupt = collaboration_interrupt_core(
-            conn,
-            manager,
-            emitter,
-            prompt_queue,
-            InterruptCollaborationInput {
-                event_id: event_id.to_string(),
-                target_conversation_id,
-                client_dedupe_id: format!("high-interrupt:{event_id}:{target_conversation_id}"),
-                reason: HIGH_PRIORITY_INTERRUPT_REASON.to_string(),
-            },
-        )
-        .await;
-        if let Err(err) = interrupt {
-            tracing::warn!(
-                "[collaboration] high-priority interrupt failed for {target_conversation_id}: {err}"
-            );
-            prompt_queue.wake(target_conversation_id);
-        }
-        return;
-    }
-    prompt_queue.wake(target_conversation_id);
-}
 
 /// No live Harness means there is no "next turn" to wait for. Normal mail
 /// still has to reach the Agent, so the dispatcher must resume the Session.
@@ -259,14 +197,16 @@ async fn dispatch_persisted_deliveries(
     }) {
         let target = delivery.target.conversation_id;
         // Persist skipped the prompt queue (archived Room @, or a failed
-        // enqueue). High-priority dispatch would still interrupt or wake
-        // the Harness; do not invent a turn that was never queued.
+        // enqueue). High-priority dispatch must not invent a turn that was
+        // never queued. Ordinary high / @ never auto-interrupts: wake so
+        // idle starts a turn, busy+steer injects at most once this turn,
+        // otherwise the letter waits for TurnComplete. Humans still use
+        // "stop and send" for an explicit interrupt.
         if high && delivery.queue_item_id.is_none() {
             continue;
         }
         if high {
-            deliver_high_priority_now(conn, manager, emitter, prompt_queue, event_id, target)
-                .await;
+            prompt_queue.wake(target);
         } else if target_is_closed(conn, manager, target).await {
             wake_closed_session_for_normal_letter(
                 conn,
@@ -289,9 +229,11 @@ pub async fn collaboration_send_core(
     mut input: SendCollaborationMessageInput,
 ) -> Result<CollaborationSendResult, AppCommandError> {
     // Persist first. `priority=high` notifies now: steer if the busy target
-    // supports it, otherwise interrupt. `priority=normal` waits for the next
+    // supports it, otherwise wait for the current turn to finish and flush
+    // queued envelopes together. `priority=normal` waits for the next
     // ordinary turn when the Session is live, and resumes a closed Session
-    // so the letter can still arrive. Both are Agent mail.
+    // so the letter can still arrive. Both are Agent mail. Humans who want
+    // to stop the current turn use collaboration_send_interrupt_core.
     let high = input.invocation_policy == CollaborationInvocationPolicy::InvokeWhenIdle;
     if high {
         input.delivery_hint = CollaborationDeliveryHint::SteerIfSupported;
@@ -965,6 +907,8 @@ impl SessionCollaborationAccess for DbSessionCollaboration {
                 room_id: room.id,
                 title: room.title,
                 member_count: room.member_count,
+                unread_count: room.unread_count,
+                mention_unread_count: room.mention_unread_count,
                 last_event_at: room.last_event_at,
             })
             .collect();
@@ -980,8 +924,7 @@ impl SessionCollaborationAccess for DbSessionCollaboration {
     async fn read_room(
         &self,
         caller_session_id: i32,
-        room_id: String,
-        limit: u32,
+        query: RoomReadQuery,
     ) -> SessionRoomReadOutcome {
         if !self.config.is_enabled().await {
             return SessionRoomReadOutcome::unavailable(
@@ -991,23 +934,33 @@ impl SessionCollaborationAccess for DbSessionCollaboration {
         }
         if let Err(err) = collaboration_room_service::require_member(
             &self.db.conn,
-            &room_id,
+            &query.room_id,
             caller_session_id,
         )
         .await
         {
             return SessionRoomReadOutcome::unavailable(Some(caller_session_id), err.to_string());
         }
-        let detail = match collaboration_room_service::get(&self.db.conn, &room_id).await {
+        let detail = match collaboration_room_service::get(&self.db.conn, &query.room_id).await {
             Ok(detail) => detail,
             Err(err) => {
                 return SessionRoomReadOutcome::unavailable(Some(caller_session_id), err.to_string())
             }
         };
-        let timeline = match collaboration_room_service::timeline(
+        let mode = if query.unread {
+            collaboration_room_service::RoomTimelineMode::Unread {
+                conversation_id: caller_session_id,
+            }
+        } else if let Some(before) = query.before_event_id.as_deref() {
+            collaboration_room_service::RoomTimelineMode::Before { event_id: before }
+        } else {
+            collaboration_room_service::RoomTimelineMode::Recent
+        };
+        let timeline = match collaboration_room_service::timeline_with(
             &self.db.conn,
-            &room_id,
-            Some(limit),
+            &query.room_id,
+            Some(query.limit),
+            mode,
         )
         .await
         {
@@ -1015,6 +968,32 @@ impl SessionCollaborationAccess for DbSessionCollaboration {
             Err(err) => {
                 return SessionRoomReadOutcome::unavailable(Some(caller_session_id), err.to_string())
             }
+        };
+        let event_ids: Vec<String> = timeline.events.iter().map(|event| event.id.clone()).collect();
+        if let Err(err) = collaboration_room_service::consume_room_window(
+            &self.db.conn,
+            &query.room_id,
+            caller_session_id,
+            &event_ids,
+            query.unread,
+        )
+        .await
+        {
+            return SessionRoomReadOutcome::unavailable(Some(caller_session_id), err.to_string());
+        }
+        let note = if timeline.truncated {
+            if query.unread {
+                Some("More unread posts remain. Call read_room again with unread=true.".to_string())
+            } else if let Some(first) = timeline.events.first() {
+                Some(format!(
+                    "Older posts remain. Call read_room with before_event_id={}",
+                    first.id
+                ))
+            } else {
+                None
+            }
+        } else {
+            None
         };
         SessionRoomReadOutcome {
             available: true,
@@ -1050,8 +1029,8 @@ impl SessionCollaborationAccess for DbSessionCollaboration {
                     created_at: event.created_at,
                 })
                 .collect(),
-            truncated: false,
-            note: None,
+            truncated: timeline.truncated,
+            note,
         }
     }
 
@@ -1650,7 +1629,9 @@ mod tests {
     use super::*;
     use crate::acp::connection::ConnectionCommand;
     use crate::acp::internal_bus::EventBusMetrics;
-    use crate::acp::session_collaboration::{SessionInboxFilter, SessionMessageDeliveryMode};
+    use crate::acp::session_collaboration::{
+        SessionInboxFilter, SessionMessageDeliveryMode, RoomReadQuery,
+    };
     use crate::acp::InternalEventBus;
     use crate::db::test_helpers::{fresh_in_memory_db, seed_conversation, seed_folder};
     use crate::models::{
@@ -2124,7 +2105,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn high_priority_cancels_busy_turn_when_steer_is_unavailable() {
+    async fn high_priority_stays_queued_when_busy_without_steer() {
         let db = fresh_in_memory_db().await;
         let folder = seed_folder(&db, "/tmp/codeg-high-interrupt").await;
         let source = seed_conversation(&db, folder, AgentType::Codex).await;
@@ -2152,19 +2133,20 @@ mod tests {
         .await
         .expect("send high");
 
-        assert!(matches!(
-            commands.recv().await,
-            Some(ConnectionCommand::Cancel)
-        ));
+        assert!(
+            commands.try_recv().is_err(),
+            "ordinary high mail must not auto-interrupt a busy turn"
+        );
         assert_eq!(
             result.deliveries[0].state,
             CollaborationDeliveryState::Queued
         );
-        assert!(prompt_queue_service::snapshot(&db.conn, target)
+        let snapshot = prompt_queue_service::snapshot(&db.conn, target)
             .await
-            .unwrap()
-            .paused_reason
-            .is_some());
+            .unwrap();
+        assert!(snapshot.paused_reason.is_none());
+        assert_eq!(snapshot.items.len(), 1);
+        assert_eq!(snapshot.items[0].state, PromptQueueItemState::Queued);
     }
 
     #[tokio::test]
@@ -2562,13 +2544,54 @@ mod tests {
         assert_eq!(posted.deliveries.len(), 1);
         assert_eq!(posted.deliveries[0].target_session_id, peer);
 
-        let timeline = access.read_room(source, room.id.clone(), 50).await;
+        let timeline = access
+            .read_room(
+                source,
+                RoomReadQuery {
+                    room_id: room.id.clone(),
+                    limit: 50,
+                    unread: false,
+                    before_event_id: None,
+                },
+            )
+            .await;
         assert!(timeline.available);
         assert_eq!(timeline.events.len(), 1);
         assert_eq!(timeline.events[0].body, "please look at the plan");
         assert_eq!(timeline.events[0].mention_session_ids, vec![peer]);
 
-        let hidden = access.read_room(outsider, room.id.clone(), 50).await;
+        let peer_rooms = access.list_rooms(peer, None, 50).await;
+        assert_eq!(peer_rooms.rooms[0].unread_count, 1);
+        assert_eq!(peer_rooms.rooms[0].mention_unread_count, 1);
+
+        let catch_up = access
+            .read_room(
+                peer,
+                RoomReadQuery {
+                    room_id: room.id.clone(),
+                    limit: 50,
+                    unread: true,
+                    before_event_id: None,
+                },
+            )
+            .await;
+        assert!(catch_up.available);
+        assert_eq!(catch_up.events.len(), 1);
+        let peer_rooms = access.list_rooms(peer, None, 50).await;
+        assert_eq!(peer_rooms.rooms[0].unread_count, 0);
+        assert_eq!(peer_rooms.rooms[0].mention_unread_count, 0);
+
+        let hidden = access
+            .read_room(
+                outsider,
+                RoomReadQuery {
+                    room_id: room.id.clone(),
+                    limit: 50,
+                    unread: false,
+                    before_event_id: None,
+                },
+            )
+            .await;
         assert!(!hidden.available);
 
         let mail = access

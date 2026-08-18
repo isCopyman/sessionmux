@@ -139,4 +139,31 @@ pub(crate) struct ClaimedPromptQueueItem {
     pub delivery_hint: Option<CollaborationDeliveryHint>,
     pub mode_id: Option<String>,
     pub claimed_by: String,
+    /// Extra queue rows claimed with the head so one turn can carry several
+    /// collaboration envelopes. Empty for ordinary user drafts and single
+    /// letters. Does not include `id`.
+    pub batched_claim_ids: Vec<String>,
+    /// Origins for `batched_claim_ids`, same order. Does not include
+    /// `origin_event_id`.
+    pub batched_origin_event_ids: Vec<String>,
+}
+
+impl ClaimedPromptQueueItem {
+    pub(crate) fn claim_ids(&self) -> Vec<&str> {
+        let mut ids = Vec::with_capacity(1 + self.batched_claim_ids.len());
+        ids.push(self.id.as_str());
+        ids.extend(self.batched_claim_ids.iter().map(String::as_str));
+        ids
+    }
+
+    pub(crate) fn origin_event_ids(&self) -> Vec<&str> {
+        let mut ids = Vec::with_capacity(
+            usize::from(self.origin_event_id.is_some()) + self.batched_origin_event_ids.len(),
+        );
+        if let Some(id) = self.origin_event_id.as_deref() {
+            ids.push(id);
+        }
+        ids.extend(self.batched_origin_event_ids.iter().map(String::as_str));
+        ids
+    }
 }

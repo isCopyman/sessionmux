@@ -6,6 +6,7 @@ use sea_orm::{
     Statement, TransactionTrait,
 };
 
+use crate::acp::types::PromptInputBlock;
 use crate::db::entities::conversation;
 use crate::db::error::DbError;
 use crate::models::prompt_queue::{
@@ -24,6 +25,10 @@ const CLASS_ORDER_SQL: &str = "CASE source \
 const CLASS_ORDER_SQL_Q: &str = "CASE q.source \
      WHEN 'user' THEN 0 WHEN 'collaboration' THEN 1 WHEN 'reminder' THEN 1 \
      ELSE 2 END ASC, q.position ASC, q.created_at ASC, q.id ASC";
+/// Idle flush and busy steer both merge consecutive collaboration origins
+/// into one prompt. Buzz's FlushBatch: one round, several envelopes.
+const MAX_COLLABORATION_FLUSH_BATCH: usize = 16;
+const MAX_FLUSH_ENVELOPE_BYTES: usize = 256_000;
 const MAX_DISPLAY_TEXT_BYTES: usize = 1_000_000;
 const UNKNOWN_DISPATCH_REASON: &str = "dispatch_outcome_unknown";
 pub const SESSION_COLLABORATION_ENABLED_KEY: &str = "session_collaboration.enabled";
@@ -808,7 +813,8 @@ pub async fn retry_item(
 }
 
 /// Claim the class-ordered head of the queue: the item an idle Session must
-/// run next.
+/// run next. Consecutive collaboration / reminder origins after that head are
+/// claimed in the same turn (Buzz FlushBatch).
 pub(crate) async fn claim_head(
     conn: &DatabaseConnection,
     conversation_id: i32,
@@ -820,13 +826,21 @@ pub(crate) async fn claim_head(
          WHERE conversation_id = ? AND state = 'queued' \
          ORDER BY {CLASS_ORDER_SQL} LIMIT 1"
     );
-    claim_by_selector(conn, conversation_id, worker_id, lease, &head_selector).await
+    claim_by_selector(
+        conn,
+        conversation_id,
+        worker_id,
+        lease,
+        &head_selector,
+        OriginFlushKind::ConsecutiveQueuedOrigins,
+    )
+    .await
 }
 
-/// Claim the first queued letter whose sender asked for a native steer. A
-/// busy Session cannot run the class-ordered head, but a steer does not
-/// consume the turn slot, so it may legitimately skip past queued user
-/// drafts — those still own the next full turn.
+/// Claim queued letters whose sender asked for a native steer. A busy Session
+/// cannot run the class-ordered head, but a steer does not consume the turn
+/// slot, so it may skip past queued user drafts — those still own the next
+/// full turn. Every currently steerable origin is merged into one inject.
 pub(crate) async fn claim_first_steerable(
     conn: &DatabaseConnection,
     conversation_id: i32,
@@ -841,7 +855,198 @@ pub(crate) async fn claim_first_steerable(
            AND cd.delivery_hint = 'steer_if_supported' \
          ORDER BY {CLASS_ORDER_SQL_Q} LIMIT 1"
     );
-    claim_by_selector(conn, conversation_id, worker_id, lease, &steer_selector).await
+    claim_by_selector(
+        conn,
+        conversation_id,
+        worker_id,
+        lease,
+        &steer_selector,
+        OriginFlushKind::RemainingSteerable,
+    )
+    .await
+}
+
+#[derive(Clone, Copy)]
+enum OriginFlushKind {
+    ConsecutiveQueuedOrigins,
+    RemainingSteerable,
+}
+
+fn draft_byte_len(draft: &PromptQueueDraft) -> usize {
+    draft
+        .blocks
+        .iter()
+        .map(|block| match block {
+            PromptInputBlock::Text { text } => text.len(),
+            _ => 0,
+        })
+        .sum()
+}
+
+fn merge_origin_drafts(base: &mut PromptQueueDraft, extra: PromptQueueDraft) {
+    let extra_text: String = extra
+        .blocks
+        .iter()
+        .filter_map(|block| match block {
+            PromptInputBlock::Text { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let extra_is_text = extra
+        .blocks
+        .iter()
+        .all(|block| matches!(block, PromptInputBlock::Text { .. }));
+    match base.blocks.as_mut_slice() {
+        [PromptInputBlock::Text { text }] if extra_is_text => {
+            text.push_str("\n\n");
+            text.push_str(&extra_text);
+        }
+        _ => base.blocks.extend(extra.blocks),
+    }
+    if !extra.display_text.is_empty() {
+        if !base.display_text.is_empty() {
+            base.display_text.push_str("\n\n");
+        }
+        base.display_text.push_str(&extra.display_text);
+    }
+}
+
+async fn claim_queue_row(
+    txn: &DatabaseTransaction,
+    conversation_id: i32,
+    worker_id: &str,
+    expires_at: DateTime<Utc>,
+    id_selector: &str,
+    selector_values: Vec<sea_orm::Value>,
+) -> Result<Option<QueryResult>, DbError> {
+    let mut values = vec![worker_id.into(), expires_at.into()];
+    values.extend(selector_values);
+    values.push(conversation_id.into());
+    txn.query_one(statement(
+        &format!(
+            "UPDATE conversation_prompt_queue_item \
+             SET state = 'claimed', claimed_by = ?, claim_expires_at = ?, \
+                 dispatch_started_at = NULL, attempts = attempts + 1, \
+                 updated_at = CURRENT_TIMESTAMP \
+             WHERE id = ({id_selector}) AND conversation_id = ? AND state = 'queued' \
+             RETURNING id, conversation_id, draft_json, origin_event_id, mode_id"
+        ),
+        values,
+    ))
+    .await
+    .map_err(DbError::from)
+}
+
+async fn draft_from_claimed_row(
+    txn: &DatabaseTransaction,
+    conversation_id: i32,
+    row: &QueryResult,
+) -> Result<(PromptQueueDraft, Option<String>), DbError> {
+    let draft_json: Option<String> = row.try_get("", "draft_json")?;
+    let origin_event_id: Option<String> = row.try_get("", "origin_event_id")?;
+    let draft = match (draft_json, origin_event_id.as_deref()) {
+        (Some(draft_json), None) => serde_json::from_str(&draft_json)
+            .map_err(|err| validation(format!("Invalid queued prompt payload: {err}")))?,
+        (None, Some(event_id)) => {
+            crate::db::service::collaboration_service::prompt_draft_for_origin(
+                txn,
+                conversation_id,
+                event_id,
+            )
+            .await?
+        }
+        _ => {
+            return Err(validation(
+                "Queued prompt must contain exactly one of draft_json or origin_event_id",
+            ))
+        }
+    };
+    Ok((draft, origin_event_id))
+}
+
+async fn extend_origin_flush(
+    txn: &DatabaseTransaction,
+    claimed: &mut ClaimedPromptQueueItem,
+    conversation_id: i32,
+    worker_id: &str,
+    expires_at: DateTime<Utc>,
+    kind: OriginFlushKind,
+) -> Result<(), DbError> {
+    if claimed.origin_event_id.is_none() {
+        return Ok(());
+    }
+    let mut envelope_bytes = draft_byte_len(&claimed.draft);
+    while claimed.claim_ids().len() < MAX_COLLABORATION_FLUSH_BATCH {
+        let candidate = match kind {
+            OriginFlushKind::ConsecutiveQueuedOrigins => {
+                txn.query_one(statement(
+                    &format!(
+                        "SELECT id, origin_event_id, mode_id FROM conversation_prompt_queue_item \
+                         WHERE conversation_id = ? AND state = 'queued' \
+                         ORDER BY {CLASS_ORDER_SQL} LIMIT 1"
+                    ),
+                    vec![conversation_id.into()],
+                ))
+                .await?
+            }
+            OriginFlushKind::RemainingSteerable => {
+                txn.query_one(statement(
+                    &format!(
+                        "SELECT q.id, q.origin_event_id, q.mode_id \
+                         FROM conversation_prompt_queue_item q \
+                         JOIN collaboration_delivery cd ON cd.id = q.id \
+                         WHERE q.conversation_id = ? AND q.state = 'queued' \
+                           AND q.origin_event_id IS NOT NULL \
+                           AND cd.delivery_hint = 'steer_if_supported' \
+                         ORDER BY {CLASS_ORDER_SQL_Q} LIMIT 1"
+                    ),
+                    vec![conversation_id.into()],
+                ))
+                .await?
+            }
+        };
+        let Some(candidate) = candidate else {
+            break;
+        };
+        let next_id: String = candidate.try_get("", "id")?;
+        let next_origin: Option<String> = candidate.try_get("", "origin_event_id")?;
+        let Some(next_origin) = next_origin else {
+            break;
+        };
+        let next_mode: Option<String> = candidate.try_get("", "mode_id")?;
+        if next_mode != claimed.mode_id {
+            break;
+        }
+        let extra_draft = crate::db::service::collaboration_service::prompt_draft_for_origin(
+            txn,
+            conversation_id,
+            &next_origin,
+        )
+        .await?;
+        let next_bytes = draft_byte_len(&extra_draft);
+        if envelope_bytes.saturating_add(next_bytes) > MAX_FLUSH_ENVELOPE_BYTES {
+            break;
+        }
+        let Some(row) = claim_queue_row(
+            txn,
+            conversation_id,
+            worker_id,
+            expires_at,
+            "SELECT ?",
+            vec![next_id.clone().into()],
+        )
+        .await?
+        else {
+            break;
+        };
+        let claimed_id: String = row.try_get("", "id")?;
+        merge_origin_drafts(&mut claimed.draft, extra_draft);
+        envelope_bytes = envelope_bytes.saturating_add(next_bytes);
+        claimed.batched_claim_ids.push(claimed_id);
+        claimed.batched_origin_event_ids.push(next_origin);
+    }
+    Ok(())
 }
 
 async fn claim_by_selector(
@@ -850,6 +1055,7 @@ async fn claim_by_selector(
     worker_id: &str,
     lease: Duration,
     head_selector: &str,
+    flush_kind: OriginFlushKind,
 ) -> Result<Option<(ClaimedPromptQueueItem, PromptQueueSnapshot)>, DbError> {
     let txn = conn.begin().await?;
     ensure_state(&txn, conversation_id).await?;
@@ -863,49 +1069,21 @@ async fn claim_by_selector(
     // can race this worker, but it cannot observe the same head as claimable
     // after this statement obtains the writer lock. This is the database-side
     // equivalent of Codex Desktop's per-message acquire lock.
-    let Some(row) = txn
-        .query_one(statement(
-            &format!(
-                "UPDATE conversation_prompt_queue_item \
-                 SET state = 'claimed', claimed_by = ?, claim_expires_at = ?, \
-                     dispatch_started_at = NULL, attempts = attempts + 1, \
-                     updated_at = CURRENT_TIMESTAMP \
-                 WHERE id = ({head_selector}) AND conversation_id = ? AND state = 'queued' \
-                 RETURNING id, conversation_id, draft_json, origin_event_id, mode_id"
-            ),
-            vec![
-                worker_id.into(),
-                expires_at.into(),
-                conversation_id.into(),
-                conversation_id.into(),
-            ],
-        ))
-        .await?
+    let Some(row) = claim_queue_row(
+        &txn,
+        conversation_id,
+        worker_id,
+        expires_at,
+        head_selector,
+        vec![conversation_id.into()],
+    )
+    .await?
     else {
         txn.commit().await?;
         return Ok(None);
     };
     let id: String = row.try_get("", "id")?;
-    let draft_json: Option<String> = row.try_get("", "draft_json")?;
-    let origin_event_id: Option<String> = row.try_get("", "origin_event_id")?;
-    let draft = match (draft_json, origin_event_id.as_deref()) {
-        (Some(draft_json), None) => serde_json::from_str(&draft_json)
-            .map_err(|err| validation(format!("Invalid queued prompt payload: {err}")))?,
-        (None, Some(event_id)) => {
-            crate::db::service::collaboration_service::prompt_draft_for_origin(
-                &txn,
-                conversation_id,
-                event_id,
-            )
-            .await?
-        }
-        _ => {
-            return Err(validation(
-                "Queued prompt must contain exactly one of draft_json or origin_event_id",
-            ))
-        }
-    };
-    bump_revision(&txn, conversation_id).await?;
+    let (draft, origin_event_id) = draft_from_claimed_row(&txn, conversation_id, &row).await?;
     let delivery_hint = match origin_event_id.as_deref() {
         Some(event_id) => Some(
             crate::db::service::collaboration_service::delivery_hint_for_origin(
@@ -917,7 +1095,7 @@ async fn claim_by_selector(
         ),
         None => None,
     };
-    let claimed = ClaimedPromptQueueItem {
+    let mut claimed = ClaimedPromptQueueItem {
         id,
         conversation_id,
         draft,
@@ -925,7 +1103,19 @@ async fn claim_by_selector(
         delivery_hint,
         mode_id: row.try_get("", "mode_id")?,
         claimed_by: worker_id.to_string(),
+        batched_claim_ids: Vec::new(),
+        batched_origin_event_ids: Vec::new(),
     };
+    extend_origin_flush(
+        &txn,
+        &mut claimed,
+        conversation_id,
+        worker_id,
+        expires_at,
+        flush_kind,
+    )
+    .await?;
+    bump_revision(&txn, conversation_id).await?;
     txn.commit().await?;
     let snapshot = snapshot_on(conn, conversation_id).await?;
     Ok(Some((claimed, snapshot)))
@@ -944,57 +1134,60 @@ pub(crate) async fn mark_dispatch_started(
     let expires_at = now + lease;
     let txn = conn.begin().await?;
     ensure_state(&txn, item.conversation_id).await?;
-    let result = txn
-        .execute(statement(
-            "UPDATE conversation_prompt_queue_item \
-             SET dispatch_started_at = CURRENT_TIMESTAMP, claim_expires_at = ?, \
-                 updated_at = CURRENT_TIMESTAMP \
-             WHERE id = ? AND conversation_id = ? AND state = 'claimed' \
-               AND claimed_by = ? AND claim_expires_at > ? \
-               AND NOT EXISTS ( \
-                   SELECT 1 FROM conversation_prompt_queue_state s \
-                   WHERE s.conversation_id = ? AND s.paused_reason IS NOT NULL \
-               ) AND (? IS NULL OR NOT EXISTS ( \
-                   SELECT 1 FROM app_metadata m \
-                   WHERE m.key = ? AND m.value = 'false' AND m.deleted_at IS NULL \
-               ))",
-            vec![
-                expires_at.into(),
-                item.id.clone().into(),
-                item.conversation_id.into(),
-                item.claimed_by.clone().into(),
-                now.into(),
-                item.conversation_id.into(),
-                item.origin_event_id.clone().into(),
-                SESSION_COLLABORATION_ENABLED_KEY.into(),
-            ],
-        ))
-        .await?;
-    if result.rows_affected() == 1 {
-        if let Some(event_id) = item.origin_event_id.as_deref() {
-            let changed = crate::db::service::collaboration_service::mark_origin_embedding(
-                &txn,
-                item.conversation_id,
-                event_id,
-                &item.id,
-            )
+    for id in item.claim_ids() {
+        let result = txn
+            .execute(statement(
+                "UPDATE conversation_prompt_queue_item \
+                 SET dispatch_started_at = CURRENT_TIMESTAMP, claim_expires_at = ?, \
+                     updated_at = CURRENT_TIMESTAMP \
+                 WHERE id = ? AND conversation_id = ? AND state = 'claimed' \
+                   AND claimed_by = ? AND claim_expires_at > ? \
+                   AND NOT EXISTS ( \
+                       SELECT 1 FROM conversation_prompt_queue_state s \
+                       WHERE s.conversation_id = ? AND s.paused_reason IS NOT NULL \
+                   ) AND (? IS NULL OR NOT EXISTS ( \
+                       SELECT 1 FROM app_metadata m \
+                       WHERE m.key = ? AND m.value = 'false' AND m.deleted_at IS NULL \
+                   ))",
+                vec![
+                    expires_at.into(),
+                    id.into(),
+                    item.conversation_id.into(),
+                    item.claimed_by.clone().into(),
+                    now.into(),
+                    item.conversation_id.into(),
+                    item.origin_event_id.clone().into(),
+                    SESSION_COLLABORATION_ENABLED_KEY.into(),
+                ],
+            ))
             .await?;
-            if !changed {
-                return Err(validation(
-                    "Collaboration delivery is no longer eligible for dispatch",
-                ));
-            }
-            crate::db::service::collaboration_interrupt_service::mark_origin_dispatching(
-                &txn,
-                item.conversation_id,
-                event_id,
-            )
-            .await?;
+        if result.rows_affected() != 1 {
+            return Ok(false);
         }
-        bump_revision(&txn, item.conversation_id).await?;
     }
+    for event_id in item.origin_event_ids() {
+        let changed = crate::db::service::collaboration_service::mark_origin_embedding(
+            &txn,
+            item.conversation_id,
+            event_id,
+            &item.id,
+        )
+        .await?;
+        if !changed {
+            return Err(validation(
+                "Collaboration delivery is no longer eligible for dispatch",
+            ));
+        }
+        crate::db::service::collaboration_interrupt_service::mark_origin_dispatching(
+            &txn,
+            item.conversation_id,
+            event_id,
+        )
+        .await?;
+    }
+    bump_revision(&txn, item.conversation_id).await?;
     txn.commit().await?;
-    Ok(result.rows_affected() == 1)
+    Ok(true)
 }
 
 pub(crate) async fn accept_claim(
@@ -1003,18 +1196,23 @@ pub(crate) async fn accept_claim(
 ) -> Result<PromptQueueSnapshot, DbError> {
     let txn = conn.begin().await?;
     ensure_state(&txn, item.conversation_id).await?;
-    let result = txn
-        .execute(statement(
-            "DELETE FROM conversation_prompt_queue_item \
-             WHERE id = ? AND conversation_id = ? AND state = 'claimed' AND claimed_by = ?",
-            vec![
-                item.id.clone().into(),
-                item.conversation_id.into(),
-                item.claimed_by.clone().into(),
-            ],
-        ))
-        .await?;
-    if result.rows_affected() == 0 {
+    let mut deleted_any = false;
+    for id in item.claim_ids() {
+        let result = txn
+            .execute(statement(
+                "DELETE FROM conversation_prompt_queue_item \
+                 WHERE id = ? AND conversation_id = ? AND state = 'claimed' AND claimed_by = ?",
+                vec![
+                    id.into(),
+                    item.conversation_id.into(),
+                    item.claimed_by.clone().into(),
+                ],
+            ))
+            .await?;
+        if result.rows_affected() == 1 {
+            deleted_any = true;
+            continue;
+        }
         // Idempotent success for a lost response: the first DELETE may have
         // committed and only its snapshot read failed. Retrying must not turn
         // that successful acceptance into an "unknown" pause.
@@ -1022,17 +1220,19 @@ pub(crate) async fn accept_claim(
             .query_one(statement(
                 "SELECT 1 AS present FROM conversation_prompt_queue_item \
                  WHERE id = ? AND conversation_id = ?",
-                vec![item.id.clone().into(), item.conversation_id.into()],
+                vec![id.into(), item.conversation_id.into()],
             ))
             .await?
             .is_some();
         if still_exists {
             return Err(validation("Prompt queue claim is no longer owned"));
         }
+    }
+    if !deleted_any {
         txn.commit().await?;
         return snapshot_on(conn, item.conversation_id).await;
     }
-    if let Some(event_id) = item.origin_event_id.as_deref() {
+    for event_id in item.origin_event_ids() {
         let changed = crate::db::service::collaboration_service::mark_origin_embedded(
             &txn,
             item.conversation_id,
@@ -1063,23 +1263,25 @@ pub(crate) async fn release_claim_busy(
 ) -> Result<PromptQueueSnapshot, DbError> {
     let txn = conn.begin().await?;
     ensure_state(&txn, item.conversation_id).await?;
-    let result = txn
-        .execute(statement(
-            "UPDATE conversation_prompt_queue_item \
-         SET state = 'queued', claimed_by = NULL, claim_expires_at = NULL, \
-             dispatch_started_at = NULL, updated_at = CURRENT_TIMESTAMP \
-         WHERE id = ? AND conversation_id = ? AND state = 'claimed' AND claimed_by = ?",
-            vec![
-                item.id.clone().into(),
-                item.conversation_id.into(),
-                item.claimed_by.clone().into(),
-            ],
-        ))
-        .await?;
-    if result.rows_affected() != 1 {
-        return Err(validation("Prompt queue claim is no longer owned"));
+    for id in item.claim_ids() {
+        let result = txn
+            .execute(statement(
+                "UPDATE conversation_prompt_queue_item \
+             SET state = 'queued', claimed_by = NULL, claim_expires_at = NULL, \
+                 dispatch_started_at = NULL, updated_at = CURRENT_TIMESTAMP \
+             WHERE id = ? AND conversation_id = ? AND state = 'claimed' AND claimed_by = ?",
+                vec![
+                    id.into(),
+                    item.conversation_id.into(),
+                    item.claimed_by.clone().into(),
+                ],
+            ))
+            .await?;
+        if result.rows_affected() != 1 {
+            return Err(validation("Prompt queue claim is no longer owned"));
+        }
     }
-    if let Some(event_id) = item.origin_event_id.as_deref() {
+    for event_id in item.origin_event_ids() {
         // A busy rejection happens before the Harness accepts a prompt, so an
         // embedding reservation is safe to return to the delivery queue.
         let changed = crate::db::service::collaboration_service::mark_origin_queued(
@@ -1114,21 +1316,25 @@ pub(crate) async fn pause_dispatch_unknown(
 ) -> Result<PromptQueueSnapshot, DbError> {
     let txn = conn.begin().await?;
     ensure_state(&txn, item.conversation_id).await?;
-    let result = txn
-        .execute(statement(
-            "UPDATE conversation_prompt_queue_item \
+    let mut paused_any = false;
+    for id in item.claim_ids() {
+        let result = txn
+            .execute(statement(
+                "UPDATE conversation_prompt_queue_item \
              SET state = 'paused', claimed_by = NULL, claim_expires_at = NULL, \
                  paused_reason = ?, updated_at = CURRENT_TIMESTAMP \
              WHERE id = ? AND conversation_id = ? AND dispatch_started_at IS NOT NULL",
-            vec![
-                UNKNOWN_DISPATCH_REASON.into(),
-                item.id.clone().into(),
-                item.conversation_id.into(),
-            ],
-        ))
-        .await?;
-    if result.rows_affected() > 0 {
-        if let Some(event_id) = item.origin_event_id.as_deref() {
+                vec![
+                    UNKNOWN_DISPATCH_REASON.into(),
+                    id.into(),
+                    item.conversation_id.into(),
+                ],
+            ))
+            .await?;
+        paused_any |= result.rows_affected() > 0;
+    }
+    if paused_any {
+        for event_id in item.origin_event_ids() {
             crate::db::service::collaboration_service::mark_origin_failed(
                 &txn,
                 item.conversation_id,
@@ -1164,24 +1370,26 @@ pub(crate) async fn fail_claim(
     let reason = reason.trim();
     let txn = conn.begin().await?;
     ensure_state(&txn, item.conversation_id).await?;
-    let result = txn
-        .execute(statement(
-            "UPDATE conversation_prompt_queue_item \
+    for id in item.claim_ids() {
+        let result = txn
+            .execute(statement(
+                "UPDATE conversation_prompt_queue_item \
              SET state = 'paused', claimed_by = NULL, claim_expires_at = NULL, \
                  paused_reason = ?, updated_at = CURRENT_TIMESTAMP \
              WHERE id = ? AND conversation_id = ? AND state = 'claimed' AND claimed_by = ?",
-            vec![
-                reason.into(),
-                item.id.clone().into(),
-                item.conversation_id.into(),
-                item.claimed_by.clone().into(),
-            ],
-        ))
-        .await?;
-    if result.rows_affected() != 1 {
-        return Err(validation("Prompt queue claim is no longer owned"));
+                vec![
+                    reason.into(),
+                    id.into(),
+                    item.conversation_id.into(),
+                    item.claimed_by.clone().into(),
+                ],
+            ))
+            .await?;
+        if result.rows_affected() != 1 {
+            return Err(validation("Prompt queue claim is no longer owned"));
+        }
     }
-    if let Some(event_id) = item.origin_event_id.as_deref() {
+    for event_id in item.origin_event_ids() {
         crate::db::service::collaboration_service::mark_origin_failed(
             &txn,
             item.conversation_id,
@@ -2510,5 +2718,151 @@ mod tests {
             .try_get("", "count")
             .expect("count");
         assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
+    async fn claim_head_merges_consecutive_collaboration_origins() {
+        let (db, target) = seeded_memory().await;
+        let target_row = conversation::Entity::find_by_id(target)
+            .one(&db.conn)
+            .await
+            .unwrap()
+            .unwrap();
+        let source = seed_conversation(&db, target_row.folder_id, AgentType::ClaudeCode).await;
+        let first = collaboration_service::send(
+            &db.conn,
+            SendCollaborationMessageInput {
+                source_conversation_id: source,
+                target_conversation_ids: vec![target],
+                subject: "One".into(),
+                body: "first envelope".into(),
+                client_dedupe_id: "flush-one".into(),
+                invocation_policy: CollaborationInvocationPolicy::InvokeWhenIdle,
+                delivery_hint: CollaborationDeliveryHint::Default,
+                expects_reply: false,
+                urgency: CollaborationUrgency::Normal,
+                reply_to_event_id: None,
+            },
+        )
+        .await
+        .expect("first letter");
+        let second = collaboration_service::send(
+            &db.conn,
+            SendCollaborationMessageInput {
+                source_conversation_id: source,
+                target_conversation_ids: vec![target],
+                subject: "Two".into(),
+                body: "second envelope".into(),
+                client_dedupe_id: "flush-two".into(),
+                invocation_policy: CollaborationInvocationPolicy::InvokeWhenIdle,
+                delivery_hint: CollaborationDeliveryHint::Default,
+                expects_reply: false,
+                urgency: CollaborationUrgency::Normal,
+                reply_to_event_id: None,
+            },
+        )
+        .await
+        .expect("second letter");
+        let (claim, _) = claim_head(&db.conn, target, "worker", Duration::seconds(30))
+            .await
+            .expect("claim")
+            .expect("head");
+        assert_eq!(claim.id, first.deliveries[0].id);
+        assert_eq!(
+            claim.batched_claim_ids,
+            vec![second.deliveries[0].id.clone()]
+        );
+        let PromptInputBlock::Text { text } = &claim.draft.blocks[0] else {
+            panic!("merged flush must stay one text prompt");
+        };
+        assert!(text.contains("first envelope"));
+        assert!(text.contains("second envelope"));
+        assert!(
+            mark_dispatch_started(&db.conn, &claim, Duration::seconds(30))
+                .await
+                .expect("mark")
+        );
+        accept_claim(&db.conn, &claim).await.expect("accept");
+        assert!(claim_head(&db.conn, target, "worker", Duration::seconds(30))
+            .await
+            .expect("empty")
+            .is_none());
+        let feed = collaboration_service::feed(&db.conn, target, None)
+            .await
+            .unwrap();
+        assert!(feed
+            .inbound
+            .iter()
+            .all(|item| item.state == CollaborationDeliveryState::Embedded));
+        assert_eq!(
+            feed.inbound
+                .iter()
+                .filter(|item| item.embedded_turn_ref.as_deref() == Some(claim.id.as_str()))
+                .count(),
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn claim_first_steerable_merges_all_steer_letters_behind_a_user_draft() {
+        let (db, target) = seeded_memory().await;
+        let target_row = conversation::Entity::find_by_id(target)
+            .one(&db.conn)
+            .await
+            .unwrap()
+            .unwrap();
+        let source = seed_conversation(&db, target_row.folder_id, AgentType::ClaudeCode).await;
+        enqueue(&db.conn, input(target, "blocking-draft", "runs on next idle"))
+            .await
+            .expect("user enqueue");
+        let first = SendCollaborationMessageInput {
+            source_conversation_id: source,
+            target_conversation_ids: vec![target],
+            subject: "Steer A".into(),
+            body: "correction one".into(),
+            client_dedupe_id: "steer-batch-a".into(),
+            invocation_policy: CollaborationInvocationPolicy::InvokeWhenIdle,
+            delivery_hint: CollaborationDeliveryHint::SteerIfSupported,
+            expects_reply: false,
+            urgency: CollaborationUrgency::Normal,
+            reply_to_event_id: None,
+        };
+        let second = {
+            let mut item = first.clone();
+            item.body = "correction two".into();
+            item.client_dedupe_id = "steer-batch-b".into();
+            item
+        };
+        let first = collaboration_service::send(&db.conn, first)
+            .await
+            .expect("steer a");
+        let second = collaboration_service::send(&db.conn, second)
+            .await
+            .expect("steer b");
+        let (claim, _) = claim_first_steerable(&db.conn, target, "worker", Duration::seconds(30))
+            .await
+            .expect("steer claim")
+            .expect("batch");
+        assert_eq!(claim.id, first.deliveries[0].id);
+        assert_eq!(
+            claim.batched_claim_ids,
+            vec![second.deliveries[0].id.clone()]
+        );
+        let PromptInputBlock::Text { text } = &claim.draft.blocks[0] else {
+            panic!("steer batch must stay one text inject");
+        };
+        assert!(text.contains("correction one"));
+        assert!(text.contains("correction two"));
+        assert!(
+            mark_dispatch_started(&db.conn, &claim, Duration::seconds(30))
+                .await
+                .expect("mark")
+        );
+        accept_claim(&db.conn, &claim).await.expect("accept");
+        let (head, _) = claim_head(&db.conn, target, "worker", Duration::seconds(30))
+            .await
+            .expect("head")
+            .expect("user draft remains");
+        assert_eq!(head.id, "blocking-draft");
     }
 }

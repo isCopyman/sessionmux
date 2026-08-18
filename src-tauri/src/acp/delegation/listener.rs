@@ -615,9 +615,14 @@ impl HostBridgeListener {
         self.collaboration
             .read_room(
                 caller_session_id,
-                req.room_id,
-                req.limit
-                    .unwrap_or(crate::acp::session_collaboration::DEFAULT_ROOM_READ_LIMIT),
+                crate::acp::session_collaboration::RoomReadQuery {
+                    room_id: req.room_id,
+                    limit: req
+                        .limit
+                        .unwrap_or(crate::acp::session_collaboration::DEFAULT_ROOM_READ_LIMIT),
+                    unread: req.unread,
+                    before_event_id: req.before_event_id,
+                },
             )
             .await
     }
@@ -1042,13 +1047,12 @@ mod tests {
         async fn read_room(
             &self,
             caller_session_id: i32,
-            room_id: String,
-            _limit: u32,
+            query: crate::acp::session_collaboration::RoomReadQuery,
         ) -> crate::acp::session_collaboration::SessionRoomReadOutcome {
             crate::acp::session_collaboration::SessionRoomReadOutcome {
                 available: true,
                 caller_session_id: Some(caller_session_id),
-                room_id: Some(room_id),
+                room_id: Some(query.room_id),
                 ..Default::default()
             }
         }

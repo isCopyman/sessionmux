@@ -1071,6 +1071,9 @@ pub(crate) async fn auto_reply_for_completed_turn(
                    WHERE reply.reply_to_event_id = e.id \
                      AND reply.source_conversation_id = d.target_conversation_id \
                ) \
+               AND (SELECT COUNT(*) FROM collaboration_delivery same \
+                     WHERE same.target_conversation_id = d.target_conversation_id \
+                       AND same.embedded_turn_ref = d.embedded_turn_ref) = 1 \
              ORDER BY d.updated_at DESC, d.id DESC LIMIT 1",
             vec![target_conversation_id.into(), completed_message_id.into()],
         ))
@@ -2171,7 +2174,6 @@ pub async fn list_overdue_reminder_targets(
                   AND c.deleted_at IS NULL \
                  LEFT JOIN conversation_collaboration_state s \
                    ON s.conversation_id = d.target_conversation_id \
-                 WHERE COALESCE(e.visibility, 'direct') = 'direct' \
                  GROUP BY d.target_conversation_id \
                  HAVING overdue_unread > 0 OR overdue_reply > 0"
             ),
@@ -2232,6 +2234,8 @@ async fn overdue_reminder_letters(
             &format!(
                 "SELECT e.id AS event_id, e.subject, e.body, \
                         e.source_conversation_id, e.source_title_snapshot, \
+                        COALESCE(e.visibility, 'direct') AS visibility, \
+                        e.room_id, \
                         CASE WHEN d.obligation_state = 'awaiting_reply' \
                              AND d.agent_received_at IS NOT NULL \
                              AND d.agent_received_at <= datetime('now', '-{REPLY_AFTER_SECS} seconds') \
@@ -2240,7 +2244,6 @@ async fn overdue_reminder_letters(
                  JOIN collaboration_event e ON e.id = d.event_id \
                  WHERE d.target_conversation_id = ? \
                    AND d.state <> 'dismissed' AND d.state <> 'failed' \
-                   {DIRECT_MAIL_SQL} \
                    AND ( \
                         (d.invocation_policy = 'invoke_when_idle' \
                          AND d.agent_received_at IS NULL \
@@ -2265,14 +2268,24 @@ async fn overdue_reminder_letters(
         let from_title: Option<String> = row.try_get("", "source_title_snapshot")?;
         let from_session_id: i32 = row.try_get("", "source_conversation_id")?;
         let awaiting: i64 = row.try_get("", "awaiting_reply")?;
+        let visibility: String = row
+            .try_get::<Option<String>>("", "visibility")?
+            .unwrap_or_else(|| "direct".to_string());
+        let is_room = visibility == "room";
         letters.push(crate::acp::collaboration_reminder::ReminderLetterLine {
             event_id: row.try_get("", "event_id")?,
             from_session_id,
             from_title: from_title
                 .filter(|title| !title.trim().is_empty())
                 .unwrap_or_else(|| format!("Session {from_session_id}")),
-            letter_title: crate::acp::session_collaboration::letter_title(&subject, &body),
+            letter_title: if is_room {
+                crate::acp::session_collaboration::inbox_preview(&body)
+            } else {
+                crate::acp::session_collaboration::letter_title(&subject, &body)
+            },
             awaiting_reply: awaiting != 0,
+            is_room,
+            room_id: row.try_get("", "room_id")?,
         });
     }
     Ok(letters)

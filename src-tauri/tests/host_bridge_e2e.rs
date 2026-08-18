@@ -162,8 +162,7 @@ impl SessionCollaborationAccess for RecordingCollaboration {
     async fn read_room(
         &self,
         caller_session_id: i32,
-        _room_id: String,
-        _limit: u32,
+        _query: codeg_lib::acp::session_collaboration::RoomReadQuery,
     ) -> codeg_lib::acp::session_collaboration::SessionRoomReadOutcome {
         codeg_lib::acp::session_collaboration::SessionRoomReadOutcome::unavailable(
             Some(caller_session_id),

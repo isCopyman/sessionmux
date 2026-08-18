@@ -382,6 +382,10 @@ pub struct SessionRoomListItem {
     pub room_id: String,
     pub title: String,
     pub member_count: u32,
+    #[serde(default)]
+    pub unread_count: u32,
+    #[serde(default)]
+    pub mention_unread_count: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_event_at: Option<DateTime<Utc>>,
 }
@@ -446,6 +450,14 @@ pub struct SessionRoomReadOutcome {
     pub truncated: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RoomReadQuery {
+    pub room_id: String,
+    pub limit: u32,
+    pub unread: bool,
+    pub before_event_id: Option<String>,
 }
 
 impl SessionRoomReadOutcome {
@@ -516,8 +528,7 @@ pub trait SessionCollaborationAccess: Send + Sync {
     async fn read_room(
         &self,
         caller_session_id: i32,
-        room_id: String,
-        limit: u32,
+        query: RoomReadQuery,
     ) -> SessionRoomReadOutcome;
 
     async fn post_room(&self, source_session_id: i32, spec: RoomPostSpec) -> SessionSendOutcome;

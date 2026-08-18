@@ -549,6 +549,10 @@ pub struct CollaborationRoomSummary {
     pub root_folder_id: Option<i32>,
     pub member_count: u32,
     pub unread_count: u32,
+    /// Deliveries of Room `@` this member has not consumed. Host / Workbench
+    /// lists leave this at 0; Agent `list_rooms` fills it per Session.
+    #[serde(default)]
+    pub mention_unread_count: u32,
     pub last_event_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -594,6 +598,8 @@ pub struct RoomTimelineEvent {
 pub struct RoomTimeline {
     pub room_id: String,
     pub events: Vec<RoomTimelineEvent>,
+    #[serde(default)]
+    pub truncated: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

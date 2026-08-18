@@ -1458,6 +1458,7 @@ export interface CollaborationRoomSummary {
   rootFolderId?: number | null
   memberCount: number
   unreadCount: number
+  mentionUnreadCount?: number
   lastEventAt?: string | null
   createdAt: string
   updatedAt: string
@@ -1493,6 +1494,7 @@ export interface RoomTimelineEvent {
 export interface RoomTimeline {
   roomId: string
   events: RoomTimelineEvent[]
+  truncated?: boolean
 }
 
 export interface RoomChanged {
