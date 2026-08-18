@@ -165,4 +165,46 @@ describe("SessionTimers", () => {
     expect(screen.queryByRole("button")).not.toBeInTheDocument()
     expect(listSessionTimers).not.toHaveBeenCalled()
   })
+
+  it("shows the next estimated fire on the collapsed pill", async () => {
+    listSessionTimers.mockResolvedValue([
+      {
+        ...timer,
+        idleGraceSecs: 180,
+        // Fired two minutes ago: 3m grace → the pill reads "~1m".
+        lastFiredAt: new Date(Date.now() - 120_000).toISOString(),
+      },
+    ])
+    renderTimers()
+
+    const pill = await screen.findByRole("button", {
+      name: /1 timer · ~1m/i,
+    })
+    expect(pill).toHaveAttribute(
+      "title",
+      expect.stringContaining("Read docs/current-task.md")
+    )
+  })
+
+  it("reads 'due' instead of a frozen 0s when the estimate has passed", async () => {
+    listSessionTimers.mockResolvedValue([
+      {
+        ...timer,
+        idleGraceSecs: 60,
+        // 1m grace, last fired ten minutes ago → overdue.
+        lastFiredAt: new Date(Date.now() - 600_000).toISOString(),
+      },
+    ])
+    renderTimers()
+    expect(
+      await screen.findByRole("button", { name: /1 timer · due/i })
+    ).toBeInTheDocument()
+  })
+
+  it("keeps the plain count when every timer is paused", async () => {
+    listSessionTimers.mockResolvedValue([{ ...timer, enabled: false }])
+    renderTimers()
+    const pill = await screen.findByRole("button", { name: /1 timer/i })
+    expect(pill.textContent).not.toContain("·")
+  })
 })

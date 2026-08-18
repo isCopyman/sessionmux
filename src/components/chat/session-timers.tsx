@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import {
   PauseIcon,
   PencilIcon,
@@ -14,6 +14,10 @@ import {
 } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { useSessionTimers } from "@/hooks/use-session-timers"
+import {
+  formatCompactCountdown,
+  nextFireTimer,
+} from "@/lib/session-timer-next-fire"
 import { cn } from "@/lib/utils"
 
 /**
@@ -33,6 +37,16 @@ export function SessionTimers({
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editingText, setEditingText] = useState("")
   const [error, setError] = useState<string | null>(null)
+  // Ticks the pill's countdown estimate. The backend is the trigger authority;
+  // this only repaints the "~in 3m" hint (see session-timer-next-fire).
+  const [now, setNow] = useState(() => Date.now())
+  const nextFire = nextFireTimer(timers)
+  const hasNextFire = nextFire != null
+  useEffect(() => {
+    if (!hasNextFire) return
+    const interval = setInterval(() => setNow(Date.now()), 15_000)
+    return () => clearInterval(interval)
+  }, [hasNextFire])
 
   if (conversationId == null) return null
 
@@ -60,6 +74,21 @@ export function SessionTimers({
     setEditingText("")
   }
 
+  // The collapsed pill says what it is waiting for, not just how many: the
+  // next estimated fire rides alongside the count ("2 timers · ~3m"), with the
+  // full prompt in the tooltip. An overdue estimate (backend still waiting for
+  // an idle window) reads "due" instead of a frozen "0s".
+  const nextFireIn = nextFire ? nextFire.at - now : null
+  const pillTitle = nextFire
+    ? t("nextFireTitle", {
+        time: formatCompactCountdown(Math.max(0, nextFireIn ?? 0)),
+        prompt:
+          nextFire.timer.promptText.length > 40
+            ? `${nextFire.timer.promptText.slice(0, 40)}…`
+            : nextFire.timer.promptText,
+      })
+    : t("title")
+
   return (
     <div className="pb-1">
       <button
@@ -72,11 +101,23 @@ export function SessionTimers({
             "border-primary/40 text-primary",
           open && "bg-primary/5 text-foreground"
         )}
-        title={t("title")}
+        title={pillTitle}
       >
         <TimerIcon className="h-3 w-3" />
         {timers.length > 0 ? (
-          <span>{t("count", { count: timers.length })}</span>
+          <span>
+            {t("count", { count: timers.length })}
+            {nextFire ? (
+              <span className="text-muted-foreground/80">
+                {" · "}
+                {nextFireIn != null && nextFireIn > 0
+                  ? t("nextIn", {
+                      time: formatCompactCountdown(nextFireIn),
+                    })
+                  : t("dueShort")}
+              </span>
+            ) : null}
+          </span>
         ) : (
           <span>{t("title")}</span>
         )}
