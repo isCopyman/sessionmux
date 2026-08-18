@@ -2041,6 +2041,16 @@ export async function updateSessionTimer(
   })
 }
 
+export async function resetSessionTimerDelay(
+  conversationId: number,
+  id: string
+): Promise<SessionTimer> {
+  return getTransport().call("session_timer_reset_delay", {
+    conversationId,
+    id,
+  })
+}
+
 export async function deleteSessionTimer(
   conversationId: number,
   id: string

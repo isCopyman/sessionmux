@@ -1288,6 +1288,7 @@ mod tauri_app {
                 session_timer_commands::session_timer_list,
                 session_timer_commands::session_timer_create,
                 session_timer_commands::session_timer_update,
+                session_timer_commands::session_timer_reset_delay,
                 session_timer_commands::session_timer_delete,
                 acp_commands::acp_describe_agent_options,
                 acp_commands::acp_cancel,

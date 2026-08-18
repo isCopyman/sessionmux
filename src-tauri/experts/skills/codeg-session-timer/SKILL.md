@@ -1,6 +1,6 @@
 ---
 name: codeg-session-timer
-description: Keep one managed Codeg Session advancing through a long objective after each completed Turn. Use when the user asks the current Session to keep working, finish a multi-step task, or continue from a durable project plan without needing another user prompt. Also use to inspect, update, pause, resume, or stop the current Session's continuation timer.
+description: Keep one managed Codeg Session advancing through a long objective after each completed Turn. Use when the user asks the current Session to keep working, finish a multi-step task, or continue from a durable project plan without needing another user prompt. Also use to inspect, update, pause, resume, reset the reminder delay, or stop the current Session's continuation timer.
 ---
 
 # Codeg Session Timer
@@ -35,12 +35,26 @@ does not create a separate Goal state machine.
 
 - Update the project file after meaningful progress so the next Turn resumes
   from durable facts rather than reconstructing the whole conversation.
+- When you made real progress, or new mail / Room news unblocks you, call
+  `timer.reset_delay`. That returns the reminder delay to the shortest
+  interval (`idle_grace_seconds`). The wait is a **delay**, not a clock
+  schedule: after each fire it doubles, up to about 30 minutes, until you
+  reset it.
+- If you are still waiting on someone else and have nothing else to do,
+  do **not** call `timer.reset_delay`. End the turn. Do not take over
+  another Session's work just to keep the delay short.
+- Mail, Room `@`, and the human typing still wake you through the
+  Dispatcher. After that wake, if you can continue the goal, work, then
+  `timer.reset_delay`.
 - When the objective or next-step policy changes, update the project file and
   call `timer.update` with revised continuation text.
 - Call `timer.pause` before asking the user for information, approval, or an
   external state change. Call `timer.resume` after the blocker clears.
 - Call `timer.stop` before the final response when the objective is complete.
   The same Agent doing the work makes this decision.
+
+One Session, one active continuation. Change the timer text or the plan file
+instead of stacking timers.
 
 Always discover the current schema with `codeg_help` before `codeg_use`.
 Codeg derives the current Session from the managed MCP token; never include a

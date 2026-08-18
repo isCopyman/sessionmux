@@ -77,6 +77,22 @@ pub async fn update(
     ))
 }
 
+pub async fn reset_delay(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<DeleteParams>,
+) -> Result<Json<SessionTimerInfo>, AppCommandError> {
+    Ok(Json(
+        session_timer::session_timer_reset_delay_core(
+            &state.db.conn,
+            &state.emitter,
+            &state.session_timer,
+            params.conversation_id,
+            params.id,
+        )
+        .await?,
+    ))
+}
+
 pub async fn delete(
     Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<DeleteParams>,

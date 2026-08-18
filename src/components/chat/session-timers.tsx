@@ -6,6 +6,7 @@ import {
   PencilIcon,
   PlayIcon,
   PlusIcon,
+  RotateCcwIcon,
   SaveIcon,
   TimerIcon,
   Trash2Icon,
@@ -25,7 +26,8 @@ export function SessionTimers({
   conversationId?: number | null
 }) {
   const t = useTranslations("Folder.chat.sessionTimers")
-  const { timers, create, update, remove } = useSessionTimers(conversationId)
+  const { timers, create, update, resetDelay, remove } =
+    useSessionTimers(conversationId)
   const [open, setOpen] = useState(false)
   const [promptText, setPromptText] = useState("")
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -149,6 +151,14 @@ export function SessionTimers({
                         </button>
                         <button
                           type="button"
+                          onClick={() => resetDelay(timer.id)}
+                          className="shrink-0 rounded-sm p-0.5 text-muted-foreground hover:bg-muted-foreground/15"
+                          title={t("resetDelay")}
+                        >
+                          <RotateCcwIcon className="h-3 w-3" />
+                        </button>
+                        <button
+                          type="button"
                           onClick={() =>
                             update(timer.id, { enabled: !timer.enabled })
                           }
@@ -170,6 +180,11 @@ export function SessionTimers({
                           <Trash2Icon className="h-3 w-3" />
                         </button>
                       </div>
+                      {timer.strikeCount > 0 && timer.autoPausedAt == null ? (
+                        <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
+                          {t("delayGrew")}
+                        </p>
+                      ) : null}
                       {timer.autoPausedAt != null && (
                         <div className="mt-1 flex items-center gap-1.5 rounded-sm bg-amber-500/15 px-1.5 py-1">
                           <span className="min-w-0 flex-1 text-[10px] leading-relaxed text-amber-800 dark:text-amber-300">
@@ -177,7 +192,7 @@ export function SessionTimers({
                           </span>
                           <button
                             type="button"
-                            onClick={() => update(timer.id, { enabled: true })}
+                            onClick={() => resetDelay(timer.id)}
                             className="shrink-0 rounded-sm border border-amber-500/40 px-1.5 py-0.5 text-[10px] font-medium text-amber-800 transition-colors hover:bg-amber-500/20 dark:text-amber-300"
                           >
                             {t("resumeNow")}

@@ -6,6 +6,7 @@ import {
   createSessionTimer,
   deleteSessionTimer,
   listSessionTimers,
+  resetSessionTimerDelay,
   updateSessionTimer,
 } from "@/lib/api"
 import { onTransportReconnect, subscribe } from "@/lib/platform"
@@ -24,6 +25,7 @@ export interface UseSessionTimersReturn {
     id: string,
     input: Omit<UpdateSessionTimerInput, "expectedUpdatedAt">
   ) => void
+  resetDelay: (id: string) => void
   remove: (id: string) => void
 }
 
@@ -133,6 +135,18 @@ export function useSessionTimers(
     [conversationId, timers]
   )
 
+  const resetDelay = useCallback(
+    (id: string) => {
+      if (conversationId == null) return
+      void resetSessionTimerDelay(conversationId, id)
+        .then((timer) => setTimers((prev) => upsert(prev, timer)))
+        .catch((error) =>
+          console.error("[session-timers] reset delay failed:", error)
+        )
+    },
+    [conversationId]
+  )
+
   const remove = useCallback(
     (id: string) => {
       if (conversationId == null) return
@@ -144,7 +158,7 @@ export function useSessionTimers(
     [conversationId]
   )
 
-  return { timers, hydrated, create, update, remove }
+  return { timers, hydrated, create, update, resetDelay, remove }
 }
 
 function upsert(timers: SessionTimer[], next: SessionTimer): SessionTimer[] {

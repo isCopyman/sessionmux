@@ -8,6 +8,7 @@ import enMessages from "@/i18n/messages/en.json"
 const listSessionTimers = vi.fn()
 const createSessionTimer = vi.fn()
 const updateSessionTimer = vi.fn()
+const resetSessionTimerDelay = vi.fn()
 const deleteSessionTimer = vi.fn()
 
 vi.mock("@/lib/platform", () => ({
@@ -20,6 +21,8 @@ vi.mock("@/lib/api", () => ({
   listSessionTimers: (...args: unknown[]) => listSessionTimers(...args),
   createSessionTimer: (...args: unknown[]) => createSessionTimer(...args),
   updateSessionTimer: (...args: unknown[]) => updateSessionTimer(...args),
+  resetSessionTimerDelay: (...args: unknown[]) =>
+    resetSessionTimerDelay(...args),
   deleteSessionTimer: (...args: unknown[]) => deleteSessionTimer(...args),
 }))
 
@@ -118,31 +121,42 @@ describe("SessionTimers", () => {
     fireEvent.click(screen.getByRole("button", { name: /idle continue/i }))
     await screen.findByText(autoPausedTimer.promptText)
 
-    expect(screen.getByText(/paused by backoff/i)).toBeInTheDocument()
+    expect(screen.getByText(/older waiting rule/i)).toBeInTheDocument()
     // enabled is still true, so the row keeps the Pause toggle (not Resume).
     expect(screen.getByTitle("Pause")).toBeInTheDocument()
   })
 
-  it("resumes an auto-paused timer with one click", async () => {
+  it("resets delay on a parked timer with one click", async () => {
     listSessionTimers.mockResolvedValue([autoPausedTimer])
-    updateSessionTimer.mockResolvedValue({
+    resetSessionTimerDelay.mockResolvedValue({
       ...timer,
       updatedAt: "2026-08-18T00:01:00Z",
     })
     renderTimers()
     fireEvent.click(screen.getByRole("button", { name: /idle continue/i }))
-    await screen.findByText(/paused by backoff/i)
+    await screen.findByText(/older waiting rule/i)
 
-    fireEvent.click(screen.getByRole("button", { name: "Resume now" }))
+    fireEvent.click(screen.getByText("Reset delay"))
     await waitFor(() =>
-      expect(updateSessionTimer).toHaveBeenCalledWith(
-        7,
-        "t1",
-        expect.objectContaining({
-          enabled: true,
-          expectedUpdatedAt: autoPausedTimer.updatedAt,
-        })
-      )
+      expect(resetSessionTimerDelay).toHaveBeenCalledWith(7, "t1")
+    )
+  })
+
+  it("offers reset delay after the reminder interval has grown", async () => {
+    listSessionTimers.mockResolvedValue([{ ...timer, strikeCount: 2 }])
+    resetSessionTimerDelay.mockResolvedValue({
+      ...timer,
+      strikeCount: 0,
+      updatedAt: "2026-08-18T00:01:00Z",
+    })
+    renderTimers()
+    fireEvent.click(screen.getByRole("button", { name: /idle continue/i }))
+    expect(
+      await screen.findByText(/reminder delay has grown/i)
+    ).toBeInTheDocument()
+    fireEvent.click(screen.getByTitle("Reset delay"))
+    await waitFor(() =>
+      expect(resetSessionTimerDelay).toHaveBeenCalledWith(7, "t1")
     )
   })
 

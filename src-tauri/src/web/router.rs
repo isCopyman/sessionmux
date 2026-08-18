@@ -1299,6 +1299,10 @@ pub fn build_router(
             post(handlers::session_timer::update),
         )
         .route(
+            "/session_timer_reset_delay",
+            post(handlers::session_timer::reset_delay),
+        )
+        .route(
             "/session_timer_delete",
             post(handlers::session_timer::delete),
         )

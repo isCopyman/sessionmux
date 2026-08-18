@@ -69,6 +69,29 @@ pub async fn session_timer_update_core(
     Ok(timer)
 }
 
+pub async fn session_timer_reset_delay_core(
+    conn: &sea_orm::DatabaseConnection,
+    emitter: &EventEmitter,
+    runtime: &SessionTimerHandle,
+    conversation_id: i32,
+    id: String,
+) -> Result<SessionTimerInfo, AppCommandError> {
+    let existing = session_timer_service::find(conn, &id)
+        .await
+        .map_err(AppCommandError::from)?;
+    if existing.conversation_id != conversation_id {
+        return Err(AppCommandError::invalid_input(
+            "Timer does not belong to this Session",
+        ));
+    }
+    let timer = session_timer_service::reset_delay(conn, &id, existing.updated_at)
+        .await
+        .map_err(AppCommandError::from)?;
+    publish(emitter, vec![conversation_id]);
+    runtime.wake(conversation_id);
+    Ok(timer)
+}
+
 pub async fn session_timer_delete_core(
     conn: &sea_orm::DatabaseConnection,
     emitter: &EventEmitter,
@@ -127,6 +150,25 @@ pub async fn session_timer_update(
         conversation_id,
         id,
         input,
+    )
+    .await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn session_timer_reset_delay(
+    conversation_id: i32,
+    id: String,
+    db: tauri::State<'_, crate::db::AppDatabase>,
+    runtime: tauri::State<'_, SessionTimerHandle>,
+    app: tauri::AppHandle,
+) -> Result<SessionTimerInfo, AppCommandError> {
+    session_timer_reset_delay_core(
+        &db.conn,
+        &EventEmitter::Tauri(app),
+        &runtime,
+        conversation_id,
+        id,
     )
     .await
 }

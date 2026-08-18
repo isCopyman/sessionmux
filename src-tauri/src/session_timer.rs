@@ -1,19 +1,18 @@
 //! Backend-authoritative idle continuation loop for a managed Session.
 //!
-//! A completed Turn opens an idle window. Once the timer's grace has elapsed,
-//! the timer text is appended to the ordinary durable PromptQueue and is
-//! therefore indistinguishable from the user's next follow-up at the Harness
-//! boundary — except that the queue schedules it behind the user's own drafts
-//! and pending letters.
+//! A completed Turn opens an idle window. Once the timer's current reminder
+//! delay has elapsed, the timer text is appended to the ordinary durable
+//! PromptQueue and is therefore indistinguishable from the user's next
+//! follow-up at the Harness boundary — except that the queue schedules it
+//! behind the user's own drafts and pending letters.
 //!
-//! The cadence is obligation-aware. Sending with expects_reply (a letter, or
-//! a Room @) is an implicit "I am waiting" declaration. While anything I sent
-//! is unanswered and nothing new has arrived, the timer does NOT keep poking:
-//! it stays quiet, surfaces ONE inspection poke at the half-hour mark (so the
-//! Session can check whether the peer is alive and re-plan if not), and then
-//! parks until real news — an inbound letter or @, a resolved obligation, or
-//! a user edit — revives it. Heuristics only ever stretch the interval — they
-//! never decide whether the user's continuation is allowed to exist.
+//! The delay starts at the timer's `idle_grace` and doubles after each fire
+//! that the Agent does not answer with `timer.reset_delay`, capping around
+//! 30 minutes. Mail, Room posts, and `@` do not change this cadence; they
+//! still wake the Session through the Dispatcher. Call `timer.reset_delay`
+//! after real progress (or when new information unblocks the goal) so the
+//! next reminder returns to the shortest interval. Skip it when still
+//! waiting with nothing else to do.
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -26,8 +25,7 @@ use tokio::sync::{broadcast, mpsc};
 use crate::acp::manager::ConnectionManager;
 use crate::acp::types::{AcpEvent, ConnectionStatus, PromptInputBlock};
 use crate::acp::InternalEventBus;
-use crate::db::service::collaboration_service::OutboundAwaitingSummary;
-use crate::db::service::{collaboration_service, prompt_queue_service, session_timer_service};
+use crate::db::service::{prompt_queue_service, session_timer_service};
 use crate::db::AppDatabase;
 use crate::models::prompt_queue::{EnqueuePromptQueueItem, PromptQueueDraft, PromptQueueSource};
 use crate::web::event_bridge::{
@@ -36,14 +34,9 @@ use crate::web::event_bridge::{
 };
 
 const SCAN_INTERVAL_SECS: u64 = 1;
-/// While the Session is waiting on unanswered outbound work, the only
-/// automatic poke is one inspection at this horizon: long enough that a
-/// healthy peer has finished, short enough that a stuck one gets looked at.
-const WAITING_CHECK_AFTER_SECS: i64 = 30 * 60;
-/// Zero-information pokes allowed while waiting before the brake parks the
-/// timer. One: the half-hour inspection, then silence until real news.
-const MAX_ZERO_PROGRESS_POKES: i32 = 1;
-pub const AUTO_PAUSE_REASON_WAITING: &str = "waiting_no_progress";
+/// Longest wait between idle reminders. The delay starts at `idle_grace`
+/// and doubles after each unanswered fire until it hits this cap.
+const MAX_REMINDER_DELAY_SECS: i64 = 30 * 60;
 
 #[derive(Clone)]
 pub struct SessionTimerHandle {
@@ -124,12 +117,10 @@ impl SessionTimerRuntime {
 
     /// A restart wipes this in-memory idle map while the timers themselves
     /// persist, so without a seed every enabled timer stays silent until its
-    /// Session happens to complete another turn — which a backed-off Session
-    /// waiting on replies may never do on its own. Treating "idle since
+    /// Session happens to complete another turn. Treating "idle since
     /// process start" as the boundary is conservative: each fire still waits
-    /// a full grace (or backoff interval) measured from startup, and every
-    /// pre-fire guard (queued work yields, busy runtime skips, auto-pause
-    /// holds) applies unchanged.
+    /// a full reminder delay measured from startup, and every pre-fire
+    /// guard (queued work yields, busy runtime skips) applies unchanged.
     async fn seed_idle_boundaries(&mut self) {
         let timers = match session_timer_service::enabled(&self.db.conn).await {
             Ok(timers) => timers,
@@ -192,92 +183,7 @@ impl SessionTimerRuntime {
                 continue;
             };
             let idle_for = now - idle_since;
-            if idle_for < Duration::seconds(timer.idle_grace_secs) {
-                continue;
-            }
-
-            // Host-observed facts that set the cadence: did the mailbox
-            // produce anything new since the last poke, and is this Session
-            // still waiting on unanswered outbound letters?
-            let new_info = match collaboration_service::latest_mailbox_info_at(
-                &self.db.conn,
-                timer.conversation_id,
-            )
-            .await
-            {
-                Ok(latest) => match (latest, timer.last_fired_at) {
-                    (Some(info), Some(fired)) => {
-                        // Mailbox timestamps are normalized to second
-                        // precision while the fire clock keeps sub-seconds;
-                        // news landing within the fire's own second must
-                        // still count as new (the cost is at most one extra
-                        // normal-cadence poke).
-                        use chrono::Timelike;
-                        info >= fired.with_nanosecond(0).unwrap_or(fired)
-                    }
-                    (_, None) => true,
-                    (None, Some(_)) => false,
-                },
-                Err(error) => {
-                    tracing::warn!("[session-timer] mailbox info check failed: {error}");
-                    true
-                }
-            };
-            let waiting = match collaboration_service::outbound_awaiting_summary(
-                &self.db.conn,
-                timer.conversation_id,
-            )
-            .await
-            {
-                Ok(summary) => summary,
-                Err(error) => {
-                    tracing::warn!("[session-timer] obligation check failed: {error}");
-                    OutboundAwaitingSummary::default()
-                }
-            };
-            let strike = if new_info { 0 } else { timer.strike_count };
-            let repeat_poke = !new_info && waiting.letter_count > 0;
-
-            if timer.auto_paused_at.is_some() && !new_info {
-                continue;
-            }
-            if repeat_poke && strike >= MAX_ZERO_PROGRESS_POKES {
-                if timer.auto_paused_at.is_none() {
-                    match session_timer_service::auto_pause(
-                        &self.db.conn,
-                        &timer.id,
-                        timer.updated_at,
-                        AUTO_PAUSE_REASON_WAITING,
-                    )
-                    .await
-                    {
-                        Ok(paused) => {
-                            tracing::info!(
-                                "[session-timer] parked {} after {} zero-information pokes",
-                                paused.id,
-                                strike
-                            );
-                            emit_event(
-                                &self.emitter,
-                                SESSION_TIMER_CHANGED_EVENT,
-                                SessionTimerChanged {
-                                    conversation_ids: vec![timer.conversation_id],
-                                },
-                            );
-                        }
-                        Err(error) => {
-                            tracing::debug!("[session-timer] auto-pause raced: {error}")
-                        }
-                    }
-                }
-                continue;
-            }
-
-            let required_secs = if repeat_poke {
-                timer.idle_grace_secs.max(WAITING_CHECK_AFTER_SECS)
-            } else {
-                timer.idle_grace_secs
-            };
+            let required_secs = reminder_delay_secs(timer.idle_grace_secs, timer.strike_count);
             if idle_for < Duration::seconds(required_secs) {
                 continue;
             }
@@ -285,8 +191,7 @@ impl SessionTimerRuntime {
             // Anything already queued will continue the Session by itself; a
             // timer poke on top would spend a second turn on the same idle
             // window.
-            match prompt_queue_service::has_queued_items(&self.db.conn, timer.conversation_id)
-                .await
+            match prompt_queue_service::has_queued_items(&self.db.conn, timer.conversation_id).await
             {
                 Ok(false) => {}
                 Ok(true) => continue,
@@ -305,13 +210,11 @@ impl SessionTimerRuntime {
                 continue;
             }
 
-            let next_strike = if repeat_poke { strike + 1 } else { 0 };
-            let facts = continuation_facts(
+            let next_strike = timer.strike_count.saturating_add(1);
+            let facts = continuation_hint(
                 timer.fire_count.saturating_add(1),
-                idle_for,
-                &waiting,
-                if repeat_poke { next_strike } else { 0 },
-                now,
+                reminder_delay_secs(timer.idle_grace_secs, next_strike),
+                timer.strike_count,
             );
             self.fire(timer, next_strike, facts).await;
         }
@@ -405,46 +308,26 @@ impl SessionTimerRuntime {
     }
 }
 
-/// Host-authored appendix for a continuation prompt: only facts the host
-/// observed itself, never advice. `None` when there is nothing worth
-/// reporting, so the user's configured text goes out exactly as written.
-fn continuation_facts(
-    occurrence: i32,
-    idle_for: Duration,
-    waiting: &OutboundAwaitingSummary,
-    strike: i32,
-    now: DateTime<Utc>,
-) -> Option<String> {
-    if strike == 0 && waiting.letter_count == 0 {
+/// Host-authored appendix for a continuation prompt. The first reminder
+/// stays the user's configured text. After the delay has grown, name the
+/// tool that resets it.
+fn continuation_hint(occurrence: i32, next_delay_secs: i64, current_strike: i32) -> Option<String> {
+    if current_strike <= 0 {
         return None;
     }
-    let mut text = format!(
-        "\n\n——\nCodeg 宿主观测（自动续跑第 {occurrence} 次）：距上一轮结束{}。",
-        humanize_duration(idle_for)
-    );
-    if waiting.letter_count > 0 {
-        match (
-            waiting.peer_conversation_ids.first().copied(),
-            waiting
-                .oldest_since
-                .map(|since| humanize_duration(now - since)),
-        ) {
-            (Some(peer), Some(oldest)) => text.push_str(&format!(
-                "你派出的 {} 条消息仍未收到回复（最早的一条发往 Session #{peer}，已等待{oldest}）。",
-                waiting.letter_count
-            )),
-            _ => text.push_str(&format!(
-                "你派出的 {} 条消息仍未收到回复。",
-                waiting.letter_count
-            )),
-        }
-    }
-    if strike > 0 {
-        text.push_str(
-            "这是一次等待巡查：如果协作者还在正常干活，可以继续等；如果卡住或出错了，换个办法（查一下对方状态、换人、或先推进别的）。本次之后将退避停靠，收到新消息（回复销账/来信/@）会自动恢复。",
-        );
-    }
-    Some(text)
+    Some(format!(
+        "\n\n——\nCodeg idle reminder #{occurrence}. Next reminder delay is about {}. Call timer.reset_delay if you made progress or can continue. Skip it if you are still waiting and have nothing else to do.",
+        humanize_duration(Duration::seconds(next_delay_secs))
+    ))
+}
+
+fn reminder_delay_secs(grace: i64, strike: i32) -> i64 {
+    let shift = u32::try_from(strike.max(0)).unwrap_or(0).min(20);
+    let multiplier = 1i64.checked_shl(shift).unwrap_or(i64::MAX);
+    grace
+        .saturating_mul(multiplier)
+        .min(MAX_REMINDER_DELAY_SECS)
+        .max(grace.max(1))
 }
 
 fn humanize_duration(duration: Duration) -> String {
@@ -484,8 +367,7 @@ mod tests {
         let folder_id = seed_folder(&db, "/tmp/timer-engine-test").await;
         let conversation_id =
             seed_conversation(&db, folder_id, crate::models::AgentType::Codex).await;
-        let peer_id =
-            seed_conversation(&db, folder_id, crate::models::AgentType::ClaudeCode).await;
+        let peer_id = seed_conversation(&db, folder_id, crate::models::AgentType::ClaudeCode).await;
         (db, conversation_id, peer_id)
     }
 
@@ -630,107 +512,115 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn waiting_on_replies_gets_one_inspection_poke_at_the_half_hour() {
+    async fn unanswered_outbound_does_not_stretch_or_park_the_timer() {
         let (db, conversation_id, peer_id) = setup().await;
-        let timer = create_timer(&db, conversation_id, "waiting-backoff").await;
+        create_timer(&db, conversation_id, "mail-is-not-cadence").await;
         crate::db::service::collaboration_service::send(
             &db.conn,
             letter(conversation_id, peer_id, "delegate-1", true),
         )
         .await
         .unwrap();
-        // One continuation already went out and nothing new arrived since.
-        backdate_last_fire(&db, &timer.id, 0).await;
 
         let mut runtime = runtime(crate::db::AppDatabase {
             conn: db.conn.clone(),
         });
-        runtime
-            .idle_since
-            .insert(conversation_id, Utc::now() - Duration::seconds(301));
-        runtime.fire_due(None).await;
-        assert!(
-            queue_text(&db, conversation_id).await.is_empty(),
-            "waiting in silence: no poke before the half-hour inspection"
-        );
-
-        runtime
-            .idle_since
-            .insert(conversation_id, Utc::now() - Duration::seconds(1801));
-        runtime.fire_due(None).await;
-        let texts = queue_text(&db, conversation_id).await;
-        assert_eq!(texts.len(), 1, "the single inspection poke goes out");
-        assert!(texts[0].starts_with("Read docs/current-task.md and continue"));
-        assert!(
-            texts[0].contains("仍未收到回复"),
-            "host-observed waiting facts ride along: {}",
-            texts[0]
-        );
-        assert!(texts[0].contains("这是一次等待巡查"));
-        assert!(texts[0].contains(&format!("#{peer_id}")));
-        let timer = session_timer_service::list(&db.conn, conversation_id)
-            .await
-            .unwrap()
-            .pop()
-            .unwrap();
-        assert_eq!(timer.strike_count, 1, "the inspection is the only poke");
-    }
-
-    #[tokio::test]
-    async fn brake_parks_the_timer_and_a_reply_revives_it() {
-        let (db, conversation_id, peer_id) = setup().await;
-        let timer = create_timer(&db, conversation_id, "brake-then-revive").await;
-        let sent = crate::db::service::collaboration_service::send(
-            &db.conn,
-            letter(conversation_id, peer_id, "delegate-2", true),
-        )
-        .await
-        .unwrap();
-        backdate_last_fire(&db, &timer.id, MAX_ZERO_PROGRESS_POKES).await;
-
-        let mut runtime = runtime(crate::db::AppDatabase {
-            conn: db.conn.clone(),
-        });
-        runtime
-            .idle_since
-            .insert(conversation_id, Utc::now() - Duration::seconds(3600));
-        runtime.fire_due(None).await;
-        assert!(
-            queue_text(&db, conversation_id).await.is_empty(),
-            "the exhausted streak parks the timer instead of poking forever"
-        );
-        let parked = session_timer_service::list(&db.conn, conversation_id)
-            .await
-            .unwrap()
-            .pop()
-            .unwrap();
-        assert!(parked.enabled, "auto-pause never flips the user's switch");
-        assert!(parked.auto_paused_at.is_some());
-        assert_eq!(
-            parked.auto_pause_reason.as_deref(),
-            Some(AUTO_PAUSE_REASON_WAITING)
-        );
-
-        // The peer finally answers: real news clears the brake on the next
-        // scan and the continuation goes out at the ordinary grace again.
-        let mut reply = letter(peer_id, conversation_id, "delegate-2-reply", false);
-        reply.reply_to_event_id = Some(sent.event_id.clone());
-        crate::db::service::collaboration_service::send(&db.conn, reply)
-            .await
-            .unwrap();
         runtime
             .idle_since
             .insert(conversation_id, Utc::now() - Duration::seconds(5));
         runtime.fire_due(None).await;
         let texts = queue_text(&db, conversation_id).await;
-        assert_eq!(texts.len(), 1, "real news revives the parked timer");
-        let revived = session_timer_service::list(&db.conn, conversation_id)
+        assert_eq!(
+            texts,
+            ["Read docs/current-task.md and continue"],
+            "unanswered mail must not delay or park the idle reminder"
+        );
+        let timer = session_timer_service::list(&db.conn, conversation_id)
             .await
             .unwrap()
             .pop()
             .unwrap();
-        assert!(revived.auto_paused_at.is_none());
-        assert_eq!(revived.strike_count, 0);
+        assert!(timer.auto_paused_at.is_none());
+        assert_eq!(timer.strike_count, 1);
+    }
+
+    #[tokio::test]
+    async fn delay_doubles_until_reset_delay_returns_to_grace() {
+        let (db, conversation_id, _) = setup().await;
+        let timer = create_timer(&db, conversation_id, "grown-delay").await;
+        backdate_last_fire(&db, &timer.id, 3).await;
+
+        let mut runtime = runtime(crate::db::AppDatabase {
+            conn: db.conn.clone(),
+        });
+        runtime
+            .idle_since
+            .insert(conversation_id, Utc::now() - Duration::seconds(5));
+        runtime.fire_due(None).await;
+        assert!(
+            queue_text(&db, conversation_id).await.is_empty(),
+            "strike 3 with grace 1 waits 8s, not 5s"
+        );
+
+        runtime
+            .idle_since
+            .insert(conversation_id, Utc::now() - Duration::seconds(9));
+        runtime.fire_due(None).await;
+        let texts = queue_text(&db, conversation_id).await;
+        assert_eq!(texts.len(), 1);
+        assert!(texts[0].starts_with("Read docs/current-task.md and continue"));
+        assert!(texts[0].contains("timer.reset_delay"));
+        let grown = session_timer_service::list(&db.conn, conversation_id)
+            .await
+            .unwrap()
+            .pop()
+            .unwrap();
+        assert_eq!(grown.strike_count, 4);
+
+        let reset = session_timer_service::reset_delay(&db.conn, &grown.id, grown.updated_at)
+            .await
+            .unwrap();
+        assert_eq!(reset.strike_count, 0);
+        assert!(reset.auto_paused_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn reset_delay_lets_the_next_idle_window_use_grace() {
+        let (db, conversation_id, _) = setup().await;
+        let timer = create_timer(&db, conversation_id, "reset-to-grace").await;
+        backdate_last_fire(&db, &timer.id, 8).await;
+        let current = session_timer_service::find(&db.conn, &timer.id)
+            .await
+            .unwrap();
+        session_timer_service::reset_delay(&db.conn, &current.id, current.updated_at)
+            .await
+            .unwrap();
+
+        let mut runtime = runtime(crate::db::AppDatabase {
+            conn: db.conn.clone(),
+        });
+        runtime
+            .idle_since
+            .insert(conversation_id, Utc::now() - Duration::seconds(2));
+        runtime.fire_due(None).await;
+        assert_eq!(
+            queue_text(&db, conversation_id).await,
+            ["Read docs/current-task.md and continue"]
+        );
+        let fired = session_timer_service::list(&db.conn, conversation_id)
+            .await
+            .unwrap()
+            .pop()
+            .unwrap();
+        assert_eq!(fired.strike_count, 1);
+    }
+
+    #[test]
+    fn reminder_delay_doubles_then_caps() {
+        assert_eq!(reminder_delay_secs(2, 0), 2);
+        assert_eq!(reminder_delay_secs(2, 1), 4);
+        assert_eq!(reminder_delay_secs(2, 2), 8);
+        assert_eq!(reminder_delay_secs(2, 20), MAX_REMINDER_DELAY_SECS);
     }
 
     #[tokio::test]

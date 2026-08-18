@@ -219,9 +219,7 @@ pub async fn delete(conn: &impl ConnectionTrait, id: &str) -> Result<(), DbError
 
 /// Atomically reserve one continuation occurrence. The timer remains enabled;
 /// the engine closes its current idle window and the next TurnComplete re-arms it.
-/// `strike_count` is the streak the engine computed for this occurrence (0 when
-/// real new information reset the backoff); a successful fire always clears an
-/// automatic pause.
+/// `strike_count` is the streak of reminders since the last `reset_delay`.
 pub async fn claim_fire(
     conn: &impl ConnectionTrait,
     id: &str,
@@ -247,6 +245,32 @@ pub async fn claim_fire(
     if result.rows_affected() != 1 {
         return Err(DbError::Conflict(format!(
             "Session timer {id} changed before its fire was claimed"
+        )));
+    }
+    find(conn, id).await
+}
+
+/// Reset the reminder delay to `idle_grace`. Call this after real progress
+/// on the continuation goal, or when new information unblocks the Session.
+/// It does not fire the timer and does not change `enabled`.
+pub async fn reset_delay(
+    conn: &impl ConnectionTrait,
+    id: &str,
+    previous_updated_at: DateTime<Utc>,
+) -> Result<SessionTimerInfo, DbError> {
+    let now = Utc::now();
+    let result = conn
+        .execute(statement(
+            "UPDATE conversation_timer \
+             SET strike_count = 0, auto_paused_at = NULL, auto_pause_reason = NULL, \
+                 updated_at = ? \
+             WHERE id = ? AND updated_at = ?",
+            vec![now.into(), id.into(), previous_updated_at.into()],
+        ))
+        .await?;
+    if result.rows_affected() != 1 {
+        return Err(DbError::Conflict(format!(
+            "Session timer {id} changed before its delay could be reset"
         )));
     }
     find(conn, id).await
@@ -409,5 +433,22 @@ mod tests {
         .unwrap();
         assert!(revived.auto_paused_at.is_none());
         assert_eq!(revived.strike_count, 0);
+    }
+
+    #[tokio::test]
+    async fn reset_delay_clears_strike_without_toggling_enabled() {
+        let (db, conversation_id) = setup().await;
+        let timer = create(&db.conn, input(conversation_id, "reset"))
+            .await
+            .unwrap();
+        let claimed = claim_fire(&db.conn, &timer.id, timer.updated_at, 3)
+            .await
+            .unwrap();
+        assert_eq!(claimed.strike_count, 3);
+        let reset = reset_delay(&db.conn, &claimed.id, claimed.updated_at)
+            .await
+            .unwrap();
+        assert!(reset.enabled);
+        assert_eq!(reset.strike_count, 0);
     }
 }

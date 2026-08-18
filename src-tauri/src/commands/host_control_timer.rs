@@ -88,6 +88,12 @@ impl TimerHostControl {
                     timer_target_schema(),
                 ),
                 capability(
+                    "timer.reset_delay",
+                    "You made progress on this Session's continuation goal, or new information unblocks you. Reset the reminder delay to the shortest interval (idle_grace_seconds). Do not call this if you are still waiting and have nothing else to do — the delay will keep growing, up to about 30 minutes.",
+                    HostControlAccessLevel::Write,
+                    timer_target_schema(),
+                ),
+                capability(
                     "timer.stop",
                     "Permanently stop and delete a current-Session continuation timer after the objective is complete.",
                     HostControlAccessLevel::Write,
@@ -101,9 +107,8 @@ impl TimerHostControl {
     pub fn access_for(action: &str) -> Option<HostControlAccessLevel> {
         match action {
             "timer.list" => Some(HostControlAccessLevel::Read),
-            "timer.create" | "timer.update" | "timer.pause" | "timer.resume" | "timer.stop" => {
-                Some(HostControlAccessLevel::Write)
-            }
+            "timer.create" | "timer.update" | "timer.pause" | "timer.resume"
+            | "timer.reset_delay" | "timer.stop" => Some(HostControlAccessLevel::Write),
             _ => None,
         }
     }
@@ -174,6 +179,20 @@ impl TimerHostControl {
                     Some(enabled),
                 )
                 .await
+            }
+            "timer.reset_delay" => {
+                let params = match parse_input::<TimerTargetInput>(&action, input) {
+                    Ok(params) => params,
+                    Err(note) => return HostControlUseOutcome::rejected(request_id, action, note),
+                };
+                let timer = match self.owned(caller, &params.timer_id).await {
+                    Ok(timer) => timer,
+                    Err(note) => return HostControlUseOutcome::rejected(request_id, action, note),
+                };
+                let result =
+                    session_timer_service::reset_delay(&self.db.conn, &timer.id, timer.updated_at)
+                        .await;
+                self.finish_timer_write(request_id, action, result).await
             }
             "timer.stop" => {
                 let params = match parse_input::<TimerTargetInput>(&action, input) {
@@ -404,6 +423,27 @@ mod tests {
             )
             .await;
         assert_eq!(paused.data["timer"]["enabled"], false);
+
+        let resumed = host
+            .use_action(
+                &caller,
+                "resume-1".into(),
+                "timer.resume".into(),
+                json!({ "timer_id": timer_id }),
+            )
+            .await;
+        assert!(resumed.accepted);
+
+        let reset = host
+            .use_action(
+                &caller,
+                "reset-1".into(),
+                "timer.reset_delay".into(),
+                json!({ "timer_id": timer_id }),
+            )
+            .await;
+        assert!(reset.accepted);
+        assert_eq!(reset.data["timer"]["strikeCount"], 0);
 
         let foreign = session_timer_service::create(
             &host.db.conn,

@@ -22,14 +22,12 @@ pub struct SessionTimerInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_fired_at: Option<DateTime<Utc>>,
     pub fire_count: i32,
-    /// Consecutive continuations that fired while the Session was waiting on
-    /// unanswered outbound letters and no new information had arrived. Resets
-    /// to zero on any real news (inbound letter, resolved obligation) and on
-    /// every user edit.
+    /// Consecutive idle reminders since the last `timer.reset_delay` (or
+    /// user edit). The reminder delay is `idle_grace * 2^strike`, capped
+    /// around 30 minutes.
     pub strike_count: i32,
-    /// Set when the no-progress brake parked this timer. `enabled` stays
-    /// true: new mailbox information or a user edit clears this
-    /// automatically.
+    /// Legacy park flag from the old waiting-on-replies brake. The engine
+    /// no longer writes this. `timer.reset_delay` or any user edit clears it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auto_paused_at: Option<DateTime<Utc>>,
     #[serde(skip_serializing_if = "Option::is_none")]

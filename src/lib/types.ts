@@ -1219,13 +1219,13 @@ export interface SessionTimer {
   lastFiredAt?: string | null
   fireCount: number
   /**
-   * Consecutive fires with unanswered outbound letters and no new mailbox
-   * information. Any real news or user edit resets it to zero.
+   * Consecutive idle reminders since the last delay reset or user edit.
+   * The reminder delay is grace × 2^strike, capped around 30 minutes.
    */
   strikeCount: number
   /**
-   * Set when the no-progress brake parked this timer (enabled stays true).
-   * New mailbox information or any user update clears it automatically.
+   * Legacy park flag from the old waiting-on-replies brake. Reset delay
+   * or any user edit clears it.
    */
   autoPausedAt?: string | null
   autoPauseReason?: string | null

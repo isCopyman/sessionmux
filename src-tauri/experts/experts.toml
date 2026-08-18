@@ -527,8 +527,8 @@ en = "Codeg Session Timer"
 "zh-CN" = "Codeg 会话续航"
 
 [expert.description]
-en = "Keeps the current Session advancing from a durable plan after each completed turn."
-"zh-CN" = "每轮完成后按持久计划继续推进当前会话，直到自行暂停或停止。"
+en = "Keeps the current Session advancing from a durable plan after each completed turn. Call timer.reset_delay after real progress so the reminder delay returns to the shortest interval."
+"zh-CN" = "每轮完成后按持久计划继续推进当前会话。有进展时调用 timer.reset_delay，把催促间隔打回最短。"
 
 
 [[expert]]
