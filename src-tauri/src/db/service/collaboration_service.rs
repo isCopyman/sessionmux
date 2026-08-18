@@ -728,11 +728,13 @@ pub(crate) async fn delivery_hint_for_origin<C: ConnectionTrait>(
     target_conversation_id: i32,
     event_id: &str,
 ) -> Result<CollaborationDeliveryHint, DbError> {
+    // No invocation-policy filter: a reminder may legitimately queue an
+    // origin item for a `store_only` delivery (read-but-unanswered nag), and
+    // rejecting it here would poison the claimed queue head forever.
     let row = conn
         .query_one(statement(
             "SELECT delivery_hint FROM collaboration_delivery \
-             WHERE event_id = ? AND target_conversation_id = ? \
-               AND invocation_policy = 'invoke_when_idle'",
+             WHERE event_id = ? AND target_conversation_id = ?",
             vec![event_id.into(), target_conversation_id.into()],
         ))
         .await?
@@ -795,12 +797,18 @@ pub(crate) async fn mark_origin_embedding(
     event_id: &str,
     turn_ref: &str,
 ) -> Result<bool, DbError> {
+    // `queued` is the normal hand-off state, but two resting states are also
+    // legal dispatch sources: `pending` (a store_only letter re-delivered by
+    // the reminder before the promotion in `enqueue_origin` existed) and
+    // `embedded` (an already-injected letter being nagged again). Dismissed
+    // and failed deliveries stay ineligible.
     let changed = txn
         .execute(statement(
             "UPDATE collaboration_delivery \
              SET state = 'embedding', embedded_turn_ref = ?, attempts = attempts + 1, \
                  error = NULL, updated_at = CURRENT_TIMESTAMP \
-             WHERE event_id = ? AND target_conversation_id = ? AND state = 'queued'",
+             WHERE event_id = ? AND target_conversation_id = ? \
+               AND state IN ('queued', 'pending', 'embedded')",
             vec![
                 turn_ref.into(),
                 event_id.into(),
@@ -814,6 +822,46 @@ pub(crate) async fn mark_origin_embedding(
         bump_origin_participants(txn, target_conversation_id, event_id).await?;
     }
     Ok(changed)
+}
+
+/// A reminder re-delivers a letter by queueing a fresh origin item. Deliveries
+/// rest in `pending` (store_only) or `embedded` (already injected once);
+/// promote them back to `queued` so the origin dispatch protocol
+/// (queued → embedding → embedded) holds end to end. Refuse deliveries that
+/// cannot be rendered at claim time (dismissed/failed/missing) and ones whose
+/// dispatch is literally in flight (`embedding`): enqueueing those would park
+/// an unclaimable item at the queue head.
+pub(crate) async fn prepare_origin_redelivery(
+    txn: &DatabaseTransaction,
+    target_conversation_id: i32,
+    event_id: &str,
+) -> Result<bool, DbError> {
+    let Some(row) = txn
+        .query_one(statement(
+            "SELECT state FROM collaboration_delivery \
+             WHERE event_id = ? AND target_conversation_id = ?",
+            vec![event_id.into(), target_conversation_id.into()],
+        ))
+        .await?
+    else {
+        return Ok(false);
+    };
+    let state: String = row.try_get("", "state")?;
+    match state.as_str() {
+        "queued" => Ok(true),
+        "pending" | "embedded" => {
+            txn.execute(statement(
+                "UPDATE collaboration_delivery \
+                 SET state = 'queued', error = NULL, updated_at = CURRENT_TIMESTAMP \
+                 WHERE event_id = ? AND target_conversation_id = ? \
+                   AND state IN ('pending', 'embedded')",
+                vec![event_id.into(), target_conversation_id.into()],
+            ))
+            .await?;
+            Ok(true)
+        }
+        _ => Ok(false),
+    }
 }
 
 pub(crate) async fn mark_origin_queued(
@@ -3210,6 +3258,61 @@ mod tests {
             source_feed.outbound[0].state,
             CollaborationDeliveryState::Dismissed
         );
+    }
+
+    #[tokio::test]
+    async fn origin_redelivery_promotes_resting_states_and_refuses_dismissed() {
+        let (db, source, target_a, _) = seeded_memory().await;
+
+        // Dismissed letters must never be re-queued: their draft cannot be
+        // rendered at claim time, so the queued item would be poison.
+        let dismissed = send(
+            &db.conn,
+            input(source, vec![target_a], "redeliver-dead", "gone"),
+        )
+        .await
+        .unwrap();
+        dismiss(&db.conn, target_a, &dismissed.deliveries[0].id)
+            .await
+            .unwrap();
+        let txn = db.conn.begin().await.unwrap();
+        assert!(
+            !prepare_origin_redelivery(&txn, target_a, &dismissed.event_id)
+                .await
+                .unwrap(),
+            "a dismissed delivery is not re-deliverable"
+        );
+        txn.commit().await.unwrap();
+
+        // An already-embedded letter may be nagged again: it returns to
+        // `queued` so the dispatch protocol applies to the second injection.
+        let embedded = send(
+            &db.conn,
+            invoke_input(source, vec![target_a], "redeliver-embedded", "answer me"),
+        )
+        .await
+        .unwrap();
+        let txn = db.conn.begin().await.unwrap();
+        assert!(mark_origin_embedding(&txn, target_a, &embedded.event_id, "turn-1")
+            .await
+            .unwrap());
+        assert!(mark_origin_embedded(&txn, target_a, &embedded.event_id, "turn-1")
+            .await
+            .unwrap());
+        txn.commit().await.unwrap();
+
+        let txn = db.conn.begin().await.unwrap();
+        assert!(prepare_origin_redelivery(&txn, target_a, &embedded.event_id)
+            .await
+            .unwrap());
+        txn.commit().await.unwrap();
+        let refreshed = feed(&db.conn, target_a, None).await.unwrap();
+        let row = refreshed
+            .inbound
+            .iter()
+            .find(|item| item.event_id == embedded.event_id)
+            .expect("the embedded letter stays visible");
+        assert_eq!(row.state, CollaborationDeliveryState::Queued);
     }
 
     #[tokio::test]

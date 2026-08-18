@@ -1349,6 +1349,18 @@ pub async fn enqueue_origin(
     source: PromptQueueSource,
 ) -> Result<bool, DbError> {
     let txn = conn.begin().await?;
+    // Re-deliveries must leave the underlying delivery in a claimable state,
+    // otherwise the queued item can never be rendered or dispatched.
+    let deliverable = crate::db::service::collaboration_service::prepare_origin_redelivery(
+        &txn,
+        conversation_id,
+        origin_event_id,
+    )
+    .await?;
+    if !deliverable {
+        txn.commit().await?;
+        return Ok(false);
+    }
     let inserted = enqueue_origin_in_transaction(
         &txn,
         conversation_id,
@@ -1685,6 +1697,133 @@ mod tests {
             ],
             "dispatch order is user > letter > timer regardless of arrival"
         );
+    }
+
+    /// Regression: a read-but-unanswered `store_only` letter is re-delivered
+    /// by the reminder as an origin queue item. The resting delivery must be
+    /// promoted to `queued` so the claim can render a hint and cross the
+    /// dispatch boundary; before the fix the claim rolled back forever
+    /// ("has no delivery hint") and the nag never reached the Agent.
+    #[tokio::test]
+    async fn reminder_redelivery_of_read_store_only_letter_claims_and_dispatches() {
+        let (db, target) = seeded_memory().await;
+        let target_row = conversation::Entity::find_by_id(target)
+            .one(&db.conn)
+            .await
+            .unwrap()
+            .unwrap();
+        let source = seed_conversation(&db, target_row.folder_id, AgentType::ClaudeCode).await;
+        let sent = collaboration_service::send(
+            &db.conn,
+            SendCollaborationMessageInput {
+                source_conversation_id: source,
+                target_conversation_ids: vec![target],
+                subject: "Read but unanswered".into(),
+                body: "please reply when you can".into(),
+                client_dedupe_id: "store-only-nag".into(),
+                invocation_policy: CollaborationInvocationPolicy::StoreOnly,
+                delivery_hint: CollaborationDeliveryHint::Default,
+                expects_reply: true,
+                urgency: CollaborationUrgency::Normal,
+                reply_to_event_id: None,
+            },
+        )
+        .await
+        .expect("send store_only letter");
+        collaboration_service::mark_agent_read(&db.conn, target, &sent.event_id)
+            .await
+            .expect("agent reads the letter");
+
+        let inserted = enqueue_origin(
+            &db.conn,
+            target,
+            "nag-item-1",
+            &sent.event_id,
+            "mailbox-attention:store-only-nag:0",
+            PromptQueueSource::Reminder,
+        )
+        .await
+        .expect("reminder enqueue");
+        assert!(inserted, "the nag item must be inserted");
+        let feed = collaboration_service::feed(&db.conn, target, None)
+            .await
+            .expect("feed");
+        assert_eq!(
+            feed.inbound[0].state,
+            CollaborationDeliveryState::Queued,
+            "re-delivery promotes the resting store_only delivery"
+        );
+
+        let (claim, _) = claim_head(&db.conn, target, "worker", Duration::seconds(30))
+            .await
+            .expect("claim")
+            .expect("the nag item is claimable");
+        assert_eq!(claim.origin_event_id.as_deref(), Some(sent.event_id.as_str()));
+        assert_eq!(claim.delivery_hint, Some(CollaborationDeliveryHint::Default));
+        assert!(
+            mark_dispatch_started(&db.conn, &claim, Duration::seconds(30))
+                .await
+                .expect("dispatch boundary"),
+            "the promoted delivery crosses queued → embedding"
+        );
+        accept_claim(&db.conn, &claim).await.expect("accept");
+    }
+
+    /// Regression: rows created before `enqueue_origin` learned to promote the
+    /// delivery (queue item exists, delivery still `pending`) must still
+    /// dispatch instead of looping at the claim/dispatch boundary.
+    #[tokio::test]
+    async fn legacy_pending_store_only_origin_item_still_dispatches() {
+        let (db, target) = seeded_memory().await;
+        let target_row = conversation::Entity::find_by_id(target)
+            .one(&db.conn)
+            .await
+            .unwrap()
+            .unwrap();
+        let source = seed_conversation(&db, target_row.folder_id, AgentType::ClaudeCode).await;
+        let sent = collaboration_service::send(
+            &db.conn,
+            SendCollaborationMessageInput {
+                source_conversation_id: source,
+                target_conversation_ids: vec![target],
+                subject: "Legacy row".into(),
+                body: "queued by an older build".into(),
+                client_dedupe_id: "legacy-store-only".into(),
+                invocation_policy: CollaborationInvocationPolicy::StoreOnly,
+                delivery_hint: CollaborationDeliveryHint::Default,
+                expects_reply: true,
+                urgency: CollaborationUrgency::Normal,
+                reply_to_event_id: None,
+            },
+        )
+        .await
+        .expect("send store_only letter");
+        let txn = db.conn.begin().await.expect("txn");
+        enqueue_origin_in_transaction(
+            &txn,
+            target,
+            "legacy-nag-item",
+            &sent.event_id,
+            "mailbox-attention:legacy:0",
+            None,
+            PromptQueueSource::Reminder,
+        )
+        .await
+        .expect("legacy enqueue without promotion");
+        txn.commit().await.expect("commit");
+
+        let (claim, _) = claim_head(&db.conn, target, "worker", Duration::seconds(30))
+            .await
+            .expect("claim succeeds despite the pending delivery")
+            .expect("the legacy item is claimable");
+        assert_eq!(claim.delivery_hint, Some(CollaborationDeliveryHint::Default));
+        assert!(
+            mark_dispatch_started(&db.conn, &claim, Duration::seconds(30))
+                .await
+                .expect("dispatch boundary"),
+            "a pending delivery is a legal dispatch source"
+        );
+        accept_claim(&db.conn, &claim).await.expect("accept");
     }
 
     #[tokio::test]
