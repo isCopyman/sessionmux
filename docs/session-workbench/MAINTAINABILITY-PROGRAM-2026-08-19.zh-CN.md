@@ -495,7 +495,21 @@ T2 后置截图（CDP 9222 可用，基线在 .artifacts）+ 晨间验收报告 
   今天就能写 shadow-auditor playbook（候选，待点头）；其 300s debuff/插话循环翻车反向
   印证我们 R2 每轮一 steer + 5 分钟冷却 + 链深保险丝的保守缺省。Multica=issue 队列制，
   taskboard 远亲，无行动项。
-- 2026-08-19 04:30 用户睡前追加 **G12 bonus 簇**（明确说是 bonus，排主线后、G11 前）：
+- 2026-08-19 05:4x 用户提出**编队膨胀问题**（拿本夜编排当参照负载：Claude Code 里子代理
+  隐形、用完即弃；codeg 里 session.create 拉的工人=顶级常驻 Session，侧栏会炸）。现状
+  查实：① `ConversationKind::Delegate`（⟺ parent_id 非空，插入即定不可改）已实现
+  "harness 内部子代理嵌进父会话工具视图、不占侧栏"——这层已对齐 Claude Code，管不到
+  host-control 拉的正规军；② parent_id 红线锁给 delegation，不可复用作编队树；
+  ③ conversation.archived_at 列在、人类 UI 能归档，**agent 无 session.archive 动作**
+  （session.stop 文案明示 never archives）；④ closed ≠ 隐藏，closed 可被信件冷启动
+  （mailbox 根基，不可破坏）；⑤ Collection 全套动作（create/add_session/…）agent 已可用，
+  session.create 已收 collection_id。**立项 G13 编队生命周期（提案，待用户点头分级）**：
+  G13-a 零代码=playbook 教编排者"先 collection.create 编队容器再拉人"（工具已存在，
+  仅 skill 文案）；G13-b 小=host control 增 session.archive/unarchive（归档对私信投递的
+  语义要先过 RFC：建议拒收+提示发件人，绝不能让信悄悄躺死）；G13-c 中=侧栏/列表加
+  来源与归档过滤（codeg_owned/harness_internal 列可用；"谁创建的"目前未落库，RFC 题）；
+  G13-d 记录=delegate 层无需动。原则：**不学 Claude Code 的"隐形舰队"**——codeg 的
+  session 是同事不是工具，正解是可见性分层+编队容器+可逆归档，不是消失。（明确说是 bonus，排主线后、G11 前）：
   B1 timer worktree 考察（在飞）；B2 是否加 workflow 功能（openteams/multica 参照，在飞）；
   B3 linux.do 帖探索（在飞）；B4 **把本次"fable 规划者 + K3 执行者"编排模式沉淀为 codeg
   可复用参考**（待做：合并两线后作为第 5 个 playbook 写入 codeg-multi-agent/references/，
