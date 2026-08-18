@@ -144,17 +144,25 @@
   },
   {
     "name": "send_message",
-    "description": "Send a durable mailbox letter from this persistent Session to one or more existing Codeg Sessions by stable numeric id. Letters have a short title (like an email subject) and a body. The target receives a Codeg system notice with the title only; it must call read_message(event_id) to open the body. This is Session-to-Session communication, not delegation. Default delivery_mode is queue: persist first, then the Session dispatcher delivers the notice when the target is idle. If the target is closed, Codeg starts or resumes it so the notice can arrive. deliver_only persists and displays without starting a target turn. A queued or delivered result does NOT mean the target has read or answered. For a request that needs an answer, keep expects_reply true (the default). To answer, target only from_session_id and set reply_to_event_id. Do not invent names or send to the calling Session.",
+    "description": "Send a durable mailbox letter, or post to a Room when room_id is set. Letters have a short title and a body. Private mail: the target gets a Codeg system notice with the title only and must call read_message(event_id). Room post: every member can see the body on the Room timeline; only mention targets get a delivery/turn. Default delivery_mode is queue. deliver_only persists without starting a target turn. For a private reply, target only from_session_id and set reply_to_event_id. For a Room reply, set the same room_id and reply_to_event_id; do not send a private letter unless asked.",
     "inputSchema": {
       "type": "object",
-      "required": ["target_session_ids", "title", "content"],
+      "required": ["title", "content"],
       "properties": {
         "target_session_ids": {
           "type": "array",
-          "minItems": 1,
+          "minItems": 0,
           "maxItems": 16,
           "items": { "type": "integer", "minimum": 1 },
-          "description": "One or more stable numeric Session ids from a codeg://session/<id> reference or list_sessions."
+          "description": "Private mail: one or more Session ids. Room post: Sessions to @mention. Omit or pass [] with room_id for a record-only Room post."
+        },
+        "room_id": {
+          "type": "string",
+          "description": "When set, post to this Room instead of sending private mail. The caller must already be a member."
+        },
+        "mention_all": {
+          "type": "boolean",
+          "description": "Room only. Mention every other member. Prefer explicit target_session_ids unless @all is intended."
         },
         "title": {
           "type": "string",

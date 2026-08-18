@@ -1746,7 +1746,10 @@
         "clearSelection": "選択を解除",
         "addToWorkbench": "ワークベンチに追加",
         "bulkActions": "セッション操作",
-        "toastOpFailed": "操作に失敗しました: {message}"
+        "toastOpFailed": "操作に失敗しました: {message}",
+        "createRoom": "ルームを作成",
+        "toastRoomCreated": "ルーム {title} を作成しました",
+        "toastRoomNeedTwo": "ルーム作成には Session を2つ以上選択してください"
       },
       "sectionPinned": "ピン留め",
       "sectionFolders": "フォルダ",
@@ -1759,7 +1762,8 @@
       "newChatAction": "新しいチャット",
       "automations": "オートメーション",
       "tasks": "ToDo タスク",
-      "loadingSubsessions": "サブ会話を読み込み中…"
+      "loadingSubsessions": "サブ会話を読み込み中…",
+      "rooms": "ルーム"
     },
     "conversation": {
       "reloadFailed": "会話の再読み込みに失敗しました: {message}",
@@ -5174,5 +5178,27 @@
     "interruptConfirm": "Stop and send",
     "startProcessing": "Start processing",
     "sendToMentionedSessions": "Send to {count} selected sessions"
+  },
+  "Room": {
+    "title": "ルーム",
+    "empty": "ルームはまだありません",
+    "emptyHint": "サイドバーで Session を2つ以上選んでルームを作成します。",
+    "create": "ルームを作成",
+    "members": "メンバー",
+    "memberCount": "{count} 人",
+    "recordOnly": "記録のみ",
+    "mentionAll": "@all",
+    "composerPlaceholder": "ルームへのメッセージ…",
+    "send": "送信",
+    "invokeWhenIdle": "メンションした Session を起こす",
+    "requestReply": "返信を求める",
+    "speakingAs": "投稿者",
+    "timelineEmpty": "メッセージはまだありません",
+    "mentioned": "@ {names}",
+    "openSession": "Session を開く",
+    "untitled": "無題の Session #{id}",
+    "sendFailed": "ルームに投稿できませんでした",
+    "posted": "ルームに投稿しました",
+    "unread": "未読 {count}"
   }
 }

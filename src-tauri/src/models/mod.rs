@@ -24,14 +24,17 @@ pub use automation::{
 #[allow(unused_imports)]
 pub use chat_channel::{ChannelStatusInfo, ChatChannelInfo, ChatChannelMessageLogInfo};
 pub use collaboration::{
-    CollaborationAgentReceiptKind, CollaborationAttentionState, CollaborationChanged,
-    CollaborationDeliveryHint, CollaborationDeliveryState, CollaborationDeliveryView,
-    CollaborationFeed, CollaborationInterruptOperationView, CollaborationInterruptResult,
-    CollaborationInterruptState, CollaborationInvocationPolicy, CollaborationObligationState,
-    CollaborationSendResult, CollaborationSessionSnapshot, CollaborationTimelineProjection,
-    CollaborationUnreadOverview, CollaborationUnreadSession, CollaborationUrgency,
-    InterruptCollaborationInput, SendAndInterruptCollaborationInput,
-    SendAndInterruptCollaborationResult, SendCollaborationMessageInput,
+    AddCollaborationRoomMembersInput, CollaborationAgentReceiptKind, CollaborationAttentionState,
+    CollaborationChanged, CollaborationDeliveryHint, CollaborationDeliveryState,
+    CollaborationDeliveryView, CollaborationFeed, CollaborationInterruptOperationView,
+    CollaborationInterruptResult, CollaborationInterruptState, CollaborationInvocationPolicy,
+    CollaborationObligationState, CollaborationRoomDetail, CollaborationRoomMember,
+    CollaborationRoomSummary, CollaborationSendResult, CollaborationSessionSnapshot,
+    CollaborationTimelineProjection, CollaborationUnreadOverview, CollaborationUnreadSession,
+    CollaborationUrgency, CollaborationVisibility, CreateCollaborationRoomInput,
+    InterruptCollaborationInput, PostRoomMessageInput, RoomChanged, RoomPostResult, RoomTimeline,
+    RoomTimelineEvent, SendAndInterruptCollaborationInput, SendAndInterruptCollaborationResult,
+    SendCollaborationMessageInput,
 };
 pub use conversation::{
     AgentConversationCount, AgentStats, ConversationDetail, ConversationSummary,

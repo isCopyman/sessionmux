@@ -1746,7 +1746,10 @@
         "clearSelection": "清除選取",
         "addToWorkbench": "加入工作台",
         "bulkActions": "會話操作",
-        "toastOpFailed": "操作失敗：{message}"
+        "toastOpFailed": "操作失敗：{message}",
+        "createRoom": "建群",
+        "toastRoomCreated": "已建立群聊 {title}",
+        "toastRoomNeedTwo": "建群至少需要選中兩個 Session"
       },
       "sectionPinned": "已置頂",
       "sectionFolders": "資料夾",
@@ -1759,7 +1762,8 @@
       "newChatAction": "新增聊天",
       "automations": "自動化",
       "tasks": "待辦任務",
-      "loadingSubsessions": "正在載入子會話…"
+      "loadingSubsessions": "正在載入子會話…",
+      "rooms": "群聊"
     },
     "conversation": {
       "reloadFailed": "會話重新載入失敗：{message}",
@@ -5174,5 +5178,27 @@
     "interruptConfirm": "停止並傳送",
     "startProcessing": "啟動處理",
     "sendToMentionedSessions": "傳送到所選的 {count} 個會話"
+  },
+  "Room": {
+    "title": "群聊",
+    "empty": "還沒有群聊",
+    "emptyHint": "在側欄至少選中兩個 Session，然後建群。",
+    "create": "建群",
+    "members": "成員",
+    "memberCount": "{count} 位成員",
+    "recordOnly": "僅記錄",
+    "mentionAll": "@全體",
+    "composerPlaceholder": "寫一條群訊息…",
+    "send": "傳送",
+    "invokeWhenIdle": "喚醒被點名的 Session",
+    "requestReply": "請求回覆",
+    "speakingAs": "以誰的身分傳送",
+    "timelineEmpty": "還沒有訊息",
+    "mentioned": "@ {names}",
+    "openSession": "開啟 Session",
+    "untitled": "未命名 Session #{id}",
+    "sendFailed": "無法發到群裡",
+    "posted": "已發到群裡",
+    "unread": "{count} 則未讀"
   }
 }

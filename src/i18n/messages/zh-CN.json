@@ -1746,7 +1746,10 @@
         "clearSelection": "清除选择",
         "addToWorkbench": "加入工作台",
         "bulkActions": "会话操作",
-        "toastOpFailed": "操作失败：{message}"
+        "toastOpFailed": "操作失败：{message}",
+        "createRoom": "建群",
+        "toastRoomCreated": "已创建群聊 {title}",
+        "toastRoomNeedTwo": "建群至少需要选中两个 Session"
       },
       "sectionPinned": "已置顶",
       "sectionFolders": "文件夹",
@@ -1759,7 +1762,8 @@
       "newChatAction": "新建聊天",
       "automations": "自动化",
       "tasks": "待办任务",
-      "loadingSubsessions": "正在加载子会话…"
+      "loadingSubsessions": "正在加载子会话…",
+      "rooms": "群聊"
     },
     "conversation": {
       "reloadFailed": "会话重新加载失败：{message}",
@@ -5174,5 +5178,27 @@
     "interruptConfirm": "停止并发送",
     "startProcessing": "启动处理",
     "sendToMentionedSessions": "发送到所选的 {count} 个会话"
+  },
+  "Room": {
+    "title": "群聊",
+    "empty": "还没有群聊",
+    "emptyHint": "在侧栏至少选中两个 Session，然后建群。",
+    "create": "建群",
+    "members": "成员",
+    "memberCount": "{count} 位成员",
+    "recordOnly": "仅记录",
+    "mentionAll": "@全体",
+    "composerPlaceholder": "写一条群消息…",
+    "send": "发送",
+    "invokeWhenIdle": "唤醒被点名的 Session",
+    "requestReply": "请求回复",
+    "speakingAs": "以谁的身份发送",
+    "timelineEmpty": "还没有消息",
+    "mentioned": "@ {names}",
+    "openSession": "打开 Session",
+    "untitled": "未命名 Session #{id}",
+    "sendFailed": "无法发到群里",
+    "posted": "已发到群里",
+    "unread": "{count} 条未读"
   }
 }

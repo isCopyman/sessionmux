@@ -1746,7 +1746,10 @@
         "clearSelection": "Limpar seleção",
         "addToWorkbench": "Adicionar ao workbench",
         "bulkActions": "Ações da sessão",
-        "toastOpFailed": "Falha na operação: {message}"
+        "toastOpFailed": "Falha na operação: {message}",
+        "createRoom": "Criar sala",
+        "toastRoomCreated": "Sala {title} criada",
+        "toastRoomNeedTwo": "Selecione pelo menos duas Sessions para criar uma sala"
       },
       "sectionPinned": "Fixadas",
       "sectionFolders": "Pastas",
@@ -1759,7 +1762,8 @@
       "newChatAction": "Novo chat",
       "automations": "Automações",
       "tasks": "Tarefas a fazer",
-      "loadingSubsessions": "Carregando subconversas…"
+      "loadingSubsessions": "Carregando subconversas…",
+      "rooms": "Salas"
     },
     "conversation": {
       "reloadFailed": "Falha ao recarregar conversa: {message}",
@@ -5174,5 +5178,27 @@
     "interruptConfirm": "Stop and send",
     "startProcessing": "Start processing",
     "sendToMentionedSessions": "Send to {count} selected sessions"
+  },
+  "Room": {
+    "title": "Salas",
+    "empty": "Ainda não há salas",
+    "emptyHint": "Selecione pelo menos duas Sessions na barra lateral e crie uma sala.",
+    "create": "Criar sala",
+    "members": "Membros",
+    "memberCount": "{count} membros",
+    "recordOnly": "Somente registrar",
+    "mentionAll": "@todos",
+    "composerPlaceholder": "Escreva uma mensagem da sala…",
+    "send": "Enviar",
+    "invokeWhenIdle": "Acordar as Sessions mencionadas",
+    "requestReply": "Pedir resposta",
+    "speakingAs": "Publicar como",
+    "timelineEmpty": "Ainda não há mensagens",
+    "mentioned": "@ {names}",
+    "openSession": "Abrir session",
+    "untitled": "Session sem título #{id}",
+    "sendFailed": "Não foi possível publicar na sala",
+    "posted": "Publicado na sala",
+    "unread": "{count} não lidas"
   }
 }

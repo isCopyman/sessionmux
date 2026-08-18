@@ -395,6 +395,8 @@ async fn real_host_bridge_routes_session_message_from_token_bound_source() {
                 expects_reply: true,
                 reply_to_event_id: None,
                 client_dedupe_id: "e2e-message".to_string(),
+                room_id: None,
+                mention_all: false,
             },
         },
     )
@@ -430,9 +432,7 @@ async fn real_host_bridge_round_trips_reply_status_through_host_core() {
     use codeg_lib::acp::session_collaboration::{
         SessionCollaborationConfig, SessionCollaborationRuntimeConfig,
     };
-    use codeg_lib::commands::collaboration::{
-        collaboration_feed_core, DbSessionCollaboration,
-    };
+    use codeg_lib::commands::collaboration::{collaboration_feed_core, DbSessionCollaboration};
     use codeg_lib::db::test_helpers::{fresh_in_memory_db, seed_conversation, seed_folder};
     use codeg_lib::db::AppDatabase;
     use codeg_lib::models::{AgentType, CollaborationObligationState};
@@ -514,6 +514,8 @@ async fn real_host_bridge_round_trips_reply_status_through_host_core() {
                 expects_reply: true,
                 reply_to_event_id: None,
                 client_dedupe_id: "bridge-a-to-b".to_string(),
+                room_id: None,
+                mention_all: false,
             },
         },
     )
@@ -560,6 +562,8 @@ async fn real_host_bridge_round_trips_reply_status_through_host_core() {
                 expects_reply: false,
                 reply_to_event_id: Some(event_id.clone()),
                 client_dedupe_id: "bridge-b-reply".to_string(),
+                room_id: None,
+                mention_all: false,
             },
         },
     )
@@ -618,9 +622,7 @@ async fn public_mcp_creates_organizes_and_replies_through_host_core() {
     use codeg_lib::acp::session_collaboration::{
         SessionCollaborationConfig, SessionCollaborationRuntimeConfig,
     };
-    use codeg_lib::commands::collaboration::{
-        collaboration_feed_core, DbSessionCollaboration,
-    };
+    use codeg_lib::commands::collaboration::{collaboration_feed_core, DbSessionCollaboration};
     use codeg_lib::commands::host_control::DbSessionHostControl;
     use codeg_lib::db::test_helpers::{fresh_in_memory_db, seed_conversation, seed_folder};
     use codeg_lib::db::AppDatabase;
@@ -851,6 +853,8 @@ async fn public_mcp_creates_organizes_and_replies_through_host_core() {
                 expects_reply: true,
                 reply_to_event_id: None,
                 client_dedupe_id: "public-a-to-b".to_string(),
+                room_id: None,
+                mention_all: false,
             },
         },
     )
@@ -885,6 +889,8 @@ async fn public_mcp_creates_organizes_and_replies_through_host_core() {
                 expects_reply: false,
                 reply_to_event_id: Some(event_id.clone()),
                 client_dedupe_id: "public-b-reply".to_string(),
+                room_id: None,
+                mention_all: false,
             },
         },
     )

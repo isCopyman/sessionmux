@@ -118,6 +118,12 @@ pub struct SessionMessageSpec {
     /// Companion-generated from the parent connection + MCP request id. The
     /// model cannot spoof the sender or pick a key that collides with UI sends.
     pub client_dedupe_id: String,
+    /// When set, this is a Room post, not a private letter. Empty
+    /// `target_session_ids` means record-only. Mentions still create deliveries.
+    #[serde(default)]
+    pub room_id: Option<String>,
+    #[serde(default)]
+    pub mention_all: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -15,6 +15,8 @@ const h = vi.hoisted(() => ({
   openTab: vi.fn(),
   openConversations: vi.fn(),
   createOnly: vi.fn(),
+  createCollaborationRoom: vi.fn(),
+  setRoute: vi.fn(),
 }))
 
 vi.mock("sonner", () => ({
@@ -25,6 +27,14 @@ vi.mock("@/lib/session-bulk-operations", () => ({
   archiveSessions: h.archiveSessions,
   deleteSessions: h.deleteSessions,
   moveSessionsToCollection: h.moveSessionsToCollection,
+}))
+
+vi.mock("@/lib/api", () => ({
+  createCollaborationRoom: h.createCollaborationRoom,
+}))
+
+vi.mock("@/lib/room-events", () => ({
+  requestOpenRoom: vi.fn(),
 }))
 
 vi.mock("@/lib/workbench-session-tabs", () => ({
@@ -41,7 +51,10 @@ vi.mock("@/contexts/tab-context", () => ({
 }))
 
 vi.mock("@/contexts/workbench-route-context", () => ({
-  useWorkbenchRoute: () => ({ openConversations: h.openConversations }),
+  useWorkbenchRoute: () => ({
+    openConversations: h.openConversations,
+    setRoute: h.setRoute,
+  }),
 }))
 
 vi.mock("@/stores/tab-store", () => ({
@@ -131,6 +144,10 @@ describe("SessionBulkActionBar", () => {
       added: 2,
       skipped: 0,
     })
+    h.createCollaborationRoom.mockResolvedValue({
+      id: "rm_test",
+      title: "Session 1 / Session 2",
+    })
   })
 
   it("archives the current selection", async () => {
@@ -161,6 +178,21 @@ describe("SessionBulkActionBar", () => {
       ])
     )
     expect(h.openTab).not.toHaveBeenCalled()
+  })
+
+  it("creates a room from the current selection", async () => {
+    const { onClear, user } = renderBar()
+    await user.click(screen.getByRole("button", { name: "Create room" }))
+    await waitFor(() =>
+      expect(h.createCollaborationRoom).toHaveBeenCalledWith({
+        workbenchId: 1,
+        title: "Session 1 / Session 2",
+        memberConversationIds: [1, 2],
+        createdByConversationId: 1,
+      })
+    )
+    expect(h.setRoute).toHaveBeenCalledWith("rooms")
+    expect(onClear).toHaveBeenCalled()
   })
 
   it("asks for confirmation before deleting", async () => {

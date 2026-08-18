@@ -23,11 +23,11 @@ use crate::acp::host_control::{
 use crate::acp::manager::ConnectionManager;
 use crate::chat_channel::manager::ChatChannelManager;
 use crate::commands::conversations::{
-    emit_conversation_upsert, list_all_conversations_core,
-    sync_conversation_title_to_channels_core,
+    emit_conversation_upsert, list_all_conversations_core, sync_conversation_title_to_channels_core,
 };
-use crate::commands::host_control_session::SessionHostControlProvider;
 use crate::commands::host_control_organization::OrganizationHostControl;
+use crate::commands::host_control_room::RoomHostControl;
+use crate::commands::host_control_session::SessionHostControlProvider;
 use crate::commands::host_control_timer::TimerHostControl;
 use crate::db::entities::conversation::ConversationKind;
 use crate::db::service::conversation_service;
@@ -75,6 +75,7 @@ pub struct DbSessionHostControl {
     session_lifecycle: SessionHostControlProvider,
     organization: OrganizationHostControl,
     timer: TimerHostControl,
+    room: RoomHostControl,
     /// Held across a write so concurrent replays cannot both pass the lookup.
     writes: Mutex<IdempotencyCache>,
 }
@@ -96,6 +97,7 @@ impl DbSessionHostControl {
         );
         let organization = OrganizationHostControl::new(db.clone(), emitter.clone());
         let timer = TimerHostControl::new(db.clone(), emitter.clone());
+        let room = RoomHostControl::new(db.clone(), emitter.clone());
         Self {
             db,
             emitter,
@@ -104,6 +106,7 @@ impl DbSessionHostControl {
             session_lifecycle,
             organization,
             timer,
+            room,
             writes: Mutex::new(IdempotencyCache::default()),
         }
     }
@@ -116,6 +119,7 @@ impl DbSessionHostControl {
             SessionHostControlProvider::isolated_for_tests(Arc::clone(&db), emitter.clone());
         let organization = OrganizationHostControl::new(db.clone(), emitter.clone());
         let timer = TimerHostControl::new(db.clone(), emitter.clone());
+        let room = RoomHostControl::new(db.clone(), emitter.clone());
         Self {
             db,
             emitter,
@@ -124,6 +128,7 @@ impl DbSessionHostControl {
             session_lifecycle,
             organization,
             timer,
+            room,
             writes: Mutex::new(IdempotencyCache::default()),
         }
     }
@@ -138,12 +143,13 @@ impl DbSessionHostControl {
                 "The calling Session is no longer an active Codeg Session. Resume it before using Host Control."
                     .to_string()
             })?;
-        if !matches!(session.kind, ConversationKind::Regular | ConversationKind::Chat)
-            || session.parent_id.is_some()
+        if !matches!(
+            session.kind,
+            ConversationKind::Regular | ConversationKind::Chat
+        ) || session.parent_id.is_some()
         {
             return Err(
-                "Host Control is available only to ordinary persistent Codeg Sessions."
-                    .to_string(),
+                "Host Control is available only to ordinary persistent Codeg Sessions.".to_string(),
             );
         }
         Ok(session)
@@ -163,7 +169,10 @@ impl DbSessionHostControl {
                 )
             })?;
         if target.folder_id != source.folder_id
-            || !matches!(target.kind, ConversationKind::Regular | ConversationKind::Chat)
+            || !matches!(
+                target.kind,
+                ConversationKind::Regular | ConversationKind::Chat
+            )
             || target.parent_id.is_some()
         {
             return Err(format!(
@@ -268,6 +277,7 @@ impl DbSessionHostControl {
         }
         capabilities.extend(OrganizationHostControl::capabilities(writes_allowed));
         capabilities.extend(TimerHostControl::capabilities(writes_allowed));
+        capabilities.extend(RoomHostControl::capabilities(writes_allowed));
         capabilities
     }
 
@@ -505,16 +515,10 @@ impl DbSessionHostControl {
         if let Some(data) = outcome.data.as_object_mut() {
             if placed.accepted {
                 data.insert("collection_id".to_string(), json!(collection_id));
-                data.insert(
-                    "collection_placement".to_string(),
-                    json!("persisted"),
-                );
+                data.insert("collection_placement".to_string(), json!("persisted"));
             } else {
                 data.insert("collection_id".to_string(), Value::Null);
-                data.insert(
-                    "collection_placement".to_string(),
-                    json!("failed"),
-                );
+                data.insert("collection_placement".to_string(), json!("failed"));
             }
         }
         if !placed.accepted {
@@ -651,6 +655,23 @@ impl HostControlAccess for DbSessionHostControl {
                         .await
                 }
             }
+            _ if RoomHostControl::access_for(&action).is_some() => {
+                if matches!(
+                    RoomHostControl::access_for(&action),
+                    Some(HostControlAccessLevel::Write)
+                ) && (!config.writes_enabled || !caller.writes_allowed)
+                {
+                    HostControlUseOutcome::rejected(
+                        request_id,
+                        action,
+                        "This Session's live Host policy does not allow Host Control writes.",
+                    )
+                } else {
+                    self.room
+                        .use_action(&caller, request_id, action, input)
+                        .await
+                }
+            }
             _ => HostControlUseOutcome::rejected(
                 request_id,
                 action,
@@ -749,7 +770,7 @@ mod tests {
         let (host, _, caller_id, _) = fixture().await;
         let read_only = host.help(caller(caller_id, false), None, None).await;
         assert!(read_only.available);
-        assert_eq!(read_only.capabilities.len(), 5);
+        assert_eq!(read_only.capabilities.len(), 6);
         assert!(read_only
             .capabilities
             .iter()
@@ -766,6 +787,10 @@ mod tests {
             .capabilities
             .iter()
             .any(|capability| capability.action == "timer.list"));
+        assert!(read_only
+            .capabilities
+            .iter()
+            .any(|capability| capability.action == "room.list"));
 
         let writable = host.help(caller(caller_id, true), None, None).await;
         assert!(writable
@@ -780,6 +805,10 @@ mod tests {
             .capabilities
             .iter()
             .any(|capability| capability.action == "workbench.add_session"));
+        assert!(writable
+            .capabilities
+            .iter()
+            .any(|capability| capability.action == "room.create"));
     }
 
     #[tokio::test]

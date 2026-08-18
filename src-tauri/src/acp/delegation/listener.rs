@@ -1048,6 +1048,8 @@ mod tests {
                     expects_reply: true,
                     reply_to_event_id: None,
                     client_dedupe_id: "mcp:test".into(),
+                    room_id: None,
+                    mention_all: false,
                 },
             })
             .await;

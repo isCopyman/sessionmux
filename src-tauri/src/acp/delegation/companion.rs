@@ -52,8 +52,8 @@ use crate::acp::delegation::transport::{
 };
 use crate::acp::question::parse_questions;
 use crate::acp::session_collaboration::{
-    SessionInboxFilter, SessionMailboxScope, SessionMessageDeliveryMode, SessionMessageSpec, DEFAULT_INBOX_LIMIT,
-    DEFAULT_SESSION_LIST_LIMIT, MAX_INBOX_LIMIT, MAX_SESSION_LIST_LIMIT,
+    SessionInboxFilter, SessionMailboxScope, SessionMessageDeliveryMode, SessionMessageSpec,
+    DEFAULT_INBOX_LIMIT, DEFAULT_SESSION_LIST_LIMIT, MAX_INBOX_LIMIT, MAX_SESSION_LIST_LIMIT,
     MAX_SESSION_MESSAGE_TARGETS,
 };
 use crate::acp::session_info::MAX_SESSION_MESSAGES;
@@ -502,7 +502,12 @@ async fn build_tools_call_spawn(
             register_and_spawn(inflight, id, round_trip, render_session_list_result).await
         }
         "send_message" => {
-            let target_session_ids = match parse_target_session_ids(&arguments) {
+            let room_id_present = arguments
+                .get("room_id")
+                .and_then(|value| value.as_str())
+                .map(str::trim)
+                .is_some_and(|value| !value.is_empty());
+            let target_session_ids = match parse_target_session_ids(&arguments, room_id_present) {
                 Ok(ids) => ids,
                 Err(message) => return LineAction::Respond(err(id, -32602, message)),
             };
@@ -571,6 +576,16 @@ async fn build_tools_call_spawn(
                     "send_message `steer_if_supported` requires delivery_mode=queue",
                 ));
             }
+            let room_id = arguments
+                .get("room_id")
+                .and_then(|value| value.as_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string);
+            let mention_all = arguments
+                .get("mention_all")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false);
             let client_dedupe_id = mcp_call_dedupe_id(&ctx.parent_connection_id, &id);
             let req = BrokerSendMessageRequest {
                 token: ctx.token.clone(),
@@ -586,6 +601,8 @@ async fn build_tools_call_spawn(
                         .unwrap_or(true),
                     reply_to_event_id,
                     client_dedupe_id,
+                    room_id,
+                    mention_all,
                 },
             };
             let round_trip =
@@ -1366,13 +1383,16 @@ fn parse_peer_session_id(arguments: &Value) -> Result<Option<i32>, String> {
         .ok_or_else(|| "list_inbox `peer_session_id` must be a positive Session id".to_string())
 }
 
-fn parse_target_session_ids(arguments: &Value) -> Result<Vec<i32>, String> {
-    let values = arguments
+fn parse_target_session_ids(arguments: &Value, allow_empty: bool) -> Result<Vec<i32>, String> {
+    let Some(values) = arguments
         .get("target_session_ids")
         .and_then(Value::as_array)
-        .ok_or_else(|| {
-            "send_message requires a non-empty `target_session_ids` array".to_string()
-        })?;
+    else {
+        if allow_empty {
+            return Ok(Vec::new());
+        }
+        return Err("send_message requires a non-empty `target_session_ids` array".to_string());
+    };
     let mut ids = Vec::new();
     for value in values {
         let id = value
@@ -1392,7 +1412,7 @@ fn parse_target_session_ids(arguments: &Value) -> Result<Vec<i32>, String> {
             ids.push(id);
         }
     }
-    if ids.is_empty() {
+    if ids.is_empty() && !allow_empty {
         return Err("send_message requires at least one target Session".to_string());
     }
     if ids.len() > MAX_SESSION_MESSAGE_TARGETS {
@@ -1527,17 +1547,20 @@ pub fn render_session_inbox_result(outcome: &Value) -> Value {
                     .and_then(Value::as_str)
                     .or_else(|| item.get("preview").and_then(Value::as_str))
                     .unwrap_or("(untitled)");
-                let outbound =
-                    item.get("direction").and_then(Value::as_str) == Some("outbound");
+                let outbound = item.get("direction").and_then(Value::as_str) == Some("outbound");
                 let peer_word = if outbound { "to" } else { "from" };
-                let awaiting_open = item.get("obligation_state").and_then(Value::as_str)
-                    == Some("awaiting_reply");
+                let awaiting_open =
+                    item.get("obligation_state").and_then(Value::as_str) == Some("awaiting_reply");
                 let mut flags = Vec::new();
                 if item.get("unread").and_then(Value::as_bool).unwrap_or(false) {
                     flags.push(if outbound { "unopened" } else { "unread" });
                 }
                 if awaiting_open {
-                    flags.push(if outbound { "awaiting reply" } else { "needs reply" });
+                    flags.push(if outbound {
+                        "awaiting reply"
+                    } else {
+                        "needs reply"
+                    });
                 }
                 let flag_text = if flags.is_empty() {
                     String::new()

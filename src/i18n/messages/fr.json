@@ -1746,7 +1746,10 @@
         "clearSelection": "Effacer la sélection",
         "addToWorkbench": "Ajouter au workbench",
         "bulkActions": "Actions de session",
-        "toastOpFailed": "Échec de l'opération : {message}"
+        "toastOpFailed": "Échec de l'opération : {message}",
+        "createRoom": "Créer une salle",
+        "toastRoomCreated": "Salle {title} créée",
+        "toastRoomNeedTwo": "Sélectionnez au moins deux Sessions pour créer une salle"
       },
       "sectionPinned": "Épinglées",
       "sectionFolders": "Dossiers",
@@ -1759,7 +1762,8 @@
       "newChatAction": "Nouvelle discussion",
       "automations": "Automatisations",
       "tasks": "Tâches à faire",
-      "loadingSubsessions": "Chargement des sous-conversations…"
+      "loadingSubsessions": "Chargement des sous-conversations…",
+      "rooms": "Salles"
     },
     "conversation": {
       "reloadFailed": "Échec du rechargement de la conversation : {message}",
@@ -5174,5 +5178,27 @@
     "interruptConfirm": "Stop and send",
     "startProcessing": "Start processing",
     "sendToMentionedSessions": "Send to {count} selected sessions"
+  },
+  "Room": {
+    "title": "Salles",
+    "empty": "Aucune salle pour le moment",
+    "emptyHint": "Sélectionnez au moins deux Sessions dans la barre latérale pour créer une salle.",
+    "create": "Créer une salle",
+    "members": "Membres",
+    "memberCount": "{count} membres",
+    "recordOnly": "Enregistrer seulement",
+    "mentionAll": "@tous",
+    "composerPlaceholder": "Écrire un message de salle…",
+    "send": "Envoyer",
+    "invokeWhenIdle": "Réveiller les Sessions mentionnées",
+    "requestReply": "Demander une réponse",
+    "speakingAs": "Publier en tant que",
+    "timelineEmpty": "Aucun message pour le moment",
+    "mentioned": "@ {names}",
+    "openSession": "Ouvrir la session",
+    "untitled": "Session sans titre #{id}",
+    "sendFailed": "Impossible de publier dans la salle",
+    "posted": "Publié dans la salle",
+    "unread": "{count} non lus"
   }
 }

@@ -1746,7 +1746,10 @@
         "clearSelection": "Auswahl aufheben",
         "addToWorkbench": "Zur Workbench hinzufügen",
         "bulkActions": "Sitzungsaktionen",
-        "toastOpFailed": "Aktion fehlgeschlagen: {message}"
+        "toastOpFailed": "Aktion fehlgeschlagen: {message}",
+        "createRoom": "Raum erstellen",
+        "toastRoomCreated": "Raum {title} erstellt",
+        "toastRoomNeedTwo": "Wähle mindestens zwei Sessions, um einen Raum zu erstellen"
       },
       "sectionPinned": "Angeheftet",
       "sectionFolders": "Ordner",
@@ -1759,7 +1762,8 @@
       "newChatAction": "Neuer Chat",
       "automations": "Automatisierungen",
       "tasks": "To-dos",
-      "loadingSubsessions": "Unterkonversationen werden geladen…"
+      "loadingSubsessions": "Unterkonversationen werden geladen…",
+      "rooms": "Räume"
     },
     "conversation": {
       "reloadFailed": "Konversation konnte nicht neu geladen werden: {message}",
@@ -5174,5 +5178,27 @@
     "interruptConfirm": "Stop and send",
     "startProcessing": "Start processing",
     "sendToMentionedSessions": "Send to {count} selected sessions"
+  },
+  "Room": {
+    "title": "Räume",
+    "empty": "Noch keine Räume",
+    "emptyHint": "Wähle in der Seitenleiste mindestens zwei Sessions und erstelle einen Raum.",
+    "create": "Raum erstellen",
+    "members": "Mitglieder",
+    "memberCount": "{count} Mitglieder",
+    "recordOnly": "Nur speichern",
+    "mentionAll": "@alle",
+    "composerPlaceholder": "Raum-Nachricht schreiben…",
+    "send": "Senden",
+    "invokeWhenIdle": "Erwähnte Sessions wecken",
+    "requestReply": "Antwort anfordern",
+    "speakingAs": "Senden als",
+    "timelineEmpty": "Noch keine Nachrichten",
+    "mentioned": "@ {names}",
+    "openSession": "Session öffnen",
+    "untitled": "Unbenannte Session #{id}",
+    "sendFailed": "Konnte nicht in den Raum senden",
+    "posted": "Im Raum veröffentlicht",
+    "unread": "{count} ungelesen"
   }
 }

@@ -10,6 +10,12 @@ pub enum CollaborationInvocationPolicy {
     InvokeWhenIdle,
 }
 
+impl Default for CollaborationInvocationPolicy {
+    fn default() -> Self {
+        Self::StoreOnly
+    }
+}
+
 impl CollaborationInvocationPolicy {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
@@ -34,6 +40,12 @@ pub enum CollaborationDeliveryHint {
     SteerIfSupported,
 }
 
+impl Default for CollaborationDeliveryHint {
+    fn default() -> Self {
+        Self::Default
+    }
+}
+
 impl CollaborationDeliveryHint {
     pub(crate) fn as_str(self) -> &'static str {
         match self {
@@ -56,6 +68,12 @@ impl CollaborationDeliveryHint {
 pub enum CollaborationUrgency {
     Normal,
     Urgent,
+}
+
+impl Default for CollaborationUrgency {
+    fn default() -> Self {
+        Self::Normal
+    }
 }
 
 impl CollaborationUrgency {
@@ -408,4 +426,136 @@ pub struct SendAndInterruptCollaborationResult {
 #[serde(rename_all = "camelCase")]
 pub struct CollaborationChanged {
     pub conversation_ids: Vec<i32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CollaborationVisibility {
+    Direct,
+    Room,
+}
+
+impl CollaborationVisibility {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Direct => "direct",
+            Self::Room => "room",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateCollaborationRoomInput {
+    pub workbench_id: i32,
+    pub title: String,
+    pub member_conversation_ids: Vec<i32>,
+    pub created_by_conversation_id: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddCollaborationRoomMembersInput {
+    pub room_id: String,
+    pub conversation_ids: Vec<i32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PostRoomMessageInput {
+    pub room_id: String,
+    pub source_conversation_id: i32,
+    pub target_conversation_ids: Vec<i32>,
+    #[serde(default)]
+    pub mention_all: bool,
+    #[serde(default)]
+    pub subject: String,
+    pub body: String,
+    pub client_dedupe_id: String,
+    #[serde(default = "default_invocation_policy")]
+    pub invocation_policy: CollaborationInvocationPolicy,
+    #[serde(default = "default_delivery_hint")]
+    pub delivery_hint: CollaborationDeliveryHint,
+    #[serde(default)]
+    pub expects_reply: bool,
+    #[serde(default = "default_urgency")]
+    pub urgency: CollaborationUrgency,
+    #[serde(default)]
+    pub reply_to_event_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CollaborationRoomMember {
+    pub conversation_id: i32,
+    pub title: Option<String>,
+    pub agent_type: Option<String>,
+    pub role: String,
+    pub joined_at: DateTime<Utc>,
+    pub last_read_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CollaborationRoomSummary {
+    pub id: String,
+    pub workbench_id: i32,
+    pub title: String,
+    pub created_by_conversation_id: i32,
+    pub member_count: u32,
+    pub unread_count: u32,
+    pub last_event_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CollaborationRoomDetail {
+    pub id: String,
+    pub workbench_id: i32,
+    pub title: String,
+    pub created_by_conversation_id: i32,
+    pub members: Vec<CollaborationRoomMember>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoomTimelineEvent {
+    pub id: String,
+    pub room_id: String,
+    pub source: CollaborationSessionSnapshot,
+    pub subject: String,
+    pub body: String,
+    pub reply_to_event_id: Option<String>,
+    pub expects_reply: bool,
+    pub urgency: CollaborationUrgency,
+    pub mention_conversation_ids: Vec<i32>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoomTimeline {
+    pub room_id: String,
+    pub events: Vec<RoomTimelineEvent>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoomChanged {
+    pub room_id: String,
+    pub workbench_id: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoomPostResult {
+    pub event_id: String,
+    pub room_id: String,
+    pub deliveries: Vec<CollaborationDeliveryView>,
+    pub affected_conversation_ids: Vec<i32>,
+    pub deduplicated: bool,
 }

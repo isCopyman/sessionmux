@@ -8,6 +8,7 @@ use sea_orm::{
 
 use crate::acp::types::PromptInputBlock;
 use crate::db::error::DbError;
+use crate::db::service::collaboration_room_service;
 use crate::db::service::prompt_queue_service;
 use crate::models::{
     CollaborationAgentReceiptKind, CollaborationAttentionState, CollaborationDeliveryHint,
@@ -15,7 +16,8 @@ use crate::models::{
     CollaborationInterruptState, CollaborationInvocationPolicy, CollaborationObligationState,
     CollaborationSendResult, CollaborationSessionSnapshot, CollaborationTimelineProjection,
     CollaborationUnreadOverview, CollaborationUnreadSession, CollaborationUrgency,
-    PromptQueueDraft, PromptQueueItemState, SendCollaborationMessageInput,
+    PostRoomMessageInput, PromptQueueDraft, PromptQueueItemState, RoomPostResult,
+    SendCollaborationMessageInput,
 };
 
 const MAX_BODY_BYTES: usize = 1_000_000;
@@ -33,6 +35,8 @@ pub const INACTIVE_TARGET_CONFIRMATION_REASON: &str =
 /// An Agent may create replies through this depth, but the event at the limit
 /// cannot ask another Agent for a reply. Human UI sends remain unrestricted.
 pub const MAX_AGENT_REPLY_CHAIN_DEPTH: i32 = 4;
+/// Mailbox / inbox / session-timeline projections must never see Room events.
+const DIRECT_MAIL_SQL: &str = "AND COALESCE(e.visibility, 'direct') = 'direct'";
 
 /// Versioned, transcript-safe envelope persisted by every Harness when Codeg
 /// invokes a Session on behalf of another Session. The UUID-scoped closing
@@ -465,16 +469,22 @@ fn prompt_draft_from_delivery_row(row: &QueryResult) -> Result<PromptQueueDraft,
     let subject: String = row
         .try_get::<Option<String>>("", "subject")?
         .unwrap_or_default();
-    let body: String = row.try_get::<Option<String>>("", "body")?.unwrap_or_default();
-    let letter_title =
-        crate::acp::session_collaboration::letter_title(&subject, &body);
+    let body: String = row
+        .try_get::<Option<String>>("", "body")?
+        .unwrap_or_default();
+    let letter_title = crate::acp::session_collaboration::letter_title(&subject, &body);
     let source_label = source_title
         .as_deref()
         .filter(|title| !title.trim().is_empty())
         .unwrap_or("Untitled Session");
+    let visibility: String = row
+        .try_get::<Option<String>>("", "visibility")?
+        .unwrap_or_else(|| "direct".to_string());
+    let room_id: Option<String> = row.try_get("", "room_id")?;
+    let is_room = visibility == "room" && room_id.is_some();
     let metadata = serde_json::json!({
         "version": ENVELOPE_VERSION,
-        "kind": "system_notify",
+        "kind": if is_room { "room_mention" } else { "system_notify" },
         "eventId": event_id,
         "deliveryId": delivery_id,
         "sourceConversationId": source_conversation_id,
@@ -484,6 +494,8 @@ fn prompt_draft_from_delivery_row(row: &QueryResult) -> Result<PromptQueueDraft,
         "letterTitle": letter_title,
         "expectsReply": expects_reply != 0,
         "replyToEventId": reply_to_event_id,
+        "visibility": visibility,
+        "roomId": room_id,
     });
     let metadata = serde_json::to_string(&metadata)
         .map_err(|err| validation(format!("Could not serialize collaboration envelope: {err}")))?;
@@ -492,14 +504,26 @@ fn prompt_draft_from_delivery_row(row: &QueryResult) -> Result<PromptQueueDraft,
     } else {
         ""
     };
-    let text = format!(
-        "{ENVELOPE_PREFIX}{event_id}>>>\n{metadata}\n\
+    let text = if is_room {
+        let room = room_id.as_deref().unwrap_or("");
+        format!(
+            "{ENVELOPE_PREFIX}{event_id}>>>\n{metadata}\n\
+This is a Codeg Room mention in {room}. It is not a private letter from Session {source_conversation_id}. The body is not in this prompt.\n\
+Mention from {source_label} (#{source_conversation_id}): 《{letter_title}》.{reply_hint}\n\
+Call read_message with event_id={event_id} to open the body. Reply in the same Room (scope=room, room_id={room}, reply_to_event_id={event_id}). Do not send a private letter unless asked.\n\
+--- message ---\n\
+{ENVELOPE_END_PREFIX}{event_id}>>>"
+        )
+    } else {
+        format!(
+            "{ENVELOPE_PREFIX}{event_id}>>>\n{metadata}\n\
 This is a Codeg system mailbox notice. It is not a message from Session {source_conversation_id}. The letter body is not in this prompt.\n\
 Unread from {source_label} (#{source_conversation_id}): 《{letter_title}》.{reply_hint}\n\
 Call list_inbox to see titles. Call read_message with event_id={event_id} to open the body. If a reply is needed, send_message to sourceConversationId and set reply_to_event_id={event_id}.\n\
 --- message ---\n\
 {ENVELOPE_END_PREFIX}{event_id}>>>"
-    );
+        )
+    };
     Ok(PromptQueueDraft {
         blocks: vec![PromptInputBlock::Text { text }],
         display_text: format!("Codeg mailbox: {letter_title}"),
@@ -518,7 +542,7 @@ pub(crate) async fn prompt_draft_for_origin<C: ConnectionTrait>(
                         AS effective_expects_reply, \
                     e.source_conversation_id, e.source_title_snapshot, \
                     e.source_agent_type_snapshot, e.source_folder_path_snapshot, \
-                    e.subject, e.body \
+                    e.subject, e.body, e.visibility, e.room_id \
              FROM collaboration_delivery d \
              JOIN collaboration_event e ON e.id = d.event_id \
              WHERE d.event_id = ? AND d.target_conversation_id = ? \
@@ -573,7 +597,7 @@ pub(crate) async fn claim_pending_store_only_for_turn(
                             AS effective_expects_reply, \
                         e.source_conversation_id, e.source_title_snapshot, \
                         e.source_agent_type_snapshot, e.source_folder_path_snapshot, \
-                        e.subject, e.body \
+                        e.subject, e.body, e.visibility, e.room_id \
                  FROM collaboration_delivery d \
                  JOIN collaboration_event e ON e.id = d.event_id \
                  WHERE d.target_conversation_id = ? \
@@ -961,7 +985,7 @@ pub(crate) async fn auto_reply_for_completed_turn(
     }
     let Some(row) = conn
         .query_one(statement(
-            "SELECT e.id AS event_id, e.source_conversation_id \
+            "SELECT e.id AS event_id, e.source_conversation_id, e.visibility, e.room_id \
              FROM collaboration_delivery d \
              JOIN collaboration_event e ON e.id = d.event_id \
              WHERE d.target_conversation_id = ? \
@@ -985,8 +1009,43 @@ pub(crate) async fn auto_reply_for_completed_turn(
     };
     let event_id: String = row.try_get("", "event_id")?;
     let original_source_conversation_id: i32 = row.try_get("", "source_conversation_id")?;
+    let visibility: String = row
+        .try_get::<Option<String>>("", "visibility")?
+        .unwrap_or_else(|| "direct".to_string());
+    let room_id: Option<String> = row.try_get("", "room_id")?;
     let body =
         bounded_auto_reply_body(target_conversation_id, completed_message_id, assistant_text);
+    if visibility == "room" {
+        let Some(room_id) = room_id else {
+            return Ok(None);
+        };
+        let posted = post_room(
+            conn,
+            PostRoomMessageInput {
+                room_id,
+                source_conversation_id: target_conversation_id,
+                target_conversation_ids: vec![],
+                mention_all: false,
+                subject: "Auto reply".into(),
+                body,
+                client_dedupe_id: format!(
+                    "auto-reply:{event_id}:{target_conversation_id}:{completed_message_id}"
+                ),
+                invocation_policy: CollaborationInvocationPolicy::StoreOnly,
+                delivery_hint: CollaborationDeliveryHint::Default,
+                expects_reply: false,
+                urgency: CollaborationUrgency::Normal,
+                reply_to_event_id: Some(event_id),
+            },
+        )
+        .await?;
+        return Ok(Some(CollaborationSendResult {
+            event_id: posted.event_id,
+            deliveries: posted.deliveries,
+            affected_conversation_ids: posted.affected_conversation_ids,
+            deduplicated: posted.deduplicated,
+        }));
+    }
     send_with_initially_inactive_targets_guarded(
         conn,
         SendCollaborationMessageInput {
@@ -1349,6 +1408,273 @@ async fn send_with_initially_inactive_targets_guarded(
     }))
 }
 
+async fn validate_room_reply<C: ConnectionTrait>(
+    conn: &C,
+    room_id: &str,
+    reply_to_event_id: &str,
+) -> Result<(), DbError> {
+    let row = conn
+        .query_one(statement(
+            "SELECT visibility, room_id FROM collaboration_event WHERE id = ?",
+            vec![reply_to_event_id.into()],
+        ))
+        .await?
+        .ok_or_else(|| DbError::NotFound(format!("Collaboration event {reply_to_event_id}")))?;
+    let visibility: String = row
+        .try_get::<Option<String>>("", "visibility")?
+        .unwrap_or_else(|| "direct".to_string());
+    let parent_room: Option<String> = row.try_get("", "room_id")?;
+    if visibility != "room" || parent_room.as_deref() != Some(room_id) {
+        return Err(validation(format!(
+            "Room reply {reply_to_event_id} must target an event in the same Room"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_room_post(input: &PostRoomMessageInput) -> Result<(), DbError> {
+    if input.body.trim().is_empty() {
+        return Err(validation("A Room message body cannot be empty"));
+    }
+    if input.body.len() > MAX_BODY_BYTES {
+        return Err(validation("A Room message body is too large"));
+    }
+    let dedupe_id = input.client_dedupe_id.trim();
+    if dedupe_id.is_empty() || dedupe_id.len() > MAX_DEDUPE_ID_BYTES {
+        return Err(validation(format!(
+            "client_dedupe_id must contain between 1 and {MAX_DEDUPE_ID_BYTES} bytes"
+        )));
+    }
+    if input.delivery_hint == CollaborationDeliveryHint::SteerIfSupported
+        && input.invocation_policy != CollaborationInvocationPolicy::InvokeWhenIdle
+    {
+        return Err(validation("steer_if_supported requires invoke_when_idle"));
+    }
+    if !input.subject.trim().is_empty() {
+        crate::acp::session_collaboration::normalize_letter_title(&input.subject)
+            .map_err(validation)?;
+    }
+    Ok(())
+}
+
+/// Persist a Room-visible event. Empty targets (and mention_all=false) is a
+/// record-only post: every member can read it, nobody is invoked. Structured
+/// `@` targets still create per-Session deliveries and enter the existing
+/// collaboration dispatcher. Mail projections never see these events.
+pub async fn post_room(
+    conn: &DatabaseConnection,
+    input: PostRoomMessageInput,
+) -> Result<RoomPostResult, DbError> {
+    validate_room_post(&input)?;
+    let txn = conn.begin().await?;
+    let _workbench_id = collaboration_room_service::room_workbench_id(&txn, &input.room_id).await?;
+    collaboration_room_service::require_member(&txn, &input.room_id, input.source_conversation_id)
+        .await?;
+    let source = require_live_session(&txn, input.source_conversation_id).await?;
+    let members = collaboration_room_service::member_ids(&txn, &input.room_id).await?;
+    let member_set: HashSet<i32> = members.iter().copied().collect();
+    let mut targets: BTreeSet<i32> = input.target_conversation_ids.iter().copied().collect();
+    if input.mention_all {
+        for id in &members {
+            if *id != input.source_conversation_id {
+                targets.insert(*id);
+            }
+        }
+    }
+    targets.remove(&input.source_conversation_id);
+    if targets.len() > MAX_TARGETS {
+        return Err(validation(format!(
+            "A Room mention supports at most {MAX_TARGETS} targets"
+        )));
+    }
+    for target in &targets {
+        if !member_set.contains(target) {
+            return Err(validation(format!(
+                "Session {target} is not a member of Room {}",
+                input.room_id
+            )));
+        }
+    }
+    if let Some(reply_to) = input.reply_to_event_id.as_deref() {
+        validate_room_reply(&txn, &input.room_id, reply_to).await?;
+    }
+    let chain_depth = child_chain_depth(&txn, input.reply_to_event_id.as_deref()).await?;
+    if let Some(event_id) =
+        event_id_for_dedupe(&txn, input.source_conversation_id, &input.client_dedupe_id).await?
+    {
+        let deliveries = deliveries_for_event(&txn, &event_id).await?;
+        let mut affected = BTreeSet::from([input.source_conversation_id]);
+        affected.extend(deliveries.iter().map(|item| item.target.conversation_id));
+        txn.commit().await?;
+        return Ok(RoomPostResult {
+            event_id,
+            room_id: input.room_id,
+            deliveries,
+            affected_conversation_ids: affected.into_iter().collect(),
+            deduplicated: true,
+        });
+    }
+
+    let event_id = uuid::Uuid::new_v4().to_string();
+    let subject = if input.subject.trim().is_empty() {
+        String::new()
+    } else {
+        crate::acp::session_collaboration::normalize_letter_title(&input.subject)
+            .map_err(validation)?
+    };
+    let inserted = txn
+        .execute(statement(
+            "INSERT OR IGNORE INTO collaboration_event \
+             (id, source_conversation_id, source_title_snapshot, source_agent_type_snapshot, \
+              source_folder_path_snapshot, source_backend_snapshot, subject, body, reply_to_event_id, \
+              expects_reply, urgency, client_dedupe_id, chain_depth, visibility, room_id, created_at) \
+             VALUES (?, ?, ?, ?, ?, 'current', ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
+            vec![
+                event_id.clone().into(),
+                source.id.into(),
+                source.title.clone().into(),
+                source.agent_type.clone().into(),
+                source.folder_path.clone().into(),
+                subject.into(),
+                input.body.clone().into(),
+                input.reply_to_event_id.clone().into(),
+                (input.expects_reply as i32).into(),
+                input.urgency.as_str().into(),
+                input.client_dedupe_id.clone().into(),
+                chain_depth.into(),
+                crate::models::CollaborationVisibility::Room.as_str().into(),
+                input.room_id.clone().into(),
+            ],
+        ))
+        .await?;
+    if inserted.rows_affected() == 0 {
+        if let Some(existing_id) =
+            event_id_for_dedupe(&txn, input.source_conversation_id, &input.client_dedupe_id).await?
+        {
+            let deliveries = deliveries_for_event(&txn, &existing_id).await?;
+            let mut affected = BTreeSet::from([input.source_conversation_id]);
+            affected.extend(deliveries.iter().map(|item| item.target.conversation_id));
+            txn.commit().await?;
+            return Ok(RoomPostResult {
+                event_id: existing_id,
+                room_id: input.room_id,
+                deliveries,
+                affected_conversation_ids: affected.into_iter().collect(),
+                deduplicated: true,
+            });
+        }
+        return Err(validation(
+            "Room message dedupe race did not resolve to an event",
+        ));
+    }
+
+    if let Some(reply_to_event_id) = input.reply_to_event_id.as_deref() {
+        txn.execute(statement(
+            "UPDATE collaboration_delivery \
+             SET obligation_state = 'resolved', \
+                 obligation_resolved_at = COALESCE(obligation_resolved_at, CURRENT_TIMESTAMP), \
+                 updated_at = CURRENT_TIMESTAMP \
+             WHERE event_id = ? AND target_conversation_id = ? \
+               AND obligation_state = 'awaiting_reply'",
+            vec![reply_to_event_id.into(), source.id.into()],
+        ))
+        .await?;
+    }
+
+    let mut affected = BTreeSet::from([source.id]);
+    ensure_state(&txn, source.id).await?;
+    bump_revision(&txn, source.id).await?;
+
+    for target_id in targets {
+        let target = live_session(&txn, target_id).await?;
+        let (snapshot, state, error) = match target.as_ref() {
+            Some(target) => (
+                target.snapshot(),
+                match input.invocation_policy {
+                    CollaborationInvocationPolicy::StoreOnly => "pending",
+                    CollaborationInvocationPolicy::InvokeWhenIdle => "queued",
+                },
+                None,
+            ),
+            None => (
+                CollaborationSessionSnapshot {
+                    conversation_id: target_id,
+                    title: None,
+                    agent_type: None,
+                    folder_path: None,
+                    backend: "current".to_string(),
+                },
+                "failed",
+                Some("target_not_found".to_string()),
+            ),
+        };
+        let delivery_id = uuid::Uuid::new_v4().to_string();
+        let obligation_state = if input.expects_reply && target.is_some() {
+            CollaborationObligationState::AwaitingReply
+        } else {
+            CollaborationObligationState::None
+        };
+        txn.execute(statement(
+            "INSERT INTO collaboration_delivery \
+              (id, event_id, target_conversation_id, target_title_snapshot, \
+               target_agent_type_snapshot, target_folder_path_snapshot, invocation_policy, \
+               delivery_hint, state, obligation_state, obligation_created_at, \
+               attempts, error, created_at, updated_at) \
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, \
+                      CASE WHEN ? = 1 THEN CURRENT_TIMESTAMP ELSE NULL END, \
+                      0, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+            vec![
+                delivery_id.clone().into(),
+                event_id.clone().into(),
+                target_id.into(),
+                snapshot.title.into(),
+                snapshot.agent_type.into(),
+                snapshot.folder_path.into(),
+                input.invocation_policy.as_str().into(),
+                input.delivery_hint.as_str().into(),
+                state.into(),
+                obligation_state.as_str().into(),
+                (input.expects_reply as i32).into(),
+                error.into(),
+            ],
+        ))
+        .await?;
+        if target.is_some() {
+            if input.invocation_policy == CollaborationInvocationPolicy::InvokeWhenIdle {
+                prompt_queue_service::enqueue_origin_in_transaction(
+                    &txn,
+                    target_id,
+                    &delivery_id,
+                    &event_id,
+                    &delivery_id,
+                    None,
+                    crate::models::prompt_queue::PromptQueueSource::Collaboration,
+                )
+                .await?;
+            }
+            ensure_state(&txn, target_id).await?;
+            bump_revision(&txn, target_id).await?;
+            affected.insert(target_id);
+        }
+    }
+
+    txn.execute(statement(
+        "UPDATE collaboration_room SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        vec![input.room_id.clone().into()],
+    ))
+    .await?;
+
+    let deliveries = deliveries_for_event(&txn, &event_id).await?;
+    txn.commit().await?;
+    Ok(RoomPostResult {
+        event_id,
+        room_id: input.room_id,
+        deliveries,
+        affected_conversation_ids: affected.into_iter().collect(),
+        deduplicated: false,
+    })
+}
+
 async fn feed_on<C: ConnectionTrait>(
     conn: &C,
     conversation_id: i32,
@@ -1359,7 +1685,7 @@ async fn feed_on<C: ConnectionTrait>(
     let inbound_rows = conn
         .query_all(statement(
             &format!(
-                "{DELIVERY_SELECT} WHERE d.target_conversation_id = ? \
+                "{DELIVERY_SELECT} WHERE d.target_conversation_id = ? {DIRECT_MAIL_SQL} \
                  ORDER BY d.created_at DESC, d.id DESC LIMIT ?"
             ),
             vec![conversation_id.into(), limit.into()],
@@ -1368,7 +1694,7 @@ async fn feed_on<C: ConnectionTrait>(
     let outbound_rows = conn
         .query_all(statement(
             &format!(
-                "{DELIVERY_SELECT} WHERE e.source_conversation_id = ? \
+                "{DELIVERY_SELECT} WHERE e.source_conversation_id = ? {DIRECT_MAIL_SQL} \
                  ORDER BY d.created_at DESC, d.id DESC LIMIT ?"
             ),
             vec![conversation_id.into(), limit.into()],
@@ -1376,9 +1702,11 @@ async fn feed_on<C: ConnectionTrait>(
         .await?;
     let count_row = conn
         .query_one(statement(
-            "SELECT COUNT(*) AS count FROM collaboration_delivery \
-             WHERE target_conversation_id = ? AND agent_received_at IS NULL \
-               AND state <> 'dismissed'",
+            "SELECT COUNT(*) AS count FROM collaboration_delivery d \
+             JOIN collaboration_event e ON e.id = d.event_id \
+             WHERE d.target_conversation_id = ? AND d.agent_received_at IS NULL \
+               AND d.state <> 'dismissed' \
+               AND COALESCE(e.visibility, 'direct') = 'direct'",
             vec![conversation_id.into()],
         ))
         .await?
@@ -1453,7 +1781,7 @@ pub async fn list_inbox(
     let rows = conn
         .query_all(statement(
             &format!(
-                "{DELIVERY_SELECT} WHERE {anchor_sql}                  AND d.state <> 'dismissed' {peer_clause} {filter_sql}                  ORDER BY d.created_at DESC, d.id DESC LIMIT ?"
+                "{DELIVERY_SELECT} WHERE {anchor_sql}                  AND d.state <> 'dismissed' {DIRECT_MAIL_SQL} {peer_clause} {filter_sql}                  ORDER BY d.created_at DESC, d.id DESC LIMIT ?"
             ),
             params,
         ))
@@ -1558,7 +1886,7 @@ pub async fn timeline_projection(
         .query_all(statement(
             &format!(
                 "{DELIVERY_SELECT} WHERE d.target_conversation_id = ? \
-                 AND d.state <> 'dismissed' \
+                 AND d.state <> 'dismissed' {DIRECT_MAIL_SQL} \
                  ORDER BY d.created_at ASC, d.id ASC"
             ),
             vec![conversation_id.into()],
@@ -1568,7 +1896,7 @@ pub async fn timeline_projection(
         .query_all(statement(
             &format!(
                 "{DELIVERY_SELECT} WHERE e.source_conversation_id = ? \
-                 AND d.state <> 'dismissed' \
+                 AND d.state <> 'dismissed' {DIRECT_MAIL_SQL} \
                  ORDER BY d.created_at ASC, d.id ASC"
             ),
             vec![conversation_id.into()],
@@ -1598,18 +1926,24 @@ pub async fn unread_overview(
         .query_all(statement(
             "SELECT c.id AS conversation_id, COALESCE(s.revision, 0) AS revision, \
              (SELECT COUNT(*) FROM collaboration_delivery d \
+                JOIN collaboration_event e ON e.id = d.event_id \
                 WHERE d.target_conversation_id = c.id \
-                  AND d.agent_received_at IS NULL AND d.state <> 'dismissed') AS unread_count, \
+                  AND d.agent_received_at IS NULL AND d.state <> 'dismissed' \
+                  AND COALESCE(e.visibility, 'direct') = 'direct') AS unread_count, \
              (SELECT COUNT(*) FROM collaboration_delivery d \
+                JOIN collaboration_event e ON e.id = d.event_id \
                 WHERE d.target_conversation_id = c.id \
-                  AND d.obligation_state = 'awaiting_reply') AS needs_reply_count, \
+                  AND d.obligation_state = 'awaiting_reply' \
+                  AND COALESCE(e.visibility, 'direct') = 'direct') AS needs_reply_count, \
              (SELECT COUNT(*) FROM collaboration_delivery d \
                 JOIN collaboration_event e ON e.id = d.event_id \
                 WHERE e.source_conversation_id = c.id \
-                  AND d.obligation_state = 'awaiting_reply') AS awaiting_reply_count, \
+                  AND d.obligation_state = 'awaiting_reply' \
+                  AND COALESCE(e.visibility, 'direct') = 'direct') AS awaiting_reply_count, \
              (SELECT COUNT(*) FROM collaboration_delivery d \
                 JOIN collaboration_event e ON e.id = d.event_id \
                 WHERE d.state = 'failed' \
+                  AND COALESCE(e.visibility, 'direct') = 'direct' \
                   AND (d.target_conversation_id = c.id OR e.source_conversation_id = c.id)) AS failed_count \
              FROM conversation c \
              LEFT JOIN conversation_collaboration_state s ON s.conversation_id = c.id \
@@ -1651,7 +1985,8 @@ pub async fn unread_overview(
         .query_one(statement(
             "SELECT COUNT(*) AS count FROM collaboration_delivery d \
              JOIN collaboration_event e ON e.id = d.event_id \
-             WHERE d.state = 'failed' AND EXISTS ( \
+             WHERE d.state = 'failed' \
+               AND COALESCE(e.visibility, 'direct') = 'direct' AND EXISTS ( \
                  SELECT 1 FROM conversation c \
                  WHERE c.deleted_at IS NULL \
                    AND (c.id = d.target_conversation_id OR c.id = e.source_conversation_id) \
@@ -1807,7 +2142,9 @@ async fn overdue_reminder_letters(
         let subject: String = row
             .try_get::<Option<String>>("", "subject")?
             .unwrap_or_default();
-        let body: String = row.try_get::<Option<String>>("", "body")?.unwrap_or_default();
+        let body: String = row
+            .try_get::<Option<String>>("", "body")?
+            .unwrap_or_default();
         let from_title: Option<String> = row.try_get("", "source_title_snapshot")?;
         let from_session_id: i32 = row.try_get("", "source_conversation_id")?;
         let awaiting: i64 = row.try_get("", "awaiting_reply")?;
@@ -2336,8 +2673,12 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(attached[0].contains(&first.event_id));
         assert!(attached[1].contains(&second.event_id));
-        assert!(attached.iter().all(|text| text.contains("Call read_message")));
-        assert!(attached.iter().all(|text| text.contains("Codeg system mailbox notice")));
+        assert!(attached
+            .iter()
+            .all(|text| text.contains("Call read_message")));
+        assert!(attached
+            .iter()
+            .all(|text| text.contains("Codeg system mailbox notice")));
         assert!(attached.iter().all(|text| !text.contains("review note")));
         assert!(
             claim_pending_store_only_for_turn(&db.conn, target, "another-turn")
@@ -2479,7 +2820,12 @@ mod tests {
         let (db, source, target, _) = seeded_memory().await;
         let sent = send(
             &db.conn,
-            input(source, vec![target], "store-draft", "wake the other Session"),
+            input(
+                source,
+                vec![target],
+                "store-draft",
+                "wake the other Session",
+            ),
         )
         .await
         .unwrap();
@@ -3097,8 +3443,8 @@ mod tests {
             None,
             20,
         )
-            .await
-            .unwrap();
+        .await
+        .unwrap();
         assert_eq!(open.len(), 2);
         assert!(open.iter().all(|item| item.agent_received_at.is_none()));
 
@@ -3113,8 +3459,8 @@ mod tests {
             None,
             20,
         )
-            .await
-            .unwrap();
+        .await
+        .unwrap();
         assert_eq!(unread.len(), 1);
         assert_eq!(unread[0].event_id, sent.event_id);
 
@@ -3129,8 +3475,8 @@ mod tests {
             None,
             20,
         )
-            .await
-            .unwrap();
+        .await
+        .unwrap();
         assert_eq!(awaiting.len(), 1);
         assert_eq!(awaiting[0].event_id, sent.event_id);
         assert!(awaiting[0].agent_received_at.is_some());
@@ -3293,18 +3639,24 @@ mod tests {
         .await
         .unwrap();
         let txn = db.conn.begin().await.unwrap();
-        assert!(mark_origin_embedding(&txn, target_a, &embedded.event_id, "turn-1")
-            .await
-            .unwrap());
-        assert!(mark_origin_embedded(&txn, target_a, &embedded.event_id, "turn-1")
-            .await
-            .unwrap());
+        assert!(
+            mark_origin_embedding(&txn, target_a, &embedded.event_id, "turn-1")
+                .await
+                .unwrap()
+        );
+        assert!(
+            mark_origin_embedded(&txn, target_a, &embedded.event_id, "turn-1")
+                .await
+                .unwrap()
+        );
         txn.commit().await.unwrap();
 
         let txn = db.conn.begin().await.unwrap();
-        assert!(prepare_origin_redelivery(&txn, target_a, &embedded.event_id)
-            .await
-            .unwrap());
+        assert!(
+            prepare_origin_redelivery(&txn, target_a, &embedded.event_id)
+                .await
+                .unwrap()
+        );
         txn.commit().await.unwrap();
         let refreshed = feed(&db.conn, target_a, None).await.unwrap();
         let row = refreshed
@@ -3625,7 +3977,9 @@ mod tests {
             ))
             .await
             .unwrap();
-        record_successful_reminder(&db.conn, target, 2).await.unwrap();
+        record_successful_reminder(&db.conn, target, 2)
+            .await
+            .unwrap();
         db.conn
             .execute(Statement::from_sql_and_values(
                 DbBackend::Sqlite,

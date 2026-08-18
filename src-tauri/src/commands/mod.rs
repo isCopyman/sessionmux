@@ -22,6 +22,7 @@ pub mod host_control;
 pub mod host_control_timer;
 pub mod host_control_session;
 pub mod host_control_organization;
+pub mod host_control_room;
 pub mod logging;
 pub mod mcp;
 pub mod model_provider;

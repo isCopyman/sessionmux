@@ -1409,6 +1409,95 @@ export interface CollaborationChanged {
   conversationIds: number[]
 }
 
+export interface CreateCollaborationRoomInput {
+  workbenchId: number
+  title: string
+  memberConversationIds: number[]
+  createdByConversationId: number
+}
+
+export interface AddCollaborationRoomMembersInput {
+  roomId: string
+  conversationIds: number[]
+}
+
+export interface PostRoomMessageInput {
+  roomId: string
+  sourceConversationId: number
+  targetConversationIds: number[]
+  mentionAll?: boolean
+  subject?: string
+  body: string
+  clientDedupeId: string
+  invocationPolicy?: CollaborationInvocationPolicy
+  deliveryHint?: CollaborationDeliveryHint
+  expectsReply?: boolean
+  urgency?: CollaborationUrgency
+  replyToEventId?: string | null
+}
+
+export interface CollaborationRoomMember {
+  conversationId: number
+  title?: string | null
+  agentType?: string | null
+  role: string
+  joinedAt: string
+  lastReadAt?: string | null
+}
+
+export interface CollaborationRoomSummary {
+  id: string
+  workbenchId: number
+  title: string
+  createdByConversationId: number
+  memberCount: number
+  unreadCount: number
+  lastEventAt?: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export interface CollaborationRoomDetail {
+  id: string
+  workbenchId: number
+  title: string
+  createdByConversationId: number
+  members: CollaborationRoomMember[]
+  createdAt: string
+  updatedAt: string
+}
+
+export interface RoomTimelineEvent {
+  id: string
+  roomId: string
+  source: CollaborationSessionSnapshot
+  subject: string
+  body: string
+  replyToEventId?: string | null
+  expectsReply: boolean
+  urgency: CollaborationUrgency
+  mentionConversationIds: number[]
+  createdAt: string
+}
+
+export interface RoomTimeline {
+  roomId: string
+  events: RoomTimelineEvent[]
+}
+
+export interface RoomChanged {
+  roomId: string
+  workbenchId: number
+}
+
+export interface RoomPostResult {
+  eventId: string
+  roomId: string
+  deliveries: CollaborationDelivery[]
+  affectedConversationIds: number[]
+  deduplicated: boolean
+}
+
 // Permission option info from agent
 export interface PermissionOptionInfo {
   option_id: string

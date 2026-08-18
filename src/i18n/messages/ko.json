@@ -1746,7 +1746,10 @@
         "clearSelection": "선택 해제",
         "addToWorkbench": "워크벤치에 추가",
         "bulkActions": "세션 작업",
-        "toastOpFailed": "작업 실패: {message}"
+        "toastOpFailed": "작업 실패: {message}",
+        "createRoom": "룸 만들기",
+        "toastRoomCreated": "룸 {title}을(를) 만들었습니다",
+        "toastRoomNeedTwo": "룸을 만들려면 Session을 두 개 이상 선택하세요"
       },
       "sectionPinned": "고정됨",
       "sectionFolders": "폴더",
@@ -1759,7 +1762,8 @@
       "newChatAction": "새 채팅",
       "automations": "자동화",
       "tasks": "할 일",
-      "loadingSubsessions": "하위 대화 로드 중…"
+      "loadingSubsessions": "하위 대화 로드 중…",
+      "rooms": "룸"
     },
     "conversation": {
       "reloadFailed": "대화 다시 불러오기 실패: {message}",
@@ -5174,5 +5178,27 @@
     "interruptConfirm": "Stop and send",
     "startProcessing": "Start processing",
     "sendToMentionedSessions": "Send to {count} selected sessions"
+  },
+  "Room": {
+    "title": "룸",
+    "empty": "룸이 없습니다",
+    "emptyHint": "사이드바에서 Session을 두 개 이상 선택한 뒤 룸을 만드세요.",
+    "create": "룸 만들기",
+    "members": "멤버",
+    "memberCount": "멤버 {count}명",
+    "recordOnly": "기록만",
+    "mentionAll": "@all",
+    "composerPlaceholder": "룸 메시지를 작성하세요…",
+    "send": "보내기",
+    "invokeWhenIdle": "멘션된 Session 깨우기",
+    "requestReply": "답장 요청",
+    "speakingAs": "다음으로 보내기",
+    "timelineEmpty": "아직 메시지가 없습니다",
+    "mentioned": "@ {names}",
+    "openSession": "Session 열기",
+    "untitled": "제목 없는 Session #{id}",
+    "sendFailed": "룸에 게시하지 못했습니다",
+    "posted": "룸에 게시했습니다",
+    "unread": "읽지 않음 {count}"
   }
 }

@@ -1365,6 +1365,42 @@ pub fn build_router(
             "/collaboration_restore",
             post(handlers::collaboration::restore),
         )
+        .route(
+            "/collaboration_room_create",
+            post(handlers::collaboration::room_create),
+        )
+        .route(
+            "/collaboration_room_list",
+            post(handlers::collaboration::room_list),
+        )
+        .route(
+            "/collaboration_room_get",
+            post(handlers::collaboration::room_get),
+        )
+        .route(
+            "/collaboration_room_add_members",
+            post(handlers::collaboration::room_add_members),
+        )
+        .route(
+            "/collaboration_room_remove_member",
+            post(handlers::collaboration::room_remove_member),
+        )
+        .route(
+            "/collaboration_room_rename",
+            post(handlers::collaboration::room_rename),
+        )
+        .route(
+            "/collaboration_room_mark_seen",
+            post(handlers::collaboration::room_mark_seen),
+        )
+        .route(
+            "/collaboration_room_timeline",
+            post(handlers::collaboration::room_timeline),
+        )
+        .route(
+            "/collaboration_room_post",
+            post(handlers::collaboration::room_post),
+        )
         // ─── Automations ───
         .route(
             "/automation_list",

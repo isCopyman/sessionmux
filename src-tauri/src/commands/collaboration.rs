@@ -13,21 +13,24 @@ use crate::acp::session_collaboration::{
 };
 use crate::app_error::AppCommandError;
 use crate::db::service::{
-    app_metadata_service, collaboration_interrupt_service, collaboration_service,
-    conversation_service, folder_service, prompt_queue_service,
+    app_metadata_service, collaboration_interrupt_service, collaboration_room_service,
+    collaboration_service, conversation_service, folder_service, prompt_queue_service,
 };
 use crate::db::AppDatabase;
 use crate::models::{
-    CollaborationChanged, CollaborationDeliveryHint, CollaborationDeliveryState, CollaborationFeed,
-    CollaborationInterruptResult, CollaborationInterruptState, CollaborationInvocationPolicy,
-    CollaborationSendResult, CollaborationTimelineProjection, CollaborationUnreadOverview,
-    CollaborationUrgency, InterruptCollaborationInput, SendAndInterruptCollaborationInput,
-    SendAndInterruptCollaborationResult, SendCollaborationMessageInput,
+    AddCollaborationRoomMembersInput, CollaborationChanged, CollaborationDeliveryHint,
+    CollaborationDeliveryState, CollaborationFeed, CollaborationInterruptResult,
+    CollaborationInterruptState, CollaborationInvocationPolicy, CollaborationRoomDetail,
+    CollaborationRoomSummary, CollaborationSendResult, CollaborationTimelineProjection,
+    CollaborationUnreadOverview, CollaborationUrgency, CreateCollaborationRoomInput,
+    InterruptCollaborationInput, PostRoomMessageInput, RoomChanged, RoomPostResult, RoomTimeline,
+    SendAndInterruptCollaborationInput, SendAndInterruptCollaborationResult,
+    SendCollaborationMessageInput,
 };
 use crate::prompt_queue::PromptQueueHandle;
 use crate::web::event_bridge::{
     emit_event, EventEmitter, COLLABORATION_CHANGED_EVENT, PROMPT_QUEUE_CHANGED_EVENT,
-    SESSION_COLLABORATION_SETTINGS_CHANGED_EVENT,
+    ROOM_CHANGED_EVENT, SESSION_COLLABORATION_SETTINGS_CHANGED_EVENT,
 };
 
 pub const KEY_SESSION_COLLABORATION_ENABLED: &str =
@@ -546,6 +549,60 @@ impl SessionCollaborationAccess for DbSessionCollaboration {
                 "Session collaboration is disabled in Codeg settings.",
             );
         }
+        if let Some(room_id) = spec.room_id.clone() {
+            let result = collaboration_room_post_core(
+                &self.db.conn,
+                &self.emitter,
+                &self.prompt_queue,
+                PostRoomMessageInput {
+                    room_id,
+                    source_conversation_id: source_session_id,
+                    target_conversation_ids: spec.target_session_ids,
+                    mention_all: spec.mention_all,
+                    subject: spec.title,
+                    body: spec.content,
+                    client_dedupe_id: spec.client_dedupe_id,
+                    invocation_policy: match spec.delivery_mode {
+                        SessionMessageDeliveryMode::DeliverOnly => {
+                            CollaborationInvocationPolicy::StoreOnly
+                        }
+                        SessionMessageDeliveryMode::Queue => {
+                            CollaborationInvocationPolicy::InvokeWhenIdle
+                        }
+                    },
+                    delivery_hint: if spec.steer_if_supported {
+                        CollaborationDeliveryHint::SteerIfSupported
+                    } else {
+                        CollaborationDeliveryHint::Default
+                    },
+                    expects_reply: spec.expects_reply,
+                    urgency: CollaborationUrgency::Normal,
+                    reply_to_event_id: spec.reply_to_event_id,
+                },
+            )
+            .await;
+            return match result {
+                Ok(result) => SessionSendOutcome {
+                    accepted: true,
+                    source_session_id: Some(source_session_id),
+                    event_id: Some(result.event_id),
+                    deliveries: result
+                        .deliveries
+                        .into_iter()
+                        .map(|delivery| SessionMessageDeliveryOutcome {
+                            target_session_id: delivery.target.conversation_id,
+                            target_title: delivery.target.title,
+                            target_agent_type: delivery.target.agent_type,
+                            state: delivery_state_name(delivery.state),
+                            error: delivery.error,
+                        })
+                        .collect(),
+                    deduplicated: result.deduplicated,
+                    note: Some(format!("Posted to Room {}", result.room_id)),
+                },
+                Err(err) => SessionSendOutcome::rejected(Some(source_session_id), err.to_string()),
+            };
+        }
         let result = collaboration_send_core(
             &self.db.conn,
             &self.emitter,
@@ -643,8 +700,7 @@ impl SessionCollaborationAccess for DbSessionCollaboration {
                 item.obligation_state == crate::models::CollaborationObligationState::AwaitingReply
             })
             .count() as u32;
-        let outbound =
-            scope == crate::acp::session_collaboration::SessionMailboxScope::Sent;
+        let outbound = scope == crate::acp::session_collaboration::SessionMailboxScope::Sent;
         SessionInboxOutcome {
             available: true,
             caller_session_id: Some(caller_session_id),
@@ -660,8 +716,7 @@ impl SessionCollaborationAccess for DbSessionCollaboration {
                     SessionInboxItem {
                         event_id: item.event_id,
                         delivery_id: item.id,
-                        direction: if outbound { "outbound" } else { "inbound" }
-                            .to_string(),
+                        direction: if outbound { "outbound" } else { "inbound" }.to_string(),
                         from_session_id: peer.conversation_id,
                         from_title: peer.title,
                         from_agent_type: peer.agent_type,
@@ -993,6 +1048,227 @@ pub async fn collaboration_restore(
     .await
 }
 
+fn publish_room(emitter: &EventEmitter, room_id: &str, workbench_id: i32) {
+    emit_event(
+        emitter,
+        ROOM_CHANGED_EVENT,
+        RoomChanged {
+            room_id: room_id.to_string(),
+            workbench_id,
+        },
+    );
+}
+
+pub async fn collaboration_room_create_core(
+    conn: &sea_orm::DatabaseConnection,
+    emitter: &EventEmitter,
+    input: CreateCollaborationRoomInput,
+) -> Result<CollaborationRoomDetail, AppCommandError> {
+    let room = collaboration_room_service::create(conn, input).await?;
+    publish_room(emitter, &room.id, room.workbench_id);
+    Ok(room)
+}
+
+pub async fn collaboration_room_list_core(
+    conn: &sea_orm::DatabaseConnection,
+    workbench_id: i32,
+) -> Result<Vec<CollaborationRoomSummary>, AppCommandError> {
+    collaboration_room_service::list(conn, workbench_id)
+        .await
+        .map_err(AppCommandError::from)
+}
+
+pub async fn collaboration_room_get_core(
+    conn: &sea_orm::DatabaseConnection,
+    room_id: &str,
+) -> Result<CollaborationRoomDetail, AppCommandError> {
+    collaboration_room_service::get(conn, room_id)
+        .await
+        .map_err(AppCommandError::from)
+}
+
+pub async fn collaboration_room_add_members_core(
+    conn: &sea_orm::DatabaseConnection,
+    emitter: &EventEmitter,
+    input: AddCollaborationRoomMembersInput,
+) -> Result<CollaborationRoomDetail, AppCommandError> {
+    let room = collaboration_room_service::add_members(conn, input).await?;
+    publish_room(emitter, &room.id, room.workbench_id);
+    Ok(room)
+}
+
+pub async fn collaboration_room_remove_member_core(
+    conn: &sea_orm::DatabaseConnection,
+    emitter: &EventEmitter,
+    room_id: &str,
+    conversation_id: i32,
+) -> Result<CollaborationRoomDetail, AppCommandError> {
+    let room = collaboration_room_service::remove_member(conn, room_id, conversation_id).await?;
+    publish_room(emitter, &room.id, room.workbench_id);
+    Ok(room)
+}
+
+pub async fn collaboration_room_rename_core(
+    conn: &sea_orm::DatabaseConnection,
+    emitter: &EventEmitter,
+    room_id: &str,
+    title: &str,
+) -> Result<CollaborationRoomDetail, AppCommandError> {
+    let room = collaboration_room_service::rename(conn, room_id, title).await?;
+    publish_room(emitter, &room.id, room.workbench_id);
+    Ok(room)
+}
+
+pub async fn collaboration_room_mark_seen_core(
+    conn: &sea_orm::DatabaseConnection,
+    emitter: &EventEmitter,
+    room_id: &str,
+    conversation_id: Option<i32>,
+) -> Result<CollaborationRoomDetail, AppCommandError> {
+    let room = collaboration_room_service::mark_seen(conn, room_id, conversation_id).await?;
+    publish_room(emitter, &room.id, room.workbench_id);
+    Ok(room)
+}
+
+pub async fn collaboration_room_timeline_core(
+    conn: &sea_orm::DatabaseConnection,
+    room_id: &str,
+    limit: Option<u32>,
+) -> Result<RoomTimeline, AppCommandError> {
+    collaboration_room_service::timeline(conn, room_id, limit)
+        .await
+        .map_err(AppCommandError::from)
+}
+
+pub async fn collaboration_room_post_core(
+    conn: &sea_orm::DatabaseConnection,
+    emitter: &EventEmitter,
+    prompt_queue: &PromptQueueHandle,
+    input: PostRoomMessageInput,
+) -> Result<RoomPostResult, AppCommandError> {
+    let should_wake = input.invocation_policy == CollaborationInvocationPolicy::InvokeWhenIdle;
+    let result = collaboration_service::post_room(conn, input).await?;
+    if let Ok(detail) = collaboration_room_service::get(conn, &result.room_id).await {
+        publish_room(emitter, &result.room_id, detail.workbench_id);
+    }
+    if !result.deduplicated {
+        publish(emitter, result.affected_conversation_ids.clone());
+    }
+    if should_wake && !result.deduplicated {
+        for delivery in result.deliveries.iter().filter(|delivery| {
+            delivery.state != CollaborationDeliveryState::Failed
+                && delivery.state != CollaborationDeliveryState::Dismissed
+        }) {
+            prompt_queue.wake(delivery.target.conversation_id);
+        }
+    }
+    Ok(result)
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn collaboration_room_create(
+    input: CreateCollaborationRoomInput,
+    db: tauri::State<'_, AppDatabase>,
+    app: tauri::AppHandle,
+) -> Result<CollaborationRoomDetail, AppCommandError> {
+    collaboration_room_create_core(&db.conn, &EventEmitter::Tauri(app), input).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn collaboration_room_list(
+    workbench_id: i32,
+    db: tauri::State<'_, AppDatabase>,
+) -> Result<Vec<CollaborationRoomSummary>, AppCommandError> {
+    collaboration_room_list_core(&db.conn, workbench_id).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn collaboration_room_get(
+    room_id: String,
+    db: tauri::State<'_, AppDatabase>,
+) -> Result<CollaborationRoomDetail, AppCommandError> {
+    collaboration_room_get_core(&db.conn, &room_id).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn collaboration_room_add_members(
+    input: AddCollaborationRoomMembersInput,
+    db: tauri::State<'_, AppDatabase>,
+    app: tauri::AppHandle,
+) -> Result<CollaborationRoomDetail, AppCommandError> {
+    collaboration_room_add_members_core(&db.conn, &EventEmitter::Tauri(app), input).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn collaboration_room_remove_member(
+    room_id: String,
+    conversation_id: i32,
+    db: tauri::State<'_, AppDatabase>,
+    app: tauri::AppHandle,
+) -> Result<CollaborationRoomDetail, AppCommandError> {
+    collaboration_room_remove_member_core(
+        &db.conn,
+        &EventEmitter::Tauri(app),
+        &room_id,
+        conversation_id,
+    )
+    .await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn collaboration_room_rename(
+    room_id: String,
+    title: String,
+    db: tauri::State<'_, AppDatabase>,
+    app: tauri::AppHandle,
+) -> Result<CollaborationRoomDetail, AppCommandError> {
+    collaboration_room_rename_core(&db.conn, &EventEmitter::Tauri(app), &room_id, &title).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn collaboration_room_mark_seen(
+    room_id: String,
+    conversation_id: Option<i32>,
+    db: tauri::State<'_, AppDatabase>,
+    app: tauri::AppHandle,
+) -> Result<CollaborationRoomDetail, AppCommandError> {
+    collaboration_room_mark_seen_core(
+        &db.conn,
+        &EventEmitter::Tauri(app),
+        &room_id,
+        conversation_id,
+    )
+    .await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn collaboration_room_timeline(
+    room_id: String,
+    limit: Option<u32>,
+    db: tauri::State<'_, AppDatabase>,
+) -> Result<RoomTimeline, AppCommandError> {
+    collaboration_room_timeline_core(&db.conn, &room_id, limit).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn collaboration_room_post(
+    input: PostRoomMessageInput,
+    db: tauri::State<'_, AppDatabase>,
+    prompt_queue: tauri::State<'_, PromptQueueHandle>,
+    app: tauri::AppHandle,
+) -> Result<RoomPostResult, AppCommandError> {
+    collaboration_room_post_core(&db.conn, &EventEmitter::Tauri(app), &prompt_queue, input).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1304,6 +1580,8 @@ mod tests {
             expects_reply: true,
             reply_to_event_id: None,
             client_dedupe_id: "mcp:agent-send".into(),
+            room_id: None,
+            mention_all: false,
         };
 
         let sent = access.send_message(source, spec.clone()).await;
@@ -1363,6 +1641,8 @@ mod tests {
                         expects_reply: true,
                         reply_to_event_id: reply_to_event_id.clone(),
                         client_dedupe_id: format!("mcp:reply-depth-{depth}"),
+                        room_id: None,
+                        mention_all: false,
                     },
                 )
                 .await;
@@ -1427,6 +1707,8 @@ mod tests {
                     expects_reply: true,
                     reply_to_event_id: None,
                     client_dedupe_id: "mcp:disabled".into(),
+                    room_id: None,
+                    mention_all: false,
                 },
             )
             .await;

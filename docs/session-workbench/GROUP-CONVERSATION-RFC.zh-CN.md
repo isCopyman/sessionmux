@@ -1,6 +1,6 @@
 # Codeg 群聊面板与 Session 协作 RFC
 
-> 状态：Draft  
+> 状态：R1 已落地（2026-08-18），邮件与 Room 隔离；H1 / R2 未做  
 > 最近调研：2026-08-18
 > 定位：定义多个持久 Session 如何在一个共享面板中交流，以及共享可见、运行时投递和模型上下文之间的边界。  
 > 前置条件：稳定的 Session 身份、Resume、Workbench、多视图同步和统一 Delivery Router。
@@ -29,7 +29,7 @@ Room Thread                             某条公共根消息下面的回复串
 - 当前后端故意把 direct reply 限制为“原收件 Session 只回复原发送 Session”，多目标 fan-out 的
   各接收者也不能看到彼此回复。因此它是安全的私信 Thread，不是隐藏的群聊；
 - 当前数据库的作者和目标仍然都是数值 `conversation_id`。RFC 中的 `human` 保留地址尚未进入
-  schema、MCP 或 UI；Room 成员、公共时间线和 `scope=room` 也尚未实现。
+  schema、MCP 或 UI。Room 成员、公共时间线和 `visibility=room` 已在 R1 落地；Human Inbox 未做。
 
 因此，“没有父节点就是新 Thread，有 `reply_to_event_id` 就沿用原 Thread”已经可用，不需要为了
 direct mail 再创建 `thread` 表。当前 UI 数据量下向上遍历足够；等后端分页、Room 时间线和全局
@@ -611,14 +611,14 @@ collaboration_delivery
 - 人类 linked reply 进入同一 Dispatcher，保持来源 event 和 Session；
 - 第一版不做邮件文件夹、规则引擎和多用户权限。
 
-### R1：最小 Room
+### R1：最小 Room（2026-08-18 已落地）
 
-- Room 面板、稳定成员引用和共享时间线；
-- “仅记录”、`@一个/多个`、显式 `@all`；
-- Agent 回复回到 Room；
-- 点击头像打开原 Session 私聊；
-- Room 与 Workbench 生命周期解耦；
-- 受管 Session 的真实排队、运行、失败和停止状态。
+- `collaboration_room` / `collaboration_room_member`，event 增加 `visibility` + `room_id`；
+- 邮件投影强制 `visibility='direct'`，Room @ 不进 inbox / unread；
+- 工作台全页 Rooms：建群、时间线、成员栏、仅记录 / `@` / `@all`；
+- Host Control：`room.list` / `room.create` / `room.add_member` / `room.post`；
+- MCP `send_message` 可带 `room_id`（空目标 = 仅记录）；自动回复回 Room；
+- 点击成员打开原 Session；Room 挂在 Workbench 下列表，不占用 Tab kind。
 
 ### R2：Agent 间协作
 

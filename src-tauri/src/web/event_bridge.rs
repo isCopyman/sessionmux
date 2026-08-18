@@ -301,6 +301,8 @@ pub const TABS_CHANGED_EVENT: &str = "tabs://changed";
 pub const PROMPT_QUEUE_CHANGED_EVENT: &str = "prompt-queue://changed";
 /// Cross-client invalidation for persistent Session-to-Session communication.
 pub const COLLABORATION_CHANGED_EVENT: &str = "collaboration://changed";
+/// Cross-client invalidation for Room membership and shared timeline.
+pub const ROOM_CHANGED_EVENT: &str = "room://changed";
 
 /// Cross-client invalidation for Session Timer state. Like
 /// [`AUTOMATION_CHANGED_EVENT`] this carries only ids — clients refetch the

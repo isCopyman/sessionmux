@@ -104,10 +104,17 @@ import type {
   SessionTimer,
   CreateSessionTimerInput,
   UpdateSessionTimerInput,
+  AddCollaborationRoomMembersInput,
   CollaborationFeed,
+  CollaborationRoomDetail,
+  CollaborationRoomSummary,
   CollaborationTimelineProjection,
   CollaborationUnreadOverview,
   CollaborationSendResult,
+  CreateCollaborationRoomInput,
+  PostRoomMessageInput,
+  RoomPostResult,
+  RoomTimeline,
   CollaborationInterruptResult,
   InterruptCollaborationInput,
   SendAndInterruptCollaborationInput,
@@ -2192,6 +2199,73 @@ export async function restoreCollaborationDelivery(
     conversationId,
     deliveryId,
   })
+}
+
+export async function createCollaborationRoom(
+  input: CreateCollaborationRoomInput
+): Promise<CollaborationRoomDetail> {
+  return getTransport().call("collaboration_room_create", { input })
+}
+
+export async function listCollaborationRooms(
+  workbenchId: number
+): Promise<CollaborationRoomSummary[]> {
+  return getTransport().call("collaboration_room_list", { workbenchId })
+}
+
+export async function getCollaborationRoom(
+  roomId: string
+): Promise<CollaborationRoomDetail> {
+  return getTransport().call("collaboration_room_get", { roomId })
+}
+
+export async function addCollaborationRoomMembers(
+  input: AddCollaborationRoomMembersInput
+): Promise<CollaborationRoomDetail> {
+  return getTransport().call("collaboration_room_add_members", { input })
+}
+
+export async function removeCollaborationRoomMember(
+  roomId: string,
+  conversationId: number
+): Promise<CollaborationRoomDetail> {
+  return getTransport().call("collaboration_room_remove_member", {
+    roomId,
+    conversationId,
+  })
+}
+
+export async function renameCollaborationRoom(
+  roomId: string,
+  title: string
+): Promise<CollaborationRoomDetail> {
+  return getTransport().call("collaboration_room_rename", { roomId, title })
+}
+
+export async function markCollaborationRoomSeen(
+  roomId: string,
+  conversationId?: number | null
+): Promise<CollaborationRoomDetail> {
+  return getTransport().call("collaboration_room_mark_seen", {
+    roomId,
+    conversationId: conversationId ?? null,
+  })
+}
+
+export async function getCollaborationRoomTimeline(
+  roomId: string,
+  limit?: number
+): Promise<RoomTimeline> {
+  return getTransport().call("collaboration_room_timeline", {
+    roomId,
+    limit: limit ?? null,
+  })
+}
+
+export async function postCollaborationRoomMessage(
+  input: PostRoomMessageInput
+): Promise<RoomPostResult> {
+  return getTransport().call("collaboration_room_post", { input })
 }
 
 export async function listOpenFolderDetails(): Promise<FolderDetail[]> {

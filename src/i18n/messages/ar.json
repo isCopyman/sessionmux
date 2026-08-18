@@ -1746,7 +1746,10 @@
         "clearSelection": "مسح التحديد",
         "addToWorkbench": "إضافة إلى مساحة العمل",
         "bulkActions": "إجراءات الجلسة",
-        "toastOpFailed": "فشلت العملية: {message}"
+        "toastOpFailed": "فشلت العملية: {message}",
+        "createRoom": "إنشاء غرفة",
+        "toastRoomCreated": "تم إنشاء الغرفة {title}",
+        "toastRoomNeedTwo": "اختر جلستين على الأقل لإنشاء غرفة"
       },
       "sectionPinned": "مثبّتة",
       "sectionFolders": "المجلدات",
@@ -1759,7 +1762,8 @@
       "newChatAction": "محادثة جديدة",
       "automations": "الأتمتة",
       "tasks": "المهام قيد الانتظار",
-      "loadingSubsessions": "جارٍ تحميل المحادثات الفرعية…"
+      "loadingSubsessions": "جارٍ تحميل المحادثات الفرعية…",
+      "rooms": "الغرف"
     },
     "conversation": {
       "reloadFailed": "فشل إعادة تحميل المحادثة: {message}",
@@ -5174,5 +5178,27 @@
     "interruptConfirm": "Stop and send",
     "startProcessing": "Start processing",
     "sendToMentionedSessions": "Send to {count} selected sessions"
+  },
+  "Room": {
+    "title": "الغرف",
+    "empty": "لا توجد غرف بعد",
+    "emptyHint": "اختر جلستين على الأقل من الشريط الجانبي ثم أنشئ غرفة.",
+    "create": "إنشاء غرفة",
+    "members": "الأعضاء",
+    "memberCount": "{count} أعضاء",
+    "recordOnly": "تسجيل فقط",
+    "mentionAll": "@الكل",
+    "composerPlaceholder": "اكتب رسالة للغرفة…",
+    "send": "إرسال",
+    "invokeWhenIdle": "إيقاظ الجلسات المذكورة",
+    "requestReply": "طلب رد",
+    "speakingAs": "نشر باسم",
+    "timelineEmpty": "لا توجد رسائل بعد",
+    "mentioned": "@ {names}",
+    "openSession": "فتح الجلسة",
+    "untitled": "جلسة بلا عنوان #{id}",
+    "sendFailed": "تعذر النشر في الغرفة",
+    "posted": "تم النشر في الغرفة",
+    "unread": "{count} غير مقروءة"
   }
 }

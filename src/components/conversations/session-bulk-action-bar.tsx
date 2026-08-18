@@ -9,6 +9,7 @@ import {
   PanelsTopLeft,
   Plus,
   Trash2,
+  Users,
   X,
 } from "lucide-react"
 import { useTranslations } from "next-intl"
@@ -42,6 +43,8 @@ import {
   moveSessionsToCollection,
 } from "@/lib/session-bulk-operations"
 import { cn } from "@/lib/utils"
+import { createCollaborationRoom } from "@/lib/api"
+import { requestOpenRoom } from "@/lib/room-events"
 import { appendConversationsToWorkbench } from "@/lib/workbench-session-tabs"
 import type { CollectionInfo, DbConversationSummary } from "@/lib/types"
 import { useCollectionStore } from "@/stores/collection-store"
@@ -88,7 +91,7 @@ export function SessionBulkActionBar({
   const conversations = useMemo(() => [...selected.values()], [selected])
   const selectedCount = conversations.length
   const { closeConversationTab, openTab } = useTabActions()
-  const { openConversations } = useWorkbenchRoute()
+  const { openConversations, setRoute } = useWorkbenchRoute()
   const activeWorkbenchId = useTabStore((state) => state.activeWorkbenchId)
   const activeWorkbenchTabs = useTabStore((state) => state.rawTabs)
   const workbenches = useWorkbenchStore((state) => state.items)
@@ -275,6 +278,32 @@ export function SessionBulkActionBar({
     ]
   )
 
+  const handleCreateRoom = useCallback(() => {
+    if (selectedCount < 2) {
+      toast.error(t("toastRoomNeedTwo"))
+      return
+    }
+    void run(async () => {
+      const title =
+        conversations
+          .slice(0, 2)
+          .map((conversation) => formatConversationTitle(conversation.title))
+          .filter(Boolean)
+          .join(" / ") || t("createRoom")
+      const created = await createCollaborationRoom({
+        workbenchId: activeWorkbenchId,
+        title: selectedCount > 2 ? `${title}…` : title,
+        memberConversationIds: conversations.map(
+          (conversation) => conversation.id
+        ),
+        createdByConversationId: conversations[0].id,
+      })
+      toast.success(t("toastRoomCreated", { title: created.title }))
+      setRoute("rooms")
+      requestOpenRoom(created.id)
+    })
+  }, [activeWorkbenchId, conversations, run, selectedCount, setRoute, t])
+
   if (selectedCount === 0) return null
 
   return (
@@ -400,6 +429,17 @@ export function SessionBulkActionBar({
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="h-7 px-2 text-xs"
+            disabled={pending}
+            onClick={handleCreateRoom}
+          >
+            <Users className="h-3.5 w-3.5" />
+            {t("createRoom")}
+          </Button>
           <Button
             type="button"
             size="sm"

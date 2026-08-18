@@ -1745,6 +1745,9 @@
         "toastOpened": "Added {count} session(s) to the current workbench",
         "clearSelection": "Clear selection",
         "addToWorkbench": "Add to workbench",
+        "createRoom": "Create room",
+        "toastRoomCreated": "Created room {title}",
+        "toastRoomNeedTwo": "Select at least two Sessions to create a room",
         "bulkActions": "Session actions",
         "toastOpFailed": "Operation failed: {message}"
       },
@@ -1758,6 +1761,7 @@
       "noFolders": "No folders open",
       "newChatAction": "New chat",
       "automations": "Automations",
+      "rooms": "Rooms",
       "tasks": "To-dos",
       "loadingSubsessions": "Loading sub-conversations…"
     },
@@ -5174,5 +5178,27 @@
     "interruptConfirm": "Stop and send",
     "startProcessing": "Start processing",
     "sendToMentionedSessions": "Send to {count} selected sessions"
+  },
+  "Room": {
+    "title": "Rooms",
+    "empty": "No rooms yet",
+    "emptyHint": "Select at least two Sessions in the sidebar and create a room.",
+    "create": "Create room",
+    "members": "Members",
+    "memberCount": "{count} members",
+    "recordOnly": "Record only",
+    "mentionAll": "@all",
+    "composerPlaceholder": "Write a room message…",
+    "send": "Send",
+    "invokeWhenIdle": "Wake mentioned Sessions",
+    "requestReply": "Request a reply",
+    "speakingAs": "Post as",
+    "timelineEmpty": "No messages yet",
+    "mentioned": "@ {names}",
+    "openSession": "Open session",
+    "untitled": "Untitled session #{id}",
+    "sendFailed": "Could not post to the room",
+    "posted": "Posted to the room",
+    "unread": "{count} unread"
   }
 }
