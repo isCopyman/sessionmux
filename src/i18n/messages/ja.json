@@ -5194,6 +5194,7 @@
     "members": "メンバー",
     "memberCount": "{count} 人",
     "uncategorized": "未分類",
+    "memberRunning": "実行中",
     "recordOnly": "記録のみ",
     "mentionAll": "@all",
     "mentionHuman": "@human",

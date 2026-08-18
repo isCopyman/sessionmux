@@ -5194,6 +5194,7 @@
     "members": "Membres",
     "memberCount": "{count} membres",
     "uncategorized": "Non classé",
+    "memberRunning": "En cours",
     "recordOnly": "Enregistrer seulement",
     "mentionAll": "@tous",
     "mentionHuman": "@human",

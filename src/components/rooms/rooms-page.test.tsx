@@ -53,6 +53,18 @@ vi.mock("@/stores/room-catalog-store", () => {
   return { useRoomCatalogStore }
 })
 
+const runtime = vi.hoisted(() => ({
+  byConversationId: new Map<number, { liveMessage: { id: string } | null }>(),
+}))
+
+vi.mock("@/stores/conversation-runtime-store", () => ({
+  useConversationRuntimeStore: (
+    selector: (state: {
+      byConversationId: Map<number, { liveMessage: { id: string } | null }>
+    }) => unknown
+  ) => selector({ byConversationId: runtime.byConversationId }),
+}))
+
 const roomId = "rm_plan"
 
 function roomDetail(): CollaborationRoomDetail {
@@ -116,6 +128,7 @@ function renderRoom() {
 describe("RoomWorkspace", () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    runtime.byConversationId.clear()
     api.getCollaborationRoom.mockResolvedValue(roomDetail())
     api.markCollaborationRoomSeen.mockResolvedValue(roomDetail())
     api.postCollaborationRoomMessage.mockResolvedValue({
@@ -183,6 +196,23 @@ describe("RoomWorkspace", () => {
 
     expect(await screen.findByText("Research · 1 members")).toBeTruthy()
     expect(screen.queryByText("Uncategorized · 1 members")).toBeNull()
+  })
+
+  it("marks a member as running only while liveMessage is set", async () => {
+    runtime.byConversationId.set(101, { liveMessage: { id: "live-1" } })
+    api.getCollaborationRoomTimeline.mockResolvedValue(timeline([event()]))
+    renderRoom()
+
+    expect(await screen.findByText("newest post")).toBeTruthy()
+    expect(screen.getByText("Running")).toBeTruthy()
+  })
+
+  it("does not treat idle Sessions as running members", async () => {
+    api.getCollaborationRoomTimeline.mockResolvedValue(timeline([event()]))
+    renderRoom()
+
+    expect(await screen.findByText("newest post")).toBeTruthy()
+    expect(screen.queryByText("Running")).toBeNull()
   })
 
   it("posts a reply against the selected event", async () => {

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react"
 import { MessagesSquare, Plus, Send, UserRound, Users, X } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
+import { useShallow } from "zustand/react/shallow"
 
 import { AgentIcon } from "@/components/agent-icon"
 import { Button } from "@/components/ui/button"
@@ -37,7 +38,9 @@ import {
   mentionsHumanFromText,
   sessionIdsFromText,
 } from "@/lib/collaboration-session-mentions"
+import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { useCollectionStore } from "@/stores/collection-store"
+import { useConversationRuntimeStore } from "@/stores/conversation-runtime-store"
 import { useRoomCatalogStore } from "@/stores/room-catalog-store"
 import type {
   AgentType,
@@ -47,7 +50,6 @@ import type {
   RoomChanged,
   RoomTimelineEvent,
 } from "@/lib/types"
-import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 
 function memberLabel(
   member: Pick<CollaborationRoomMember, "conversationId" | "title">,
@@ -158,6 +160,17 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
   const memberIds = useMemo(
     () => new Set(detail?.members.map((member) => member.conversationId) ?? []),
     [detail]
+  )
+  const runningMembers = useConversationRuntimeStore(
+    useShallow((state) => {
+      const running: Record<number, true> = {}
+      for (const id of memberIds) {
+        if (state.byConversationId.get(id)?.liveMessage != null) {
+          running[id] = true
+        }
+      }
+      return running
+    })
   )
   const canPost = Boolean(body.trim()) && !pending && hydrated
   const speakerName = useCallback(
@@ -498,6 +511,11 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
                   <span className="min-w-0 flex-1 truncate">
                     {memberLabel(member, (id) => t("untitled", { id }))}
                   </span>
+                  {runningMembers[member.conversationId] ? (
+                    <span className="shrink-0 text-[10px] text-primary">
+                      {t("memberRunning")}
+                    </span>
+                  ) : null}
                 </button>
                 <Button
                   type="button"

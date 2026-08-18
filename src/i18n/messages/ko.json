@@ -5194,6 +5194,7 @@
     "members": "멤버",
     "memberCount": "멤버 {count}명",
     "uncategorized": "미분류",
+    "memberRunning": "실행 중",
     "recordOnly": "기록만",
     "mentionAll": "@all",
     "mentionHuman": "@human",

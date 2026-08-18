@@ -5194,6 +5194,7 @@
     "members": "الأعضاء",
     "memberCount": "{count} أعضاء",
     "uncategorized": "غير مصنف",
+    "memberRunning": "قيد التشغيل",
     "recordOnly": "تسجيل فقط",
     "mentionAll": "@الكل",
     "mentionHuman": "@human",
