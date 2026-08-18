@@ -75,8 +75,7 @@ export function SessionMessageComposerDialog({
   )
   const [subject, setSubject] = useState("")
   const [body, setBody] = useState(initialBody)
-  const [invocationPolicy, setInvocationPolicy] =
-    useState<CollaborationInvocationPolicy>("store_only")
+  const [priority, setPriority] = useState<"high" | "normal">("high")
   const [deliveryHint, setDeliveryHint] =
     useState<CollaborationDeliveryHint>("default")
   const [expectsReply, setExpectsReply] = useState(false)
@@ -151,7 +150,7 @@ export function SessionMessageComposerDialog({
     setSelected(new Set(presetTargets))
     setSubject("")
     setBody(initialBody)
-    setInvocationPolicy("store_only")
+    setPriority("high")
     setDeliveryHint("default")
     setExpectsReply(false)
   }
@@ -181,10 +180,12 @@ export function SessionMessageComposerDialog({
         subject: subject.trim(),
         body,
         clientDedupeId: randomUUID(),
-        invocationPolicy,
+        invocationPolicy: (priority === "high"
+          ? "invoke_when_idle"
+          : "store_only") satisfies CollaborationInvocationPolicy,
         deliveryHint,
         expectsReply,
-        urgency: "normal",
+        urgency: priority === "high" ? "urgent" : "normal",
         replyToEventId,
       })
       const failed = result.deliveries.filter(
@@ -220,44 +221,36 @@ export function SessionMessageComposerDialog({
         <DialogHeader>
           <DialogTitle>{t("sendTitle")}</DialogTitle>
           <DialogDescription>
-            {invocationPolicy === "store_only"
-              ? t("storeOnlyDescription")
-              : t("invokeWhenIdleDescription")}
+            {priority === "high"
+              ? t("priorityHighDescription")
+              : t("priorityNormalDescription")}
           </DialogDescription>
         </DialogHeader>
 
         <div
           role="radiogroup"
-          aria-label={t("deliveryMode")}
+          aria-label={t("letterPriority")}
           className="grid grid-cols-2 gap-1 rounded-lg bg-muted p-1"
         >
           <Button
             type="button"
             role="radio"
-            aria-checked={invocationPolicy === "store_only"}
-            variant={invocationPolicy === "store_only" ? "secondary" : "ghost"}
+            aria-checked={priority === "high"}
+            variant={priority === "high" ? "secondary" : "ghost"}
             size="sm"
-            onClick={() => {
-              setInvocationPolicy("store_only")
-              setDeliveryHint("default")
-            }}
+            onClick={() => setPriority("high")}
           >
-            {t("deliverOnly")}
+            {t("priorityHigh")}
           </Button>
           <Button
             type="button"
             role="radio"
-            aria-checked={invocationPolicy === "invoke_when_idle"}
-            variant={
-              invocationPolicy === "invoke_when_idle" ? "secondary" : "ghost"
-            }
+            aria-checked={priority === "normal"}
+            variant={priority === "normal" ? "secondary" : "ghost"}
             size="sm"
-            onClick={() => {
-              setInvocationPolicy("invoke_when_idle")
-              setDeliveryHint("default")
-            }}
+            onClick={() => setPriority("normal")}
           >
-            {t("invokeWhenIdle")}
+            {t("priorityNormal")}
           </Button>
         </div>
 

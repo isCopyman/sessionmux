@@ -5063,6 +5063,11 @@
   "Collaboration": {
     "sendMenu": "Send to another session",
     "sendTitle": "Send a session message",
+    "letterPriority": "信件優先級",
+    "priorityHigh": "重要",
+    "priorityNormal": "普通",
+    "priorityHighDescription": "立刻通知目標 Agent。關閉的會話會被啟動，以便讀信。",
+    "priorityNormalDescription": "先放進郵箱，等目標 Agent 下一輪再讀。仍然是給 Agent 的信。",
     "storeOnlyDescription": "The message is delivered and shown now. It will not start or interrupt the target agent.",
     "invokeWhenIdleDescription": "The message is delivered now and queued for the target agent after its current turn. A closed session waits for confirmation after it is resumed.",
     "steerIfSupportedDescription": "訊息會先可靠儲存。若忙碌目標明確支援安全的即時插話，Codeg 會在不中斷目前任務的情況下插入；否則繼續排隊。",
@@ -5199,6 +5204,24 @@
     "untitled": "未命名 Session #{id}",
     "sendFailed": "無法發到群裡",
     "posted": "已發到群裡",
-    "unread": "{count} 則未讀"
+    "unread": "{count} 則未讀",
+    "you": "你",
+    "youHint": "主持",
+    "youHost": "由你主持",
+    "roomBadge": "群聊",
+    "addMember": "加入 Session",
+    "addMemberTitle": "把 Session 加入這個群",
+    "addMemberSearch": "搜尋 Session",
+    "add": "加入",
+    "removeMember": "移出群聊",
+    "rename": "重新命名群聊",
+    "renamed": "群聊已改名",
+    "added": "已加入群聊",
+    "removed": "已移出群聊",
+    "noCandidates": "目前能加入的 Session 都已經在群裡了。",
+    "cancel": "取消",
+    "wakeHint": "普通訊息只記在共享時間線上。@ 某個 Session 才會喚醒它。",
+    "roleOwner": "群主",
+    "roleMember": "成員"
   }
 }

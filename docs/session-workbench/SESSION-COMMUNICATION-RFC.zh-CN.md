@@ -433,9 +433,12 @@ mailbox Delivery 独占触发且目标唯一可判定的 Turn，才允许兜底�
 **【实现注记 2026-08-18】** 产品已授权：需要送达 Agent 的信件（`invoke_when_idle`
 与逾期催办）在目标关闭时由 Session Dispatcher 启动/恢复该 Session。fan-out 仍受目标个数上限约束。
 
-**【实现注记 2026-08-19】** 新私信一律 `invoke_when_idle`。`deliver_only` /
-`store_only` 不再作为发信选项：每封信都必须投递给目标 Agent。旧行仍可被
-自然 Turn 或催办消化。
+**【实现注记 2026-08-19】** 发信人面对的是信件优先级，不是调度器字段名。
+`priority=high`（默认）映射为 `invoke_when_idle`：空闲则立刻投递系统提醒，
+关闭的 Session 由 Dispatcher 启动/恢复。`priority=normal` 映射为
+`store_only`：先入邮箱，等下一轮自然 Turn 再附带进去。两种都是给 Agent
+的信，没有「只给人看」的投递。`delivery_mode=queue/deliver_only` 只是旧
+companion 的别名。
 
 已关闭 Session 原先默认不因一条 Agent 消息自动冷启动。否则一次 fan-out 可能未经用户同意启动多个
 CLI、消耗 Token 并触发工具权限。当前实现改为由统一 Dispatcher 决定启动，而不是各入口自行 spawn。

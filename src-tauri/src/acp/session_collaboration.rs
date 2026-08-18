@@ -53,15 +53,57 @@ pub fn normalize_letter_title(subject: &str) -> Result<String, String> {
     Ok(trimmed)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionMessageDeliveryMode {
-    /// Persist and display the message without asking the target Harness to
-    /// consume it as a new turn.
+    /// Legacy alias for [`SessionMessagePriority::Normal`].
     DeliverOnly,
-    /// Persist first, then enqueue an origin-event reference. The dispatcher
-    /// starts or resumes a closed Session so the notice can be delivered.
+    /// Legacy alias for [`SessionMessagePriority::High`].
+    #[default]
     Queue,
+}
+
+/// How soon the target Agent should see this letter. Senders pick this;
+/// [`SessionMessageDeliveryMode`] remains only so older companions still
+/// deserialize.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionMessagePriority {
+    /// Persist and attach the letter to the target's next ordinary turn.
+    Normal,
+    /// Notify now when idle, and start/resume a closed Session if needed.
+    High,
+}
+
+impl SessionMessagePriority {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "normal" => Some(Self::Normal),
+            "high" | "urgent" => Some(Self::High),
+            _ => None,
+        }
+    }
+
+    pub fn from_legacy_delivery_mode(mode: SessionMessageDeliveryMode) -> Self {
+        match mode {
+            SessionMessageDeliveryMode::DeliverOnly => Self::Normal,
+            SessionMessageDeliveryMode::Queue => Self::High,
+        }
+    }
+
+    pub fn invocation_policy(self) -> crate::models::CollaborationInvocationPolicy {
+        match self {
+            Self::Normal => crate::models::CollaborationInvocationPolicy::StoreOnly,
+            Self::High => crate::models::CollaborationInvocationPolicy::InvokeWhenIdle,
+        }
+    }
+
+    pub fn urgency(self) -> crate::models::CollaborationUrgency {
+        match self {
+            Self::Normal => crate::models::CollaborationUrgency::Normal,
+            Self::High => crate::models::CollaborationUrgency::Urgent,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -108,6 +150,10 @@ pub struct SessionMessageSpec {
     pub title: String,
     pub content: String,
     pub delivery_mode: SessionMessageDeliveryMode,
+    /// Sender-facing priority. Omitted values fall back to `delivery_mode`
+    /// so older companions keep working.
+    #[serde(default)]
+    pub priority: Option<SessionMessagePriority>,
     /// Best-effort, non-destructive hint. The Host may inject into a currently
     /// running turn only through a proven native steering channel; otherwise
     /// the durable message remains queued for the next ordinary turn.
@@ -124,6 +170,14 @@ pub struct SessionMessageSpec {
     pub room_id: Option<String>,
     #[serde(default)]
     pub mention_all: bool,
+}
+
+impl SessionMessageSpec {
+    pub fn resolved_priority(&self) -> SessionMessagePriority {
+        self.priority.unwrap_or_else(|| {
+            SessionMessagePriority::from_legacy_delivery_mode(self.delivery_mode)
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -373,6 +427,57 @@ mod tests {
         assert!(normalize_letter_title("").is_err());
         assert!(normalize_letter_title(&"x".repeat(MAX_LETTER_TITLE_CHARS + 1)).is_err());
         assert_eq!(normalize_letter_title("  Ping  ").unwrap(), "Ping");
+    }
+
+    #[test]
+    fn letter_priority_maps_to_scheduler_policy() {
+        assert_eq!(
+            SessionMessagePriority::parse("high"),
+            Some(SessionMessagePriority::High)
+        );
+        assert_eq!(
+            SessionMessagePriority::parse("urgent"),
+            Some(SessionMessagePriority::High)
+        );
+        assert_eq!(
+            SessionMessagePriority::parse("normal"),
+            Some(SessionMessagePriority::Normal)
+        );
+        assert_eq!(SessionMessagePriority::parse("invoke_when_idle"), None);
+        assert_eq!(
+            SessionMessagePriority::High.invocation_policy(),
+            crate::models::CollaborationInvocationPolicy::InvokeWhenIdle
+        );
+        assert_eq!(
+            SessionMessagePriority::Normal.invocation_policy(),
+            crate::models::CollaborationInvocationPolicy::StoreOnly
+        );
+        let inferred_normal = SessionMessageSpec {
+            target_session_ids: vec![1],
+            title: "later".into(),
+            content: "body".into(),
+            delivery_mode: SessionMessageDeliveryMode::DeliverOnly,
+            priority: None,
+            steer_if_supported: false,
+            expects_reply: false,
+            reply_to_event_id: None,
+            client_dedupe_id: "dedupe".into(),
+            room_id: None,
+            mention_all: false,
+        };
+        assert_eq!(
+            inferred_normal.resolved_priority(),
+            SessionMessagePriority::Normal
+        );
+        let explicit_high = SessionMessageSpec {
+            delivery_mode: SessionMessageDeliveryMode::DeliverOnly,
+            priority: Some(SessionMessagePriority::High),
+            ..inferred_normal
+        };
+        assert_eq!(
+            explicit_high.resolved_priority(),
+            SessionMessagePriority::High
+        );
     }
 
     #[test]

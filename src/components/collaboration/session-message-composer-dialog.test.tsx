@@ -114,7 +114,7 @@ describe("SessionMessageComposerDialog", () => {
         subject: "Compare claims",
         body: "Please compare these claims",
         clientDedupeId: expect.any(String),
-        invocationPolicy: "store_only",
+        invocationPolicy: "invoke_when_idle",
         deliveryHint: "default",
         expectsReply: false,
       })
@@ -176,7 +176,7 @@ describe("SessionMessageComposerDialog", () => {
     expect(screen.getByRole("button", { name: /^send$/ })).toBeDisabled()
   })
 
-  it("can queue the message for the target agent without interrupting its turn", async () => {
+  it("sends important mail so the target is notified now", async () => {
     render(
       <SessionMessageComposerDialog
         sourceConversationId={1}
@@ -184,13 +184,12 @@ describe("SessionMessageComposerDialog", () => {
         onOpenChange={onOpenChange}
       />
     )
-    fireEvent.click(screen.getByRole("radio", { name: "invokeWhenIdle" }))
     fireEvent.click(screen.getByRole("button", { name: /Reviewer/ }))
     fireEvent.change(screen.getByPlaceholderText("letterTitlePlaceholder"), {
-      target: { value: "After this turn" },
+      target: { value: "Need this now" },
     })
     fireEvent.change(screen.getByPlaceholderText("bodyPlaceholder"), {
-      target: { value: "Read this after the current turn" },
+      target: { value: "Please read this as soon as you are idle" },
     })
     fireEvent.click(screen.getByRole("button", { name: /^send$/ }))
 
@@ -198,7 +197,35 @@ describe("SessionMessageComposerDialog", () => {
     expect(api.send).toHaveBeenCalledWith(
       expect.objectContaining({
         invocationPolicy: "invoke_when_idle",
+        urgency: "urgent",
         deliveryHint: "default",
+      })
+    )
+  })
+
+  it("sends normal mail to wait for the target's next turn", async () => {
+    render(
+      <SessionMessageComposerDialog
+        sourceConversationId={1}
+        open
+        onOpenChange={onOpenChange}
+      />
+    )
+    fireEvent.click(screen.getByRole("radio", { name: "priorityNormal" }))
+    fireEvent.click(screen.getByRole("button", { name: /Reviewer/ }))
+    fireEvent.change(screen.getByPlaceholderText("letterTitlePlaceholder"), {
+      target: { value: "When you have a moment" },
+    })
+    fireEvent.change(screen.getByPlaceholderText("bodyPlaceholder"), {
+      target: { value: "No rush" },
+    })
+    fireEvent.click(screen.getByRole("button", { name: /^send$/ }))
+
+    await waitFor(() => expect(api.send).toHaveBeenCalledTimes(1))
+    expect(api.send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        invocationPolicy: "store_only",
+        urgency: "normal",
       })
     )
   })

@@ -545,17 +545,15 @@ Desktop 调试分层与 WebView2 CDP 验证记录；历史记录只用于找回�
 - `invoke_when_idle` 仍会在目标空闲时注入通知。2026-08-18 的 UI 再测里，C=290 发给
   D=291 后 D 自行 `read_message`（`agent_receipt_ref=inbox_read`）并在时间线渲染成
   prompt 样式信件卡；旧的 MAILBOX-PING → PONG → ACK 多轮链还在。
-- 「已读未回」要单独测：`expects_reply=true` + `store_only`，再让目标只
+- 「已读未回」要单独测：`expects_reply=true` + `priority=high`（立刻投递），再让目标只
   `read_message`、禁止 `send_message`。2026-08-18 用 event `ef6bccdd-…` 得到
   `obligation=awaiting_reply`、`replyReceived=false`、触发条「1 封已读未回」、
   列表琥珀标签。当时过了 10 分钟也没有系统催办：扫描曾只认
   `invoke_when_idle`，把已读的 `store_only` 信排除了；连接停在 `connecting` 还会被
   当成未接通而不投递。这两处已修。不要用立刻回完的 PING/PONG 冒充催办已测。
-- 来信通知和五分钟催办走同一个 Session Dispatcher：先存 Delivery，再按
-  类型/属性和运行时状态入队。`store_only` 仍不单独起 Turn。`invoke_when_idle`
-  和逾期催办在目标关闭时会启动/恢复该 Session（`session_dispatcher.rs`，
-  复用 `spawn_agent` / resume，不是第二套 spawn）。工作台没有标签时仍会打开
-  标签，方便人看着投递过程。
+- 来信通知和五分钟催办走同一个 Session Dispatcher。发信用 `priority`：
+  `high` 立刻入队叫醒（关闭 Session 会 resume），`normal` 等下一轮自然
+  Turn。两种都是给 Agent 的信。工作台没有标签时仍会打开标签。
 - **HMR 混合态（2026-08-18）**：`pnpm tauri dev` 里前端随保存热更，Rust 后端停在
   进程启动那一刻。改后端后不重启实例，测到的是「新前端 + 旧后端」——新增行为测不到，
   新前端读新增字段还会拿到 `undefined`。两条纪律：改后端后的行为验收必须先重启

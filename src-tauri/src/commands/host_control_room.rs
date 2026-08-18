@@ -87,7 +87,7 @@ impl RoomHostControl {
                 ),
                 capability(
                     "room.post",
-                    "Post a Room-visible message as the calling Session. Empty mention_session_ids is record-only. This path does not wake targets; use send_message with room_id and delivery_mode=queue to invoke.",
+                    "Post a Room-visible message as the calling Session. Empty mention_session_ids is record-only. This path does not wake targets; use send_message with room_id and priority=high to notify mentioned Sessions.",
                     HostControlAccessLevel::Write,
                     json!({
                         "type": "object",

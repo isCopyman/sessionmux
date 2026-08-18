@@ -52,9 +52,9 @@ use crate::acp::delegation::transport::{
 };
 use crate::acp::question::parse_questions;
 use crate::acp::session_collaboration::{
-    SessionInboxFilter, SessionMailboxScope, SessionMessageDeliveryMode, SessionMessageSpec,
-    DEFAULT_INBOX_LIMIT, DEFAULT_SESSION_LIST_LIMIT, MAX_INBOX_LIMIT, MAX_SESSION_LIST_LIMIT,
-    MAX_SESSION_MESSAGE_TARGETS,
+    SessionInboxFilter, SessionMailboxScope, SessionMessageDeliveryMode, SessionMessagePriority,
+    SessionMessageSpec, DEFAULT_INBOX_LIMIT, DEFAULT_SESSION_LIST_LIMIT, MAX_INBOX_LIMIT,
+    MAX_SESSION_LIST_LIMIT, MAX_SESSION_MESSAGE_TARGETS,
 };
 use crate::acp::session_info::MAX_SESSION_MESSAGES;
 use crate::models::AutomationAction;
@@ -538,16 +538,36 @@ async fn build_tools_call_spawn(
                 .and_then(|value| value.as_str())
                 .unwrap_or("queue")
             {
-                // Older companions may still send deliver_only. Every letter
-                // must be delivered to the target Agent, so coerce to queue.
-                "queue" | "deliver_only" => SessionMessageDeliveryMode::Queue,
+                "queue" => SessionMessageDeliveryMode::Queue,
+                "deliver_only" => SessionMessageDeliveryMode::DeliverOnly,
                 _ => {
                     return LineAction::Respond(err(
                         id,
                         -32602,
-                        "send_message `delivery_mode` must be queue",
+                        "send_message `delivery_mode` must be queue or deliver_only",
                     ))
                 }
+            };
+            let priority = if let Some(raw) = arguments
+                .get("priority")
+                .and_then(|value| value.as_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                match SessionMessagePriority::parse(raw) {
+                    Some(priority) => priority,
+                    None => {
+                        return LineAction::Respond(err(
+                            id,
+                            -32602,
+                            "send_message `priority` must be high or normal",
+                        ))
+                    }
+                }
+            } else if delivery_mode == SessionMessageDeliveryMode::DeliverOnly {
+                SessionMessagePriority::Normal
+            } else {
+                SessionMessagePriority::High
             };
             let reply_to_event_id = arguments
                 .get("reply_to_event_id")
@@ -570,6 +590,13 @@ async fn build_tools_call_spawn(
                     ))
                 }
             };
+            if steer_if_supported && priority == SessionMessagePriority::Normal {
+                return LineAction::Respond(err(
+                    id,
+                    -32602,
+                    "send_message `steer_if_supported` requires priority=high",
+                ));
+            }
             let room_id = arguments
                 .get("room_id")
                 .and_then(|value| value.as_str())
@@ -588,6 +615,7 @@ async fn build_tools_call_spawn(
                     title,
                     content,
                     delivery_mode,
+                    priority: Some(priority),
                     steer_if_supported,
                     expects_reply: arguments
                         .get("expects_reply")
@@ -2187,6 +2215,7 @@ mod tests {
             serde_json::json!({ "target_session_ids": [7], "content": "x" }),
             serde_json::json!({ "target_session_ids": [7], "title": "t", "content": "x", "delivery_mode": "interrupt" }),
             serde_json::json!({ "target_session_ids": [7], "title": "t", "content": "x", "delivery_hint": "interrupt" }),
+            serde_json::json!({ "target_session_ids": [7], "title": "t", "content": "x", "priority": "normal", "delivery_hint": "steer_if_supported" }),
         ] {
             let line = serde_json::json!({
                 "jsonrpc": "2.0", "id": 42, "method": "tools/call",

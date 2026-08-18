@@ -16,9 +16,9 @@ A letter has two parts, like email:
   Room timeline; only `@` mentions create a delivery.
 
 A successful `send_message` without `room_id` means Codeg stored a private
-letter and queued a **system notice** (titles only) for the target Agent.
-Every private letter is delivered; there is no display-only / deliver_only
-mode. It is not user approval and not a Room.
+letter. `priority=high` (default) queues a **system notice** now.
+`priority=normal` waits for the target's next turn. Both are Agent mail.
+It is not user approval and not a Room.
 
 A successful `send_message` with `room_id` means Codeg stored a Room-visible
 event. Empty `target_session_ids` is record-only (nobody is woken). Mention
@@ -30,6 +30,8 @@ ids still create deliveries.
   `session_id` as the only address.
 - `send_message`: send `title` + `content`.
   - Private mail: `target_session_ids` required, omit `room_id`.
+  - `priority=high` (default) notifies now; `priority=normal` waits
+    for the next ordinary turn.
   - Room post: set `room_id`. Mentions go in `target_session_ids` or
     `mention_all=true`. Reply or supplement with the same `room_id` and
     `reply_to_event_id`.

@@ -8,8 +8,8 @@ use serde::{Deserialize, Serialize};
 use crate::acp::manager::ConnectionManager;
 use crate::acp::session_collaboration::{
     SessionAddress, SessionCollaborationAccess, SessionCollaborationConfig,
-    SessionCollaborationRuntimeConfig, SessionListOutcome, SessionMessageDeliveryMode,
-    SessionMessageDeliveryOutcome, SessionMessageSpec, SessionSendOutcome, MAX_SESSION_LIST_LIMIT,
+    SessionCollaborationRuntimeConfig, SessionListOutcome, SessionMessageDeliveryOutcome,
+    SessionMessageSpec, SessionSendOutcome, MAX_SESSION_LIST_LIMIT,
 };
 use crate::app_error::AppCommandError;
 use crate::db::service::{
@@ -22,7 +22,7 @@ use crate::models::{
     CollaborationDeliveryState, CollaborationFeed, CollaborationInterruptResult,
     CollaborationInterruptState, CollaborationInvocationPolicy, CollaborationRoomDetail,
     CollaborationRoomSummary, CollaborationSendResult, CollaborationTimelineProjection,
-    CollaborationUnreadOverview, CollaborationUrgency, CreateCollaborationRoomInput,
+    CollaborationUnreadOverview, CreateCollaborationRoomInput,
     InterruptCollaborationInput, PostRoomMessageInput, RoomChanged, RoomPostResult, RoomTimeline,
     SendAndInterruptCollaborationInput, SendAndInterruptCollaborationResult,
     SendCollaborationMessageInput,
@@ -121,10 +121,9 @@ pub async fn collaboration_send_core(
     prompt_queue: &PromptQueueHandle,
     input: SendCollaborationMessageInput,
 ) -> Result<CollaborationSendResult, AppCommandError> {
-    // Persist first. Only invoke_when_idle enters the Session dispatcher;
-    // store_only remains visible in the mailbox until a later natural turn,
-    // overdue attention, or explicit Agent read. The dispatcher starts a
-    // closed target when the queued notice needs a live runtime.
+    // Persist first. `priority=high` (invoke_when_idle) enters the dispatcher
+    // now; `priority=normal` waits for the next ordinary turn. Both are Agent
+    // mail — normal is delayed delivery, not "human only".
     let should_wake = input.invocation_policy == CollaborationInvocationPolicy::InvokeWhenIdle;
     let result = persist_collaboration_message(conn, prompt_queue, input).await?;
     publish_persisted_message(emitter, &result);
@@ -550,6 +549,7 @@ impl SessionCollaborationAccess for DbSessionCollaboration {
             );
         }
         if let Some(room_id) = spec.room_id.clone() {
+            let priority = spec.resolved_priority();
             let result = collaboration_room_post_core(
                 &self.db.conn,
                 &self.emitter,
@@ -562,21 +562,14 @@ impl SessionCollaborationAccess for DbSessionCollaboration {
                     subject: spec.title,
                     body: spec.content,
                     client_dedupe_id: spec.client_dedupe_id,
-                    invocation_policy: match spec.delivery_mode {
-                        SessionMessageDeliveryMode::DeliverOnly => {
-                            CollaborationInvocationPolicy::StoreOnly
-                        }
-                        SessionMessageDeliveryMode::Queue => {
-                            CollaborationInvocationPolicy::InvokeWhenIdle
-                        }
-                    },
+                    invocation_policy: priority.invocation_policy(),
                     delivery_hint: if spec.steer_if_supported {
                         CollaborationDeliveryHint::SteerIfSupported
                     } else {
                         CollaborationDeliveryHint::Default
                     },
                     expects_reply: spec.expects_reply,
-                    urgency: CollaborationUrgency::Normal,
+                    urgency: priority.urgency(),
                     reply_to_event_id: spec.reply_to_event_id,
                 },
             )
@@ -603,6 +596,7 @@ impl SessionCollaborationAccess for DbSessionCollaboration {
                 Err(err) => SessionSendOutcome::rejected(Some(source_session_id), err.to_string()),
             };
         }
+        let priority = spec.resolved_priority();
         let result = collaboration_send_core(
             &self.db.conn,
             &self.emitter,
@@ -613,21 +607,14 @@ impl SessionCollaborationAccess for DbSessionCollaboration {
                 subject: spec.title,
                 body: spec.content,
                 client_dedupe_id: spec.client_dedupe_id,
-                invocation_policy: match spec.delivery_mode {
-                    SessionMessageDeliveryMode::DeliverOnly => {
-                        CollaborationInvocationPolicy::StoreOnly
-                    }
-                    SessionMessageDeliveryMode::Queue => {
-                        CollaborationInvocationPolicy::InvokeWhenIdle
-                    }
-                },
+                invocation_policy: priority.invocation_policy(),
                 delivery_hint: if spec.steer_if_supported {
                     CollaborationDeliveryHint::SteerIfSupported
                 } else {
                     CollaborationDeliveryHint::Default
                 },
                 expects_reply: spec.expects_reply,
-                urgency: CollaborationUrgency::Normal,
+                urgency: priority.urgency(),
                 reply_to_event_id: spec.reply_to_event_id,
             },
         )
@@ -1565,6 +1552,82 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn letter_priority_high_queues_now_and_normal_waits_for_next_turn() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-letter-priority").await;
+        let source = seed_conversation(&db, folder, AgentType::Codex).await;
+        let high_target = seed_conversation(&db, folder, AgentType::ClaudeCode).await;
+        let normal_target = seed_conversation(&db, folder, AgentType::Gemini).await;
+        let access = enabled_agent_access(&db, EventEmitter::Noop).await;
+
+        let high = access
+            .send_message(
+                source,
+                SessionMessageSpec {
+                    target_session_ids: vec![high_target],
+                    title: "Need this now".into(),
+                    content: "please look".into(),
+                    delivery_mode: SessionMessageDeliveryMode::Queue,
+                    priority: Some(crate::acp::session_collaboration::SessionMessagePriority::High),
+                    steer_if_supported: false,
+                    expects_reply: false,
+                    reply_to_event_id: None,
+                    client_dedupe_id: "priority-high".into(),
+                    room_id: None,
+                    mention_all: false,
+                },
+            )
+            .await;
+        assert!(high.accepted);
+        assert_eq!(high.deliveries[0].state, "queued");
+        assert_eq!(
+            prompt_queue_service::snapshot(&db.conn, high_target)
+                .await
+                .unwrap()
+                .items
+                .len(),
+            1
+        );
+
+        let normal = access
+            .send_message(
+                source,
+                SessionMessageSpec {
+                    target_session_ids: vec![normal_target],
+                    title: "When you have a moment".into(),
+                    content: "no rush".into(),
+                    delivery_mode: SessionMessageDeliveryMode::DeliverOnly,
+                    priority: Some(
+                        crate::acp::session_collaboration::SessionMessagePriority::Normal,
+                    ),
+                    steer_if_supported: false,
+                    expects_reply: false,
+                    reply_to_event_id: None,
+                    client_dedupe_id: "priority-normal".into(),
+                    room_id: None,
+                    mention_all: false,
+                },
+            )
+            .await;
+        assert!(normal.accepted);
+        assert_eq!(normal.deliveries[0].state, "pending");
+        assert!(prompt_queue_service::snapshot(&db.conn, normal_target)
+            .await
+            .unwrap()
+            .items
+            .is_empty());
+        let inbound = collaboration_service::feed(&db.conn, normal_target, None)
+            .await
+            .unwrap()
+            .inbound
+            .remove(0);
+        assert_eq!(
+            inbound.invocation_policy,
+            CollaborationInvocationPolicy::StoreOnly
+        );
+    }
+
+    #[tokio::test]
     async fn agent_send_reuses_event_without_enqueuing() {
         let db = fresh_in_memory_db().await;
         let folder = seed_folder(&db, "/tmp/codeg-agent-send").await;
@@ -1576,6 +1639,7 @@ mod tests {
             title: "Test letter".into(),
             content: "check the argument".into(),
             delivery_mode: SessionMessageDeliveryMode::Queue,
+            priority: Default::default(),
             steer_if_supported: true,
             expects_reply: true,
             reply_to_event_id: None,
@@ -1637,6 +1701,7 @@ mod tests {
                         title: "Test letter".into(),
                         content: format!("reply at depth {depth}"),
                         delivery_mode: SessionMessageDeliveryMode::DeliverOnly,
+                        priority: Default::default(),
                         steer_if_supported: false,
                         expects_reply: true,
                         reply_to_event_id: reply_to_event_id.clone(),
@@ -1703,6 +1768,7 @@ mod tests {
                     title: "Test letter".into(),
                     content: "must not land".into(),
                     delivery_mode: SessionMessageDeliveryMode::Queue,
+                    priority: Default::default(),
                     steer_if_supported: false,
                     expects_reply: true,
                     reply_to_event_id: None,

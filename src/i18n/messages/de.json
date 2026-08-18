@@ -5063,6 +5063,11 @@
   "Collaboration": {
     "sendMenu": "Send to another session",
     "sendTitle": "Send a session message",
+    "letterPriority": "Letter priority",
+    "priorityHigh": "Important",
+    "priorityNormal": "Normal",
+    "priorityHighDescription": "Notify the target Agent now. A closed session is started so it can read the letter.",
+    "priorityNormalDescription": "Keep the letter in the mailbox until the target Agent's next turn. It is still for the Agent.",
     "storeOnlyDescription": "The message is delivered and shown now. It will not start or interrupt the target agent.",
     "invokeWhenIdleDescription": "The message is delivered now and queued for the target agent after its current turn. A closed session waits for confirmation after it is resumed.",
     "steerIfSupportedDescription": "The message is durable first. If the busy target supports safe live updates, Codeg inserts it without interrupting; otherwise it stays queued.",
@@ -5199,6 +5204,24 @@
     "untitled": "Unbenannte Session #{id}",
     "sendFailed": "Konnte nicht in den Raum senden",
     "posted": "Im Raum veröffentlicht",
-    "unread": "{count} ungelesen"
+    "unread": "{count} ungelesen",
+    "you": "You",
+    "youHint": "Host",
+    "youHost": "You host this room",
+    "roomBadge": "Room",
+    "addMember": "Add a Session",
+    "addMemberTitle": "Add Sessions to this room",
+    "addMemberSearch": "Search Sessions",
+    "add": "Add",
+    "removeMember": "Remove from room",
+    "rename": "Rename room",
+    "renamed": "Room renamed",
+    "added": "Session added to the room",
+    "removed": "Session removed from the room",
+    "noCandidates": "Every open Session is already in this room.",
+    "cancel": "Cancel",
+    "wakeHint": "Plain messages stay on the shared timeline. @ a Session to wake it.",
+    "roleOwner": "owner",
+    "roleMember": "member"
   }
 }

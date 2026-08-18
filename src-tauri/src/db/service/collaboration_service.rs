@@ -1096,7 +1096,7 @@ pub(crate) async fn auto_reply_for_completed_turn(
             client_dedupe_id: format!(
                 "auto-reply:{event_id}:{target_conversation_id}:{completed_message_id}"
             ),
-            invocation_policy: CollaborationInvocationPolicy::InvokeWhenIdle,
+            invocation_policy: CollaborationInvocationPolicy::StoreOnly,
             delivery_hint: CollaborationDeliveryHint::Default,
             expects_reply: false,
             urgency: CollaborationUrgency::Normal,
@@ -1519,10 +1519,6 @@ pub async fn post_room(
         }
     }
     targets.remove(&input.source_conversation_id);
-    let mut input = input;
-    if !targets.is_empty() {
-        input.invocation_policy = CollaborationInvocationPolicy::InvokeWhenIdle;
-    }
     if targets.len() > MAX_TARGETS {
         return Err(validation(format!(
             "A Room mention supports at most {MAX_TARGETS} targets"
@@ -3123,16 +3119,13 @@ mod tests {
         assert!(!reply.deliveries[0].expects_reply);
         assert_eq!(
             reply.deliveries[0].invocation_policy,
-            CollaborationInvocationPolicy::InvokeWhenIdle
+            CollaborationInvocationPolicy::StoreOnly
         );
-        assert_eq!(
-            prompt_queue_service::snapshot(&db.conn, source)
-                .await
-                .unwrap()
-                .items
-                .len(),
-            1
-        );
+        assert!(prompt_queue_service::snapshot(&db.conn, source)
+            .await
+            .unwrap()
+            .items
+            .is_empty());
 
         assert!(auto_reply_for_completed_turn(
             &db.conn,

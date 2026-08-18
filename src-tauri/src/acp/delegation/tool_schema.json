@@ -144,7 +144,7 @@
   },
   {
     "name": "send_message",
-    "description": "Send a durable mailbox letter, or post to a Room when room_id is set. Letters have a short title and a body. Private mail: Codeg queues a system notice (title only) and the target must call read_message(event_id); a closed target is started so the notice can arrive. Room post: every member can see the body on the Room timeline; only mention targets get a delivery/turn. delivery_mode is always queue — every letter must be delivered to the Agent. For a private reply or a follow-up supplement on the same thread, target the same peer and set reply_to_event_id. Omitting reply_to_event_id starts a new thread. For a Room reply, set the same room_id and reply_to_event_id; do not send a private letter unless asked.",
+    "description": "Send a durable mailbox letter, or post to a Room when room_id is set. Letters have a short title and a body. Private mail: the target gets a Codeg system notice with the title only and must call read_message(event_id). Room post: every member can see the body on the Room timeline; only mention targets get a delivery/turn. priority=high (default) notifies the target now, starting a closed Session if needed. priority=normal waits for the target's next ordinary turn — the letter is still for the Agent. For a private reply or a follow-up supplement on the same thread, target the same peer and set reply_to_event_id. Omitting reply_to_event_id starts a new thread. For a Room reply, set the same room_id and reply_to_event_id; do not send a private letter unless asked.",
     "inputSchema": {
       "type": "object",
       "required": ["title", "content"],
@@ -175,10 +175,15 @@
           "minLength": 1,
           "description": "The letter body. Only returned by read_message; not copied into the system notice or list_inbox."
         },
+        "priority": {
+          "type": "string",
+          "enum": ["high", "normal"],
+          "description": "How soon the target Agent should see this letter. high (default): notify now when idle, and start/resume a closed Session. normal: keep it in the mailbox until the next ordinary turn. Both are Agent mail. delivery_mode=queue/deliver_only is a legacy alias for high/normal."
+        },
         "delivery_mode": {
           "type": "string",
-          "enum": ["queue"],
-          "description": "Always queue. Every letter is persisted and delivered to the target Agent. deliver_only is no longer accepted as a distinct mode."
+          "enum": ["queue", "deliver_only"],
+          "description": "Legacy alias. queue = priority high; deliver_only = priority normal. Prefer `priority`."
         },
         "delivery_hint": {
           "type": "string",
