@@ -394,6 +394,36 @@ flowchart TD
 3. 普通 `invoke_when_idle` mailbox 执行项；
 4. Goal、Automation 和 background work。
 
+当前 PromptQueue runtime 的 claim 双路径与租约回收（2026-08-19 对账，与代码一致——
+`prompt_queue.rs` 的 `process` / `process_native_steer` / `recover_and_scan`，
+`prompt_queue_service.rs` 的 `claim_head` / `claim_first_steerable` /
+`recover_expired_claims`）：
+
+```mermaid
+flowchart TD
+    W["wake 信号"] --> S["process(conversation_id)"]
+    T["ACP TurnComplete / SessionStarted"] --> S
+    F["15s 兜底扫 recover_and_scan"] --> S
+    S --> C{"runtime Connected 且无 turn_in_flight?"}
+    C -- "无 runtime" --> E["有 queued 项且可自启<br/>→ dispatcher ensure/resume 冷启动"]
+    C -- "busy + 支持 native steer" --> ST["claim_first_steerable<br/>仅 steer_if_supported 信件"]
+    C -- "busy 无 steer" --> X1["本轮不动，等 idle flush"]
+    ST --> SO{"本轮已 steer 过?<br/>collaboration_steered_this_turn"}
+    SO -- "是" --> X1
+    SO -- "否" --> SI["mark_dispatch_started<br/>→ native steer 注入一次"]
+    C -- "idle" --> H["claim_head<br/>类序 user > collaboration/reminder > timer，类内 FIFO"]
+    H --> B{"头是 collaboration/reminder origin?"}
+    B -- "是" --> BB["连并后续连续 origin<br/>一批至多 16 条合并为一封 prompt"]
+    B -- "否" --> D["mark_dispatch_started<br/>→ send_prompt_linked 发本轮 prompt"]
+    BB --> D
+    SI --> OK["Harness 接受 → 删除队列行"]
+    D --> OK
+    F --> RC["recover_expired_claims<br/>claim 租约 30s / dispatch 租约 300s"]
+    RC --> R1{"dispatch_started_at 已写?"}
+    R1 -- "否" --> RQ["安全放回 queued"]
+    R1 -- "是" --> RP["paused + dispatch_outcome_unknown<br/>origin 标 failed，等人工 retry"]
+```
+
 `store_only` mailbox 不是独立执行项。派发下一条自然用户 Prompt 时，Dispatcher 才按最旧优先、
 条数与字节预算把选中的协作信封放在前面，用户正文放在最后：
 

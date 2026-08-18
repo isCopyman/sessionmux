@@ -360,6 +360,39 @@ Mailbox 需要分别记录：
 每条消息先落库，再为每个目标创建唯一 Delivery。Router 只选择一个 Adapter，不能同时直接注入
 和让 AgentBus 再领取。
 
+当前落地的 Delivery 状态机与义务/催办支线（2026-08-19 对账，与代码一致——迁移函数见
+`collaboration_service.rs` 的 `mark_origin_embedding` / `mark_origin_queued` /
+`mark_origin_embedded` / `mark_origin_failed` / `dismiss` / `restore`，催办常量见
+`collaboration_reminder.rs`）：
+
+```mermaid
+stateDiagram-v2
+    [*] --> pending: store_only 落库
+    [*] --> queued: invoke_when_idle 落库
+    [*] --> failed: 目标不存在 target_not_found
+    pending --> dismissed: 人类 dismiss（仅 store_only）
+    dismissed --> pending: 人类 restore
+    queued --> embedding: Dispatcher claim
+    embedding --> queued: 忙碌/竞态回队
+    embedding --> embedded: Harness 接受并记 turn ref
+    embedding --> failed: 派发失败
+    queued --> failed: 派发失败
+    pending --> queued: 催办再投递提升
+    embedded --> queued: 催办再投递提升
+    note right of embedded
+        义务支线：建 Delivery 时 expects_reply=true
+        即挂 awaiting_reply；对方回信带
+        reply_to_event_id 或显式 resolve_obligation
+        才清债（resolved）。
+    end note
+    note left of queued
+        催办支线：invoke_when_idle 投递 5 分钟未签收
+        为未读催；签收后 5 分钟仍 awaiting_reply
+        为已读催。每个欠债周期最多 3 次、
+        5 分钟冷却；新欠债周期配额清零重算。
+    end note
+```
+
 | 目标状态 | `store_only` | `invoke_when_idle` | UI 状态 |
 |---|---|---|---|
 | 空闲且已连接 | 保存，等待自然 turn | 使用 `session/prompt` 创建新 turn | 已收到 / 正在处理 |

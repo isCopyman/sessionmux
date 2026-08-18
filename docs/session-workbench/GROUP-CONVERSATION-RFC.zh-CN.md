@@ -90,6 +90,25 @@ Room 与多收件人邮件的差异只有一个，却是不可省略的差异：
 仍照常入账（测试钉死 depth 0..=4 全部 accepted，且人显式参与的回复链不受限）。强制拦截列入
 维护计划；Room Thread 的链深继承同一计数。
 
+一次 `post_room` 从落账到唤醒的完整分流（2026-08-19 对账，与代码一致——
+`collaboration_service.rs::post_room`、`collaboration_room_service.rs::consume_room_window`）：
+
+```mermaid
+flowchart TD
+    P["post_room"] --> V{"校验<br/>成员资格 / 父帖同 Room / dedupe"}
+    V --> E["落 event<br/>visibility=room 公共账本"]
+    E --> M{"结构化 @ 分流<br/>自由文本 @word 不计"}
+    M -- "无 @" --> L["只记账<br/>零 Delivery 零唤醒"]
+    M -- "@ 在册成员" --> D["建 Delivery<br/>缺省 high + steer_if_supported"]
+    D --> Q["queued + enqueue origin<br/>入队等 idle，忙时 native steer"]
+    M -- "@ 归档成员" --> A["Delivery 强制 store_only<br/>记账不唤醒、不挂义务"]
+    M -- "mention_human" --> H["只打标记<br/>无投递通道、不起 turn"]
+    Q --> R["read_room 窗口签收<br/>consume_room_window 记 receipt + 推进游标"]
+    L -. "成员随时主动读" .-> R
+    A -. "成员随时主动读" .-> R
+    R --> RP["回帖 post_room + reply_to_event_id<br/>精确清偿 awaiting_reply；仅引用不叫醒"]
+```
+
 ### 0.4 list_inbox 过滤维持显式参数，不折叠成 DSL
 
 用户问过“过滤能不能收成一个变量”。结论：维持现状。`box` / `filter` / `peer_session_id`

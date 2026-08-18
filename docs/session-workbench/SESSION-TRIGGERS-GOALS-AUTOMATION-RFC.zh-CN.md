@@ -73,6 +73,23 @@
 5. 运行时缺失（被 idle_sweep 回收）→ 照样入队 + 唤醒，走 dispatcher ensure/resume，
    与信件同路。
 
+同一流程的全景（2026-08-19 对账，与代码一致——`session_timer.rs` 的 `fire_due` / `fire`，
+`session_timer_service.rs` 的 `claim_fire` / `reset_delay`）：
+
+```mermaid
+flowchart TD
+    TC["ACP TurnComplete"] --> I["记 idle_since = now<br/>（重启时按进程启动播种）"]
+    UM["ACP UserMessage"] --> CLR["抹掉 idle_since<br/>本轮空闲作废"]
+    I --> WT["等待 idle_grace × 2^strike<br/>上限 1800s"]
+    WT --> CH{"到期检查（1s 扫描）"}
+    CH -- "队列已有 queued 项" --> SK["让位跳过，不叠加第二轮"]
+    CH -- "runtime 存在但忙/未 Connected" --> SK
+    CH -- "runtime 空闲或缺失" --> CF["claim_fire：CAS 认领<br/>strike+1、fire_count+1"]
+    CF --> ENQ["入队 source=timer<br/>正文=用户文本；strike≥1 起附<br/>第 N 次提醒 + 下次间隔"]
+    ENQ --> WK["清 idle_since，wake 调度器<br/>runtime 缺失走 dispatcher ensure/resume"]
+    RST["agent 调 timer.reset_delay"] --> Z["strike 归零<br/>回到最短档 idle_grace"]
+```
+
 阻塞式 `wait_message` 维持第 12 节的暂缓判断——退避 + 来信经 dispatcher 唤醒已经等价，
 且不烧模型。
 
