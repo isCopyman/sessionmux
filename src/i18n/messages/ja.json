@@ -5230,6 +5230,7 @@
     "reply": "Reply",
     "replyTo": "Replying to {name}",
     "cancelReply": "Cancel reply",
+    "quotedMissing": "元の投稿は読み込まれていません",
     "roleOwner": "owner",
     "roleMember": "member"
   }

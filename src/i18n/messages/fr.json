@@ -5230,6 +5230,7 @@
     "reply": "Reply",
     "replyTo": "Replying to {name}",
     "cancelReply": "Cancel reply",
+    "quotedMissing": "Le message d'origine n'est pas chargé",
     "roleOwner": "owner",
     "roleMember": "member"
   }

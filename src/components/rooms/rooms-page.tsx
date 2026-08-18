@@ -157,6 +157,10 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
   }, [reload, roomId])
 
   const mentionSet = useMemo(() => new Set(mentioned), [mentioned])
+  const eventsById = useMemo(
+    () => new Map(events.map((item) => [item.id, item])),
+    [events]
+  )
   const memberIds = useMemo(
     () => new Set(detail?.members.map((member) => member.conversationId) ?? []),
     [detail]
@@ -386,6 +390,9 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
             ) : (
               events.map((event) => {
                 const fromYou = event.authorKind === "human"
+                const quoted = event.replyToEventId
+                  ? eventsById.get(event.replyToEventId)
+                  : undefined
                 const names = event.mentionConversationIds
                   .map((id) => {
                     const member = detail.members.find(
@@ -438,6 +445,24 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
                         </span>
                       ) : null}
                     </div>
+                    {event.replyToEventId ? (
+                      <div className="mb-1.5 rounded-md border-l-2 border-primary/40 bg-muted/50 px-2 py-1">
+                        {quoted ? (
+                          <>
+                            <p className="truncate text-[11px] font-medium text-muted-foreground">
+                              {speakerName(quoted)}
+                            </p>
+                            <p className="line-clamp-2 text-[11px] text-muted-foreground">
+                              {quoted.body}
+                            </p>
+                          </>
+                        ) : (
+                          <p className="text-[11px] text-muted-foreground">
+                            {t("quotedMissing")}
+                          </p>
+                        )}
+                      </div>
+                    ) : null}
                     <p className="whitespace-pre-wrap text-sm">{event.body}</p>
                     <div className="mt-1 flex justify-end">
                       <Button

@@ -5230,6 +5230,7 @@
     "reply": "回覆",
     "replyTo": "正在回覆 {name}",
     "cancelReply": "取消回覆",
+    "quotedMissing": "原訊息未載入",
     "roleOwner": "群主",
     "roleMember": "成員"
   }

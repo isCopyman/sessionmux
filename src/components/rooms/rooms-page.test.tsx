@@ -242,4 +242,38 @@ describe("RoomWorkspace", () => {
       )
     })
   })
+
+  it("quotes the original post on a reply in the same timeline", async () => {
+    api.getCollaborationRoomTimeline.mockResolvedValue(
+      timeline([
+        event({ id: "evt-old", body: "please review the plan" }),
+        event({
+          id: "evt-reply",
+          body: "looks good",
+          replyToEventId: "evt-old",
+        }),
+      ])
+    )
+    renderRoom()
+
+    expect(await screen.findByText("looks good")).toBeTruthy()
+    expect(screen.getAllByText("please review the plan").length).toBe(2)
+    expect(screen.getAllByText("Planner").length).toBeGreaterThan(1)
+  })
+
+  it("says the original post is missing when it is not loaded", async () => {
+    api.getCollaborationRoomTimeline.mockResolvedValue(
+      timeline([
+        event({
+          id: "evt-reply",
+          body: "looks good",
+          replyToEventId: "evt-gone",
+        }),
+      ])
+    )
+    renderRoom()
+
+    expect(await screen.findByText("looks good")).toBeTruthy()
+    expect(screen.getByText("Original post is not loaded")).toBeTruthy()
+  })
 })

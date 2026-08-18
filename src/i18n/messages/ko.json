@@ -5230,6 +5230,7 @@
     "reply": "Reply",
     "replyTo": "Replying to {name}",
     "cancelReply": "Cancel reply",
+    "quotedMissing": "원 메시지를 불러오지 못했습니다",
     "roleOwner": "owner",
     "roleMember": "member"
   }
