@@ -1,17 +1,18 @@
 //! Decide how mailbox attention reaches a target, and when it is due.
 //!
-//! New mail is due immediately. Unread follow-ups and read-but-unreplied
-//! mail use a 5-minute clock. There is no urgency dimension. Busy Sessions
-//! are injected when native steering exists, otherwise the reminder waits in
-//! the same durable queue as ordinary follow-ups. Closed Sessions are started
-//! or resumed so the notice can be delivered.
+//! First delivery already carries the letter body. Unread nags and
+//! read-but-unreplied mail share a 5-minute clock. There is no urgency
+//! dimension. Busy Sessions are injected when native steering exists,
+//! otherwise the reminder waits in the same durable queue as ordinary
+//! follow-ups. Closed Sessions are started or resumed so the notice can
+//! be delivered.
 
 use chrono::{DateTime, Duration, Utc};
 
 use super::types::ConnectionStatus;
 
-/// First unread reminder is due as soon as the Delivery exists.
-pub const UNREAD_AFTER_SECS: i64 = 0;
+/// Unread nag is due only after the Agent had time to consume the first delivery.
+pub const UNREAD_AFTER_SECS: i64 = 5 * 60;
 /// Awaiting reply after the Agent actually received the body.
 pub const REPLY_AFTER_SECS: i64 = 5 * 60;
 /// After a successful reminder, wait before nagging the same Session again.
@@ -171,7 +172,7 @@ pub fn reminder_digest_text_with_letters(
         text.push_str(&lines.join("；"));
         text.push('。');
     }
-    text.push_str("请用 list_inbox 查看标题，需要时用 read_message 打开正文。");
+    text.push_str("请用 list_inbox 查看标题，用 read_message 确认已读。催办不含正文。");
     text
 }
 
@@ -240,11 +241,13 @@ mod tests {
     }
 
     #[test]
-    fn clocks_are_immediate_unread_and_five_minute_reply() {
+    fn clocks_are_five_minute_unread_and_reply() {
         let start = DateTime::parse_from_rfc3339("2026-08-17T00:00:00Z")
             .unwrap()
             .with_timezone(&Utc);
-        assert!(unread_is_due(start, start));
+        assert!(!unread_is_due(start, start));
+        assert!(!unread_is_due(start, start + Duration::minutes(4)));
+        assert!(unread_is_due(start, start + Duration::minutes(5)));
         assert!(!reply_is_due(start, start + Duration::minutes(4)));
         assert!(reply_is_due(start, start + Duration::minutes(5)));
         assert!(reminder_in_cooldown(start, start + Duration::minutes(4)));
@@ -255,7 +258,7 @@ mod tests {
     fn digest_text_is_chinese_and_does_not_repeat_the_letter_body() {
         assert_eq!(
             reminder_digest_text(2, 1),
-            "Codeg 系统信箱提醒（不是来自某个 Session 的信）：有 2 封未读会话信件；有 1 封已读但仍需回复的会话信件。请用 list_inbox 查看标题，需要时用 read_message 打开正文。"
+            "Codeg 系统信箱提醒（不是来自某个 Session 的信）：有 2 封未读会话信件；有 1 封已读但仍需回复的会话信件。请用 list_inbox 查看标题，用 read_message 确认已读。催办不含正文。"
         );
         let with_titles = reminder_digest_text_with_letters(
             1,

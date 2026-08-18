@@ -13,13 +13,12 @@ use crate::db::service::collaboration_room_service;
 use crate::db::service::prompt_queue_service;
 use crate::models::{
     CollaborationAgentReceiptKind, CollaborationAttentionState, CollaborationAuthorKind,
-    CollaborationDeliveryHint,
-    CollaborationDeliveryState, CollaborationDeliveryView, CollaborationFeed,
-    CollaborationInterruptState, CollaborationInvocationPolicy, CollaborationObligationState,
-    CollaborationSendResult, CollaborationSessionSnapshot, CollaborationTimelineProjection,
-    CollaborationUnreadOverview, CollaborationUnreadSession, CollaborationUrgency,
-    PostRoomMessageInput, PromptQueueDraft, PromptQueueItemState, RoomPostResult,
-    SendCollaborationMessageInput,
+    CollaborationDeliveryHint, CollaborationDeliveryState, CollaborationDeliveryView,
+    CollaborationFeed, CollaborationInterruptState, CollaborationInvocationPolicy,
+    CollaborationObligationState, CollaborationSendResult, CollaborationSessionSnapshot,
+    CollaborationTimelineProjection, CollaborationUnreadOverview, CollaborationUnreadSession,
+    CollaborationUrgency, PostRoomMessageInput, PromptQueueDraft, PromptQueueItemState,
+    RoomPostResult, SendCollaborationMessageInput,
 };
 
 const MAX_BODY_BYTES: usize = 1_000_000;
@@ -28,9 +27,12 @@ const MAX_DEDUPE_ID_BYTES: usize = 200;
 const DEFAULT_FEED_LIMIT: u32 = 100;
 const MAX_FEED_LIMIT: u32 = 500;
 const MAX_STORE_ONLY_DELIVERIES_PER_TURN: usize = 16;
-// One legal event body may already be MAX_BODY_BYTES. Leave bounded room for
-// the transcript-safe envelope so the oldest large message can still make
-// progress instead of blocking every later delivery forever.
+/// First delivery copies a bounded prefix of the body into the prompt.
+/// The rest stays in the mailbox / Room ledger; `read_message` / `read_room`
+/// return it. Legal events may be up to `MAX_BODY_BYTES`.
+const MAX_FIRST_DELIVERY_BODY_CHARS: usize = 8_000;
+// One legal event body may already be MAX_BODY_BYTES. First delivery now
+// truncates, so a 16-item store_only batch stays far below this ceiling.
 const MAX_STORE_ONLY_ENVELOPE_BYTES_PER_TURN: usize = MAX_BODY_BYTES + 128_000;
 pub const INACTIVE_TARGET_CONFIRMATION_REASON: &str =
     "collaboration_target_inactive_confirmation_required";
@@ -496,9 +498,15 @@ fn validate_input(input: &SendCollaborationMessageInput) -> Result<Vec<i32>, DbE
     Ok(targets.into_iter().collect())
 }
 
-/// Resolve an immutable collaboration event into a compact mailbox
-/// notification. The body remains exclusively in the mailbox and is returned
-/// to the target Agent only by `read_message(event_id)`.
+fn truncate_first_delivery_body(body: &str) -> (String, bool) {
+    let mut chars = body.chars();
+    let taken: String = chars.by_ref().take(MAX_FIRST_DELIVERY_BODY_CHARS).collect();
+    (taken, chars.next().is_some())
+}
+
+/// First delivery includes title + a bounded body. Consume is still
+/// `read_message` / `read_room`; overdue nags stay a short digest without
+/// repeating the body.
 fn prompt_draft_from_delivery_row(row: &QueryResult) -> Result<PromptQueueDraft, DbError> {
     let event_id: String = row.try_get("", "event_id")?;
     let delivery_id: String = row.try_get("", "delivery_id")?;
@@ -524,9 +532,10 @@ fn prompt_draft_from_delivery_row(row: &QueryResult) -> Result<PromptQueueDraft,
         .unwrap_or_else(|| "direct".to_string());
     let room_id: Option<String> = row.try_get("", "room_id")?;
     let is_room = visibility == "room" && room_id.is_some();
+    let (body_for_prompt, truncated) = truncate_first_delivery_body(&body);
     let metadata = serde_json::json!({
         "version": ENVELOPE_VERSION,
-        "kind": if is_room { "room_mention" } else { "system_notify" },
+        "kind": if is_room { "room_mention" } else { "letter" },
         "eventId": event_id,
         "deliveryId": delivery_id,
         "sourceConversationId": source_conversation_id,
@@ -538,6 +547,7 @@ fn prompt_draft_from_delivery_row(row: &QueryResult) -> Result<PromptQueueDraft,
         "replyToEventId": reply_to_event_id,
         "visibility": visibility,
         "roomId": room_id,
+        "bodyTruncated": truncated,
     });
     let metadata = serde_json::to_string(&metadata)
         .map_err(|err| validation(format!("Could not serialize collaboration envelope: {err}")))?;
@@ -546,26 +556,45 @@ fn prompt_draft_from_delivery_row(row: &QueryResult) -> Result<PromptQueueDraft,
     } else {
         ""
     };
-    let text = if is_room {
+    let host_text = if is_room {
         let room = room_id.as_deref().unwrap_or("");
+        let consume = if truncated {
+            format!(
+                "Body truncated after {MAX_FIRST_DELIVERY_BODY_CHARS} characters. Call read_room with room_id={room} (event_id={event_id}) for surrounding posts and the rest of this mention."
+            )
+        } else {
+            format!(
+                "Call read_room with room_id={room} for surrounding posts (event_id={event_id})."
+            )
+        };
         format!(
-            "{ENVELOPE_PREFIX}{event_id}>>>\n{metadata}\n\
-This is a Codeg Room mention in {room}. It is not a private letter from Session {source_conversation_id}. The body is not in this prompt.\n\
-Mention from {source_label} (#{source_conversation_id}): 《{letter_title}》.{reply_hint}\n\
-Call read_room with room_id={room} to open the timeline (event_id={event_id}). Reply with post_room using the same room_id and reply_to_event_id={event_id}. Later supplements must also set reply_to_event_id or they start a new thread. Do not send_message a private letter unless asked.\n\
---- message ---\n\
-{ENVELOPE_END_PREFIX}{event_id}>>>"
+            "This is a Codeg Room mention in {room}. It is not a private letter from Session {source_conversation_id}.\n\
+Mention from {source_label} (#{source_conversation_id}).{reply_hint}\n\
+{consume} Reply with post_room using the same room_id and reply_to_event_id={event_id}. Later supplements must also set reply_to_event_id or they start a new thread. Do not send_message a private letter unless asked."
         )
     } else {
+        let consume = if truncated {
+            format!(
+                "Body truncated after {MAX_FIRST_DELIVERY_BODY_CHARS} characters. Call read_message with event_id={event_id} for the rest and to mark this letter read."
+            )
+        } else {
+            format!(
+                "Call read_message with event_id={event_id} to mark this letter read. Listing inbox does not mark it read."
+            )
+        };
         format!(
-            "{ENVELOPE_PREFIX}{event_id}>>>\n{metadata}\n\
-This is a Codeg system mailbox notice. It is not a message from Session {source_conversation_id}. The letter body is not in this prompt.\n\
-Unread from {source_label} (#{source_conversation_id}): 《{letter_title}》.{reply_hint}\n\
-Call list_inbox to see titles. Call read_message with event_id={event_id} to open the body. If a reply is needed, send_message to sourceConversationId and set reply_to_event_id={event_id}. Later supplements to the same thread must also set reply_to_event_id; omitting it starts a new root.\n\
---- message ---\n\
-{ENVELOPE_END_PREFIX}{event_id}>>>"
+            "This is a Codeg mailbox letter from {source_label} (#{source_conversation_id}). It is not a Room post.\n\
+Title: 《{letter_title}》.{reply_hint}\n\
+{consume} If a reply is needed, send_message to sourceConversationId and set reply_to_event_id={event_id}. Later supplements to the same thread must also set reply_to_event_id; omitting it starts a new root."
         )
     };
+    let text = format!(
+        "{ENVELOPE_PREFIX}{event_id}>>>\n{metadata}\n\
+{host_text}\n\
+--- message ---\n\
+{body_for_prompt}\n\
+{ENVELOPE_END_PREFIX}{event_id}>>>"
+    );
     Ok(PromptQueueDraft {
         blocks: vec![PromptInputBlock::Text { text }],
         display_text: format!("Codeg mailbox: {letter_title}"),
@@ -1584,12 +1613,11 @@ pub async fn post_room(
         crate::acp::session_collaboration::normalize_letter_title(&input.subject)
             .map_err(validation)?
     };
-    let (title_snapshot, agent_snapshot) =
-        if input.author_kind == CollaborationAuthorKind::Human {
-            (Some("You".to_string()), "human".to_string())
-        } else {
-            (source.title.clone(), source.agent_type.clone())
-        };
+    let (title_snapshot, agent_snapshot) = if input.author_kind == CollaborationAuthorKind::Human {
+        (Some("You".to_string()), "human".to_string())
+    } else {
+        (source.title.clone(), source.agent_type.clone())
+    };
     let inserted = txn
         .execute(statement(
             "INSERT OR IGNORE INTO collaboration_event \
@@ -1662,8 +1690,7 @@ pub async fn post_room(
         // public timeline can show the @. They must not be woken: skip the
         // prompt queue and do not park an awaiting-reply obligation.
         let archived = target.as_ref().is_some_and(|session| session.archived);
-        let invoke = input.invocation_policy
-            == CollaborationInvocationPolicy::InvokeWhenIdle
+        let invoke = input.invocation_policy == CollaborationInvocationPolicy::InvokeWhenIdle
             && target.as_ref().is_some_and(|session| !session.archived);
         let (snapshot, state, error) = match target.as_ref() {
             Some(target) => (
@@ -2144,6 +2171,7 @@ pub async fn list_overdue_reminder_targets(
                   AND c.deleted_at IS NULL \
                  LEFT JOIN conversation_collaboration_state s \
                    ON s.conversation_id = d.target_conversation_id \
+                 WHERE COALESCE(e.visibility, 'direct') = 'direct' \
                  GROUP BY d.target_conversation_id \
                  HAVING overdue_unread > 0 OR overdue_reply > 0"
             ),
@@ -2212,6 +2240,7 @@ async fn overdue_reminder_letters(
                  JOIN collaboration_event e ON e.id = d.event_id \
                  WHERE d.target_conversation_id = ? \
                    AND d.state <> 'dismissed' AND d.state <> 'failed' \
+                   {DIRECT_MAIL_SQL} \
                    AND ( \
                         (d.invocation_policy = 'invoke_when_idle' \
                          AND d.agent_received_at IS NULL \
@@ -2766,8 +2795,8 @@ mod tests {
             .all(|text| text.contains("Call read_message")));
         assert!(attached
             .iter()
-            .all(|text| text.contains("Codeg system mailbox notice")));
-        assert!(attached.iter().all(|text| !text.contains("review note")));
+            .all(|text| text.contains("Codeg mailbox letter")));
+        assert!(attached.iter().all(|text| text.contains("review note")));
         assert!(
             claim_pending_store_only_for_turn(&db.conn, target, "another-turn")
                 .await
@@ -2923,7 +2952,7 @@ mod tests {
         let PromptInputBlock::Text { text } = &draft.blocks[0] else {
             panic!("store_only draft must be one text envelope");
         };
-        assert!(!text.contains("wake the other Session"));
+        assert!(text.contains("wake the other Session"));
         assert!(text.contains(&sent.event_id));
         assert!(text.contains("Call read_message"));
     }
@@ -2964,8 +2993,9 @@ mod tests {
                 panic!("collaboration delivery must resolve to one text envelope");
             };
             assert!(text.starts_with(&format!("{ENVELOPE_PREFIX}{}>>>", sent.event_id)));
-            assert!(!text.contains("compare the evidence"));
+            assert!(text.contains("compare the evidence"));
             assert!(text.contains("Call read_message"));
+            assert!(text.contains("\"kind\":\"letter\""));
             assert!(text.ends_with(&format!("{ENVELOPE_END_PREFIX}{}>>>", sent.event_id)));
         }
 
@@ -3819,7 +3849,7 @@ mod tests {
         assert!(claimed.blocks.iter().any(|block| matches!(
             block,
             PromptInputBlock::Text { text } if text.contains("Call read_message")
-                && !text.contains("include me later")
+                && text.contains("include me later")
         )));
     }
 
@@ -4027,8 +4057,9 @@ mod tests {
             panic!("expected a text envelope");
         };
         assert!(first_text.contains("\"sourceAgentType\":\"codex\""));
-        assert!(!first_text.contains("keep this wording"));
+        assert!(first_text.contains("keep this wording"));
         assert!(first_text.contains("Call read_message"));
+        assert!(first_text.contains("\"kind\":\"letter\""));
         assert!(first_text.contains(&sent.event_id));
         release_store_only_batch(&db.conn, target, &first)
             .await
@@ -4052,8 +4083,30 @@ mod tests {
         let sent = send(&db.conn, invoke_input(source, vec![target], "due", "hello"))
             .await
             .unwrap();
+        assert!(
+            list_overdue_reminder_targets(&db.conn)
+                .await
+                .unwrap()
+                .is_empty(),
+            "new unread mail is not due until the five-minute clock elapses"
+        );
+
+        db.conn
+            .execute(Statement::from_sql_and_values(
+                DbBackend::Sqlite,
+                "UPDATE collaboration_delivery \
+                 SET created_at = datetime('now', '-6 minutes') \
+                 WHERE event_id = ?",
+                vec![sent.event_id.clone().into()],
+            ))
+            .await
+            .unwrap();
         let immediately = list_overdue_reminder_targets(&db.conn).await.unwrap();
-        assert_eq!(immediately.len(), 1, "new unread mail is due immediately");
+        assert_eq!(
+            immediately.len(),
+            1,
+            "unread mail is due after five minutes"
+        );
         assert_eq!(immediately[0].conversation_id, target);
 
         mark_seen(&db.conn, target, vec![sent.deliveries[0].id.clone()])
@@ -4191,5 +4244,53 @@ mod tests {
         assert_eq!(overdue[0].overdue_reply, 1);
         assert_eq!(overdue[0].letters.len(), 1);
         assert!(overdue[0].letters[0].awaiting_reply);
+    }
+
+    #[tokio::test]
+    async fn first_delivery_puts_body_after_separator_and_asks_read_message_to_consume() {
+        let (db, source, target, _) = seeded_memory().await;
+        let sent = send(
+            &db.conn,
+            input(source, vec![target], "resume-envelope", "keep this wording"),
+        )
+        .await
+        .unwrap();
+        let draft = prompt_draft_for_origin(&db.conn, target, &sent.event_id)
+            .await
+            .expect("first delivery must be injectable");
+        let PromptInputBlock::Text { text } = &draft.blocks[0] else {
+            panic!("expected a text envelope");
+        };
+        let separator = text
+            .find("--- message ---\n")
+            .expect("envelope must keep the body after the separator");
+        let after = &text[separator + "--- message ---\n".len()..];
+        assert!(
+            after.starts_with("keep this wording\n"),
+            "first delivery must carry the letter body: {after}"
+        );
+        assert!(text.contains("\"kind\":\"letter\""));
+        assert!(text.contains("Call read_message"));
+        assert!(!text.contains("Call list_inbox to see titles"));
+        assert!(!text.contains("The letter body is not in this prompt"));
+    }
+
+    #[tokio::test]
+    async fn first_delivery_truncates_oversized_body() {
+        let (db, source, target, _) = seeded_memory().await;
+        let body = "x".repeat(MAX_FIRST_DELIVERY_BODY_CHARS + 40);
+        let sent = send(&db.conn, input(source, vec![target], "huge-letter", &body))
+            .await
+            .unwrap();
+        let draft = prompt_draft_for_origin(&db.conn, target, &sent.event_id)
+            .await
+            .expect("truncated first delivery must still be injectable");
+        let PromptInputBlock::Text { text } = &draft.blocks[0] else {
+            panic!("expected a text envelope");
+        };
+        assert!(text.contains("Body truncated"));
+        assert!(text.contains(&"x".repeat(MAX_FIRST_DELIVERY_BODY_CHARS)));
+        assert!(!text.contains(&body));
+        assert!(text.contains("Call read_message"));
     }
 }

@@ -1,9 +1,10 @@
 //! Periodic mailbox reminder sweep.
 //!
-//! New unread mail is due immediately. Inject via native steering when that
-//! channel is live; otherwise enqueue attention on the same PromptQueue used
-//! by the first notice. Idle and closed Sessions are started so the Agent
-//! can receive it.
+//! First delivery already carries the body. This sweep nags only after the
+//! unread or read-awaiting-reply clock elapses. Inject via native steering
+//! when that channel is live; otherwise enqueue attention on the same
+//! PromptQueue used by the first notice. Idle and closed Sessions are
+//! started so the Agent can receive it.
 
 use std::time::Duration;
 

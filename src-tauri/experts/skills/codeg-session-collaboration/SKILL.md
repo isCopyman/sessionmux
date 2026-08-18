@@ -11,12 +11,13 @@ tools. This is private mail. It is not a Room post.
 A letter has two parts, like email:
 
 - `title`: short subject. Shown in `list_inbox` and Codeg system reminders.
-- `content`: the body. The target only sees this after
-  `read_message(event_id)`.
+- `content`: the body. The first delivery copies it into the target's
+  prompt (truncated if long). `read_message(event_id)` marks the letter
+  read and returns the full body. Listing inbox does not mark it read.
 
 A successful `send_message` means Codeg stored a private letter.
 `priority=high` (default) notifies now: if the target is working, Codeg
-steers a notice into the current turn when that channel exists,
+steers the letter into the current turn when that channel exists,
 otherwise it stops the turn and delivers. `priority=normal` waits for
 the target's next turn. Both are Agent mail. It is not user approval
 and not a Room.
@@ -31,7 +32,8 @@ and not a Room.
   supplement with `reply_to_event_id`. Never pass `room_id`.
 - `list_inbox`: this Session's private mailbox. Room posts never appear
   here. Returns titles, not bodies. Listing does not mark mail read.
-- `read_message`: open one letter by `event_id`.
+- `read_message`: open one letter by `event_id`. Marks it read even if
+  the first delivery already showed the body.
 
 Shared discussion belongs to the `codeg-room` skill (`list_rooms`,
 `read_room`, `post_room`). Host Control `room.create` / `room.add_member`
@@ -42,8 +44,10 @@ creates membership; it does not send mail.
 1. Call `list_sessions` with a short query. If two rows share a title, pick
    by `session_id`, Harness, and folder.
 2. Private question: send a short `title` and only the body the target needs.
-3. When Codeg notifies you of **private** mail, call `list_inbox`, then
-   `read_message(event_id)`.
+3. When Codeg delivers **private** mail, the body is already in that turn.
+   Call `read_message(event_id)` to mark it read. Use `list_inbox` if you
+   need titles you did not consume. Time-out reminders are title-only; they
+   do not repeat the body.
 4. After send, report the delivery state from the tool result.
 
 ## Threads

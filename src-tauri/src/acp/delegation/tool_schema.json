@@ -144,7 +144,7 @@
   },
   {
     "name": "send_message",
-    "description": "Send a durable private mailbox letter. Letters have a short title and a body. The target gets a Codeg system notice with the title only and must call read_message(event_id). This is not a Room post — use post_room for shared Rooms. priority=high (default) tells the target now: steer into the running turn when that channel exists, otherwise stop the turn and deliver; a closed Session is started. priority=normal waits for the target's next ordinary turn — the letter is still for the Agent. For a private reply or a follow-up supplement on the same thread, target the same peer and set reply_to_event_id. Omitting reply_to_event_id starts a new thread.",
+    "description": "Send a durable private mailbox letter. Letters have a short title and a body. The first delivery copies title plus body into the target's prompt (truncated if long). Call read_message(event_id) to mark the letter read and to fetch any truncated remainder. Time-out reminders are title-only and do not repeat the body. This is not a Room post — use post_room for shared Rooms. priority=high (default) tells the target now: steer into the running turn when that channel exists, otherwise stop the turn and deliver; a closed Session is started. priority=normal waits for the target's next ordinary turn — the letter is still for the Agent. For a private reply or a follow-up supplement on the same thread, target the same peer and set reply_to_event_id. Omitting reply_to_event_id starts a new thread.",
     "inputSchema": {
       "type": "object",
       "required": ["target_session_ids", "title", "content"],
@@ -165,7 +165,7 @@
         "content": {
           "type": "string",
           "minLength": 1,
-          "description": "The letter body. Only returned by read_message; not copied into the system notice or list_inbox."
+          "description": "The letter body. Copied into the first delivery prompt (truncated if long). list_inbox stays titles only. read_message returns the full body and marks the letter read."
         },
         "priority": {
           "type": "string",
@@ -195,7 +195,7 @@
   },
   {
     "name": "list_inbox",
-    "description": "List this Session's Agent mailbox. box=inbox (default) lists received letters; box=sent lists letters this Session sent, with the same filter words applied to the recipient (unread: they have not received it; awaiting_reply: they still owe the reply). Use peer_session_id to see only the exchange with one Session. Results are newest first and include the letter title only — call read_message with event_id to open a received body. Listing does not mark mail as read. A human opening the Session never consumes this mailbox.",
+    "description": "List this Session's Agent mailbox. box=inbox (default) lists received letters; box=sent lists letters this Session sent, with the same filter words applied to the recipient (unread: they have not received it; awaiting_reply: they still owe the reply). Use peer_session_id to see only the exchange with one Session. Results are newest first and include the letter title only — call read_message with event_id to mark a received letter read and to open the full body. Listing does not mark mail as read. A human opening the Session never consumes this mailbox.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -225,7 +225,7 @@
   },
   {
     "name": "read_message",
-    "description": "Open one inbound Agent mailbox letter by event_id and return its title and full body. Opening marks the letter read for this Agent so unread reminders stop. It does not send a reply and does not clear a reply obligation. If expects_reply is true, answer with send_message targeting from_session_id and setting reply_to_event_id. Further supplements to the same letter must also set reply_to_event_id; omitting it starts a new thread. Do not invent event ids. Do not use this for Room posts — call read_room instead.",
+    "description": "Open one inbound Agent mailbox letter by event_id and return its title and full body. Opening marks the letter read for this Agent so unread reminders stop, including when the first delivery already showed the body. It does not send a reply and does not clear a reply obligation. If expects_reply is true, answer with send_message targeting from_session_id and setting reply_to_event_id. Further supplements to the same letter must also set reply_to_event_id; omitting it starts a new thread. Do not invent event ids. Do not use this for Room posts — call read_room instead.",
     "inputSchema": {
       "type": "object",
       "required": ["event_id"],
@@ -259,7 +259,7 @@
   },
   {
     "name": "read_room",
-    "description": "Read a shared Room timeline this Session belongs to. Returns members and recent posts with full bodies. Room posts never appear in list_inbox. After a Room mention envelope, call this with the given room_id. Reply with post_room using the same room_id and reply_to_event_id; do not send_message a private letter unless asked.",
+    "description": "Read a shared Room timeline this Session belongs to. Returns members and recent posts with full bodies. Room posts never appear in list_inbox. A Room mention envelope already includes that post's body; call this with the given room_id for surrounding posts. Reply with post_room using the same room_id and reply_to_event_id; do not send_message a private letter unless asked.",
     "inputSchema": {
       "type": "object",
       "required": ["room_id"],

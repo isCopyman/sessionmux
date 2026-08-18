@@ -1692,7 +1692,7 @@ pub fn render_session_inbox_result(outcome: &Value) -> Value {
                     .to_string()
             } else {
                 format!(
-                    "Inbox: {unread} unread, {awaiting} awaiting reply. Titles only — open a letter with read_message(event_id)."
+                    "Inbox: {unread} unread, {awaiting} awaiting reply. Titles only — call read_message(event_id) to mark read and open the full body."
                 )
             }];
             for item in items {

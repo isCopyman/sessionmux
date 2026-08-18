@@ -176,10 +176,7 @@ async fn collection_root_folder<C: ConnectionTrait>(
         ))
         .await?
         .ok_or_else(|| DbError::NotFound(format!("Collection {collection_id}")))?;
-    Ok((
-        row.try_get("", "id")?,
-        row.try_get("", "root_folder_id")?,
-    ))
+    Ok((row.try_get("", "id")?, row.try_get("", "root_folder_id")?))
 }
 
 async fn shared_collection_among<C: ConnectionTrait>(
@@ -907,6 +904,40 @@ mod tests {
             .unwrap();
         assert_eq!(queued, 1);
 
+        let draft = crate::db::service::collaboration_service::prompt_draft_for_origin(
+            &db.conn,
+            b,
+            &posted.event_id,
+        )
+        .await
+        .expect("Room @ must be injectable");
+        let crate::acp::types::PromptInputBlock::Text { text } = &draft.blocks[0] else {
+            panic!("Room @ must resolve to one text envelope");
+        };
+        assert!(text.contains("\"kind\":\"room_mention\""));
+        assert!(text.contains("check this"));
+        assert!(text.contains("Call read_room"));
+        assert!(!text.contains("Call list_inbox"));
+        assert!(!text.contains("Call read_message"));
+
+        db.conn
+            .execute(Statement::from_sql_and_values(
+                DbBackend::Sqlite,
+                "UPDATE collaboration_delivery \
+                 SET created_at = datetime('now', '-6 minutes') \
+                 WHERE event_id = ?",
+                vec![posted.event_id.clone().into()],
+            ))
+            .await
+            .unwrap();
+        assert!(
+            crate::db::service::collaboration_service::list_overdue_reminder_targets(&db.conn)
+                .await
+                .unwrap()
+                .is_empty(),
+            "Room @ must not enter the mailbox unread nag list"
+        );
+
         let inbox = list_inbox(
             &db.conn,
             b,
@@ -1240,8 +1271,7 @@ mod tests {
 
         let not_the_creators_slot = make_room(&db, a, vec![a, b]).await;
         assert_eq!(
-            not_the_creators_slot.collection_id,
-            None,
+            not_the_creators_slot.collection_id, None,
             "a Room does not inherit Collection from the creator Session alone"
         );
         assert_eq!(not_the_creators_slot.root_folder_id, Some(folder_id));
@@ -1274,9 +1304,14 @@ mod tests {
         assert_eq!(independent.collection_id, None);
         assert_eq!(independent.root_folder_id, Some(folder_id));
 
-        assign_to_collection(&db.conn, vec![independent.id.clone()], Some(collection.id), None)
-            .await
-            .expect("move room");
+        assign_to_collection(
+            &db.conn,
+            vec![independent.id.clone()],
+            Some(collection.id),
+            None,
+        )
+        .await
+        .expect("move room");
         let moved = get(&db.conn, &independent.id).await.unwrap();
         assert_eq!(moved.collection_id, Some(collection.id));
     }

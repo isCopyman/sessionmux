@@ -1408,7 +1408,7 @@ mod tests {
         let PromptInputBlock::Text { text } = &blocks[0] else {
             panic!("expected text envelope");
         };
-        assert!(!text.contains("PING queue idle"));
+        assert!(text.contains("PING queue idle"));
         assert!(text.contains("Call read_message"));
         dispatch_ack
             .expect("collaboration dispatch acknowledgement")
@@ -1461,7 +1461,7 @@ mod tests {
         let ConnectionCommand::Steer { text, reply } = command else {
             panic!("busy Session message must steer");
         };
-        assert!(!text.contains("PING queue steer"));
+        assert!(text.contains("PING queue steer"));
         assert!(text.contains("Call read_message"));
         reply.send(Ok(SteerOutcome::Injected)).expect("steer reply");
         wait_until(|| async {
@@ -1597,9 +1597,9 @@ mod tests {
         let PromptInputBlock::Text { text } = &blocks[0] else {
             panic!("expected stable text envelope");
         };
-        assert!(text.contains("system mailbox notice"));
+        assert!(text.contains("mailbox letter"));
         assert!(text.contains("Call read_message"));
-        assert!(!text.contains("review this claim"));
+        assert!(text.contains("review this claim"));
         assert_eq!(
             user_message.as_ref().map(|(id, _)| id.as_str()),
             Some(sent.deliveries[0].id.as_str())
@@ -1972,9 +1972,9 @@ mod tests {
         let ConnectionCommand::Steer { text, reply } = command else {
             panic!("expected native steer command");
         };
-        assert!(text.contains("system mailbox notice"));
+        assert!(text.contains("mailbox letter"));
         assert!(text.contains("Call read_message"));
-        assert!(!text.contains("correct the premise"));
+        assert!(text.contains("correct the premise"));
         reply.send(Ok(SteerOutcome::Injected)).expect("steer reply");
 
         wait_until(|| async {

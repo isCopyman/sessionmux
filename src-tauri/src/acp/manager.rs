@@ -3859,8 +3859,9 @@ mod tests {
         mut rx: tokio::sync::mpsc::Receiver<crate::acp::connection::ConnectionCommand>,
         expected: GoalControlAction,
         landed: bool,
-    ) -> tokio::task::JoinHandle<tokio::sync::mpsc::Receiver<crate::acp::connection::ConnectionCommand>>
-    {
+    ) -> tokio::task::JoinHandle<
+        tokio::sync::mpsc::Receiver<crate::acp::connection::ConnectionCommand>,
+    > {
         tokio::spawn(async move {
             match rx.recv().await.expect("goal control enqueued") {
                 ConnectionCommand::GoalControl { action, reply } => {
@@ -3960,7 +3961,7 @@ mod tests {
         let mgr = ConnectionManager::new();
         let mut rx = insert_live_connection(&mgr, "c-goal-paused", AgentType::Codex, None).await;
         mark_prompting(&mgr, "c-goal-paused").await; // the user's own prompt
-        // `goal_active` stays false: the last snapshot was `paused`.
+                                                     // `goal_active` stays false: the last snapshot was `paused`.
 
         mgr.goal_control(&db.conn, "c-goal-paused", GoalControlAction::Clear)
             .await
@@ -4264,7 +4265,7 @@ mod tests {
             SendCollaborationMessageInput {
                 source_conversation_id: source,
                 target_conversation_ids: vec![target],
-            subject: "Test letter".into(),
+                subject: "Test letter".into(),
                 body: "mail from another Harness".into(),
                 client_dedupe_id: "chat-store-only".into(),
                 invocation_policy: CollaborationInvocationPolicy::StoreOnly,
@@ -4328,7 +4329,7 @@ mod tests {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        assert!(!text[0].contains("mail from another Harness"));
+        assert!(text[0].contains("mail from another Harness"));
         assert!(text[0].contains("Call read_message"));
         assert_eq!(text[1], "message from managed chat");
         let delivery = collaboration_service::feed(&db.conn, target, None)
@@ -4753,7 +4754,7 @@ mod tests {
             SendCollaborationMessageInput {
                 source_conversation_id: source,
                 target_conversation_ids: vec![target],
-            subject: "Test letter".into(),
+                subject: "Test letter".into(),
                 body: "compare this evidence".to_string(),
                 client_dedupe_id: "cross-harness-natural-turn".to_string(),
                 invocation_policy: CollaborationInvocationPolicy::StoreOnly,
@@ -4823,7 +4824,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(harness_text.len(), 2);
-        assert!(!harness_text[0].contains("compare this evidence"));
+        assert!(harness_text[0].contains("compare this evidence"));
         assert!(harness_text[0].contains("Call read_message"));
         assert_eq!(harness_text[1], "my own question");
 
@@ -4866,7 +4867,7 @@ mod tests {
             SendCollaborationMessageInput {
                 source_conversation_id: source,
                 target_conversation_ids: vec![target],
-            subject: "Test letter".into(),
+                subject: "Test letter".into(),
                 body: "do not replay an uncertain delivery".into(),
                 client_dedupe_id: "cross-harness-unknown".into(),
                 invocation_policy: CollaborationInvocationPolicy::StoreOnly,
@@ -4937,7 +4938,7 @@ mod tests {
             SendCollaborationMessageInput {
                 source_conversation_id: source,
                 target_conversation_ids: vec![target],
-            subject: "Test letter".into(),
+                subject: "Test letter".into(),
                 body: "retry after a known failure".to_string(),
                 client_dedupe_id: "cross-harness-failed-turn".to_string(),
                 invocation_policy: CollaborationInvocationPolicy::StoreOnly,
@@ -6437,7 +6438,7 @@ mod tests {
             SendCollaborationMessageInput {
                 source_conversation_id: source,
                 target_conversation_ids: vec![c1.id],
-            subject: "Test letter".into(),
+                subject: "Test letter".into(),
                 body: "mail addressed to immutable C1".into(),
                 client_dedupe_id: "fork-mail-c1".into(),
                 invocation_policy: CollaborationInvocationPolicy::StoreOnly,

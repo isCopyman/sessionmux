@@ -1,6 +1,6 @@
 # 群聊、Mailbox 与人类角色
 
-> 状态：设计拍板稿（2026-08-18）。第 13、14 节已落地。归档 Session 的 Room `@` 不再入队唤醒。第 15 节冻结：群历史要搜，不要把 `read_room` 当全文检索。下一刀仍是删 Room API。  
+> 状态：设计拍板稿（2026-08-18）。第 13、14 节已落地。归档 Session 的 Room `@` 不再入队唤醒。第 15 节冻结：群历史要搜，不要把 `read_room` 当全文检索。第 16 节：第一次投递带正文，催办仍摘要。队列合并 / 连续 `@` 不打断是下一刀。  
 > 问题：群聊是不是另一套消息系统？Mailbox 是不是完全私聊？人类该打字还是该发邮件？CCCC 怎么做？  
 > 已有长文：[群聊 RFC](./GROUP-CONVERSATION-RFC.zh-CN.md)、[通信 RFC](./SESSION-COMMUNICATION-RFC.zh-CN.md)、[产品场景](./PRODUCT-SPEC.zh-CN.md#48-建立一个共享讨论室)  
 > 本文只补那三份没讲清的东西：协议边界、人类三条入口、和 CCCC 的真实差别。  
@@ -333,7 +333,7 @@ Slack 同一个 `@user`：频道里是点名，DM 里是私信。CCCC 正文 `@`
 | 邮箱 / 分别发送 | 定向隔离私信 | `send_message`；人用邮箱面板 | 用 `post_room` 或输入框 `@` 偷发 |
 | Room 目标条 / 群徽章 | 公共账本上的点名 | `post_room.mention_session_ids` | 进 mailbox inbox |
 
-Agent 看见同一 URI 时靠**已经落地的信封**分流：`kind=room_mention` → `read_room` / `post_room`；`kind=system_notify` → `list_inbox` / `read_message`。再加 `mention_channel` 只是复制 `visibility`。
+Agent 看见同一 URI 时靠**已经落地的信封**分流：`kind=room_mention` → 正文已在信封里，用 `read_room` / `post_room` 看前后文并回群；`kind=letter` → 私信第一次投递，正文已在信封里，用 `read_message` 标已读。`kind=system_notify` 只出现在旧 transcript 里（当时第一次投递是“请去读”）。现在的超时催办是独立中文摘要，不再走这套信封，也不重发正文。
 
 真缺口是人类 Session 作曲器：若把同一徽章再接到 `send_message`，就会和 `get_session_info` 抢。所以 **不要接线**。人要写信，用邮箱；人要在群里点名，用 Room。
 
@@ -362,3 +362,21 @@ V1 形状（学 CCCC `search_messages` 和 Discord 的“搜到再跳回上下�
 5. 可抽前端搜索框 / 高亮命中。**禁止**把 ctx、邮箱过滤、群账本并成一个后端函数。
 
 下一刀功能（第 11 节）仍是删 Room API；删 Workbench 不再 CASCADE 出孤儿 `collaboration_event`。`read_room` 改尾窗 + `search_room` 作为独立小刀插在删 Room 之后、Room 回跳之前。文件搬家只插空做，不合并写路径。
+
+调度器下一刀：同 Session 排队的通知 claim 时合并；连续 `@` 禁止一条一个 interrupt（能 steer 就 steer，否则等本轮结束再一批投）。人的输入框和“停掉再发”仍单独优先。
+
+## 16. 第一次投递带正文，催办才用系统摘要
+
+Mailbox 和 Room `@` 共用一个 Dispatcher，但第一次进 Turn 的信封不是“请去读”的说明书。
+
+| 时机 | 进 prompt 的是什么 | 已读？ |
+|---|---|---|
+| 第一次投递 | 标题 + 正文（超长截断；余下 `read_message` / `read_room`） | 否。投递成功 ≠ 消费 |
+| Agent 调 `read_message` | 全文 | 是。已见过正文再调一次 = 点已读 |
+| 过了 5 分钟仍未 consume | 短摘要 + `event_id`，不重发全文 | 仍未读 |
+| 已读但 `expects_reply` 且 5 分钟没回 | 短摘要 | 已读未回 |
+
+群帖没有 title。`kind=room_mention` 的正文就是那条 `content`。没 `@` 的群发言不进调度器。
+
+不要学 CCCC 的 `auto_mark_on_delivery`：塞进 prompt 只证明 Host 投了。
+

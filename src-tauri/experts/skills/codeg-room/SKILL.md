@@ -16,8 +16,8 @@ This is not private mail. Do not use `send_message` / `list_inbox` /
 
 - `list_rooms`: Rooms this Session already belongs to. Use the returned
   `room_id`.
-- `read_room`: members plus timeline bodies. Call this after a Room
-  mention envelope.
+- `read_room`: members plus timeline bodies. A Room mention envelope
+  already includes that post's body; call this for surrounding posts.
 - `post_room`: write to the Room.
   - Omit `mention_session_ids` (and `mention_all=false`) to record only.
   - Pass `mention_session_ids` or `mention_all=true` to tap a Session.
@@ -37,7 +37,8 @@ Lifecycle (create, add a member) is Host Control via `codeg_help` /
 ## Workflow
 
 1. If you do not have a `room_id`, call `list_rooms`.
-2. `read_room` before answering a mention so you see the public thread.
+2. The mention envelope already has that post. Call `read_room` when you
+   need surrounding posts or a truncated remainder.
 3. Reply with `post_room`. Default back to the Room, not to private mail.
 4. `@` only the Sessions that must act. Do not `@all` unless asked.
 
