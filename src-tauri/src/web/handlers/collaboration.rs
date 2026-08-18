@@ -90,6 +90,7 @@ pub async fn send(
             &state.db.conn,
             &state.emitter,
             &state.prompt_queue,
+            Some(&state.connection_manager),
             params.input,
         )
         .await?,
@@ -388,6 +389,7 @@ pub async fn room_post(
             &state.db.conn,
             &state.emitter,
             &state.prompt_queue,
+            Some(&state.connection_manager),
             params.input,
         )
         .await?,

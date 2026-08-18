@@ -7,11 +7,9 @@ use super::prompt_queue::PromptQueueItemState;
 ///
 /// This is the Host scheduler field, not the sender-facing letter priority.
 /// Senders pick `priority=high|normal`; Host maps it here:
-/// - high → [`Self::InvokeWhenIdle`] (notify now, wait if busy, resume if closed)
+/// - high → [`Self::InvokeWhenIdle`] (steer if the busy target supports it,
+///   otherwise interrupt; resume a closed Session)
 /// - normal → [`Self::StoreOnly`] (attach to the next ordinary turn)
-///
-/// `invoke_when_idle` is accurate for the runtime — even important mail does
-/// not interrupt the current turn — and the wrong name to show senders.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CollaborationInvocationPolicy {

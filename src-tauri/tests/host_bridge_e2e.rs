@@ -457,6 +457,7 @@ async fn real_host_bridge_round_trips_reply_status_through_host_core() {
         }),
         EventEmitter::Noop,
         PromptQueueHandle::disconnected_for_test(),
+        codeg_lib::acp::manager::ConnectionManager::new(),
         config,
     ));
 
@@ -665,6 +666,7 @@ async fn public_mcp_creates_organizes_and_replies_through_host_core() {
         Arc::clone(&db),
         EventEmitter::Noop,
         PromptQueueHandle::disconnected_for_test(),
+        codeg_lib::acp::manager::ConnectionManager::new(),
         collab_config,
     ));
 

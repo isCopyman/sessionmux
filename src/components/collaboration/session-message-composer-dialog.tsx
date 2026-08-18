@@ -76,8 +76,6 @@ export function SessionMessageComposerDialog({
   const [subject, setSubject] = useState("")
   const [body, setBody] = useState(initialBody)
   const [priority, setPriority] = useState<"high" | "normal">("high")
-  const [deliveryHint, setDeliveryHint] =
-    useState<CollaborationDeliveryHint>("default")
   const [expectsReply, setExpectsReply] = useState(false)
   const [sending, setSending] = useState(false)
 
@@ -151,7 +149,6 @@ export function SessionMessageComposerDialog({
     setSubject("")
     setBody(initialBody)
     setPriority("high")
-    setDeliveryHint("default")
     setExpectsReply(false)
   }
 
@@ -183,7 +180,9 @@ export function SessionMessageComposerDialog({
         invocationPolicy: (priority === "high"
           ? "invoke_when_idle"
           : "store_only") satisfies CollaborationInvocationPolicy,
-        deliveryHint,
+        deliveryHint: (priority === "high"
+          ? "steer_if_supported"
+          : "default") satisfies CollaborationDeliveryHint,
         expectsReply,
         urgency: priority === "high" ? "urgent" : "normal",
         replyToEventId,

@@ -16,9 +16,11 @@ A letter has two parts, like email:
   Room timeline; only `@` mentions create a delivery.
 
 A successful `send_message` without `room_id` means Codeg stored a private
-letter. `priority=high` (default) queues a **system notice** now.
-`priority=normal` waits for the target's next turn. Both are Agent mail.
-It is not user approval and not a Room.
+letter. `priority=high` (default) notifies now: if the target is working,
+Codeg steers a notice into the current turn when that channel exists,
+otherwise it stops the turn and delivers. `priority=normal` waits for
+the target's next turn. Both are Agent mail. It is not user approval
+and not a Room.
 
 A successful `send_message` with `room_id` means Codeg stored a Room-visible
 event. Empty `target_session_ids` is record-only (nobody is woken). Mention
@@ -30,8 +32,9 @@ ids still create deliveries.
   `session_id` as the only address.
 - `send_message`: send `title` + `content`.
   - Private mail: `target_session_ids` required, omit `room_id`.
-  - `priority=high` (default) notifies now; `priority=normal` waits
-    for the next ordinary turn.
+  - `priority=high` (default) notifies now (steer if supported,
+    otherwise interrupt); `priority=normal` waits for the next
+    ordinary turn.
   - Room post: set `room_id`. Mentions go in `target_session_ids` or
     `mention_all=true`. Reply or supplement with the same `room_id` and
     `reply_to_event_id`.

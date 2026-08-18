@@ -71,7 +71,8 @@ pub enum SessionMessageDeliveryMode {
 pub enum SessionMessagePriority {
     /// Persist and attach the letter to the target's next ordinary turn.
     Normal,
-    /// Notify now when idle, and start/resume a closed Session if needed.
+    /// Tell the target now: steer into the running turn when that channel
+    /// exists, otherwise stop the turn and deliver. Closed Sessions resume.
     High,
 }
 

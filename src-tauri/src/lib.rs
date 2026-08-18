@@ -729,6 +729,7 @@ mod tauri_app {
                                 app.state::<crate::prompt_queue::PromptQueueHandle>()
                                     .inner()
                                     .clone(),
+                                cm_state.clone_ref(),
                                 session_collaboration_config.clone(),
                             ),
                         ),

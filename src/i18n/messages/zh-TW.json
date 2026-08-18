@@ -5066,7 +5066,7 @@
     "letterPriority": "信件優先級",
     "priorityHigh": "重要",
     "priorityNormal": "普通",
-    "priorityHighDescription": "立刻通知目標 Agent。關閉的會話會被啟動，以便讀信。",
+    "priorityHighDescription": "立刻通知目標 Agent。若它正在工作，有原生插話就插入；否則停止目前輪再投遞。",
     "priorityNormalDescription": "先放進郵箱，等目標 Agent 下一輪再讀。仍然是給 Agent 的信。",
     "storeOnlyDescription": "The message is delivered and shown now. It will not start or interrupt the target agent.",
     "invokeWhenIdleDescription": "The message is delivered now and queued for the target agent after its current turn. A closed session waits for confirmation after it is resumed.",

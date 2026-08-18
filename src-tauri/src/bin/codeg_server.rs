@@ -411,6 +411,7 @@ async fn async_main() -> ExitCode {
                     }),
                     state.emitter.clone(),
                     state.prompt_queue.clone(),
+                    state.connection_manager.clone_ref(),
                     session_collaboration_config.clone(),
                 ),
             ),

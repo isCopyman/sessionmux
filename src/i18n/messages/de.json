@@ -5066,7 +5066,7 @@
     "letterPriority": "Letter priority",
     "priorityHigh": "Important",
     "priorityNormal": "Normal",
-    "priorityHighDescription": "Notify the target Agent now. A closed session is started so it can read the letter.",
+    "priorityHighDescription": "Notify the target Agent now. If it is working, Codeg injects a notice when steering is available; otherwise it stops that turn.",
     "priorityNormalDescription": "Keep the letter in the mailbox until the target Agent's next turn. It is still for the Agent.",
     "storeOnlyDescription": "The message is delivered and shown now. It will not start or interrupt the target agent.",
     "invokeWhenIdleDescription": "The message is delivered now and queued for the target agent after its current turn. A closed session waits for confirmation after it is resumed.",

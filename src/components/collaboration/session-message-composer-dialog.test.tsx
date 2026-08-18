@@ -115,7 +115,7 @@ describe("SessionMessageComposerDialog", () => {
         body: "Please compare these claims",
         clientDedupeId: expect.any(String),
         invocationPolicy: "invoke_when_idle",
-        deliveryHint: "default",
+        deliveryHint: "steer_if_supported",
         expectsReply: false,
       })
     )
@@ -198,7 +198,7 @@ describe("SessionMessageComposerDialog", () => {
       expect.objectContaining({
         invocationPolicy: "invoke_when_idle",
         urgency: "urgent",
-        deliveryHint: "default",
+        deliveryHint: "steer_if_supported",
       })
     )
   })

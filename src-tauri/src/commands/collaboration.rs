@@ -11,6 +11,7 @@ use crate::acp::session_collaboration::{
     SessionCollaborationRuntimeConfig, SessionListOutcome, SessionMessageDeliveryOutcome,
     SessionMessageSpec, SessionSendOutcome, MAX_SESSION_LIST_LIMIT,
 };
+use crate::acp::types::ConnectionStatus;
 use crate::app_error::AppCommandError;
 use crate::db::service::{
     app_metadata_service, collaboration_interrupt_service, collaboration_room_service,
@@ -22,8 +23,8 @@ use crate::models::{
     CollaborationDeliveryState, CollaborationFeed, CollaborationInterruptResult,
     CollaborationInterruptState, CollaborationInvocationPolicy, CollaborationRoomDetail,
     CollaborationRoomSummary, CollaborationSendResult, CollaborationTimelineProjection,
-    CollaborationUnreadOverview, CreateCollaborationRoomInput,
-    InterruptCollaborationInput, PostRoomMessageInput, RoomChanged, RoomPostResult, RoomTimeline,
+    CollaborationUnreadOverview, CreateCollaborationRoomInput, InterruptCollaborationInput,
+    PostRoomMessageInput, RoomChanged, RoomPostResult, RoomTimeline,
     SendAndInterruptCollaborationInput, SendAndInterruptCollaborationResult,
     SendCollaborationMessageInput,
 };
@@ -62,6 +63,7 @@ pub struct DbSessionCollaboration {
     db: Arc<AppDatabase>,
     emitter: EventEmitter,
     prompt_queue: PromptQueueHandle,
+    manager: ConnectionManager,
     config: SessionCollaborationRuntimeConfig,
 }
 
@@ -70,12 +72,14 @@ impl DbSessionCollaboration {
         db: Arc<AppDatabase>,
         emitter: EventEmitter,
         prompt_queue: PromptQueueHandle,
+        manager: ConnectionManager,
         config: SessionCollaborationRuntimeConfig,
     ) -> Self {
         Self {
             db,
             emitter,
             prompt_queue,
+            manager,
             config,
         }
     }
@@ -115,24 +119,107 @@ fn publish_persisted_message(emitter: &EventEmitter, result: &CollaborationSendR
     }
 }
 
+const HIGH_PRIORITY_INTERRUPT_REASON: &str = "High-priority letter";
+
+/// Busy + no native steer → stop the current turn. Otherwise wake: idle
+/// starts a turn, busy+steer injects, closed Sessions resume.
+async fn target_needs_interrupt(
+    conn: &sea_orm::DatabaseConnection,
+    manager: &ConnectionManager,
+    conversation_id: i32,
+) -> bool {
+    let Ok(Some(row)) = crate::db::entities::conversation::Entity::find_by_id(conversation_id)
+        .one(conn)
+        .await
+    else {
+        return false;
+    };
+    let Some((_, state)) = crate::prompt_queue::active_connection_for_row(manager, &row).await
+    else {
+        return false;
+    };
+    let state = state.read().await;
+    state.status == ConnectionStatus::Connected
+        && state.turn_in_flight
+        && !state.native_steering_available
+}
+
+async fn deliver_high_priority_now(
+    conn: &sea_orm::DatabaseConnection,
+    manager: Option<&ConnectionManager>,
+    emitter: &EventEmitter,
+    prompt_queue: &PromptQueueHandle,
+    event_id: &str,
+    target_conversation_id: i32,
+) {
+    let Some(manager) = manager else {
+        prompt_queue.wake(target_conversation_id);
+        return;
+    };
+    if target_needs_interrupt(conn, manager, target_conversation_id).await {
+        let interrupt = collaboration_interrupt_core(
+            conn,
+            manager,
+            emitter,
+            prompt_queue,
+            InterruptCollaborationInput {
+                event_id: event_id.to_string(),
+                target_conversation_id,
+                client_dedupe_id: format!("high-interrupt:{event_id}:{target_conversation_id}"),
+                reason: HIGH_PRIORITY_INTERRUPT_REASON.to_string(),
+            },
+        )
+        .await;
+        if let Err(err) = interrupt {
+            tracing::warn!(
+                "[collaboration] high-priority interrupt failed for {target_conversation_id}: {err}"
+            );
+            prompt_queue.wake(target_conversation_id);
+        }
+        return;
+    }
+    prompt_queue.wake(target_conversation_id);
+}
+
+fn successful_high_targets(result: &CollaborationSendResult) -> impl Iterator<Item = i32> + '_ {
+    result.deliveries.iter().filter_map(|delivery| {
+        if delivery.state == CollaborationDeliveryState::Failed
+            || delivery.state == CollaborationDeliveryState::Dismissed
+        {
+            None
+        } else {
+            Some(delivery.target.conversation_id)
+        }
+    })
+}
+
 pub async fn collaboration_send_core(
     conn: &sea_orm::DatabaseConnection,
     emitter: &EventEmitter,
     prompt_queue: &PromptQueueHandle,
-    input: SendCollaborationMessageInput,
+    manager: Option<&ConnectionManager>,
+    mut input: SendCollaborationMessageInput,
 ) -> Result<CollaborationSendResult, AppCommandError> {
-    // Persist first. `priority=high` (invoke_when_idle) enters the dispatcher
-    // now; `priority=normal` waits for the next ordinary turn. Both are Agent
-    // mail — normal is delayed delivery, not "human only".
-    let should_wake = input.invocation_policy == CollaborationInvocationPolicy::InvokeWhenIdle;
+    // Persist first. `priority=high` (invoke_when_idle) notifies now: steer
+    // if the busy target supports it, otherwise interrupt. `priority=normal`
+    // waits for the next ordinary turn. Both are Agent mail.
+    let high = input.invocation_policy == CollaborationInvocationPolicy::InvokeWhenIdle;
+    if high {
+        input.delivery_hint = CollaborationDeliveryHint::SteerIfSupported;
+    }
     let result = persist_collaboration_message(conn, prompt_queue, input).await?;
     publish_persisted_message(emitter, &result);
-    if should_wake && !result.deduplicated {
-        for delivery in result.deliveries.iter().filter(|delivery| {
-            delivery.state != CollaborationDeliveryState::Failed
-                && delivery.state != CollaborationDeliveryState::Dismissed
-        }) {
-            prompt_queue.wake(delivery.target.conversation_id);
+    if high && !result.deduplicated {
+        for target in successful_high_targets(&result) {
+            deliver_high_priority_now(
+                conn,
+                manager,
+                emitter,
+                prompt_queue,
+                &result.event_id,
+                target,
+            )
+            .await;
         }
     }
     Ok(result)
@@ -554,6 +641,7 @@ impl SessionCollaborationAccess for DbSessionCollaboration {
                 &self.db.conn,
                 &self.emitter,
                 &self.prompt_queue,
+                Some(&self.manager),
                 PostRoomMessageInput {
                     room_id,
                     source_conversation_id: source_session_id,
@@ -601,6 +689,7 @@ impl SessionCollaborationAccess for DbSessionCollaboration {
             &self.db.conn,
             &self.emitter,
             &self.prompt_queue,
+            Some(&self.manager),
             SendCollaborationMessageInput {
                 source_conversation_id: source_session_id,
                 target_conversation_ids: spec.target_session_ids,
@@ -897,9 +986,17 @@ pub async fn collaboration_send(
     input: SendCollaborationMessageInput,
     db: tauri::State<'_, AppDatabase>,
     prompt_queue: tauri::State<'_, PromptQueueHandle>,
+    manager: tauri::State<'_, ConnectionManager>,
     app: tauri::AppHandle,
 ) -> Result<CollaborationSendResult, AppCommandError> {
-    collaboration_send_core(&db.conn, &EventEmitter::Tauri(app), &prompt_queue, input).await
+    collaboration_send_core(
+        &db.conn,
+        &EventEmitter::Tauri(app),
+        &prompt_queue,
+        Some(&manager),
+        input,
+    )
+    .await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -1131,9 +1228,13 @@ pub async fn collaboration_room_post_core(
     conn: &sea_orm::DatabaseConnection,
     emitter: &EventEmitter,
     prompt_queue: &PromptQueueHandle,
-    input: PostRoomMessageInput,
+    manager: Option<&ConnectionManager>,
+    mut input: PostRoomMessageInput,
 ) -> Result<RoomPostResult, AppCommandError> {
-    let should_wake = input.invocation_policy == CollaborationInvocationPolicy::InvokeWhenIdle;
+    let high = input.invocation_policy == CollaborationInvocationPolicy::InvokeWhenIdle;
+    if high {
+        input.delivery_hint = CollaborationDeliveryHint::SteerIfSupported;
+    }
     let result = collaboration_service::post_room(conn, input).await?;
     if let Ok(detail) = collaboration_room_service::get(conn, &result.room_id).await {
         publish_room(emitter, &result.room_id, detail.workbench_id);
@@ -1141,12 +1242,20 @@ pub async fn collaboration_room_post_core(
     if !result.deduplicated {
         publish(emitter, result.affected_conversation_ids.clone());
     }
-    if should_wake && !result.deduplicated {
+    if high && !result.deduplicated {
         for delivery in result.deliveries.iter().filter(|delivery| {
             delivery.state != CollaborationDeliveryState::Failed
                 && delivery.state != CollaborationDeliveryState::Dismissed
         }) {
-            prompt_queue.wake(delivery.target.conversation_id);
+            deliver_high_priority_now(
+                conn,
+                manager,
+                emitter,
+                prompt_queue,
+                &result.event_id,
+                delivery.target.conversation_id,
+            )
+            .await;
         }
     }
     Ok(result)
@@ -1251,9 +1360,17 @@ pub async fn collaboration_room_post(
     input: PostRoomMessageInput,
     db: tauri::State<'_, AppDatabase>,
     prompt_queue: tauri::State<'_, PromptQueueHandle>,
+    manager: tauri::State<'_, ConnectionManager>,
     app: tauri::AppHandle,
 ) -> Result<RoomPostResult, AppCommandError> {
-    collaboration_room_post_core(&db.conn, &EventEmitter::Tauri(app), &prompt_queue, input).await
+    collaboration_room_post_core(
+        &db.conn,
+        &EventEmitter::Tauri(app),
+        &prompt_queue,
+        Some(&manager),
+        input,
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -1325,6 +1442,7 @@ mod tests {
             }),
             emitter,
             PromptQueueHandle::disconnected_for_test(),
+            ConnectionManager::new(),
             config,
         )
     }
@@ -1343,6 +1461,7 @@ mod tests {
             &db.conn,
             &emitter,
             &PromptQueueHandle::disconnected_for_test(),
+            None,
             SendCollaborationMessageInput {
                 source_conversation_id: source,
                 target_conversation_ids: vec![target],
@@ -1372,6 +1491,7 @@ mod tests {
             &db.conn,
             &emitter,
             &PromptQueueHandle::disconnected_for_test(),
+            None,
             SendCollaborationMessageInput {
                 source_conversation_id: source,
                 target_conversation_ids: vec![target],
@@ -1401,6 +1521,7 @@ mod tests {
             &db.conn,
             &EventEmitter::Noop,
             &PromptQueueHandle::disconnected_for_test(),
+            None,
             SendCollaborationMessageInput {
                 source_conversation_id: source,
                 target_conversation_ids: vec![target],
@@ -1588,6 +1709,15 @@ mod tests {
                 .len(),
             1
         );
+        let high_inbound = collaboration_service::feed(&db.conn, high_target, None)
+            .await
+            .unwrap()
+            .inbound
+            .remove(0);
+        assert_eq!(
+            high_inbound.delivery_hint,
+            CollaborationDeliveryHint::SteerIfSupported
+        );
 
         let normal = access
             .send_message(
@@ -1625,6 +1755,100 @@ mod tests {
             inbound.invocation_policy,
             CollaborationInvocationPolicy::StoreOnly
         );
+    }
+
+    #[tokio::test]
+    async fn high_priority_does_not_cancel_when_native_steer_exists() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-high-steer").await;
+        let source = seed_conversation(&db, folder, AgentType::Codex).await;
+        let target = seed_conversation(&db, folder, AgentType::ClaudeCode).await;
+        let (manager, prompt_queue, mut commands) = live_queue(&db, folder, target, true).await;
+        manager
+            .get_state("interrupt-target")
+            .await
+            .expect("state")
+            .write()
+            .await
+            .native_steering_available = true;
+
+        collaboration_send_core(
+            &db.conn,
+            &EventEmitter::Noop,
+            &prompt_queue,
+            Some(&manager),
+            SendCollaborationMessageInput {
+                source_conversation_id: source,
+                target_conversation_ids: vec![target],
+                subject: "Need this now".into(),
+                body: "please look".into(),
+                client_dedupe_id: "high-steer".into(),
+                invocation_policy: CollaborationInvocationPolicy::InvokeWhenIdle,
+                delivery_hint: CollaborationDeliveryHint::Default,
+                expects_reply: false,
+                urgency: CollaborationUrgency::Urgent,
+                reply_to_event_id: None,
+            },
+        )
+        .await
+        .expect("send high");
+
+        assert!(
+            commands.try_recv().is_err(),
+            "native steer must not stop the current turn"
+        );
+        assert_eq!(
+            collaboration_service::feed(&db.conn, target, None)
+                .await
+                .unwrap()
+                .inbound[0]
+                .delivery_hint,
+            CollaborationDeliveryHint::SteerIfSupported
+        );
+    }
+
+    #[tokio::test]
+    async fn high_priority_cancels_busy_turn_when_steer_is_unavailable() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-high-interrupt").await;
+        let source = seed_conversation(&db, folder, AgentType::Codex).await;
+        let target = seed_conversation(&db, folder, AgentType::ClaudeCode).await;
+        let (manager, prompt_queue, mut commands) = live_queue(&db, folder, target, true).await;
+
+        let result = collaboration_send_core(
+            &db.conn,
+            &EventEmitter::Noop,
+            &prompt_queue,
+            Some(&manager),
+            SendCollaborationMessageInput {
+                source_conversation_id: source,
+                target_conversation_ids: vec![target],
+                subject: "Need this now".into(),
+                body: "please look".into(),
+                client_dedupe_id: "high-interrupt".into(),
+                invocation_policy: CollaborationInvocationPolicy::InvokeWhenIdle,
+                delivery_hint: CollaborationDeliveryHint::Default,
+                expects_reply: false,
+                urgency: CollaborationUrgency::Urgent,
+                reply_to_event_id: None,
+            },
+        )
+        .await
+        .expect("send high");
+
+        assert!(matches!(
+            commands.recv().await,
+            Some(ConnectionCommand::Cancel)
+        ));
+        assert_eq!(
+            result.deliveries[0].state,
+            CollaborationDeliveryState::Queued
+        );
+        assert!(prompt_queue_service::snapshot(&db.conn, target)
+            .await
+            .unwrap()
+            .paused_reason
+            .is_some());
     }
 
     #[tokio::test]
@@ -1758,6 +1982,7 @@ mod tests {
             }),
             EventEmitter::Noop,
             PromptQueueHandle::disconnected_for_test(),
+            ConnectionManager::new(),
             SessionCollaborationRuntimeConfig::new(),
         );
         let result = access
@@ -1885,6 +2110,7 @@ mod tests {
             &db.conn,
             &EventEmitter::Noop,
             &PromptQueueHandle::disconnected_for_test(),
+            None,
             SendCollaborationMessageInput {
                 source_conversation_id: source,
                 target_conversation_ids: vec![target],

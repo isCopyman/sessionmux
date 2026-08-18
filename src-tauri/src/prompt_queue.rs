@@ -1387,6 +1387,7 @@ mod tests {
             &db.conn,
             &EventEmitter::Noop,
             &handle,
+            Some(&manager),
             collaboration_input(source, target, "send-core-idle", "PING queue idle"),
         )
         .await
@@ -1447,6 +1448,7 @@ mod tests {
             &db.conn,
             &EventEmitter::Noop,
             &handle,
+            Some(&manager),
             input,
         )
         .await
