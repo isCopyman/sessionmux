@@ -449,3 +449,27 @@ T2 后置截图（CDP 9222 可用，基线在 .artifacts）+ 晨间验收报告 
   xintaofei/codeg）最新更新合并进本分支。**约束：若上游改动与我们的设计冲突（§0 红线、
   §4 裁决、RFC 拍板、mailbox/room 语义），必须先产出冲突分析、经用户同意后方可合并**；
   无设计冲突的部分才允许自主合并。执行时点：全部 G/R/UI/T 包收口、全量门绿之后。
+- 2026-08-19 04:25 **WIP 落地完成（编排会话接管执行）**：wipland 停摆后，编排会话用
+  rustfmt(HEAD) 逐字节比对重建分组（107 fmt-only 实锤；真改动仅 6 Rust + 前端一组），
+  亲自评审全部特性 diff 后六笔落地：6fc87afe（test 修四处存量断言）→ d1f86680（style:
+  fmt 107 文件）→ 7924e6cf（feat(mcp) 三 server 拆分：codeg-mcp/codeg-mailbox/codeg-room，
+  legacy collaboration token 兼容、逐 server 独立 token、revoke_by_parent 清理）→
+  4e4d0503（feat(room) 侧栏稳定排序 lastEventAt、mark_seen 不顶 updated_at、定位活动房间、
+  多选对齐、行内回复/更多操作菜单、i18n×10）→ 887fcce8（gitignore）→ 77bbc5df（docs:
+  G10 调研入库 SESSION-FORK-REWIND-SURVEY + 本文件增量）。工作树归零。
+  门记录：vitest 347/347 文件全绿（单独跑；双负载并跑会出资源型 flaky）；服务器门 2429
+  与 check --all-targets 沿用 wipland 已验绿；**桌面模式 cargo test 在本机以
+  STATUS_ENTRYPOINT_NOT_FOUND 崩溃（冷目录与 PowerShell 均复现）——按手册 §4.4/§6 协议
+  记录为本机 DLL 环境阻塞，编译成功+运行被阻两事实并存，不伪装成绿**。
+- 2026-08-19 04:28 C 线 merge 完成：314321bf（--no-ff，skill 硬伤修复 + 四 playbook +
+  experts.toml 8 locale×2，零冲突）。
+- 2026-08-19 04:30 派发：**A 线 lane-a-rseries**（worker-k3 worktree，R1-R6 按 §4.4）、
+  **B 线 lane-b-ui**（worker-k3 worktree，G5-2/3/6a/8/9/13）、**bonus-timer**（explore-k3
+  只读考察 codex/session-timer worktree 遗产）、**bonus-web**（general-purpose@sonnet 档
+  =K3 映射，调研 openteams workflow 形态 + linux.do 帖 2759945，本机有 opencli 可用）。
+- 2026-08-19 04:30 用户睡前追加 **G12 bonus 簇**（明确说是 bonus，排主线后、G11 前）：
+  B1 timer worktree 考察（在飞）；B2 是否加 workflow 功能（openteams/multica 参照，在飞）；
+  B3 linux.do 帖探索（在飞）；B4 **把本次"fable 规划者 + K3 执行者"编排模式沉淀为 codeg
+  可复用参考**（待做：合并两线后作为第 5 个 playbook 写入 codeg-multi-agent/references/，
+  内容含：贵脑便宜手分工、开工前 48h 机制核对、停手令/催稿、逐字节验证代替记忆、
+  提交锁纪律）。另：用户提示 deja skill 可回溯聊天历史核对身份定位。
