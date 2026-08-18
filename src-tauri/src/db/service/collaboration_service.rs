@@ -1334,6 +1334,7 @@ async fn send_with_initially_inactive_targets_guarded(
     let source = require_live_session(&txn, input.source_conversation_id).await?;
 
     if let Some(reply_to) = input.reply_to_event_id.as_deref() {
+        validate_direct_reply(&txn, reply_to).await?;
         validate_reply_relation(&txn, input.source_conversation_id, &target_ids, reply_to).await?;
     }
     let chain_depth = child_chain_depth(&txn, input.reply_to_event_id.as_deref()).await?;
@@ -1543,6 +1544,31 @@ async fn send_with_initially_inactive_targets_guarded(
         affected_conversation_ids: affected.into_iter().collect(),
         deduplicated: false,
     }))
+}
+
+/// A mailbox reply must quote a mailbox event, symmetric with
+/// `validate_room_reply`. Answering a Room post with a private letter would
+/// clear the Room obligation while the Room timeline never sees the answer;
+/// the whole membership loses the thread.
+async fn validate_direct_reply<C: ConnectionTrait>(
+    conn: &C,
+    reply_to_event_id: &str,
+) -> Result<(), DbError> {
+    let row = conn
+        .query_one(statement(
+            "SELECT COALESCE(visibility, 'direct') AS visibility \
+             FROM collaboration_event WHERE id = ?",
+            vec![reply_to_event_id.into()],
+        ))
+        .await?
+        .ok_or_else(|| DbError::NotFound(format!("Collaboration event {reply_to_event_id}")))?;
+    let visibility: String = row.try_get("", "visibility")?;
+    if visibility != "direct" {
+        return Err(validation(format!(
+            "Collaboration event {reply_to_event_id} is a Room post; answer it with post_room in the same Room, not send_message"
+        )));
+    }
+    Ok(())
 }
 
 async fn validate_room_reply<C: ConnectionTrait>(
@@ -3565,6 +3591,99 @@ mod tests {
         assert!(text.contains("群点名"));
         assert!(text.contains(&format!("room_id={}", room.id)));
         assert!(text.contains(&posted.event_id));
+    }
+
+    async fn seeded_room(
+        db: &crate::db::AppDatabase,
+        source: i32,
+        target: i32,
+    ) -> crate::models::CollaborationRoomDetail {
+        collaboration_room_service::create(
+            &db.conn,
+            crate::models::CreateCollaborationRoomInput {
+                workbench_id: 1,
+                title: "Plan".into(),
+                member_conversation_ids: vec![source, target],
+                created_by_conversation_id: source,
+                collection_id: None,
+                root_folder_id: None,
+            },
+        )
+        .await
+        .expect("create room")
+    }
+
+    fn room_post(
+        room_id: &str,
+        source: i32,
+        targets: Vec<i32>,
+        dedupe: &str,
+    ) -> PostRoomMessageInput {
+        PostRoomMessageInput {
+            room_id: room_id.to_string(),
+            source_conversation_id: source,
+            target_conversation_ids: targets,
+            mention_all: false,
+            body: "look at the plan".into(),
+            client_dedupe_id: dedupe.into(),
+            invocation_policy: CollaborationInvocationPolicy::InvokeWhenIdle,
+            delivery_hint: CollaborationDeliveryHint::Default,
+            expects_reply: true,
+            urgency: CollaborationUrgency::Normal,
+            reply_to_event_id: None,
+            mention_human: false,
+            author_kind: Default::default(),
+        }
+    }
+
+    #[tokio::test]
+    async fn mailbox_reply_to_a_room_event_is_rejected_and_keeps_the_room_debt() {
+        let (db, source, target, _) = seeded_memory().await;
+        let room = seeded_room(&db, source, target).await;
+        let posted = post_room(
+            &db.conn,
+            room_post(&room.id, source, vec![target], "room-q"),
+        )
+        .await
+        .expect("post");
+
+        let mut letter = input(target, vec![source], "sneaky-reply", "answering privately");
+        letter.reply_to_event_id = Some(posted.event_id.clone());
+        let err = send(&db.conn, letter)
+            .await
+            .expect_err("a Room post must be answered in the Room");
+        assert!(
+            err.to_string().contains("post_room"),
+            "the error points at the Room channel: {err}"
+        );
+
+        let debt = open_obligation_digest(&db.conn, target).await.unwrap();
+        assert_eq!(
+            debt.room_mentions_owed, 1,
+            "a rejected private reply must not clear the Room obligation"
+        );
+    }
+
+    #[tokio::test]
+    async fn room_reply_to_a_mailbox_letter_is_rejected() {
+        let (db, source, target, _) = seeded_memory().await;
+        let room = seeded_room(&db, source, target).await;
+        let sent = send(
+            &db.conn,
+            input(source, vec![target], "direct-q", "private question"),
+        )
+        .await
+        .expect("send");
+
+        let mut post = room_post(&room.id, target, vec![source], "room-sneaky");
+        post.reply_to_event_id = Some(sent.event_id.clone());
+        let err = post_room(&db.conn, post)
+            .await
+            .expect_err("a mailbox letter must be answered by mailbox");
+        assert!(
+            err.to_string().contains("same Room"),
+            "symmetric with the mailbox direction: {err}"
+        );
     }
 
     #[tokio::test]
