@@ -21,6 +21,10 @@ export type RoomBodyPart =
 
 const SESSION_URI = /^codeg:\/\/session\/(\d+)$/i
 const HUMAN_URI = /^codeg:\/\/(?:human|user)$/i
+// Structured "wake everyone" token. The composer panel and @all button insert
+// it as a reference badge (`[@all](codeg://all)`), so detection keys on the
+// URI — the badge's visible label is localized and must not be load-bearing.
+const ALL_URI = /^codeg:\/\/all(?![a-z0-9])/i
 const ALL_AT = /^@(?:all|everyone|全体)$/i
 
 export function mentionMarkdownForSession(
@@ -31,7 +35,14 @@ export function mentionMarkdownForSession(
 }
 
 export function mentionAllFromText(text: string): boolean {
-  return /@all\b/i.test(text) || /@everyone\b/i.test(text) || /@全体/.test(text)
+  return (
+    // The URI shape is matched unanchored here (the token sits inside a
+    // `[label](uri)` link); `codeg://allowed` must NOT match.
+    /codeg:\/\/all(?![a-z0-9])/i.test(text) ||
+    /@all\b/i.test(text) ||
+    /@everyone\b/i.test(text) ||
+    /@全体/.test(text)
+  )
 }
 
 export function insertMentionToken(body: string, token: string): string {
@@ -189,6 +200,13 @@ function scanProse(
       textStart = i
       continue
     }
+    if (/^codeg:\/\/all(?![a-z0-9])/i.test(text.slice(i))) {
+      flush(i)
+      parts.push({ type: "mention", kind: "all", label: allLabel })
+      i += "codeg://all".length
+      textStart = i
+      continue
+    }
     const at = matchAtToken(text, i, members, untitled, allLabel, humanLabel)
     if (at) {
       flush(i)
@@ -211,7 +229,11 @@ export function sessionIdsFromAtAliases(
   const parts = scanProse(text, members, untitled, "@all", "@human")
   const ids = new Set<number>()
   for (const part of parts) {
-    if (part.type === "mention" && part.kind === "session" && part.conversationId) {
+    if (
+      part.type === "mention" &&
+      part.kind === "session" &&
+      part.conversationId
+    ) {
       ids.add(part.conversationId)
     }
   }
@@ -256,11 +278,13 @@ export function roomMessageBodyParts(input: {
       })
       continue
     }
-    if (HUMAN_URI.test(uri) || ALL_AT.test(unescapeReferenceLabel(token.label))) {
+    const label = unescapeReferenceLabel(token.label)
+    if (HUMAN_URI.test(uri) || ALL_URI.test(uri) || ALL_AT.test(label)) {
+      const human = HUMAN_URI.test(uri)
       parts.push({
         type: "mention",
-        kind: HUMAN_URI.test(uri) ? "human" : "all",
-        label: HUMAN_URI.test(uri) ? humanLabel : allLabel,
+        kind: human ? "human" : "all",
+        label: human ? humanLabel : allLabel,
       })
       continue
     }
@@ -299,7 +323,12 @@ export function roomMessageBodyParts(input: {
   if (extras.length === 0) return mergeText(parts)
   const spacer: RoomBodyPart[] = []
   const last = parts[parts.length - 1]
-  if (last && last.type === "text" && last.value.length > 0 && !/\s$/.test(last.value)) {
+  if (
+    last &&
+    last.type === "text" &&
+    last.value.length > 0 &&
+    !/\s$/.test(last.value)
+  ) {
     spacer.push({ type: "text", value: " " })
   } else if (!last) {
     // body empty except metadata — still show mentions
@@ -319,7 +348,5 @@ function mergeText(parts: RoomBodyPart[]): RoomBodyPart[] {
       out.push({ ...part })
     }
   }
-  return out.filter(
-    (part) => part.type === "mention" || part.value.length > 0
-  )
+  return out.filter((part) => part.type === "mention" || part.value.length > 0)
 }

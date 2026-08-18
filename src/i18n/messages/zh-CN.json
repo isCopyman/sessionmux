@@ -5238,6 +5238,8 @@
     "noCandidates": "当前能加入的 Session 都已经在群里了。",
     "cancel": "取消",
     "wakeHint": "普通消息只记在共享时间线上。@ 某个 Session 才会唤醒它。",
+    "wakePreview": "将唤醒:{names}",
+    "wakePreviewEmpty": "将唤醒:无人 —— 帖子只会上时间线",
     "loadOlder": "加载更早的消息",
     "reply": "回复",
     "replyTo": "正在回复 {name}",

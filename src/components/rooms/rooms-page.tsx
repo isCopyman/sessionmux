@@ -38,7 +38,14 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { Textarea } from "@/components/ui/textarea"
+import {
+  RichComposer,
+  type RichComposerHandle,
+} from "@/components/chat/composer/rich-composer"
+import { ReferenceBadge } from "@/components/chat/composer/badges/reference-badge"
+import { useComposerMentionLabels } from "@/components/chat/composer/use-composer-mention-labels"
+import type { ReferenceSearch } from "@/components/chat/composer/suggestion/types"
+import { rankByTextMatch } from "@/lib/fuzzy-text-match"
 import { useTabActions } from "@/contexts/tab-context"
 import { toErrorMessage } from "@/lib/app-error"
 import { formatConversationTitle } from "@/lib/conversation-title"
@@ -60,10 +67,7 @@ import {
   sessionIdsFromText,
 } from "@/lib/collaboration-session-mentions"
 import {
-  insertMentionToken,
   mentionAllFromText,
-  mentionMarkdownForSession,
-  removeMentionToken,
   roomMessageBodyParts,
   sessionIdsFromAtAliases,
   type RoomBodyPart,
@@ -190,26 +194,41 @@ function RoomMessageBody({
 }) {
   return (
     <p className="whitespace-pre-wrap text-[15px] leading-6 text-foreground">
-      {parts.map((part, index) =>
-        part.type === "text" ? (
-          <span key={index}>{part.value}</span>
-        ) : part.kind === "session" &&
-          part.conversationId != null &&
-          onOpenSession ? (
-          <button
-            key={index}
-            type="button"
-            className={cn(mentionClassName(), "cursor-pointer")}
-            onClick={() => onOpenSession(part.conversationId!)}
-          >
-            {part.label}
-          </button>
-        ) : (
+      {parts.map((part, index) => {
+        if (part.type === "text") return <span key={index}>{part.value}</span>
+        // Session mentions wear the same badge the Session transcript gives a
+        // `codeg://session/<id>` reference; @all/@human keep the room pill.
+        if (part.kind === "session" && part.conversationId != null) {
+          const badge = (
+            <ReferenceBadge
+              data={{
+                refType: "session",
+                id: String(part.conversationId),
+                label: part.label,
+                uri: `codeg://session/${part.conversationId}`,
+                meta: null,
+              }}
+            />
+          )
+          return onOpenSession ? (
+            <button
+              key={index}
+              type="button"
+              className="cursor-pointer"
+              onClick={() => onOpenSession(part.conversationId!)}
+            >
+              {badge}
+            </button>
+          ) : (
+            <span key={index}>{badge}</span>
+          )
+        }
+        return (
           <span key={index} className={mentionClassName()}>
             {part.label}
           </span>
         )
-      )}
+      })}
     </p>
   )
 }
@@ -225,9 +244,10 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
   const [loadingOlder, setLoadingOlder] = useState(false)
   const [replyTo, setReplyTo] = useState<RoomTimelineEvent | null>(null)
   const [hydrated, setHydrated] = useState(false)
+  // The composer is an uncontrolled RichComposer; `body` is its serialized
+  // plain-text mirror (mention badges serialize to `[label](codeg://…)` link
+  // tokens), which drives the send gate, the wake preview and the post parse.
   const [body, setBody] = useState("")
-  const [mentionAll, setMentionAll] = useState(false)
-  const [mentioned, setMentioned] = useState<number[]>([])
   const [pending, setPending] = useState(false)
   const [titleDraft, setTitleDraft] = useState<string | null>(null)
   const [addOpen, setAddOpen] = useState(false)
@@ -237,7 +257,11 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [membersOpen, setMembersOpen] = useState(false)
-  const composerRef = useRef<HTMLTextAreaElement>(null)
+  const composerRef = useRef<RichComposerHandle>(null)
+  // Localized chrome for the shared `@` panel (same hook the Session composer
+  // uses — the panel reads identically wherever it opens).
+  const { groupLabels: mentionGroupLabels, uiLabels: mentionUiLabels } =
+    useComposerMentionLabels()
 
   const reload = useCallback(async () => {
     const [nextDetail, timeline] = await Promise.all([
@@ -304,14 +328,14 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
     }
   }, [reload, roomId])
 
-  const mentionSet = useMemo(() => new Set(mentioned), [mentioned])
   const eventsById = useMemo(
     () => new Map(events.map((item) => [item.id, item])),
     [events]
   )
+  const members = useMemo(() => detail?.members ?? [], [detail])
   const memberIds = useMemo(
-    () => new Set(detail?.members.map((member) => member.conversationId) ?? []),
-    [detail]
+    () => new Set(members.map((member) => member.conversationId)),
+    [members]
   )
   const runningMembers = useConversationRuntimeStore(
     useShallow((state) => {
@@ -360,13 +384,96 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
       behavior: "smooth",
     })
   }, [])
-  const applyComposerToken = useCallback((token: string, add: boolean) => {
-    setBody((current) =>
-      add
-        ? insertMentionToken(current, token)
-        : removeMentionToken(current, token)
-    )
-    queueMicrotask(() => composerRef.current?.focus())
+  // The `@` panel: the unified composer suggestion popup, scoped to this
+  // room — members plus the two structured pseudo-mentions (@all / @human).
+  // Every row inserts a reference badge that serializes to a `codeg://` URI
+  // token, so a wake is ALWAYS structured (never typed prose).
+  const roomMentionSearch = useMemo<ReferenceSearch>(() => {
+    const untitled = (id: number) => t("untitled", { id })
+    const pseudo = [
+      {
+        reference: {
+          refType: "session" as const,
+          id: "all",
+          label: t("mentionAll"),
+          uri: "codeg://all",
+          meta: null,
+        },
+        keywords: "all everyone 全体 全體",
+      },
+      {
+        reference: {
+          refType: "session" as const,
+          id: "human",
+          label: t("mentionHuman"),
+          uri: "codeg://human",
+          meta: null,
+        },
+        keywords: "human user 人类 人類",
+      },
+    ]
+    const memberItems = members.map((member) => ({
+      reference: {
+        refType: "session" as const,
+        id: String(member.conversationId),
+        label: memberLabel(member, untitled),
+        uri: `codeg://session/${member.conversationId}`,
+        meta: member.agentType
+          ? { agentType: member.agentType as AgentType }
+          : null,
+      },
+      keywords: String(member.conversationId),
+    }))
+    const all = [...pseudo, ...memberItems]
+    return (query: string) => [
+      {
+        kind: "session" as const,
+        label: mentionGroupLabels.session,
+        items: rankByTextMatch(
+          query,
+          all,
+          (item) => item.reference.label,
+          (item) => item.keywords
+        ),
+      },
+    ]
+  }, [members, t, mentionGroupLabels])
+
+  // Live "will wake" preview: exactly the parse handlePost performs, so what
+  // the host sees is what gets woken — no more silent at-submit resolution.
+  const wakePreview = useMemo(() => {
+    const untitled = (id: number) => t("untitled", { id })
+    const ids = [
+      ...new Set([
+        ...sessionIdsFromText(body),
+        ...sessionIdsFromAtAliases(body, members, untitled),
+      ]),
+    ]
+    const names = ids.map((id) => {
+      const member = members.find((item) => item.conversationId === id)
+      return member ? memberLabel(member, untitled) : untitled(id)
+    })
+    if (mentionAllFromText(body)) names.unshift(t("mentionAll"))
+    if (mentionsHumanFromText(body)) names.push(t("mentionHuman"))
+    return names
+  }, [body, members, t])
+
+  const insertBadge = useCallback((uri: string, id: string, label: string) => {
+    const handle = composerRef.current
+    const editor = handle?.getEditor()
+    if (!handle || !editor) return
+    // One badge per target: the serialized text carries the uri, so a
+    // repeat click on the same pseudo-mention is a no-op refocus.
+    if (handle.getText().includes(uri)) {
+      editor.commands.focus()
+      return
+    }
+    editor
+      .chain()
+      .focus()
+      .insertReference({ refType: "session", id, label, uri, meta: null })
+      .insertContent(" ")
+      .run()
   }, [])
   const candidates = useMemo(() => {
     const query = addQuery.trim().toLowerCase()
@@ -392,10 +499,10 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
       detail.members,
       untitled
     )
-    const mentionAllNext = mentionAll || mentionAllFromText(text)
+    const mentionAllNext = mentionAllFromText(text)
     const targets = mentionAllNext
       ? []
-      : [...new Set([...mentioned, ...mentionedFromUri, ...mentionedFromAlias])]
+      : [...new Set([...mentionedFromUri, ...mentionedFromAlias])]
     const mentionHumanNext = mentionsHumanFromText(text)
     setPending(true)
     try {
@@ -415,9 +522,8 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
         expectsReply: mentionAllNext || targets.length > 0,
         replyToEventId: replyTo?.id ?? null,
       })
+      composerRef.current?.clear()
       setBody("")
-      setMentioned([])
-      setMentionAll(false)
       setReplyTo(null)
       toast.success(t("posted"))
       await reload()
@@ -428,7 +534,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
     } finally {
       setPending(false)
     }
-  }, [body, detail, mentionAll, mentioned, reload, replyTo, roomId, t])
+  }, [body, detail, reload, replyTo, roomId, t])
 
   const handleRename = useCallback(async () => {
     if (!detail || titleDraft == null) return
@@ -477,7 +583,6 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
           conversationId
         )
         setDetail(updated)
-        setMentioned((current) => current.filter((id) => id !== conversationId))
         toast.success(t("removed"))
         void useRoomCatalogStore.getState().refresh()
       } catch (error) {
@@ -827,11 +932,6 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
       </div>
       <div className="border-t border-border/60">
         <div className="mx-auto w-full max-w-3xl p-3">
-          <p className="mb-2 text-[11px] text-muted-foreground">
-            {replyTo
-              ? t("replyWakeHint", { name: speakerName(replyTo) })
-              : t("wakeHint")}
-          </p>
           {replyTo ? (
             <div className="mb-2 flex items-center justify-between gap-2 rounded-md bg-muted/50 px-2 py-1 text-xs">
               <span className="min-w-0 truncate">
@@ -852,61 +952,34 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
             <Button
               type="button"
               size="sm"
-              variant={mentionAll ? "default" : "outline"}
+              variant="outline"
               className="h-7 px-2 text-xs"
-              onClick={() => {
-                const next = !mentionAll
-                setMentionAll(next)
-                if (next) {
-                  setMentioned([])
-                  applyComposerToken(t("mentionAll"), true)
-                } else {
-                  applyComposerToken(t("mentionAll"), false)
-                  applyComposerToken("@all", false)
-                  applyComposerToken("@everyone", false)
-                }
-              }}
+              onClick={() => insertBadge("codeg://all", "all", t("mentionAll"))}
             >
               {t("mentionAll")}
             </Button>
-            {detail.members.map((member) => {
-              const active = mentionSet.has(member.conversationId)
-              return (
-                <Button
-                  key={member.conversationId}
-                  type="button"
-                  size="sm"
-                  variant={active ? "default" : "outline"}
-                  className="h-7 px-2 text-xs"
-                  disabled={mentionAll}
-                  onClick={() => {
-                    const label = memberLabel(member, (id) =>
-                      t("untitled", { id })
-                    )
-                    const token = mentionMarkdownForSession(
-                      label,
-                      member.conversationId
-                    )
-                    const next = !active
-                    setMentioned((current) =>
-                      next
-                        ? [...current, member.conversationId]
-                        : current.filter((id) => id !== member.conversationId)
-                    )
-                    applyComposerToken(token, next)
-                  }}
-                >
-                  @{memberLabel(member, (id) => t("untitled", { id }))}
-                </Button>
-              )
-            })}
+            <span
+              data-testid="wake-preview"
+              className="min-w-0 truncate text-[11px] text-muted-foreground"
+            >
+              {wakePreview.length > 0
+                ? t("wakePreview", { names: wakePreview.join(", ") })
+                : t("wakePreviewEmpty")}
+            </span>
           </div>
-          <Textarea
+          <RichComposer
             ref={composerRef}
-            value={body}
-            onChange={(event) => setBody(event.target.value)}
-            placeholder={t("composerPlaceholder")}
-            className="min-h-20 resize-none"
+            placeholder={
+              replyTo
+                ? t("replyWakeHint", { name: speakerName(replyTo) })
+                : t("wakeHint")
+            }
+            ariaLabel={t("wakeHint")}
+            referenceSearch={roomMentionSearch}
+            mentionUiLabels={mentionUiLabels}
+            tabLabels={mentionGroupLabels}
+            onChange={setBody}
+            className="min-h-20 rounded-md border border-input bg-transparent"
           />
           <div className="mt-2 flex items-center justify-end gap-2">
             <Button

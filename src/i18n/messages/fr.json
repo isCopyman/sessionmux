@@ -5238,6 +5238,8 @@
     "noCandidates": "Every open Session is already in this room.",
     "cancel": "Cancel",
     "wakeHint": "Plain messages stay on the shared timeline. @ a Session to wake it.",
+    "wakePreview": "Réveillera : {names}",
+    "wakePreviewEmpty": "Réveillera : personne — le message reste sur le fil",
     "loadOlder": "Load older posts",
     "reply": "Reply",
     "replyTo": "Replying to {name}",

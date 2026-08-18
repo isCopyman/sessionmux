@@ -100,4 +100,25 @@ describe("room message body", () => {
       "[Session C](codeg://session/3)"
     )
   })
+
+  it("treats the codeg://all URI as a structured wake-everyone token", () => {
+    // The badge label is localized, so detection keys on the URI alone.
+    expect(mentionAllFromText("[@alle](codeg://all)")).toBe(true)
+    expect(mentionAllFromText("[@tous](codeg://all) hi")).toBe(true)
+    expect(mentionAllFromText("codeg://allowed")).toBe(false)
+
+    const parts = roomMessageBodyParts({
+      body: "各位 [@alle](codeg://all) 看看",
+      members,
+      mentionConversationIds: [],
+      allLabel: "@all",
+      humanLabel: "@human",
+      untitled,
+    })
+    expect(parts).toEqual([
+      { type: "text", value: "各位 " },
+      { type: "mention", kind: "all", label: "@all" },
+      { type: "text", value: " 看看" },
+    ])
+  })
 })
