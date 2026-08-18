@@ -375,6 +375,38 @@ describe("ConversationManageDialog", () => {
     expect(screen.getByText("on feature")).toBeTruthy()
   })
 
+  it("collapses an open filter dropdown on Escape before the dialog closes", async () => {
+    const onOpenChange = vi.fn()
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <ConversationManageDialog
+          open
+          onOpenChange={onOpenChange}
+          folderId={1}
+        />
+      </NextIntlClientProvider>
+    )
+    const user = userEvent.setup()
+    await screen.findByText("on main")
+
+    await user.click(
+      screen.getByRole("combobox", { name: "Session message worklist" })
+    )
+    await screen.findByRole("listbox")
+
+    // First Escape: the dropdown eats it — the dialog must stay open.
+    await user.keyboard("{Escape}")
+    await waitFor(() =>
+      expect(screen.queryByRole("listbox")).not.toBeInTheDocument()
+    )
+    expect(onOpenChange).not.toHaveBeenCalled()
+    expect(screen.getByText("on main")).toBeTruthy()
+
+    // Second Escape, nothing layered above the dialog: the dialog closes.
+    await user.keyboard("{Escape}")
+    expect(onOpenChange).toHaveBeenCalledWith(false)
+  })
+
   it("opens scoped to the folder it was invoked on, plus that folder's worktrees", async () => {
     renderDialog()
     await screen.findByText("on main")

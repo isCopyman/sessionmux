@@ -27,8 +27,6 @@ const workspace = vi.hoisted(() => ({
     },
   ],
 }))
-const replyDialog = vi.hoisted(() => ({ props: null as unknown }))
-
 vi.mock("next-intl", () => ({
   useTranslations: () => (key: string, values?: Record<string, unknown>) =>
     values?.name ? `${key}:${values.name}` : key,
@@ -53,13 +51,6 @@ vi.mock("@/stores/app-workspace-store", () => ({
   useAppWorkspaceStore: (selector: (state: typeof workspace) => unknown) =>
     selector(workspace),
 }))
-vi.mock("./session-message-composer-dialog", () => ({
-  SessionMessageComposerDialog: (props: unknown) => {
-    replyDialog.props = props
-    return <div data-testid="reply-dialog" />
-  },
-}))
-
 import {
   SessionCommunicationBanner,
   SessionPendingContextBar,
@@ -130,7 +121,6 @@ beforeEach(() => {
       agent_type: "claude_code",
     },
   ]
-  replyDialog.props = null
   hook.feed = {
     conversationId: 2,
     revision: 1,
@@ -232,7 +222,6 @@ describe("SessionCommunicationBanner", () => {
     expect(
       screen.queryByRole("button", { name: "sendMenu" })
     ).not.toBeInTheDocument()
-    expect(screen.queryByTestId("reply-dialog")).not.toBeInTheDocument()
   })
 
   it("uses the live Session title instead of the send-time snapshot", () => {
@@ -337,7 +326,6 @@ describe("SessionCommunicationBanner", () => {
     expect(
       screen.queryByRole("button", { name: "reply" })
     ).not.toBeInTheDocument()
-    expect(screen.queryByTestId("reply-dialog")).not.toBeInTheDocument()
   })
 
   it("shows whether an explicit reply obligation is still open", () => {

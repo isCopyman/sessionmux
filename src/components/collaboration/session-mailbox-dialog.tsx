@@ -58,7 +58,10 @@ const COLLABORATION_DISABLED_REASON = "session_collaboration_disabled"
  * "threads" tab; that role belongs to the right pane.
  */
 type MailScope = "inbox" | "sent"
-type MailFilter = "all" | "unread" | "needs_reply" | "awaiting"
+// Filter values mirror the session-center CollaborationFilter vocabulary: the
+// reply-duty split is directional ("needs_reply" is mine, "awaiting_reply" is
+// theirs), so both surfaces name the same concept identically.
+type MailFilter = "all" | "unread" | "needs_reply" | "awaiting_reply"
 
 /**
  * Display subject: only a real letter subject counts. `thread.subject` falls
@@ -156,7 +159,7 @@ export function SessionMailboxDialog({
   const visibleLetters = useMemo(() => {
     let letters = scopeLetters
     if (filter === "unread") letters = letters.filter(isAgentUnread)
-    else if (filter === "needs_reply" || filter === "awaiting") {
+    else if (filter === "needs_reply" || filter === "awaiting_reply") {
       letters = letters.filter(
         (delivery) => delivery.obligationState === "awaiting_reply"
       )
@@ -625,7 +628,7 @@ export function SessionMailboxDialog({
                   ] as const)
                 : ([
                     ["all", t("mailFilterAll")],
-                    ["awaiting", t("stateAwaitingReply")],
+                    ["awaiting_reply", t("stateAwaitingReply")],
                   ] as const)
               ).map(([id, label]) => (
                 <button

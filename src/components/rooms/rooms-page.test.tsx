@@ -1,4 +1,5 @@
 import {
+  act,
   fireEvent,
   render,
   screen,
@@ -11,11 +12,39 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { RoomWorkspace } from "./rooms-page"
 import enMessages from "@/i18n/messages/en.json"
+import type { RichComposerHandle } from "@/components/chat/composer/rich-composer"
 import type {
   CollaborationRoomDetail,
   RoomTimeline,
   RoomTimelineEvent,
 } from "@/lib/types"
+
+// RoomWorkspace keeps its RichComposer handle internally; capture it through a
+// partial mock that still renders the real composer, so tests can type into
+// the very Tiptap editor the send path serializes (mirrors message-input.test).
+const composerHandle = vi.hoisted(() => ({
+  current: null as RichComposerHandle | null,
+}))
+vi.mock("@/components/chat/composer/rich-composer", async (importOriginal) => {
+  const actual =
+    await importOriginal<
+      typeof import("@/components/chat/composer/rich-composer")
+    >()
+  const React = await import("react")
+  const Captured = React.forwardRef<
+    RichComposerHandle,
+    React.ComponentProps<typeof actual.RichComposer>
+  >((props, ref) => {
+    const assign = (handle: RichComposerHandle | null) => {
+      composerHandle.current = handle
+      if (typeof ref === "function") ref(handle)
+      else if (ref) ref.current = handle
+    }
+    return React.createElement(actual.RichComposer, { ...props, ref: assign })
+  })
+  Captured.displayName = "CapturedRichComposer"
+  return { ...actual, RichComposer: Captured }
+})
 
 const api = vi.hoisted(() => ({
   getCollaborationRoom: vi.fn(),
@@ -164,9 +193,38 @@ function renderRoom() {
   )
 }
 
+/** The live composer editor (mounts once the room detail has hydrated). */
+async function composerEditor() {
+  await waitFor(() => expect(composerHandle.current?.getEditor()).toBeTruthy())
+  const editor = composerHandle.current?.getEditor()
+  if (!editor) throw new Error("composer editor not mounted")
+  return editor
+}
+
+/** insertContent dispatches a real transaction, so onChange fires. */
+function typeInComposer(
+  editor: NonNullable<ReturnType<RichComposerHandle["getEditor"]>>,
+  text: string
+) {
+  act(() => {
+    editor.commands.insertContent(text)
+  })
+}
+
+/** Pick a row from the open `@` panel (mousedown keeps editor focus). */
+async function pickMentionRow(name: string | RegExp) {
+  const row = await screen.findByRole("option", { name }, { timeout: 5000 })
+  act(() => {
+    row.dispatchEvent(
+      new MouseEvent("mousedown", { bubbles: true, cancelable: true })
+    )
+  })
+}
+
 describe("RoomWorkspace", () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    composerHandle.current = null
     runtime.byConversationId.clear()
     api.getCollaborationRoom.mockResolvedValue(roomDetail())
     api.markCollaborationRoomSeen.mockResolvedValue(roomDetail())
@@ -258,20 +316,22 @@ describe("RoomWorkspace", () => {
     renderRoom()
 
     expect(await screen.findByText("newest post")).toBeTruthy()
+    const editor = await composerEditor()
     const reply = screen.getByRole("button", { name: "Reply" })
     expect(reply.className).not.toMatch(/absolute/)
     expect(reply.closest("div")?.textContent).toContain("Planner")
     fireEvent.click(reply)
     expect(screen.getByText("Replying to Planner")).toBeTruthy()
+    // The wake discipline hint moved into the composer placeholder.
     expect(
-      screen.getByText(
-        "This reply only quotes Planner. It does not wake them. @ a Session to wake it."
-      )
-    ).toBeTruthy()
+      (editor.view.dom as HTMLElement)
+        .querySelector("[data-placeholder]")
+        ?.getAttribute("data-placeholder")
+    ).toBe(
+      "This reply only quotes Planner. It does not wake them. @ a Session to wake it."
+    )
 
-    fireEvent.change(screen.getByPlaceholderText(/Write to the room/), {
-      target: { value: "ack" },
-    })
+    typeInComposer(editor, "ack")
     fireEvent.click(screen.getByRole("button", { name: "Send" }))
 
     await waitFor(() => {
@@ -316,6 +376,11 @@ describe("RoomWorkspace", () => {
     const article = screen.getByRole("article")
     expect(within(article).getByText("@Session D")).toBeTruthy()
     expect(within(article).queryByText("@ Session D")).toBeNull()
+    // Session mentions render as the same reference badge the Session
+    // transcript uses.
+    expect(
+      article.querySelector('[data-reference-badge][data-ref-type="session"]')
+    ).not.toBeNull()
   })
 
   it("keeps a typed @all inside the post body", async () => {
@@ -333,15 +398,26 @@ describe("RoomWorkspace", () => {
     expect(within(screen.getByRole("article")).getByText("@all")).toBeTruthy()
   })
 
-  it("puts @all into the composer when the chip is pressed", async () => {
+  it("inserts a structured @all badge when the chip is pressed", async () => {
     api.getCollaborationRoomTimeline.mockResolvedValue(timeline([event()]))
     renderRoom()
     await screen.findByText("newest post")
+    const editor = await composerEditor()
+
     fireEvent.click(screen.getByRole("button", { name: "@all" }))
-    expect(
-      (screen.getByPlaceholderText(/Write to the room/) as HTMLTextAreaElement)
-        .value
-    ).toBe("@all")
+
+    // The chip inserts the same badge the @ panel would — a structured
+    // `codeg://all` token, never bare prose.
+    await waitFor(() => expect(editor.getText()).toContain("(codeg://all)"))
+    // …and the wake preview says so before anything is sent.
+    expect(screen.getByTestId("wake-preview").textContent).toContain("@all")
+
+    fireEvent.click(screen.getByRole("button", { name: "Send" }))
+    await waitFor(() => {
+      expect(api.postCollaborationRoomMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ mentionAll: true, expectsReply: true })
+      )
+    })
   })
 
   it("quotes the original post on a reply in the same timeline", async () => {
@@ -431,7 +507,7 @@ describe("RoomWorkspace", () => {
 
     fireEvent.click(
       within(screen.getByRole("article")).getByRole("button", {
-        name: "@Session D",
+        name: "session: @Session D",
       })
     )
     expect(api.openTab).toHaveBeenCalledWith(
@@ -470,11 +546,22 @@ describe("RoomWorkspace", () => {
     expect(screen.queryByRole("checkbox", { name: "Needs a reply" })).toBeNull()
   })
 
-  it("posts expectsReply when a Session is mentioned", async () => {
+  it("posts expectsReply when a Session is mentioned via the @ panel", async () => {
     api.getCollaborationRoomTimeline.mockResolvedValue(timeline([event()]))
     renderRoom()
     await screen.findByText("newest post")
-    fireEvent.click(screen.getByRole("button", { name: "@Planner" }))
+    const editor = await composerEditor()
+
+    typeInComposer(editor, "@plan")
+    await pickMentionRow(/Planner/)
+
+    // The badge serializes to a structured session URI, and the preview
+    // announces the wake before sending.
+    await waitFor(() =>
+      expect(editor.getText()).toContain("codeg://session/101")
+    )
+    expect(screen.getByTestId("wake-preview").textContent).toContain("Planner")
+
     fireEvent.click(screen.getByRole("button", { name: "Send" }))
     await waitFor(() => {
       expect(api.postCollaborationRoomMessage).toHaveBeenCalledWith(
@@ -484,6 +571,35 @@ describe("RoomWorkspace", () => {
         })
       )
     })
+  })
+
+  it("scopes the @ panel to room members plus @all/@human", async () => {
+    api.getCollaborationRoomTimeline.mockResolvedValue(timeline([event()]))
+    renderRoom()
+    await screen.findByText("newest post")
+    const editor = await composerEditor()
+
+    typeInComposer(editor, "@")
+    const popup = await screen.findByTestId("mention-popup", undefined, {
+      timeout: 5000,
+    })
+    // Members and the two structured pseudo-mentions… (the panel's fetch is
+    // debounced, so the first row lookup must be async)
+    await within(popup).findByRole("option", { name: /Planner/ })
+    expect(within(popup).getByRole("option", { name: "@all" })).toBeTruthy()
+    expect(within(popup).getByRole("option", { name: "@human" })).toBeTruthy()
+    // …but never a Session that is not in the room.
+    expect(within(popup).queryByText("Session D")).toBeNull()
+  })
+
+  it("previews an empty wake list before anyone is mentioned", async () => {
+    api.getCollaborationRoomTimeline.mockResolvedValue(timeline([event()]))
+    renderRoom()
+    await screen.findByText("newest post")
+    await composerEditor()
+    expect(screen.getByTestId("wake-preview").textContent).toBe(
+      "Will wake: no one — the post lands on the timeline"
+    )
   })
 
   it("keeps the members panel collapsed until the header toggle is pressed", async () => {
