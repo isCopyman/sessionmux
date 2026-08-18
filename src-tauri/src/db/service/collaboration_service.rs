@@ -351,6 +351,7 @@ async fn validate_dedupe_payload<C: ConnectionTrait>(
     conn: &C,
     event_id: &str,
     input: &SendCollaborationMessageInput,
+    effective_expects_reply: bool,
 ) -> Result<(), DbError> {
     let row = conn
         .query_one(statement(
@@ -373,7 +374,7 @@ async fn validate_dedupe_payload<C: ConnectionTrait>(
     if subject != expected_subject
         || body != input.body
         || reply_to != input.reply_to_event_id
-        || (expects_reply != 0) != input.expects_reply
+        || (expects_reply != 0) != effective_expects_reply
         || urgency != input.urgency.as_str()
     {
         return Err(validation(
@@ -1338,11 +1339,16 @@ async fn send_with_initially_inactive_targets_guarded(
         validate_reply_relation(&txn, input.source_conversation_id, &target_ids, reply_to).await?;
     }
     let chain_depth = child_chain_depth(&txn, input.reply_to_event_id.as_deref()).await?;
+    // Mailbox letters are always Agent-authored, so the chain-depth fuse
+    // applies to every send: at the limit the letter still lands, but it can
+    // no longer ask for a reply. Human UI sends go through post_room, which
+    // applies the fuse to Agent authors only.
+    let expects_reply = input.expects_reply && chain_depth < MAX_AGENT_REPLY_CHAIN_DEPTH;
 
     if let Some(event_id) =
         event_id_for_dedupe(&txn, input.source_conversation_id, &input.client_dedupe_id).await?
     {
-        validate_dedupe_payload(&txn, &event_id, &input).await?;
+        validate_dedupe_payload(&txn, &event_id, &input, expects_reply).await?;
         let deliveries = deliveries_for_event(&txn, &event_id).await?;
         let mut affected = BTreeSet::from([input.source_conversation_id]);
         affected.extend(deliveries.iter().map(|item| item.target.conversation_id));
@@ -1379,7 +1385,7 @@ async fn send_with_initially_inactive_targets_guarded(
                 subject.clone().into(),
                 input.body.clone().into(),
                 input.reply_to_event_id.clone().into(),
-                (input.expects_reply as i32).into(),
+                (expects_reply as i32).into(),
                 input.urgency.as_str().into(),
                 input.client_dedupe_id.clone().into(),
                 chain_depth.into(),
@@ -1404,7 +1410,7 @@ async fn send_with_initially_inactive_targets_guarded(
                 subject.clone().into(),
                 input.body.clone().into(),
                 input.reply_to_event_id.clone().into(),
-                (input.expects_reply as i32).into(),
+                (expects_reply as i32).into(),
                 input.urgency.as_str().into(),
                 input.client_dedupe_id.clone().into(),
                 chain_depth.into(),
@@ -1420,7 +1426,7 @@ async fn send_with_initially_inactive_targets_guarded(
         if let Some(existing_id) =
             event_id_for_dedupe(&txn, input.source_conversation_id, &input.client_dedupe_id).await?
         {
-            validate_dedupe_payload(&txn, &existing_id, &input).await?;
+            validate_dedupe_payload(&txn, &existing_id, &input, expects_reply).await?;
             let deliveries = deliveries_for_event(&txn, &existing_id).await?;
             let mut affected = BTreeSet::from([input.source_conversation_id]);
             affected.extend(deliveries.iter().map(|item| item.target.conversation_id));
@@ -1484,7 +1490,7 @@ async fn send_with_initially_inactive_targets_guarded(
             ),
         };
         let delivery_id = uuid::Uuid::new_v4().to_string();
-        let obligation_state = if input.expects_reply && target.is_some() {
+        let obligation_state = if expects_reply && target.is_some() {
             CollaborationObligationState::AwaitingReply
         } else {
             CollaborationObligationState::None
@@ -1509,7 +1515,7 @@ async fn send_with_initially_inactive_targets_guarded(
                 input.delivery_hint.as_str().into(),
                 state.into(),
                 obligation_state.as_str().into(),
-                (input.expects_reply as i32).into(),
+                (expects_reply as i32).into(),
                 error.into(),
             ],
         ))
@@ -1676,6 +1682,12 @@ pub async fn post_room(
         validate_room_reply(&txn, &input.room_id, reply_to).await?;
     }
     let chain_depth = child_chain_depth(&txn, input.reply_to_event_id.as_deref()).await?;
+    // The chain-depth fuse binds Agent authors only: a Room thread at the
+    // limit still accepts the post but it can no longer ask for a reply.
+    // Human UI posts stay unrestricted (red line).
+    let expects_reply = input.expects_reply
+        && (input.author_kind == CollaborationAuthorKind::Human
+            || chain_depth < MAX_AGENT_REPLY_CHAIN_DEPTH);
     if let Some(event_id) =
         event_id_for_dedupe(&txn, ledger_source_id, &input.client_dedupe_id).await?
     {
@@ -1718,7 +1730,7 @@ pub async fn post_room(
                 subject.into(),
                 input.body.clone().into(),
                 input.reply_to_event_id.clone().into(),
-                (input.expects_reply as i32).into(),
+                (expects_reply as i32).into(),
                 input.urgency.as_str().into(),
                 input.client_dedupe_id.clone().into(),
                 chain_depth.into(),
@@ -1794,7 +1806,7 @@ pub async fn post_room(
             ),
         };
         let delivery_id = uuid::Uuid::new_v4().to_string();
-        let obligation_state = if input.expects_reply && target.is_some() && !archived {
+        let obligation_state = if expects_reply && target.is_some() && !archived {
             CollaborationObligationState::AwaitingReply
         } else {
             CollaborationObligationState::None
@@ -3656,7 +3668,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn core_keeps_explicit_human_reply_chains_unrestricted() {
+    async fn agent_reply_chain_stops_asking_for_replies_at_the_fuse() {
         let (db, first, second, _) = seeded_memory().await;
         let mut source = first;
         let mut target = second;
@@ -3666,13 +3678,31 @@ mod tests {
             let mut next = input(
                 source,
                 vec![target],
-                &format!("human-depth-{depth}"),
+                &format!("agent-depth-{depth}"),
                 "continue the discussion",
             );
             next.expects_reply = true;
             next.reply_to_event_id = reply_to_event_id.clone();
             let sent = send(&db.conn, next).await.unwrap();
-            assert!(sent.deliveries[0].expects_reply);
+            if depth < MAX_AGENT_REPLY_CHAIN_DEPTH {
+                assert!(
+                    sent.deliveries[0].expects_reply,
+                    "depth {depth} is below the fuse"
+                );
+                assert_eq!(
+                    sent.deliveries[0].obligation_state,
+                    CollaborationObligationState::AwaitingReply
+                );
+            } else {
+                assert!(
+                    !sent.deliveries[0].expects_reply,
+                    "depth {depth} hits the fuse: the letter lands but cannot ask for a reply"
+                );
+                assert_eq!(
+                    sent.deliveries[0].obligation_state,
+                    CollaborationObligationState::None
+                );
+            }
             reply_to_event_id = Some(sent.event_id);
             std::mem::swap(&mut source, &mut target);
         }
@@ -3687,7 +3717,43 @@ mod tests {
             .unwrap()
             .unwrap();
         let stored_depth: i32 = row.try_get("", "chain_depth").unwrap();
-        assert_eq!(stored_depth, MAX_AGENT_REPLY_CHAIN_DEPTH + 1);
+        assert_eq!(
+            stored_depth,
+            MAX_AGENT_REPLY_CHAIN_DEPTH + 1,
+            "chain depth keeps being recorded past the fuse"
+        );
+    }
+
+    #[tokio::test]
+    async fn human_room_posts_keep_asking_for_replies_past_the_fuse() {
+        let (db, a, b, _) = seeded_memory().await;
+        let room = seeded_room(&db, a, b).await;
+        // Grow an Agent thread up to the fuse: the last Agent post lands at
+        // depth MAX and loses its reply request.
+        let mut reply_to = None;
+        let mut author = a;
+        let mut other = b;
+        for depth in 0..=MAX_AGENT_REPLY_CHAIN_DEPTH {
+            let mut post = room_post(&room.id, author, vec![other], &format!("fuse-{depth}"));
+            post.reply_to_event_id = reply_to.clone();
+            let posted = post_room(&db.conn, post).await.expect("post");
+            assert_eq!(
+                posted.deliveries[0].expects_reply,
+                depth < MAX_AGENT_REPLY_CHAIN_DEPTH,
+                "agent post at depth {depth}"
+            );
+            reply_to = Some(posted.event_id);
+            std::mem::swap(&mut author, &mut other);
+        }
+        // A human follow-up on the depth-MAX thread still asks for a reply.
+        let mut human = room_post(&room.id, a, vec![b], "human-past-fuse");
+        human.reply_to_event_id = reply_to;
+        human.author_kind = CollaborationAuthorKind::Human;
+        let posted = post_room(&db.conn, human).await.expect("human post");
+        assert!(
+            posted.deliveries[0].expects_reply,
+            "human UI posts stay unrestricted"
+        );
     }
 
     #[tokio::test]

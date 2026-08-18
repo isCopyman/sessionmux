@@ -2269,7 +2269,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn agent_reply_chain_preserves_each_explicit_reply_obligation() {
+    async fn agent_reply_chain_holds_obligations_until_the_fuse() {
         let db = fresh_in_memory_db().await;
         let folder = seed_folder(&db, "/tmp/codeg-agent-reply-budget").await;
         let first = seed_conversation(&db, folder, AgentType::Codex).await;
@@ -2308,11 +2308,22 @@ mod tests {
                 .iter()
                 .find(|delivery| delivery.event_id == event_id)
                 .expect("target sees the delivered event");
-            assert!(inbound.expects_reply);
-            assert_eq!(
-                inbound.obligation_state,
-                crate::models::CollaborationObligationState::AwaitingReply
-            );
+            if depth < collaboration_service::MAX_AGENT_REPLY_CHAIN_DEPTH {
+                assert!(inbound.expects_reply, "depth {depth} is below the fuse");
+                assert_eq!(
+                    inbound.obligation_state,
+                    crate::models::CollaborationObligationState::AwaitingReply
+                );
+            } else {
+                assert!(
+                    !inbound.expects_reply,
+                    "depth {depth} hits the fuse: delivered, but no reply obligation"
+                );
+                assert_eq!(
+                    inbound.obligation_state,
+                    crate::models::CollaborationObligationState::None
+                );
+            }
             assert!(sent.note.is_none());
 
             let row = db
