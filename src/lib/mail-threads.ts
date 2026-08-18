@@ -110,9 +110,9 @@ function byCreatedAt(
 }
 
 /**
- * Session mailbox reading pane: nest by `replyToEventId`, sort siblings by
- * time. A letter whose parent is missing from this thread becomes a root so
- * it still shows up.
+ * Session mailbox reading order: walk `replyToEventId` as a tree, siblings
+ * by time. Display stays flush; indent is not part of this contract. A letter
+ * whose parent is missing from this thread becomes a root so it still shows.
  */
 export function buildMailThreadTree(
   items: CollaborationDelivery[]
@@ -144,4 +144,23 @@ export function buildMailThreadTree(
   })
 
   return roots.sort(byCreatedAt).map(toNode)
+}
+
+/** Parent, then children; siblings already time-sorted. No visual indent. */
+export function flattenMailThreadTree(
+  nodes: MailThreadNode[]
+): CollaborationDelivery[] {
+  const out: CollaborationDelivery[] = []
+  const walk = (node: MailThreadNode) => {
+    out.push(node.delivery)
+    for (const child of node.children) walk(child)
+  }
+  for (const node of nodes) walk(node)
+  return out
+}
+
+export function orderMailThreadByTree(
+  items: CollaborationDelivery[]
+): CollaborationDelivery[] {
+  return flattenMailThreadTree(buildMailThreadTree(items))
 }

@@ -3,6 +3,7 @@ import type { CollaborationDelivery } from "@/lib/types"
 import {
   buildMailThreadTree,
   groupMailThreads,
+  orderMailThreadByTree,
   summarizeMailThread,
 } from "./mail-threads"
 
@@ -120,6 +121,27 @@ describe("buildMailThreadTree", () => {
     expect(treeIds(buildMailThreadTree([orphan]))).toEqual([
       { id: "e9", children: [] },
     ])
+  })
+
+  it("flattens tree walk order without changing sibling time order", () => {
+    const root = letter("e1", { createdAt: "2026-08-18T00:00:00Z" })
+    const firstReply = letter("e2", {
+      replyToEventId: "e1",
+      createdAt: "2026-08-18T00:02:00Z",
+    })
+    const nested = letter("e3", {
+      replyToEventId: "e2",
+      createdAt: "2026-08-18T00:03:00Z",
+    })
+    const laterSibling = letter("e4", {
+      replyToEventId: "e1",
+      createdAt: "2026-08-18T00:04:00Z",
+    })
+    expect(
+      orderMailThreadByTree([laterSibling, nested, root, firstReply]).map(
+        (item) => item.eventId
+      )
+    ).toEqual(["e1", "e2", "e3", "e4"])
   })
 })
 
