@@ -1447,13 +1447,7 @@ pub async fn spawn_agent_connection(
                 // Revoke the per-launch token and reclaim any pending interactive
                 // requests owned by this parent connection.
                 if let Some(inj) = delegation_for_cleanup {
-                    let token = {
-                        let snap = state_clone.read().await;
-                        snap.codeg_mcp_token.clone()
-                    };
-                    if let Some(tok) = token {
-                        inj.tokens.revoke(&tok).await;
-                    }
+                    inj.tokens.revoke_by_parent(&conn_id).await;
                     // Reclaim a parked `ask_user_question` instead of waiting for the
                     // companion's ask socket to close (which a reparented/hard-killed
                     // agent may never do); the dropped sender declines the tool cleanly.
@@ -3119,7 +3113,10 @@ fn build_client_capabilities(
     // convention is to advertise nothing an agent hasn't implemented.
     let mut meta = serde_json::Map::new();
     if agent_type == AgentType::ClaudeCode {
-        meta.insert("subagent-transcript".to_string(), serde_json::Value::Bool(true));
+        meta.insert(
+            "subagent-transcript".to_string(),
+            serde_json::Value::Bool(true),
+        );
     }
     // The capabilities array is deliberately "sessionFailure" ONLY.
     // claude-agent-acp 0.69.0 and codex-acp 1.4.0 added a second AIR
@@ -3472,10 +3469,11 @@ fn is_executable_file(path: &Path) -> bool {
     true
 }
 
-/// Append the built-in `codeg-mcp` MCP entry when at least one host tool group
-/// is enabled and the companion binary is present. Returns the per-launch token
-/// that was registered, or `None` when injection was skipped (disabled by
-/// config, or binary missing).
+/// Append the built-in companion MCP entries when at least one host tool group
+/// is enabled and the companion binary is present. Returns one per-launch token
+/// (the first registered) for session-state bookkeeping, or `None` when
+/// injection was skipped (disabled by config, or binary missing). Teardown
+/// revokes every token for the parent connection, not just this one.
 ///
 /// When the binary is missing we log a single-line warning and skip
 /// injection rather than register the token + emit a phantom McpServerStdio
@@ -3483,8 +3481,12 @@ fn is_executable_file(path: &Path) -> bool {
 /// new ACP session ship a guaranteed-to-fail MCP server entry: stricter
 /// agents (Claude Code) refuse the whole session. Skipping leaves the agent
 /// functional without codeg's host bridge tools.
-/// Which tool groups a companion launch should expose. A struct rather than a
-/// positional bool list: the groups keep growing and adjacent `bool`s at a
+///
+/// Mailbox and Room are separate stdio servers (`codeg-mailbox`, `codeg-room`)
+/// so the agent never sees `send_message` and `post_room` in one `tools/list`.
+///
+/// Which tool groups a shared `codeg-mcp` launch should expose. A struct rather
+/// than a positional bool list: the groups keep growing and adjacent `bool`s at a
 /// call site is a silent argument-swap waiting to happen.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct CompanionFeatureFlags {
@@ -3493,7 +3495,6 @@ struct CompanionFeatureFlags {
     feedback: bool,
     ask: bool,
     sessions: bool,
-    collaboration: bool,
     /// Per-spawn (task-engine launches only), not a settings toggle — on its own
     /// it still injects the companion so a task session always has its reporting
     /// tools.
@@ -3504,10 +3505,17 @@ struct CompanionFeatureFlags {
     taskboard: bool,
 }
 
-/// The `--features` value for a companion launch, or `None` when no group is
-/// enabled (the companion isn't injected at all). Pulled out as a pure function
-/// so the inject/skip decision is unit-testable without a real binary on disk or
-/// a live listener. The order here is the order the companion's
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CompanionStdioSpec {
+    server_name: &'static str,
+    features_arg: String,
+}
+
+/// The `--features` value for the shared `codeg-mcp` companion, or `None` when
+/// that process has no groups enabled. Mailbox / Room are not included here;
+/// they travel as their own stdio servers. Pulled out as a pure function so the
+/// inject/skip decision is unit-testable without a real binary on disk or a live
+/// listener. The order here is the order the companion's
 /// `CompanionFeatures::parse` recognizes.
 fn companion_features_arg(flags: CompanionFeatureFlags) -> Option<String> {
     let mut features: Vec<&str> = Vec::new();
@@ -3523,9 +3531,6 @@ fn companion_features_arg(flags: CompanionFeatureFlags) -> Option<String> {
     if flags.sessions {
         features.push("sessions");
     }
-    if flags.collaboration {
-        features.push("collaboration");
-    }
     if flags.tasks {
         features.push("tasks");
     }
@@ -3539,6 +3544,76 @@ fn companion_features_arg(flags: CompanionFeatureFlags) -> Option<String> {
         return None;
     }
     Some(features.join(","))
+}
+
+fn companion_stdio_specs(
+    flags: CompanionFeatureFlags,
+    channels_enabled: bool,
+) -> Vec<CompanionStdioSpec> {
+    let mut specs = Vec::new();
+    if let Some(features_arg) = companion_features_arg(flags) {
+        specs.push(CompanionStdioSpec {
+            server_name: "codeg-mcp",
+            features_arg,
+        });
+    }
+    if channels_enabled {
+        specs.push(CompanionStdioSpec {
+            server_name: "codeg-mailbox",
+            features_arg: "mailbox".into(),
+        });
+        specs.push(CompanionStdioSpec {
+            server_name: "codeg-room",
+            features_arg: "room".into(),
+        });
+    }
+    specs
+}
+
+async fn push_companion_stdio(
+    servers: &mut Vec<McpServer>,
+    injection: &CodegMcpInjection,
+    parent_connection_id: &str,
+    working_dir: &Path,
+    binary_path: &Path,
+    spec: &CompanionStdioSpec,
+) -> String {
+    let token = uuid::Uuid::new_v4().to_string();
+    injection
+        .tokens
+        .register(
+            token.clone(),
+            crate::acp::delegation::listener::TokenEntry {
+                parent_connection_id: parent_connection_id.to_string(),
+                working_dir: working_dir.to_path_buf(),
+                // Host Control is a separate, typed application capability.
+                // CODEG_ACP_HOST_TOOLS only chooses who hosts fs/terminal and
+                // must not silently disable reversible Session organization.
+                host_control_writes_allowed: true,
+            },
+        )
+        .await;
+    let mut server = McpServerStdio::new(spec.server_name, binary_path.to_path_buf());
+    server = server.args(vec![
+        "--parent-connection-id".to_string(),
+        parent_connection_id.to_string(),
+        "--socket-path".to_string(),
+        injection.socket_path.to_string_lossy().to_string(),
+        "--token".to_string(),
+        token.clone(),
+        // Self-cleanup watchdog: codeg-mcp exits when this PID is gone so
+        // orphaned companions can't keep the binary file locked across an
+        // installer upgrade (Windows) or hold a stale host connection
+        // (any platform).
+        "--parent-pid".to_string(),
+        std::process::id().to_string(),
+        "--features".to_string(),
+        spec.features_arg.clone(),
+        "--server-name".to_string(),
+        spec.server_name.to_string(),
+    ]);
+    servers.push(McpServer::Stdio(server));
+    token
 }
 
 /// Outcome of injecting the `codeg-mcp` companion: the per-launch token to
@@ -3561,64 +3636,47 @@ async fn inject_codeg_mcp(
     // groups out of both tools/list and tools/call.
     let feedback_enabled = injection.feedback.is_enabled().await;
     let authoring = injection.authoring.snapshot().await;
+    let channels_enabled =
+        injection.collaboration.is_enabled().await && host_tools.hosts_channels();
     let flags = CompanionFeatureFlags {
         host_control: injection.host_control.is_enabled().await,
         feedback: feedback_enabled,
         ask: injection.ask.is_enabled().await,
         sessions: injection.sessions.is_enabled().await,
-        collaboration: injection.collaboration.is_enabled().await && host_tools.hosts_channels(),
         tasks: tasks_enabled,
         automations: authoring.automations_enabled,
         taskboard: authoring.work_tasks_enabled,
     };
-    // `None` (no feature enabled) short-circuits the whole injection.
-    let features_arg = companion_features_arg(flags)?;
+    let specs = companion_stdio_specs(flags, channels_enabled);
+    if specs.is_empty() {
+        return None;
+    }
     let Some(binary_path) = locate_codeg_mcp_binary() else {
         tracing::warn!(
             "[host-bridge][WARN] codeg-mcp companion binary not found (checked CODEG_MCP_BIN, \
              exe sibling, and PATH); skipping check_user_feedback / \
-             ask_user_question / get_session_info / Host Control / Session collaboration tool injection for connection \
+             ask_user_question / get_session_info / Host Control / mailbox / Room tool injection for connection \
              {parent_connection_id}. Reinstall codeg or set CODEG_MCP_BIN to fix."
         );
         return None;
     };
-    let token = uuid::Uuid::new_v4().to_string();
-    injection
-        .tokens
-        .register(
-            token.clone(),
-            crate::acp::delegation::listener::TokenEntry {
-                parent_connection_id: parent_connection_id.to_string(),
-                working_dir: working_dir.to_path_buf(),
-                // Host Control is a separate, typed application capability.
-                // CODEG_ACP_HOST_TOOLS only chooses who hosts fs/terminal and
-                // must not silently disable reversible Session organization.
-                host_control_writes_allowed: true,
-            },
+    let mut token = None;
+    for spec in &specs {
+        let next = push_companion_stdio(
+            servers,
+            injection,
+            parent_connection_id,
+            working_dir,
+            &binary_path,
+            spec,
         )
         .await;
-    let mut server = McpServerStdio::new("codeg-mcp", binary_path);
-    let args = vec![
-        "--parent-connection-id".to_string(),
-        parent_connection_id.to_string(),
-        "--socket-path".to_string(),
-        injection.socket_path.to_string_lossy().to_string(),
-        "--token".to_string(),
-        token.clone(),
-        // Self-cleanup watchdog: codeg-mcp exits when this PID is gone so
-        // orphaned companions can't keep the binary file locked across an
-        // installer upgrade (Windows) or hold a stale host connection
-        // (any platform).
-        "--parent-pid".to_string(),
-        std::process::id().to_string(),
-        // Tool groups to expose this launch (see `CompanionFeatureFlags`).
-        "--features".to_string(),
-        features_arg,
-    ];
-    server = server.args(args);
-    servers.push(McpServer::Stdio(server));
+        if token.is_none() {
+            token = Some(next);
+        }
+    }
     Some(CompanionInjection {
-        token,
+        token: token.expect("specs is non-empty"),
         feedback_available: feedback_enabled,
     })
 }
@@ -10239,12 +10297,12 @@ async fn emit_conversation_update(
             // is orchestration bookkeeping, so it is replaced wholesale); the
             // other lifecycle markers stay dropped. See
             // `classify_codex_subagent_activity`.
-            let codex_subagent = match classify_codex_subagent_activity(agent_type, tc.meta.as_ref())
-            {
-                CodexSubagentActivity::None => None,
-                CodexSubagentActivity::Started(input) => Some(input),
-                CodexSubagentActivity::Other => return,
-            };
+            let codex_subagent =
+                match classify_codex_subagent_activity(agent_type, tc.meta.as_ref()) {
+                    CodexSubagentActivity::None => None,
+                    CodexSubagentActivity::Started(input) => Some(input),
+                    CodexSubagentActivity::Other => return,
+                };
             let tool_call_id = tc.tool_call_id.to_string();
             // Grok emits a redundant `tool_call` for its native ask_user_question
             // alongside the blocking `_x.ai/ask_user_question` ext request codeg
@@ -10700,9 +10758,7 @@ async fn emit_conversation_update(
             // parser auto-title path on the next conversation fetch, not here, to
             // keep this DB-agnostic emit path unchanged — see parsers/codex.rs.)
             let neutral_goal_channel = state.read().await.neutral_goal_channel;
-            if let Some(goal) =
-                session_info_goal_value(neutral_goal_channel, info.meta.as_ref())
-            {
+            if let Some(goal) = session_info_goal_value(neutral_goal_channel, info.meta.as_ref()) {
                 if let Some(marker) =
                     crate::acp::codex_goal::next_goal_marker(&mut cb_state.codex_open_goal, goal)
                 {
@@ -10746,8 +10802,7 @@ async fn emit_conversation_update(
             if let Some(raw) = air_session_failure(info.meta.as_ref()) {
                 match parse_session_failure_record(raw) {
                     Some(record) => {
-                        emit_with_state(state, emitter, AcpEvent::SessionFailure { record })
-                            .await;
+                        emit_with_state(state, emitter, AcpEvent::SessionFailure { record }).await;
                     }
                     None => tracing::debug!(
                         "[ACP] dropped AIR sessionFailure without usable id/revision: {raw:?}"
@@ -11382,9 +11437,15 @@ mod tests {
             "codex": {"goal": {"objective": "legacy", "status": "active"}},
         }));
         let neutral = session_info_goal_value(true, Some(&both)).expect("neutral value");
-        assert_eq!(neutral.get("objective").and_then(|v| v.as_str()), Some("neutral"));
+        assert_eq!(
+            neutral.get("objective").and_then(|v| v.as_str()),
+            Some("neutral")
+        );
         let legacy = session_info_goal_value(false, Some(&both)).expect("legacy value");
-        assert_eq!(legacy.get("objective").and_then(|v| v.as_str()), Some("legacy"));
+        assert_eq!(
+            legacy.get("objective").and_then(|v| v.as_str()),
+            Some("legacy")
+        );
 
         // Neutral-pinned connections ignore a legacy-only update (and vice
         // versa) — the two updates of a double-publish collapse to one marker.
@@ -11392,9 +11453,8 @@ mod tests {
             serde_json::json!({"codex": {"goal": {"objective": "legacy", "status": "active"}}}),
         );
         assert!(session_info_goal_value(true, Some(&legacy_only)).is_none());
-        let neutral_only = meta_map(
-            serde_json::json!({"goal": {"objective": "neutral", "status": "active"}}),
-        );
+        let neutral_only =
+            meta_map(serde_json::json!({"goal": {"objective": "neutral", "status": "active"}}));
         assert!(session_info_goal_value(false, Some(&neutral_only)).is_none());
 
         // `goal: null` IS a value (the clear signal), not an absent key.
@@ -11417,7 +11477,10 @@ mod tests {
         }}));
         assert_eq!(
             goal_advertised_control(Some(&claude)),
-            Some(("_session/goal".to_string(), vec!["set".to_string(), "clear".to_string()]))
+            Some((
+                "_session/goal".to_string(),
+                vec!["set".to_string(), "clear".to_string()]
+            ))
         );
         // Advertised-but-empty actions are honored as "no controls" — the
         // card must not offer affordances the adapter never implemented.
@@ -11592,7 +11655,10 @@ mod tests {
         assert_eq!(record.severity, "error");
         assert_eq!(record.title, "");
         assert_eq!(record.details, None);
-        assert_eq!(record.actions, vec!["retry".to_string(), "sing".to_string()]);
+        assert_eq!(
+            record.actions,
+            vec!["retry".to_string(), "sing".to_string()]
+        );
     }
 
     #[test]
@@ -11648,10 +11714,7 @@ mod tests {
             let caps =
                 serde_json::to_value(build_client_capabilities(agent, HostToolsPolicy::Default))
                     .unwrap();
-            assert!(caps
-                .get("_meta")
-                .and_then(|m| m.get("jetbrains"))
-                .is_none());
+            assert!(caps.get("_meta").and_then(|m| m.get("jetbrains")).is_none());
         }
     }
 
@@ -15848,11 +15911,6 @@ mod tests {
         assert_eq!(only(|f| f.ask = true), Some("ask".to_string()));
         // Sessions only — likewise injects the companion on its own.
         assert_eq!(only(|f| f.sessions = true), Some("sessions".to_string()));
-        // Collaboration only — mailbox + Room tools travel together.
-        assert_eq!(
-            only(|f| f.collaboration = true),
-            Some("collaboration".to_string())
-        );
         // Per-spawn tasks group: injects alone.
         assert_eq!(only(|f| f.tasks = true), Some("tasks".to_string()));
         // Each chat-authoring group injects the companion on its own too, so a
@@ -15869,16 +15927,40 @@ mod tests {
                 feedback: true,
                 ask: true,
                 sessions: true,
-                collaboration: true,
                 tasks: true,
                 automations: true,
                 taskboard: true,
             }),
-            Some(
-                "host_control,feedback,ask,sessions,collaboration,tasks,automations,taskboard"
-                    .to_string()
-            )
+            Some("host_control,feedback,ask,sessions,tasks,automations,taskboard".to_string())
         );
+        // Mailbox + Room are their own stdio servers, not a shared --features
+        // token on codeg-mcp. Channels alone still inject two companions.
+        assert!(companion_stdio_specs(CompanionFeatureFlags::default(), false).is_empty());
+        let channels_only = companion_stdio_specs(CompanionFeatureFlags::default(), true);
+        assert_eq!(
+            channels_only
+                .iter()
+                .map(|spec| spec.server_name)
+                .collect::<Vec<_>>(),
+            vec!["codeg-mailbox", "codeg-room"]
+        );
+        assert_eq!(channels_only[0].features_arg, "mailbox");
+        assert_eq!(channels_only[1].features_arg, "room");
+        let host_and_channels = companion_stdio_specs(
+            CompanionFeatureFlags {
+                host_control: true,
+                ..CompanionFeatureFlags::default()
+            },
+            true,
+        );
+        assert_eq!(
+            host_and_channels
+                .iter()
+                .map(|spec| spec.server_name)
+                .collect::<Vec<_>>(),
+            vec!["codeg-mcp", "codeg-mailbox", "codeg-room"]
+        );
+        assert_eq!(host_and_channels[0].features_arg, "host_control");
     }
 
     // ── Boolean config options (cline 3.0.50 `auto_approve`) ──

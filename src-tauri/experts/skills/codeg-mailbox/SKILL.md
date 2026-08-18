@@ -6,7 +6,8 @@ description: Use when a managed Codeg Agent needs to consult or notify another e
 # Codeg Mailbox
 
 Contact another **already existing** Codeg Session with the **mailbox**
-tools. This is private mail. It is not a Room post.
+tools on the `codeg-mailbox` MCP server. This is private mail. It is not a
+Room post, and these tools do not appear on `codeg-mcp` or `codeg-room`.
 
 A letter has two parts, like email:
 

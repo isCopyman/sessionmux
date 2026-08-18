@@ -52,6 +52,9 @@ They do not post and they do not send mail.
 
 ## Ledger tools
 
+These live on the `codeg-room` MCP server, not `codeg-mcp`. Host Control
+`room.create` / `room.add_member` stay on `codeg-mcp`.
+
 - `list_rooms`: Rooms this Session already belongs to. Includes
   `unread_count` (channel posts since you last read),
   `mention_unread_count` (`@` deliveries you have not consumed),

@@ -125,13 +125,18 @@ pub fn err(id: Value, code: i64, message: impl Into<String>) -> JsonRpcResponse 
 /// Which tool groups this companion exposes. Passed in via the `--features`
 /// arg at launch; a tool whose group is off is hidden from `tools/list` and
 /// rejected on `tools/call`.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct CompanionFeatures {
     pub host_control: bool,
     pub feedback: bool,
     pub ask: bool,
     pub sessions: bool,
-    pub collaboration: bool,
+    /// Private mailbox tools (`list_sessions` / `send_message` / `list_inbox` /
+    /// `read_message`). Injected as the `codeg-mailbox` stdio server.
+    pub mailbox: bool,
+    /// Shared Room tools (`list_rooms` / `read_room` / `post_room`). Injected as
+    /// the `codeg-room` stdio server, never listed next to mailbox tools.
+    pub room: bool,
     /// Work-task reporting tools (`task_progress` / `task_complete`) — injected
     /// only into spawns launched by the task engine.
     pub tasks: bool,
@@ -143,39 +148,28 @@ pub struct CompanionFeatures {
 
 impl CompanionFeatures {
     /// Parse the comma-joined `--features` value (e.g.
-    /// `feedback,ask,sessions,collaboration,tasks,automations,taskboard`).
+    /// `feedback,ask,sessions,mailbox,room,tasks,automations,taskboard`).
     /// Unknown tokens are ignored. An absent value enables no tools; the main
     /// process and companion ship together and always pass an explicit value.
+    /// The legacy `collaboration` token still opens both `mailbox` and `room`
+    /// for older injected processes.
     pub fn parse(raw: Option<&str>) -> Self {
         let Some(s) = raw else {
-            return Self {
-                host_control: false,
-                feedback: false,
-                ask: false,
-                sessions: false,
-                collaboration: false,
-                tasks: false,
-                automations: false,
-                taskboard: false,
-            };
+            return Self::default();
         };
-        let mut f = Self {
-            host_control: false,
-            feedback: false,
-            ask: false,
-            sessions: false,
-            collaboration: false,
-            tasks: false,
-            automations: false,
-            taskboard: false,
-        };
+        let mut f = Self::default();
         for tok in s.split(',').map(str::trim).filter(|t| !t.is_empty()) {
             match tok {
                 "host_control" => f.host_control = true,
                 "feedback" => f.feedback = true,
                 "ask" => f.ask = true,
                 "sessions" => f.sessions = true,
-                "collaboration" => f.collaboration = true,
+                "mailbox" => f.mailbox = true,
+                "room" => f.room = true,
+                "collaboration" => {
+                    f.mailbox = true;
+                    f.room = true;
+                }
                 "tasks" => f.tasks = true,
                 "automations" => f.automations = true,
                 "taskboard" => f.taskboard = true,
@@ -192,8 +186,8 @@ impl CompanionFeatures {
             "check_user_feedback" => self.feedback,
             "ask_user_question" => self.ask,
             "get_session_info" => self.sessions,
-            "list_sessions" | "send_message" | "list_inbox" | "read_message" | "list_rooms"
-            | "read_room" | "post_room" => self.collaboration,
+            "list_sessions" | "send_message" | "list_inbox" | "read_message" => self.mailbox,
+            "list_rooms" | "read_room" | "post_room" => self.room,
             "task_progress" | "task_complete" => self.tasks,
             "create_automation" => self.automations,
             "create_work_task" => self.taskboard,
@@ -208,6 +202,9 @@ pub struct CompanionContext {
     pub parent_connection_id: String,
     pub socket_path: String,
     pub token: String,
+    /// Name reported in `initialize` / `serverInfo`. Mailbox and Room launches
+    /// use `codeg-mailbox` / `codeg-room` so the agent sees two MCP servers.
+    pub server_name: String,
     /// Tool groups this launch exposes (see [`CompanionFeatures`]).
     pub features: CompanionFeatures,
 }
@@ -333,7 +330,7 @@ pub async fn dispatch_line(
             json!({
                 "protocolVersion": "2024-11-05",
                 "serverInfo": {
-                    "name": "codeg-mcp",
+                    "name": ctx.server_name,
                     "version": env!("CARGO_PKG_VERSION"),
                 },
                 "capabilities": { "tools": {} },
@@ -2224,36 +2221,36 @@ mod tests {
             feedback: true,
             ask: true,
             sessions: true,
-            collaboration: true,
+            mailbox: true,
+            room: true,
             tasks: true,
             automations: true,
             taskboard: true,
         }
     }
 
-    fn collaboration_features() -> CompanionFeatures {
+    fn mailbox_features() -> CompanionFeatures {
         CompanionFeatures {
-            host_control: false,
-            feedback: false,
-            ask: false,
-            sessions: false,
-            collaboration: true,
-            tasks: false,
-            automations: false,
-            taskboard: false,
+            mailbox: true,
+            ..CompanionFeatures::default()
         }
+    }
+
+    fn room_features() -> CompanionFeatures {
+        CompanionFeatures {
+            room: true,
+            ..CompanionFeatures::default()
+        }
+    }
+
+    fn collaboration_features() -> CompanionFeatures {
+        CompanionFeatures::parse(Some("collaboration"))
     }
 
     fn host_control_features() -> CompanionFeatures {
         CompanionFeatures {
             host_control: true,
-            feedback: false,
-            ask: false,
-            sessions: false,
-            collaboration: false,
-            tasks: false,
-            automations: false,
-            taskboard: false,
+            ..CompanionFeatures::default()
         }
     }
 
@@ -2262,6 +2259,7 @@ mod tests {
             parent_connection_id: "parent-1".into(),
             socket_path: "/tmp/codeg-mcp-test.sock".into(),
             token: "token".into(),
+            server_name: "codeg-mcp".into(),
             features,
         }
     }
@@ -2286,8 +2284,23 @@ mod tests {
             r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#,
         )
         .await;
-        let response = response(action).await;
-        assert_eq!(response.result.unwrap()["serverInfo"]["name"], "codeg-mcp");
+        let initialized = response(action).await;
+        assert_eq!(
+            initialized.result.unwrap()["serverInfo"]["name"],
+            "codeg-mcp"
+        );
+        let mut mailbox = ctx(mailbox_features());
+        mailbox.server_name = "codeg-mailbox".into();
+        let named = dispatch_line(
+            &mailbox,
+            Arc::new(InflightCalls::new()),
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#,
+        )
+        .await;
+        assert_eq!(
+            response(named).await.result.unwrap()["serverInfo"]["name"],
+            "codeg-mailbox"
+        );
     }
 
     #[tokio::test]
@@ -2399,33 +2412,82 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tools_list_gates_session_collaboration_as_one_group() {
-        let action = dispatch_line(
-            &ctx(collaboration_features()),
-            Arc::new(InflightCalls::new()),
-            r#"{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}"#,
-        )
-        .await;
-        let response = response(action).await;
-        let result = response.result.unwrap();
-        let names: Vec<&str> = result["tools"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter_map(|tool| tool["name"].as_str())
-            .collect();
+    async fn tools_list_keeps_mailbox_and_room_on_separate_servers() {
+        async fn names(features: CompanionFeatures) -> Vec<String> {
+            let action = dispatch_line(
+                &ctx(features),
+                Arc::new(InflightCalls::new()),
+                r#"{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}"#,
+            )
+            .await;
+            response(action).await.result.unwrap()["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|tool| tool["name"].as_str().map(str::to_string))
+                .collect()
+        }
+
         assert_eq!(
-            names,
+            names(mailbox_features()).await,
             vec![
                 "list_sessions",
                 "send_message",
                 "list_inbox",
-                "read_message",
-                "list_rooms",
-                "read_room",
-                "post_room"
+                "read_message"
             ]
         );
+        assert_eq!(
+            names(room_features()).await,
+            vec!["list_rooms", "read_room", "post_room"]
+        );
+
+        let post_on_mailbox = serde_json::json!({
+            "jsonrpc": "2.0", "id": 9, "method": "tools/call",
+            "params": { "name": "post_room", "arguments": {
+                "room_id": "rm_1",
+                "content": "no"
+            }}
+        })
+        .to_string();
+        let LineAction::Respond(denied) = dispatch_line(
+            &ctx(mailbox_features()),
+            Arc::new(InflightCalls::new()),
+            &post_on_mailbox,
+        )
+        .await
+        else {
+            panic!("room tools must be unknown on the mailbox server");
+        };
+        assert!(denied
+            .error
+            .expect("unknown tool")
+            .message
+            .contains("unknown tool: post_room"));
+
+        let send_on_room = serde_json::json!({
+            "jsonrpc": "2.0", "id": 10, "method": "tools/call",
+            "params": { "name": "send_message", "arguments": {
+                "target_session_ids": [7],
+                "title": "t",
+                "content": "x"
+            }}
+        })
+        .to_string();
+        let LineAction::Respond(denied) = dispatch_line(
+            &ctx(room_features()),
+            Arc::new(InflightCalls::new()),
+            &send_on_room,
+        )
+        .await
+        else {
+            panic!("mailbox tools must be unknown on the room server");
+        };
+        assert!(denied
+            .error
+            .expect("unknown tool")
+            .message
+            .contains("unknown tool: send_message"));
     }
 
     #[tokio::test]
@@ -2708,14 +2770,15 @@ mod tests {
     #[test]
     fn feature_parser_is_explicit_and_independent() {
         let none = CompanionFeatures::parse(None);
-        assert!(!none.feedback && !none.ask && !none.sessions && !none.collaboration);
+        assert!(!none.feedback && !none.ask && !none.sessions && !none.mailbox && !none.room);
         let parsed = CompanionFeatures::parse(Some(
             "feedback,ask,sessions,collaboration,tasks,automations,taskboard,unknown",
         ));
         assert!(parsed.feedback);
         assert!(parsed.ask);
         assert!(parsed.sessions);
-        assert!(parsed.collaboration);
+        assert!(parsed.mailbox);
+        assert!(parsed.room);
         assert!(parsed.allows_tool("list_inbox"));
         assert!(parsed.allows_tool("read_message"));
         assert!(parsed.allows_tool("list_rooms"));
@@ -2723,6 +2786,12 @@ mod tests {
         assert!(parsed.tasks);
         assert!(parsed.automations);
         assert!(parsed.taskboard);
+        let mailbox = CompanionFeatures::parse(Some("mailbox"));
+        assert!(mailbox.allows_tool("send_message"));
+        assert!(!mailbox.allows_tool("post_room"));
+        let room = CompanionFeatures::parse(Some("room"));
+        assert!(room.allows_tool("post_room"));
+        assert!(!room.allows_tool("send_message"));
     }
 
     #[tokio::test]

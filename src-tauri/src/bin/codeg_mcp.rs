@@ -47,8 +47,11 @@ struct Args {
     /// from. Omitted by older parents — backward compatible.
     parent_pid: Option<u32>,
     /// Comma-joined tool groups to expose (e.g.
-    /// `feedback,ask,sessions,collaboration,tasks,automations,taskboard`).
+    /// `feedback,ask,sessions,mailbox,room,tasks,automations,taskboard`).
     features: Option<String>,
+    /// MCP `serverInfo.name`. Mailbox / Room launches pass `codeg-mailbox` /
+    /// `codeg-room` so the agent sees two servers instead of one mixed catalog.
+    server_name: String,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -57,6 +60,7 @@ fn parse_args() -> Result<Args, String> {
     let mut token = None;
     let mut parent_pid = None;
     let mut features = None;
+    let mut server_name = None;
 
     let mut iter = std::env::args().skip(1);
     while let Some(arg) = iter.next() {
@@ -94,9 +98,15 @@ fn parse_args() -> Result<Args, String> {
                         .ok_or_else(|| "--features requires a value".to_string())?,
                 );
             }
+            "--server-name" => {
+                server_name = Some(
+                    iter.next()
+                        .ok_or_else(|| "--server-name requires a value".to_string())?,
+                );
+            }
             "--help" | "-h" => {
                 println!(
-                    "codeg-mcp --parent-connection-id <uuid> --socket-path <path> --token <secret> [--parent-pid <pid>] [--features feedback,ask,sessions,collaboration,tasks,automations,taskboard]"
+                    "codeg-mcp --parent-connection-id <uuid> --socket-path <path> --token <secret> [--parent-pid <pid>] [--features feedback,ask,sessions,mailbox,room,tasks,automations,taskboard] [--server-name codeg-mcp]"
                 );
                 std::process::exit(0);
             }
@@ -110,6 +120,7 @@ fn parse_args() -> Result<Args, String> {
         token: token.ok_or_else(|| "missing --token".to_string())?,
         parent_pid,
         features,
+        server_name: server_name.unwrap_or_else(|| "codeg-mcp".to_string()),
     })
 }
 
@@ -146,6 +157,7 @@ async fn main() -> ExitCode {
         parent_connection_id: args.parent_connection_id,
         socket_path: args.socket_path,
         token: args.token,
+        server_name: args.server_name,
         features: CompanionFeatures::parse(args.features.as_deref()),
     };
 
