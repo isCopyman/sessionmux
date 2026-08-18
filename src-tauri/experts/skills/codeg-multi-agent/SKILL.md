@@ -54,6 +54,10 @@ persona packs, subscription filters, or role names as `@` addresses.
 - Sequential design → implement → check: `references/planner-coder-reviewer.md`
 - One coordinator, others speak when asked: `references/star.md`
 - Several Sessions should see the same thread: `references/roundtable.md`
+- Pattern pick, delegation brief, effort scale: `references/patterns-map.md`
+- Research / report writing pipeline: `references/research-writing.md`
+- Long-form or narrative writing: `references/long-form-writing.md`
+- Final convergence meeting on a draft: `references/line-review.md`
 - A saved project or user pattern: read that file; fill missing fields from
   `references/pattern-template.md`
 
