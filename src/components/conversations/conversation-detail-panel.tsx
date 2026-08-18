@@ -57,6 +57,7 @@ import {
 } from "@/components/message/goal-control-context"
 import { useAdvertisedGoalActions } from "@/hooks/use-goal-actions"
 import { ConversationShell } from "@/components/chat/conversation-shell"
+import { RoomWorkspace } from "@/components/rooms/rooms-page"
 
 import { SessionConfigStaleBanner } from "@/components/chat/session-config-stale-banner"
 import {
@@ -2730,20 +2731,23 @@ export function ConversationDetailPanel() {
     // Visible = tiled (all group members shown) or the group's selected tab.
     const visible = canTileG || tab.id === groupSelection[groupId]
     const folderPath = allFolders.find((f) => f.id === tab.folderId)?.path
-    const view = (
-      <ConversationTabView
-        tabId={tab.id}
-        workbenchId={activeWorkbenchId}
-        conversationId={tab.conversationId}
-        runtimeConversationId={tab.runtimeConversationId}
-        agentType={tab.agentType}
-        workingDir={tab.workingDir ?? folderPath}
-        isActive={active}
-        showActiveFlow={(isSplit || canTileG) && active}
-        reloadSignal={reloadByTabId[tab.id] ?? 0}
-        groupId={groupId}
-      />
-    )
+    const view =
+      tab.kind === "room" && tab.roomId ? (
+        <RoomWorkspace roomId={tab.roomId} />
+      ) : (
+        <ConversationTabView
+          tabId={tab.id}
+          workbenchId={activeWorkbenchId}
+          conversationId={tab.conversationId}
+          runtimeConversationId={tab.runtimeConversationId}
+          agentType={tab.agentType}
+          workingDir={tab.workingDir ?? folderPath}
+          isActive={active}
+          showActiveFlow={(isSplit || canTileG) && active}
+          reloadSignal={reloadByTabId[tab.id] ?? 0}
+          groupId={groupId}
+        />
+      )
     return (
       <div
         key={tab.id}

@@ -13,6 +13,7 @@ import {
   PinOff,
   Plus,
   Trash2,
+  Users,
 } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
@@ -51,11 +52,17 @@ import { listOpenedTabs, listWorkbenchTabs } from "@/lib/api"
 import { formatConversationTitle } from "@/lib/conversation-title"
 import type {
   AgentType,
+  CollaborationRoomSummary,
   ConversationStatus,
   DbConversationSummary,
   OpenedTab,
   WorkbenchInfo,
 } from "@/lib/types"
+import { useOpenRoom } from "@/lib/open-room"
+import {
+  ensureRoomCatalogSubscription,
+  useRoomCatalogStore,
+} from "@/stores/room-catalog-store"
 import { cn } from "@/lib/utils"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { useWorkbenchStore } from "@/stores/workbench-store"
@@ -68,6 +75,9 @@ type EditorState =
 
 interface TreeSession {
   key: string
+  kind: "conversation" | "room"
+  roomId?: string
+  room?: CollaborationRoomSummary
   conversationId: number | null
   folderId: number
   agentType: AgentType
@@ -94,6 +104,7 @@ function persistedSessions(
       return [
         {
           key: `conversation:${tab.conversation_id}`,
+          kind: "conversation",
           conversationId: tab.conversation_id,
           folderId: conversation?.folder_id ?? tab.folder_id,
           agentType: conversation?.agent_type ?? tab.agent_type,
@@ -114,10 +125,34 @@ function persistedSessions(
  * Drafts stay first, then persisted Sessions sort by newest update with the
  * saved tab position as a stable fallback when a summary is not loaded.
  */
+function roomToTreeSession(
+  room: CollaborationRoomSummary,
+  conversations: Map<number, DbConversationSummary>,
+  tabOrder: number,
+  liveTabId?: string
+): TreeSession {
+  const creator = conversations.get(room.createdByConversationId)
+  return {
+    key: liveTabId ?? `room:${room.id}`,
+    kind: "room",
+    roomId: room.id,
+    room,
+    conversationId: null,
+    folderId: room.rootFolderId ?? creator?.folder_id ?? 1,
+    agentType: creator?.agent_type ?? "claude_code",
+    title: room.title,
+    liveTabId,
+    updatedAt: room.updatedAt,
+    tabOrder,
+  }
+}
+
 export function sortTreeSessions(sessions: TreeSession[]): TreeSession[] {
   return [...sessions].sort((left, right) => {
-    const leftDraft = left.conversationId == null
-    const rightDraft = right.conversationId == null
+    const leftDraft =
+      left.kind === "conversation" && left.conversationId == null
+    const rightDraft =
+      right.kind === "conversation" && right.conversationId == null
     if (leftDraft !== rightDraft) return leftDraft ? -1 : 1
     const updatedDiff =
       Date.parse(right.updatedAt ?? "") - Date.parse(left.updatedAt ?? "")
@@ -157,6 +192,8 @@ export function WorkbenchTree() {
   const openTab = useTabStore((state) => state.openTab)
   const conversations = useAppWorkspaceStore((state) => state.conversations)
   const { openConversations } = useWorkbenchRoute()
+  const openRoom = useOpenRoom()
+  const catalogRooms = useRoomCatalogStore((state) => state.rooms)
   const organizationRevision = useOrganizationRevisionStore(
     (state) => state.revision
   )
@@ -177,6 +214,11 @@ export function WorkbenchTree() {
       toast.error(t("loadFailed", { message: toErrorMessage(error) }))
     )
   }, [hydrate, hydrated, t])
+
+  useEffect(() => {
+    ensureRoomCatalogSubscription()
+    void useRoomCatalogStore.getState().refresh()
+  }, [])
 
   useEffect(() => {
     if (!tabsHydrated) return
@@ -232,32 +274,67 @@ export function WorkbenchTree() {
   )
 
   const sessionsFor = (workbenchId: number): TreeSession[] => {
-    if (workbenchId === activeWorkbenchId) {
-      return sortTreeSessions(
-        liveTabs.map((tab, tabOrder) => {
-          const conversation =
-            tab.conversationId == null
-              ? undefined
-              : conversationById.get(tab.conversationId)
-          return {
-            key: tab.id,
-            conversationId: tab.conversationId,
-            folderId: tab.folderId,
-            agentType: tab.agentType,
-            title: formatConversationTitle(tab.title) || t("draftSession"),
-            status: tab.status,
-            liveTabId: tab.id,
-            updatedAt: conversation?.updated_at ?? null,
-            tabOrder,
-          }
-        })
-      )
-    }
-    return persistedSessions(
-      snapshots.get(workbenchId) ?? [],
-      conversationById,
-      t("untitledSession")
+    const workbenchRooms = catalogRooms.filter(
+      (room) => room.workbenchId === workbenchId
     )
+    if (workbenchId === activeWorkbenchId) {
+      const fromTabs = liveTabs.map((tab, tabOrder): TreeSession => {
+        if (tab.kind === "room" && tab.roomId) {
+          const room = workbenchRooms.find((item) => item.id === tab.roomId)
+          return room
+            ? roomToTreeSession(room, conversationById, tabOrder, tab.id)
+            : {
+                key: tab.id,
+                kind: "room",
+                roomId: tab.roomId,
+                conversationId: null,
+                folderId: tab.folderId,
+                agentType: tab.agentType,
+                title: tab.title,
+                liveTabId: tab.id,
+                updatedAt: null,
+                tabOrder,
+              }
+        }
+        const conversation =
+          tab.conversationId == null
+            ? undefined
+            : conversationById.get(tab.conversationId)
+        return {
+          key: tab.id,
+          kind: "conversation",
+          conversationId: tab.conversationId,
+          folderId: tab.folderId,
+          agentType: tab.agentType,
+          title: formatConversationTitle(tab.title) || t("draftSession"),
+          status: tab.status,
+          liveTabId: tab.id,
+          updatedAt: conversation?.updated_at ?? null,
+          tabOrder,
+        }
+      })
+      const seen = new Set(
+        fromTabs
+          .filter((session) => session.kind === "room")
+          .map((session) => session.roomId)
+      )
+      const extra = workbenchRooms
+        .filter((room) => !seen.has(room.id))
+        .map((room, index) =>
+          roomToTreeSession(room, conversationById, fromTabs.length + index)
+        )
+      return sortTreeSessions([...fromTabs, ...extra])
+    }
+    return sortTreeSessions([
+      ...persistedSessions(
+        snapshots.get(workbenchId) ?? [],
+        conversationById,
+        t("untitledSession")
+      ),
+      ...workbenchRooms.map((room, index) =>
+        roomToTreeSession(room, conversationById, 1000 + index)
+      ),
+    ])
   }
 
   const openEditor = (next: EditorState) => {
@@ -314,6 +391,10 @@ export function WorkbenchTree() {
 
   const focusSession = async (workbenchId: number, session: TreeSession) => {
     try {
+      if (session.kind === "room" && session.room) {
+        await openRoom(session.room)
+        return
+      }
       if (workbenchId !== activeWorkbenchId) {
         await switchWorkbench(workbenchId)
       }
@@ -490,6 +571,7 @@ export function WorkbenchTree() {
                           data-conversation-id={
                             session.conversationId ?? undefined
                           }
+                          data-room-id={session.roomId}
                           title={session.title}
                           aria-current={selected ? "page" : undefined}
                           className={cn(
@@ -504,10 +586,14 @@ export function WorkbenchTree() {
                             aria-hidden
                             className="relative flex h-3.5 w-3.5 shrink-0 items-center justify-center"
                           >
-                            <AgentIcon
-                              agentType={session.agentType}
-                              className="h-3 w-3"
-                            />
+                            {session.kind === "room" ? (
+                              <Users className="h-3 w-3" />
+                            ) : (
+                              <AgentIcon
+                                agentType={session.agentType}
+                                className="h-3 w-3"
+                              />
+                            )}
                             {session.status ? (
                               <ConversationStatusDot
                                 status={session.status}

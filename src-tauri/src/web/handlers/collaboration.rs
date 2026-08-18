@@ -262,6 +262,14 @@ pub struct RenameRoomParams {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct AssignRoomCollectionParams {
+    pub room_ids: Vec<String>,
+    pub collection_id: Option<i32>,
+    pub root_folder_id: Option<i32>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct MarkRoomSeenParams {
     pub room_id: String,
     pub conversation_id: Option<i32>,
@@ -346,6 +354,22 @@ pub async fn room_rename(
             &state.emitter,
             &params.room_id,
             &params.title,
+        )
+        .await?,
+    ))
+}
+
+pub async fn room_assign_collection(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<AssignRoomCollectionParams>,
+) -> Result<Json<Vec<CollaborationRoomSummary>>, AppCommandError> {
+    Ok(Json(
+        collaboration::collaboration_room_assign_collection_core(
+            &state.db.conn,
+            &state.emitter,
+            params.room_ids,
+            params.collection_id,
+            params.root_folder_id,
         )
         .await?,
     ))

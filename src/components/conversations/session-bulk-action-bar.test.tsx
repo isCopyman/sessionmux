@@ -16,7 +16,9 @@ const h = vi.hoisted(() => ({
   openConversations: vi.fn(),
   createOnly: vi.fn(),
   createCollaborationRoom: vi.fn(),
+  listConversationCollectionRefs: vi.fn(),
   setRoute: vi.fn(),
+  openRoom: vi.fn(),
 }))
 
 vi.mock("sonner", () => ({
@@ -31,10 +33,11 @@ vi.mock("@/lib/session-bulk-operations", () => ({
 
 vi.mock("@/lib/api", () => ({
   createCollaborationRoom: h.createCollaborationRoom,
+  listConversationCollectionRefs: h.listConversationCollectionRefs,
 }))
 
-vi.mock("@/lib/room-events", () => ({
-  requestOpenRoom: vi.fn(),
+vi.mock("@/lib/open-room", () => ({
+  useOpenRoom: () => h.openRoom,
 }))
 
 vi.mock("@/lib/workbench-session-tabs", () => ({
@@ -147,7 +150,11 @@ describe("SessionBulkActionBar", () => {
     h.createCollaborationRoom.mockResolvedValue({
       id: "rm_test",
       title: "Session 1 / Session 2",
+      workbenchId: 1,
+      createdByConversationId: 1,
     })
+    h.listConversationCollectionRefs.mockResolvedValue([])
+    h.openRoom.mockResolvedValue(undefined)
   })
 
   it("archives the current selection", async () => {
@@ -191,8 +198,28 @@ describe("SessionBulkActionBar", () => {
         createdByConversationId: 1,
       })
     )
-    expect(h.setRoute).toHaveBeenCalledWith("rooms")
+    expect(h.openRoom).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "rm_test" })
+    )
     expect(onClear).toHaveBeenCalled()
+  })
+
+  it("places a new Room in the Collection shared by the selection", async () => {
+    h.listConversationCollectionRefs.mockResolvedValue([
+      { conversation_id: 1, collection_id: 10 },
+      { conversation_id: 2, collection_id: 10 },
+    ])
+    const { user } = renderBar()
+    await user.click(screen.getByRole("button", { name: "Create room" }))
+    await waitFor(() =>
+      expect(h.createCollaborationRoom).toHaveBeenCalledWith({
+        workbenchId: 1,
+        title: "Session 1 / Session 2",
+        memberConversationIds: [1, 2],
+        createdByConversationId: 1,
+        collectionId: 10,
+      })
+    )
   })
 
   it("asks for confirmation before deleting", async () => {

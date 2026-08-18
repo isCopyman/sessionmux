@@ -2,6 +2,7 @@
 
 import { useCallback, type ReactNode } from "react"
 import {
+  PointerSensor,
   useDraggable,
   useDroppable,
   type Data,
@@ -330,4 +331,15 @@ export function TreeDropBindings({
     setNodeRef: droppable.setNodeRef,
     isOver: droppable.isOver,
   })
+}
+
+/** Ignore right-clicks so Collection rows can open the app menu. */
+export class PrimaryPointerSensor extends PointerSensor {
+  static activators = [
+    {
+      eventName: "onPointerDown" as const,
+      handler: ({ nativeEvent }: { nativeEvent: PointerEvent }) =>
+        nativeEvent.isPrimary && nativeEvent.button === 0,
+    },
+  ]
 }

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import type { DbConversationSummary } from "@/lib/types"
 import {
   applyReorder,
+  attachRoomsToSidebarRows,
   buildOwnerHeaderIndex,
   buildRows,
   computeStickyState,
@@ -1649,5 +1650,38 @@ describe("applyReorder", () => {
   it("clamps the destination and ignores an out-of-range source", () => {
     expect(applyReorder([1, 2, 3], 0, 99)).toEqual([2, 3, 1])
     expect(applyReorder([1, 2, 3], 5, 0)).toEqual([1, 2, 3])
+  })
+})
+
+describe("attachRoomsToSidebarRows", () => {
+  it("places a Room after the last Session on the Room's Path", () => {
+    const creator = conv(102, 9)
+    const samePath = conv(101, 7)
+    const rows: SidebarRow[] = [
+      { kind: "conversation", conversation: creator, depth: 0 },
+      { kind: "conversation", conversation: samePath, depth: 0 },
+    ]
+    const attached = attachRoomsToSidebarRows(rows, [
+      {
+        id: "rm_own",
+        workbenchId: 1,
+        title: "Own room",
+        createdByConversationId: 102,
+        rootFolderId: 7,
+        memberCount: 2,
+        unreadCount: 0,
+        createdAt: "2026-06-04T00:00:00.000Z",
+        updatedAt: "2026-06-04T00:00:00.000Z",
+      },
+    ])
+    expect(attached.map((row) => row.kind)).toEqual([
+      "conversation",
+      "conversation",
+      "room",
+    ])
+    expect(attached[2]).toMatchObject({
+      kind: "room",
+      room: { id: "rm_own" },
+    })
   })
 })

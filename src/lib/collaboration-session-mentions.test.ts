@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import {
+  mentionsHumanFromText,
   sessionIdsFromPromptBlocks,
   sessionIdsFromText,
 } from "./collaboration-session-mentions"
@@ -36,4 +37,9 @@ describe("collaboration session mentions", () => {
     ).toEqual([2, 4])
   })
 
+  it("treats only structured human URIs as @human", () => {
+    expect(mentionsHumanFromText("ping @user and @alice")).toBe(false)
+    expect(mentionsHumanFromText("see [You](codeg://human)")).toBe(true)
+    expect(mentionsHumanFromText("see [You](codeg://user)")).toBe(true)
+  })
 })

@@ -43,8 +43,11 @@ import {
   moveSessionsToCollection,
 } from "@/lib/session-bulk-operations"
 import { cn } from "@/lib/utils"
-import { createCollaborationRoom } from "@/lib/api"
-import { requestOpenRoom } from "@/lib/room-events"
+import {
+  createCollaborationRoom,
+  listConversationCollectionRefs,
+} from "@/lib/api"
+import { useOpenRoom } from "@/lib/open-room"
 import { appendConversationsToWorkbench } from "@/lib/workbench-session-tabs"
 import type { CollectionInfo, DbConversationSummary } from "@/lib/types"
 import { useCollectionStore } from "@/stores/collection-store"
@@ -91,7 +94,8 @@ export function SessionBulkActionBar({
   const conversations = useMemo(() => [...selected.values()], [selected])
   const selectedCount = conversations.length
   const { closeConversationTab, openTab } = useTabActions()
-  const { openConversations, setRoute } = useWorkbenchRoute()
+  const { openConversations } = useWorkbenchRoute()
+  const openRoom = useOpenRoom()
   const activeWorkbenchId = useTabStore((state) => state.activeWorkbenchId)
   const activeWorkbenchTabs = useTabStore((state) => state.rawTabs)
   const workbenches = useWorkbenchStore((state) => state.items)
@@ -290,6 +294,14 @@ export function SessionBulkActionBar({
           .map((conversation) => formatConversationTitle(conversation.title))
           .filter(Boolean)
           .join(" / ") || t("createRoom")
+      const refs = await listConversationCollectionRefs(
+        conversations.map((conversation) => conversation.id)
+      )
+      const collectionIds = new Set(refs.map((ref) => ref.collection_id))
+      const collectionId =
+        refs.length === conversations.length && collectionIds.size === 1
+          ? refs[0]?.collection_id
+          : undefined
       const created = await createCollaborationRoom({
         workbenchId: activeWorkbenchId,
         title: selectedCount > 2 ? `${title}…` : title,
@@ -297,12 +309,12 @@ export function SessionBulkActionBar({
           (conversation) => conversation.id
         ),
         createdByConversationId: conversations[0].id,
+        ...(collectionId != null ? { collectionId } : {}),
       })
       toast.success(t("toastRoomCreated", { title: created.title }))
-      setRoute("rooms")
-      requestOpenRoom(created.id)
+      await openRoom(created)
     })
-  }, [activeWorkbenchId, conversations, run, selectedCount, setRoute, t])
+  }, [activeWorkbenchId, conversations, openRoom, run, selectedCount, t])
 
   if (selectedCount === 0) return null
 

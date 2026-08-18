@@ -335,6 +335,13 @@ pub async fn delete(conn: &DatabaseConnection, id: i32) -> Result<(), DbError> {
         .filter(collection_conversation::Column::CollectionId.eq(id))
         .exec(&txn)
         .await?;
+    txn.execute(sea_orm::Statement::from_sql_and_values(
+        sea_orm::DbBackend::Sqlite,
+        "UPDATE collaboration_room SET collection_id = NULL, updated_at = CURRENT_TIMESTAMP \
+         WHERE collection_id = ?",
+        [id.into()],
+    ))
+    .await?;
     collection::Entity::delete_by_id(id).exec(&txn).await?;
     txn.commit().await?;
     Ok(())

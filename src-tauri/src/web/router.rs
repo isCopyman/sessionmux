@@ -1390,6 +1390,10 @@ pub fn build_router(
             post(handlers::collaboration::room_rename),
         )
         .route(
+            "/collaboration_room_assign_collection",
+            post(handlers::collaboration::room_assign_collection),
+        )
+        .route(
             "/collaboration_room_mark_seen",
             post(handlers::collaboration::room_mark_seen),
         )

@@ -18,6 +18,17 @@ const h = vi.hoisted(() => ({
   switchTab: vi.fn(),
   openTab: vi.fn(),
   openConversations: vi.fn(),
+  openRoom: vi.fn(),
+  rooms: [] as Array<{
+    id: string
+    workbenchId: number
+    title: string
+    createdByConversationId: number
+    memberCount: number
+    unreadCount: number
+    updatedAt: string
+    createdAt: string
+  }>,
   workbenches: [
     {
       id: 1,
@@ -130,7 +141,24 @@ vi.mock("sonner", () => ({ toast: { error: vi.fn() } }))
 vi.mock("@/lib/api", () => ({
   listOpenedTabs: h.listOpenedTabs,
   listWorkbenchTabs: h.listWorkbenchTabs,
+  listCollaborationRooms: vi.fn().mockResolvedValue([]),
 }))
+
+vi.mock("@/lib/open-room", () => ({
+  useOpenRoom: () => h.openRoom,
+}))
+
+vi.mock("@/stores/room-catalog-store", () => {
+  const refresh = vi.fn()
+  const state = { rooms: h.rooms, hydrated: true, refresh }
+  const useRoomCatalogStore = (selector: (value: typeof state) => unknown) =>
+    selector(state)
+  useRoomCatalogStore.getState = () => state
+  return {
+    useRoomCatalogStore,
+    ensureRoomCatalogSubscription: vi.fn(),
+  }
+})
 
 vi.mock("@/stores/workbench-store", () => ({
   useWorkbenchStore: (selector: (state: unknown) => unknown) =>
@@ -163,6 +191,7 @@ vi.mock("@/contexts/workbench-route-context", () => ({
 describe("WorkbenchTree", () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    h.rooms.length = 0
     h.listOpenedTabs.mockResolvedValue({ items: [], version: 1 })
     h.listWorkbenchTabs.mockResolvedValue({
       items: [
@@ -243,6 +272,31 @@ describe("WorkbenchTree", () => {
         "Reviewer session"
       )
       expect(h.openConversations).toHaveBeenCalled()
+    })
+  })
+
+  it("lists Rooms next to Sessions and opens them as Room tabs", async () => {
+    h.rooms.push({
+      id: "rm_plan",
+      workbenchId: 1,
+      title: "Plan room",
+      createdByConversationId: 101,
+      memberCount: 2,
+      unreadCount: 0,
+      createdAt: "2026-08-06T00:00:00.000Z",
+      updatedAt: "2026-08-06T00:00:00.000Z",
+    })
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <WorkbenchTree />
+      </NextIntlClientProvider>
+    )
+    expect(await screen.findByText("Plan room")).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "Plan room" }))
+    await waitFor(() => {
+      expect(h.openRoom).toHaveBeenCalledWith(
+        expect.objectContaining({ id: "rm_plan" })
+      )
     })
   })
 })

@@ -8,10 +8,12 @@ use sea_orm::{
 
 use crate::acp::types::PromptInputBlock;
 use crate::db::error::DbError;
+use crate::db::service::collaboration_mention;
 use crate::db::service::collaboration_room_service;
 use crate::db::service::prompt_queue_service;
 use crate::models::{
-    CollaborationAgentReceiptKind, CollaborationAttentionState, CollaborationDeliveryHint,
+    CollaborationAgentReceiptKind, CollaborationAttentionState, CollaborationAuthorKind,
+    CollaborationDeliveryHint,
     CollaborationDeliveryState, CollaborationDeliveryView, CollaborationFeed,
     CollaborationInterruptState, CollaborationInvocationPolicy, CollaborationObligationState,
     CollaborationSendResult, CollaborationSessionSnapshot, CollaborationTimelineProjection,
@@ -1073,6 +1075,8 @@ pub(crate) async fn auto_reply_for_completed_turn(
                 expects_reply: false,
                 urgency: CollaborationUrgency::Normal,
                 reply_to_event_id: Some(event_id),
+                mention_human: false,
+                author_kind: Default::default(),
             },
         )
         .await?;
@@ -1494,10 +1498,10 @@ fn validate_room_post(input: &PostRoomMessageInput) -> Result<(), DbError> {
     Ok(())
 }
 
-/// Persist a Room-visible event. Empty targets (and mention_all=false) is a
-/// record-only post: every member can read it, nobody is invoked. Structured
-/// `@` targets still create per-Session deliveries and enter the existing
-/// collaboration dispatcher. Mail projections never see these events.
+/// Persist a Room-visible event. Empty structured mentions is a record-only
+/// post: every member can read it, nobody is invoked. Free-text `@word` is
+/// ignored. Structured Session URIs / mention_session_ids still create
+/// deliveries. Mail projections never see these events.
 pub async fn post_room(
     conn: &DatabaseConnection,
     input: PostRoomMessageInput,
@@ -1505,20 +1509,36 @@ pub async fn post_room(
     validate_room_post(&input)?;
     let txn = conn.begin().await?;
     let _workbench_id = collaboration_room_service::room_workbench_id(&txn, &input.room_id).await?;
-    collaboration_room_service::require_member(&txn, &input.room_id, input.source_conversation_id)
+    let created_by =
+        collaboration_room_service::created_by_conversation_id(&txn, &input.room_id).await?;
+    let ledger_source_id = if input.author_kind == CollaborationAuthorKind::Human {
+        created_by
+    } else {
+        collaboration_room_service::require_member(
+            &txn,
+            &input.room_id,
+            input.source_conversation_id,
+        )
         .await?;
-    let source = require_live_session(&txn, input.source_conversation_id).await?;
+        input.source_conversation_id
+    };
+    let source = require_live_session(&txn, ledger_source_id).await?;
     let members = collaboration_room_service::member_ids(&txn, &input.room_id).await?;
     let member_set: HashSet<i32> = members.iter().copied().collect();
     let mut targets: BTreeSet<i32> = input.target_conversation_ids.iter().copied().collect();
+    targets.extend(collaboration_mention::session_ids_from_structured_uris(
+        &input.body,
+    ));
+    let mention_human = input.mention_human
+        || collaboration_mention::mentions_human_from_structured_uris(&input.body);
     if input.mention_all {
         for id in &members {
-            if *id != input.source_conversation_id {
+            if *id != ledger_source_id {
                 targets.insert(*id);
             }
         }
     }
-    targets.remove(&input.source_conversation_id);
+    targets.remove(&ledger_source_id);
     if targets.len() > MAX_TARGETS {
         return Err(validation(format!(
             "A Room mention supports at most {MAX_TARGETS} targets"
@@ -1537,10 +1557,10 @@ pub async fn post_room(
     }
     let chain_depth = child_chain_depth(&txn, input.reply_to_event_id.as_deref()).await?;
     if let Some(event_id) =
-        event_id_for_dedupe(&txn, input.source_conversation_id, &input.client_dedupe_id).await?
+        event_id_for_dedupe(&txn, ledger_source_id, &input.client_dedupe_id).await?
     {
         let deliveries = deliveries_for_event(&txn, &event_id).await?;
-        let mut affected = BTreeSet::from([input.source_conversation_id]);
+        let mut affected = BTreeSet::from([ledger_source_id]);
         affected.extend(deliveries.iter().map(|item| item.target.conversation_id));
         txn.commit().await?;
         return Ok(RoomPostResult {
@@ -1559,18 +1579,25 @@ pub async fn post_room(
         crate::acp::session_collaboration::normalize_letter_title(&input.subject)
             .map_err(validation)?
     };
+    let (title_snapshot, agent_snapshot) =
+        if input.author_kind == CollaborationAuthorKind::Human {
+            (Some("You".to_string()), "human".to_string())
+        } else {
+            (source.title.clone(), source.agent_type.clone())
+        };
     let inserted = txn
         .execute(statement(
             "INSERT OR IGNORE INTO collaboration_event \
              (id, source_conversation_id, source_title_snapshot, source_agent_type_snapshot, \
               source_folder_path_snapshot, source_backend_snapshot, subject, body, reply_to_event_id, \
-              expects_reply, urgency, client_dedupe_id, chain_depth, visibility, room_id, created_at) \
-             VALUES (?, ?, ?, ?, ?, 'current', ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
+              expects_reply, urgency, client_dedupe_id, chain_depth, visibility, room_id, \
+              author_kind, mention_human, created_at) \
+             VALUES (?, ?, ?, ?, ?, 'current', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
             vec![
                 event_id.clone().into(),
                 source.id.into(),
-                source.title.clone().into(),
-                source.agent_type.clone().into(),
+                title_snapshot.into(),
+                agent_snapshot.into(),
                 source.folder_path.clone().into(),
                 subject.into(),
                 input.body.clone().into(),
@@ -1581,12 +1608,14 @@ pub async fn post_room(
                 chain_depth.into(),
                 crate::models::CollaborationVisibility::Room.as_str().into(),
                 input.room_id.clone().into(),
+                input.author_kind.as_str().into(),
+                (mention_human as i32).into(),
             ],
         ))
         .await?;
     if inserted.rows_affected() == 0 {
         if let Some(existing_id) =
-            event_id_for_dedupe(&txn, input.source_conversation_id, &input.client_dedupe_id).await?
+            event_id_for_dedupe(&txn, ledger_source_id, &input.client_dedupe_id).await?
         {
             let deliveries = deliveries_for_event(&txn, &existing_id).await?;
             let mut affected = BTreeSet::from([input.source_conversation_id]);

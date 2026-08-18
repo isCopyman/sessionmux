@@ -802,6 +802,10 @@ async fn build_tools_call_spawn(
                     content,
                     mention_session_ids,
                     mention_all,
+                    mention_human: arguments
+                        .get("mention_human")
+                        .and_then(|value| value.as_bool())
+                        .unwrap_or(false),
                     priority,
                     expects_reply: arguments
                         .get("expects_reply")

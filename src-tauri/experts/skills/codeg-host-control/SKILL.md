@@ -62,8 +62,9 @@ the idempotency key outside model-controlled arguments.
 
 ## Available Room actions
 
-- `room.list`: list Rooms on a Workbench (defaults to Workbench 1). Prefer
-  `list_rooms` when you only need Rooms you already belong to.
+- `room.list` / `room.list_workbench`: list Rooms on a Workbench (defaults to
+  Workbench 1). Prefer `list_rooms` when you only need Rooms you already belong
+  to. These two Host Control ids are aliases of each other.
 - `room.create`: create a shared Room. You become owner; pass at least one
   other Session id.
 - `room.add_member`: add an existing Session to a Room you already belong to.

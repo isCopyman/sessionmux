@@ -1414,6 +1414,8 @@ export interface CreateCollaborationRoomInput {
   title: string
   memberConversationIds: number[]
   createdByConversationId: number
+  collectionId?: number | null
+  rootFolderId?: number | null
 }
 
 export interface AddCollaborationRoomMembersInput {
@@ -1426,6 +1428,8 @@ export interface PostRoomMessageInput {
   sourceConversationId: number
   targetConversationIds: number[]
   mentionAll?: boolean
+  mentionHuman?: boolean
+  authorKind?: "session" | "human"
   subject?: string
   body: string
   clientDedupeId: string
@@ -1450,6 +1454,8 @@ export interface CollaborationRoomSummary {
   workbenchId: number
   title: string
   createdByConversationId: number
+  collectionId?: number | null
+  rootFolderId?: number | null
   memberCount: number
   unreadCount: number
   lastEventAt?: string | null
@@ -1462,6 +1468,8 @@ export interface CollaborationRoomDetail {
   workbenchId: number
   title: string
   createdByConversationId: number
+  collectionId?: number | null
+  rootFolderId?: number | null
   members: CollaborationRoomMember[]
   createdAt: string
   updatedAt: string
@@ -1477,6 +1485,8 @@ export interface RoomTimelineEvent {
   expectsReply: boolean
   urgency: CollaborationUrgency
   mentionConversationIds: number[]
+  mentionHuman?: boolean
+  authorKind?: "session" | "human"
   createdAt: string
 }
 

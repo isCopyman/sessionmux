@@ -244,6 +244,20 @@ vi.mock("@/components/layout/clone-dialog", () => ({ CloneDialog: () => null }))
 // The sub-session realtime sync hook reaches @/lib/platform (transport), which
 // these tests don't load; stub it to a no-op — it has its own unit tests.
 vi.mock("@/hooks/use-subsession-sync", () => ({ useSubsessionSync: () => {} }))
+vi.mock("@/lib/open-room", () => ({
+  useOpenRoom: () => async () => {},
+}))
+vi.mock("@/stores/room-catalog-store", () => {
+  const refresh = vi.fn()
+  const state = { rooms: [], hydrated: true, refresh }
+  const useRoomCatalogStore = (selector: (value: typeof state) => unknown) =>
+    selector(state)
+  useRoomCatalogStore.getState = () => state
+  return {
+    useRoomCatalogStore,
+    ensureRoomCatalogSubscription: vi.fn(),
+  }
+})
 vi.mock("@/components/shared/directory-browser-dialog", () => ({
   DirectoryBrowserDialog: () => null,
 }))

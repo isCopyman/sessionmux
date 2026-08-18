@@ -76,7 +76,9 @@ import type {
 
 export interface TabItemInternal {
   id: string
-  kind: "conversation"
+  kind: "conversation" | "room"
+  /** Set when `kind === "room"`. Room tabs are in-memory only. */
+  roomId?: string
   folderId: number
   conversationId: number | null
   /** The runtime session key used by ConversationRuntimeContext.
@@ -209,6 +211,12 @@ export interface TabStoreState {
     title?: string,
     options?: OpenTabOptions
   ) => void
+  openRoomTab: (input: {
+    roomId: string
+    title: string
+    folderId: number
+    agentType: AgentType
+  }) => void
   closeTab: (tabId: string) => void
   closeConversationTab: (
     folderId: number,
@@ -915,6 +923,10 @@ function makeNewConversationTabId(): string {
   return `new-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 }
 
+export function makeRoomTabId(roomId: string): string {
+  return `room-${roomId}`
+}
+
 /** Sync identity of a persisted tab — the canonical tab id, which is exactly the
  *  (folder, agent, conversation) triple the persisted row is keyed by. A bound
  *  draft keeps its volatile `new-*` id, so this is deliberately derived from the
@@ -962,6 +974,7 @@ function sameDerivedTab(a: TabItemInternal, b: TabItemInternal): boolean {
   return (
     a.id === b.id &&
     a.kind === b.kind &&
+    a.roomId === b.roomId &&
     a.folderId === b.folderId &&
     a.conversationId === b.conversationId &&
     a.runtimeConversationId === b.runtimeConversationId &&
@@ -984,7 +997,7 @@ function buildPersistItems(
   activeTabId: string | null
 ): OpenedTab[] {
   return tabs
-    .filter((tab) => tab.conversationId != null)
+    .filter((tab) => tab.kind !== "room" && tab.conversationId != null)
     .map((tab, i) => ({
       id: 0,
       folder_id: tab.folderId,
@@ -1972,6 +1985,37 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
     runtime.activateConversationPane()
   },
 
+  openRoomTab: ({ roomId, title, folderId, agentType }) => {
+    const prevState = get()
+    const tabId = makeRoomTabId(roomId)
+    const existing = prevState.rawTabs.find(
+      (tab) => tab.kind === "room" && tab.roomId === roomId
+    )
+    if (existing) {
+      focusTab(existing.id)
+      runtime.activateConversationPane()
+      return
+    }
+    const targetGroup = resolveTargetGroup(prevState)
+    const newTab: TabItemInternal = {
+      id: tabId,
+      kind: "room",
+      roomId,
+      folderId,
+      conversationId: null,
+      agentType,
+      title,
+      isPinned: true,
+    }
+    set({
+      rawTabs: [...prevState.rawTabs, newTab],
+      activeTabId: tabId,
+      groupOf: { ...prevState.groupOf, [tabId]: targetGroup },
+    })
+    recomputeTabs()
+    runtime.activateConversationPane()
+  },
+
   closeTab: (tabId) => {
     const shouldActivateConversation = tabId === get().activeTabId
 
@@ -1984,7 +2028,7 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
       // unless this close spawns the replacement draft, which continues the same
       // slot and inherits the text instead of losing it silently.
       const closingDraftKey =
-        closingTab.conversationId == null
+        closingTab.kind === "conversation" && closingTab.conversationId == null
           ? buildNewConversationDraftStorageKey(closingTab.id)
           : null
 
@@ -3503,6 +3547,7 @@ export function useTabActions() {
   return useTabStore(
     useShallow((s) => ({
       openTab: s.openTab,
+      openRoomTab: s.openRoomTab,
       closeTab: s.closeTab,
       closeConversationTab: s.closeConversationTab,
       closeOtherTabs: s.closeOtherTabs,

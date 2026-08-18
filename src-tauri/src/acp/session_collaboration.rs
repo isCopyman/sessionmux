@@ -195,6 +195,8 @@ pub struct RoomPostSpec {
     #[serde(default)]
     pub mention_all: bool,
     #[serde(default)]
+    pub mention_human: bool,
+    #[serde(default)]
     pub priority: Option<SessionMessagePriority>,
     #[serde(default)]
     pub expects_reply: bool,
@@ -206,7 +208,7 @@ pub struct RoomPostSpec {
 impl RoomPostSpec {
     pub fn resolved_priority(&self) -> SessionMessagePriority {
         self.priority.unwrap_or_else(|| {
-            if self.mention_all || !self.mention_session_ids.is_empty() {
+            if self.mention_all || !self.mention_session_ids.is_empty() || self.mention_human {
                 SessionMessagePriority::High
             } else {
                 SessionMessagePriority::Normal
@@ -424,6 +426,10 @@ pub struct SessionRoomEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reply_to_event_id: Option<String>,
     pub mention_session_ids: Vec<i32>,
+    #[serde(default)]
+    pub mention_human: bool,
+    #[serde(default)]
+    pub from_author_kind: String,
     pub created_at: DateTime<Utc>,
 }
 

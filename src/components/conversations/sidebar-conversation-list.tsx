@@ -35,6 +35,7 @@ import {
   Rocket,
   SquarePen,
   Tag,
+  Users,
   XCircle,
 } from "lucide-react"
 import { useActiveFolder } from "@/contexts/active-folder-context"
@@ -94,6 +95,7 @@ import {
 } from "./sidebar-conversation-card"
 import {
   applyReorder,
+  attachRoomsToSidebarRows,
   buildOwnerHeaderIndex,
   buildRows,
   computeStickyState,
@@ -114,6 +116,11 @@ import {
   worktreeHeaderAlias,
   type SidebarRow,
 } from "./sidebar-conversation-grouping"
+import { useOpenRoom } from "@/lib/open-room"
+import {
+  ensureRoomCatalogSubscription,
+  useRoomCatalogStore,
+} from "@/stores/room-catalog-store"
 import { useSessionMultiSelect } from "@/hooks/use-session-multi-select"
 import { useSubsessionSync } from "@/hooks/use-subsession-sync"
 import { SessionBulkActionBar } from "./session-bulk-action-bar"
@@ -793,6 +800,8 @@ export function SidebarConversationList({
     openChatModeTab,
   } = useTabActions()
   const { openConversations } = useWorkbenchRoute()
+  const openRoom = useOpenRoom()
+  const catalogRooms = useRoomCatalogStore((state) => state.rooms)
   const {
     selected: multiSelected,
     apply: applyMultiSelect,
@@ -1271,7 +1280,12 @@ export function SidebarConversationList({
   // separate, un-virtualized pinned list). Deliberately excludes `now` (see
   // buildRows): the per-minute label tick must not rebuild rows and break the
   // card memo.
-  const rows = useMemo(
+  useEffect(() => {
+    ensureRoomCatalogSubscription()
+    void useRoomCatalogStore.getState().refresh()
+  }, [])
+
+  const conversationRows = useMemo(
     () =>
       buildRows({
         pinned,
@@ -1317,6 +1331,10 @@ export function SidebarConversationList({
       containerChildren,
       rootGroupCollapsed,
     ]
+  )
+  const rows = useMemo(
+    () => attachRoomsToSidebarRows(conversationRows, catalogRooms),
+    [catalogRooms, conversationRows]
   )
 
   // Latest snapshots for the imperative scroll/drag code paths, refreshed every
@@ -2502,6 +2520,30 @@ export function SidebarConversationList({
         </div>
       )
     }
+    if (row.kind === "room") {
+      const selected =
+        tabs.find((tab) => tab.id === activeTabId)?.roomId === row.room.id
+      return (
+        <button
+          type="button"
+          data-room-id={row.room.id}
+          title={row.room.title}
+          className={cn(
+            "flex h-8 w-full items-center gap-1.5 rounded-md pe-2 text-start text-xs",
+            "hover:bg-sidebar-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
+            selected &&
+              "bg-primary/8 text-primary ring-1 ring-inset ring-primary/30"
+          )}
+          style={{
+            paddingLeft: `calc(0.875rem + ${row.depth} * ${CONV_RAIL_DEPTH_STEP} + 0.875rem)`,
+          }}
+          onClick={() => void openRoom(row.room)}
+        >
+          <Users className="h-3.5 w-3.5 shrink-0" />
+          <span className="min-w-0 flex-1 truncate">{row.room.title}</span>
+        </button>
+      )
+    }
     if (row.kind === "subsession-loading") {
       // Transient spinner at the child indent while children are fetched. The
       // left inset matches a depth-`row.depth` card's text start: rail axis
@@ -2575,6 +2617,7 @@ export function SidebarConversationList({
     if (row.kind === "folders-empty") return "folders-empty"
     if (row.kind === "recent-empty") return "recent-empty"
     if (row.kind === "recent-more") return "recent-more"
+    if (row.kind === "room") return `room-${row.room.id}`
     const prefix = row.recent ? "recent-" : ""
     if (row.kind === "subsession-loading") {
       return `${prefix}subloading-${row.parentId}`

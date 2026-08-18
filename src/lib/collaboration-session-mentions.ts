@@ -27,6 +27,13 @@ export function sessionIdsFromText(
   return [...ids]
 }
 
+const HUMAN_URI = /codeg:\/\/(?:human|user)(?![a-z0-9])/i
+
+/** Structured `@human` / `@user` chips. Free-text `@user` is ignored. */
+export function mentionsHumanFromText(text: string): boolean {
+  return HUMAN_URI.test(text)
+}
+
 export function sessionIdsFromPromptBlocks(
   blocks: PromptInputBlock[],
   excludeId?: number | null
@@ -55,5 +62,3 @@ export function sessionIdsFromEditor(
   })
   return [...ids]
 }
-
-

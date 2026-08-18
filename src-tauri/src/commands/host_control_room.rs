@@ -29,9 +29,10 @@ impl RoomHostControl {
     }
 
     pub fn capabilities(writes_allowed: bool) -> Vec<HostControlCapability> {
-        let mut capabilities = vec![capability(
+        let mut capabilities = vec![
+            capability(
             "room.list",
-            "List Rooms on a Workbench. Defaults to Workbench 1 (Main). Agents that only need Rooms they already belong to should call list_rooms instead.",
+            "List Rooms on a Workbench. Defaults to Workbench 1 (Main). Alias of room.list_workbench. Agents that only need Rooms they already belong to should call list_rooms instead.",
             HostControlAccessLevel::Read,
             json!({
                 "type": "object",
@@ -44,7 +45,24 @@ impl RoomHostControl {
                     }
                 }
             }),
-        )];
+        ),
+            capability(
+            "room.list_workbench",
+            "List every Room on a Workbench (defaults to 1). Not the same as MCP list_rooms, which only returns Rooms this Session already joined.",
+            HostControlAccessLevel::Read,
+            json!({
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "workbench_id": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Workbench that owns the Rooms page. Defaults to 1."
+                    }
+                }
+            }),
+        ),
+        ];
         if writes_allowed {
             capabilities.extend([
                 capability(
@@ -88,7 +106,7 @@ impl RoomHostControl {
 
     pub fn access_for(action: &str) -> Option<HostControlAccessLevel> {
         match action {
-            "room.list" => Some(HostControlAccessLevel::Read),
+            "room.list" | "room.list_workbench" => Some(HostControlAccessLevel::Read),
             "room.create" | "room.add_member" => Some(HostControlAccessLevel::Write),
             _ => None,
         }
@@ -102,13 +120,15 @@ impl RoomHostControl {
         input: Value,
     ) -> HostControlUseOutcome {
         match action.as_str() {
-            "room.list" => {
+            "room.list" | "room.list_workbench" => {
                 let params = match parse_input::<ListInput>(&action, input) {
                     Ok(params) => params,
                     Err(note) => return HostControlUseOutcome::rejected(request_id, action, note),
                 };
                 let workbench_id = params.workbench_id.unwrap_or(1);
-                match collaboration_room_service::list(&self.db.conn, workbench_id).await {
+                match collaboration_room_service::list_for_workbench(&self.db.conn, workbench_id)
+                    .await
+                {
                     Ok(rooms) => accepted(request_id, action, "read", json!({ "rooms": rooms })),
                     Err(error) => rejected(request_id, action, error),
                 }
@@ -129,6 +149,8 @@ impl RoomHostControl {
                         title: params.title,
                         member_conversation_ids: members,
                         created_by_conversation_id: caller.current_session_id,
+                        collection_id: None,
+                        root_folder_id: None,
                     },
                 )
                 .await

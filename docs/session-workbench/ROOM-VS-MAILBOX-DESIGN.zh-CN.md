@@ -1,6 +1,6 @@
 # 群聊、Mailbox 与人类角色
 
-> 状态：设计拍板稿（2026-08-18）。实现按项推进：Agent 表面已拆开；人类作者、Room 一等 item、群 UI 仍待做。  
+> 状态：设计拍板稿（2026-08-18）。实现按第 13 节推进：Agent 表面已拆开；`@` 三义已冻结；人类作者、Room 一等 item、侧栏右键按项落地。  
 > 问题：群聊是不是另一套消息系统？Mailbox 是不是完全私聊？人类该打字还是该发邮件？CCCC 怎么做？  
 > 已有长文：[群聊 RFC](./GROUP-CONVERSATION-RFC.zh-CN.md)、[通信 RFC](./SESSION-COMMUNICATION-RFC.zh-CN.md)、[产品场景](./PRODUCT-SPEC.zh-CN.md#48-建立一个共享讨论室)  
 > 本文只补那三份没讲清的东西：协议边界、人类三条入口、和 CCCC 的真实差别。  
@@ -267,3 +267,56 @@ Mailbox 继续留在 Session 面板里，当“跨 Session 的收件箱”，不
 - Session 归档仍可留在群里，但不能被 `@` 唤醒；Session 删除后成员必须标死或移出。
 - UI 还缺：Delivery 状态、只记录 vs @、回复某条时继承目标、Session 页“来自 Room”回跳。现 UI 已用 created_by 冒充“你”，作者模型落地前不要再加深这条假路径。
 - 通信 RFC 文首仍写“Room 仍为拟议”，和 R1 存储已落地不一致，改代码前先改那一行。
+
+## 12. `@` 语法（对照 Buzz / CCCC / Multica 后拍板）
+
+群 RFC 5 节已经写过：“点名”和“正文提及”必须区分。对照仓库只是再次确认，不另选一条路。
+
+| 来源 | 实际做法 | Codeg 学什么 | Codeg 不学什么 |
+|---|---|---|---|
+| CCCC | `@` 是自动完成/高亮；真正叫醒谁由 **recipient chips / `to`** 决定。`@user` 是人类 principal，不是 Actor。空 `to` 默认 `@foreman`。 | chip 路由；`@human`/`@user` 是人，不是 Session | 空目标默默叫醒群主 / Foreman |
+| Buzz | 投递用结构化 p-tag，不是扫正文 `@word`。`buzz-acp` 只听 mention。附件是另一条协议。 | 没结构化点名就不叫醒；文件不是 mention | 把文件链接当成 Delivery |
+| Multica | `@Agent` = 启动一次执行；`@all` 只通知人类、不含 Agent。共享记录 / 通知人 / 启动 Agent 三套语义。 | 三种 `@` 必须拆开 | 把 `@all` 做成“也通知人、也叫醒全部 Agent”的混合物 |
+| Codeg 输入框 | 已有结构化徽章：`file` / `agent` / `session` / `commit` / `skill`，URI 如 `codeg://session/12` | Room 复用同一套徽章，不新发明 `@alice` 扫描 | 后端再扫一遍自由文本 |
+
+因此 `post_room` **不解析语句里的 `@` 字符**。邮件地址、Rust 属性、`@/src/foo.rs`、代码块里的 `@param` 都不是点名。
+
+三种 `@`，三种结果：
+
+```text
+1. Session 点名
+   入口：post_room.mention_session_ids / mention_all
+         或人类编辑器选中的 session 徽章 / codeg://session/<id>
+   结果：同一条 Room event + 对该 Session 的 Delivery（可能唤醒）
+   不进 mailbox inbox
+
+2. 人类点名（@human / @user，同一地址）
+   入口：post_room.mention_human 或 codeg://human / codeg://user
+   结果：同一条公共 Room event 打上 mention_human
+         不叫醒任何 Session
+         将来进 Human Inbox（本轮只落标记，不造第二套人表）
+
+3. 文件 / commit / skill 引用
+   入口：composer 的 file/commit/skill 徽章（file:// 或已有 reference URI）
+   结果：只是正文里的上下文，零 Delivery
+```
+
+`@all` 只叫醒**可投递的 Session 成员**，不含 `@human`。要拍人的肩膀，必须另选 `@human`。
+
+Agent 工具继续走结构化字段。人类群输入框走目标条 + 徽章（群 RFC 6 节）。正文里写下 `@Claude` 但没选中实体，不静默路由。
+
+## 13. 本轮执行顺序（功能为主，重构只收拾歧义）
+
+不一边大重构一边堆功能。顺序：
+
+1. **文档冻结**（本节）：`@` 三义、不扫自由文本、Room 自己进 Collection。
+2. **侧栏右键**：Collection 行整行进 ContextMenu；树容器 `preventDefault`；dnd-kit 忽略右键。原生浏览器菜单不再冒出来。
+3. **歧义 API 改名（行为不变）**：
+   - Rust `collaboration_room_service::list` → `list_for_workbench`
+   - Host Control 增加 `room.list_workbench`，`room.list` 仍是别名
+   - 前端 `listWorkbenchRooms`；`listCollaborationRooms` 仍是别名
+   - MCP `list_rooms` **不改名**（成员范围，skill 已教过）
+4. **Room 一等 Collection item**：表加 `collection_id` / `root_folder_id`；树按这两列摆，不再挂创建者 Session；补测试。
+5. **人类作者 + `@` 合同**：`author_kind` + `mention_human`；UI 不再冒充群主发言；正文 `@word` 不投递；结构化 URI 才并进目标。
+
+Human Inbox 本体、删 Room API、Agent 互 `@` 仍按第 11 节留到后面，本轮不夹带。

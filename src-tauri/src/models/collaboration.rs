@@ -452,6 +452,31 @@ impl CollaborationVisibility {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum CollaborationAuthorKind {
+    #[default]
+    Session,
+    Human,
+}
+
+impl CollaborationAuthorKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Session => "session",
+            Self::Human => "human",
+        }
+    }
+
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw {
+            "session" => Some(Self::Session),
+            "human" => Some(Self::Human),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateCollaborationRoomInput {
@@ -459,6 +484,10 @@ pub struct CreateCollaborationRoomInput {
     pub title: String,
     pub member_conversation_ids: Vec<i32>,
     pub created_by_conversation_id: i32,
+    #[serde(default)]
+    pub collection_id: Option<i32>,
+    #[serde(default)]
+    pub root_folder_id: Option<i32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -490,6 +519,10 @@ pub struct PostRoomMessageInput {
     pub urgency: CollaborationUrgency,
     #[serde(default)]
     pub reply_to_event_id: Option<String>,
+    #[serde(default)]
+    pub mention_human: bool,
+    #[serde(default)]
+    pub author_kind: CollaborationAuthorKind,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -510,6 +543,10 @@ pub struct CollaborationRoomSummary {
     pub workbench_id: i32,
     pub title: String,
     pub created_by_conversation_id: i32,
+    #[serde(default)]
+    pub collection_id: Option<i32>,
+    #[serde(default)]
+    pub root_folder_id: Option<i32>,
     pub member_count: u32,
     pub unread_count: u32,
     pub last_event_at: Option<DateTime<Utc>>,
@@ -524,6 +561,10 @@ pub struct CollaborationRoomDetail {
     pub workbench_id: i32,
     pub title: String,
     pub created_by_conversation_id: i32,
+    #[serde(default)]
+    pub collection_id: Option<i32>,
+    #[serde(default)]
+    pub root_folder_id: Option<i32>,
     pub members: Vec<CollaborationRoomMember>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -541,6 +582,10 @@ pub struct RoomTimelineEvent {
     pub expects_reply: bool,
     pub urgency: CollaborationUrgency,
     pub mention_conversation_ids: Vec<i32>,
+    #[serde(default)]
+    pub mention_human: bool,
+    #[serde(default)]
+    pub author_kind: CollaborationAuthorKind,
     pub created_at: DateTime<Utc>,
 }
 

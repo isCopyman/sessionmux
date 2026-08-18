@@ -3,7 +3,7 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react"
 import { Reorder } from "motion/react"
 import type { PanInfo } from "motion/react"
-import { X } from "lucide-react"
+import { Users, X } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { cn, handleMiddleClickClose } from "@/lib/utils"
 import {
@@ -388,9 +388,13 @@ export const TabItem = memo(function TabItem({
                   ]
             )}
           >
-            <ConversationStatusDot
-              status={tab.status as ConversationStatus | undefined}
-            />
+            {tab.kind === "room" ? (
+              <Users className="h-3 w-3 shrink-0 text-muted-foreground" />
+            ) : (
+              <ConversationStatusDot
+                status={tab.status as ConversationStatus | undefined}
+              />
+            )}
             <span
               className={cn(
                 // Embedded: grow + shrink as the tab tightens, but instead of an

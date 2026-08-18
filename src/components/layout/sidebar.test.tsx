@@ -205,12 +205,6 @@ describe("Sidebar — fixed New chat / Search region", () => {
     expect(spies.setRoute).toHaveBeenCalledWith("automations")
   })
 
-  it("Rooms navigates to the rooms route", () => {
-    const { getByText } = renderSidebar()
-    fireEvent.click(getByText("Rooms"))
-    expect(spies.setRoute).toHaveBeenCalledWith("rooms")
-  })
-
   it("New chat returns to the conversation workspace", () => {
     const { getByText } = renderSidebar()
     fireEvent.click(getByText("New chat"))

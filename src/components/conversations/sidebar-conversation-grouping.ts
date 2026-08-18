@@ -1,4 +1,8 @@
-import type { DbConversationSummary, FolderDetail } from "@/lib/types"
+import type {
+  CollaborationRoomSummary,
+  DbConversationSummary,
+  FolderDetail,
+} from "@/lib/types"
 import {
   DEFAULT_SECTION_ORDER,
   normalizeSectionOrder,
@@ -527,6 +531,12 @@ export interface SubsessionLoadingRow {
   recent?: true
 }
 
+export interface RoomSidebarRow {
+  kind: "room"
+  room: CollaborationRoomSummary
+  depth: number
+}
+
 export type SidebarRow =
   | SectionHeaderRow
   | FolderHeaderRow
@@ -538,6 +548,49 @@ export type SidebarRow =
   | RecentEmptyRow
   | RecentMoreRow
   | SubsessionLoadingRow
+  | RoomSidebarRow
+
+export function attachRoomsToSidebarRows(
+  rows: SidebarRow[],
+  rooms: CollaborationRoomSummary[]
+): SidebarRow[] {
+  if (rooms.length === 0) return rows
+  const byRoot = new Map<number, CollaborationRoomSummary[]>()
+  for (const room of rooms) {
+    if (room.rootFolderId == null) continue
+    const list = byRoot.get(room.rootFolderId) ?? []
+    list.push(room)
+    byRoot.set(room.rootFolderId, list)
+  }
+  if (byRoot.size === 0) return rows
+
+  const lastIndexForRoot = new Map<number, number>()
+  rows.forEach((row, index) => {
+    if (row.kind !== "conversation" || row.recent) return
+    const folderId = row.conversation.folder_id
+    lastIndexForRoot.set(folderId, index)
+  })
+
+  const inserts = new Map<number, CollaborationRoomSummary[]>()
+  for (const [rootId, list] of byRoot) {
+    const index = lastIndexForRoot.get(rootId)
+    if (index == null) continue
+    inserts.set(index, list)
+  }
+  if (inserts.size === 0) return rows
+
+  const next: SidebarRow[] = []
+  rows.forEach((row, index) => {
+    next.push(row)
+    const attached = inserts.get(index)
+    if (!attached) return
+    const depth = row.kind === "conversation" ? row.depth : 0
+    for (const room of attached) {
+      next.push({ kind: "room", room, depth })
+    }
+  })
+  return next
+}
 
 const MAX_RENDER_DEPTH = 32
 

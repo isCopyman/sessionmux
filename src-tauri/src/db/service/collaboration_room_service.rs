@@ -114,6 +114,117 @@ pub(crate) async fn member_ids<C: ConnectionTrait>(
         .collect()
 }
 
+pub(crate) async fn created_by_conversation_id<C: ConnectionTrait>(
+    conn: &C,
+    room_id: &str,
+) -> Result<i32, DbError> {
+    let row = conn
+        .query_one(statement(
+            "SELECT created_by_conversation_id FROM collaboration_room \
+             WHERE id = ? AND status = 'active'",
+            vec![room_id.into()],
+        ))
+        .await?
+        .ok_or_else(|| DbError::NotFound(format!("Room {room_id}")))?;
+    row.try_get("", "created_by_conversation_id")
+        .map_err(DbError::from)
+}
+
+async fn folder_root_for_session<C: ConnectionTrait>(
+    conn: &C,
+    conversation_id: i32,
+) -> Result<Option<i32>, DbError> {
+    let row = conn
+        .query_one(statement(
+            "SELECT COALESCE(f.parent_id, f.id) AS root_id \
+             FROM conversation c \
+             JOIN folder f ON f.id = c.folder_id \
+             WHERE c.id = ? AND c.deleted_at IS NULL",
+            vec![conversation_id.into()],
+        ))
+        .await?;
+    match row {
+        Some(row) => Ok(Some(row.try_get("", "root_id")?)),
+        None => Ok(None),
+    }
+}
+
+async fn collection_for_session<C: ConnectionTrait>(
+    conn: &C,
+    conversation_id: i32,
+) -> Result<Option<i32>, DbError> {
+    let row = conn
+        .query_one(statement(
+            "SELECT collection_id FROM collection_conversation WHERE conversation_id = ?",
+            vec![conversation_id.into()],
+        ))
+        .await?;
+    match row {
+        Some(row) => Ok(Some(row.try_get("", "collection_id")?)),
+        None => Ok(None),
+    }
+}
+
+async fn collection_root_folder<C: ConnectionTrait>(
+    conn: &C,
+    collection_id: i32,
+) -> Result<(i32, Option<i32>), DbError> {
+    let row = conn
+        .query_one(statement(
+            "SELECT id, root_folder_id FROM collection WHERE id = ?",
+            vec![collection_id.into()],
+        ))
+        .await?
+        .ok_or_else(|| DbError::NotFound(format!("Collection {collection_id}")))?;
+    Ok((
+        row.try_get("", "id")?,
+        row.try_get("", "root_folder_id")?,
+    ))
+}
+
+async fn shared_collection_among<C: ConnectionTrait>(
+    conn: &C,
+    conversation_ids: &[i32],
+) -> Result<Option<i32>, DbError> {
+    if conversation_ids.is_empty() {
+        return Ok(None);
+    }
+    let mut shared: Option<i32> = None;
+    for id in conversation_ids {
+        match collection_for_session(conn, *id).await? {
+            Some(collection_id) => match shared {
+                None => shared = Some(collection_id),
+                Some(existing) if existing != collection_id => return Ok(None),
+                Some(_) => {}
+            },
+            None => return Ok(None),
+        }
+    }
+    Ok(shared)
+}
+
+async fn resolve_placement<C: ConnectionTrait>(
+    conn: &C,
+    input: &CreateCollaborationRoomInput,
+    member_ids: &[i32],
+) -> Result<(Option<i32>, Option<i32>), DbError> {
+    if let Some(collection_id) = input.collection_id {
+        let (_, root_folder_id) = collection_root_folder(conn, collection_id).await?;
+        return Ok((Some(collection_id), root_folder_id.or(input.root_folder_id)));
+    }
+    if let Some(root_folder_id) = input.root_folder_id {
+        return Ok((None, Some(root_folder_id)));
+    }
+    if let Some(collection_id) = shared_collection_among(conn, member_ids).await? {
+        let (_, root_folder_id) = collection_root_folder(conn, collection_id).await?;
+        return Ok((Some(collection_id), root_folder_id));
+    }
+    Ok((
+        None,
+        folder_root_for_session(conn, input.created_by_conversation_id).await?,
+    ))
+}
+
 pub(crate) async fn room_workbench_id<C: ConnectionTrait>(
     conn: &C,
     room_id: &str,
@@ -170,18 +281,22 @@ pub async fn create(
     for conversation_id in &member_ids {
         require_live_session(conn, *conversation_id).await?;
     }
+    let (collection_id, root_folder_id) = resolve_placement(conn, &input, &member_ids).await?;
 
     let room_id = format!("rm_{}", uuid::Uuid::new_v4());
     let txn = conn.begin().await?;
     txn.execute(statement(
         "INSERT INTO collaboration_room \
-         (id, workbench_id, title, status, created_by_conversation_id, created_at, updated_at) \
-         VALUES (?, ?, ?, 'active', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+         (id, workbench_id, title, status, created_by_conversation_id, \
+          collection_id, root_folder_id, created_at, updated_at) \
+         VALUES (?, ?, ?, 'active', ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
         vec![
             room_id.clone().into(),
             input.workbench_id.into(),
             title.into(),
             input.created_by_conversation_id.into(),
+            collection_id.into(),
+            root_folder_id.into(),
         ],
     ))
     .await?;
@@ -203,14 +318,8 @@ pub async fn create(
     get(conn, &room_id).await
 }
 
-pub async fn list(
-    conn: &DatabaseConnection,
-    workbench_id: i32,
-) -> Result<Vec<CollaborationRoomSummary>, DbError> {
-    require_workbench(conn, workbench_id).await?;
-    let rows = conn
-        .query_all(statement(
-            "SELECT r.id, r.workbench_id, r.title, r.created_by_conversation_id, \
+const ROOM_SUMMARY_SELECT: &str = "SELECT r.id, r.workbench_id, r.title, r.created_by_conversation_id, \
+                    r.collection_id, r.root_folder_id, \
                     r.created_at, r.updated_at, r.last_seen_at, \
                     (SELECT COUNT(*) FROM collaboration_room_member m \
                       WHERE m.room_id = r.id) AS member_count, \
@@ -221,13 +330,34 @@ pub async fn list(
                       WHERE e.room_id = r.id AND COALESCE(e.visibility, 'direct') = 'room' \
                         AND (r.last_seen_at IS NULL OR datetime(e.created_at) > datetime(r.last_seen_at))) \
                       AS unread_count \
-             FROM collaboration_room r \
+             FROM collaboration_room r";
+
+/// Rooms on one Workbench. Host Control `room.list` / `room.list_workbench`
+/// and the Rooms page use this. Agents that only need Rooms they joined
+/// should call `list_for_member` instead.
+pub async fn list_for_workbench(
+    conn: &DatabaseConnection,
+    workbench_id: i32,
+) -> Result<Vec<CollaborationRoomSummary>, DbError> {
+    require_workbench(conn, workbench_id).await?;
+    let rows = conn
+        .query_all(statement(
+            &format!(
+                "{ROOM_SUMMARY_SELECT} \
              WHERE r.workbench_id = ? AND r.status = 'active' \
-             ORDER BY datetime(COALESCE(last_event_at, r.updated_at)) DESC, r.id DESC",
+             ORDER BY datetime(COALESCE(last_event_at, r.updated_at)) DESC, r.id DESC"
+            ),
             vec![workbench_id.into()],
         ))
         .await?;
     rows.iter().map(summary_from_row).collect()
+}
+
+pub async fn list(
+    conn: &DatabaseConnection,
+    workbench_id: i32,
+) -> Result<Vec<CollaborationRoomSummary>, DbError> {
+    list_for_workbench(conn, workbench_id).await
 }
 
 /// Rooms the Session already belongs to, across Workbenches. Agents use this
@@ -239,22 +369,13 @@ pub async fn list_for_member(
     require_live_session(conn, conversation_id).await?;
     let rows = conn
         .query_all(statement(
-            "SELECT r.id, r.workbench_id, r.title, r.created_by_conversation_id, \
-                    r.created_at, r.updated_at, r.last_seen_at, \
-                    (SELECT COUNT(*) FROM collaboration_room_member m \
-                      WHERE m.room_id = r.id) AS member_count, \
-                    (SELECT MAX(e.created_at) FROM collaboration_event e \
-                      WHERE e.room_id = r.id AND COALESCE(e.visibility, 'direct') = 'room') \
-                      AS last_event_at, \
-                    (SELECT COUNT(*) FROM collaboration_event e \
-                      WHERE e.room_id = r.id AND COALESCE(e.visibility, 'direct') = 'room' \
-                        AND (r.last_seen_at IS NULL OR datetime(e.created_at) > datetime(r.last_seen_at))) \
-                      AS unread_count \
-             FROM collaboration_room r \
+            &format!(
+                "{ROOM_SUMMARY_SELECT} \
              JOIN collaboration_room_member me \
                ON me.room_id = r.id AND me.conversation_id = ? \
              WHERE r.status = 'active' \
-             ORDER BY datetime(COALESCE(last_event_at, r.updated_at)) DESC, r.id DESC",
+             ORDER BY datetime(COALESCE(last_event_at, r.updated_at)) DESC, r.id DESC"
+            ),
             vec![conversation_id.into()],
         ))
         .await?;
@@ -269,6 +390,8 @@ fn summary_from_row(row: &QueryResult) -> Result<CollaborationRoomSummary, DbErr
         workbench_id: row.try_get("", "workbench_id")?,
         title: row.try_get("", "title")?,
         created_by_conversation_id: row.try_get("", "created_by_conversation_id")?,
+        collection_id: row.try_get("", "collection_id")?,
+        root_folder_id: row.try_get("", "root_folder_id")?,
         member_count: u32::try_from(member_count.max(0)).unwrap_or(u32::MAX),
         unread_count: u32::try_from(unread_count.max(0)).unwrap_or(u32::MAX),
         last_event_at: parse_optional_timestamp(row, "last_event_at")?,
@@ -283,7 +406,8 @@ pub async fn get(
 ) -> Result<CollaborationRoomDetail, DbError> {
     let row = conn
         .query_one(statement(
-            "SELECT id, workbench_id, title, created_by_conversation_id, created_at, updated_at \
+            "SELECT id, workbench_id, title, created_by_conversation_id, \
+                    collection_id, root_folder_id, created_at, updated_at \
              FROM collaboration_room WHERE id = ? AND status = 'active'",
             vec![room_id.into()],
         ))
@@ -295,6 +419,8 @@ pub async fn get(
         workbench_id: row.try_get("", "workbench_id")?,
         title: row.try_get("", "title")?,
         created_by_conversation_id: row.try_get("", "created_by_conversation_id")?,
+        collection_id: row.try_get("", "collection_id")?,
+        root_folder_id: row.try_get("", "root_folder_id")?,
         members,
         created_at: parse_timestamp(&row, "created_at")?,
         updated_at: parse_timestamp(&row, "updated_at")?,
@@ -444,6 +570,61 @@ pub async fn rename(
     get(conn, room_id).await
 }
 
+pub async fn assign_to_collection(
+    conn: &DatabaseConnection,
+    room_ids: Vec<String>,
+    collection_id: Option<i32>,
+    root_folder_id: Option<i32>,
+) -> Result<Vec<CollaborationRoomSummary>, DbError> {
+    if room_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    if room_ids.len() > 200 {
+        return Err(validation("At most 200 Rooms can be moved at once"));
+    }
+    let (next_collection, next_root) = if let Some(collection_id) = collection_id {
+        let (_, collection_root) = collection_root_folder(conn, collection_id).await?;
+        (Some(collection_id), collection_root.or(root_folder_id))
+    } else {
+        (None, root_folder_id)
+    };
+    let txn = conn.begin().await?;
+    for room_id in &room_ids {
+        let _ = room_workbench_id(&txn, room_id).await?;
+        txn.execute(statement(
+            "UPDATE collaboration_room \
+             SET collection_id = ?, root_folder_id = COALESCE(?, root_folder_id), \
+                 updated_at = CURRENT_TIMESTAMP \
+             WHERE id = ? AND status = 'active'",
+            vec![
+                next_collection.into(),
+                next_root.into(),
+                room_id.clone().into(),
+            ],
+        ))
+        .await?;
+    }
+    txn.commit().await?;
+    let mut rooms = Vec::new();
+    for room_id in room_ids {
+        let detail = get(conn, &room_id).await?;
+        rooms.push(CollaborationRoomSummary {
+            id: detail.id,
+            workbench_id: detail.workbench_id,
+            title: detail.title,
+            created_by_conversation_id: detail.created_by_conversation_id,
+            collection_id: detail.collection_id,
+            root_folder_id: detail.root_folder_id,
+            member_count: u32::try_from(detail.members.len()).unwrap_or(u32::MAX),
+            unread_count: 0,
+            last_event_at: None,
+            created_at: detail.created_at,
+            updated_at: detail.updated_at,
+        });
+    }
+    Ok(rooms)
+}
+
 pub async fn mark_seen(
     conn: &DatabaseConnection,
     room_id: &str,
@@ -486,6 +667,8 @@ pub async fn timeline(
             "SELECT e.id, e.room_id, e.source_conversation_id, e.source_title_snapshot, \
                     e.source_agent_type_snapshot, e.source_folder_path_snapshot, \
                     e.subject, e.body, e.reply_to_event_id, e.expects_reply, e.urgency, \
+                    COALESCE(e.author_kind, 'session') AS author_kind, \
+                    COALESCE(e.mention_human, 0) AS mention_human, \
                     e.created_at \
              FROM collaboration_event e \
              WHERE e.room_id = ? AND COALESCE(e.visibility, 'direct') = 'room' \
@@ -533,6 +716,15 @@ pub async fn timeline(
             expects_reply: expects_reply != 0,
             urgency,
             mention_conversation_ids,
+            mention_human: {
+                let raw: i64 = row.try_get("", "mention_human")?;
+                raw != 0
+            },
+            author_kind: {
+                let raw: String = row.try_get("", "author_kind")?;
+                crate::models::CollaborationAuthorKind::parse(&raw)
+                    .unwrap_or(crate::models::CollaborationAuthorKind::Session)
+            },
             created_at: parse_timestamp(&row, "created_at")?,
         });
     }
@@ -575,6 +767,8 @@ mod tests {
                 title: "Plan".into(),
                 member_conversation_ids: members,
                 created_by_conversation_id: created_by,
+                collection_id: None,
+                root_folder_id: None,
             },
         )
         .await
@@ -591,6 +785,8 @@ mod tests {
                 title: "Solo".into(),
                 member_conversation_ids: vec![a],
                 created_by_conversation_id: a,
+                collection_id: None,
+                root_folder_id: None,
             },
         )
         .await
@@ -629,6 +825,8 @@ mod tests {
                 expects_reply: false,
                 urgency: Default::default(),
                 reply_to_event_id: None,
+                mention_human: false,
+                author_kind: Default::default(),
             },
         )
         .await
@@ -684,6 +882,8 @@ mod tests {
                 expects_reply: true,
                 urgency: Default::default(),
                 reply_to_event_id: None,
+                mention_human: false,
+                author_kind: Default::default(),
             },
         )
         .await
@@ -768,6 +968,8 @@ mod tests {
                 expects_reply: true,
                 urgency: Default::default(),
                 reply_to_event_id: None,
+                mention_human: false,
+                author_kind: Default::default(),
             },
         )
         .await
@@ -787,6 +989,8 @@ mod tests {
                 expects_reply: false,
                 urgency: Default::default(),
                 reply_to_event_id: Some(root.event_id.clone()),
+                mention_human: false,
+                author_kind: Default::default(),
             },
         )
         .await
@@ -846,6 +1050,8 @@ mod tests {
                 expects_reply: false,
                 urgency: Default::default(),
                 reply_to_event_id: None,
+                mention_human: false,
+                author_kind: Default::default(),
             },
         )
         .await
@@ -885,6 +1091,8 @@ mod tests {
                 title: "A and C".into(),
                 member_conversation_ids: vec![a, c],
                 created_by_conversation_id: a,
+                collection_id: None,
+                root_folder_id: None,
             },
         )
         .await
@@ -898,5 +1106,143 @@ mod tests {
         assert!(ids.contains(&ab.id.as_str()));
         assert!(ids.contains(&ac.id.as_str()));
         assert_eq!(for_a.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn room_placement_is_owned_by_the_room_not_the_creator_session() {
+        let (db, a, b, _) = seeded().await;
+        let folder_id: i32 = db
+            .conn
+            .query_one(sea_orm::Statement::from_sql_and_values(
+                sea_orm::DbBackend::Sqlite,
+                "SELECT folder_id FROM conversation WHERE id = ?",
+                [a.into()],
+            ))
+            .await
+            .unwrap()
+            .unwrap()
+            .try_get("", "folder_id")
+            .unwrap();
+        let collection = crate::db::service::collection_service::create(
+            &db.conn,
+            "Sources".into(),
+            None,
+            Some(folder_id),
+        )
+        .await
+        .expect("collection");
+        crate::db::service::collection_service::assign_conversations(
+            &db.conn,
+            vec![a],
+            Some(collection.id),
+        )
+        .await
+        .expect("assign creator");
+
+        let hanging_off_creator = make_room(&db, a, vec![a, b]).await;
+        assert_eq!(hanging_off_creator.collection_id, Some(collection.id));
+        assert_eq!(hanging_off_creator.root_folder_id, Some(folder_id));
+
+        let independent = create(
+            &db.conn,
+            CreateCollaborationRoomInput {
+                workbench_id: 1,
+                title: "Own home".into(),
+                member_conversation_ids: vec![a, b],
+                created_by_conversation_id: a,
+                collection_id: None,
+                root_folder_id: Some(folder_id),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(independent.collection_id, None);
+        assert_eq!(independent.root_folder_id, Some(folder_id));
+
+        assign_to_collection(&db.conn, vec![independent.id.clone()], Some(collection.id), None)
+            .await
+            .expect("move room");
+        let moved = get(&db.conn, &independent.id).await.unwrap();
+        assert_eq!(moved.collection_id, Some(collection.id));
+    }
+
+    #[tokio::test]
+    async fn prose_at_mentions_do_not_create_room_deliveries() {
+        let (db, a, b, _) = seeded().await;
+        let room = make_room(&db, a, vec![a, b]).await;
+        let posted = crate::db::service::collaboration_service::post_room(
+            &db.conn,
+            PostRoomMessageInput {
+                room_id: room.id.clone(),
+                source_conversation_id: a,
+                target_conversation_ids: vec![],
+                mention_all: false,
+                subject: "Note".into(),
+                body: "hey @alice look at @/src/lib.rs and ping @user".into(),
+                client_dedupe_id: "prose-at".into(),
+                invocation_policy: CollaborationInvocationPolicy::StoreOnly,
+                delivery_hint: Default::default(),
+                expects_reply: false,
+                urgency: Default::default(),
+                reply_to_event_id: None,
+                mention_human: false,
+                author_kind: Default::default(),
+            },
+        )
+        .await
+        .expect("post");
+        assert!(posted.deliveries.is_empty());
+
+        let with_uri = crate::db::service::collaboration_service::post_room(
+            &db.conn,
+            PostRoomMessageInput {
+                room_id: room.id.clone(),
+                source_conversation_id: a,
+                target_conversation_ids: vec![],
+                mention_all: false,
+                subject: "URI".into(),
+                body: format!("please look codeg://session/{b}"),
+                client_dedupe_id: "uri-at".into(),
+                invocation_policy: CollaborationInvocationPolicy::StoreOnly,
+                delivery_hint: Default::default(),
+                expects_reply: false,
+                urgency: Default::default(),
+                reply_to_event_id: None,
+                mention_human: false,
+                author_kind: Default::default(),
+            },
+        )
+        .await
+        .expect("post uri");
+        assert_eq!(with_uri.deliveries.len(), 1);
+        assert_eq!(with_uri.deliveries[0].target.conversation_id, b);
+
+        let human = crate::db::service::collaboration_service::post_room(
+            &db.conn,
+            PostRoomMessageInput {
+                room_id: room.id.clone(),
+                source_conversation_id: a,
+                target_conversation_ids: vec![],
+                mention_all: false,
+                subject: "You".into(),
+                body: "human speaking codeg://human".into(),
+                client_dedupe_id: "human-post".into(),
+                invocation_policy: CollaborationInvocationPolicy::StoreOnly,
+                delivery_hint: Default::default(),
+                expects_reply: false,
+                urgency: Default::default(),
+                reply_to_event_id: None,
+                mention_human: false,
+                author_kind: crate::models::CollaborationAuthorKind::Human,
+            },
+        )
+        .await
+        .expect("human post");
+        assert!(human.deliveries.is_empty());
+        let events = timeline(&db.conn, &room.id, None).await.unwrap().events;
+        let last = events.last().expect("event");
+        assert_eq!(last.author_kind, crate::models::CollaborationAuthorKind::Human);
+        assert!(last.mention_human);
+        assert_eq!(last.source.agent_type.as_deref(), Some("human"));
     }
 }

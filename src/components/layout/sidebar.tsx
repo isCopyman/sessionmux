@@ -11,7 +11,6 @@ import {
   Search,
   ListTodo,
   SquarePen,
-  Users,
   Zap,
   type LucideIcon,
 } from "lucide-react"
@@ -592,15 +591,6 @@ export function Sidebar() {
               </span>
             ) : null
           }
-        />
-        <SidebarNavButton
-          icon={Users}
-          label={t("rooms")}
-          active={routeId === "rooms"}
-          onClick={() => {
-            if (isMobile) toggle()
-            setRoute("rooms")
-          }}
         />
         <SidebarNavButton
           icon={ListTodo}

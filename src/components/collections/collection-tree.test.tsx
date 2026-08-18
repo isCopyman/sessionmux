@@ -24,6 +24,7 @@ const h = vi.hoisted(() => ({
   hydrate: vi.fn(),
   listRefs: vi.fn(),
   assignCollection: vi.fn(),
+  assignRooms: vi.fn(),
   updateTitle: vi.fn(),
   updateArchive: vi.fn(),
   updatePinned: vi.fn(),
@@ -35,6 +36,19 @@ const h = vi.hoisted(() => ({
   closeConversationTab: vi.fn(),
   openTab: vi.fn(),
   openConversations: vi.fn(),
+  openRoom: vi.fn(),
+  rooms: [] as Array<{
+    id: string
+    workbenchId: number
+    title: string
+    createdByConversationId: number
+    collectionId?: number | null
+    rootFolderId?: number | null
+    memberCount: number
+    unreadCount: number
+    updatedAt: string
+    createdAt: string
+  }>,
   conversations: [
     {
       id: 101,
@@ -248,9 +262,26 @@ vi.mock("@/components/conversations/session-details-dialog", () => ({
   SessionDetailsDialog: () => null,
 }))
 
+vi.mock("@/lib/open-room", () => ({
+  useOpenRoom: () => h.openRoom,
+}))
+
+vi.mock("@/stores/room-catalog-store", () => {
+  const refresh = vi.fn()
+  const state = { rooms: h.rooms, hydrated: true, refresh }
+  const useRoomCatalogStore = (selector: (value: typeof state) => unknown) =>
+    selector(state)
+  useRoomCatalogStore.getState = () => state
+  return {
+    useRoomCatalogStore,
+    ensureRoomCatalogSubscription: vi.fn(),
+  }
+})
+
 vi.mock("@/lib/api", () => ({
   listConversationCollectionRefs: h.listRefs,
   assignConversationsToCollection: h.assignCollection,
+  assignRoomsToCollection: h.assignRooms,
   updateConversationTitle: h.updateTitle,
   updateConversationArchive: h.updateArchive,
   updateConversationPinned: h.updatePinned,
@@ -300,6 +331,7 @@ function renderTree(
 describe("CollectionTree", () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    h.rooms.length = 0
     h.create.mockResolvedValue({
       id: 14,
       root_folder_id: 7,
@@ -319,6 +351,7 @@ describe("CollectionTree", () => {
               collection_id: collectionId,
             }))
     )
+    h.assignRooms.mockResolvedValue([])
     h.place.mockResolvedValue(undefined)
   })
 
@@ -716,6 +749,90 @@ describe("CollectionTree", () => {
     await waitFor(() => {
       expect(h.deleteConversation).toHaveBeenCalledWith(102)
       expect(h.deleteConversation).toHaveBeenCalledWith(103)
+    })
+  })
+
+  it("shows a Room on its own Path, not under the creator Session", async () => {
+    h.rooms.push({
+      id: "rm_notes",
+      workbenchId: 1,
+      title: "Notes room",
+      createdByConversationId: 102,
+      collectionId: null,
+      rootFolderId: 7,
+      memberCount: 2,
+      unreadCount: 0,
+      createdAt: "2026-06-04T00:00:00.000Z",
+      updatedAt: "2026-06-04T00:00:00.000Z",
+    })
+    renderTree(vi.fn(), { showSessions: true })
+    expect(await screen.findByText("Notes room")).toBeTruthy()
+    expect(await screen.findByText("Loose notes")).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "Notes room" }))
+    await waitFor(() => {
+      expect(h.openRoom).toHaveBeenCalledWith(
+        expect.objectContaining({ id: "rm_notes" })
+      )
+    })
+  })
+
+  it("shows a Room under the Collection it owns, not the creator Session", async () => {
+    h.rooms.push({
+      id: "rm_sources",
+      workbenchId: 1,
+      title: "Sources room",
+      createdByConversationId: 102,
+      collectionId: 11,
+      rootFolderId: 7,
+      memberCount: 2,
+      unreadCount: 0,
+      createdAt: "2026-06-04T00:00:00.000Z",
+      updatedAt: "2026-06-04T00:00:00.000Z",
+    })
+    const { user } = renderTree(vi.fn(), { showSessions: true })
+    await user.click(screen.getByRole("button", { name: "Research" }))
+    await user.click(screen.getByTitle("Sources"))
+    expect(await screen.findByText("Sources room")).toBeTruthy()
+    expect(screen.queryByText("Loose notes")).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "Sources room" }))
+    await waitFor(() => {
+      expect(h.openRoom).toHaveBeenCalledWith(
+        expect.objectContaining({ id: "rm_sources", collectionId: 11 })
+      )
+    })
+  })
+
+  it("opens the Collection menu from the expand chevron, not the browser menu", async () => {
+    renderTree()
+    const expand = screen.getAllByRole("button", {
+      name: "Expand collection",
+    })[0]
+    fireEvent.contextMenu(expand)
+    expect(
+      await screen.findByRole("menuitem", { name: "New nested collection" })
+    ).toBeTruthy()
+  })
+
+  it("opens a Room from its Collection context menu", async () => {
+    h.rooms.push({
+      id: "rm_menu",
+      workbenchId: 1,
+      title: "Menu room",
+      createdByConversationId: 102,
+      collectionId: null,
+      rootFolderId: 7,
+      memberCount: 2,
+      unreadCount: 0,
+      createdAt: "2026-06-04T00:00:00.000Z",
+      updatedAt: "2026-06-04T00:00:00.000Z",
+    })
+    renderTree(vi.fn(), { showSessions: true })
+    fireEvent.contextMenu(await screen.findByRole("button", { name: "Menu room" }))
+    await userEvent.click(screen.getByRole("menuitem", { name: "Open room" }))
+    await waitFor(() => {
+      expect(h.openRoom).toHaveBeenCalledWith(
+        expect.objectContaining({ id: "rm_menu" })
+      )
     })
   })
 

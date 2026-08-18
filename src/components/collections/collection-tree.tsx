@@ -14,7 +14,6 @@ import {
   DndContext,
   DragOverlay,
   KeyboardSensor,
-  PointerSensor,
   pointerWithin,
   useSensor,
   useSensors,
@@ -50,6 +49,7 @@ import {
   Square,
   SquarePen,
   Trash2,
+  Users,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
@@ -105,6 +105,7 @@ import {
   collectionPlacementForRow,
   sessionDragPayload,
   sessionIdsInDrag,
+  PrimaryPointerSensor,
   type CollectionDropTarget,
   type CollectionTreeDrag,
   type SessionTreeDrag,
@@ -116,6 +117,7 @@ import { useImeGuard } from "@/hooks/use-ime-guard"
 import { useSessionMultiSelect } from "@/hooks/use-session-multi-select"
 import {
   assignConversationsToCollection,
+  assignRoomsToCollection,
   deleteConversation,
   listConversationCollectionRefs,
   updateConversationArchive,
@@ -133,10 +135,16 @@ import {
 } from "@/lib/session-bulk-operations"
 import type {
   AgentType,
+  CollaborationRoomSummary,
   CollectionInfo,
   ConversationStatus,
   DbConversationSummary,
 } from "@/lib/types"
+import { useOpenRoom } from "@/lib/open-room"
+import {
+  ensureRoomCatalogSubscription,
+  useRoomCatalogStore,
+} from "@/stores/room-catalog-store"
 import { STATUS_ORDER } from "@/lib/types"
 import { toErrorMessage } from "@/lib/app-error"
 import { cn } from "@/lib/utils"
@@ -283,6 +291,8 @@ export const CollectionTree = forwardRef<
   const tabs = useTabStore((state) => state.tabs)
   const { closeConversationTab, openTab } = useTabActions()
   const { openConversations } = useWorkbenchRoute()
+  const openRoom = useOpenRoom()
+  const catalogRooms = useRoomCatalogStore((state) => state.rooms)
   const multiSelect = useSessionMultiSelect<DbConversationSummary>()
   const organizationRevision = useOrganizationRevisionStore(
     (state) => state.revision
@@ -329,14 +339,23 @@ export const CollectionTree = forwardRef<
   const pendingLocateActiveRef = useRef(false)
   const [locateRequest, setLocateRequest] = useState(0)
   const dndSensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(PrimaryPointerSensor, { activationConstraint: { distance: 6 } }),
     useSensor(KeyboardSensor)
   )
 
-  const activeConversationId = useMemo(
-    () => tabs.find((tab) => tab.id === activeTabId)?.conversationId ?? null,
+  const activeTab = useMemo(
+    () => tabs.find((tab) => tab.id === activeTabId),
     [activeTabId, tabs]
   )
+  const activeConversationId =
+    activeTab?.kind === "room" ? null : (activeTab?.conversationId ?? null)
+  const activeRoomId =
+    activeTab?.kind === "room" ? (activeTab.roomId ?? null) : null
+
+  useEffect(() => {
+    ensureRoomCatalogSubscription()
+    void useRoomCatalogStore.getState().refresh()
+  }, [])
 
   useEffect(() => {
     if (!hydrated) {
@@ -483,6 +502,35 @@ export const CollectionTree = forwardRef<
       ),
     [visibleConversations]
   )
+  const conversationByIdAll = useMemo(
+    () =>
+      new Map(
+        conversations.map((conversation) => [conversation.id, conversation])
+      ),
+    [conversations]
+  )
+  const roomsByCollection = useMemo(() => {
+    const grouped = new Map<number, CollaborationRoomSummary[]>()
+    if (!showSessions) return grouped
+    for (const room of catalogRooms) {
+      if (room.collectionId == null) continue
+      const group = grouped.get(room.collectionId) ?? []
+      group.push(room)
+      grouped.set(room.collectionId, group)
+    }
+    return grouped
+  }, [catalogRooms, showSessions])
+  const roomsByUnclassifiedRoot = useMemo(() => {
+    const grouped = new Map<number, CollaborationRoomSummary[]>()
+    if (!showSessions) return grouped
+    for (const room of catalogRooms) {
+      if (room.collectionId != null || room.rootFolderId == null) continue
+      const group = grouped.get(room.rootFolderId) ?? []
+      group.push(room)
+      grouped.set(room.rootFolderId, group)
+    }
+    return grouped
+  }, [catalogRooms, showSessions])
   const rootFolderIdByConversation = useMemo(() => {
     const next = new Map<number, number>()
     for (const conversation of visibleConversations) {
@@ -528,11 +576,24 @@ export const CollectionTree = forwardRef<
       if (rootId == null) continue
       result.set(rootId, (result.get(rootId) ?? 0) + 1)
     }
+    for (const [collectionId, rooms] of roomsByCollection) {
+      const collection = collectionById.get(collectionId)
+      if (collection?.root_folder_id == null) continue
+      result.set(
+        collection.root_folder_id,
+        (result.get(collection.root_folder_id) ?? 0) + rooms.length
+      )
+    }
+    for (const [rootId, rooms] of roomsByUnclassifiedRoot) {
+      result.set(rootId, (result.get(rootId) ?? 0) + rooms.length)
+    }
     return result
   }, [
     collectionById,
     folderById,
     membershipByConversation,
+    roomsByCollection,
+    roomsByUnclassifiedRoot,
     visibleConversations,
   ])
 
@@ -1002,6 +1063,22 @@ export const CollectionTree = forwardRef<
     }
   }
 
+  const handleMoveRoom = async (
+    room: CollaborationRoomSummary,
+    collectionId: number | null
+  ) => {
+    try {
+      await assignRoomsToCollection(
+        [room.id],
+        collectionId,
+        collectionId == null ? (room.rootFolderId ?? null) : null
+      )
+      await useRoomCatalogStore.getState().refresh()
+    } catch (error) {
+      toast.error(t("operationFailed", { message: toErrorMessage(error) }))
+    }
+  }
+
   const handleBulkAddToCurrentWorkbench = () => {
     const conversations = selectedSessions()
     if (conversations.length === 0) return
@@ -1397,6 +1474,73 @@ export const CollectionTree = forwardRef<
     )
   }
 
+  const renderRoom = (
+    room: CollaborationRoomSummary,
+    depth: number,
+    pathRootId: number | null
+  ) => {
+    const selected = room.id === activeRoomId
+    const moveTargets = items.filter(
+      (item) =>
+        item.id !== room.collectionId &&
+        (pathRootId == null || item.root_folder_id === pathRootId)
+    )
+    return (
+      <ContextMenu key={`room:${room.id}`}>
+        <ContextMenuTrigger asChild>
+          <button
+            type="button"
+            data-room-id={room.id}
+            data-focused-session={selected ? "true" : undefined}
+            title={room.title}
+            aria-current={selected ? "page" : undefined}
+            className={cn(
+              "flex h-7 w-full min-w-0 items-center gap-1.5 rounded-md pe-2 text-start text-xs",
+              "hover:bg-sidebar-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
+              selected &&
+                "bg-primary/8 text-primary ring-1 ring-inset ring-primary/30"
+            )}
+            style={{ paddingInlineStart: `${0.75 + depth * 0.75}rem` }}
+            onClick={() => void openRoom(room)}
+          >
+            <Users className="h-3 w-3 shrink-0" />
+            <span className="min-w-0 flex-1 truncate">{room.title}</span>
+            {room.unreadCount > 0 ? (
+              <span className="ms-auto shrink-0 text-[10px] text-muted-foreground">
+                {room.unreadCount}
+              </span>
+            ) : null}
+          </button>
+        </ContextMenuTrigger>
+        <ContextMenuContent>
+          <ContextMenuItem onSelect={() => void openRoom(room)}>
+            <Users className="h-4 w-4" />
+            {t("openRoom")}
+          </ContextMenuItem>
+          <ContextMenuSub>
+            <ContextMenuSubTrigger>
+              <FolderInput className="h-4 w-4" />
+              {tManage("moveToCollection")}
+            </ContextMenuSubTrigger>
+            <ContextMenuSubContent className="max-h-72 overflow-y-auto">
+              <ContextMenuItem onSelect={() => void handleMoveRoom(room, null)}>
+                {t("unclassified")}
+              </ContextMenuItem>
+              {moveTargets.map((item) => (
+                <ContextMenuItem
+                  key={item.id}
+                  onSelect={() => void handleMoveRoom(room, item.id)}
+                >
+                  {item.name}
+                </ContextMenuItem>
+              ))}
+            </ContextMenuSubContent>
+          </ContextMenuSub>
+        </ContextMenuContent>
+      </ContextMenu>
+    )
+  }
+
   const renderItems = (
     parent: number | null,
     depth = 0,
@@ -1413,7 +1557,13 @@ export const CollectionTree = forwardRef<
         const memberSessions = showSessions
           ? (conversationsByCollection.get(item.id) ?? [])
           : []
-        const expandable = childItems.length > 0 || memberSessions.length > 0
+        const memberRooms = showSessions
+          ? (roomsByCollection.get(item.id) ?? [])
+          : []
+        const expandable =
+          childItems.length > 0 ||
+          memberSessions.length > 0 ||
+          memberRooms.length > 0
         const isExpanded = expanded.has(item.id)
         return (
           <TreeDndBindings
@@ -1470,6 +1620,7 @@ export const CollectionTree = forwardRef<
                       "pointer-events-none opacity-55"
                   )}
                   style={{ paddingInlineStart: `${0.25 + depth * 0.75}rem` }}
+                  onContextMenu={(event) => event.preventDefault()}
                 >
                   {collectionDropTarget?.targetCollectionId === item.id &&
                   (collectionDropTarget.position === "before" ||
@@ -1484,31 +1635,31 @@ export const CollectionTree = forwardRef<
                       )}
                     />
                   ) : null}
-                  <button
-                    type="button"
-                    className={cn(
-                      "flex h-6 w-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground",
-                      !expandable && "pointer-events-none opacity-0"
-                    )}
-                    aria-label={isExpanded ? t("collapse") : t("expand")}
-                    onClick={() =>
-                      setExpanded((current) => {
-                        const next = new Set(current)
-                        if (next.has(item.id)) next.delete(item.id)
-                        else next.add(item.id)
-                        return next
-                      })
-                    }
-                  >
-                    {isExpanded ? (
-                      <ChevronDown className="h-3.5 w-3.5" />
-                    ) : (
-                      <ChevronRight className="h-3.5 w-3.5 rtl:rotate-180" />
-                    )}
-                  </button>
                   <ContextMenu>
                     <ContextMenuTrigger asChild>
-                      <div className="flex min-h-0 min-w-0 flex-1">
+                      <div className="flex min-h-0 min-w-0 flex-1 items-center">
+                        <button
+                          type="button"
+                          className={cn(
+                            "flex h-6 w-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground",
+                            !expandable && "pointer-events-none opacity-0"
+                          )}
+                          aria-label={isExpanded ? t("collapse") : t("expand")}
+                          onClick={() =>
+                            setExpanded((current) => {
+                              const next = new Set(current)
+                              if (next.has(item.id)) next.delete(item.id)
+                              else next.add(item.id)
+                              return next
+                            })
+                          }
+                        >
+                          {isExpanded ? (
+                            <ChevronDown className="h-3.5 w-3.5" />
+                          ) : (
+                            <ChevronRight className="h-3.5 w-3.5 rtl:rotate-180" />
+                          )}
+                        </button>
                         <button
                           type="button"
                           {...attributes}
@@ -1544,9 +1695,10 @@ export const CollectionTree = forwardRef<
                             <Folder className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                           )}
                           <span className="truncate">{item.name}</span>
-                          {showSessions && memberSessions.length > 0 ? (
+                          {showSessions &&
+                          memberSessions.length + memberRooms.length > 0 ? (
                             <span className="ms-auto shrink-0 text-[10px] text-muted-foreground">
-                              {memberSessions.length}
+                              {memberSessions.length + memberRooms.length}
                             </span>
                           ) : null}
                         </button>
@@ -1650,6 +1802,13 @@ export const CollectionTree = forwardRef<
                     {memberSessions.map((session) =>
                       renderSession(session, depth + 1, item.id)
                     )}
+                    {memberRooms.map((room) =>
+                      renderRoom(
+                        room,
+                        depth + 1,
+                        item.root_folder_id ?? rootFolderId ?? null
+                      )
+                    )}
                     {renderItems(item.id, depth + 1, rootFolderId)}
                   </>
                 ) : null}
@@ -1663,6 +1822,8 @@ export const CollectionTree = forwardRef<
     rootFolderId: number,
     sessions: DbConversationSummary[]
   ) => {
+    const rooms = roomsByUnclassifiedRoot.get(rootFolderId) ?? []
+    const childCount = sessions.length + rooms.length
     const isExpanded = !collapsedUnclassified.has(rootFolderId)
     return (
       <TreeDropBindings
@@ -1698,7 +1859,7 @@ export const CollectionTree = forwardRef<
                 type="button"
                 className={cn(
                   "flex h-6 w-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground",
-                  sessions.length === 0 && "pointer-events-none opacity-0"
+                  childCount === 0 && "pointer-events-none opacity-0"
                 )}
                 aria-label={isExpanded ? t("collapse") : t("expand")}
                 onClick={() =>
@@ -1721,7 +1882,7 @@ export const CollectionTree = forwardRef<
                 className="flex h-full min-w-0 flex-1 items-center gap-1.5 text-start text-xs"
                 aria-label={t("unclassified")}
                 onClick={() => {
-                  if (sessions.length === 0) return
+                  if (childCount === 0) return
                   setCollapsedUnclassified((current) => {
                     const next = new Set(current)
                     if (next.has(rootFolderId)) next.delete(rootFolderId)
@@ -1732,9 +1893,9 @@ export const CollectionTree = forwardRef<
               >
                 <Inbox className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                 <span className="truncate">{t("unclassified")}</span>
-                {sessions.length > 0 ? (
+                {childCount > 0 ? (
                   <span className="ms-auto shrink-0 text-[10px] text-muted-foreground">
-                    {sessions.length}
+                    {childCount}
                   </span>
                 ) : null}
               </button>
@@ -1748,9 +1909,12 @@ export const CollectionTree = forwardRef<
                 <MoreHorizontal className="h-3.5 w-3.5" />
               </Button>
             </div>
-            {isExpanded
-              ? sessions.map((session) => renderSession(session, 1, null))
-              : null}
+            {isExpanded ? (
+              <>
+                {sessions.map((session) => renderSession(session, 1, null))}
+                {rooms.map((room) => renderRoom(room, 1, rootFolderId))}
+              </>
+            ) : null}
           </div>
         )}
       </TreeDropBindings>
@@ -1760,10 +1924,14 @@ export const CollectionTree = forwardRef<
   const renderPath = (root: (typeof allFolders)[number]) => {
     const isExpanded = !collapsedPaths.has(root.id)
     const sessions = unclassifiedByRoot.get(root.id) ?? []
+    const unclassifiedRooms = roomsByUnclassifiedRoot.get(root.id) ?? []
     const rootCollections = (children.get(null) ?? []).filter(
       (item) => item.root_folder_id === root.id
     )
-    const expandable = rootCollections.length > 0 || sessions.length > 0
+    const expandable =
+      rootCollections.length > 0 ||
+      sessions.length > 0 ||
+      unclassifiedRooms.length > 0
     return (
       <TreeDropBindings
         key={root.id}
@@ -1907,6 +2075,7 @@ export const CollectionTree = forwardRef<
             "overflow-y-auto",
             showSessions ? "min-h-0 flex-1" : "max-h-40"
           )}
+          onContextMenu={(event) => event.preventDefault()}
         >
           {showSessions && membershipsLoading && conversationIdsKey !== "" ? (
             <div className="flex h-7 items-center justify-center text-muted-foreground">

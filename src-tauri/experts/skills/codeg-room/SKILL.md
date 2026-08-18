@@ -20,8 +20,11 @@ This is not private mail. Do not use `send_message` / `list_inbox` /
   mention envelope.
 - `post_room`: write to the Room.
   - Omit `mention_session_ids` (and `mention_all=false`) to record only.
-  - Pass `mention_session_ids` or `mention_all=true` to tap a shoulder.
-  - Reply or supplement with the same `room_id` and `reply_to_event_id`.
+  - Pass `mention_session_ids` or `mention_all=true` to tap a Session.
+  - Pass `mention_human=true` (or `codeg://human`) to tap the operator.
+    That does not wake a Session.
+  - File / path text in the body is context, not a Delivery.
+  - Free-text `@alice` does not wake anyone. Use the structured fields.
 
 Lifecycle (create, add a member) is Host Control via `codeg_help` /
 `codeg_use`:

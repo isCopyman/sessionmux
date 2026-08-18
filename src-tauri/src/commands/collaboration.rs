@@ -1039,6 +1039,8 @@ impl SessionCollaborationAccess for DbSessionCollaboration {
                     body: event.body,
                     reply_to_event_id: event.reply_to_event_id,
                     mention_session_ids: event.mention_conversation_ids,
+                    mention_human: event.mention_human,
+                    from_author_kind: event.author_kind.as_str().to_string(),
                     created_at: event.created_at,
                 })
                 .collect(),
@@ -1079,6 +1081,8 @@ impl SessionCollaborationAccess for DbSessionCollaboration {
                 expects_reply: spec.expects_reply,
                 urgency: priority.urgency(),
                 reply_to_event_id: spec.reply_to_event_id,
+                mention_human: spec.mention_human,
+                author_kind: crate::models::CollaborationAuthorKind::Session,
             },
         )
         .await;
@@ -1386,7 +1390,7 @@ pub async fn collaboration_room_list_core(
     conn: &sea_orm::DatabaseConnection,
     workbench_id: i32,
 ) -> Result<Vec<CollaborationRoomSummary>, AppCommandError> {
-    collaboration_room_service::list(conn, workbench_id)
+    collaboration_room_service::list_for_workbench(conn, workbench_id)
         .await
         .map_err(AppCommandError::from)
 }
@@ -1430,6 +1434,26 @@ pub async fn collaboration_room_rename_core(
     let room = collaboration_room_service::rename(conn, room_id, title).await?;
     publish_room(emitter, &room.id, room.workbench_id);
     Ok(room)
+}
+
+pub async fn collaboration_room_assign_collection_core(
+    conn: &sea_orm::DatabaseConnection,
+    emitter: &EventEmitter,
+    room_ids: Vec<String>,
+    collection_id: Option<i32>,
+    root_folder_id: Option<i32>,
+) -> Result<Vec<CollaborationRoomSummary>, AppCommandError> {
+    let rooms = collaboration_room_service::assign_to_collection(
+        conn,
+        room_ids,
+        collection_id,
+        root_folder_id,
+    )
+    .await?;
+    for room in &rooms {
+        publish_room(emitter, &room.id, room.workbench_id);
+    }
+    Ok(rooms)
 }
 
 pub async fn collaboration_room_mark_seen_core(
@@ -1548,6 +1572,25 @@ pub async fn collaboration_room_rename(
     app: tauri::AppHandle,
 ) -> Result<CollaborationRoomDetail, AppCommandError> {
     collaboration_room_rename_core(&db.conn, &EventEmitter::Tauri(app), &room_id, &title).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn collaboration_room_assign_collection(
+    room_ids: Vec<String>,
+    collection_id: Option<i32>,
+    root_folder_id: Option<i32>,
+    db: tauri::State<'_, AppDatabase>,
+    app: tauri::AppHandle,
+) -> Result<Vec<CollaborationRoomSummary>, AppCommandError> {
+    collaboration_room_assign_collection_core(
+        &db.conn,
+        &EventEmitter::Tauri(app),
+        room_ids,
+        collection_id,
+        root_folder_id,
+    )
+    .await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -2451,6 +2494,8 @@ mod tests {
                 title: "Plan".into(),
                 member_conversation_ids: vec![source, peer],
                 created_by_conversation_id: source,
+                collection_id: None,
+                root_folder_id: None,
             },
         )
         .await
@@ -2496,6 +2541,7 @@ mod tests {
                     content: "please look at the plan".into(),
                     mention_session_ids: vec![peer],
                     mention_all: false,
+                    mention_human: false,
                     priority: Some(
                         crate::acp::session_collaboration::SessionMessagePriority::High,
                     ),

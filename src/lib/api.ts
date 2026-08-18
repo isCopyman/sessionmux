@@ -2207,10 +2207,17 @@ export async function createCollaborationRoom(
   return getTransport().call("collaboration_room_create", { input })
 }
 
-export async function listCollaborationRooms(
+export async function listWorkbenchRooms(
   workbenchId: number
 ): Promise<CollaborationRoomSummary[]> {
   return getTransport().call("collaboration_room_list", { workbenchId })
+}
+
+/** @deprecated Use listWorkbenchRooms. This listed Workbench Rooms, not member Rooms. */
+export async function listCollaborationRooms(
+  workbenchId: number
+): Promise<CollaborationRoomSummary[]> {
+  return listWorkbenchRooms(workbenchId)
 }
 
 export async function getCollaborationRoom(
@@ -2240,6 +2247,18 @@ export async function renameCollaborationRoom(
   title: string
 ): Promise<CollaborationRoomDetail> {
   return getTransport().call("collaboration_room_rename", { roomId, title })
+}
+
+export async function assignRoomsToCollection(
+  roomIds: string[],
+  collectionId?: number | null,
+  rootFolderId?: number | null
+): Promise<CollaborationRoomSummary[]> {
+  return getTransport().call("collaboration_room_assign_collection", {
+    roomIds,
+    collectionId: collectionId ?? null,
+    rootFolderId: rootFolderId ?? null,
+  })
 }
 
 export async function markCollaborationRoomSeen(
