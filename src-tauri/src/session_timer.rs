@@ -6,14 +6,14 @@
 //! boundary — except that the queue schedules it behind the user's own drafts
 //! and pending letters.
 //!
-//! The cadence is obligation-aware. Sending a letter with expects_reply is an
-//! implicit "I am waiting" declaration, so while outbound letters are
-//! unanswered and nothing new has arrived, repeat pokes start at the
-//! recipient-side reminder clock (five minutes) and double per
-//! zero-information poke; after a short streak the brake parks the timer
-//! until real news (an inbound letter, a resolved obligation, or a user
-//! edit) revives it. Heuristics only ever stretch the interval — they never
-//! decide whether the user's continuation is allowed to exist.
+//! The cadence is obligation-aware. Sending with expects_reply (a letter, or
+//! a Room @) is an implicit "I am waiting" declaration. While anything I sent
+//! is unanswered and nothing new has arrived, the timer does NOT keep poking:
+//! it stays quiet, surfaces ONE inspection poke at the half-hour mark (so the
+//! Session can check whether the peer is alive and re-plan if not), and then
+//! parks until real news — an inbound letter or @, a resolved obligation, or
+//! a user edit — revives it. Heuristics only ever stretch the interval — they
+//! never decide whether the user's continuation is allowed to exist.
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -36,15 +36,13 @@ use crate::web::event_bridge::{
 };
 
 const SCAN_INTERVAL_SECS: u64 = 1;
-/// While the Session is waiting on unanswered letters, a repeat poke never
-/// comes sooner than the recipient-side reminder clock: the peer deserves
-/// its five minutes before we spend a turn saying "still waiting".
-const WAITING_POKE_FLOOR_SECS: i64 = 5 * 60;
-/// Backoff ceiling for repeat pokes (matches the agreed 30-minute cap).
-const BACKOFF_CAP_SECS: i64 = 30 * 60;
-/// Consecutive zero-information pokes allowed while waiting before the brake
-/// parks the timer.
-const MAX_ZERO_PROGRESS_POKES: i32 = 3;
+/// While the Session is waiting on unanswered outbound work, the only
+/// automatic poke is one inspection at this horizon: long enough that a
+/// healthy peer has finished, short enough that a stuck one gets looked at.
+const WAITING_CHECK_AFTER_SECS: i64 = 30 * 60;
+/// Zero-information pokes allowed while waiting before the brake parks the
+/// timer. One: the half-hour inspection, then silence until real news.
+const MAX_ZERO_PROGRESS_POKES: i32 = 1;
 pub const AUTO_PAUSE_REASON_WAITING: &str = "waiting_no_progress";
 
 #[derive(Clone)]
@@ -276,9 +274,7 @@ impl SessionTimerRuntime {
             }
 
             let required_secs = if repeat_poke {
-                let base = timer.idle_grace_secs.max(WAITING_POKE_FLOOR_SECS);
-                let doubled = base.saturating_mul(1i64 << strike.clamp(0, 20));
-                doubled.min(BACKOFF_CAP_SECS)
+                timer.idle_grace_secs.max(WAITING_CHECK_AFTER_SECS)
             } else {
                 timer.idle_grace_secs
             };
@@ -434,19 +430,19 @@ fn continuation_facts(
                 .map(|since| humanize_duration(now - since)),
         ) {
             (Some(peer), Some(oldest)) => text.push_str(&format!(
-                "你发出的 {} 封信仍未收到回复（最早的一封发往 Session #{peer}，已等待{oldest}）。",
+                "你派出的 {} 条消息仍未收到回复（最早的一条发往 Session #{peer}，已等待{oldest}）。",
                 waiting.letter_count
             )),
             _ => text.push_str(&format!(
-                "你发出的 {} 封信仍未收到回复。",
+                "你派出的 {} 条消息仍未收到回复。",
                 waiting.letter_count
             )),
         }
     }
     if strike > 0 {
-        text.push_str(&format!(
-            "这是连续第 {strike} 次没有任何新信息的自动续跑（连续 {MAX_ZERO_PROGRESS_POKES} 次后将退避暂停，收到新信息会自动恢复）。"
-        ));
+        text.push_str(
+            "这是一次等待巡查：如果协作者还在正常干活，可以继续等；如果卡住或出错了，换个办法（查一下对方状态、换人、或先推进别的）。本次之后将退避停靠，收到新消息（回复销账/来信/@）会自动恢复。",
+        );
     }
     Some(text)
 }
@@ -634,7 +630,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn waiting_on_replies_stretches_repeat_pokes_to_the_reminder_clock() {
+    async fn waiting_on_replies_gets_one_inspection_poke_at_the_half_hour() {
         let (db, conversation_id, peer_id) = setup().await;
         let timer = create_timer(&db, conversation_id, "waiting-backoff").await;
         crate::db::service::collaboration_service::send(
@@ -651,32 +647,33 @@ mod tests {
         });
         runtime
             .idle_since
-            .insert(conversation_id, Utc::now() - Duration::seconds(30));
+            .insert(conversation_id, Utc::now() - Duration::seconds(301));
         runtime.fire_due(None).await;
         assert!(
             queue_text(&db, conversation_id).await.is_empty(),
-            "a zero-information poke must wait for the five-minute floor"
+            "waiting in silence: no poke before the half-hour inspection"
         );
 
         runtime
             .idle_since
-            .insert(conversation_id, Utc::now() - Duration::seconds(301));
+            .insert(conversation_id, Utc::now() - Duration::seconds(1801));
         runtime.fire_due(None).await;
         let texts = queue_text(&db, conversation_id).await;
-        assert_eq!(texts.len(), 1, "the floor elapsed, the poke goes out");
+        assert_eq!(texts.len(), 1, "the single inspection poke goes out");
         assert!(texts[0].starts_with("Read docs/current-task.md and continue"));
         assert!(
             texts[0].contains("仍未收到回复"),
             "host-observed waiting facts ride along: {}",
             texts[0]
         );
+        assert!(texts[0].contains("这是一次等待巡查"));
         assert!(texts[0].contains(&format!("#{peer_id}")));
         let timer = session_timer_service::list(&db.conn, conversation_id)
             .await
             .unwrap()
             .pop()
             .unwrap();
-        assert_eq!(timer.strike_count, 1, "the zero-information streak grows");
+        assert_eq!(timer.strike_count, 1, "the inspection is the only poke");
     }
 
     #[tokio::test]
