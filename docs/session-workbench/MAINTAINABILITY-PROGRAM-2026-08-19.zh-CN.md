@@ -460,7 +460,11 @@ T2 后置截图（CDP 9222 可用，基线在 .artifacts）+ 晨间验收报告 
   门记录：vitest 347/347 文件全绿（单独跑；双负载并跑会出资源型 flaky）；服务器门 2429
   与 check --all-targets 沿用 wipland 已验绿；**桌面模式 cargo test 在本机以
   STATUS_ENTRYPOINT_NOT_FOUND 崩溃（冷目录与 PowerShell 均复现）——按手册 §4.4/§6 协议
-  记录为本机 DLL 环境阻塞，编译成功+运行被阻两事实并存，不伪装成绿**。
+  记录为本机 DLL 环境阻塞，编译成功+运行被阻两事实并存，不伪装成绿**。取证补充
+  （wipland）：7 个历史桌面测试二进制（最早 8/16 构建）现全崩同码，PATH 洗到只剩
+  System32 仍崩，PE 静态+延迟导入表仅含 System32 标准符号，同机 server 套件两轮 2429
+  全绿；**本机今日 01:12 有蓝屏记录**，最可能是蓝屏/系统更新后 DLL 环境变化所致——
+  即历史上桌面测试在本机可能跑过，现在起需在别机或修复环境后才能真跑。
 - 2026-08-19 04:28 C 线 merge 完成：314321bf（--no-ff，skill 硬伤修复 + 四 playbook +
   experts.toml 8 locale×2，零冲突）。
 - 2026-08-19 04:30 派发：**A 线 lane-a-rseries**（worker-k3 worktree，R1-R6 按 §4.4）、
