@@ -1,6 +1,6 @@
 # 群聊、Mailbox 与人类角色
 
-> 状态：设计拍板稿（2026-08-18）。第 13、14 节已落地。归档 Session 的 Room `@` 不再入队唤醒。下一刀是删 Room API。  
+> 状态：设计拍板稿（2026-08-18）。第 13、14 节已落地。归档 Session 的 Room `@` 不再入队唤醒。第 15 节冻结：群历史要搜，不要把 `read_room` 当全文检索。下一刀仍是删 Room API。  
 > 问题：群聊是不是另一套消息系统？Mailbox 是不是完全私聊？人类该打字还是该发邮件？CCCC 怎么做？  
 > 已有长文：[群聊 RFC](./GROUP-CONVERSATION-RFC.zh-CN.md)、[通信 RFC](./SESSION-COMMUNICATION-RFC.zh-CN.md)、[产品场景](./PRODUCT-SPEC.zh-CN.md#48-建立一个共享讨论室)  
 > 本文只补那三份没讲清的东西：协议边界、人类三条入口、和 CCCC 的真实差别。  
@@ -265,7 +265,7 @@ Mailbox 继续留在 Session 面板里，当“跨 Session 的收件箱”，不
 - 现码没有删除 Room API；删 Workbench 却会 CASCADE 掉 Room，而 `collaboration_event.room_id` 无外键，账本会变孤儿。
 - “最后群主不能移走”在“人不是成员”之后应改成：活着的 Session 成员不能少于 2。
 - Session 归档仍可留在群里，但不能被 `@` 唤醒（`post_room` 已落地：仍建 Delivery、时间线仍显示点名，不入队、不打断、不挂回复义务）。Session 删除后成员必须标死或移出。Mailbox 写信给归档 Session 的语义本轮不动。
-- UI 还缺：Delivery 状态、只记录 vs @、回复某条时继承目标、Session 页“来自 Room”回跳。现 UI 已用 created_by 冒充“你”，作者模型落地前不要再加深这条假路径。
+- UI 还缺：Delivery 状态、只记录 vs @、回复某条时继承目标、Session 页“来自 Room”回跳、Room 时间线搜索（见第 15 节）。现 UI 已用 created_by 冒充“你”，作者模型落地前不要再加深这条假路径。
 - 通信 RFC 文首仍写“Room 仍为拟议”，和 R1 存储已落地不一致，改代码前先改那一行。
 
 ## 12. `@` 语法（对照 Buzz / CCCC / Multica 后拍板）
@@ -339,4 +339,26 @@ Agent 看见同一 URI 时靠**已经落地的信封**分流：`kind=room_mentio
 
 归档 Session 的 Room `@`：公共账本仍记下这次点名，但 `invocation_policy` 落成 `store_only`，不进 `prompt_queue`，高优先级 dispatch 看到没有 queue item 也不会去打断。Mailbox 的 `send_message` 不跟这刀。
 
-下一刀功能（第 11 节）：删 Room API；删 Workbench 不再 CASCADE 出孤儿 `collaboration_event`。然后才是 Room 回跳、Human Inbox。文件搬家只插空做，不合并写路径。
+## 15. 群历史要不要搜？
+
+要。微信 / Discord / CCCC 都有。新成员补课、老成员找“上次怎么定的”，都不能靠把整本账本塞进一次 `read_room`。
+
+`read_room` 现在不是搜索，连“看最近”都没做好：默认 `LIMIT` 50（服务端最多 200），`ORDER BY created_at ASC`，等于房间变长之后只能看到**最早**的一段。工具文案写 recent，实现是 oldest。人的 Room 面板也是一次性拉 timeline，没有搜索框。
+
+现有三套“搜索”不是同一件事，不要合成一个 `search()`：
+
+| 入口 | 实际在搜什么 | 和群历史 |
+|---|---|---|
+| Cmd+K / `search_session_content` | ctx 扫 Harness 会话文件 | 不是 `collaboration_event` |
+| Agent `list_inbox` | 未读 / 待回等**状态**过滤；列表故意没有正文 | 私信，不是群 |
+| 邮箱对话框的输入框 | 对**已经加载进内存的信**做 `includes` | 不是服务端全文，信一多就漏 |
+
+V1 形状（学 CCCC `search_messages` 和 Discord 的“搜到再跳回上下文”）：
+
+1. 先让 `read_room` 变成**最近 N 条** + `before_event_id` 往回翻。这比搜索更基础。
+2. 另做 `search_room(room_id, query, limit)`：必须已是成员；只查 `visibility=room`；返回 snippet + `event_id` + 作者。命中后再 `read_room` 看前后文。不要把 query 塞进 `read_room` 让一个工具身兼打开窗口和 grep。
+3. 人的 Room 面板用同一条 SQL。Cmd+K 以后可以加“群”页，现在不必。
+4. 房间还小，V1 用大小写不敏感的 `LIKE` 即可，先不上 FTS5。
+5. 可抽前端搜索框 / 高亮命中。**禁止**把 ctx、邮箱过滤、群账本并成一个后端函数。
+
+下一刀功能（第 11 节）仍是删 Room API；删 Workbench 不再 CASCADE 出孤儿 `collaboration_event`。`read_room` 改尾窗 + `search_room` 作为独立小刀插在删 Room 之后、Room 回跳之前。文件搬家只插空做，不合并写路径。
