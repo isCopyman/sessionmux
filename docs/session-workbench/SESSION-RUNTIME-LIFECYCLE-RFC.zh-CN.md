@@ -227,6 +227,8 @@ stateDiagram-v2
 - active idle 的 `invoke_when_idle` 可由 Dispatcher 正常执行；`store_only` 不单独创建 Turn。
 
 这一策略只固定未来 Dispatcher 语义，不表示当前 direct Router 已提供全部冷启动策略字段。
+（2026-08-19 对账：产品此后已授权需要送达的信在目标关闭时由统一 Dispatcher 启动/恢复，
+见通信 RFC 6.1 的 2026-08-18/19 实现注记；本段其余约束仍成立。）
 
 ## 5. 用户 PromptQueue 生命周期
 
@@ -243,7 +245,8 @@ stateDiagram-v2
 - 前端 hook 只是 snapshot/event projection，断线后按 revision 重新拉取；
 - 当前公开的持久 item 状态只有 `queued / claimed / paused`；
 - 一个后端 worker 原子 claim FIFO head，并只通过 `ConnectionManager::send_prompt_linked` 派发；
-- V1 不冷启动已关闭 Session，重新 Resume 后 worker 才继续。
+- 已关闭 Session 存在队列项时，由统一 Dispatcher 冷启动/恢复后继续派发
+  （`request_ensure_runtime` → `session_dispatcher::ensure_session_runtime`，2026-08-19 对账）。
 
 因此，旧的“刷新丢队列、两个窗口各一份、只有聊天面板挂载时才能 flush”应作为**已修复的历史
 缺陷**记录，不能继续写成当前限制。
@@ -324,17 +327,19 @@ reference？答案必须保留原 collaboration event，不能把清空执行计
 |---|---|---|
 | Event | 不可变正文、source snapshot、dedupe、reply_to | 继续作为唯一正文事实源 |
 | Delivery | per-target `pending/queued/embedding/embedded/dismissed/failed` | 增加清晰的投递终态/恢复策略 |
-| Attention | 当前只有 `ui_seen_at` | `unread/opened`，只表示人类 UI 投影 |
-| Agent receipt | 当前以 `embedded_turn_ref` 证明 | 独立 `agent_received_at`/checkpoint 证据 |
-| Obligation | 当前由 `expects_reply` + linked reply 派生 | `none/awaiting_ack/awaiting_reply/resolved` |
-| Reminder | 当前未实现 | 引用原 event/delivery 的提醒/升级动作 |
+| Attention | `attention_state` / `opened_at` 已进表（迁移 m20260816_000005，2026-08-19 对账），仍只表示人类 UI 投影 | — |
+| Agent receipt | `agent_received_at` 已进表（同上）；`embedded_turn_ref` 仍是证据之一 | 未来 checkpoint 证据 |
+| Obligation | `obligation_state`（`none/awaiting_reply/resolved`）已进表（同上） | `awaiting_ack` 待显式 ACK 协议 |
+| Reminder | 已实现：5 秒一扫的 mailbox 催办（`collaboration_reminder_runtime.rs`，2026-08-19 对账） | 升级策略、通知发送者 |
 
 **【当前事实】** `ui_seen_at` 不能证明 Agent 看过消息；真正摄入以 `embedded_turn_ref` 或未来等价
 checkpoint evidence 为准。`expects_reply=false` 不能产生“已读未回”。回复是一个新的不可变 event，
 通过 `reply_to_event_id` 精确清偿对应目标，不用发送方收到任意新消息来猜。
 
-**【已审计缺陷】** 当前模型还没有独立 Attention、Agent receipt、Obligation 和两套 deadline，
-因此只能展示 direct 主干的近似状态，不能可靠表达“UI 已打开但 Agent 未摄入”或“已摄入、待回复”。
+**【已修复，2026-08-19 对账】** 独立 Attention、Agent receipt 和 Obligation 已随迁移
+m20260816_000005 进表（`attention_state` / `opened_at` / `agent_received_at` / `obligation_state`），
+“UI 已打开但 Agent 未摄入”与“已摄入、待回复”均可表达。两套 deadline 未物化成列，由催办
+扫描按常量时限现算（未读 / 已读未回各 300 秒）。
 
 ### 6.2 Reminder 不复制正文
 
@@ -570,9 +575,9 @@ sequenceDiagram
 | 跨 Backend 地址 | 当前 direct 仅同 Backend `conversation.id` | `backend_ref` 格式、迁移和深链 |
 | Queue 终态 | 接受后删除，Turn 结果在别处 | 是否需要只读 execution history/projection |
 | 批量清空 | 无统一语义 | queued draft、mailbox ref、obligation 分别怎样处理 |
-| 关闭最后 View | 持久数据保留，V1 不冷启动 | 哪些 Host/用户策略允许后台 runtime 继续或冷恢复 |
-| Mailbox receipt | `embedded_turn_ref` 是当前证据 | 独立 receipt/Attention/Obligation migration |
-| Reminder | 尚未实现 | deadline 起点、cooldown、digest、升级策略 |
+| 关闭最后 View | 持久数据保留；有队列项时由 Dispatcher 冷启动/恢复（2026-08-19 对账） | 哪些 Host/用户策略允许后台 runtime 继续或冷恢复 |
+| Mailbox receipt | receipt/Attention/Obligation 已进表（m20260816_000005，2026-08-19 对账） | checkpoint 证据、`awaiting_ack` 待显式协议 |
+| Reminder | 已实现：5 秒扫描、300 秒常量时限、cooldown、最多 3 次（2026-08-19 对账） | 升级策略、达到上限后通知发送者 |
 | Dispatcher | PromptQueue 已是统一入口雏形 | Automation/Goal 如何加入 projection 而不旁路 |
 | Wait | Optional/Later，尚未实现 | 仅在明确 fan-in 需求出现后裁决复合 cursor 与宿主 continuation |
 | Turn result | ACP terminal 与 Conversation status 不同 | UI 文案和 API 怎样避免滥用 `completed` |
@@ -585,12 +590,12 @@ sequenceDiagram
 - Fork 身份批次已经独立实现并提交为 `0bfb86a0`，不能再按旧的 C1→S2 语义扩展；
 - 本文其余内容不授权改变 PromptQueue、Collaboration、Dispatcher 或 Automation 运行时代码；
 - 不安装 Hook，不修改 Claude/Codex/其他 Harness 配置；
-- 不实现 wait、Reminder、统一执行计划 UI 或跨 Backend 通信；
+- 不实现 wait、统一执行计划 UI 或跨 Backend 通信；Reminder 已落地（2026-08-19 对账），本 Gate 对它的历史使命完成；
 - 不把本文的拟议状态直接冻结成公共 API。
 
 后续任何实现都必须先与用户讨论上述未决问题并获得明确授权，再拆成独立、可测试、可回滚的
-批次。稳定身份已经完成；Mailbox receipt/obligation、统一 execution projection 和 Reminder 仍须
-单独授权。wait 明确降级为 Optional/Later，不与近期 Mailbox 批次混做。
+批次。稳定身份已经完成；Mailbox receipt/obligation 与 Reminder 已落地（2026-08-19 对账）；
+统一 execution projection 仍须单独授权。wait 明确降级为 Optional/Later，不与近期 Mailbox 批次混做。
 
 ## 13. 一手证据索引
 

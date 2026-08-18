@@ -1,8 +1,11 @@
 # Codeg Host 控制面与 Agent 可编程工作台 RFC
 
-> 状态：Design draft，尚未实现
+> 状态：能力目录已落地（2026-08-19 对账）。渐进式 gateway（`codeg_help` / `codeg_use`）与
+> `session.*` / `collection.*` / `workbench.*` / `timer.*` / `room.*` 能力已实现，见
+> [`commands/host_control*.rs`](../../src-tauri/src/commands/host_control.rs) 与
+> [`acp/host_control.rs`](../../src-tauri/src/acp/host_control.rs)；H3 / H4 仍为设计。
 >
-> 更新时间：2026-08-16
+> 更新时间：2026-08-19
 >
 > 上位产品需求：[产品需求与使用场景](./PRODUCT-SPEC.zh-CN.md)
 > 相邻设计：[Session 间通信 RFC](./SESSION-COMMUNICATION-RFC.zh-CN.md)、
@@ -314,8 +317,12 @@ Schema 就约 5,600 字符，其中 `get_delegation_status` 的说明尤其长�
 只要该 feature 在本次 companion 启动时开启，这些定义仍会进入工具目录。
 
 现有 `CompanionFeatures` 已经能按启动参数隐藏整组工具，但它是**启动时粗粒度开关**，不是“用户
-此刻提出协作需求后才加载”的渐进披露；当前 companion 也没有声明 `tools.listChanged`。因此继续
-增加十几个永远可见的 Session、Workbench 和协作工具不是合适方向。
+此刻提出协作需求后才加载”的渐进披露。2026-08-19 对账：渐进 gateway 已落地——Host Control 面只
+常驻 `codeg_help` / `codeg_use` 两个元工具
+（[`acp/host_control.rs`](../../src-tauri/src/acp/host_control.rs)），`session.*` / `collection.*` /
+`workbench.*` / `timer.*` / `room.*` 能力按需发现、按读写级别门控，完整 Schema 不再永久暴露；
+邮箱与群工具（`send_message` / `post_room` 等）作为独立的 `codeg-mailbox` / `codeg-room`
+stdio server 注入。
 
 ### 4.2 调用者身份由 Host 绑定，不由模型自报
 
@@ -614,12 +621,18 @@ Capability。Codeg 受管 Session 只走结构化渐进式 MCP；Buzz 式 CLI �
 
 ### H0：统一现有服务边界
 
+> 2026-08-19 对账：delegation 三工具、task_id Broker 与专属设置/UI 已移除（见第 2 节）。
+
 - 删除三项 delegation 工具、task_id Broker 和专属设置/UI；
 - 保留共享 `codeg-mcp` companion、transport、caller identity 和普通 Host 工具；
 - GUI、HTTP 和 `codeg-mcp` 不各写一套启动逻辑；
 - 把子会话悬浮层降为状态 Peek，增加“在 Workbench 打开真实 Session”，不在 Dialog 里重造聊天。
 
 ### H1：完整 Session Lifecycle Tool
+
+> 2026-08-19 对账：`session.list` / `session.get` / `session.rename` / `session.create` /
+> `session.cancel_turn` / `session.stop` 已落地；极小 capability gateway 即 `codeg_help` /
+> `codeg_use`（见 4.1）；fork / archive / open / focus 与 `wait_sessions` 仍未做。
 
 - list/search/get；
 - create/import/resume/fork/rename/archive/open/focus；
@@ -629,6 +642,10 @@ Capability。Codeg 受管 Session 只走结构化渐进式 MCP；Buzz 式 CLI �
 - 引入极小 capability gateway，避免把完整 Lifecycle/Collaboration/Workbench Schema 永久暴露。
 
 ### H2：持久 Session 通信
+
+> 2026-08-19 对账：已落地——Collaboration Core、多目标 `send_message`、`list_sessions` /
+> `list_inbox` / `read_message` 邮箱工具组、能力门控 `steer_if_supported` 与显式
+> 「停止当前任务并发送」均在。
 
 - 实现 Collaboration Core、`list_sessions`、多目标 `send_message`；
 - 目标忙碌、休眠、远端和不可 Resume 时显示真实投递状态；

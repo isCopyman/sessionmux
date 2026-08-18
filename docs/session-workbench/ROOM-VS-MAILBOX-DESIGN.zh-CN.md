@@ -12,7 +12,7 @@
 
 在作者模型和三条入口没写清之前，继续堆“加人按钮 / 树里像 Session”只会把错误心智做进 UI。
 
-**本轮继续做：** Room 工作区 / 侧栏树 / Tab 仍先不动，直到作者模型和一等 item 落地。Agent 工具表面已按第 6.7 节拆开。
+**进展（2026-08-19 对账）：** Room 工作区 / 侧栏树 / Tab 已落地（Room Tab 持久化见迁移 m20260818_000007 与提交 595609bd），人类作者 `author_kind` 已进表（迁移 m20260818_000004），群 UI 以「你」发言。Agent 工具表面已按第 6.7 节拆开。
 
 ## 1. Codeg 其实有三条人类入口
 
@@ -149,7 +149,7 @@ Mailbox **做不到** 的，恰恰是用户感知里的“群”：
 - 人点成员头像：离开群，进入该 Session 的 ①。那里打的字不回流群，除非显式“分享到群聊”。
 - Agent 需要人拍板：仍走 ② 的 Human Inbox，不要把所有群消息复制成人类邮件。
 
-当前 R1 实现违反了这一节：`post_room` 要求 `source_conversation_id` 必须是成员。人被逼成“以 Session C 发言”。这是文档和代码不一致的根因，也是 UI 看起来不像群聊的根因。
+早期 R1 实现违反了这一节：`post_room` 曾要求 `source_conversation_id` 必须是成员。`author_kind` 落地后（2026-08-19 对账）：人类发言不再要求成员身份，账本 `source_conversation_id` 仅为满足外键记群主 Session，`author_kind='human'` 与快照「You / human」才是真作者。
 
 ## 5. CCCC 实际怎么做
 
@@ -237,16 +237,16 @@ Foreman 在 CCCC 里是**第一个 Actor**，不是人类。人类 principal 固
 
 Mailbox 继续留在 Session 面板里，当“跨 Session 的收件箱”，不要做成第二个群。
 
-## 9. 和现有代码的差距（只记账，本轮不改）
+## 9. 和现有代码的差距（2026-08-19 对账：除 Human Inbox 外均已消化）
 
 | 项 | 现在 | 本文要求 |
 |---|---|---|
-| Room event 作者 | 必须是成员 Session | 允许 `human` |
-| 群 UI 发言 | “Post as Session …” | 你主持 |
+| Room event 作者 | 已落地（2026-08-18：`author_kind`，人可作 human 发言） | 允许 `human` |
+| 群 UI 发言 | 已落地（2026-08-19 对账：UI 以「你」发言） | 你主持 |
 | Human Inbox | 未做 | 独立于 Room，Agent→人 |
-| 树/Tab 里像 Session | 半截、未审完 | 可以做，但是内容面板，不是 conversation |
-| 加人 UI | 后端有，界面无 | 作者模型之后再做 |
-| Agent 互 @ | R2 | 先不要扩大 |
+| 树/Tab 里像 Session | 已落地（2026-08-19 对账：Room Tab 持久化，提交 595609bd） | 可以做，但是内容面板，不是 conversation |
+| 加人 UI | 已落地（2026-08-19 对账：房间页可加成员） | 作者模型之后再做 |
+| Agent 互 @ | 已落地（2026-08-19 对账：`post_room.mention_session_ids`，归档成员不唤醒） | 先不要扩大 |
 
 ## 10. 四个问题的建议拍板
 
@@ -262,11 +262,11 @@ Mailbox 继续留在 Session 面板里，当“跨 Session 的收件箱”，不
 2026-08-18 子代理对照旧 RFC 和现码后的高优先级缺口：
 
 - 人类作者和 H1 Human Inbox 是**同一刀地址模型**（`author_kind` + 可空 session 引用）。不能先在 Room 里用 `0` 冒充人，再另做一套 human 表。
-- 现码没有删除 Room API；删 Workbench 却会 CASCADE 掉 Room，而 `collaboration_event.room_id` 无外键，账本会变孤儿。
+- 删除 Room API 已落地（2026-08-19 对账：`collaboration_room_delete_core` + `collaboration_room_service::delete`，提交 e4b63a19）；删 Workbench 已改为 RESTRICT（迁移 m20260818_000008），不再级联删 Room。
 - “最后群主不能移走”在“人不是成员”之后应改成：活着的 Session 成员不能少于 2。
 - Session 归档仍可留在群里，但不能被 `@` 唤醒（`post_room` 已落地：仍建 Delivery、时间线仍显示点名，不入队、不打断、不挂回复义务）。Session 删除后成员必须标死或移出。Mailbox 写信给归档 Session 的语义本轮不动。
-- UI 还缺：Delivery 状态、只记录 vs @、回复某条时继承目标、Session 页“来自 Room”回跳、Room 时间线搜索（见第 15 节）。现 UI 已用 created_by 冒充“你”，作者模型落地前不要再加深这条假路径。
-- 通信 RFC 文首仍写“Room 仍为拟议”，和 R1 存储已落地不一致，改代码前先改那一行。
+- UI 还缺：Delivery 状态、只记录 vs @、回复某条时继承目标、Session 页“来自 Room”回跳、Room 时间线搜索（见第 15 节）。作者模型已落地，UI 以 `author_kind` 区分「你」与成员 Session（2026-08-19 对账）。
+- 通信 RFC 文首仍写“Room 仍为拟议”，和 R1 存储已落地不一致，改代码前先改那一行。（已改，2026-08-19 对账）
 
 ## 12. `@` 语法（对照 Buzz / CCCC / Multica 后拍板）
 
@@ -319,7 +319,7 @@ Agent 工具继续走结构化字段。人类群输入框走目标条 + 徽章�
 4. **Room 一等 Collection item**：表加 `collection_id` / `root_folder_id`；树按这两列摆，不再挂创建者 Session；补测试。
 5. **人类作者 + `@` 合同**：`author_kind` + `mention_human`；UI 不再冒充群主发言；正文 `@word` 不投递；结构化 URI 才并进目标。
 
-Human Inbox 本体、删 Room API、Agent 互 `@` 仍按第 11 节留到后面，本轮不夹带。
+Human Inbox 本体仍按第 11 节留到后面；删 Room API 与 Agent 互 `@` 已落地（2026-08-19 对账）。
 
 ## 14. `codeg://session/<id>` 会不会和邮件抢语义？
 
@@ -361,7 +361,7 @@ V1 形状（学 CCCC `search_messages` 和 Discord 的“搜到再跳回上下�
 4. 房间还小，V1 用大小写不敏感的 `LIKE` 即可，先不上 FTS5。
 5. 可抽前端搜索框 / 高亮命中。**禁止**把 ctx、邮箱过滤、群账本并成一个后端函数。
 
-下一刀功能（第 11 节）仍是删 Room API；删 Workbench 不再 CASCADE 出孤儿 `collaboration_event`。`search_room` 作为独立小刀插在删 Room 之后、Room 回跳之前。文件搬家只插空做，不合并写路径。
+删 Room API 与 Workbench 级联问题已落地（见第 11 节标注，2026-08-19 对账）。`search_room` 仍未实现，作为独立小刀排在 Room 回跳之前。文件搬家只插空做，不合并写路径。
 
 调度器（第 17 节）已落地：同 Session 排队的通知 claim 时合并；连续 `@` 禁止一条一个 interrupt。人的输入框和“停掉再发”仍单独优先。
 
@@ -396,7 +396,7 @@ Mailbox 和 Room `@` 共用一个 Dispatcher，但第一次进 Turn 的信封不
 
 ### 已读未回
 
-Mailbox 已有 5 分钟钟。Room `@` 同样催，但不要让 Agent 去 `list_inbox`。没 `@` 的频道未读不催。`read_room` consume ≠ 清 `expects_reply`；回群必须 `post_room` + `reply_to_event_id`。不要再造第四套 Room inbox 工具。
+Mailbox 已有 5 分钟钟。Room `@` 同样催，但不要让 Agent 去 `list_inbox`。没 `@` 的频道未读不催。边界（2026-08-19 对账）：未读催办只统计 `invocation_policy='invoke_when_idle'` 的投递，`store_only` 的信不进未读催办。`read_room` consume ≠ 清 `expects_reply`；回群必须 `post_room` + `reply_to_event_id`。不要再造第四套 Room inbox 工具。
 
 ### Buzz 怎么做，Codeg 对齐什么
 

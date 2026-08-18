@@ -1,6 +1,6 @@
 # Codeg AgentBus 协作集成 RFC
 
-> 状态：Draft  
+> 状态：Draft（2026-08-19 对账注：未启动的设计存档，代码零实现；何时启动见维护计划）  
 > 日期：2026-08-15  
 > 依赖：稳定的 Session 身份、原生 Resume、Session Registry 及 Workbench 基础  
 > 定位：把现有 AgentBus 的跨 App/主机通信能力融入 Codeg UI 和受管 Harness turn，

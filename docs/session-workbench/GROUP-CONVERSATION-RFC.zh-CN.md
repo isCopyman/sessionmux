@@ -1,6 +1,6 @@
 # Codeg 群聊面板与 Session 协作 RFC
 
-> 状态：R1 存储已落地（2026-08-18），邮件与 Room 隔离；H1 / R2 未做。人类作者与 UI 心智未拍板，见同伴文档。  
+> 状态：R1 存储已落地（2026-08-18），邮件与 Room 隔离；R2 的 Agent 互 `@` 已落地（`post_room.mention_session_ids`，归档成员记名不唤醒，2026-08-19 对账）；人类作者 `author_kind` 已进表（迁移 m20260818_000004）。H1（Human Inbox）未做——2026-08-19 用户拍板：Human Inbox 暂不做、人类写信 UI 不做。  
 > 最近调研：2026-08-18
 > 先读：[群聊、Mailbox 与人类角色](./ROOM-VS-MAILBOX-DESIGN.zh-CN.md)  
 > 定位：定义多个持久 Session 如何在一个共享面板中交流，以及共享可见、运行时投递和模型上下文之间的边界。  
@@ -29,8 +29,10 @@ Room Thread                             某条公共根消息下面的回复串
   Sent、筛选、全文检索和右侧完整回复串，用户点击任一封信都会进入所属 Thread；
 - 当前后端故意把 direct reply 限制为“原收件 Session 只回复原发送 Session”，多目标 fan-out 的
   各接收者也不能看到彼此回复。因此它是安全的私信 Thread，不是隐藏的群聊；
-- 当前数据库的作者和目标仍然都是数值 `conversation_id`。RFC 中的 `human` 保留地址尚未进入
-  schema、MCP 或 UI。Room 成员、公共时间线和 `visibility=room` 已在 R1 落地；Human Inbox 未做。
+- 当前数据库的作者已带 `author_kind`（session / human，迁移 m20260818_000004），Room 里人可
+  以 human 身份发言；投递目标仍都是数值 `conversation_id`，`human` 作为**收信**地址尚未进入
+  schema、MCP 或 UI。Room 成员、公共时间线和 `visibility=room` 已在 R1 落地；Human Inbox 未做
+  （2026-08-19 用户拍板暂不做）。
 
 因此，“没有父节点就是新 Thread，有 `reply_to_event_id` 就沿用原 Thread”已经可用。对同一封信的
 第二封、第三封补充也必须带 `reply_to`，否则会被当成新根。不需要为了
@@ -83,8 +85,10 @@ Room 与多收件人邮件的差异只有一个，却是不可省略的差异：
 戳醒成员直接复用 2026-08-18 落地的统一消息调度（见
 [Trigger RFC 第 0 节](./SESSION-TRIGGERS-GOALS-AUTOMATION-RFC.zh-CN.md)）：room poke 生成的
 队列项就是 collaboration 类（user > collaboration/reminder > timer 的第二类），类内 FIFO，
-不需要 Room 专属调度器。回复链深度保险丝（`MAX_AGENT_REPLY_CHAIN_DEPTH = 4`，刻意防
-Agent 对喷）不因 Room 引入而放宽——Room Thread 的链深继承同一计数。
+不需要 Room 专属调度器。回复链深度目前**只记账、不拦截**（2026-08-19 对账）：每条 event 落
+`chain_depth`（父链深 +1），常量 `MAX_AGENT_REPLY_CHAIN_DEPTH = 4` 仅供测试参考，超过该深度
+仍照常入账（测试钉死 depth 0..=4 全部 accepted，且人显式参与的回复链不受限）。强制拦截列入
+维护计划；Room Thread 的链深继承同一计数。
 
 ### 0.4 list_inbox 过滤维持显式参数，不折叠成 DSL
 
@@ -454,34 +458,26 @@ Delivery 及其回复才回写共享时间线，防止把所有 Bus 私信泄漏
 AgentBus 重复领取。完整传输规则见
 [AgentBus 协作子 RFC](./AGENTBUS-COLLABORATION-RFC.zh-CN.md)。
 
-### 10.1 第一版只需要一个发送工具
+### 10.1 发送工具（2026-08-19 对账：落地拆成两套，不是一套）
 
-不要因为 UI 中存在私聊、群聊和分别发送，就给 Agent 暴露多套功能重叠的消息工具。第一版使用
-一个 `send_message`，`targets` 自然接受一个或多个稳定 Session Address：
+本节原方案是单一 `send_message(scope: "direct" | "room", …)`。实际落地按
+[群聊、Mailbox 与人类角色](./ROOM-VS-MAILBOX-DESIGN.zh-CN.md) 第 6.7 节拆成两套：私信
+`send_message` 与群帖 `post_room`。`send_message` 带 `room_id` 或 `mention_all` 会被直接
+拒收并提示改用 `post_room`；`post_room` 只做群。
 
-```text
-send_message(
-  scope: "direct" | "room",
-  targets: [{ backend_ref, conversation_id }, ...],
-  body: string,
-  expects_reply: boolean,
-  room_id?: room_id,
-  reply_to?: event_id,
-  context_refs?: [event_id | file_ref, ...]
-)
-```
+语义对应关系保持不变：
 
-语义保持简单：
-
-- `direct + 一个目标`：普通私信；
+- `direct + 一个目标`：普通私信（`send_message.target_session_ids`）；
 - `direct + 多个目标`：分别私发，创建互相隔离的 Delivery；
-- `room + 零个目标`：只写公共记录，不启动 Agent；
-- `room + 一个或多个目标`：写一条公共消息，并分别启动明确目标；
-- UI 中的 `@all` 在确认目标数量后展开为当时可投递成员的 ID 列表；
-- `scope=room` 必须有 `room_id`，`scope=direct` 不允许悄悄回写 Room；
+- `room + 零个目标`：`post_room` 不带 mention，只写公共记录，不启动 Agent；
+- `room + 一个或多个目标`：`post_room.mention_session_ids`，写一条公共消息，并分别启动
+  明确目标；
+- UI 中的 `@all` 在确认目标数量后展开为当时可投递成员的 ID 列表
+  （`post_room.mention_all`）；`@human` 走 `post_room.mention_human`，只落标记不叫醒
+  Session；
 - `expects_reply=true` 表示请求，需要目标产生一次定向回复；`false` 表示通知或最终结果；
-- `reply_to` 只能引用同 scope 且同 Room 的事件；从 Room 转私聊或把私聊分享到 Room 时使用
-  `context_refs`，生成带来源的新事件。
+- `reply_to_event_id` 只能引用同 scope 且同 Room 的事件；从 Room 转私聊或把私聊分享到
+  Room 时产生带来源引用的新事件，不悄悄改变旧消息的可见域。
 
 普通 Agent 最终回复由当前 Runtime 自动写回触发它的 Room 或私信来源，不要求模型再次调用
 `send_message`，并固定为 `expects_reply=false`，避免重复发言和 A/B 自动互相唤醒。direct 回复
@@ -624,9 +620,14 @@ collaboration_delivery
 - Host Control：`room.list` / `room.create` / `room.add_member`（生命周期）；
 - MCP：`list_rooms` / `read_room` / `post_room`；`send_message` 不再带 `room_id`；
 - 自动回复仍回 Room；信封引导 `read_room` + `post_room`；
-- 点击成员打开原 Session；Room 挂在 Workbench 下列表，不占用 Tab kind。
+- 点击成员打开原 Session；Room 已是一等 Tab kind 并持久化进 Workbench 布局（迁移
+  m20260818_000007，提交 595609bd；2026-08-19 对账）。
 
 ### R2：Agent 间协作
+
+2026-08-19 对账：Agent 互 `@`（`post_room.mention_session_ids`，归档成员记名不唤醒）与成员
+已读游标（迁移 m20260818_000005）已落地；其余（链深强制拦截、轮数/预算、循环保护、新成员
+摘要）仍未做，列入维护计划。
 
 - Agent 在 Room 中 `@` 其他成员；
 - 回复链、成员上下文游标、置顶背景和稳定的只读历史资源；

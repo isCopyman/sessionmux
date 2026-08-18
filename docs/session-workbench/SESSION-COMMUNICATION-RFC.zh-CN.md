@@ -1,7 +1,7 @@
 # Codeg Session 间通信与调用策略 RFC
 
-> 状态：部分实现。内部 direct 通信主干已落地；完整 mailbox lifecycle、Timeline、统一 Dispatcher、附件、跨 Backend 与 Room 仍为拟议
-> 更新时间：2026-08-17
+> 状态：大部分已落地（2026-08-19 对账）。direct 主干、mailbox lifecycle（Attention / Obligation / Agent receipt）、统一 Session Dispatcher、Reminder 扫描与 Room 存储和工具面均已实现；附件、跨 Backend federation 与 AgentBus Adapter 仍为拟议
+> 更新时间：2026-08-19
 > 按使用方式阅读：[Session 交流：工具、使用方式与结果](./SESSION-COMMUNICATION-USAGE.zh-CN.md)  
 > 上位产品需求：[产品需求与使用场景](./PRODUCT-SPEC.zh-CN.md#410-联系其他-backend-或-codeg-管理边界之外的-agent)
 > 相邻设计：[Session Runtime 生命周期 RFC](./SESSION-RUNTIME-LIFECYCLE-RFC.zh-CN.md)、[AgentBus 协作子 RFC](./AGENTBUS-COLLABORATION-RFC.zh-CN.md)、[群聊面板与 Session 协作 RFC](./GROUP-CONVERSATION-RFC.zh-CN.md)
@@ -68,8 +68,8 @@ AgentBus 继续承担未托管 App、离线跨边界邮箱和缺少直接 Backen
 协作层保存一份不可变消息事实，回答：谁在何时向谁发送了什么、来源是什么、是否要求回复。
 它不冒充 Harness 原生历史，也不因为目标暂时关闭而消失。
 
-第一版只要求 `direct`。未来 Room 仍复用同一事件模型，通过 `visibility=room` 和 `room_id` 增加
-共享时间线，不需要迁移第一版私信。
+第一版只要求 `direct`。Room 已复用同一事件模型落地：event 增加 `visibility=room` 与 `room_id`
+（迁移 m20260818_000003，2026-08-19 对账），第一版私信未做迁移。
 
 ### 3.2 UI projection：人类可见状态
 
@@ -179,8 +179,8 @@ Human Inbox 写出回复后，才清偿该 Delivery。不能在某个 Agent 的�
 
 ### 3.6 Session 勿扰（以后，bonus）
 
-第一版不做勿扰。长任务 / Goal 挡信靠 [6.4](#64-v1-系统提醒能注入就注入不能就打断发送)
-的注入或打断发送，不靠对方设开关。开关本身也不一定可靠：Agent 可能忘了设、设了忘解、或
+第一版不做勿扰。长任务 / Goal 挡信靠 [6.4](#64-v1-系统提醒能注入就注入不能就排队)
+的注入或排队后投，不靠对方设开关。开关本身也不一定可靠：Agent 可能忘了设、设了忘解、或
 在不该挡的时候挡系统提醒。
 
 以后若再加，只作为尽量少敲门的可选抑制，不能当成投递保证，也不能挡住人手动「停止并发送」。
@@ -333,9 +333,9 @@ Mailbox 需要分别记录：
 5. 重复打开、重连或多窗口查看不能后推 deadline；两个时间戳都只允许首次建立或显式策略修订。
 
 期限采用持久 wall-clock timestamp，目标离线或关闭时不反复暂停、重算时间轴。Router 将“已经
-到期”与“现在适合提醒”分开：关掉或离线可以显示 overdue、暂不推送；忙碌不算“不适合提醒”——
-到期后按 [6.4](#64-v1-系统提醒能注入就注入不能就打断发送) 注入或打断发送。逾期本身不另外
-发明一种 cancel 权；打断发送就是这条提醒通道。
+到期”与“现在适合提醒”分开：关掉或离线可以显示 overdue、由 Dispatcher 启动/恢复后再推；忙碌不算“不适合提醒”——
+到期后按 [6.4](#64-v1-系统提醒能注入就注入不能就排队) 注入或排队后投。逾期本身不另外
+发明一种 cancel 权；打断仍只有人手动「停止并发送」。
 
 ### 5.6 提醒时间用系统预设，不做成每封信一个闹钟
 
@@ -351,8 +351,9 @@ Mailbox 需要分别记录：
 | 人类 | Human Inbox 中已打开但仍欠回复 | 约 30 分钟 | 约 10 分钟 |
 
 同一目标一个 cooldown 窗口只打一条摘要。提醒不重发正文，自身 `expects_reply=false`。达到最大
-重复次数后通知发送者或人类，**不**自动 interrupt。这些数字是第一版产品默认，实施时写入配置
-而不是写死在每个 Harness adapter 里。
+重复次数后通知发送者或人类，**不**自动 interrupt。这些数字是第一版产品默认；当前落地为后端
+硬编码常量，未做配置化（2026-08-19 对账：[`collaboration_reminder.rs`](../../src-tauri/src/acp/collaboration_reminder.rs)
+中未读、已读未回、cooldown 均为 300 秒，最多连催 3 次，扫描间隔 5 秒）。
 
 ## 6. Delivery Router 状态机
 
@@ -363,15 +364,12 @@ Mailbox 需要分别记录：
 |---|---|---|---|
 | 空闲且已连接 | 保存，等待自然 turn | 使用 `session/prompt` 创建新 turn | 已收到 / 正在处理 |
 | 正在运行 | 保存 | 进入该 Session 的有序队列 | 已排队 |
-| 已关闭但可 Resume | 保存，不冷启动 | 默认排队；是否恢复由用户/策略决定 | 未读 / 等待恢复 |
+| 已关闭但可 Resume | 入队后由统一 Dispatcher 启动/恢复（「不冷启动」已被下方 2026-08-18/19 注记取代） | 同左 | 未读 / 等待恢复 |
 | 只读或不可 Resume | 保存为可见引用 | 不伪装可调用，提供复制或另起新会话续问 | 只读 / 无法直接处理 |
 | 受管远端 Backend | 由远端 Router 执行相同规则 | 由远端 Runtime 决定 | 显示真实远端状态 |
 | 未托管外部目标 | 经 AgentBus 等 Adapter 落入 mailbox | 是否唤醒取决于外部能力 | 已入邮箱，不声称已处理 |
 
-离线唤醒采用按来源授权：用户在 UI 中明确执行 invoke 时，可以冷启动可恢复的受管 Session；
-Session/Agent 来源只有目标启用 `allow_background_wake`，或消息属于用户批准的协作关系/工作流时
-才可冷启动，V1 默认关闭。用户主动 stopped 永不自动唤醒；crashed/reconnecting 必须先恢复并核对
-native binding。active idle 的 `invoke_when_idle` 正常进入 Dispatcher，`store_only` 永不单独起 Turn。
+离线唤醒原先采用按来源授权：用户在 UI 中明确执行 invoke 时，可以冷启动可恢复的受管 Session；Session/Agent 来源只有目标启用 `allow_background_wake`，或消息属于用户批准的协作关系/工作流时才可冷启动，V1 默认关闭。（2026-08-19 对账：该默认已被下方 2026-08-18/19 实现注记取代——普通信与催办在目标关闭时由统一 Dispatcher 启动/恢复，见 `wake_closed_session_for_normal_letter`。）用户主动 stopped 永不自动唤醒；crashed/reconnecting 必须先恢复并核对 native binding。active idle 的 `invoke_when_idle` 正常进入 Dispatcher，`store_only` 永不单独起 Turn。
 
 忙碌竞态不增加第二套判定。Router 应复用现有消息队列、连接门槛和 `TurnBusyError` 回队行为；
 判定空闲后仍发生竞争时，消息返回队首而不是丢失或重复启动。
@@ -467,9 +465,9 @@ digest cooldown。只有实际成功展示、注入或完成一次强制发送�
 可能永不结束，信就永远进不了模型。
 
 V1 系统提醒在忙碌时的通道只有两条：`native_steering_available` 则 `_session/steering` 注入；
-否则走与人点「停止当前任务并发送」相同的 persist → `session/cancel` → 再发。这是宿主提醒
-通道，不是 Agent 工具，也不要求发送者预授权。第一版没有勿扰。达到最大重复次数以后，
-通知发送者或交给用户，不再连催。
+否则排队等本轮结束再投（QueueAfterTurn，催办车道没有 interrupt；打断仍只有人手动「停止当前
+任务并发送」）。这是宿主提醒通道，不是 Agent 工具，也不要求发送者预授权。第一版没有勿扰。
+达到最大重复次数以后，通知发送者或交给用户，不再连催。
 
 系统生成的 reminder/escalation 自身固定 `expects_reply=false`，并排除在 unread/reply reminder
 扫描之外，防止 Agent 对提醒做 ACK、ACK 又生成新提醒的循环。相同目标在一个 cooldown 窗口内的
@@ -491,18 +489,18 @@ V1 系统提醒在忙碌时的通道只有两条：`native_steering_available` �
 Web / 服务器模式没有原生悬浮窗时，降级为页面内横幅和浏览器通知（若用户授权），不能假装
 已经 Desktop 提醒过。
 
-### 6.4 V1 系统提醒：能注入就注入，不能就打断发送
+### 6.4 V1 系统提醒：能注入就注入，不能就排队
 
-若提醒只等「下次有人说话」或「这一轮自己结束」，信可能永远进不了 Agent：长工具、训练、
+若提醒只等「下次有人说话」，信可能永远进不了 Agent：长工具、训练、
 Goal 都可以占住唯一一轮。第一版**不装 Hook**，系统提醒（有新消息 / 未读 / 已读未回）
 推送时只走下面的通道：
 
 | 目标状态 | 通道 | 不是什么 |
 |---|---|---|
 | 正在跑一轮，且 `native_steering_available` | `_session/steering` 注入 | 不重发正文 |
-| 正在跑一轮，不能注入 | 打断当前轮，再发（`queue` 原信或催办摘要） | 人不再点「停止并发送」 |
+| 正在跑一轮，不能注入 | 排队等本轮结束再投（QueueAfterTurn） | 不自动打断；打断只有人手动「停止并发送」 |
 | 已连接且空闲 / 休息 | 立刻开一轮 | 不是冷启动已关闭的 Session |
-| 已关闭 | 不自动 Resume；提醒人 | 不是偷偷 `session/new` |
+| 已关闭 | 由统一 Dispatcher 启动/恢复后投递（见 6.1 注记） | 不是偷偷 `session/new` |
 | 写给 human | Desktop 悬浮窗 | 不是开某个 Session |
 
 勿扰不在第一版。以后若加，也只是 bonus，见 [3.6](#36-session-勿扰以后bonus)。
@@ -510,9 +508,10 @@ Goal 都可以占住唯一一轮。第一版**不装 Hook**，系统提醒（有
 人在**当前** Session 输入框里说话仍然入队，那是人跟自己的 Agent 续写，不是 mailbox 提醒。
 系统提醒更凶，是因为跨 Session 的信没有「等我做完再看」的保证。
 
-时钟（系统预设）只决定**何时**第一次推、以及 cooldown。到期仍卡在同一轮，就注入或打断，
-不把「等 turn 结束」写成通道。Claude Hook / `check_user_feedback` 拉取仍是以后的可选优化，
-见 [9.3](#93-发送端与接收端能力不同)。决策函数见
+时钟（系统预设，当前为硬编码常量）只决定**何时**第一次推、以及 cooldown。到期仍卡在同一轮，
+能注入就注入，不能注入就排在轮后；催办车道不自动打断，也不把「等 turn 结束」当成可以无限
+跳过的理由（cooldown 后重催，最多 3 次）。Claude Hook / `check_user_feedback` 拉取仍是以后的
+可选优化，见 [9.3](#93-发送端与接收端能力不同)。决策函数见
 [`collaboration_reminder.rs`](../../src-tauri/src/acp/collaboration_reminder.rs)。
 
 ## 7. 上下文、重放与幂等
@@ -949,8 +948,9 @@ conversation_collaboration_state
 - conversation_id / revision / updated_at
 ```
 
-`attachments/context_refs/visibility/room_id/delivery_deadline_at/adapter` 和用于时间线定位的
-`source_turn_ref/source_tool_call_ref` 尚未进入当前 schema，不能在 API 或 UI 中假装已经存在。下一
+`attachments/context_refs/delivery_deadline_at/adapter` 和用于时间线定位的
+`source_turn_ref/source_tool_call_ref` 尚未进入当前 schema，不能在 API 或 UI 中假装已经存在；
+`visibility` / `room_id` 已随 Room 进表（迁移 m20260818_000003，2026-08-19 对账）。下一
 阶段采用新 migration 增加 mailbox lifecycle；建议语义如下，最终列名需与 SQLite 兼容性和查询
 成本一起核对：
 
@@ -976,7 +976,7 @@ collaboration_attachment（拟议，独立批次）
 `ui_seen_at` 在兼容期保留并映射到 `opened_at`；`embedded_turn_ref` 继续作为 receipt ref，不允许把
 前者回填成后者。Reminder log 只记录动作和引用，不复制 `collaboration_event.body`。
 
-未来 Room 在 event 上增加 `visibility=room`、`room_id` 和公共顺序；每个被点名成员仍各有一个
+Room 已在 event 上落地 `visibility=room` 与 `room_id`（迁移 m20260818_000003）；每个被点名成员仍各有一个
 Delivery。`invocation_policy` 属于 Delivery，因为同一公开事件的不同目标可能处于不同状态或采用
 不同调用策略。
 
@@ -989,8 +989,9 @@ Delivery。`invocation_policy` 属于 Delivery，因为同一公开事件的不�
 截至 2026-08-16，V1 的稳定 ID 寻址、持久 event/Delivery、未读投影、`store_only` 自然 Turn 摄入、
 `invoke_when_idle` 队列、能力门控 steer、显式 interrupt、定向回复和多目标 fan-out 已在当前分支
 实现。聊天输入区会显示下一次自然 Turn 将摄入的消息，用户可以逐条排除，并可从完整往来记录中
-恢复。下列清单同时保留验收范围；尚未完成的 mailbox obligation/reminder、跨 Backend、外部
-AgentBus Adapter 和 Room 不应被描述为当前能力。
+恢复。下列清单同时保留验收范围；2026-08-19 对账：mailbox obligation/reminder（迁移
+m20260816_000005、m20260817_000002）与 Room 存储和工具面（m20260818_000003 起）此后已落地，
+尚未完成的剩跨 Backend、外部 AgentBus Adapter 与附件，不应被描述为当前能力。
 
 ### 已实现：V1 内部 direct 通信主干
 
@@ -1046,7 +1047,7 @@ transcript 对账，以及同一 Session 多视图 revision 的真实端到端�
 - 同一个 Session 只有一个运行锁、Dispatcher 和可恢复的原子 claim/lease；
 - 统一“接下来”视图显示用户 follow-up、Session 消息和 background work 的来源与真实顺序；
 - `store_only` 按 oldest-first 和条数/字节预算附加到下一条自然 Prompt，用户正文最后；
-- `invoke_when_idle` 不得隐式越过用户队列；人的 follow-up 仍按 FIFO。系统提醒在不能注入时走宿主 interrupt，见 [6.4](#64-v1-系统提醒能注入就注入不能就打断发送)；
+- `invoke_when_idle` 不得隐式越过用户队列；人的 follow-up 仍按 FIFO。系统提醒在不能注入时排队等本轮结束再投，见 [6.4](#64-v1-系统提醒能注入就注入不能就排队)；
 - 多封 mailbox 批量摄入时仍分别保留 event identity 和回复义务，禁止一次普通回答批量清偿。
 
 ### 后续独立批次：V1.4 Reminder/escalation engine

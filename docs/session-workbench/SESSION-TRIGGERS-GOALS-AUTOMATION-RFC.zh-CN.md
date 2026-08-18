@@ -1,8 +1,9 @@
 # Codeg Session Trigger、Goal 与 Automation RFC
 
-> 状态：部分已实现——统一消息调度、Timer 等待退避与催办配额修复已落地（见第 0 节对账），
+> 状态：部分已实现——统一消息调度与催办配额修复已落地（见第 0 节对账）；Timer 的义务感知
+> 退避与刹车机制已于 2026-08-19 拆除，现为纯退避 + `timer.reset_delay`（见 0.3）。
 > 其余章节仍是方向性设计  
-> 更新时间：2026-08-18  
+> 更新时间：2026-08-19  
 > 适用范围：已有 Session 的自动续跑、提醒、计划执行与消息唤醒  
 > 相邻设计：[Session 间通信 RFC](./SESSION-COMMUNICATION-RFC.zh-CN.md)、
 > [Host 控制面 RFC](./HOST-CONTROL-SURFACE-RFC.zh-CN.md)、
@@ -19,7 +20,7 @@
 实现事实源：[`prompt_queue.rs`](../../src-tauri/src/prompt_queue.rs)（worker claim）、
 [`prompt_queue_service.rs`](../../src-tauri/src/db/service/prompt_queue_service.rs)（排序与准入）、
 [`session_timer.rs`](../../src-tauri/src/session_timer.rs)（fire 判定链）、
-[`session_timer_service.rs`](../../src-tauri/src/db/service/session_timer_service.rs)（claim_fire/auto_pause）、
+[`session_timer_service.rs`](../../src-tauri/src/db/service/session_timer_service.rs)（claim_fire/reset_delay；auto_pause 已成仅测试引用的遗留代码，2026-08-19 对账）、
 [`collaboration_service.rs`](../../src-tauri/src/db/service/collaboration_service.rs)（义务查询与催办配额）。
 
 ### 0.1 队列类别调度：user > letter/reminder > timer，类内 FIFO
@@ -52,32 +53,28 @@
 `urgency` 字段永不参与调度——它只是 UI 展示信号。这维持了第 7.4 节“中断不是 Timer
 的职责”的原判断。
 
-### 0.3 Timer 义务感知退避（“下发任务等回信时别催”）
+### 0.3 Timer 退避（2026-08-19 对账：义务感知退避已拆除）
 
-fire 前判定链（顺序重要，[`session_timer.rs`](../../src-tauri/src/session_timer.rs)）：
+本节原记“义务感知退避”：fire 前读 `latest_mailbox_info_at` 与 `outbound_awaiting_summary`
+判断“在等回信”，等回信时按 max(grace, 300s)×2^strike 退避、strike 达 3 置
+`auto_paused_at` 刹车、回信或用户编辑复活。该机制已被提交 **34ae1c36** 拆除——邮件、群帖
+和 `@` 不再改变 timer 节律，通信不再刹停 timer；d81504fc 引入的“等待期一次巡检 poke 后
+停靠”也一并移除。`auto_pause` 只剩测试引用的遗留代码，无生产调用方。
 
-1. 宽限期未到 → 跳过。
-2. `latest_mailbox_info_at`（新收到的信 / 自己的出站义务被解决，二者取最新）对比
-   `last_fired_at` 判“有没有新信息”。DB 时间只有秒精度，比较前必须对 `last_fired_at`
-   做秒级截断（`with_nanosecond(0)`），否则同秒到达的回信会被误判为旧信息。
-3. `outbound_awaiting_summary` 查“我发出去还没人回的信”（`obligation_state='awaiting_reply'`）。
-4. 无新信息且在等回信 = “重复戳”：间隔 = max(grace, **300s**) × 2^strike，上限 **30 分钟**。
-   300s 起步对齐收件侧催办的 5 分钟节律，给对端留回复时间（grace 默认才 2 秒）。
-5. strike 达 **3** → 不再 fire，置 `auto_paused_at` / `auto_pause_reason='waiting_no_progress'`，
-   **`enabled` 不动**——这是把退避拉长到“直到有新信息”，不是替用户做决定。任何新信息
-   或用户任意编辑（update 无条件清 strike + auto_pause）自动复活。
-6. 队列里已有 queued 项 → 让位跳过（队列自会续命，不叠加第二轮）。
-7. 运行时缺失（被 idle_sweep 回收）→ **照样入队 + 唤醒**，走 dispatcher ensure/resume，
+现行为（实现事实源：[`session_timer.rs`](../../src-tauri/src/session_timer.rs)）：
+
+1. 宽限期未到 → 跳过。间隔 = `idle_grace` × 2^strike，上限 30 分钟
+   （`MAX_REMINDER_DELAY_SECS = 1800`，`reminder_delay_secs`）。
+2. Agent 有进展、或有新信息解锁目标时，自己调 `timer.reset_delay` 把间隔重置回
+   `idle_grace`；仍在等待、无事可做就不调，间隔继续翻倍。
+3. strike ≥ 1 起，fire 正文 = 用户配置文本原样 + 宿主附注（第 N 次提醒、下一档间隔、
+   提示可调 `timer.reset_delay`）。
+4. 队列里已有 queued 项 → 让位跳过（不叠加第二轮）。
+5. 运行时缺失（被 idle_sweep 回收）→ 照样入队 + 唤醒，走 dispatcher ensure/resume，
    与信件同路。
-8. fire 正文 = 用户配置文本原样 + 宿主事实附注（第 N 次续跑、几封信未回、等了多久等），
-   仅在有等待或有 strike 时附加。
 
-**strike 只在“无新信息且有未回义务”时累积**；纯本地干活的 goal 循环保持原行为——宿主
-判不准“本地零进展”，误刹更伤（转写增量启发式记为 v2）。
-
-不需要新的“等待声明”工具：`send_message(expects_reply=true)` 写入义务表，本身就是等待
-声明，timer 直接读它。阻塞式 `wait_message` 维持第 12 节的暂缓判断——退避 + 来信自动
-唤醒已经等价，且不烧模型。
+阻塞式 `wait_message` 维持第 12 节的暂缓判断——退避 + 来信经 dispatcher 唤醒已经等价，
+且不烧模型。
 
 ### 0.4 催办配额按“欠债周期”重置（修复“已读未回不提醒”）
 
@@ -91,34 +88,33 @@ fire 前判定链（顺序重要，[`session_timer.rs`](../../src-tauri/src/sess
 
 | 原稿 | 落地现实 |
 |---|---|
-| 7.1：第一版默认 one-shot while idle | 落地为 repeat-while-idle 默认，靠 0.3 的退避 + 刹车约束重复消耗 |
+| 7.1：第一版默认 one-shot while idle | 落地为 repeat-while-idle 默认，靠 0.3 的退避约束重复消耗 |
 | 5.1 场景：空闲 15 分钟后提醒 | `idle_grace_secs` 默认 2 秒——Turn 结束即续，等待场景由退避接管 |
-| 12：暂缓“没有限额、停止条件和失败暂停的永久自动续跑” | 约束已落地：等待退避（300s×2^n，30min 上限）+ 3 次刹车 + 可见 auto_pause |
-| 7.3：等待外部消息时不应让 Goal 空轮询 | timer 现在读义务表感知“在等回信”，空轮询被退避与刹车消解 |
+| 12：暂缓“没有限额、停止条件和失败暂停的永久自动续跑” | 约束曾为“等待退避 + 3 次刹车 + 可见 auto_pause”；2026-08-19 对账：刹车机制已删除（34ae1c36），现为纯退避 idle_grace×2^strike（30 分钟上限）+ `timer.reset_delay` |
+| 7.3：等待外部消息时不应让 Goal 空轮询 | timer 曾读义务表感知“在等回信”；2026-08-19 对账：该耦合已拆除，等回信期间靠翻倍退避消解空轮询 |
 
 ### 0.6 Corner case 对账表
 
 | 场景 | 行为 |
 |---|---|
-| 下发任务等回信，无新信息 | 退避 5/10/20 分钟，3 次后可见地停住，回信即复活 |
-| 回信与 fire 同秒到达 | 秒级截断后判为新信息，不误刹（有回归测试） |
+| 下发任务等回信，无新信息 | 间隔按 idle_grace×2^strike 翻倍（上限 30 分钟）；Agent 有进展可自行调 `timer.reset_delay` 回最短档。3 次刹车 / 回信复活机制已删除（2026-08-19 对账） |
+| 回信与 fire 同秒到达 | “新信息”判据随义务感知退避一并删除（2026-08-19 对账）；来信直接经 dispatcher 唤醒，不经 timer |
 | 退避期间运行时被 idle_sweep 回收 | 照样入队 + dispatcher 唤醒，与信件同路 |
 | 队列已有 queued 项 | timer 让位跳过，不叠加第二轮 |
 | steer 信件被人类排队草稿挡住 | `claim_first_steerable` 定向领取，不再被挡死 |
 | 用户把 timer 项拖到自己消息前 | 快照按类别序弹回，类内拖拽照常 |
 | 未读阶段烧光催办配额后信被读 | 已读未回构成新欠债周期，配额清零重催 |
-| 纯本地 goal 循环（无出站义务） | strike 不累积，行为不变 |
-| auto_pause 后用户编辑 timer | update 无条件清 strike/auto_pause，立即复活 |
+| 纯本地 goal 循环 | strike 随未 reset 的 fire 累积、间隔翻倍；与出站义务无关（2026-08-19 对账） |
+| 用户编辑 timer | update 无条件清 strike，回到最短档；auto_pause 机制已删除（2026-08-19 对账） |
 | 服务重启时 timer 正在退避等待 | 启动播种“自进程启动起空闲”边界，等满一个正常间隔后照常 fire（重启前 idle 内存态丢失曾导致永久哑火，2026-08-18 修复） |
 | 用户停止 turn 后立刻发新消息 | cancel 冻结队列防旧项抢跑；用户亲手 enqueue 自动解冻（cancel/stop 类原因白名单），新消息按 user 类立即领先；collaboration_interrupt 的等待暂停不受用户输入影响 |
 
 ### 0.7 前端呈现与尚未落地项
 
-前端已同步落地：timer 卡片在 `autoPausedAt` 非空时显示 amber 退避提示与“立即恢复”
-按钮（复用 update 即可复活，见
-[`session-timers.tsx`](../../src/components/chat/session-timers.tsx)）；
-`PromptQueueItem.source` 与 `SessionTimer.strikeCount/autoPausedAt/autoPauseReason`
-已镜像进 [`types.ts`](../../src/lib/types.ts)。
+前端已同步落地：`PromptQueueItem.source` 与 `SessionTimer.strikeCount/autoPausedAt/autoPauseReason`
+已镜像进 [`types.ts`](../../src/lib/types.ts)。timer 卡片曾在 `autoPausedAt` 非空时显示 amber
+退避提示与“立即恢复”按钮——2026-08-19 对账：auto_pause 机制已随 34ae1c36 删除，这段是前端
+遗留展示（文案已标注“旧版等待规则”），待清理。
 
 尚未落地：转写增量启发式（判定“本地零进展”后刹车纯本地 goal 循环）记为 v2；真机
 冒烟见交接文档
@@ -126,9 +122,9 @@ fire 前判定链（顺序重要，[`session_timer.rs`](../../src-tauri/src/sess
 
 ### 0.8 已知边界（显式接受，不在本轮修）
 
-**新信件串可绕过所有按串记账的刹车。** 链深保险丝（=4）按回复链计数，催办配额按
-欠债周期重置：两个 Agent 若被提示词驱动成“收到信就开新串回敬”，每串深度 1、每封信
-都是新欠债，现有机制不会熄火——这是按串/按周期记账的结构性盲区，不是实现 bug。
+**新信件串可绕过所有按串记账的刹车。** 链深目前只按回复链记账（常量 =4，尚无强制拦截，
+2026-08-19 对账），催办配额按欠债周期重置：两个 Agent 若被提示词驱动成“收到信就开新串回敬”，
+每串深度 1、每封信都是新欠债，现有机制不会熄火——这是按串/按周期记账的结构性盲区，不是实现 bug。
 真正的防线是**会话级自动 turn 预算闸**（如每小时自动触发上限 + 全局熔断可见化），
 涉及新表、配置面与 UI，记为 v2 候选。当前依赖：对喷双方都要真实消耗自己的 turn，
 且人类在信箱 UI 与会话列表中能看到异常流量。
