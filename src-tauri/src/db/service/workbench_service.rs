@@ -209,6 +209,7 @@ pub async fn duplicate(
             workbench_id: Set(created.id),
             folder_id: Set(tab.folder_id),
             conversation_id: Set(tab.conversation_id),
+            room_id: Set(tab.room_id),
             agent_type: Set(tab.agent_type),
             position: Set(tab.position),
             is_active: Set(tab.is_active),

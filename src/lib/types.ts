@@ -378,6 +378,9 @@ export interface OpenedTab {
   id: number
   folder_id: number
   conversation_id: number | null
+  /** Set when this row is a Room tab. Mutually exclusive with
+   * `conversation_id`; drafts have neither and are never persisted. */
+  room_id?: string | null
   agent_type: AgentType
   position: number
   is_active: boolean

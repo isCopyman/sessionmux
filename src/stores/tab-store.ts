@@ -1,6 +1,7 @@
 import { create } from "zustand"
 import { useShallow } from "zustand/react/shallow"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
+import { useRoomCatalogStore } from "@/stores/room-catalog-store"
 import { registerBackendScopedStoreReset } from "@/stores/backend-scoped-store-reset"
 import {
   getFolderConversation,
@@ -77,7 +78,7 @@ import type {
 export interface TabItemInternal {
   id: string
   kind: "conversation" | "room"
-  /** Set when `kind === "room"`. Room tabs are in-memory only. */
+  /** Set when `kind === "room"`. Identity for persist/hydrate is `roomId`. */
   roomId?: string
   folderId: number
   conversationId: number | null
@@ -484,6 +485,7 @@ let workbenchRuntimeTransition: {
 // Tracks the last `conversations` reference recomputeTabs derived against, so
 // the module-level app-workspace subscription recomputes only when it changes.
 let lastConversations = useAppWorkspaceStore.getState().conversations
+let lastRooms = useRoomCatalogStore.getState().rooms
 
 function fetchTabsForWorkbench(workbenchId: number) {
   return workbenchId === 1 ? listOpenedTabs() : listWorkbenchTabs(workbenchId)
@@ -927,23 +929,89 @@ export function makeRoomTabId(roomId: string): string {
   return `room-${roomId}`
 }
 
-/** Sync identity of a persisted tab — the canonical tab id, which is exactly the
- *  (folder, agent, conversation) triple the persisted row is keyed by. A bound
- *  draft keeps its volatile `new-*` id, so this is deliberately derived from the
- *  fields rather than read off `tab.id`. Drafts have no sync identity (they are
- *  device-local and never persisted) → `null`. */
+export function isDraftTab(tab: TabItemInternal): boolean {
+  return tab.kind === "conversation" && tab.conversationId == null
+}
+
+function isPersistableTab(tab: TabItemInternal): boolean {
+  return (
+    (tab.kind === "room" && Boolean(tab.roomId)) ||
+    (tab.kind === "conversation" && tab.conversationId != null)
+  )
+}
+
+function roomTitle(roomId: string): string | undefined {
+  return useRoomCatalogStore
+    .getState()
+    .rooms.find((room) => room.id === roomId)?.title
+}
+
+function openedTabSyncKey(it: OpenedTab): string | null {
+  if (it.room_id) return makeRoomTabId(it.room_id)
+  if (it.conversation_id == null) return null
+  return makeConversationTabId(it.folder_id, it.agent_type, it.conversation_id)
+}
+
+function tabFromOpenedItem(
+  it: OpenedTab,
+  existing?: TabItemInternal,
+  runtimeConversationId?: number
+): TabItemInternal {
+  if (it.room_id) {
+    return {
+      id: existing?.id ?? makeRoomTabId(it.room_id),
+      kind: "room",
+      roomId: it.room_id,
+      folderId: it.folder_id,
+      conversationId: null,
+      agentType: it.agent_type,
+      title:
+        existing?.title ??
+        roomTitle(it.room_id) ??
+        runtime.labels.loadingConversation,
+      isPinned: it.is_pinned,
+    }
+  }
+  const conversationId = it.conversation_id
+  const canonicalId =
+    conversationId != null
+      ? makeConversationTabId(it.folder_id, it.agent_type, conversationId)
+      : makeNewConversationTabId()
+  return {
+    id: existing?.id ?? canonicalId,
+    kind: "conversation",
+    folderId: it.folder_id,
+    conversationId,
+    agentType: it.agent_type,
+    title: existing?.title ?? runtime.labels.loadingConversation,
+    isPinned: it.is_pinned,
+    ...(runtimeConversationId != null &&
+    conversationId != null &&
+    runtimeConversationId !== conversationId
+      ? { runtimeConversationId }
+      : existing?.runtimeConversationId != null
+        ? { runtimeConversationId: existing.runtimeConversationId }
+        : {}),
+    status: existing?.status,
+    workingDir: existing?.workingDir,
+    isChat: existing?.isChat,
+  }
+}
+
+/** Sync identity of a persisted tab. Session tabs key on
+ *  (folder, agent, conversation); Room tabs key on `roomId`. Drafts have no
+ *  sync identity (they are device-local and never persisted) → `null`. */
 function tabSyncKey(tab: TabItemInternal): string | null {
-  if (tab.conversationId == null) return null
+  if (tab.kind === "room" && tab.roomId) return makeRoomTabId(tab.roomId)
+  if (tab.kind !== "conversation" || tab.conversationId == null) return null
   return makeConversationTabId(tab.folderId, tab.agentType, tab.conversationId)
 }
 
 function snapshotSyncKeys(items: OpenedTab[]): Set<string> {
   const keys = new Set<string>()
   for (const it of items) {
-    if (it.conversation_id == null) continue
-    keys.add(
-      makeConversationTabId(it.folder_id, it.agent_type, it.conversation_id)
-    )
+    const key = openedTabSyncKey(it)
+    if (key) keys.add(key)
   }
   return keys
 }
@@ -988,25 +1056,24 @@ function sameDerivedTab(a: TabItemInternal, b: TabItemInternal): boolean {
   )
 }
 
-/** Build the persisted (synced) tab payload: conversation-bound tabs only
+/** Build the persisted (synced) tab payload: Session and Room tabs
  *  (drafts are device-local), `position` = display index, and `is_active` set on
  *  the focused tab so focus mirrors across clients. Used by both the save effect
  *  and remote-apply so their JSON is byte-identical for the no-op gate. */
-function buildPersistItems(
+export function buildPersistItems(
   tabs: TabItemInternal[],
   activeTabId: string | null
 ): OpenedTab[] {
-  return tabs
-    .filter((tab) => tab.kind !== "room" && tab.conversationId != null)
-    .map((tab, i) => ({
-      id: 0,
-      folder_id: tab.folderId,
-      conversation_id: tab.conversationId,
-      agent_type: tab.agentType,
-      position: i,
-      is_active: tab.id === activeTabId,
-      is_pinned: tab.isPinned,
-    }))
+  return tabs.filter(isPersistableTab).map((tab, i) => ({
+    id: 0,
+    folder_id: tab.folderId,
+    conversation_id: tab.kind === "room" ? null : tab.conversationId,
+    room_id: tab.kind === "room" ? (tab.roomId ?? null) : null,
+    agent_type: tab.agentType,
+    position: i,
+    is_active: tab.id === activeTabId,
+    is_pinned: tab.isPinned,
+  }))
 }
 
 /** Resolve a tab's group: its assignment when it points at a live leaf, else
@@ -1216,6 +1283,10 @@ function persistGroupState() {
   const drafts: PersistedDraft[] = []
   st.rawTabs.forEach((tab, index) => {
     const group = groupOfTab(st.groupOf, st.groupLayout, tab.id)
+    if (tab.kind === "room" && tab.roomId) {
+      assignments[makeRoomTabId(tab.roomId)] = group
+      return
+    }
     if (tab.conversationId != null) {
       assignments[
         makeConversationTabId(tab.folderId, tab.agentType, tab.conversationId)
@@ -1241,9 +1312,15 @@ function persistGroupState() {
     const tab = st.rawTabs.find((t) => t.id === tabId)
     if (!tab) continue
     selection[groupId] =
-      tab.conversationId != null
-        ? makeConversationTabId(tab.folderId, tab.agentType, tab.conversationId)
-        : tab.id
+      tab.kind === "room" && tab.roomId
+        ? makeRoomTabId(tab.roomId)
+        : tab.conversationId != null
+          ? makeConversationTabId(
+              tab.folderId,
+              tab.agentType,
+              tab.conversationId
+            )
+          : tab.id
   }
   const activeTab = st.rawTabs.find((t) => t.id === st.activeTabId)
   const memoryViewState =
@@ -1272,7 +1349,7 @@ function persistGroupState() {
     // Only a DRAFT focus needs restoring here; conversation focus rides the
     // synced `opened_tabs.is_active`.
     activeDraft:
-      activeTab && activeTab.conversationId == null ? activeTab.id : null,
+      activeTab && isDraftTab(activeTab) ? activeTab.id : null,
     sessionViewState,
   })
   if (blob === lastGroupBlob) return
@@ -1429,39 +1506,13 @@ function installHydratedSnapshot(
         : runtimeIdByTab[
             runtimeCacheTabKey(it.folder_id, it.agent_type, it.conversation_id)
           ]
-    return {
-      id:
-        it.conversation_id != null
-          ? makeConversationTabId(
-              it.folder_id,
-              it.agent_type,
-              it.conversation_id
-            )
-          : makeNewConversationTabId(),
-      kind: "conversation",
-      folderId: it.folder_id,
-      conversationId: it.conversation_id,
-      agentType: it.agent_type,
-      title:
-        it.conversation_id != null
-          ? runtime.labels.loadingConversation
-          : runtime.labels.newConversation,
-      isPinned: it.is_pinned,
-      ...(runtimeConversationId != null &&
-      runtimeConversationId !== it.conversation_id
-        ? { runtimeConversationId }
-        : {}),
-    }
+    return tabFromOpenedItem(it, undefined, runtimeConversationId)
   })
   const activeItem = snap.items.find(
-    (it) => it.is_active && it.conversation_id != null
+    (it) => it.is_active && openedTabSyncKey(it) != null
   )
   let restoredActive: string | null = activeItem
-    ? makeConversationTabId(
-        activeItem.folder_id,
-        activeItem.agent_type,
-        activeItem.conversation_id as number
-      )
+    ? openedTabSyncKey(activeItem)
     : null
   const { tabs: withDrafts, groupOf: draftGroups } =
     mergeRestoredDrafts(restored)
@@ -1663,7 +1714,11 @@ function recomputeTabs() {
   const prev = st.tabs
 
   let next: TabItemInternal[]
-  if (conversations.length === 0 && childSummaries.size === 0) {
+  if (
+    conversations.length === 0 &&
+    childSummaries.size === 0 &&
+    useRoomCatalogStore.getState().rooms.length === 0
+  ) {
     next = rawTabs
   } else {
     const conversationMap = new Map<string, (typeof conversations)[number]>()
@@ -1672,6 +1727,17 @@ function recomputeTabs() {
     }
     const prevById = prev.length ? new Map(prev.map((d) => [d.id, d])) : null
     next = rawTabs.map((tab) => {
+      if (tab.kind === "room" && tab.roomId) {
+        const title = roomTitle(tab.roomId)
+        if (title && tab.title !== title) {
+          const derived = { ...tab, title }
+          const prevItem = prevById?.get(tab.id)
+          return prevItem && sameDerivedTab(prevItem, derived)
+            ? prevItem
+            : derived
+        }
+        return tab
+      }
       if (tab.conversationId != null) {
         const conv =
           conversationMap.get(
@@ -2138,7 +2204,7 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
 
     const prevState = get()
     const seedTab =
-      prevState.rawTabs.find((t) => t.conversationId == null && t.workingDir) ??
+      prevState.rawTabs.find((t) => isDraftTab(t) && t.workingDir) ??
       prevState.rawTabs.find((t) => t.id === prevState.activeTabId) ??
       prevState.rawTabs[0]
     const replacementTab = makeReplacementDraftTab(seedTab)
@@ -2149,7 +2215,9 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
 
   closeTabsByFolder: (folderId) => {
     const prevState = get()
-    const remaining = prevState.rawTabs.filter((t) => t.folderId !== folderId)
+    const remaining = prevState.rawTabs.filter(
+      (t) => t.kind === "room" || t.folderId !== folderId
+    )
     if (remaining.length === prevState.rawTabs.length) return
 
     const currentActive = prevState.activeTabId
@@ -2947,7 +3015,7 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
               () =>
                 new Set(
                   get()
-                    .rawTabs.filter((tab) => tab.conversationId == null)
+                    .rawTabs.filter(isDraftTab)
                     .map((tab) => tab.id)
                 )
             )
@@ -3289,7 +3357,7 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
 
   correctDraftAgents: () => {
     const candidates = get().rawTabs.filter((tab) => {
-      if (tab.conversationId != null) return false
+      if (!isDraftTab(tab)) return false
       if (tab.agentTypeProvisional) return true
       if (!runtime.sortedAvailableAgents.includes(tab.agentType)) return true
       return false
@@ -3303,15 +3371,13 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
           null
         )
         const current = get().rawTabs.find((t) => t.id === tab.id)
-        if (!current || current.conversationId != null) return
+        if (!current || !isDraftTab(current)) return
 
         if (current.agentType === newAgent) {
           if (!current.agentTypeProvisional) return
           const prev = get().rawTabs
           const next = prev.map((t) =>
-            t.id === tab.id &&
-            t.conversationId == null &&
-            t.agentTypeProvisional
+            t.id === tab.id && isDraftTab(t) && t.agentTypeProvisional
               ? { ...t, agentTypeProvisional: false }
               : t
           )
@@ -3331,7 +3397,7 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
         const prev = get().rawTabs
         const target = prev.find((t) => t.id === tab.id)
         if (!target) return
-        if (target.conversationId != null) return
+        if (!isDraftTab(target)) return
         if (
           target.agentType !== expectedAgent &&
           !target.agentTypeProvisional
@@ -3413,7 +3479,7 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
         const rawTabs = get().rawTabs
         const target = rawTabs.find((tab) => tab.id === request.tabId)
         if (!target) return
-        if (target.conversationId != null) return
+        if (!isDraftTab(target)) return
         if (
           target.agentType !== request.expectedAgent &&
           !target.agentTypeProvisional
@@ -3452,7 +3518,8 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
     if (!st.tabsHydrated) return
     const active = st.rawTabs.find((t) => t.id === st.activeTabId)
     if (!active) return
-    if (active.conversationId == null) {
+    if (active.kind === "room") return
+    if (isDraftTab(active)) {
       saveLastActiveContext({
         folderId: active.folderId,
         isChat: active.isChat === true,
@@ -3509,6 +3576,7 @@ export function pruneOrphanDraftsOnce() {
   const { allFolders } = useAppWorkspaceStore.getState()
   const orphaned = st.rawTabs.filter(
     (tab) =>
+      tab.kind === "conversation" &&
       tab.conversationId == null &&
       tab.isChat !== true &&
       !allFolders.some((folder) => folder.id === tab.folderId)
@@ -3536,6 +3604,14 @@ useAppWorkspaceStore.subscribe(() => {
   const c = useAppWorkspaceStore.getState().conversations
   if (c !== lastConversations) {
     lastConversations = c
+    recomputeTabs()
+  }
+})
+
+useRoomCatalogStore.subscribe(() => {
+  const rooms = useRoomCatalogStore.getState().rooms
+  if (rooms !== lastRooms) {
+    lastRooms = rooms
     recomputeTabs()
   }
 })
@@ -3621,6 +3697,7 @@ export function resetTabStore() {
   tabsSnapshotLoaded = false
   runtime = defaultRuntime()
   lastConversations = useAppWorkspaceStore.getState().conversations
+  lastRooms = useRoomCatalogStore.getState().rooms
   // Merge (not replace) so the action methods are preserved; only the data
   // fields reset to their initial values.
   useTabStore.setState(initialTabState())
@@ -3657,7 +3734,9 @@ function applyRemoteSnapshot(change: TabsChanged) {
     clearTimeout(saveTimer)
     saveTimer = null
   }
-  const snapshotItems = change.tabs.filter((it) => it.conversation_id != null)
+  const snapshotItems = change.tabs.filter(
+    (it) => it.conversation_id != null || Boolean(it.room_id)
+  )
 
   const prev = useTabStore.getState()
   // ── Three-way merge against `serverKnownTabKeys` (the common ancestor) ──────
@@ -3676,12 +3755,9 @@ function applyRemoteSnapshot(change: TabsChanged) {
   // last sync → we closed it locally and our save hasn't landed (or was just
   // rejected). The local close is the newer intent: keep it closed. Anything
   // else on the server is adopted — including tabs opened on another client.
-  const convItems = snapshotItems.filter((it) => {
-    const key = makeConversationTabId(
-      it.folder_id,
-      it.agent_type,
-      it.conversation_id as number
-    )
+  const remoteItems = snapshotItems.filter((it) => {
+    const key = openedTabSyncKey(it)
+    if (!key) return false
     return localKeys.has(key) || !ancestorKeys.has(key)
   })
   // Open here, absent from the snapshot, and never acknowledged by the server →
@@ -3700,54 +3776,36 @@ function applyRemoteSnapshot(change: TabsChanged) {
   // to push the merged set (against the version we just learned) or the
   // divergence never converges.
   const diverged =
-    unsyncedLocal.length > 0 || convItems.length !== snapshotItems.length
+    unsyncedLocal.length > 0 || remoteItems.length !== snapshotItems.length
 
-  const remoteActive = convItems.find((it) => it.is_active)
+  const remoteActive = remoteItems.find((it) => it.is_active)
   applyingRemote = !diverged
 
   const prevById = new Map(prev.rawTabs.map((tb) => [tb.id, tb]))
-  const remoteTabs: TabItemInternal[] = convItems.map((it) => {
-    const canonicalId = makeConversationTabId(
-      it.folder_id,
-      it.agent_type,
-      it.conversation_id as number
-    )
-    // Prefer an already-open local tab for this conversation (including a draft
-    // that just bound to it and still carries its `new-*` id) so we keep that
-    // stable id and its live runtime session.
+  const remoteTabs: TabItemInternal[] = remoteItems.map((it) => {
+    const canonicalId = openedTabSyncKey(it)
     const existing =
-      prevById.get(canonicalId) ??
-      prev.rawTabs.find(
-        (tb) =>
-          tb.conversationId === it.conversation_id &&
-          tb.folderId === it.folder_id &&
-          tb.agentType === it.agent_type
-      )
-    return {
-      id: existing?.id ?? canonicalId,
-      kind: "conversation",
-      folderId: it.folder_id,
-      conversationId: it.conversation_id,
-      agentType: it.agent_type,
-      title: existing?.title ?? runtime.labels.loadingConversation,
-      isPinned: it.is_pinned,
-      runtimeConversationId: existing?.runtimeConversationId,
-      status: existing?.status,
-      // Device-local per-tab fields the payload doesn't carry. Rebuilding the
-      // tab from the snapshot must not blank them (a bound chat tab would lose
-      // the scratch working dir it is connected in).
-      workingDir: existing?.workingDir,
-      isChat: existing?.isChat,
-    }
+      (canonicalId ? prevById.get(canonicalId) : undefined) ??
+      (it.room_id
+        ? prev.rawTabs.find(
+            (tb) => tb.kind === "room" && tb.roomId === it.room_id
+          )
+        : prev.rawTabs.find(
+            (tb) =>
+              tb.conversationId === it.conversation_id &&
+              tb.folderId === it.folder_id &&
+              tb.agentType === it.agent_type
+          ))
+    return tabFromOpenedItem(it, existing)
   })
 
   const folders = useAppWorkspaceStore.getState().folders
   // Keep every device-local draft (one per split group) that's a folderless
   // chat draft or whose real folder still exists. Never yank the user off an
-  // in-progress draft.
+  // in-progress draft. Room tabs are persistable, not drafts.
   const nextTabs = [...remoteTabs, ...unsyncedLocal]
   for (const localDraft of prev.rawTabs) {
-    if (localDraft.conversationId != null) continue
+    if (!isDraftTab(localDraft)) continue
     if (
       localDraft.isChat === true ||
       folders.some((f) => f.id === localDraft.folderId)
@@ -3778,10 +3836,7 @@ function applyRemoteSnapshot(change: TabsChanged) {
 
   const remoteActiveId = remoteActive
     ? (nextTabs.find(
-        (tb) =>
-          tb.conversationId === remoteActive.conversation_id &&
-          tb.folderId === remoteActive.folder_id &&
-          tb.agentType === remoteActive.agent_type
+        (tb) => tabSyncKey(tb) === openedTabSyncKey(remoteActive)
       )?.id ?? null)
     : null
 

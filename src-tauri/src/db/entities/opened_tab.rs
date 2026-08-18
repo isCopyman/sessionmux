@@ -8,6 +8,7 @@ pub struct Model {
     pub workbench_id: i32,
     pub folder_id: i32,
     pub conversation_id: Option<i32>,
+    pub room_id: Option<String>,
     pub agent_type: String,
     pub position: i32,
     pub is_active: bool,

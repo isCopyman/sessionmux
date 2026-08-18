@@ -1032,6 +1032,7 @@ impl OrganizationHostControl {
                     id: 0,
                     folder_id: session.folder_id,
                     conversation_id: Some(session.id),
+                    room_id: None,
                     agent_type: session.agent_type,
                     position,
                     is_active: false,

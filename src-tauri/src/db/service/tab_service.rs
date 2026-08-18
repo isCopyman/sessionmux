@@ -73,6 +73,7 @@ pub async fn list_tabs_for_workbench<C: ConnectionTrait>(
                 id: r.id,
                 folder_id: r.folder_id,
                 conversation_id: r.conversation_id,
+                room_id: r.room_id,
                 agent_type,
                 position: r.position,
                 is_active: r.is_active,
@@ -104,10 +105,12 @@ pub async fn snapshot_tabs_for_workbench(
 
 /// Replace all tabs with the given list (full replacement).
 ///
-/// Draft tabs (`conversation_id == None`) are **never persisted** — a draft is a
-/// device-local working surface (volatile id, provisional agent, live ACP
-/// connection) and must not leak across clients via this shared table. This is
-/// the single persistence chokepoint, so the invariant holds for every caller.
+/// Draft tabs (`conversation_id` and `room_id` both empty) are **never
+/// persisted** — a draft is a device-local working surface (volatile id,
+/// provisional agent, live ACP connection) and must not leak across clients
+/// via this shared table. Room tabs persist by `room_id` the same way Session
+/// tabs persist by `conversation_id`. This is the single persistence
+/// chokepoint, so the invariant holds for every caller.
 ///
 /// Ensures at most one `is_active = true` (first active wins; others forced
 /// false). `is_active` marks the focused tab and is mirrored across clients
@@ -133,10 +136,21 @@ pub async fn save_tabs_for_workbench<C: ConnectionTrait>(
     let mut active_seen = false;
 
     for item in items {
-        // Skip drafts — never persist a conversation-less tab.
-        if item.conversation_id.is_none() {
+        let room_id = item
+            .room_id
+            .as_ref()
+            .map(|id| id.trim())
+            .filter(|id| !id.is_empty())
+            .map(|id| id.to_string());
+        // Skip drafts — never persist a tab with neither a Session nor a Room.
+        if item.conversation_id.is_none() && room_id.is_none() {
             continue;
         }
+        let conversation_id = if room_id.is_some() {
+            None
+        } else {
+            item.conversation_id
+        };
 
         let agent_str = serde_json::to_value(item.agent_type)
             .ok()
@@ -154,7 +168,8 @@ pub async fn save_tabs_for_workbench<C: ConnectionTrait>(
             id: NotSet,
             workbench_id: Set(workbench_id),
             folder_id: Set(item.folder_id),
-            conversation_id: Set(item.conversation_id),
+            conversation_id: Set(conversation_id),
+            room_id: Set(room_id),
             agent_type: Set(agent_str),
             position: Set(item.position),
             is_active: Set(is_active),
@@ -289,6 +304,7 @@ pub async fn delete_folder_tabs_and_bump(
     let txn = conn.begin().await?;
     let removed = opened_tab::Entity::delete_many()
         .filter(opened_tab::Column::FolderId.eq(folder_id))
+        .filter(opened_tab::Column::RoomId.is_null())
         .exec(&txn)
         .await?;
     let next = get_tabs_version(&txn).await? + 1;
@@ -303,4 +319,124 @@ pub async fn delete_folder_tabs_and_bump(
         version: next,
         emit,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::service::collaboration_room_service;
+    use crate::db::test_helpers::{fresh_in_memory_db, seed_conversation, seed_folder};
+    use crate::models::{AgentType, CreateCollaborationRoomInput, OpenedTab};
+
+    fn conv_tab(folder_id: i32, conversation_id: i32) -> OpenedTab {
+        OpenedTab {
+            id: 0,
+            folder_id,
+            conversation_id: Some(conversation_id),
+            room_id: None,
+            agent_type: AgentType::Codex,
+            position: 0,
+            is_active: false,
+            is_pinned: true,
+        }
+    }
+
+    fn room_tab(folder_id: i32, room_id: &str) -> OpenedTab {
+        OpenedTab {
+            id: 0,
+            folder_id,
+            conversation_id: None,
+            room_id: Some(room_id.to_string()),
+            agent_type: AgentType::ClaudeCode,
+            position: 1,
+            is_active: true,
+            is_pinned: true,
+        }
+    }
+
+    #[tokio::test]
+    async fn persists_room_tabs_and_still_drops_drafts() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/codeg-room-tabs").await;
+        let a = seed_conversation(&db, folder_id, AgentType::Codex).await;
+        let b = seed_conversation(&db, folder_id, AgentType::ClaudeCode).await;
+        let room = collaboration_room_service::create(
+            &db.conn,
+            CreateCollaborationRoomInput {
+                workbench_id: 1,
+                title: "Plan".into(),
+                member_conversation_ids: vec![a, b],
+                created_by_conversation_id: a,
+                collection_id: None,
+                root_folder_id: None,
+            },
+        )
+        .await
+        .expect("create room");
+
+        save_tabs_for_workbench(
+            &db.conn,
+            1,
+            vec![
+                conv_tab(folder_id, a),
+                room_tab(folder_id, &room.id),
+                OpenedTab {
+                    id: 0,
+                    folder_id,
+                    conversation_id: None,
+                    room_id: None,
+                    agent_type: AgentType::Gemini,
+                    position: 2,
+                    is_active: false,
+                    is_pinned: true,
+                },
+            ],
+        )
+        .await
+        .expect("save");
+
+        let listed = list_tabs_for_workbench(&db.conn, 1).await.expect("list");
+        assert_eq!(listed.len(), 2);
+        assert_eq!(listed[0].conversation_id, Some(a));
+        assert_eq!(listed[0].room_id, None);
+        assert_eq!(listed[1].room_id.as_deref(), Some(room.id.as_str()));
+        assert_eq!(listed[1].conversation_id, None);
+        assert!(listed[1].is_active);
+    }
+
+    #[tokio::test]
+    async fn folder_invalidation_keeps_room_tabs() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/codeg-room-tabs-folder").await;
+        let a = seed_conversation(&db, folder_id, AgentType::Codex).await;
+        let b = seed_conversation(&db, folder_id, AgentType::ClaudeCode).await;
+        let room = collaboration_room_service::create(
+            &db.conn,
+            CreateCollaborationRoomInput {
+                workbench_id: 1,
+                title: "Plan".into(),
+                member_conversation_ids: vec![a, b],
+                created_by_conversation_id: a,
+                collection_id: None,
+                root_folder_id: None,
+            },
+        )
+        .await
+        .expect("create room");
+
+        save_tabs_for_workbench(
+            &db.conn,
+            1,
+            vec![conv_tab(folder_id, a), room_tab(folder_id, &room.id)],
+        )
+        .await
+        .expect("save");
+
+        delete_folder_tabs_and_bump(&db.conn, folder_id)
+            .await
+            .expect("invalidate folder");
+        let listed = list_tabs_for_workbench(&db.conn, 1).await.expect("list");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].room_id.as_deref(), Some(room.id.as_str()));
+    }
 }

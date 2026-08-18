@@ -86,6 +86,10 @@ pub struct OpenedTab {
     pub id: i32,
     pub folder_id: i32,
     pub conversation_id: Option<i32>,
+    /// Set when this row is a Room tab. Mutually exclusive with
+    /// `conversation_id`; drafts have neither and are never persisted.
+    #[serde(default)]
+    pub room_id: Option<String>,
     pub agent_type: AgentType,
     pub position: i32,
     pub is_active: bool,
