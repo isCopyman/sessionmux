@@ -30,8 +30,10 @@ arranges the rest.
    `initial_prompt` that states the job, the Room or mailbox to watch, and
    when to stop. Never invent a harness system prompt. Codeg has no
    per-member system-prompt field; most harnesses will not honor one.
-3. Prefer a Room for shared status. `room.create` needs at least two Session
-   ids. Everyone is a member; there is no owner.
+3. Prefer a Room for shared status. `room.create` requires a `title`
+   (1–80 chars) and at least one other Session id — the calling Session is
+   always added as a member, so passing two other ids makes a three-member
+   Room. Everyone is a member; there is no owner.
 4. Wake with structured `@` (`mention_session_ids` / `mention_all` /
    `mention_human`). A quote reply is not a wake — reporting back to
    the asker still needs an `@`. Free-text `@alice` never wakes anyone.
@@ -52,6 +54,10 @@ persona packs, subscription filters, or role names as `@` addresses.
 - Sequential design → implement → check: `references/planner-coder-reviewer.md`
 - One coordinator, others speak when asked: `references/star.md`
 - Several Sessions should see the same thread: `references/roundtable.md`
+- Pattern pick, delegation brief, effort scale: `references/patterns-map.md`
+- Research / report writing pipeline: `references/research-writing.md`
+- Long-form or narrative writing: `references/long-form-writing.md`
+- Final convergence meeting on a draft: `references/line-review.md`
 - A saved project or user pattern: read that file; fill missing fields from
   `references/pattern-template.md`
 

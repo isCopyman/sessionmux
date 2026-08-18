@@ -15,7 +15,9 @@ vendor tool search, database access, or UI automation.
    short `query` when you need to discover it.
 2. Read the returned server-owned input schema and access level.
 3. Call `codeg_use` with exactly the advertised `action` and `input` fields.
-4. Treat `read`, `persisted`, `ui_requested`, `not_found`, and `rejected` as distinct stages.
+4. Treat `read`, `persisted`, `ui_requested`, and `rejected` as distinct stages.
+   There is no `not_found` stage — a missing Session, Collection, or Workbench
+   comes back as `rejected` with a `note` naming what was not found.
    A result with `replayed: true` is the response to the same live-host MCP
    call. After a Host restart, list current state before repeating a create.
 

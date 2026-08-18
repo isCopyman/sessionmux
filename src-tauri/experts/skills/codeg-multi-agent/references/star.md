@@ -15,6 +15,8 @@ each other on the ledger. Do not use this to recreate a Multica squad
 
 Titles are this-run labels. A spoke may be a hub in another Room.
 
+Delegation template & effort scaling: see `patterns-map.md`.
+
 ## Channels
 Room is the shared board. Hub posts assignments with structured `@` of the
 spoke that owns that slice. Spokes post results on the same thread

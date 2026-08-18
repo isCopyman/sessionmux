@@ -22,6 +22,8 @@ creating a fourth Session.
 Give each created Session an `initial_prompt` with the job, the Room id
 once it exists, and the stop rule. No system prompt.
 
+Delegation template & effort scaling: see `patterns-map.md`.
+
 ## Channels
 1. Optional mailbox from the initiator to planner with the human's goal.
 2. Room for the shared plan, implementation notes, and review.
