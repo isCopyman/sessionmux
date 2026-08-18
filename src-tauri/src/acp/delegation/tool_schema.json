@@ -304,11 +304,11 @@
           "type": "array",
           "maxItems": 16,
           "items": { "type": "integer", "minimum": 1 },
-          "description": "Sessions to @mention. Empty or omitted = record-only. Mentions must already be members."
+          "description": "Sessions to @mention. Empty or omitted = record-only. Mentions must already be members. An archived member is still named on the public post but is not woken."
         },
         "mention_all": {
           "type": "boolean",
-          "description": "Mention every other Session member. Does not mention the human operator. Prefer explicit mention_session_ids unless @all is intended."
+          "description": "Mention every other Session member. Does not mention the human operator. Archived members are named on the post, not woken. Prefer explicit mention_session_ids unless @all is intended."
         },
         "mention_human": {
           "type": "boolean",

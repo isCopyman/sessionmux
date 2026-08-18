@@ -81,6 +81,7 @@ struct LiveSession {
     title: Option<String>,
     agent_type: String,
     folder_path: Option<String>,
+    archived: bool,
 }
 
 impl LiveSession {
@@ -101,7 +102,8 @@ async fn live_session<C: ConnectionTrait>(
 ) -> Result<Option<LiveSession>, DbError> {
     let row = conn
         .query_one(statement(
-            "SELECT c.id, c.title, c.agent_type, f.path AS folder_path \
+            "SELECT c.id, c.title, c.agent_type, \
+             (c.archived_at IS NOT NULL) AS archived, f.path AS folder_path \
              FROM conversation c LEFT JOIN folder f ON f.id = c.folder_id \
              WHERE c.id = ? AND c.deleted_at IS NULL",
             vec![conversation_id.into()],
@@ -113,6 +115,7 @@ async fn live_session<C: ConnectionTrait>(
             title: row.try_get("", "title")?,
             agent_type: row.try_get("", "agent_type")?,
             folder_path: row.try_get("", "folder_path")?,
+            archived: row.try_get::<i64>("", "archived")? != 0,
         })
     })
     .transpose()
@@ -1501,7 +1504,9 @@ fn validate_room_post(input: &PostRoomMessageInput) -> Result<(), DbError> {
 /// Persist a Room-visible event. Empty structured mentions is a record-only
 /// post: every member can read it, nobody is invoked. Free-text `@word` is
 /// ignored. Structured Session URIs / mention_session_ids still create
-/// deliveries. Mail projections never see these events.
+/// deliveries. An archived member stays mentioned on the ledger, but is not
+/// enqueued and does not get an awaiting-reply obligation. Mail projections
+/// never see these events.
 pub async fn post_room(
     conn: &DatabaseConnection,
     input: PostRoomMessageInput,
@@ -1653,13 +1658,17 @@ pub async fn post_room(
 
     for target_id in targets {
         let target = live_session(&txn, target_id).await?;
+        // Archived members stay in the Room and still get a Delivery so the
+        // public timeline can show the @. They must not be woken: skip the
+        // prompt queue and do not park an awaiting-reply obligation.
+        let archived = target.as_ref().is_some_and(|session| session.archived);
+        let invoke = input.invocation_policy
+            == CollaborationInvocationPolicy::InvokeWhenIdle
+            && target.as_ref().is_some_and(|session| !session.archived);
         let (snapshot, state, error) = match target.as_ref() {
             Some(target) => (
                 target.snapshot(),
-                match input.invocation_policy {
-                    CollaborationInvocationPolicy::StoreOnly => "pending",
-                    CollaborationInvocationPolicy::InvokeWhenIdle => "queued",
-                },
+                if invoke { "queued" } else { "pending" },
                 None,
             ),
             None => (
@@ -1675,10 +1684,15 @@ pub async fn post_room(
             ),
         };
         let delivery_id = uuid::Uuid::new_v4().to_string();
-        let obligation_state = if input.expects_reply && target.is_some() {
+        let obligation_state = if input.expects_reply && target.is_some() && !archived {
             CollaborationObligationState::AwaitingReply
         } else {
             CollaborationObligationState::None
+        };
+        let invocation_policy = if archived {
+            CollaborationInvocationPolicy::StoreOnly
+        } else {
+            input.invocation_policy
         };
         txn.execute(statement(
             "INSERT INTO collaboration_delivery \
@@ -1696,17 +1710,25 @@ pub async fn post_room(
                 snapshot.title.into(),
                 snapshot.agent_type.into(),
                 snapshot.folder_path.into(),
-                input.invocation_policy.as_str().into(),
+                invocation_policy.as_str().into(),
                 input.delivery_hint.as_str().into(),
                 state.into(),
                 obligation_state.as_str().into(),
-                (input.expects_reply as i32).into(),
+                (if matches!(
+                    obligation_state,
+                    CollaborationObligationState::AwaitingReply
+                ) {
+                    1
+                } else {
+                    0
+                })
+                .into(),
                 error.into(),
             ],
         ))
         .await?;
         if target.is_some() {
-            if input.invocation_policy == CollaborationInvocationPolicy::InvokeWhenIdle {
+            if invoke {
                 prompt_queue_service::enqueue_origin_in_transaction(
                     &txn,
                     target_id,

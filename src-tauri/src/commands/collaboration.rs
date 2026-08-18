@@ -258,6 +258,12 @@ async fn dispatch_persisted_deliveries(
             && delivery.state != CollaborationDeliveryState::Dismissed
     }) {
         let target = delivery.target.conversation_id;
+        // Persist skipped the prompt queue (archived Room @, or a failed
+        // enqueue). High-priority dispatch would still interrupt or wake
+        // the Harness; do not invent a turn that was never queued.
+        if high && delivery.queue_item_id.is_none() {
+            continue;
+        }
         if high {
             deliver_high_priority_now(conn, manager, emitter, prompt_queue, event_id, target)
                 .await;

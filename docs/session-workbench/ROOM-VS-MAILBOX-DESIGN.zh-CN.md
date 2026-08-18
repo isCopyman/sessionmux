@@ -1,6 +1,6 @@
 # 群聊、Mailbox 与人类角色
 
-> 状态：设计拍板稿（2026-08-18）。第 13 节已落地。第 14 节冻结：`codeg://session/<id>` 是地址，动词在工具/作曲器上，不加 URI 字段。下一刀是归档 Session 不可被 `@` 唤醒。  
+> 状态：设计拍板稿（2026-08-18）。第 13、14 节已落地。归档 Session 的 Room `@` 不再入队唤醒。下一刀是删 Room API。  
 > 问题：群聊是不是另一套消息系统？Mailbox 是不是完全私聊？人类该打字还是该发邮件？CCCC 怎么做？  
 > 已有长文：[群聊 RFC](./GROUP-CONVERSATION-RFC.zh-CN.md)、[通信 RFC](./SESSION-COMMUNICATION-RFC.zh-CN.md)、[产品场景](./PRODUCT-SPEC.zh-CN.md#48-建立一个共享讨论室)  
 > 本文只补那三份没讲清的东西：协议边界、人类三条入口、和 CCCC 的真实差别。  
@@ -264,7 +264,7 @@ Mailbox 继续留在 Session 面板里，当“跨 Session 的收件箱”，不
 - 人类作者和 H1 Human Inbox 是**同一刀地址模型**（`author_kind` + 可空 session 引用）。不能先在 Room 里用 `0` 冒充人，再另做一套 human 表。
 - 现码没有删除 Room API；删 Workbench 却会 CASCADE 掉 Room，而 `collaboration_event.room_id` 无外键，账本会变孤儿。
 - “最后群主不能移走”在“人不是成员”之后应改成：活着的 Session 成员不能少于 2。
-- Session 归档仍可留在群里，但不能被 `@` 唤醒；Session 删除后成员必须标死或移出。
+- Session 归档仍可留在群里，但不能被 `@` 唤醒（`post_room` 已落地：仍建 Delivery、时间线仍显示点名，不入队、不打断、不挂回复义务）。Session 删除后成员必须标死或移出。Mailbox 写信给归档 Session 的语义本轮不动。
 - UI 还缺：Delivery 状态、只记录 vs @、回复某条时继承目标、Session 页“来自 Room”回跳。现 UI 已用 created_by 冒充“你”，作者模型落地前不要再加深这条假路径。
 - 通信 RFC 文首仍写“Room 仍为拟议”，和 R1 存储已落地不一致，改代码前先改那一行。
 
@@ -337,4 +337,6 @@ Agent 看见同一 URI 时靠**已经落地的信封**分流：`kind=room_mentio
 
 真缺口是人类 Session 作曲器：若把同一徽章再接到 `send_message`，就会和 `get_session_info` 抢。所以 **不要接线**。人要写信，用邮箱；人要在群里点名，用 Room。
 
-下一刀功能（第 11 节）：归档 Session 仍可留在群里，但 `@` 不再入队唤醒；然后才是删 Room API、Room 回跳、Human Inbox。文件搬家只插空做，不合并写路径。
+归档 Session 的 Room `@`：公共账本仍记下这次点名，但 `invocation_policy` 落成 `store_only`，不进 `prompt_queue`，高优先级 dispatch 看到没有 queue item 也不会去打断。Mailbox 的 `send_message` 不跟这刀。
+
+下一刀功能（第 11 节）：删 Room API；删 Workbench 不再 CASCADE 出孤儿 `collaboration_event`。然后才是 Room 回跳、Human Inbox。文件搬家只插空做，不合并写路径。

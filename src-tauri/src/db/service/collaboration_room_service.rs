@@ -741,8 +741,8 @@ mod tests {
     use crate::db::test_helpers::{fresh_in_memory_db, seed_conversation, seed_folder};
     use crate::models::AgentType;
     use crate::models::{
-        CollaborationInvocationPolicy, CollaborationObligationState, PostRoomMessageInput,
-        SendCollaborationMessageInput,
+        CollaborationDeliveryState, CollaborationInvocationPolicy, CollaborationObligationState,
+        PostRoomMessageInput, SendCollaborationMessageInput,
     };
     use sea_orm::{ConnectionTrait, DbBackend, Statement};
 
@@ -947,6 +947,102 @@ mod tests {
         assert_eq!(inbox.len(), 1);
         assert_eq!(inbox[0].body, "secret");
         assert_eq!(feed(&db.conn, b, None).await.unwrap().unread_count, 1);
+    }
+
+    #[tokio::test]
+    async fn archived_member_stays_mentioned_but_is_not_enqueued() {
+        let (db, a, b, c) = seeded().await;
+        let room = make_room(&db, a, vec![a, b, c]).await;
+        crate::db::service::conversation_service::update_archive(&db.conn, b, true)
+            .await
+            .expect("archive");
+
+        let posted = crate::db::service::collaboration_service::post_room(
+            &db.conn,
+            PostRoomMessageInput {
+                room_id: room.id.clone(),
+                source_conversation_id: a,
+                target_conversation_ids: vec![b, c],
+                mention_all: false,
+                subject: "Wake the live one".into(),
+                body: "archived stays on the ledger".into(),
+                client_dedupe_id: "room-archived-1".into(),
+                invocation_policy: CollaborationInvocationPolicy::InvokeWhenIdle,
+                delivery_hint: Default::default(),
+                expects_reply: true,
+                urgency: Default::default(),
+                reply_to_event_id: None,
+                mention_human: false,
+                author_kind: Default::default(),
+            },
+        )
+        .await
+        .expect("post");
+        assert_eq!(posted.deliveries.len(), 2);
+
+        let archived = posted
+            .deliveries
+            .iter()
+            .find(|item| item.target.conversation_id == b)
+            .expect("archived delivery");
+        assert_eq!(
+            archived.invocation_policy,
+            CollaborationInvocationPolicy::StoreOnly
+        );
+        assert_eq!(archived.state, CollaborationDeliveryState::Pending);
+        assert_eq!(
+            archived.obligation_state,
+            CollaborationObligationState::None
+        );
+        assert!(archived.queue_item_id.is_none());
+
+        let live = posted
+            .deliveries
+            .iter()
+            .find(|item| item.target.conversation_id == c)
+            .expect("live delivery");
+        assert_eq!(
+            live.invocation_policy,
+            CollaborationInvocationPolicy::InvokeWhenIdle
+        );
+        assert_eq!(live.state, CollaborationDeliveryState::Queued);
+        assert_eq!(
+            live.obligation_state,
+            CollaborationObligationState::AwaitingReply
+        );
+        assert!(live.queue_item_id.is_some());
+
+        let queued: i64 = db
+            .conn
+            .query_one(Statement::from_string(
+                DbBackend::Sqlite,
+                "SELECT COUNT(*) AS count FROM conversation_prompt_queue_item".to_owned(),
+            ))
+            .await
+            .unwrap()
+            .unwrap()
+            .try_get("", "count")
+            .unwrap();
+        assert_eq!(queued, 1);
+
+        let timeline = timeline(&db.conn, &room.id, None).await.unwrap();
+        assert_eq!(timeline.events.len(), 1);
+        assert_eq!(
+            timeline.events[0].mention_conversation_ids,
+            vec![b, c],
+            "the public @ remains visible even when the target is archived"
+        );
+        assert!(list_inbox(
+            &db.conn,
+            b,
+            crate::acp::session_collaboration::SessionMailboxScope::Inbox,
+            crate::acp::session_collaboration::SessionInboxFilter::All,
+            None,
+            20,
+        )
+        .await
+        .unwrap()
+        .is_empty());
     }
 
     #[tokio::test]
