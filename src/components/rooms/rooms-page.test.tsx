@@ -1,4 +1,10 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react"
 import { NextIntlClientProvider } from "next-intl"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -18,6 +24,7 @@ const api = vi.hoisted(() => ({
   refreshCatalog: vi.fn(),
   deleteCollaborationRoom: vi.fn(),
   closeTab: vi.fn(),
+  openTab: vi.fn(),
 }))
 
 vi.mock("@/lib/api", () => ({
@@ -36,7 +43,7 @@ vi.mock("@/lib/platform", () => ({
 }))
 
 vi.mock("@/contexts/tab-context", () => ({
-  useTabActions: () => ({ openTab: vi.fn(), closeTab: api.closeTab }),
+  useTabActions: () => ({ openTab: api.openTab, closeTab: api.closeTab }),
 }))
 
 vi.mock("@/stores/tab-store", () => ({
@@ -44,8 +51,32 @@ vi.mock("@/stores/tab-store", () => ({
 }))
 
 vi.mock("@/stores/app-workspace-store", () => ({
-  useAppWorkspaceStore: (selector: (state: { conversations: [] }) => unknown) =>
-    selector({ conversations: [] }),
+  useAppWorkspaceStore: (
+    selector: (state: {
+      conversations: Array<{
+        id: number
+        folder_id: number
+        title: string
+        agent_type: string
+      }>
+    }) => unknown
+  ) =>
+    selector({
+      conversations: [
+        {
+          id: 101,
+          folder_id: 7,
+          title: "Planner",
+          agent_type: "codex",
+        },
+        {
+          id: 202,
+          folder_id: 7,
+          title: "Session D",
+          agent_type: "claude_code",
+        },
+      ],
+    }),
 }))
 
 vi.mock("@/stores/collection-store", () => ({
@@ -151,10 +182,7 @@ describe("RoomWorkspace", () => {
     api.getCollaborationRoomTimeline.mockImplementation(
       async (_id: string, _limit?: number, beforeEventId?: string | null) => {
         if (beforeEventId === "evt-new") {
-          return timeline(
-            [event({ id: "evt-old", body: "older post" })],
-            false
-          )
+          return timeline([event({ id: "evt-old", body: "older post" })], false)
         }
         return timeline([event()], true)
       }
@@ -211,6 +239,7 @@ describe("RoomWorkspace", () => {
     renderRoom()
 
     expect(await screen.findByText("newest post")).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "Show members" }))
     expect(screen.getByText("Running")).toBeTruthy()
   })
 
@@ -230,6 +259,11 @@ describe("RoomWorkspace", () => {
     expect(await screen.findByText("newest post")).toBeTruthy()
     fireEvent.click(screen.getByRole("button", { name: "Reply" }))
     expect(screen.getByText("Replying to Planner")).toBeTruthy()
+    expect(
+      screen.getByText(
+        "This reply only quotes Planner. It does not wake them. @ a Session to wake it."
+      )
+    ).toBeTruthy()
 
     fireEvent.change(screen.getByPlaceholderText(/Write to the room/), {
       target: { value: "ack" },
@@ -248,6 +282,62 @@ describe("RoomWorkspace", () => {
         })
       )
     })
+  })
+
+  it("renders mentions inside the message instead of a header chip", async () => {
+    api.getCollaborationRoom.mockResolvedValue({
+      ...roomDetail(),
+      members: [
+        ...roomDetail().members,
+        {
+          conversationId: 202,
+          title: "Session D",
+          agentType: "claude_code",
+          role: "member",
+          joinedAt: "2026-08-01T00:00:00.000Z",
+        },
+      ],
+    })
+    api.getCollaborationRoomTimeline.mockResolvedValue(
+      timeline([
+        event({
+          body: "你好",
+          mentionConversationIds: [202],
+        }),
+      ])
+    )
+    renderRoom()
+
+    expect(await screen.findByText("你好")).toBeTruthy()
+    const article = screen.getByRole("article")
+    expect(within(article).getByText("@Session D")).toBeTruthy()
+    expect(within(article).queryByText("@ Session D")).toBeNull()
+  })
+
+  it("keeps a typed @all inside the post body", async () => {
+    api.getCollaborationRoomTimeline.mockResolvedValue(
+      timeline([
+        event({
+          body: "你们说说自己是谁 @all",
+          mentionConversationIds: [101],
+        }),
+      ])
+    )
+    renderRoom()
+
+    expect(await screen.findByText(/你们说说自己是谁/)).toBeTruthy()
+    expect(within(screen.getByRole("article")).getByText("@all")).toBeTruthy()
+  })
+
+  it("puts @all into the composer when the chip is pressed", async () => {
+    api.getCollaborationRoomTimeline.mockResolvedValue(timeline([event()]))
+    renderRoom()
+    await screen.findByText("newest post")
+    fireEvent.click(screen.getByRole("button", { name: "@all" }))
+    expect(
+      (screen.getByPlaceholderText(/Write to the room/) as HTMLTextAreaElement)
+        .value
+    ).toBe("@all")
   })
 
   it("quotes the original post on a reply in the same timeline", async () => {
@@ -301,5 +391,140 @@ describe("RoomWorkspace", () => {
     })
     expect(api.closeTab).toHaveBeenCalledWith(`room-${roomId}`)
     expect(api.refreshCatalog).toHaveBeenCalled()
+  })
+
+  it("opens a Session from the timeline name and an @ mention", async () => {
+    api.getCollaborationRoom.mockResolvedValue({
+      ...roomDetail(),
+      members: [
+        ...roomDetail().members,
+        {
+          conversationId: 202,
+          title: "Session D",
+          agentType: "claude_code",
+          role: "member",
+          joinedAt: "2026-08-01T00:00:00.000Z",
+        },
+      ],
+    })
+    api.getCollaborationRoomTimeline.mockResolvedValue(
+      timeline([
+        event({
+          body: "please look",
+          mentionConversationIds: [202],
+        }),
+      ])
+    )
+    renderRoom()
+    expect(await screen.findByText("please look")).toBeTruthy()
+
+    fireEvent.click(screen.getByRole("button", { name: "Planner" }))
+    expect(api.openTab).toHaveBeenCalledWith(7, 101, "codex", true, "Planner")
+
+    fireEvent.click(
+      within(screen.getByRole("article")).getByRole("button", {
+        name: "@Session D",
+      })
+    )
+    expect(api.openTab).toHaveBeenCalledWith(
+      7,
+      202,
+      "claude_code",
+      true,
+      "Session D"
+    )
+  })
+
+  it("scrolls to the quoted post when the quote block is clicked", async () => {
+    api.getCollaborationRoomTimeline.mockResolvedValue(
+      timeline([
+        event({ id: "evt-old", body: "please review the plan" }),
+        event({
+          id: "evt-reply",
+          body: "looks good",
+          replyToEventId: "evt-old",
+        }),
+      ])
+    )
+    const scrollIntoView = vi.fn()
+    Element.prototype.scrollIntoView = scrollIntoView
+    renderRoom()
+    expect(await screen.findByText("looks good")).toBeTruthy()
+
+    fireEvent.click(screen.getByTitle("Jump to quoted post"))
+    expect(scrollIntoView).toHaveBeenCalled()
+  })
+
+  it("turns Needs a reply on with the first @ and does not sneak it back on", async () => {
+    api.getCollaborationRoomTimeline.mockResolvedValue(timeline([event()]))
+    renderRoom()
+    await screen.findByText("newest post")
+
+    const box = screen.getByRole("checkbox", { name: "Needs a reply" })
+    expect(
+      box.getAttribute("data-state") ?? box.getAttribute("aria-checked")
+    ).not.toBe("checked")
+    expect(box.getAttribute("data-state")).not.toBe("checked")
+    expect(box.getAttribute("aria-checked")).not.toBe("true")
+
+    fireEvent.click(screen.getByRole("button", { name: "@Planner" }))
+    await waitFor(() => {
+      const next = screen.getByRole("checkbox", { name: "Needs a reply" })
+      expect(
+        next.getAttribute("data-state") === "checked" ||
+          next.getAttribute("aria-checked") === "true"
+      ).toBe(true)
+    })
+
+    fireEvent.click(screen.getByRole("checkbox", { name: "Needs a reply" }))
+    await waitFor(() => {
+      const next = screen.getByRole("checkbox", { name: "Needs a reply" })
+      expect(next.getAttribute("data-state")).not.toBe("checked")
+      expect(next.getAttribute("aria-checked")).not.toBe("true")
+    })
+
+    fireEvent.click(screen.getByRole("button", { name: "@all" }))
+    expect(
+      screen
+        .getByRole("checkbox", { name: "Needs a reply" })
+        .getAttribute("data-state")
+    ).not.toBe("checked")
+
+    fireEvent.click(screen.getByRole("button", { name: "Send" }))
+    await waitFor(() => {
+      expect(api.postCollaborationRoomMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          roomId,
+          expectsReply: false,
+        })
+      )
+    })
+  })
+
+  it("posts expectsReply when @ is used and the switch is left on", async () => {
+    api.getCollaborationRoomTimeline.mockResolvedValue(timeline([event()]))
+    renderRoom()
+    await screen.findByText("newest post")
+    fireEvent.click(screen.getByRole("button", { name: "@Planner" }))
+    fireEvent.click(screen.getByRole("button", { name: "Send" }))
+    await waitFor(() => {
+      expect(api.postCollaborationRoomMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          expectsReply: true,
+          targetConversationIds: [101],
+        })
+      )
+    })
+  })
+
+  it("keeps the members panel collapsed until the header toggle is pressed", async () => {
+    api.getCollaborationRoomTimeline.mockResolvedValue(timeline([event()]))
+    renderRoom()
+    await screen.findByText("newest post")
+    expect(screen.queryByLabelText("Add a Session")).toBeNull()
+    fireEvent.click(screen.getByRole("button", { name: "Show members" }))
+    expect(screen.getByLabelText("Add a Session")).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "Hide members" }))
+    expect(screen.queryByLabelText("Add a Session")).toBeNull()
   })
 })
