@@ -5231,6 +5231,10 @@
     "replyTo": "Replying to {name}",
     "cancelReply": "Cancel reply",
     "quotedMissing": "원 메시지를 불러오지 못했습니다",
+    "delete": "방 삭제",
+    "deleteTitle": "이 방을 삭제할까요?",
+    "deleteConfirm": "게시글, 멤버, 이 탭이 삭제됩니다. Session 자체는 유지됩니다.",
+    "deleted": "방을 삭제했습니다",
     "roleOwner": "owner",
     "roleMember": "member"
   }

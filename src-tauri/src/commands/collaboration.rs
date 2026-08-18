@@ -16,7 +16,7 @@ use crate::acp::session_collaboration::{
 use crate::app_error::AppCommandError;
 use crate::db::service::{
     app_metadata_service, collaboration_interrupt_service, collaboration_room_service,
-    collaboration_service, conversation_service, folder_service, prompt_queue_service,
+    collaboration_service, conversation_service, folder_service, prompt_queue_service, tab_service,
 };
 use crate::db::AppDatabase;
 use crate::models::{
@@ -1420,6 +1420,26 @@ pub async fn collaboration_room_rename_core(
     Ok(room)
 }
 
+pub async fn collaboration_room_delete_core(
+    conn: &sea_orm::DatabaseConnection,
+    emitter: &EventEmitter,
+    room_id: &str,
+) -> Result<(), AppCommandError> {
+    let workbench_id = collaboration_room_service::delete(conn, room_id).await?;
+    match tab_service::delete_room_tabs_and_bump(conn, room_id).await {
+        Ok(inv) => {
+            if let Some(tabs) = inv.emit {
+                crate::commands::conversations::emit_tabs_invalidated(emitter, inv.version, tabs);
+            }
+        }
+        Err(e) => tracing::error!(
+            "[collaboration] tab cleanup failed (delete tabs for room {room_id}): {e}"
+        ),
+    }
+    publish_room(emitter, room_id, workbench_id);
+    Ok(())
+}
+
 pub async fn collaboration_room_assign_collection_core(
     conn: &sea_orm::DatabaseConnection,
     emitter: &EventEmitter,
@@ -1561,6 +1581,16 @@ pub async fn collaboration_room_rename(
     app: tauri::AppHandle,
 ) -> Result<CollaborationRoomDetail, AppCommandError> {
     collaboration_room_rename_core(&db.conn, &EventEmitter::Tauri(app), &room_id, &title).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn collaboration_room_delete(
+    room_id: String,
+    db: tauri::State<'_, AppDatabase>,
+    app: tauri::AppHandle,
+) -> Result<(), AppCommandError> {
+    collaboration_room_delete_core(&db.conn, &EventEmitter::Tauri(app), &room_id).await
 }
 
 #[cfg(feature = "tauri-runtime")]

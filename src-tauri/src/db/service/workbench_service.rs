@@ -1,7 +1,8 @@
 use chrono::Utc;
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::NotSet, ColumnTrait, DatabaseConnection, EntityTrait,
-    IntoActiveModel, PaginatorTrait, QueryFilter, QueryOrder, Set, TransactionTrait,
+    ActiveModelTrait, ActiveValue::NotSet, ColumnTrait, ConnectionTrait, DatabaseConnection,
+    DbBackend, EntityTrait, IntoActiveModel, PaginatorTrait, QueryFilter, QueryOrder, Set,
+    Statement, TransactionTrait,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -270,6 +271,23 @@ pub async fn delete(conn: &DatabaseConnection, id: i32) -> Result<(), DbError> {
     if workbench::Entity::find_by_id(id).one(&txn).await?.is_none() {
         return Err(DbError::NotFound(format!("Workbench {id}")));
     }
+    let target = txn
+        .query_one(Statement::from_sql_and_values(
+            DbBackend::Sqlite,
+            "SELECT id FROM workbench WHERE id != ? ORDER BY id ASC LIMIT 1",
+            vec![id.into()],
+        ))
+        .await?
+        .ok_or_else(|| DbError::Validation("The last workbench cannot be deleted".into()))?;
+    let target_id: i32 = target.try_get("", "id")?;
+    txn.execute(Statement::from_sql_and_values(
+        DbBackend::Sqlite,
+        "UPDATE collaboration_room \
+         SET workbench_id = ?, updated_at = CURRENT_TIMESTAMP \
+         WHERE workbench_id = ?",
+        vec![target_id.into(), id.into()],
+    ))
+    .await?;
     opened_tab::Entity::delete_many()
         .filter(opened_tab::Column::WorkbenchId.eq(id))
         .exec(&txn)

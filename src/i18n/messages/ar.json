@@ -5231,6 +5231,10 @@
     "replyTo": "Replying to {name}",
     "cancelReply": "Cancel reply",
     "quotedMissing": "الرسالة الأصلية غير محمّلة",
+    "delete": "حذف الغرفة",
+    "deleteTitle": "حذف هذه الغرفة؟",
+    "deleteConfirm": "ستُحذف المنشورات والأعضاء وعلامة التبويب هذه. جلسات Session تبقى كما هي.",
+    "deleted": "تم حذف الغرفة",
     "roleOwner": "owner",
     "roleMember": "member"
   }

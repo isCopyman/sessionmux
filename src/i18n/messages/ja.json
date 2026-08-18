@@ -5231,6 +5231,10 @@
     "replyTo": "Replying to {name}",
     "cancelReply": "Cancel reply",
     "quotedMissing": "元の投稿は読み込まれていません",
+    "delete": "ルームを削除",
+    "deleteTitle": "このルームを削除しますか？",
+    "deleteConfirm": "投稿、メンバー、このタブは削除されます。Session 自体は残ります。",
+    "deleted": "ルームを削除しました",
     "roleOwner": "owner",
     "roleMember": "member"
   }

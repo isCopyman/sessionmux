@@ -5231,6 +5231,10 @@
     "replyTo": "正在回复 {name}",
     "cancelReply": "取消回复",
     "quotedMissing": "原消息未加载",
+    "delete": "删除群聊",
+    "deleteTitle": "删除这个群聊？",
+    "deleteConfirm": "帖子、成员和这个标签页会被删除。Session 本身不受影响。",
+    "deleted": "群聊已删除",
     "roleOwner": "群主",
     "roleMember": "成员"
   }

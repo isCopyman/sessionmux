@@ -5231,6 +5231,10 @@
     "replyTo": "Replying to {name}",
     "cancelReply": "Cancel reply",
     "quotedMissing": "Le message d'origine n'est pas chargé",
+    "delete": "Supprimer le salon",
+    "deleteTitle": "Supprimer ce salon ?",
+    "deleteConfirm": "Les messages, les membres et cet onglet seront supprimés. Les Sessions restent intactes.",
+    "deleted": "Salon supprimé",
     "roleOwner": "owner",
     "roleMember": "member"
   }

@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useState } from "react"
-import { MessagesSquare, Plus, Send, UserRound, Users, X } from "lucide-react"
+import { MessagesSquare, Plus, Send, Trash2, UserRound, Users, X } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 import { useShallow } from "zustand/react/shallow"
@@ -12,6 +12,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -24,6 +25,7 @@ import { toErrorMessage } from "@/lib/app-error"
 import { formatConversationTitle } from "@/lib/conversation-title"
 import {
   addCollaborationRoomMembers,
+  deleteCollaborationRoom,
   getCollaborationRoom,
   getCollaborationRoomTimeline,
   markCollaborationRoomSeen,
@@ -42,6 +44,7 @@ import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { useCollectionStore } from "@/stores/collection-store"
 import { useConversationRuntimeStore } from "@/stores/conversation-runtime-store"
 import { useRoomCatalogStore } from "@/stores/room-catalog-store"
+import { makeRoomTabId } from "@/stores/tab-store"
 import type {
   AgentType,
   CollaborationRoomDetail,
@@ -72,7 +75,7 @@ function conversationLabel(
 
 export function RoomWorkspace({ roomId }: { roomId: string }) {
   const t = useTranslations("Room")
-  const { openTab } = useTabActions()
+  const { openTab, closeTab } = useTabActions()
   const conversations = useAppWorkspaceStore((state) => state.conversations)
   const collections = useCollectionStore((state) => state.items)
   const [detail, setDetail] = useState<CollaborationRoomDetail | null>(null)
@@ -90,6 +93,8 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
   const [addQuery, setAddQuery] = useState("")
   const [addSelected, setAddSelected] = useState<number[]>([])
   const [adding, setAdding] = useState(false)
+  const [deleteOpen, setDeleteOpen] = useState(false)
+  const [deleting, setDeleting] = useState(false)
 
   const reload = useCallback(async () => {
     const [nextDetail, timeline] = await Promise.all([
@@ -309,6 +314,21 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
     [roomId, t]
   )
 
+  const handleDelete = useCallback(async () => {
+    setDeleting(true)
+    try {
+      await deleteCollaborationRoom(roomId)
+      setDeleteOpen(false)
+      toast.success(t("deleted"))
+      closeTab(makeRoomTabId(roomId))
+      void useRoomCatalogStore.getState().refresh()
+    } catch (error) {
+      toast.error(toErrorMessage(error))
+    } finally {
+      setDeleting(false)
+    }
+  }, [closeTab, roomId, t])
+
   if (!hydrated) {
     return <div className="h-full" />
   }
@@ -365,6 +385,16 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
             {t("memberCount", { count: detail.members.length })}
           </p>
         </div>
+        <Button
+          type="button"
+          size="icon-sm"
+          variant="ghost"
+          className="h-7 w-7 shrink-0 text-muted-foreground hover:text-destructive"
+          aria-label={t("delete")}
+          onClick={() => setDeleteOpen(true)}
+        >
+          <Trash2 className="h-3.5 w-3.5" />
+        </Button>
       </div>
       <div className="flex min-h-0 flex-1">
         <ScrollArea className="min-w-0 flex-1">
@@ -699,6 +729,31 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
               onClick={() => void handleAddMembers()}
             >
               {t("add")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>{t("deleteTitle")}</DialogTitle>
+            <DialogDescription>{t("deleteConfirm")}</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setDeleteOpen(false)}
+              disabled={deleting}
+            >
+              {t("cancel")}
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={deleting}
+              onClick={() => void handleDelete()}
+            >
+              {t("delete")}
             </Button>
           </DialogFooter>
         </DialogContent>

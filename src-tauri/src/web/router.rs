@@ -1390,6 +1390,10 @@ pub fn build_router(
             post(handlers::collaboration::room_rename),
         )
         .route(
+            "/collaboration_room_delete",
+            post(handlers::collaboration::room_delete),
+        )
+        .route(
             "/collaboration_room_assign_collection",
             post(handlers::collaboration::room_assign_collection),
         )

@@ -292,6 +292,32 @@ pub async fn delete_conversation_tabs_and_bump(
     })
 }
 
+/// Remove persisted Room tabs after the Room itself is deleted, and bump the
+/// tab version so a stale save cannot resurrect them.
+pub async fn delete_room_tabs_and_bump(
+    conn: &DatabaseConnection,
+    room_id: &str,
+) -> Result<TabInvalidation, DbError> {
+    let _guard = version_lock().lock().await;
+    let txn = conn.begin().await?;
+    let removed = opened_tab::Entity::delete_many()
+        .filter(opened_tab::Column::RoomId.eq(room_id))
+        .exec(&txn)
+        .await?;
+    let next = get_tabs_version(&txn).await? + 1;
+    app_metadata_service::upsert_value(&txn, OPENED_TABS_VERSION_KEY, &next.to_string()).await?;
+    let emit = if removed.rows_affected > 0 {
+        Some(list_all_tabs(&txn).await?)
+    } else {
+        None
+    };
+    txn.commit().await?;
+    Ok(TabInvalidation {
+        version: next,
+        emit,
+    })
+}
+
 /// Atomically invalidate every tab belonging to a folder (folder removed from
 /// the workspace): delete the rows, ALWAYS bump the version (barrier), snapshot —
 /// one transaction under [`version_lock`], same race-free guarantee as
@@ -438,5 +464,45 @@ mod tests {
         let listed = list_tabs_for_workbench(&db.conn, 1).await.expect("list");
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].room_id.as_deref(), Some(room.id.as_str()));
+    }
+
+    #[tokio::test]
+    async fn deleting_a_room_drops_its_tabs_and_bumps_version() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/codeg-room-tabs-delete").await;
+        let a = seed_conversation(&db, folder_id, AgentType::Codex).await;
+        let b = seed_conversation(&db, folder_id, AgentType::ClaudeCode).await;
+        let room = collaboration_room_service::create(
+            &db.conn,
+            CreateCollaborationRoomInput {
+                workbench_id: 1,
+                title: "Plan".into(),
+                member_conversation_ids: vec![a, b],
+                created_by_conversation_id: a,
+                collection_id: None,
+                root_folder_id: None,
+            },
+        )
+        .await
+        .expect("create room");
+
+        save_tabs_for_workbench(
+            &db.conn,
+            1,
+            vec![conv_tab(folder_id, a), room_tab(folder_id, &room.id)],
+        )
+        .await
+        .expect("save");
+        let before = get_tabs_version(&db.conn).await.expect("version");
+
+        let inv = delete_room_tabs_and_bump(&db.conn, &room.id)
+            .await
+            .expect("invalidate room tabs");
+        assert!(inv.version > before);
+        assert!(inv.emit.is_some());
+        let listed = list_tabs_for_workbench(&db.conn, 1).await.expect("list");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].conversation_id, Some(a));
+        assert_eq!(listed[0].room_id, None);
     }
 }

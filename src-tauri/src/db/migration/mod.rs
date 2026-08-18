@@ -59,6 +59,7 @@ mod m20260818_000004_room_item_and_author;
 mod m20260818_000005_room_member_read_cursor;
 mod m20260818_000006_room_equal_members;
 mod m20260818_000007_opened_tab_room;
+mod m20260818_000008_room_workbench_restrict;
 pub struct Migrator;
 
 #[async_trait::async_trait]
@@ -124,6 +125,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260818_000005_room_member_read_cursor::Migration),
             Box::new(m20260818_000006_room_equal_members::Migration),
             Box::new(m20260818_000007_opened_tab_room::Migration),
+            Box::new(m20260818_000008_room_workbench_restrict::Migration),
         ]
     }
 }

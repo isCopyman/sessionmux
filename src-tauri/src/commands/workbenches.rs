@@ -424,4 +424,42 @@ mod tests {
             .as_deref()
             .is_some_and(|detail| detail.contains("last workbench")));
     }
+
+    #[tokio::test]
+    async fn deleting_workbench_rehomes_rooms_instead_of_cascading() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/codeg-workbench-room-rehome").await;
+        let a = seed_conversation(&db, folder_id, AgentType::Codex).await;
+        let b = seed_conversation(&db, folder_id, AgentType::ClaudeCode).await;
+        let second = create_workbench_core(&db.conn, Some("Temporary".into()))
+            .await
+            .expect("create");
+        let room = crate::db::service::collaboration_room_service::create(
+            &db.conn,
+            crate::models::CreateCollaborationRoomInput {
+                workbench_id: second.id,
+                title: "Plan".into(),
+                member_conversation_ids: vec![a, b],
+                created_by_conversation_id: a,
+                collection_id: None,
+                root_folder_id: None,
+            },
+        )
+        .await
+        .expect("create room");
+        assert_eq!(room.workbench_id, second.id);
+
+        delete_workbench_core(&db.conn, second.id)
+            .await
+            .expect("delete workbench");
+        let moved = crate::db::service::collaboration_room_service::get(&db.conn, &room.id)
+            .await
+            .expect("room survives");
+        assert_eq!(moved.workbench_id, 1);
+        let listed = crate::db::service::collaboration_room_service::list(&db.conn, 1)
+            .await
+            .expect("list main");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, room.id);
+    }
 }

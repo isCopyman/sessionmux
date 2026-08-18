@@ -360,6 +360,15 @@ pub async fn room_rename(
     ))
 }
 
+pub async fn room_delete(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<RoomIdParams>,
+) -> Result<Json<()>, AppCommandError> {
+    collaboration::collaboration_room_delete_core(&state.db.conn, &state.emitter, &params.room_id)
+        .await?;
+    Ok(Json(()))
+}
+
 pub async fn room_assign_collection(
     Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<AssignRoomCollectionParams>,

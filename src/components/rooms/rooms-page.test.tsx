@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { NextIntlClientProvider } from "next-intl"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -16,6 +16,8 @@ const api = vi.hoisted(() => ({
   markCollaborationRoomSeen: vi.fn(),
   postCollaborationRoomMessage: vi.fn(),
   refreshCatalog: vi.fn(),
+  deleteCollaborationRoom: vi.fn(),
+  closeTab: vi.fn(),
 }))
 
 vi.mock("@/lib/api", () => ({
@@ -26,6 +28,7 @@ vi.mock("@/lib/api", () => ({
   addCollaborationRoomMembers: vi.fn(),
   removeCollaborationRoomMember: vi.fn(),
   renameCollaborationRoom: vi.fn(),
+  deleteCollaborationRoom: api.deleteCollaborationRoom,
 }))
 
 vi.mock("@/lib/platform", () => ({
@@ -33,7 +36,11 @@ vi.mock("@/lib/platform", () => ({
 }))
 
 vi.mock("@/contexts/tab-context", () => ({
-  useTabActions: () => ({ openTab: vi.fn() }),
+  useTabActions: () => ({ openTab: vi.fn(), closeTab: api.closeTab }),
+}))
+
+vi.mock("@/stores/tab-store", () => ({
+  makeRoomTabId: (id: string) => `room-${id}`,
 }))
 
 vi.mock("@/stores/app-workspace-store", () => ({
@@ -275,5 +282,24 @@ describe("RoomWorkspace", () => {
 
     expect(await screen.findByText("looks good")).toBeTruthy()
     expect(screen.getByText("Original post is not loaded")).toBeTruthy()
+  })
+
+  it("deletes the room through the API and closes its tab", async () => {
+    api.getCollaborationRoomTimeline.mockResolvedValue(timeline([event()]))
+    api.deleteCollaborationRoom.mockResolvedValue(undefined)
+
+    renderRoom()
+
+    expect(await screen.findByText("newest post")).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "Delete room" }))
+    const dialog = await screen.findByRole("dialog")
+    expect(within(dialog).getByText("Delete this room?")).toBeTruthy()
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete room" }))
+
+    await waitFor(() => {
+      expect(api.deleteCollaborationRoom).toHaveBeenCalledWith(roomId)
+    })
+    expect(api.closeTab).toHaveBeenCalledWith(`room-${roomId}`)
+    expect(api.refreshCatalog).toHaveBeenCalled()
   })
 })

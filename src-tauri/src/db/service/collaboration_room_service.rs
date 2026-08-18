@@ -581,6 +581,45 @@ pub async fn rename(
     get(conn, room_id).await
 }
 
+pub async fn delete(conn: &DatabaseConnection, room_id: &str) -> Result<i32, DbError> {
+    let workbench_id = room_workbench_id(conn, room_id).await?;
+    let txn = conn.begin().await?;
+    txn.execute(statement(
+        "DELETE FROM conversation_prompt_queue_item \
+         WHERE origin_event_id IN ( \
+             SELECT id FROM collaboration_event \
+             WHERE room_id = ? AND COALESCE(visibility, 'direct') = 'room' \
+         )",
+        vec![room_id.into()],
+    ))
+    .await?;
+    txn.execute(statement(
+        "UPDATE collaboration_event \
+         SET reply_to_event_id = NULL \
+         WHERE room_id = ? AND COALESCE(visibility, 'direct') = 'room'",
+        vec![room_id.into()],
+    ))
+    .await?;
+    txn.execute(statement(
+        "DELETE FROM collaboration_event \
+         WHERE room_id = ? AND COALESCE(visibility, 'direct') = 'room'",
+        vec![room_id.into()],
+    ))
+    .await?;
+    let removed = txn
+        .execute(statement(
+            "DELETE FROM collaboration_room WHERE id = ?",
+            vec![room_id.into()],
+        ))
+        .await?
+        .rows_affected();
+    if removed == 0 {
+        return Err(DbError::NotFound(format!("Room {room_id}")));
+    }
+    txn.commit().await?;
+    Ok(workbench_id)
+}
+
 pub async fn assign_to_collection(
     conn: &DatabaseConnection,
     room_ids: Vec<String>,
@@ -1010,6 +1049,80 @@ mod tests {
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].id, room.id);
         assert_eq!(listed[0].member_count, 2);
+    }
+
+    #[tokio::test]
+    async fn delete_room_drops_events_members_and_the_room() {
+        let (db, a, b, _) = seeded().await;
+        let room = make_room(&db, a, vec![a, b]).await;
+        crate::db::service::collaboration_service::post_room(
+            &db.conn,
+            PostRoomMessageInput {
+                room_id: room.id.clone(),
+                source_conversation_id: a,
+                target_conversation_ids: vec![b],
+                mention_all: false,
+                body: "check this".into(),
+                client_dedupe_id: "room-delete-1".into(),
+                invocation_policy: CollaborationInvocationPolicy::InvokeWhenIdle,
+                delivery_hint: Default::default(),
+                expects_reply: true,
+                urgency: Default::default(),
+                reply_to_event_id: None,
+                mention_human: false,
+                author_kind: Default::default(),
+            },
+        )
+        .await
+        .expect("post");
+
+        let workbench_id = delete(&db.conn, &room.id).await.expect("delete room");
+        assert_eq!(workbench_id, 1);
+        assert!(get(&db.conn, &room.id).await.is_err());
+        assert!(list(&db.conn, 1).await.unwrap().is_empty());
+
+        let events: i64 = db
+            .conn
+            .query_one(Statement::from_string(
+                DbBackend::Sqlite,
+                format!(
+                    "SELECT COUNT(*) AS count FROM collaboration_event WHERE room_id = '{}'",
+                    room.id
+                ),
+            ))
+            .await
+            .unwrap()
+            .unwrap()
+            .try_get("", "count")
+            .unwrap();
+        assert_eq!(events, 0);
+        let members: i64 = db
+            .conn
+            .query_one(Statement::from_string(
+                DbBackend::Sqlite,
+                format!(
+                    "SELECT COUNT(*) AS count FROM collaboration_room_member WHERE room_id = '{}'",
+                    room.id
+                ),
+            ))
+            .await
+            .unwrap()
+            .unwrap()
+            .try_get("", "count")
+            .unwrap();
+        assert_eq!(members, 0);
+        let queued: i64 = db
+            .conn
+            .query_one(Statement::from_string(
+                DbBackend::Sqlite,
+                "SELECT COUNT(*) AS count FROM conversation_prompt_queue_item".to_owned(),
+            ))
+            .await
+            .unwrap()
+            .unwrap()
+            .try_get("", "count")
+            .unwrap();
+        assert_eq!(queued, 0);
     }
 
     #[tokio::test]

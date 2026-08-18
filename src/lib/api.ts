@@ -2249,6 +2249,10 @@ export async function renameCollaborationRoom(
   return getTransport().call("collaboration_room_rename", { roomId, title })
 }
 
+export async function deleteCollaborationRoom(roomId: string): Promise<void> {
+  return getTransport().call("collaboration_room_delete", { roomId })
+}
+
 export async function assignRoomsToCollection(
   roomIds: string[],
   collectionId?: number | null,

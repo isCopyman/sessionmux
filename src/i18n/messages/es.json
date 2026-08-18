@@ -5231,6 +5231,10 @@
     "replyTo": "Replying to {name}",
     "cancelReply": "Cancel reply",
     "quotedMissing": "El mensaje original no está cargado",
+    "delete": "Eliminar sala",
+    "deleteTitle": "¿Eliminar esta sala?",
+    "deleteConfirm": "Los mensajes, los miembros y esta pestaña se eliminarán. Las Sessions no se ven afectadas.",
+    "deleted": "Sala eliminada",
     "roleOwner": "owner",
     "roleMember": "member"
   }

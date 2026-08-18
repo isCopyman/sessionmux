@@ -5231,6 +5231,10 @@
     "replyTo": "Replying to {name}",
     "cancelReply": "Cancel reply",
     "quotedMissing": "Originalbeitrag nicht geladen",
+    "delete": "Raum löschen",
+    "deleteTitle": "Diesen Raum löschen?",
+    "deleteConfirm": "Beiträge, Mitglieder und dieser Tab werden gelöscht. Die Sessions bleiben erhalten.",
+    "deleted": "Raum gelöscht",
     "roleOwner": "owner",
     "roleMember": "member"
   }
