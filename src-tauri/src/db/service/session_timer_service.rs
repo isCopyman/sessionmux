@@ -86,11 +86,19 @@ pub async fn list(
     rows.iter().map(parse_timer).collect()
 }
 
+/// Every enabled timer whose Session still exists. A soft-deleted Session
+/// keeps its rows, but its timers must stop earning queue entries: the engine
+/// scans this list for due candidates, so the liveness join is the bouncer.
 pub async fn enabled(conn: &impl ConnectionTrait) -> Result<Vec<SessionTimerInfo>, DbError> {
     let rows = conn
         .query_all(statement(
-            "SELECT * FROM conversation_timer WHERE enabled = 1 \
-             ORDER BY conversation_id ASC, created_at ASC",
+            "SELECT t.id, t.conversation_id, t.idle_secs, t.prompt_text, t.enabled, \
+                    t.last_fired_at, t.fire_count, t.strike_count, \
+                    t.auto_paused_at, t.auto_pause_reason, t.created_at, t.updated_at \
+             FROM conversation_timer t \
+             JOIN conversation c ON c.id = t.conversation_id AND c.deleted_at IS NULL \
+             WHERE t.enabled = 1 \
+             ORDER BY t.conversation_id ASC, t.created_at ASC",
             vec![],
         ))
         .await?;
@@ -433,6 +441,28 @@ mod tests {
         .unwrap();
         assert!(revived.auto_paused_at.is_none());
         assert_eq!(revived.strike_count, 0);
+    }
+
+    #[tokio::test]
+    async fn enabled_skips_timers_whose_conversation_was_deleted() {
+        let (db, conversation_id) = setup().await;
+        create(&db.conn, input(conversation_id, "doomed"))
+            .await
+            .unwrap();
+        assert_eq!(enabled(&db.conn).await.unwrap().len(), 1);
+
+        db.conn
+            .execute(Statement::from_sql_and_values(
+                DbBackend::Sqlite,
+                "UPDATE conversation SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?",
+                vec![conversation_id.into()],
+            ))
+            .await
+            .unwrap();
+        assert!(
+            enabled(&db.conn).await.unwrap().is_empty(),
+            "a soft-deleted Session's timer must stop earning queue entries"
+        );
     }
 
     #[tokio::test]
