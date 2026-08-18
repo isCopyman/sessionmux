@@ -44,7 +44,12 @@ creates membership; it does not send mail.
 1. Call `list_sessions` with a short query. If two rows share a title, pick
    by `session_id`, Harness, and folder.
 2. Private question: send a short `title` and only the body the target needs.
-3. When Codeg delivers **private** mail, the body is already in that turn.
+3. When Codeg delivers **private** mail, the envelope JSON has
+   `"channel":"mailbox"` and `"kind":"letter"`. The host line is
+   `channel=mailbox`. That is not a Room mention (`channel=room` /
+   `kind=room_mention`). Answer mailbox with `send_message`; answer a
+   Room @ with `post_room`. A `codeg://session/<id>` badge is only an
+   address — it does not choose the channel.
    Call `read_message(event_id)` to mark it read. Use `list_inbox` if you
    need titles you did not consume. Time-out reminders are title-only; they
    do not repeat the body.
@@ -74,4 +79,6 @@ Never omit `reply_to_event_id` just because you already answered once.
 - Never use a display name or `@` text as the final address.
 - Never invent the body from a title or reminder digest.
 - Never pass `room_id` to `send_message`. Rooms use `post_room`.
+- A Room mention envelope (`channel=room`) is not inbox mail. Do not
+  answer it with this skill's tools.
 - If these tools are missing, say collaboration is unavailable.

@@ -12,6 +12,28 @@ create a delivery so that Session looks at the Room.
 This is not private mail. Do not use `send_message` / `list_inbox` /
 `read_message` for Room work.
 
+## How Codeg marks a Room @
+
+When someone `@`s you in a Room, Codeg injects a
+`CODEG_SESSION_MESSAGE_V1` envelope (same wrapper as mailbox, different
+channel):
+
+- JSON: `"channel":"room"`, `"kind":"room_mention"`, plus `roomId`
+- Host line: `channel=room`
+- Queue label: `Codeg room: …`
+
+That is **not** a mailbox letter. `list_inbox` will not show it.
+Reply with `post_room` and `reply_to_event_id`. Never `send_message`
+unless the operator asked for a private letter.
+
+A `codeg://session/<id>` link is only an address. It does not pick
+Room vs mailbox. The verb is the tool: `post_room` here,
+`send_message` for private mail, `get_session_info` when the current
+human turn only pointed at a Session.
+
+Free-text `@alice` never wakes anyone. Use `mention_session_ids`,
+`mention_all`, or `mention_human`.
+
 ## Tools
 
 - `list_rooms`: Rooms this Session already belongs to. Includes
@@ -32,7 +54,6 @@ This is not private mail. Do not use `send_message` / `list_inbox` /
   - Pass `mention_human=true` (or `codeg://human`) to tap the operator.
     That does not wake a Session.
   - File / path text in the body is context, not a Delivery.
-  - Free-text `@alice` does not wake anyone. Use the structured fields.
 
 Lifecycle (create, add a member) is Host Control via `codeg_help` /
 `codeg_use`:
@@ -61,7 +82,7 @@ A follow-up on the same Room thread must set it.
 
 - You must already be a member to `read_room` or `post_room`.
 - Mentions must already be members.
-- Never answer a Room mention with `send_message`.
+- Never answer a Room mention (`channel=room`) with `send_message`.
 - Never copy a Room post into a private letter unless asked.
 - A `codeg://session/<id>` badge in the current user turn is context,
   not an automatic Room mention. Use `mention_session_ids` (or

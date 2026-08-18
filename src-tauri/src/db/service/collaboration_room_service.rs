@@ -1168,10 +1168,14 @@ mod tests {
             panic!("Room @ must resolve to one text envelope");
         };
         assert!(text.contains("\"kind\":\"room_mention\""));
+        assert!(text.contains("\"channel\":\"room\""));
+        assert!(text.contains("channel=room"));
+        assert!(draft.display_text.starts_with("Codeg room:"));
         assert!(text.contains("check this"));
         assert!(text.contains("Call read_room"));
         assert!(!text.contains("Call list_inbox"));
         assert!(!text.contains("Call read_message"));
+        assert!(!text.contains("channel=mailbox"));
 
         db.conn
             .execute(Statement::from_sql_and_values(

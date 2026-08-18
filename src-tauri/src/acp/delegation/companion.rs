@@ -1957,7 +1957,8 @@ pub fn render_session_room_read_result(outcome: &Value) -> Value {
             .cloned()
             .unwrap_or_default();
         let mut lines = vec![
-            format!("Room {room_id}: {title}"),
+            format!("Room timeline (not mailbox) {room_id}: {title}"),
+            "This is a shared Room ledger. Posts never appear in list_inbox.".to_string(),
             "Reply with post_room using this room_id. Mentions wake members; omit them to record only.".to_string(),
         ];
         if events.is_empty() {

@@ -91,6 +91,30 @@ describe("parseCollaborationMessageEnvelope", () => {
     ).toBe("keep")
   })
 
+  it("parses a Room mention as a separate channel from mailbox letters", () => {
+    const text = envelope(
+      {
+        kind: "room_mention",
+        channel: "room",
+        roomId: "rm_plan",
+        letterTitle: "Need eyes",
+      },
+      "check the plan"
+    )
+    expect(parseCollaborationMessageEnvelope(text)).toEqual(
+      expect.objectContaining({
+        kind: "room_mention",
+        channel: "room",
+        roomId: "rm_plan",
+        body: "check the plan",
+      })
+    )
+    expect(parseCollaborationMessageEnvelope(envelope())?.channel).toBe(
+      "mailbox"
+    )
+    expect(parseCollaborationMessageEnvelope(envelope())?.kind).toBe("letter")
+  })
+
   it("recognizes body-free mailbox notifications so the UI can project the durable card", () => {
     const text = [
       `<<<CODEG_SESSION_MESSAGE_V1:${EVENT_ID}>>>`,

@@ -294,6 +294,49 @@ describe("applyCollaborationTimelineProjection", () => {
     )
     expect(result.map((item) => item.kind)).toEqual(["turn"])
   })
+
+  it("folds a Room mention even when mailbox inbound is empty", () => {
+    const roomEnvelope = [
+      "<<<CODEG_SESSION_MESSAGE_V1:b80f5bea-2dd6-41b5-8a07-b68d49fe269a>>>",
+      JSON.stringify({
+        version: 1,
+        channel: "room",
+        kind: "room_mention",
+        eventId: "b80f5bea-2dd6-41b5-8a07-b68d49fe269a",
+        deliveryId: "delivery-1",
+        sourceConversationId: 42,
+        sourceTitle: "Reviewer",
+        sourceAgentType: "codex",
+        sourceFolderPath: "/repo",
+        letterTitle: "Need eyes",
+        expectsReply: true,
+        replyToEventId: null,
+        roomId: "rm_plan",
+      }),
+      "channel=room",
+      "This is a Codeg Room mention in rm_plan.",
+      "--- message ---",
+      "check the plan",
+      "<<<END_CODEG_SESSION_MESSAGE_V1:b80f5bea-2dd6-41b5-8a07-b68d49fe269a>>>",
+    ].join("\n")
+    const result = applyCollaborationTimelineProjection(
+      [userItem("turn-1", roomEnvelope)],
+      []
+    )
+    expect(result.map((item) => item.kind)).toEqual(["turn"])
+    const user = result[0] as TurnItem
+    expect(user.group.parts).toEqual([{ type: "text", text: "check the plan" }])
+    expect(user.group.sessionMail).toEqual({
+      conversationId: 42,
+      title: "Reviewer",
+      agentType: "codex",
+      eventIds: ["b80f5bea-2dd6-41b5-8a07-b68d49fe269a"],
+      source: "session",
+      letterTitle: "Need eyes",
+      channel: "room",
+      roomId: "rm_plan",
+    })
+  })
 })
 
 describe("singletonSourceTurns", () => {

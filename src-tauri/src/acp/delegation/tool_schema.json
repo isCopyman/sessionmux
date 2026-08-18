@@ -144,7 +144,7 @@
   },
   {
     "name": "send_message",
-    "description": "Send a durable private mailbox letter. Letters have a short title and a body. The first delivery copies title plus body into the target's prompt (truncated if long). Call read_message(event_id) to mark the letter read and to fetch any truncated remainder. Time-out reminders are title-only and do not repeat the body. This is not a Room post — use post_room for shared Rooms. priority=high (default) tells the target now: steer into the running turn when that channel exists, otherwise stop the turn and deliver; a closed Session is started. priority=normal waits for the target's next ordinary turn — the letter is still for the Agent. For a private reply or a follow-up supplement on the same thread, target the same peer and set reply_to_event_id. Omitting reply_to_event_id starts a new thread.",
+    "description": "Send a durable private mailbox letter. Letters have a short title and a body. The first delivery copies title plus body into the target's prompt (truncated if long). Call read_message(event_id) to mark the letter read and to fetch any truncated remainder. Time-out reminders are title-only and do not repeat the body. Mailbox envelopes are marked channel=mailbox and kind=letter. This is not a Room post — Room mentions are channel=room / kind=room_mention and use post_room. priority=high (default) tells the target now: steer into the running turn when that channel exists, otherwise stop the turn and deliver; a closed Session is started. priority=normal waits for the target's next ordinary turn — the letter is still for the Agent. For a private reply or a follow-up supplement on the same thread, target the same peer and set reply_to_event_id. Omitting reply_to_event_id starts a new thread.",
     "inputSchema": {
       "type": "object",
       "required": ["target_session_ids", "title", "content"],
@@ -259,7 +259,7 @@
   },
   {
     "name": "read_room",
-    "description": "Read a shared Room timeline this Session belongs to. Returns members and posts with full bodies. Default is the newest window. Set unread=true to catch up from this Session's last-read cursor (all posts, not only @mentions) and advance that cursor. Set before_event_id to page older. Opening consumes Room @ deliveries in the returned window but does not clear a reply obligation. Room posts never appear in list_inbox. A Room mention envelope already includes that post's body. Reply with post_room using the same room_id and reply_to_event_id; do not send_message a private letter unless asked.",
+    "description": "Read a shared Room timeline this Session belongs to. Returns members and posts with full bodies. Default is the newest window. Set unread=true to catch up from this Session's last-read cursor (all posts, not only @mentions) and advance that cursor. Set before_event_id to page older. Opening consumes Room @ deliveries in the returned window but does not clear a reply obligation. Room posts never appear in list_inbox. A Room mention envelope is marked channel=room and kind=room_mention and already includes that post's body. Reply with post_room using the same room_id and reply_to_event_id; do not send_message a private letter unless asked.",
     "inputSchema": {
       "type": "object",
       "required": ["room_id"],

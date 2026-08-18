@@ -532,9 +532,11 @@ fn prompt_draft_from_delivery_row(row: &QueryResult) -> Result<PromptQueueDraft,
         .unwrap_or_else(|| "direct".to_string());
     let room_id: Option<String> = row.try_get("", "room_id")?;
     let is_room = visibility == "room" && room_id.is_some();
+    let channel = if is_room { "room" } else { "mailbox" };
     let (body_for_prompt, truncated) = truncate_first_delivery_body(&body);
     let metadata = serde_json::json!({
         "version": ENVELOPE_VERSION,
+        "channel": channel,
         "kind": if is_room { "room_mention" } else { "letter" },
         "eventId": event_id,
         "deliveryId": delivery_id,
@@ -568,7 +570,8 @@ fn prompt_draft_from_delivery_row(row: &QueryResult) -> Result<PromptQueueDraft,
             )
         };
         format!(
-            "This is a Codeg Room mention in {room}. It is not a private letter from Session {source_conversation_id}.\n\
+            "channel={channel}\n\
+This is a Codeg Room mention in {room}. It is not a private letter from Session {source_conversation_id}.\n\
 Mention from {source_label} (#{source_conversation_id}).{reply_hint}\n\
 {consume} Reply with post_room using the same room_id and reply_to_event_id={event_id}. Later supplements must also set reply_to_event_id or they start a new thread. Do not send_message a private letter unless asked."
         )
@@ -583,7 +586,8 @@ Mention from {source_label} (#{source_conversation_id}).{reply_hint}\n\
             )
         };
         format!(
-            "This is a Codeg mailbox letter from {source_label} (#{source_conversation_id}). It is not a Room post.\n\
+            "channel={channel}\n\
+This is a Codeg mailbox letter from {source_label} (#{source_conversation_id}). It is not a Room post.\n\
 Title: 《{letter_title}》.{reply_hint}\n\
 {consume} If a reply is needed, send_message to sourceConversationId and set reply_to_event_id={event_id}. Later supplements to the same thread must also set reply_to_event_id; omitting it starts a new root."
         )
@@ -597,7 +601,11 @@ Title: 《{letter_title}》.{reply_hint}\n\
     );
     Ok(PromptQueueDraft {
         blocks: vec![PromptInputBlock::Text { text }],
-        display_text: format!("Codeg mailbox: {letter_title}"),
+        display_text: if is_room {
+            format!("Codeg room: {letter_title}")
+        } else {
+            format!("Codeg mailbox: {letter_title}")
+        },
     })
 }
 
@@ -4275,6 +4283,8 @@ mod tests {
             "first delivery must carry the letter body: {after}"
         );
         assert!(text.contains("\"kind\":\"letter\""));
+        assert!(text.contains("\"channel\":\"mailbox\""));
+        assert!(text.contains("channel=mailbox"));
         assert!(text.contains("Call read_message"));
         assert!(!text.contains("Call list_inbox to see titles"));
         assert!(!text.contains("The letter body is not in this prompt"));

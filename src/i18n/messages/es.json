@@ -5123,6 +5123,7 @@
     "fromSession": "From {name}",
     "toSession": "To {name}",
     "fromPrefix": "From",
+    "channelRoom": "Room",
     "toPrefix": "To",
     "fromMailSystem": "Del sistema de correo",
     "openedLetter": "Opened letter",

@@ -1,6 +1,6 @@
 "use client"
 
-import { CornerDownRight, Inbox, Mail, Send } from "lucide-react"
+import { CornerDownRight, Inbox, Mail, Send, Users } from "lucide-react"
 import { useTranslations } from "next-intl"
 
 import { cn } from "@/lib/utils"
@@ -64,6 +64,8 @@ export function SessionMailCard({
   expectsReply,
   letterKey,
   action,
+  channel = "mailbox",
+  roomId,
 }: {
   direction: "inbound" | "outbound" | "system"
   eventId?: string | null
@@ -78,6 +80,8 @@ export function SessionMailCard({
   expectsReply?: boolean | null
   letterKey?: string
   action?: "opened" | "sent"
+  channel?: "mailbox" | "room"
+  roomId?: string | null
 }) {
   const t = useTranslations("Collaboration")
   const live = useMailDelivery(eventId)
@@ -92,20 +96,29 @@ export function SessionMailCard({
     letterListPreview(parent?.subject, parent?.body, 32)
   const replyId = replyToEventId ?? live?.replyToEventId ?? null
 
-  const DirectionIcon =
-    direction === "outbound" ? Send : direction === "inbound" ? Inbox : Mail
+  const isRoom = channel === "room"
+  const DirectionIcon = isRoom
+    ? Users
+    : direction === "outbound"
+      ? Send
+      : direction === "inbound"
+        ? Inbox
+        : Mail
 
   return (
     <article
       data-session-mail-card={direction}
       data-letter-event-id={eventId ?? undefined}
+      data-collaboration-channel={channel}
       className={cn(
         // Letters live on the agent's side of the timeline: the right column
         // stays reserved for what the human typed. Direction is carried by the
         // card itself (icon, tint, 来自/发给), not by alignment.
         "group/letter w-full max-w-[36rem] overflow-hidden rounded-lg border",
         direction === "inbound" &&
-          "self-start border-sky-500/30 bg-sky-500/[0.05]",
+          (isRoom
+            ? "self-start border-violet-500/30 bg-violet-500/[0.05]"
+            : "self-start border-sky-500/30 bg-sky-500/[0.05]"),
         direction === "outbound" && "self-start border-border bg-muted/55",
         direction === "system" &&
           "mx-auto self-center border-dashed bg-muted/25"
@@ -116,6 +129,14 @@ export function SessionMailCard({
         <div className="min-w-0 flex-1 px-3 py-2">
           <header className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
             <DirectionIcon className="h-3 w-3 shrink-0" aria-hidden="true" />
+            {isRoom ? (
+              <span className="rounded bg-violet-500/15 px-1.5 py-0.5 text-[10px] font-medium text-violet-800 dark:text-violet-300">
+                {t("channelRoom")}
+              </span>
+            ) : null}
+            {isRoom && roomId ? (
+              <span className="truncate font-mono text-[10px]">{roomId}</span>
+            ) : null}
             {direction === "system" ? (
               <span className="font-medium text-foreground">
                 {t("fromMailSystem")}

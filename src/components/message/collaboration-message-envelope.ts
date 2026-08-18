@@ -1,3 +1,9 @@
+export type CollaborationEnvelopeKind =
+  | "system_notify"
+  | "letter"
+  | "room_mention"
+export type CollaborationChannel = "mailbox" | "room"
+
 export interface CollaborationMessageEnvelope {
   version: 1
   eventId: string
@@ -7,7 +13,9 @@ export interface CollaborationMessageEnvelope {
   sourceAgentType: string
   sourceFolderPath: string | null
   letterTitle: string | null
-  kind: "system_notify" | "letter"
+  kind: CollaborationEnvelopeKind
+  channel: CollaborationChannel
+  roomId: string | null
   expectsReply: boolean
   replyToEventId: string | null
   body: string
@@ -67,14 +75,24 @@ export function parseCollaborationMessageEnvelope(
     ? metadata.letterTitle
     : null
   const body = lines.slice(separatorIndex + 1, -1).join("\n")
-  const kind =
-    metadata.kind === "letter"
-      ? "letter"
-      : metadata.kind === "system_notify"
-        ? "system_notify"
-        : body.trim().length > 0
-          ? "letter"
-          : "system_notify"
+  const kind: CollaborationEnvelopeKind =
+    metadata.kind === "room_mention"
+      ? "room_mention"
+      : metadata.kind === "letter"
+        ? "letter"
+        : metadata.kind === "system_notify"
+          ? "system_notify"
+          : body.trim().length > 0
+            ? "letter"
+            : "system_notify"
+  const roomId =
+    typeof metadata.roomId === "string" && metadata.roomId.trim()
+      ? metadata.roomId
+      : null
+  const channel: CollaborationChannel =
+    metadata.channel === "room" || kind === "room_mention" || roomId != null
+      ? "room"
+      : "mailbox"
 
   return {
     version: 1,
@@ -86,10 +104,18 @@ export function parseCollaborationMessageEnvelope(
     sourceFolderPath: metadata.sourceFolderPath,
     letterTitle,
     kind,
+    channel,
+    roomId,
     expectsReply: metadata.expectsReply,
     replyToEventId: metadata.replyToEventId,
     body,
   }
+}
+
+export function isRoomMentionEnvelope(
+  envelope: Pick<CollaborationMessageEnvelope, "kind" | "channel">
+): boolean {
+  return envelope.kind === "room_mention" || envelope.channel === "room"
 }
 
 /**

@@ -5123,6 +5123,7 @@
     "fromSession": "来自 {name}",
     "toSession": "发给 {name}",
     "fromPrefix": "来自",
+    "channelRoom": "群聊",
     "toPrefix": "发给",
     "fromMailSystem": "来自邮件系统",
     "openedLetter": "已打开信件",

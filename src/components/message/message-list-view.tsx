@@ -96,6 +96,7 @@ import { SessionMailLookupProvider } from "./session-mail-lookup"
 import { useSessionLetterUiStore } from "@/stores/session-letter-ui-store"
 import {
   extractCollaborationEnvelopes,
+  isRoomMentionEnvelope,
   stripProjectedCollaborationEnvelopes,
 } from "./collaboration-message-envelope"
 import {
@@ -148,6 +149,8 @@ export interface SessionMailAttribution {
   eventIds: string[]
   source?: "session" | "system"
   letterTitle?: string | null
+  channel?: "mailbox" | "room"
+  roomId?: string | null
 }
 
 export interface ResolvedMessageGroup {
@@ -260,10 +263,6 @@ export function applyCollaborationTimelineProjection(
   const inbound = deliveries.filter(
     (delivery) => delivery.state !== "dismissed"
   )
-  if (inbound.length === 0) {
-    return items
-  }
-
   const byEventId = new Map(
     inbound.map((delivery) => [delivery.eventId, delivery])
   )
@@ -274,7 +273,7 @@ export function applyCollaborationTimelineProjection(
     if (existing) existing.push(delivery)
     else byTurn.set(delivery.embeddedTurnRef, [delivery])
   }
-  const allEventIds = new Set(inbound.map((delivery) => delivery.eventId))
+  const mailboxEventIds = new Set(inbound.map((delivery) => delivery.eventId))
   const projected: ThreadRenderItem[] = []
   const used = new Set<string>()
 
@@ -284,6 +283,7 @@ export function applyCollaborationTimelineProjection(
       continue
     }
 
+    const envelopes: ReturnType<typeof extractCollaborationEnvelopes> = []
     const matched: CollaborationDelivery[] = []
     const seen = new Set<string>()
     const pushMatch = (delivery: CollaborationDelivery | undefined) => {
@@ -297,32 +297,35 @@ export function applyCollaborationTimelineProjection(
     for (const part of item.group.parts) {
       if (part.type !== "text") continue
       for (const envelope of extractCollaborationEnvelopes(part.text)) {
+        envelopes.push(envelope)
         pushMatch(byEventId.get(envelope.eventId))
       }
     }
     for (const delivery of matched) used.add(delivery.id)
 
-    let changed = matched.length > 0
+    const roomEnvelopes = envelopes.filter(isRoomMentionEnvelope)
+    let changed = matched.length > 0 || roomEnvelopes.length > 0
     let systemNotify = false
     let letterTitle: string | null = null
-    for (const part of item.group.parts) {
-      if (part.type !== "text") continue
-      for (const envelope of extractCollaborationEnvelopes(part.text)) {
-        if (envelope.kind === "system_notify") {
-          systemNotify = true
-        }
-        if (envelope.letterTitle?.trim()) {
-          letterTitle = envelope.letterTitle.trim()
-        }
+    for (const envelope of envelopes) {
+      if (envelope.kind === "system_notify") {
+        systemNotify = true
+      }
+      if (envelope.letterTitle?.trim()) {
+        letterTitle = envelope.letterTitle.trim()
       }
     }
     if (!letterTitle) {
       const subject = matched[0]?.subject?.trim()
       if (subject) letterTitle = subject
     }
+    const stripIds = new Set([
+      ...mailboxEventIds,
+      ...roomEnvelopes.map((envelope) => envelope.eventId),
+    ])
     const parts = item.group.parts.flatMap((part): AdaptedContentPart[] => {
       if (part.type !== "text") return [part]
-      const text = stripProjectedCollaborationEnvelopes(part.text, allEventIds)
+      const text = stripProjectedCollaborationEnvelopes(part.text, stripIds)
       if (text === part.text) return [part]
       changed = true
       return text.length > 0 ? [{ ...part, text }] : []
@@ -330,13 +333,13 @@ export function applyCollaborationTimelineProjection(
     // Boolean first: `parts.every(...)` inline would let the compiler narrow
     // `parts` to exclude the "text" variant we unshift right below.
     const hasTextPart = parts.some((part) => part.type === "text")
-    if (matched.length > 0 && !hasTextPart) {
+    if (!hasTextPart) {
       if (systemNotify) {
         if (letterTitle) {
           parts.unshift({ type: "text", text: letterTitle })
           changed = true
         }
-      } else {
+      } else if (matched.length > 0) {
         const body = matched
           .map((delivery) => delivery.body)
           .filter((text) => text.length > 0)
@@ -345,8 +348,30 @@ export function applyCollaborationTimelineProjection(
           parts.unshift({ type: "text", text: body })
           changed = true
         }
+      } else if (roomEnvelopes.length > 0) {
+        const body = roomEnvelopes
+          .map((envelope) => envelope.body)
+          .filter((text) => text.length > 0)
+          .join("\n\n")
+        if (body) {
+          parts.unshift({ type: "text", text: body })
+          changed = true
+        }
       }
     }
+    const roomAttribution =
+      matched.length === 0 && roomEnvelopes.length > 0
+        ? {
+            conversationId: roomEnvelopes[0].sourceConversationId,
+            title: roomEnvelopes[0].sourceTitle,
+            agentType: roomEnvelopes[0].sourceAgentType,
+            eventIds: roomEnvelopes.map((envelope) => envelope.eventId),
+            source: "session" as const,
+            letterTitle,
+            channel: "room" as const,
+            roomId: roomEnvelopes[0].roomId,
+          }
+        : null
     const sessionMail = systemNotify
       ? {
           conversationId: matched[0]?.source.conversationId ?? 0,
@@ -365,7 +390,7 @@ export function applyCollaborationTimelineProjection(
             source: "session" as const,
             letterTitle,
           }
-        : item.group.sessionMail
+        : (roomAttribution ?? item.group.sessionMail)
     const nextItem = changed
       ? {
           ...item,
@@ -806,6 +831,8 @@ const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
           fromAgentType={group.sessionMail.agentType}
           subject={group.sessionMail.letterTitle}
           body={mailText}
+          channel={group.sessionMail.channel}
+          roomId={group.sessionMail.roomId}
         />
       </div>
     )
