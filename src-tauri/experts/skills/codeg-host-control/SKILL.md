@@ -1,6 +1,6 @@
 ---
 name: codeg-host-control
-description: Use when a managed Codeg Agent needs to create, inspect or rename Codeg Sessions, organize Sessions into Collections, manage saved Workbenches, or create/list shared Rooms through Codeg's progressive Host Control MCP.
+description: Use when a managed Codeg Agent needs to create, inspect or rename Codeg Sessions, organize Sessions into Collections, manage saved Workbenches, or create/list shared Rooms through Codeg's progressive Host Control MCP. Posting in a Room uses the post_room tool from the codeg-room skill, not Host Control.
 ---
 
 # Codeg Host Control
@@ -62,17 +62,18 @@ the idempotency key outside model-controlled arguments.
 
 ## Available Room actions
 
-- `room.list`: list Rooms on a Workbench (defaults to Workbench 1).
+- `room.list`: list Rooms on a Workbench (defaults to Workbench 1). Prefer
+  `list_rooms` when you only need Rooms you already belong to.
 - `room.create`: create a shared Room. You become owner; pass at least one
   other Session id.
 - `room.add_member`: add an existing Session to a Room you already belong to.
-- `room.post`: store-only Room post. It does not wake anyone. To `@` a
-  member and enqueue a turn, use `send_message` with `room_id` (see
-  `codeg-session-collaboration`). A follow-up on the same Room thread
-  must set `reply_to_event_id`; omitting it starts a new root.
+
+Do not post through Host Control. Read and write the ledger with
+`read_room` / `post_room` (see `codeg-room`). Private mail stays on
+`send_message` without a Room id.
 
 Room posts are never private mail. Do not answer a Room mention with
-`send_message` that omits `room_id`.
+`send_message`.
 
 Workbench Pane layout, window mounts and focus remain device-local.
 `workbench.place_session` exposes only the existing tab/right/down placement

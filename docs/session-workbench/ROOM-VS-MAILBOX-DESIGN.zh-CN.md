@@ -1,6 +1,6 @@
 # 群聊、Mailbox 与人类角色
 
-> 状态：设计拍板稿（2026-08-18）。先审文档，再改代码。  
+> 状态：设计拍板稿（2026-08-18）。实现按项推进：Agent 表面已拆开；人类作者、Room 一等 item、群 UI 仍待做。  
 > 问题：群聊是不是另一套消息系统？Mailbox 是不是完全私聊？人类该打字还是该发邮件？CCCC 怎么做？  
 > 已有长文：[群聊 RFC](./GROUP-CONVERSATION-RFC.zh-CN.md)、[通信 RFC](./SESSION-COMMUNICATION-RFC.zh-CN.md)、[产品场景](./PRODUCT-SPEC.zh-CN.md#48-建立一个共享讨论室)  
 > 本文只补那三份没讲清的东西：协议边界、人类三条入口、和 CCCC 的真实差别。  
@@ -12,7 +12,7 @@
 
 在作者模型和三条入口没写清之前，继续堆“加人按钮 / 树里像 Session”只会把错误心智做进 UI。
 
-**本轮冻结：** 不再继续改 Room 工作区、侧栏树、Tab kind，直到本文第 6 节拍板被接受或改写。
+**本轮继续做：** Room 工作区 / 侧栏树 / Tab 仍先不动，直到作者模型和一等 item 落地。Agent 工具表面已按第 6.7 节拆开。
 
 ## 1. Codeg 其实有三条人类入口
 
@@ -187,7 +187,7 @@ Foreman 在 CCCC 里是**第一个 Actor**，不是人类。人类 principal 固
 4. **群里的作者必须能是 `human`。** 在此之前，不要把“你主持”做成会骗人的气泡。过渡期宁可显示“未完成：人类作者”，也不要再把人写成 Session C。
 5. **Room 是单独的一等 item，不是 Session 的附件。** 身份是这段共享讨论，不是成员集合。同一批 Session 可以再建另一个 Room。它可以像 Session 一样出现在 Collection、Workbench、搜索和最近使用里，用群图标，占一个 `kind: "room"` 的内容 Tab。禁止写入 `conversation` / ACP session，禁止永远挂在某个创建者 Session 下面。
 6. **加人是 Room 生命周期，不是邮件抄送。** 后端 `add_members` / `remove_member` 已有；UI 等作者模型拍板后再做。新成员默认从现在开始。
-7. **MCP 先不动。** `send_message + room_id` 和 Host Control `room.*` 已经是同一后端。不稳定时再评估 env + skill + CLI；那是传输问题，不是群聊语义问题。
+7. **Mailbox 工具和 Room 工具拆开。** `send_message` / `list_inbox` / `read_message` 只做私信。Room 读写走 `list_rooms` / `read_room` / `post_room`。Host Control `room.*` 只管创建、列表、加人；不再用 `room.post` 或 `send_message + room_id` 发群帖。内部仍共用 Delivery / Dispatcher。
 8. **同一 Thread 可以连发补充。** 回信和“忘了一句”都必须带 `reply_to_event_id`。省略父节点 = 新开一个根，往来续不上。第一封 linked reply 清债；后面的补充还挂在这条链上。
 
 ## 7. 生命周期（人能看见的）

@@ -42,19 +42,23 @@ use crate::acp::delegation::transport::{
     client_ask_round_trip, client_commit_feedback, client_create_automation_round_trip,
     client_create_work_task_round_trip, client_feedback_round_trip,
     client_host_control_help_round_trip, client_host_control_use_round_trip,
-    client_list_inbox_round_trip, client_list_sessions_round_trip, client_read_message_round_trip,
+    client_list_inbox_round_trip, client_list_rooms_round_trip, client_list_sessions_round_trip,
+    client_post_room_round_trip, client_read_message_round_trip, client_read_room_round_trip,
     client_send_message_round_trip, client_session_round_trip, client_task_complete_round_trip,
     client_task_progress_round_trip, BrokerAskRequest, BrokerCommitFeedbackRequest,
     BrokerCreateAutomationRequest, BrokerCreateWorkTaskRequest, BrokerFeedbackRequest,
     BrokerHostControlHelpRequest, BrokerHostControlUseRequest, BrokerListInboxRequest,
-    BrokerListSessionsRequest, BrokerReadMessageRequest, BrokerResponse, BrokerSendMessageRequest,
+    BrokerListRoomsRequest, BrokerListSessionsRequest, BrokerPostRoomRequest,
+    BrokerReadMessageRequest, BrokerReadRoomRequest, BrokerResponse, BrokerSendMessageRequest,
     BrokerSessionRequest, BrokerTaskCompleteRequest, BrokerTaskProgressRequest,
 };
 use crate::acp::question::parse_questions;
 use crate::acp::session_collaboration::{
-    SessionInboxFilter, SessionMailboxScope, SessionMessageDeliveryMode, SessionMessagePriority,
-    SessionMessageSpec, DEFAULT_INBOX_LIMIT, DEFAULT_SESSION_LIST_LIMIT, MAX_INBOX_LIMIT,
-    MAX_SESSION_LIST_LIMIT, MAX_SESSION_MESSAGE_TARGETS,
+    RoomPostSpec, SessionInboxFilter, SessionMailboxScope, SessionMessageDeliveryMode,
+    SessionMessagePriority, SessionMessageSpec, DEFAULT_INBOX_LIMIT, DEFAULT_ROOM_LIST_LIMIT,
+    DEFAULT_ROOM_READ_LIMIT, DEFAULT_SESSION_LIST_LIMIT, MAX_INBOX_LIMIT, MAX_ROOM_LIST_LIMIT,
+    MAX_ROOM_READ_LIMIT, MAX_SESSION_LIST_LIMIT, MAX_SESSION_MESSAGE_TARGETS,
+    SEND_MESSAGE_ROOM_HINT,
 };
 use crate::acp::session_info::MAX_SESSION_MESSAGES;
 use crate::models::AutomationAction;
@@ -188,7 +192,8 @@ impl CompanionFeatures {
             "check_user_feedback" => self.feedback,
             "ask_user_question" => self.ask,
             "get_session_info" => self.sessions,
-            "list_sessions" | "send_message" | "list_inbox" | "read_message" => self.collaboration,
+            "list_sessions" | "send_message" | "list_inbox" | "read_message" | "list_rooms"
+            | "read_room" | "post_room" => self.collaboration,
             "task_progress" | "task_complete" => self.tasks,
             "create_automation" => self.automations,
             "create_work_task" => self.taskboard,
@@ -502,12 +507,19 @@ async fn build_tools_call_spawn(
             register_and_spawn(inflight, id, round_trip, render_session_list_result).await
         }
         "send_message" => {
-            let room_id_present = arguments
+            if arguments
                 .get("room_id")
                 .and_then(|value| value.as_str())
                 .map(str::trim)
-                .is_some_and(|value| !value.is_empty());
-            let target_session_ids = match parse_target_session_ids(&arguments, room_id_present) {
+                .is_some_and(|value| !value.is_empty())
+                || arguments
+                    .get("mention_all")
+                    .and_then(|value| value.as_bool())
+                    .unwrap_or(false)
+            {
+                return LineAction::Respond(err(id, -32602, SEND_MESSAGE_ROOM_HINT.to_string()));
+            }
+            let target_session_ids = match parse_target_session_ids(&arguments, false) {
                 Ok(ids) => ids,
                 Err(message) => return LineAction::Respond(err(id, -32602, message)),
             };
@@ -597,16 +609,6 @@ async fn build_tools_call_spawn(
                     "send_message `steer_if_supported` requires priority=high",
                 ));
             }
-            let room_id = arguments
-                .get("room_id")
-                .and_then(|value| value.as_str())
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(str::to_string);
-            let mention_all = arguments
-                .get("mention_all")
-                .and_then(|value| value.as_bool())
-                .unwrap_or(false);
             let client_dedupe_id = mcp_call_dedupe_id(&ctx.parent_connection_id, &id);
             let req = BrokerSendMessageRequest {
                 token: ctx.token.clone(),
@@ -623,8 +625,8 @@ async fn build_tools_call_spawn(
                         .unwrap_or(true),
                     reply_to_event_id,
                     client_dedupe_id,
-                    room_id,
-                    mention_all,
+                    room_id: None,
+                    mention_all: false,
                 },
             };
             let round_trip =
@@ -677,6 +679,141 @@ async fn build_tools_call_spawn(
             let round_trip =
                 Box::pin(async move { client_read_message_round_trip(&socket, &req).await });
             register_and_spawn(inflight, id, round_trip, render_session_read_result).await
+        }
+        "list_rooms" => {
+            let query = arguments
+                .get("query")
+                .and_then(|value| value.as_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string);
+            let limit =
+                parse_clamped_limit(&arguments, DEFAULT_ROOM_LIST_LIMIT, MAX_ROOM_LIST_LIMIT);
+            let req = BrokerListRoomsRequest {
+                token: ctx.token.clone(),
+                query,
+                limit: Some(limit),
+            };
+            let round_trip =
+                Box::pin(async move { client_list_rooms_round_trip(&socket, &req).await });
+            register_and_spawn(inflight, id, round_trip, render_session_room_list_result).await
+        }
+        "read_room" => {
+            let room_id = arguments
+                .get("room_id")
+                .and_then(|value| value.as_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string);
+            let Some(room_id) = room_id else {
+                return LineAction::Respond(err(
+                    id,
+                    -32602,
+                    "read_room requires a non-empty `room_id` string",
+                ));
+            };
+            let limit =
+                parse_clamped_limit(&arguments, DEFAULT_ROOM_READ_LIMIT, MAX_ROOM_READ_LIMIT);
+            let req = BrokerReadRoomRequest {
+                token: ctx.token.clone(),
+                room_id,
+                limit: Some(limit),
+            };
+            let round_trip =
+                Box::pin(async move { client_read_room_round_trip(&socket, &req).await });
+            register_and_spawn(inflight, id, round_trip, render_session_room_read_result).await
+        }
+        "post_room" => {
+            let room_id = arguments
+                .get("room_id")
+                .and_then(|value| value.as_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string);
+            let Some(room_id) = room_id else {
+                return LineAction::Respond(err(
+                    id,
+                    -32602,
+                    "post_room requires a non-empty `room_id` string",
+                ));
+            };
+            let content = arguments
+                .get("content")
+                .and_then(|value| value.as_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string);
+            let Some(content) = content else {
+                return LineAction::Respond(err(
+                    id,
+                    -32602,
+                    "post_room requires a non-empty `content` string",
+                ));
+            };
+            let title = match arguments.get("title").and_then(|value| value.as_str()) {
+                Some(raw) if !raw.trim().is_empty() => {
+                    match crate::acp::session_collaboration::normalize_letter_title(raw) {
+                        Ok(title) => title,
+                        Err(message) => return LineAction::Respond(err(id, -32602, message)),
+                    }
+                }
+                _ => String::new(),
+            };
+            let mention_session_ids =
+                match parse_session_id_list(&arguments, "mention_session_ids", true, "post_room") {
+                    Ok(ids) => ids,
+                    Err(message) => return LineAction::Respond(err(id, -32602, message)),
+                };
+            let mention_all = arguments
+                .get("mention_all")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false);
+            let priority = if let Some(raw) = arguments
+                .get("priority")
+                .and_then(|value| value.as_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                match SessionMessagePriority::parse(raw) {
+                    Some(priority) => Some(priority),
+                    None => {
+                        return LineAction::Respond(err(
+                            id,
+                            -32602,
+                            "post_room `priority` must be high or normal",
+                        ))
+                    }
+                }
+            } else {
+                None
+            };
+            let reply_to_event_id = arguments
+                .get("reply_to_event_id")
+                .and_then(|value| value.as_str())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string);
+            let client_dedupe_id = mcp_call_dedupe_id(&ctx.parent_connection_id, &id);
+            let req = BrokerPostRoomRequest {
+                token: ctx.token.clone(),
+                spec: RoomPostSpec {
+                    room_id,
+                    title,
+                    content,
+                    mention_session_ids,
+                    mention_all,
+                    priority,
+                    expects_reply: arguments
+                        .get("expects_reply")
+                        .and_then(|value| value.as_bool())
+                        .unwrap_or(false),
+                    reply_to_event_id,
+                    client_dedupe_id,
+                },
+            };
+            let round_trip =
+                Box::pin(async move { client_post_room_round_trip(&socket, &req).await });
+            register_and_spawn(inflight, id, round_trip, render_session_send_result).await
         }
         "task_progress" => {
             let message = arguments
@@ -1339,27 +1476,27 @@ fn parse_max_messages(arguments: &Value) -> u32 {
 }
 
 fn parse_session_list_limit(arguments: &Value) -> u32 {
-    let Some(value) = arguments.get("limit") else {
-        return DEFAULT_SESSION_LIST_LIMIT;
-    };
-    let parsed = value
-        .as_u64()
-        .or_else(|| value.as_str().and_then(|raw| raw.trim().parse().ok()));
-    parsed
-        .unwrap_or(u64::from(DEFAULT_SESSION_LIST_LIMIT))
-        .clamp(1, u64::from(MAX_SESSION_LIST_LIMIT)) as u32
+    parse_clamped_limit(
+        arguments,
+        DEFAULT_SESSION_LIST_LIMIT,
+        MAX_SESSION_LIST_LIMIT,
+    )
 }
 
 fn parse_inbox_limit(arguments: &Value) -> u32 {
+    parse_clamped_limit(arguments, DEFAULT_INBOX_LIMIT, MAX_INBOX_LIMIT)
+}
+
+fn parse_clamped_limit(arguments: &Value, default: u32, max: u32) -> u32 {
     let Some(value) = arguments.get("limit") else {
-        return DEFAULT_INBOX_LIMIT;
+        return default;
     };
     let parsed = value
         .as_u64()
         .or_else(|| value.as_str().and_then(|raw| raw.trim().parse().ok()));
     parsed
-        .unwrap_or(u64::from(DEFAULT_INBOX_LIMIT))
-        .clamp(1, u64::from(MAX_INBOX_LIMIT)) as u32
+        .unwrap_or(u64::from(default))
+        .clamp(1, u64::from(max)) as u32
 }
 
 fn parse_inbox_filter(arguments: &Value) -> Result<Option<String>, String> {
@@ -1406,14 +1543,20 @@ fn parse_peer_session_id(arguments: &Value) -> Result<Option<i32>, String> {
 }
 
 fn parse_target_session_ids(arguments: &Value, allow_empty: bool) -> Result<Vec<i32>, String> {
-    let Some(values) = arguments
-        .get("target_session_ids")
-        .and_then(Value::as_array)
-    else {
+    parse_session_id_list(arguments, "target_session_ids", allow_empty, "send_message")
+}
+
+fn parse_session_id_list(
+    arguments: &Value,
+    field: &str,
+    allow_empty: bool,
+    tool: &str,
+) -> Result<Vec<i32>, String> {
+    let Some(values) = arguments.get(field).and_then(Value::as_array) else {
         if allow_empty {
             return Ok(Vec::new());
         }
-        return Err("send_message requires a non-empty `target_session_ids` array".to_string());
+        return Err(format!("{tool} requires a non-empty `{field}` array"));
     };
     let mut ids = Vec::new();
     for value in values {
@@ -1426,20 +1569,17 @@ fn parse_target_session_ids(arguments: &Value, allow_empty: bool) -> Result<Vec<
                     .and_then(|raw| raw.trim().parse::<i32>().ok())
             })
             .filter(|id| *id > 0)
-            .ok_or_else(|| {
-                "send_message target_session_ids must contain positive integer Session ids"
-                    .to_string()
-            })?;
+            .ok_or_else(|| format!("{tool} `{field}` must contain positive integer Session ids"))?;
         if !ids.contains(&id) {
             ids.push(id);
         }
     }
     if ids.is_empty() && !allow_empty {
-        return Err("send_message requires at least one target Session".to_string());
+        return Err(format!("{tool} requires at least one target Session"));
     }
     if ids.len() > MAX_SESSION_MESSAGE_TARGETS {
         return Err(format!(
-            "send_message supports at most {MAX_SESSION_MESSAGE_TARGETS} target Sessions"
+            "{tool} supports at most {MAX_SESSION_MESSAGE_TARGETS} target Sessions"
         ));
     }
     Ok(ids)
@@ -1677,12 +1817,17 @@ pub fn render_session_send_result(outcome: &Value) -> Value {
             .get("event_id")
             .and_then(Value::as_str)
             .unwrap_or("unknown");
+        let room_id = outcome.get("room_id").and_then(Value::as_str);
         let deliveries = outcome
             .get("deliveries")
             .and_then(Value::as_array)
             .cloned()
             .unwrap_or_default();
-        let mut lines = vec![format!("Message accepted as event {event_id}.")];
+        let mut lines = vec![if let Some(room_id) = room_id {
+            format!("Posted to Room {room_id} as event {event_id}.")
+        } else {
+            format!("Message accepted as event {event_id}.")
+        }];
         for delivery in deliveries {
             let id = delivery
                 .get("target_session_id")
@@ -1709,6 +1854,130 @@ pub fn render_session_send_result(outcome: &Value) -> Value {
             .and_then(Value::as_str)
             .unwrap_or("The message was not accepted.")
             .to_string()
+    };
+    json!({
+        "content": [{ "type": "text", "text": text }],
+        "isError": false,
+        "structuredContent": outcome.clone(),
+    })
+}
+
+pub fn render_session_room_list_result(outcome: &Value) -> Value {
+    let available = outcome
+        .get("available")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let text = if !available {
+        outcome
+            .get("note")
+            .and_then(Value::as_str)
+            .unwrap_or("Room tools are unavailable.")
+            .to_string()
+    } else {
+        let rooms = outcome
+            .get("rooms")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        if rooms.is_empty() {
+            "This Session does not belong to any Rooms.".to_string()
+        } else {
+            let mut lines = vec![format!("Found {} Room(s):", rooms.len())];
+            for room in rooms {
+                let id = room
+                    .get("room_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown");
+                let title = room
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .unwrap_or("Untitled");
+                let members = room
+                    .get("member_count")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0);
+                lines.push(format!("- {id}: {title} ({members} members)"));
+            }
+            if outcome
+                .get("truncated")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                lines.push("Results were truncated; narrow `query` to find more.".to_string());
+            }
+            lines.join("\n")
+        }
+    };
+    json!({
+        "content": [{ "type": "text", "text": text }],
+        "isError": false,
+        "structuredContent": outcome.clone(),
+    })
+}
+
+pub fn render_session_room_read_result(outcome: &Value) -> Value {
+    let available = outcome
+        .get("available")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let text = if !available {
+        outcome
+            .get("note")
+            .and_then(Value::as_str)
+            .unwrap_or("The Room was not found.")
+            .to_string()
+    } else {
+        let room_id = outcome
+            .get("room_id")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        let title = outcome
+            .get("title")
+            .and_then(Value::as_str)
+            .unwrap_or("Untitled Room");
+        let events = outcome
+            .get("events")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let mut lines = vec![
+            format!("Room {room_id}: {title}"),
+            "Reply with post_room using this room_id. Mentions wake members; omit them to record only.".to_string(),
+        ];
+        if events.is_empty() {
+            lines.push("No posts yet.".to_string());
+        } else {
+            lines.push(format!("{} post(s):", events.len()));
+            for event in events {
+                let event_id = event
+                    .get("event_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown");
+                let from_id = event
+                    .get("from_session_id")
+                    .and_then(Value::as_i64)
+                    .unwrap_or_default();
+                let from_title = event
+                    .get("from_title")
+                    .and_then(Value::as_str)
+                    .unwrap_or("Untitled Session");
+                let body = event.get("body").and_then(Value::as_str).unwrap_or("");
+                let reply = event
+                    .get("reply_to_event_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                let reply_bit = if reply.is_empty() {
+                    String::new()
+                } else {
+                    format!(" (reply to {reply})")
+                };
+                lines.push(format!(
+                    "- {event_id} from {from_id} {from_title}{reply_bit}:"
+                ));
+                lines.push(body.to_string());
+            }
+        }
+        lines.join("\n")
     };
     json!({
         "content": [{ "type": "text", "text": text }],
@@ -2010,6 +2279,9 @@ mod tests {
                 "send_message",
                 "list_inbox",
                 "read_message",
+                "list_rooms",
+                "read_room",
+                "post_room",
                 "create_automation",
                 "create_work_task",
                 "task_progress",
@@ -2109,7 +2381,10 @@ mod tests {
                 "list_sessions",
                 "send_message",
                 "list_inbox",
-                "read_message"
+                "read_message",
+                "list_rooms",
+                "read_room",
+                "post_room"
             ]
         );
     }
@@ -2186,10 +2461,60 @@ mod tests {
             LineAction::Spawn(_)
         ));
 
+        let rooms = serde_json::json!({
+            "jsonrpc": "2.0", "id": 46, "method": "tools/call",
+            "params": { "name": "list_rooms", "arguments": {} }
+        })
+        .to_string();
+        assert!(matches!(
+            dispatch_line(
+                &ctx(collaboration_features()),
+                Arc::new(InflightCalls::new()),
+                &rooms,
+            )
+            .await,
+            LineAction::Spawn(_)
+        ));
+
+        let read_room = serde_json::json!({
+            "jsonrpc": "2.0", "id": 47, "method": "tools/call",
+            "params": { "name": "read_room", "arguments": { "room_id": "rm_1" } }
+        })
+        .to_string();
+        assert!(matches!(
+            dispatch_line(
+                &ctx(collaboration_features()),
+                Arc::new(InflightCalls::new()),
+                &read_room,
+            )
+            .await,
+            LineAction::Spawn(_)
+        ));
+
+        let post = serde_json::json!({
+            "jsonrpc": "2.0", "id": 48, "method": "tools/call",
+            "params": { "name": "post_room", "arguments": {
+                "room_id": "rm_1",
+                "content": "record only"
+            }}
+        })
+        .to_string();
+        assert!(matches!(
+            dispatch_line(
+                &ctx(collaboration_features()),
+                Arc::new(InflightCalls::new()),
+                &post,
+            )
+            .await,
+            LineAction::Spawn(_)
+        ));
+
         for (name, arguments) in [
             ("list_inbox", serde_json::json!({ "filter": "urgent" })),
             ("read_message", serde_json::json!({ "event_id": " " })),
             ("read_message", serde_json::json!({})),
+            ("read_room", serde_json::json!({})),
+            ("post_room", serde_json::json!({ "room_id": "rm_1" })),
         ] {
             let line = serde_json::json!({
                 "jsonrpc": "2.0", "id": 45, "method": "tools/call",
@@ -2216,6 +2541,8 @@ mod tests {
             serde_json::json!({ "target_session_ids": [7], "title": "t", "content": "x", "delivery_mode": "interrupt" }),
             serde_json::json!({ "target_session_ids": [7], "title": "t", "content": "x", "delivery_hint": "interrupt" }),
             serde_json::json!({ "target_session_ids": [7], "title": "t", "content": "x", "priority": "normal", "delivery_hint": "steer_if_supported" }),
+            serde_json::json!({ "target_session_ids": [7], "title": "t", "content": "x", "room_id": "rm_1" }),
+            serde_json::json!({ "target_session_ids": [7], "title": "t", "content": "x", "mention_all": true }),
         ] {
             let line = serde_json::json!({
                 "jsonrpc": "2.0", "id": 42, "method": "tools/call",
@@ -2352,6 +2679,8 @@ mod tests {
         assert!(parsed.collaboration);
         assert!(parsed.allows_tool("list_inbox"));
         assert!(parsed.allows_tool("read_message"));
+        assert!(parsed.allows_tool("list_rooms"));
+        assert!(parsed.allows_tool("post_room"));
         assert!(parsed.tasks);
         assert!(parsed.automations);
         assert!(parsed.taskboard);

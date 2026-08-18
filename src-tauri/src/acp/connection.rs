@@ -15848,7 +15848,7 @@ mod tests {
         assert_eq!(only(|f| f.ask = true), Some("ask".to_string()));
         // Sessions only — likewise injects the companion on its own.
         assert_eq!(only(|f| f.sessions = true), Some("sessions".to_string()));
-        // Collaboration only — list_sessions + send_message travel together.
+        // Collaboration only — mailbox + Room tools travel together.
         assert_eq!(
             only(|f| f.collaboration = true),
             Some("collaboration".to_string())

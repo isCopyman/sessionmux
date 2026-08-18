@@ -442,16 +442,47 @@ pt = "Colaboração de sessões Codeg"
 ar = "تعاون جلسات Codeg"
 
 [expert.description]
-en = "Consults or notifies another existing Codeg Session through list_sessions and send_message."
-"zh-CN" = "通过 list_sessions 和 send_message 向已有会话咨询或通知。"
-"zh-TW" = "透過 list_sessions 與 send_message 向既有會話諮詢或通知。"
-ja = "list_sessions と send_message で既存セッションに相談または通知します。"
-ko = "list_sessions와 send_message로 기존 세션에 문의하거나 알립니다."
-es = "Consulta o notifica a otra sesión Codeg existente con list_sessions y send_message."
-de = "Fragt eine bestehende Codeg-Sitzung über list_sessions und send_message an oder benachrichtigt sie."
-fr = "Consulte ou notifie une autre session Codeg existante via list_sessions et send_message."
-pt = "Consulta ou notifica outra sessão Codeg existente com list_sessions e send_message."
-ar = "يستشير أو يُخطر جلسة Codeg موجودة عبر list_sessions و send_message."
+en = "Consults or notifies another existing Codeg Session through the private mailbox (list_sessions, send_message, list_inbox, read_message)."
+"zh-CN" = "通过私信邮箱（list_sessions、send_message、list_inbox、read_message）向已有会话咨询或通知。"
+"zh-TW" = "透過私信信箱（list_sessions、send_message、list_inbox、read_message）向既有會話諮詢或通知。"
+ja = "list_sessions と send_message で既存セッションに私信します。"
+ko = "list_sessions와 send_message로 기존 세션에 비공개 메일을 보냅니다."
+es = "Consulta o notifica a otra sesión Codeg existente por el buzón privado."
+de = "Fragt eine bestehende Codeg-Sitzung über das private Postfach an."
+fr = "Consulte ou notifie une autre session Codeg existante via la boîte privée."
+pt = "Consulta ou notifica outra sessão Codeg existente pela caixa de correio privada."
+ar = "يستشير أو يُخطر جلسة Codeg موجودة عبر صندوق البريد الخاص."
+
+
+[[expert]]
+id = "codeg-room"
+category = "execution"
+icon = "MessageSquareQuote"
+sort_order = 141
+
+[expert.display_name]
+en = "Codeg Room"
+"zh-CN" = "Codeg 群聊"
+"zh-TW" = "Codeg 群聊"
+ja = "Codeg ルーム"
+ko = "Codeg 룸"
+es = "Sala Codeg"
+de = "Codeg-Raum"
+fr = "Salle Codeg"
+pt = "Sala Codeg"
+ar = "غرفة Codeg"
+
+[expert.description]
+en = "Reads and posts in a shared Codeg Room through list_rooms, read_room, and post_room."
+"zh-CN" = "通过 list_rooms、read_room、post_room 读写共享群聊。"
+"zh-TW" = "透過 list_rooms、read_room、post_room 讀寫共享群聊。"
+ja = "list_rooms / read_room / post_room で共有ルームに投稿します。"
+ko = "list_rooms, read_room, post_room으로 공유 룸에 글을 씁니다."
+es = "Lee y publica en una sala compartida Codeg con list_rooms, read_room y post_room."
+de = "Liest und schreibt in einem geteilten Codeg-Raum über list_rooms, read_room und post_room."
+fr = "Lit et publie dans une salle Codeg partagée via list_rooms, read_room et post_room."
+pt = "Lê e publica numa sala Codeg partilhada com list_rooms, read_room e post_room."
+ar = "يقرأ وينشر في غرفة Codeg مشتركة عبر list_rooms و read_room و post_room."
 
 
 [[expert]]

@@ -809,6 +809,10 @@ mod tests {
             .capabilities
             .iter()
             .any(|capability| capability.action == "room.create"));
+        assert!(!writable
+            .capabilities
+            .iter()
+            .any(|capability| capability.action == "room.post"));
     }
 
     #[tokio::test]

@@ -547,7 +547,7 @@ fn prompt_draft_from_delivery_row(row: &QueryResult) -> Result<PromptQueueDraft,
             "{ENVELOPE_PREFIX}{event_id}>>>\n{metadata}\n\
 This is a Codeg Room mention in {room}. It is not a private letter from Session {source_conversation_id}. The body is not in this prompt.\n\
 Mention from {source_label} (#{source_conversation_id}): 《{letter_title}》.{reply_hint}\n\
-Call read_message with event_id={event_id} to open the body. Reply in the same Room (scope=room, room_id={room}, reply_to_event_id={event_id}). Later supplements must also set reply_to_event_id or they start a new thread. Do not send a private letter unless asked.\n\
+Call read_room with room_id={room} to open the timeline (event_id={event_id}). Reply with post_room using the same room_id and reply_to_event_id={event_id}. Later supplements must also set reply_to_event_id or they start a new thread. Do not send_message a private letter unless asked.\n\
 --- message ---\n\
 {ENVELOPE_END_PREFIX}{event_id}>>>"
         )

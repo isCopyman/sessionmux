@@ -16,9 +16,9 @@ use crate::acp::delegation::transport::{
     read_frame, write_frame, BrokerAskRequest, BrokerCommitFeedbackRequest,
     BrokerCreateAutomationRequest, BrokerCreateWorkTaskRequest, BrokerFeedbackRequest,
     BrokerHostControlHelpRequest, BrokerHostControlUseRequest, BrokerListInboxRequest,
-    BrokerListSessionsRequest, BrokerMessage, BrokerReadMessageRequest, BrokerResponse,
-    BrokerSendMessageRequest, BrokerSessionRequest, BrokerTaskCompleteRequest,
-    BrokerTaskProgressRequest,
+    BrokerListRoomsRequest, BrokerListSessionsRequest, BrokerMessage, BrokerPostRoomRequest,
+    BrokerReadMessageRequest, BrokerReadRoomRequest, BrokerResponse, BrokerSendMessageRequest,
+    BrokerSessionRequest, BrokerTaskCompleteRequest, BrokerTaskProgressRequest,
 };
 use crate::acp::feedback::{PendingFeedback, SessionFeedbackAccess};
 use crate::acp::host_control::{
@@ -27,7 +27,7 @@ use crate::acp::host_control::{
 use crate::acp::question::{QuestionOutcome, SessionQuestionAccess};
 use crate::acp::session_collaboration::{
     SessionCollaborationAccess, SessionInboxFilter, SessionInboxOutcome, SessionListOutcome,
-    SessionMessageReadOutcome, SessionSendOutcome,
+    SessionMessageReadOutcome, SessionRoomListOutcome, SessionRoomReadOutcome, SessionSendOutcome,
 };
 use crate::acp::session_info::{SessionInfo, SessionInfoAccess};
 use crate::acp::work_task_tools::{TaskReportAck, WorkTaskToolAccess};
@@ -329,6 +329,15 @@ impl HostBridgeListener {
             BrokerMessage::ReadMessage(req) => {
                 session_read_response(self.process_read_message(req).await)?
             }
+            BrokerMessage::ListRooms(req) => {
+                session_room_list_response(self.process_list_rooms(req).await)?
+            }
+            BrokerMessage::ReadRoom(req) => {
+                session_room_read_response(self.process_read_room(req).await)?
+            }
+            BrokerMessage::PostRoom(req) => {
+                session_send_response(self.process_post_room(req).await)?
+            }
             BrokerMessage::TaskProgress(req) => {
                 task_ack_response(self.process_task_progress(req).await)?
             }
@@ -559,6 +568,82 @@ impl HostBridgeListener {
             .await
     }
 
+    async fn process_list_rooms(&self, req: BrokerListRoomsRequest) -> SessionRoomListOutcome {
+        let Some(entry) = self.tokens.lookup(&req.token).await else {
+            return SessionRoomListOutcome::unavailable(
+                None,
+                "This Codeg Session identity has expired. Resume the Session before listing Rooms.",
+            );
+        };
+        let Some(caller_session_id) = self
+            .parent_lookup
+            .current_conversation_id(&entry.parent_connection_id)
+            .await
+        else {
+            return SessionRoomListOutcome::unavailable(
+                None,
+                "The calling connection is not bound to a persistent Codeg Session.",
+            );
+        };
+        self.collaboration
+            .list_rooms(
+                caller_session_id,
+                req.query,
+                req.limit
+                    .unwrap_or(crate::acp::session_collaboration::DEFAULT_ROOM_LIST_LIMIT),
+            )
+            .await
+    }
+
+    async fn process_read_room(&self, req: BrokerReadRoomRequest) -> SessionRoomReadOutcome {
+        let Some(entry) = self.tokens.lookup(&req.token).await else {
+            return SessionRoomReadOutcome::unavailable(
+                None,
+                "This Codeg Session identity has expired. Resume the Session before reading a Room.",
+            );
+        };
+        let Some(caller_session_id) = self
+            .parent_lookup
+            .current_conversation_id(&entry.parent_connection_id)
+            .await
+        else {
+            return SessionRoomReadOutcome::unavailable(
+                None,
+                "The calling connection is not bound to a persistent Codeg Session.",
+            );
+        };
+        self.collaboration
+            .read_room(
+                caller_session_id,
+                req.room_id,
+                req.limit
+                    .unwrap_or(crate::acp::session_collaboration::DEFAULT_ROOM_READ_LIMIT),
+            )
+            .await
+    }
+
+    async fn process_post_room(&self, req: BrokerPostRoomRequest) -> SessionSendOutcome {
+        let Some(entry) = self.tokens.lookup(&req.token).await else {
+            return SessionSendOutcome::rejected(
+                None,
+                "This Codeg Session identity has expired. Resume the Session before posting.",
+            );
+        };
+        let Some(source_session_id) = self
+            .parent_lookup
+            .current_conversation_id(&entry.parent_connection_id)
+            .await
+        else {
+            return SessionSendOutcome::rejected(
+                None,
+                "The calling connection is not bound to a persistent Codeg Session.",
+            );
+        };
+        self.collaboration
+            .post_room(source_session_id, req.spec)
+            .await
+    }
+
     /// Validate the token and hand the progress report to the task engine,
     /// which resolves the parent connection to its owning task + generation.
     async fn process_task_progress(&self, req: BrokerTaskProgressRequest) -> TaskReportAck {
@@ -689,6 +774,22 @@ fn session_inbox_response(outcome: SessionInboxOutcome) -> std::io::Result<Broke
 }
 
 fn session_read_response(outcome: SessionMessageReadOutcome) -> std::io::Result<BrokerResponse> {
+    Ok(BrokerResponse {
+        outcome: serde_json::to_value(&outcome).map_err(|e| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, format!("encode: {e}"))
+        })?,
+    })
+}
+
+fn session_room_list_response(outcome: SessionRoomListOutcome) -> std::io::Result<BrokerResponse> {
+    Ok(BrokerResponse {
+        outcome: serde_json::to_value(&outcome).map_err(|e| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, format!("encode: {e}"))
+        })?,
+    })
+}
+
+fn session_room_read_response(outcome: SessionRoomReadOutcome) -> std::io::Result<BrokerResponse> {
     Ok(BrokerResponse {
         outcome: serde_json::to_value(&outcome).map_err(|e| {
             std::io::Error::new(std::io::ErrorKind::InvalidData, format!("encode: {e}"))
@@ -921,6 +1022,62 @@ mod tests {
                 available: true,
                 caller_session_id: Some(caller_session_id),
                 event_id: Some(event_id),
+                ..Default::default()
+            }
+        }
+
+        async fn list_rooms(
+            &self,
+            caller_session_id: i32,
+            _query: Option<String>,
+            _limit: u32,
+        ) -> crate::acp::session_collaboration::SessionRoomListOutcome {
+            crate::acp::session_collaboration::SessionRoomListOutcome {
+                available: true,
+                caller_session_id: Some(caller_session_id),
+                ..Default::default()
+            }
+        }
+
+        async fn read_room(
+            &self,
+            caller_session_id: i32,
+            room_id: String,
+            _limit: u32,
+        ) -> crate::acp::session_collaboration::SessionRoomReadOutcome {
+            crate::acp::session_collaboration::SessionRoomReadOutcome {
+                available: true,
+                caller_session_id: Some(caller_session_id),
+                room_id: Some(room_id),
+                ..Default::default()
+            }
+        }
+
+        async fn post_room(
+            &self,
+            source_session_id: i32,
+            spec: crate::acp::session_collaboration::RoomPostSpec,
+        ) -> SessionSendOutcome {
+            self.sent_by.lock().await.push((
+                source_session_id,
+                crate::acp::session_collaboration::SessionMessageSpec {
+                    target_session_ids: spec.mention_session_ids,
+                    title: spec.title,
+                    content: spec.content,
+                    delivery_mode:
+                        crate::acp::session_collaboration::SessionMessageDeliveryMode::Queue,
+                    priority: spec.priority,
+                    steer_if_supported: false,
+                    expects_reply: spec.expects_reply,
+                    reply_to_event_id: spec.reply_to_event_id,
+                    client_dedupe_id: spec.client_dedupe_id,
+                    room_id: Some(spec.room_id),
+                    mention_all: spec.mention_all,
+                },
+            ));
+            SessionSendOutcome {
+                accepted: true,
+                source_session_id: Some(source_session_id),
                 ..Default::default()
             }
         }

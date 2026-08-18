@@ -39,7 +39,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::acp::chat_authoring::{NewAutomationSpec, NewWorkTaskSpec};
 use crate::acp::question::QuestionSpec;
-use crate::acp::session_collaboration::SessionMessageSpec;
+use crate::acp::session_collaboration::{RoomPostSpec, SessionMessageSpec};
 
 /// Discover the currently available progressive Host Control actions. Caller
 /// identity is intentionally absent: the listener derives it from `token`.
@@ -153,6 +153,29 @@ pub struct BrokerReadMessageRequest {
     pub event_id: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokerListRoomsRequest {
+    pub token: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokerReadRoomRequest {
+    pub token: String,
+    pub room_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokerPostRoomRequest {
+    pub token: String,
+    pub spec: RoomPostSpec,
+}
+
 /// Report a progress milestone for the work task driving the parent session.
 /// Backs the `task_progress` MCP tool. Authenticated by the per-launch `token`;
 /// the listener resolves the parent connection from it and the task engine maps
@@ -208,6 +231,9 @@ pub enum BrokerMessage {
     SendMessage(BrokerSendMessageRequest),
     ListInbox(BrokerListInboxRequest),
     ReadMessage(BrokerReadMessageRequest),
+    ListRooms(BrokerListRoomsRequest),
+    ReadRoom(BrokerReadRoomRequest),
+    PostRoom(BrokerPostRoomRequest),
     TaskProgress(BrokerTaskProgressRequest),
     TaskComplete(BrokerTaskCompleteRequest),
     CreateAutomation(BrokerCreateAutomationRequest),
@@ -369,6 +395,27 @@ pub async fn client_read_message_round_trip(
     req: &BrokerReadMessageRequest,
 ) -> io::Result<BrokerResponse> {
     message_round_trip(socket_path, &BrokerMessage::ReadMessage(req.clone())).await
+}
+
+pub async fn client_list_rooms_round_trip(
+    socket_path: &str,
+    req: &BrokerListRoomsRequest,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::ListRooms(req.clone())).await
+}
+
+pub async fn client_read_room_round_trip(
+    socket_path: &str,
+    req: &BrokerReadRoomRequest,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::ReadRoom(req.clone())).await
+}
+
+pub async fn client_post_room_round_trip(
+    socket_path: &str,
+    req: &BrokerPostRoomRequest,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::PostRoom(req.clone())).await
 }
 
 /// Dispatch a `task_progress` report and read back the `{ recorded }` ack.

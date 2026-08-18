@@ -621,8 +621,9 @@ collaboration_delivery
 - `collaboration_room` / `collaboration_room_member`，event 增加 `visibility` + `room_id`；
 - 邮件投影强制 `visibility='direct'`，Room @ 不进 inbox / unread；
 - 工作台全页 Rooms：建群、时间线、成员栏、仅记录 / `@` / `@all`；
-- Host Control：`room.list` / `room.create` / `room.add_member` / `room.post`；
-- MCP `send_message` 可带 `room_id`（空目标 = 仅记录）；自动回复回 Room；
+- Host Control：`room.list` / `room.create` / `room.add_member`（生命周期）；
+- MCP：`list_rooms` / `read_room` / `post_room`；`send_message` 不再带 `room_id`；
+- 自动回复仍回 Room；信封引导 `read_room` + `post_room`；
 - 点击成员打开原 Session；Room 挂在 Workbench 下列表，不占用 Tab kind。
 
 ### R2：Agent 间协作

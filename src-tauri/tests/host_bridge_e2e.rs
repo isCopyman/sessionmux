@@ -145,6 +145,60 @@ impl SessionCollaborationAccess for RecordingCollaboration {
             "not used",
         )
     }
+
+    async fn list_rooms(
+        &self,
+        caller_session_id: i32,
+        _query: Option<String>,
+        _limit: u32,
+    ) -> codeg_lib::acp::session_collaboration::SessionRoomListOutcome {
+        codeg_lib::acp::session_collaboration::SessionRoomListOutcome {
+            available: true,
+            caller_session_id: Some(caller_session_id),
+            ..Default::default()
+        }
+    }
+
+    async fn read_room(
+        &self,
+        caller_session_id: i32,
+        _room_id: String,
+        _limit: u32,
+    ) -> codeg_lib::acp::session_collaboration::SessionRoomReadOutcome {
+        codeg_lib::acp::session_collaboration::SessionRoomReadOutcome::unavailable(
+            Some(caller_session_id),
+            "not used",
+        )
+    }
+
+    async fn post_room(
+        &self,
+        source_session_id: i32,
+        spec: codeg_lib::acp::session_collaboration::RoomPostSpec,
+    ) -> SessionSendOutcome {
+        self.sends.lock().await.push((
+            source_session_id,
+            SessionMessageSpec {
+                target_session_ids: spec.mention_session_ids,
+                title: spec.title,
+                content: spec.content,
+                delivery_mode: Default::default(),
+                priority: spec.priority,
+                steer_if_supported: false,
+                expects_reply: spec.expects_reply,
+                reply_to_event_id: spec.reply_to_event_id,
+                client_dedupe_id: spec.client_dedupe_id,
+                room_id: Some(spec.room_id),
+                mention_all: spec.mention_all,
+            },
+        ));
+        SessionSendOutcome {
+            accepted: true,
+            source_session_id: Some(source_session_id),
+            event_id: Some("event-room-e2e".to_string()),
+            ..Default::default()
+        }
+    }
 }
 
 struct NoFeedback;

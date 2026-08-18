@@ -1,9 +1,8 @@
-//! Room actions for Codeg's progressive Host Control MCP.
+//! Room lifecycle for Codeg's progressive Host Control MCP.
 //!
 //! The caller is the token-derived current Session. Creating a room always
-//! includes that Session as owner. Messaging that must wake another Session
-//! still goes through `send_message` with `room_id` so the existing dispatcher
-//! can enqueue and wake.
+//! includes that Session as owner. Messaging lives on the dedicated MCP tools
+//! `list_rooms` / `read_room` / `post_room`, not on this gateway.
 
 use std::sync::Arc;
 
@@ -14,12 +13,9 @@ use serde_json::{json, Value};
 use crate::acp::host_control::{
     HostControlAccessLevel, HostControlCaller, HostControlCapability, HostControlUseOutcome,
 };
-use crate::db::service::{collaboration_room_service, collaboration_service};
+use crate::db::service::collaboration_room_service;
 use crate::db::AppDatabase;
-use crate::models::{
-    AddCollaborationRoomMembersInput, CollaborationInvocationPolicy, CreateCollaborationRoomInput,
-    PostRoomMessageInput, RoomChanged,
-};
+use crate::models::{AddCollaborationRoomMembersInput, CreateCollaborationRoomInput, RoomChanged};
 use crate::web::event_bridge::{emit_event, EventEmitter, ROOM_CHANGED_EVENT};
 
 pub struct RoomHostControl {
@@ -35,7 +31,7 @@ impl RoomHostControl {
     pub fn capabilities(writes_allowed: bool) -> Vec<HostControlCapability> {
         let mut capabilities = vec![capability(
             "room.list",
-            "List Rooms on a Workbench. Defaults to Workbench 1 (Main).",
+            "List Rooms on a Workbench. Defaults to Workbench 1 (Main). Agents that only need Rooms they already belong to should call list_rooms instead.",
             HostControlAccessLevel::Read,
             json!({
                 "type": "object",
@@ -53,7 +49,7 @@ impl RoomHostControl {
             capabilities.extend([
                 capability(
                     "room.create",
-                    "Create a shared Room. The calling Session becomes owner and is always a member. Pass at least one other Session id.",
+                    "Create a shared Room. The calling Session becomes owner and is always a member. Pass at least one other Session id. After create, post with post_room, not send_message.",
                     HostControlAccessLevel::Write,
                     json!({
                         "type": "object",
@@ -85,31 +81,6 @@ impl RoomHostControl {
                         }
                     }),
                 ),
-                capability(
-                    "room.post",
-                    "Post a Room-visible message as the calling Session. Empty mention_session_ids is record-only. This path does not wake targets; use send_message with room_id and priority=high to notify mentioned Sessions.",
-                    HostControlAccessLevel::Write,
-                    json!({
-                        "type": "object",
-                        "additionalProperties": false,
-                        "required": ["room_id", "content"],
-                        "properties": {
-                            "room_id": { "type": "string", "minLength": 1 },
-                            "title": { "type": "string", "maxLength": 120 },
-                            "content": { "type": "string", "minLength": 1 },
-                            "mention_session_ids": {
-                                "type": "array",
-                                "maxItems": 16,
-                                "items": { "type": "integer", "minimum": 1 }
-                            },
-                            "mention_all": { "type": "boolean", "default": false },
-                            "reply_to_event_id": {
-                                "type": "string",
-                                "description": "Event id this post continues. Required for replies and later supplements on the same Room thread. Omitting it starts a new root."
-                            }
-                        }
-                    }),
-                ),
             ]);
         }
         capabilities
@@ -118,7 +89,7 @@ impl RoomHostControl {
     pub fn access_for(action: &str) -> Option<HostControlAccessLevel> {
         match action {
             "room.list" => Some(HostControlAccessLevel::Read),
-            "room.create" | "room.add_member" | "room.post" => Some(HostControlAccessLevel::Write),
+            "room.create" | "room.add_member" => Some(HostControlAccessLevel::Write),
             _ => None,
         }
     }
@@ -199,41 +170,11 @@ impl RoomHostControl {
                     Err(error) => rejected(request_id, action, error),
                 }
             }
-            "room.post" => {
-                let params = match parse_input::<PostInput>(&action, input) {
-                    Ok(params) => params,
-                    Err(note) => return HostControlUseOutcome::rejected(request_id, action, note),
-                };
-                match collaboration_service::post_room(
-                    &self.db.conn,
-                    PostRoomMessageInput {
-                        room_id: params.room_id,
-                        source_conversation_id: caller.current_session_id,
-                        target_conversation_ids: params.mention_session_ids.unwrap_or_default(),
-                        mention_all: params.mention_all,
-                        subject: params.title.unwrap_or_default(),
-                        body: params.content,
-                        client_dedupe_id: format!("host-room-{request_id}"),
-                        invocation_policy: CollaborationInvocationPolicy::StoreOnly,
-                        delivery_hint: Default::default(),
-                        expects_reply: false,
-                        urgency: Default::default(),
-                        reply_to_event_id: params.reply_to_event_id,
-                    },
-                )
-                .await
-                {
-                    Ok(posted) => {
-                        if let Ok(detail) =
-                            collaboration_room_service::get(&self.db.conn, &posted.room_id).await
-                        {
-                            self.publish(&posted.room_id, detail.workbench_id);
-                        }
-                        accepted(request_id, action, "persisted", json!({ "post": posted }))
-                    }
-                    Err(error) => rejected(request_id, action, error),
-                }
-            }
+            "room.post" => HostControlUseOutcome::rejected(
+                request_id,
+                action,
+                "room.post was removed. Use the post_room MCP tool to post in a Room.",
+            ),
             _ => HostControlUseOutcome::rejected(
                 request_id,
                 action,
@@ -322,19 +263,4 @@ struct CreateInput {
 struct AddMemberInput {
     room_id: String,
     session_id: i32,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct PostInput {
-    room_id: String,
-    #[serde(default)]
-    title: Option<String>,
-    content: String,
-    #[serde(default)]
-    mention_session_ids: Option<Vec<i32>>,
-    #[serde(default)]
-    mention_all: bool,
-    #[serde(default)]
-    reply_to_event_id: Option<String>,
 }

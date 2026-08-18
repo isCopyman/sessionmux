@@ -227,23 +227,54 @@ pub async fn list(
             vec![workbench_id.into()],
         ))
         .await?;
-    rows.iter()
-        .map(|row| {
-            let member_count: i64 = row.try_get("", "member_count")?;
-            let unread_count: i64 = row.try_get("", "unread_count")?;
-            Ok(CollaborationRoomSummary {
-                id: row.try_get("", "id")?,
-                workbench_id: row.try_get("", "workbench_id")?,
-                title: row.try_get("", "title")?,
-                created_by_conversation_id: row.try_get("", "created_by_conversation_id")?,
-                member_count: u32::try_from(member_count.max(0)).unwrap_or(u32::MAX),
-                unread_count: u32::try_from(unread_count.max(0)).unwrap_or(u32::MAX),
-                last_event_at: parse_optional_timestamp(row, "last_event_at")?,
-                created_at: parse_timestamp(row, "created_at")?,
-                updated_at: parse_timestamp(row, "updated_at")?,
-            })
-        })
-        .collect()
+    rows.iter().map(summary_from_row).collect()
+}
+
+/// Rooms the Session already belongs to, across Workbenches. Agents use this
+/// instead of listing every Room on Workbench 1.
+pub async fn list_for_member(
+    conn: &DatabaseConnection,
+    conversation_id: i32,
+) -> Result<Vec<CollaborationRoomSummary>, DbError> {
+    require_live_session(conn, conversation_id).await?;
+    let rows = conn
+        .query_all(statement(
+            "SELECT r.id, r.workbench_id, r.title, r.created_by_conversation_id, \
+                    r.created_at, r.updated_at, r.last_seen_at, \
+                    (SELECT COUNT(*) FROM collaboration_room_member m \
+                      WHERE m.room_id = r.id) AS member_count, \
+                    (SELECT MAX(e.created_at) FROM collaboration_event e \
+                      WHERE e.room_id = r.id AND COALESCE(e.visibility, 'direct') = 'room') \
+                      AS last_event_at, \
+                    (SELECT COUNT(*) FROM collaboration_event e \
+                      WHERE e.room_id = r.id AND COALESCE(e.visibility, 'direct') = 'room' \
+                        AND (r.last_seen_at IS NULL OR datetime(e.created_at) > datetime(r.last_seen_at))) \
+                      AS unread_count \
+             FROM collaboration_room r \
+             JOIN collaboration_room_member me \
+               ON me.room_id = r.id AND me.conversation_id = ? \
+             WHERE r.status = 'active' \
+             ORDER BY datetime(COALESCE(last_event_at, r.updated_at)) DESC, r.id DESC",
+            vec![conversation_id.into()],
+        ))
+        .await?;
+    rows.iter().map(summary_from_row).collect()
+}
+
+fn summary_from_row(row: &QueryResult) -> Result<CollaborationRoomSummary, DbError> {
+    let member_count: i64 = row.try_get("", "member_count")?;
+    let unread_count: i64 = row.try_get("", "unread_count")?;
+    Ok(CollaborationRoomSummary {
+        id: row.try_get("", "id")?,
+        workbench_id: row.try_get("", "workbench_id")?,
+        title: row.try_get("", "title")?,
+        created_by_conversation_id: row.try_get("", "created_by_conversation_id")?,
+        member_count: u32::try_from(member_count.max(0)).unwrap_or(u32::MAX),
+        unread_count: u32::try_from(unread_count.max(0)).unwrap_or(u32::MAX),
+        last_event_at: parse_optional_timestamp(row, "last_event_at")?,
+        created_at: parse_timestamp(row, "created_at")?,
+        updated_at: parse_timestamp(row, "updated_at")?,
+    })
 }
 
 pub async fn get(
@@ -841,5 +872,31 @@ mod tests {
         remove_member(&db.conn, &room.id, c)
             .await
             .expect("remove extra");
+    }
+
+    #[tokio::test]
+    async fn list_for_member_returns_only_rooms_the_session_joined() {
+        let (db, a, b, c) = seeded().await;
+        let ab = make_room(&db, a, vec![a, b]).await;
+        let ac = create(
+            &db.conn,
+            CreateCollaborationRoomInput {
+                workbench_id: 1,
+                title: "A and C".into(),
+                member_conversation_ids: vec![a, c],
+                created_by_conversation_id: a,
+            },
+        )
+        .await
+        .unwrap();
+
+        let for_b = list_for_member(&db.conn, b).await.unwrap();
+        assert_eq!(for_b.len(), 1);
+        assert_eq!(for_b[0].id, ab.id);
+        let for_a = list_for_member(&db.conn, a).await.unwrap();
+        let ids: Vec<_> = for_a.iter().map(|room| room.id.as_str()).collect();
+        assert!(ids.contains(&ab.id.as_str()));
+        assert!(ids.contains(&ac.id.as_str()));
+        assert_eq!(for_a.len(), 2);
     }
 }
