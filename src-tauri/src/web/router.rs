@@ -405,10 +405,7 @@ pub fn build_router(
         .route("/git_pull", post(handlers::git::git_pull))
         .route("/git_push", post(handlers::git::git_push))
         .route("/git_fetch", post(handlers::git::git_fetch))
-        .route(
-            "/git_update_branch",
-            post(handlers::git::git_update_branch),
-        )
+        .route("/git_update_branch", post(handlers::git::git_update_branch))
         .route("/git_commit", post(handlers::git::git_commit))
         .route("/git_fetch_remote", post(handlers::git::git_fetch_remote))
         .route("/git_delete_branch", post(handlers::git::git_delete_branch))
@@ -674,10 +671,7 @@ pub fn build_router(
             "/acp_set_config_option",
             post(handlers::acp::acp_set_config_option),
         )
-        .route(
-            "/acp_goal_control",
-            post(handlers::acp::acp_goal_control),
-        )
+        .route("/acp_goal_control", post(handlers::acp::acp_goal_control))
         .route(
             "/acp_describe_agent_options",
             post(handlers::acp::acp_describe_agent_options),
@@ -1313,26 +1307,14 @@ pub fn build_router(
             post(handlers::prompt_queue::enqueue),
         )
         .route("/prompt_queue_edit", post(handlers::prompt_queue::edit))
-        .route(
-            "/prompt_queue_delete",
-            post(handlers::prompt_queue::delete),
-        )
+        .route("/prompt_queue_delete", post(handlers::prompt_queue::delete))
         .route(
             "/prompt_queue_reorder",
             post(handlers::prompt_queue::reorder),
         )
-        .route(
-            "/prompt_queue_resume",
-            post(handlers::prompt_queue::resume),
-        )
-        .route(
-            "/prompt_queue_retry",
-            post(handlers::prompt_queue::retry),
-        )
-        .route(
-            "/collaboration_send",
-            post(handlers::collaboration::send),
-        )
+        .route("/prompt_queue_resume", post(handlers::prompt_queue::resume))
+        .route("/prompt_queue_retry", post(handlers::prompt_queue::retry))
+        .route("/collaboration_send", post(handlers::collaboration::send))
         .route(
             "/collaboration_interrupt",
             post(handlers::collaboration::interrupt),
@@ -1341,10 +1323,7 @@ pub fn build_router(
             "/collaboration_send_interrupt",
             post(handlers::collaboration::send_interrupt),
         )
-        .route(
-            "/collaboration_feed",
-            post(handlers::collaboration::feed),
-        )
+        .route("/collaboration_feed", post(handlers::collaboration::feed))
         .route(
             "/collaboration_timeline_projection",
             post(handlers::collaboration::timeline_projection),
@@ -1418,7 +1397,10 @@ pub fn build_router(
             "/automation_list",
             post(handlers::automation::automation_list),
         )
-        .route("/automation_get", post(handlers::automation::automation_get))
+        .route(
+            "/automation_get",
+            post(handlers::automation::automation_get),
+        )
         .route(
             "/automation_runs",
             post(handlers::automation::automation_runs),

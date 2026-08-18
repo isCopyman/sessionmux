@@ -1271,7 +1271,10 @@ impl HostSessionRuntime for IsolatedHostSessionRuntime {
         Ok(CancelTurnRuntimeResult::NoActiveRuntime)
     }
 
-    async fn stop_session(&self, _conversation_id: i32) -> Result<StopSessionRuntimeResult, String> {
+    async fn stop_session(
+        &self,
+        _conversation_id: i32,
+    ) -> Result<StopSessionRuntimeResult, String> {
         Ok(StopSessionRuntimeResult::AlreadyStopped)
     }
 }

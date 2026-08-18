@@ -3172,30 +3172,32 @@ impl CodexParser {
                                     // routed through the same CollabAgentCard as
                                     // the live wait capsule. Two output shapes —
                                     // see `native_team_wait_input`.
-                                    let capsule = parse_codex_json_output(payload).and_then(
-                                        |output_obj| match output_obj
-                                            .get("status")
-                                            .and_then(|s| s.as_object())
-                                        {
-                                            Some(status) => {
-                                                // Mark returned agents so the spawn
-                                                // capsule won't also show their
-                                                // result, and record per-agent error
-                                                // state so the execution capsule can
-                                                // render failed (live parity).
-                                                for (agent_id, value) in status {
-                                                    agent_waited.insert(agent_id.clone());
-                                                    let (st, _) = extract_wait_agent_status(value);
-                                                    if is_error_collab_status(&st) {
-                                                        agent_errored.insert(agent_id.clone());
+                                    let capsule =
+                                        parse_codex_json_output(payload).and_then(|output_obj| {
+                                            match output_obj
+                                                .get("status")
+                                                .and_then(|s| s.as_object())
+                                            {
+                                                Some(status) => {
+                                                    // Mark returned agents so the spawn
+                                                    // capsule won't also show their
+                                                    // result, and record per-agent error
+                                                    // state so the execution capsule can
+                                                    // render failed (live parity).
+                                                    for (agent_id, value) in status {
+                                                        agent_waited.insert(agent_id.clone());
+                                                        let (st, _) =
+                                                            extract_wait_agent_status(value);
+                                                        if is_error_collab_status(&st) {
+                                                            agent_errored.insert(agent_id.clone());
+                                                        }
                                                     }
+                                                    (!status.is_empty())
+                                                        .then(|| build_collab_wait_input(status))
                                                 }
-                                                (!status.is_empty())
-                                                    .then(|| build_collab_wait_input(status))
+                                                None => native_team_wait_input(&output_obj),
                                             }
-                                            None => native_team_wait_input(&output_obj),
-                                        },
-                                    );
+                                        });
                                     if let Some((collab_input, is_error)) = capsule {
                                         messages.push(UnifiedMessage {
                                             id: format!("tool-{}", messages.len()),
@@ -4251,17 +4253,17 @@ mod tests {
     use super::extract_turn_usage_from_codex_usage;
     use super::is_encrypted_envelope;
     use super::merge_codex_context_window_stats;
-    use super::native_team_wait_input;
     use super::merge_codex_total_usage_stats;
+    use super::native_team_wait_input;
     use super::parse_codex_subagent_stats;
     use super::redact_encrypted_args;
     use super::resolve_codex_home_dir_from;
-    use super::CODEX_SUBAGENT_LAUNCH_KEY;
-    use super::COLLAB_OP_KEY;
     use super::should_skip_duplicate_user_message;
     use super::strip_blocked_resource_mentions;
     use super::CodexParser;
     use super::CODEX_SCRIPT_TOOL_NAME;
+    use super::CODEX_SUBAGENT_LAUNCH_KEY;
+    use super::COLLAB_OP_KEY;
     use crate::models::{
         ContentBlock, MessageRole, MessageTurn, SessionStats, TurnRole, TurnUsage, UnifiedMessage,
     };
@@ -6800,7 +6802,9 @@ mod tests {
         // 0.147 emits no wait/close capsule, so this card stands for the LAUNCH
         // only and must say so rather than read as "the sub-agent finished".
         assert_eq!(
-            parsed.get(CODEX_SUBAGENT_LAUNCH_KEY).and_then(|v| v.as_bool()),
+            parsed
+                .get(CODEX_SUBAGENT_LAUNCH_KEY)
+                .and_then(|v| v.as_bool()),
             Some(true)
         );
 
@@ -6845,7 +6849,10 @@ mod tests {
             })
             .expect("spawn Agent capsule present");
         let parsed: serde_json::Value = serde_json::from_str(input).expect("JSON");
-        assert_eq!(parsed.get("subagent_type").and_then(|v| v.as_str()), Some("worker"));
+        assert_eq!(
+            parsed.get("subagent_type").and_then(|v| v.as_str()),
+            Some("worker")
+        );
         assert_eq!(parsed.get("prompt").and_then(|v| v.as_str()), Some("do it"));
         assert!(parsed.get(CODEX_SUBAGENT_LAUNCH_KEY).is_none());
 
@@ -6908,7 +6915,10 @@ mod tests {
     fn redaction_leaves_ordinary_arguments_untouched() {
         let mut args = serde_json::json!({"cmd":"pnpm build","timeout_ms":3600000});
         assert!(!redact_encrypted_args(&mut args));
-        assert_eq!(args, serde_json::json!({"cmd":"pnpm build","timeout_ms":3600000}));
+        assert_eq!(
+            args,
+            serde_json::json!({"cmd":"pnpm build","timeout_ms":3600000})
+        );
         // Nested and array positions are reached.
         let sealed = format!("gAAAAAB{}", "0g7gOInVU3UTzqL".repeat(10));
         let mut nested = serde_json::json!({"outer":{"list":[sealed.clone(),"keep me"]}});
@@ -6991,14 +7001,17 @@ mod tests {
             })
             .expect("wait capsule present");
         let parsed: serde_json::Value = serde_json::from_str(input).expect("JSON");
-        assert_eq!(parsed.get(COLLAB_OP_KEY).and_then(|v| v.as_str()), Some("wait"));
-        assert_eq!(parsed.get("status").and_then(|v| v.as_str()), Some("completed"));
+        assert_eq!(
+            parsed.get(COLLAB_OP_KEY).and_then(|v| v.as_str()),
+            Some("wait")
+        );
+        assert_eq!(
+            parsed.get("status").and_then(|v| v.as_str()),
+            Some("completed")
+        );
         // No agents and no prompt — the card renders as a bare pill, exactly
         // what the live `collabAgentToolCall` produces for this output.
-        assert_eq!(
-            parsed.get("agentsStates"),
-            Some(&serde_json::json!({}))
-        );
+        assert_eq!(parsed.get("agentsStates"), Some(&serde_json::json!({})));
         let errored = detail
             .turns
             .iter()
@@ -7012,7 +7025,9 @@ mod tests {
     #[test]
     fn native_team_wait_shape_gate_and_timeout() {
         // `timed_out` is the shape gate: only the native-team output has it.
-        assert!(native_team_wait_input(&serde_json::json!({"message":"Wait completed."})).is_none());
+        assert!(
+            native_team_wait_input(&serde_json::json!({"message":"Wait completed."})).is_none()
+        );
         assert!(native_team_wait_input(&serde_json::json!({})).is_none());
         // A timeout is a real outcome — flag the capsule failed.
         let (input, is_error) =
@@ -7020,7 +7035,10 @@ mod tests {
                 .expect("native shape");
         assert!(is_error);
         let parsed: serde_json::Value = serde_json::from_str(&input).expect("JSON");
-        assert_eq!(parsed.get("status").and_then(|v| v.as_str()), Some("failed"));
+        assert_eq!(
+            parsed.get("status").and_then(|v| v.as_str()),
+            Some("failed")
+        );
     }
 
     #[test]

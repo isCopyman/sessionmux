@@ -451,8 +451,8 @@ pub async fn acp_cancel(
         &state.emitter,
         &params.connection_id,
     )
-        .await
-        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    .await
+    .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
     Ok(Json(()))
 }
 
@@ -907,8 +907,8 @@ pub async fn acp_update_pi_config(
     Ok(Json(()))
 }
 
-pub async fn acp_load_pi_config(
-) -> Result<Json<acp_commands::PiConfigProjection>, AppCommandError> {
+pub async fn acp_load_pi_config() -> Result<Json<acp_commands::PiConfigProjection>, AppCommandError>
+{
     Ok(Json(acp_commands::load_pi_config_core()))
 }
 

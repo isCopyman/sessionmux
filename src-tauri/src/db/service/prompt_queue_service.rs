@@ -1647,9 +1647,12 @@ mod tests {
     #[tokio::test]
     async fn user_enqueue_lifts_a_cancel_freeze_but_not_an_interrupt_hold() {
         let (db, conversation_id) = seeded_memory().await;
-        enqueue(&db.conn, input(conversation_id, "old-1", "queued before cancel"))
-            .await
-            .expect("enqueue");
+        enqueue(
+            &db.conn,
+            input(conversation_id, "old-1", "queued before cancel"),
+        )
+        .await
+        .expect("enqueue");
         pause_queue(
             &db.conn,
             conversation_id,
@@ -1681,18 +1684,23 @@ mod tests {
     #[tokio::test]
     async fn automation_enqueue_never_lifts_a_stop_freeze() {
         let (db, conversation_id) = seeded_memory().await;
-        enqueue(&db.conn, input(conversation_id, "old-1", "queued before stop"))
-            .await
-            .expect("enqueue");
-        pause_queue(&db.conn, conversation_id, HOST_STOP_PAUSE_REASON.to_string())
-            .await
-            .expect("pause");
+        enqueue(
+            &db.conn,
+            input(conversation_id, "old-1", "queued before stop"),
+        )
+        .await
+        .expect("enqueue");
+        pause_queue(
+            &db.conn,
+            conversation_id,
+            HOST_STOP_PAUSE_REASON.to_string(),
+        )
+        .await
+        .expect("pause");
 
         let mut timer_item = input(conversation_id, "timer-1", "idle continuation");
         timer_item.source = PromptQueueSource::Timer;
-        let snapshot = enqueue(&db.conn, timer_item)
-            .await
-            .expect("timer enqueue");
+        let snapshot = enqueue(&db.conn, timer_item).await.expect("timer enqueue");
         assert_eq!(
             snapshot.paused_reason.as_deref(),
             Some(HOST_STOP_PAUSE_REASON)
@@ -1878,9 +1886,12 @@ mod tests {
         )
         .await
         .expect("send letter");
-        enqueue(&db.conn, input(target, "user-draft", "the user's own follow-up"))
-            .await
-            .expect("user enqueue");
+        enqueue(
+            &db.conn,
+            input(target, "user-draft", "the user's own follow-up"),
+        )
+        .await
+        .expect("user enqueue");
 
         let mut claimed_order = Vec::new();
         for _ in 0..3 {
@@ -1966,8 +1977,14 @@ mod tests {
             .await
             .expect("claim")
             .expect("the nag item is claimable");
-        assert_eq!(claim.origin_event_id.as_deref(), Some(sent.event_id.as_str()));
-        assert_eq!(claim.delivery_hint, Some(CollaborationDeliveryHint::Default));
+        assert_eq!(
+            claim.origin_event_id.as_deref(),
+            Some(sent.event_id.as_str())
+        );
+        assert_eq!(
+            claim.delivery_hint,
+            Some(CollaborationDeliveryHint::Default)
+        );
         assert!(
             mark_dispatch_started(&db.conn, &claim, Duration::seconds(30))
                 .await
@@ -2024,7 +2041,10 @@ mod tests {
             .await
             .expect("claim succeeds despite the pending delivery")
             .expect("the legacy item is claimable");
-        assert_eq!(claim.delivery_hint, Some(CollaborationDeliveryHint::Default));
+        assert_eq!(
+            claim.delivery_hint,
+            Some(CollaborationDeliveryHint::Default)
+        );
         assert!(
             mark_dispatch_started(&db.conn, &claim, Duration::seconds(30))
                 .await
@@ -2043,9 +2063,12 @@ mod tests {
             .unwrap()
             .unwrap();
         let source = seed_conversation(&db, target_row.folder_id, AgentType::ClaudeCode).await;
-        enqueue(&db.conn, input(target, "blocking-draft", "runs on next idle"))
-            .await
-            .expect("user enqueue");
+        enqueue(
+            &db.conn,
+            input(target, "blocking-draft", "runs on next idle"),
+        )
+        .await
+        .expect("user enqueue");
         assert!(
             claim_first_steerable(&db.conn, target, "worker", Duration::seconds(30))
                 .await
@@ -2783,10 +2806,12 @@ mod tests {
                 .expect("mark")
         );
         accept_claim(&db.conn, &claim).await.expect("accept");
-        assert!(claim_head(&db.conn, target, "worker", Duration::seconds(30))
-            .await
-            .expect("empty")
-            .is_none());
+        assert!(
+            claim_head(&db.conn, target, "worker", Duration::seconds(30))
+                .await
+                .expect("empty")
+                .is_none()
+        );
         let feed = collaboration_service::feed(&db.conn, target, None)
             .await
             .unwrap();
@@ -2812,9 +2837,12 @@ mod tests {
             .unwrap()
             .unwrap();
         let source = seed_conversation(&db, target_row.folder_id, AgentType::ClaudeCode).await;
-        enqueue(&db.conn, input(target, "blocking-draft", "runs on next idle"))
-            .await
-            .expect("user enqueue");
+        enqueue(
+            &db.conn,
+            input(target, "blocking-draft", "runs on next idle"),
+        )
+        .await
+        .expect("user enqueue");
         let first = SendCollaborationMessageInput {
             source_conversation_id: source,
             target_conversation_ids: vec![target],

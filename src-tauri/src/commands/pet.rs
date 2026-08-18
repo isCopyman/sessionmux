@@ -621,5 +621,4 @@ mod tests {
             .expect("save 2");
         assert_eq!(cfg2.scale, 0.5, "scale clamped to lower bound");
     }
-
 }

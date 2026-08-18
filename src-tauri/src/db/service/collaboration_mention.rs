@@ -63,6 +63,9 @@ mod tests {
 
     #[test]
     fn file_uris_are_not_session_mentions() {
-        assert!(session_ids_from_structured_uris("see file://src/foo.rs and codeg://file/bar").is_empty());
+        assert!(
+            session_ids_from_structured_uris("see file://src/foo.rs and codeg://file/bar")
+                .is_empty()
+        );
     }
 }

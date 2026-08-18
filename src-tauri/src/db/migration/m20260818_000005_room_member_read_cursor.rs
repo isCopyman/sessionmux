@@ -74,8 +74,7 @@ mod tests {
         let row = conn
             .query_one(Statement::from_string(
                 DbBackend::Sqlite,
-                "SELECT last_read_at, last_read_event_id FROM collaboration_room_member"
-                    .to_owned(),
+                "SELECT last_read_at, last_read_event_id FROM collaboration_room_member".to_owned(),
             ))
             .await
             .expect("query")

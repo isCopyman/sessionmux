@@ -149,11 +149,18 @@ pub fn reminder_digest_text_with_letters(
         }
     }
     if awaiting_reply > 0 {
-        if letters.iter().any(|item| item.is_room && item.awaiting_reply)
-            && letters.iter().any(|item| !item.is_room && item.awaiting_reply)
+        if letters
+            .iter()
+            .any(|item| item.is_room && item.awaiting_reply)
+            && letters
+                .iter()
+                .any(|item| !item.is_room && item.awaiting_reply)
         {
             parts.push(format!("有 {awaiting_reply} 条已读但仍需回复"));
-        } else if letters.iter().any(|item| item.is_room && item.awaiting_reply) {
+        } else if letters
+            .iter()
+            .any(|item| item.is_room && item.awaiting_reply)
+        {
             parts.push(format!("有 {awaiting_reply} 条已读未回的群点名"));
         } else {
             parts.push(format!("有 {awaiting_reply} 封已读但仍需回复的会话信件"));
@@ -207,7 +214,9 @@ pub fn reminder_digest_text_with_letters(
     if has_mail && has_room {
         text.push_str("请用 list_inbox / read_message 处理信件，用 read_room / post_room 处理群点名。催办不含正文。");
     } else if has_room {
-        text.push_str("请用 read_room 确认已读，用 post_room 回复（设置 reply_to_event_id）。催办不含正文。");
+        text.push_str(
+            "请用 read_room 确认已读，用 post_room 回复（设置 reply_to_event_id）。催办不含正文。",
+        );
     } else {
         text.push_str("请用 list_inbox 查看标题，用 read_message 确认已读。催办不含正文。");
     }

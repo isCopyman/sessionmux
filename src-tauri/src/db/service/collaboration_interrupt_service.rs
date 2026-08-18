@@ -448,9 +448,7 @@ pub async fn recover_after_process_loss(
     Ok(recovered)
 }
 
-pub async fn waiting_target_ids(
-    conn: &DatabaseConnection,
-) -> Result<Vec<i32>, DbError> {
+pub async fn waiting_target_ids(conn: &DatabaseConnection) -> Result<Vec<i32>, DbError> {
     conn.query_all(statement(
         "SELECT DISTINCT target_conversation_id \
          FROM collaboration_interrupt_operation \
@@ -628,7 +626,7 @@ mod tests {
             SendCollaborationMessageInput {
                 source_conversation_id: source,
                 target_conversation_ids: vec![target],
-            subject: "Test letter".into(),
+                subject: "Test letter".into(),
                 body: "Review the new evidence".to_string(),
                 client_dedupe_id: dedupe.to_string(),
                 invocation_policy: CollaborationInvocationPolicy::InvokeWhenIdle,

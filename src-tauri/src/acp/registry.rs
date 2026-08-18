@@ -1093,12 +1093,7 @@ mod tests {
             "openclaw@2026.7.1",
             Some("22.22.3"),
         );
-        assert_npx_version(
-            AgentType::Cline,
-            "3.0.55",
-            "cline@3.0.55",
-            Some("22.0.0"),
-        );
+        assert_npx_version(AgentType::Cline, "3.0.55", "cline@3.0.55", Some("22.0.0"));
         assert_npx_version(
             AgentType::CodeBuddy,
             "2.137.0",
@@ -1130,7 +1125,11 @@ mod tests {
             "deepseek-acp@0.3.0",
             Some("22.0.0"),
         );
-        assert_binary_version(AgentType::OpenCode, "1.18.18", "/releases/download/v1.18.18/");
+        assert_binary_version(
+            AgentType::OpenCode,
+            "1.18.18",
+            "/releases/download/v1.18.18/",
+        );
         // Hermes rides the community npm bridge (upstream retired its PyPI
         // channel at 0.19.0; see the registry entry). The npm package version
         // tracks the upstream version 1:1, and the pin must stay EXACT — the
