@@ -436,3 +436,16 @@ T2 后置截图（CDP 9222 可用，基线在 .artifacts）+ 晨间验收报告 
   1 个新 tsc 笔误 + 1 个 HEAD 存量 tsc 死代码错）。落地顺序：修 tsc → 全套测试门 →
   fmt / MCP 拆分 / 房间 UX / gitignore 四笔提交。警示：01:44 的 cargo 进程疑为 tauri dev
   父进程，绝不可杀。
+- 2026-08-19 04:05 C 线（worker-cskills）完工：worktree 分支 mp/skills-playbooks 两笔
+  a0d85df8（G2-1 skill 硬伤修复 + experts.toml 8 locale×2）、fba95691（G8 四 playbook：
+  patterns-map / research-writing / long-form-writing / line-review），全部工具名与
+  host control action 逐一过了代码核对。工人核实顺带确认 G2-3 属实（host_control_room.rs:70
+  能力文案仍称 owner）。待编排会话 merge 回主分支。
+- 2026-08-19 04:05 wipland 停摆诊断（压缩期间无人落地，编排会话接管）：五笔提交零落地；
+  后台产物考古：vitest 全量 03:24 剩 1 红（panel-layout:270 源码断言）→ 04:04 单文件复跑
+  已全绿（修复在工作区未提交）；冷目录 cargo test --lib 三连 COLD_EXIT:127（cargo 报
+  "error: test failed"，具体失败清单缺失）。已催工人交报告，编排会话并行自跑冷目录取证。
+- 2026-08-19 04:05 用户新增 **G11 上游合并（排在最后）**：把 codeg 上游（origin=
+  xintaofei/codeg）最新更新合并进本分支。**约束：若上游改动与我们的设计冲突（§0 红线、
+  §4 裁决、RFC 拍板、mailbox/room 语义），必须先产出冲突分析、经用户同意后方可合并**；
+  无设计冲突的部分才允许自主合并。执行时点：全部 G/R/UI/T 包收口、全量门绿之后。
