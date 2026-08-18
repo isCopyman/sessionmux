@@ -60,7 +60,7 @@ function roomDetail(): CollaborationRoomDetail {
         conversationId: 101,
         title: "Planner",
         agentType: "codex",
-        role: "owner",
+        role: "member",
         joinedAt: "2026-08-01T00:00:00.000Z",
       },
     ],
@@ -153,6 +153,18 @@ describe("RoomWorkspace", () => {
     )
     expect(api.markCollaborationRoomSeen).toHaveBeenCalledTimes(1)
     expect(api.markCollaborationRoomSeen).toHaveBeenCalledWith(roomId)
+  })
+
+  it("does not show owner ranks or an @human chip in the host composer", async () => {
+    api.getCollaborationRoomTimeline.mockResolvedValue(timeline([event()]))
+    renderRoom()
+
+    expect(await screen.findByText("newest post")).toBeTruthy()
+    expect(screen.getByText("1 members")).toBeTruthy()
+    expect(screen.queryByText("You host this room")).toBeNull()
+    expect(screen.queryByText("owner")).toBeNull()
+    expect(screen.queryByRole("button", { name: "@human" })).toBeNull()
+    expect(screen.getByRole("button", { name: "@all" })).toBeTruthy()
   })
 
   it("posts a reply against the selected event", async () => {

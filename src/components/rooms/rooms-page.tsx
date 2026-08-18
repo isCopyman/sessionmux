@@ -79,7 +79,6 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
   const [hydrated, setHydrated] = useState(false)
   const [body, setBody] = useState("")
   const [mentionAll, setMentionAll] = useState(false)
-  const [mentionHuman, setMentionHuman] = useState(false)
   const [mentioned, setMentioned] = useState<number[]>([])
   const [pending, setPending] = useState(false)
   const [titleDraft, setTitleDraft] = useState<string | null>(null)
@@ -193,7 +192,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
     const targets = mentionAll
       ? []
       : [...new Set([...mentioned, ...mentionedFromUri])]
-    const mentionHumanNext = mentionHuman || mentionsHumanFromText(text)
+    const mentionHumanNext = mentionsHumanFromText(text)
     setPending(true)
     try {
       await postCollaborationRoomMessage({
@@ -213,7 +212,6 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
       setBody("")
       setMentioned([])
       setMentionAll(false)
-      setMentionHuman(false)
       setReplyTo(null)
       toast.success(t("posted"))
       await reload()
@@ -228,7 +226,6 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
     body,
     detail,
     mentionAll,
-    mentionHuman,
     mentioned,
     reload,
     replyTo,
@@ -340,7 +337,6 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
             />
           )}
           <p className="truncate text-[11px] text-muted-foreground">
-            {t("youHost")} ·{" "}
             {t("memberCount", { count: detail.members.length })}
           </p>
         </div>
@@ -462,9 +458,6 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
               <span className="min-w-0 flex-1 truncate font-medium">
                 {t("you")}
               </span>
-              <span className="text-[10px] text-muted-foreground">
-                {t("youHint")}
-              </span>
             </li>
             {detail.members.map((member) => (
               <li
@@ -496,9 +489,6 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
                   />
                   <span className="min-w-0 flex-1 truncate">
                     {memberLabel(member, (id) => t("untitled", { id }))}
-                  </span>
-                  <span className="text-[10px] text-muted-foreground">
-                    {member.role === "owner" ? t("roleOwner") : t("roleMember")}
                   </span>
                 </button>
                 <Button
@@ -548,15 +538,6 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
             }}
           >
             {t("mentionAll")}
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            variant={mentionHuman ? "default" : "outline"}
-            className="h-7 px-2 text-xs"
-            onClick={() => setMentionHuman((value) => !value)}
-          >
-            {t("mentionHuman")}
           </Button>
           {detail.members.map((member) => {
             const active = mentionSet.has(member.conversationId)

@@ -130,25 +130,6 @@ pub(crate) async fn created_by_conversation_id<C: ConnectionTrait>(
         .map_err(DbError::from)
 }
 
-async fn folder_root_for_session<C: ConnectionTrait>(
-    conn: &C,
-    conversation_id: i32,
-) -> Result<Option<i32>, DbError> {
-    let row = conn
-        .query_one(statement(
-            "SELECT COALESCE(f.parent_id, f.id) AS root_id \
-             FROM conversation c \
-             JOIN folder f ON f.id = c.folder_id \
-             WHERE c.id = ? AND c.deleted_at IS NULL",
-            vec![conversation_id.into()],
-        ))
-        .await?;
-    match row {
-        Some(row) => Ok(Some(row.try_get("", "root_id")?)),
-        None => Ok(None),
-    }
-}
-
 async fn collection_for_session<C: ConnectionTrait>(
     conn: &C,
     conversation_id: i32,
@@ -216,10 +197,7 @@ async fn resolve_placement<C: ConnectionTrait>(
         let (_, root_folder_id) = collection_root_folder(conn, collection_id).await?;
         return Ok((Some(collection_id), root_folder_id));
     }
-    Ok((
-        None,
-        folder_root_for_session(conn, input.created_by_conversation_id).await?,
-    ))
+    Ok((None, None))
 }
 
 pub(crate) async fn room_workbench_id<C: ConnectionTrait>(
@@ -298,16 +276,11 @@ pub async fn create(
     ))
     .await?;
     for conversation_id in member_ids {
-        let role = if conversation_id == input.created_by_conversation_id {
-            "owner"
-        } else {
-            "member"
-        };
         txn.execute(statement(
             "INSERT INTO collaboration_room_member \
              (room_id, conversation_id, role, joined_at, last_read_at) \
-             VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
-            vec![room_id.clone().into(), conversation_id.into(), role.into()],
+             VALUES (?, ?, 'member', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+            vec![room_id.clone().into(), conversation_id.into()],
         ))
         .await?;
     }
@@ -485,7 +458,7 @@ async fn list_members<C: ConnectionTrait>(
              FROM collaboration_room_member m \
              LEFT JOIN conversation c ON c.id = m.conversation_id \
              WHERE m.room_id = ? \
-             ORDER BY CASE m.role WHEN 'owner' THEN 0 ELSE 1 END, m.conversation_id",
+             ORDER BY m.conversation_id",
             vec![room_id.into()],
         ))
         .await?;
@@ -553,33 +526,17 @@ pub async fn remove_member(
     conversation_id: i32,
 ) -> Result<CollaborationRoomDetail, DbError> {
     let _ = room_workbench_id(conn, room_id).await?;
-    let row = conn
-        .query_one(statement(
-            "SELECT role FROM collaboration_room_member \
-             WHERE room_id = ? AND conversation_id = ?",
-            vec![room_id.into(), conversation_id.into()],
+    conn.query_one(statement(
+        "SELECT conversation_id FROM collaboration_room_member \
+         WHERE room_id = ? AND conversation_id = ?",
+        vec![room_id.into(), conversation_id.into()],
+    ))
+    .await?
+    .ok_or_else(|| {
+        DbError::NotFound(format!(
+            "Session {conversation_id} is not a member of Room {room_id}"
         ))
-        .await?
-        .ok_or_else(|| {
-            DbError::NotFound(format!(
-                "Session {conversation_id} is not a member of Room {room_id}"
-            ))
-        })?;
-    let role: String = row.try_get("", "role")?;
-    if role == "owner" {
-        let owners: i64 = conn
-            .query_one(statement(
-                "SELECT COUNT(*) AS count FROM collaboration_room_member \
-                 WHERE room_id = ? AND role = 'owner'",
-                vec![room_id.into()],
-            ))
-            .await?
-            .expect("COUNT")
-            .try_get("", "count")?;
-        if owners <= 1 {
-            return Err(validation("The last Room owner cannot be removed"));
-        }
-    }
+    })?;
     let remaining: i64 = conn
         .query_one(statement(
             "SELECT COUNT(*) AS count FROM collaboration_room_member WHERE room_id = ?",
@@ -1048,10 +1005,7 @@ mod tests {
         let room = make_room(&db, a, vec![a, b]).await;
         assert_eq!(room.members.len(), 2);
         assert_eq!(room.created_by_conversation_id, a);
-        assert!(room
-            .members
-            .iter()
-            .any(|m| m.role == "owner" && m.conversation_id == a));
+        assert!(room.members.iter().all(|m| m.role == "member"));
         let listed = list(&db.conn, 1).await.unwrap();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].id, room.id);
@@ -1417,7 +1371,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn mark_seen_clears_room_unread_and_owner_cannot_leave_last() {
+    async fn mark_seen_clears_room_unread_and_creator_can_leave() {
         let (db, a, b, c) = seeded().await;
         let room = make_room(&db, a, vec![a, b]).await;
         crate::db::service::collaboration_service::post_room(
@@ -1455,13 +1409,19 @@ mod tests {
         )
         .await
         .unwrap();
-        let err = remove_member(&db.conn, &room.id, a)
+        remove_member(&db.conn, &room.id, a)
             .await
-            .expect_err("last owner");
-        assert!(err.to_string().contains("last Room owner"));
-        remove_member(&db.conn, &room.id, c)
+            .expect("creator Session can leave while two members remain");
+        let after = get(&db.conn, &room.id).await.unwrap();
+        assert_eq!(after.members.len(), 2);
+        assert!(after
+            .members
+            .iter()
+            .all(|member| member.conversation_id != a));
+        let err = remove_member(&db.conn, &room.id, c)
             .await
-            .expect("remove extra");
+            .expect_err("floor is two members");
+        assert!(err.to_string().contains("at least two"));
     }
 
     #[tokio::test]
@@ -1528,7 +1488,11 @@ mod tests {
             not_the_creators_slot.collection_id, None,
             "a Room does not inherit Collection from the creator Session alone"
         );
-        assert_eq!(not_the_creators_slot.root_folder_id, Some(folder_id));
+        assert_eq!(
+            not_the_creators_slot.root_folder_id,
+            None,
+            "a Room does not inherit the creator Session folder"
+        );
 
         crate::db::service::collection_service::assign_conversations(
             &db.conn,
