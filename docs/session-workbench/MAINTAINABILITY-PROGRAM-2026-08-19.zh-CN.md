@@ -503,7 +503,23 @@ T2 后置截图（CDP 9222 可用，基线在 .artifacts）+ 晨间验收报告 
   ③ conversation.archived_at 列在、人类 UI 能归档，**agent 无 session.archive 动作**
   （session.stop 文案明示 never archives）；④ closed ≠ 隐藏，closed 可被信件冷启动
   （mailbox 根基，不可破坏）；⑤ Collection 全套动作（create/add_session/…）agent 已可用，
-  session.create 已收 collection_id。**立项 G13 编队生命周期（提案，待用户点头分级）**：
+  session.create 已收 collection_id，且 **collection 自身有 parent_id 可嵌套**（战役→
+  子编队纯靠 Collection 已可表达）。
+  【05:5x 修正+补充，用户记忆核实】主动委派机制确已被用户删除（3ebcfa25 remove legacy
+  delegation workflow）；`Delegate` kind 现为**只读兼容残留**——生产零写入点（残余写入
+  全在 #[cfg(test)]，注释明言 "Production releases after delegation removal never call
+  this path"），读路径仅剩 dispatcher 跳过历史行 + fork 把历史 delegate 行升为 regular。
+  **harness 内部子代理不占侧栏的真实机制**是：导入层用 harness_internal/thread_source=
+  subagent 标记隐藏（import_service.rs:329）+ claude 子代理转录由 parser 折进父会话
+  工具视图（subagents/agent-*.jsonl 不参与会话发现）。G13-d 改判：Delegate 残留保持
+  只读兼容、禁新增写入点，不清理（清理需迁移且伤历史库）。
+  **session-as-node 裁决（用户问"要不要让 session 当节点、下挂 Collection"）：不做。**
+  理由：①这正是用户删过一次的"特例"陷阱——第二棵树让每个 UI 面都要回答级联语义
+  （父 session 归档/fork/删除时子容器怎么办）；②Collection 嵌套已能表达全部层级，
+  编排者与其舰队同进一个 Collection 即可——**队长是编队成员，不是编队容器**（与
+  5cbb3670 "members as equals, not owners" 同一哲学）；③指挥关系是账本内容（谁给谁
+  发过任务信），不该固化成结构——层级会过时，账本不会。缺口用 G13-a（playbook 教
+  带 collection_id 拉人）+ G13-c（created_by 元数据做过滤/分组）补齐即可。**立项 G13 编队生命周期（提案，待用户点头分级）**：
   G13-a 零代码=playbook 教编排者"先 collection.create 编队容器再拉人"（工具已存在，
   仅 skill 文案）；G13-b 小=host control 增 session.archive/unarchive（归档对私信投递的
   语义要先过 RFC：建议拒收+提示发件人，绝不能让信悄悄躺死）；G13-c 中=侧栏/列表加
