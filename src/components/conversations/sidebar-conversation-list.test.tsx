@@ -253,6 +253,7 @@ vi.mock("@/stores/room-catalog-store", () => {
   const useRoomCatalogStore = (selector: (value: typeof state) => unknown) =>
     selector(state)
   useRoomCatalogStore.getState = () => state
+  useRoomCatalogStore.subscribe = vi.fn(() => () => {})
   return {
     useRoomCatalogStore,
     ensureRoomCatalogSubscription: vi.fn(),
@@ -316,9 +317,7 @@ function Harness() {
   useEffect(() => {
     harness.rerender = () => setTick((n) => n + 1)
   }, [])
-  return (
-    <SidebarConversationList showCompleted sortMode="created" />
-  )
+  return <SidebarConversationList showCompleted sortMode="created" />
 }
 
 function tree() {
@@ -423,7 +422,6 @@ describe("SidebarConversationList — single status event re-render scope", () =
     expect(probes.card).toBe(0)
     expect(probes.folder).toBe(0)
   })
-
 })
 
 describe("SidebarConversationList — Pinned section (migration semantics)", () => {

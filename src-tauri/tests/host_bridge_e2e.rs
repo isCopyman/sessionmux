@@ -179,7 +179,9 @@ impl SessionCollaborationAccess for RecordingCollaboration {
             source_session_id,
             SessionMessageSpec {
                 target_session_ids: spec.mention_session_ids,
-                title: spec.title,
+                // RoomPostSpec carries no title (a room post is one timeline
+                // message); the recorded spec only asserts content/mentions.
+                title: String::new(),
                 content: spec.content,
                 delivery_mode: Default::default(),
                 priority: spec.priority,

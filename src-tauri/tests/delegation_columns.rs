@@ -41,6 +41,9 @@ async fn delegation_columns_round_trip() {
         origin_cwd: Set(None),
         harness_internal: Set(false),
         codeg_owned: Set(true),
+        // Newer entity columns unrelated to this migration test.
+        preferred_mode_id: Set(None),
+        preferred_config_values: Set(None),
     };
     let inserted = active.insert(&db.conn).await.expect("insert");
     let id = inserted.id;

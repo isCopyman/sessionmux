@@ -267,7 +267,9 @@ describe("ConversationDetailPanel split-group render model", () => {
     expect(shellBody).toContain("{isSplit && selTab && (")
     expect(shellBody).toContain("<ConversationDetailHeader")
     expect(shellBody).toContain("tabId={selTab.id}")
-    expect(source).toContain("{!isSplit && activeTab && (")
+    expect(source).toContain(
+      '{!isSplit && activeTab && activeTab.kind !== "room" && ('
+    )
   })
 
   // Workbench tabs now own the window-level chrome row. Session strips sit one
