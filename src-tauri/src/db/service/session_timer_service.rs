@@ -186,7 +186,8 @@ pub async fn update(
     let enabled = input.enabled.unwrap_or(existing.enabled);
     let now = Utc::now();
     // Any deliberate edit is fresh intent from the user: the no-progress
-    // strike streak and an automatic backoff pause never survive it.
+    // strike streak never survives it. The legacy auto-pause columns are
+    // cleared alongside; nothing writes them any more.
     let result = conn
         .execute(statement(
             "UPDATE conversation_timer \
@@ -279,40 +280,6 @@ pub async fn reset_delay(
     if result.rows_affected() != 1 {
         return Err(DbError::Conflict(format!(
             "Session timer {id} changed before its delay could be reset"
-        )));
-    }
-    find(conn, id).await
-}
-
-/// Park a timer that kept poking without any new information while its
-/// Session is waiting on unanswered letters. `enabled` is deliberately left
-/// untouched: this is backoff stretched to "until something new happens",
-/// not a user decision. Real new mailbox information or any user edit
-/// revives the timer.
-pub async fn auto_pause(
-    conn: &impl ConnectionTrait,
-    id: &str,
-    previous_updated_at: DateTime<Utc>,
-    reason: &str,
-) -> Result<SessionTimerInfo, DbError> {
-    let now = Utc::now();
-    let result = conn
-        .execute(statement(
-            "UPDATE conversation_timer \
-             SET auto_paused_at = ?, auto_pause_reason = ?, updated_at = ? \
-             WHERE id = ? AND updated_at = ? AND enabled = 1",
-            vec![
-                now.into(),
-                reason.into(),
-                now.into(),
-                id.into(),
-                previous_updated_at.into(),
-            ],
-        ))
-        .await?;
-    if result.rows_affected() != 1 {
-        return Err(DbError::Conflict(format!(
-            "Session timer {id} changed before it could auto-pause"
         )));
     }
     find(conn, id).await
@@ -413,34 +380,6 @@ mod tests {
         assert!(claim_fire(&db.conn, &timer.id, timer.updated_at, 0)
             .await
             .is_err());
-    }
-
-    #[tokio::test]
-    async fn auto_pause_keeps_enabled_and_any_edit_clears_it() {
-        let (db, conversation_id) = setup().await;
-        let timer = create(&db.conn, input(conversation_id, "brake"))
-            .await
-            .unwrap();
-        let parked = auto_pause(&db.conn, &timer.id, timer.updated_at, "waiting_no_progress")
-            .await
-            .unwrap();
-        assert!(parked.enabled, "the brake never flips the user's switch");
-        assert!(parked.auto_paused_at.is_some());
-
-        let revived = update(
-            &db.conn,
-            &timer.id,
-            UpdateSessionTimerInput {
-                prompt_text: None,
-                enabled: Some(true),
-                idle_grace_secs: None,
-                expected_updated_at: parked.updated_at,
-            },
-        )
-        .await
-        .unwrap();
-        assert!(revived.auto_paused_at.is_none());
-        assert_eq!(revived.strike_count, 0);
     }
 
     #[tokio::test]
