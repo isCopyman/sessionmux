@@ -677,6 +677,14 @@ export function ConversationManageDialog({
   const [statusFilter, setStatusFilter] = useState<SessionStatusFilter>("all")
   const [collaborationFilter, setCollaborationFilter] =
     useState<CollaborationFilter>("all")
+  // Open facet dropdowns form a layer ABOVE this dialog: while one is open an
+  // Escape belongs to it (collapse the dropdown) and must not reach the dialog,
+  // which would close the whole session center from under the user. The count
+  // feeds DialogContent's onEscapeKeyDown guard below.
+  const [openFacetMenus, setOpenFacetMenus] = useState(0)
+  const trackFacetMenuOpen = useCallback((open: boolean) => {
+    setOpenFacetMenus((count) => Math.max(0, count + (open ? 1 : -1)))
+  }, [])
   const [rows, setRows] = useState<DbConversationSummary[]>([])
   const [contentSnippets, setContentSnippets] = useState<Map<number, string>>(
     new Map()
@@ -1599,7 +1607,13 @@ export function ConversationManageDialog({
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="flex h-[min(46rem,calc(100dvh-2rem))] w-[calc(100vw-2rem)] max-w-6xl flex-col overflow-hidden">
+        <DialogContent
+          className="flex h-[min(46rem,calc(100dvh-2rem))] w-[calc(100vw-2rem)] max-w-6xl flex-col overflow-hidden"
+          onEscapeKeyDown={(event) => {
+            // An open facet dropdown eats this Escape; the next one closes us.
+            if (openFacetMenus > 0) event.preventDefault()
+          }}
+        >
           <DialogHeader>
             {/* Which folder is in scope is the folder pill's job now, not the
                 title's — the pill names it alias-aware and can also read "all
@@ -1626,6 +1640,7 @@ export function ConversationManageDialog({
               </div>
               <Select
                 value={searchScope}
+                onOpenChange={trackFacetMenuOpen}
                 onValueChange={(value) =>
                   setSearchScope(value as SessionSearchScope)
                 }
@@ -1669,6 +1684,7 @@ export function ConversationManageDialog({
                     : collectionFilter
                 }
                 disabled={collectionRefsLoading || collectionRefsUnavailable}
+                onOpenChange={trackFacetMenuOpen}
                 onValueChange={(value) => {
                   if (value === "all" || value === "unclassified") {
                     setCollectionFilter(value)
@@ -1725,6 +1741,7 @@ export function ConversationManageDialog({
                     : workbenchFilter
                 }
                 disabled={workbenchRefsLoading || workbenchRefsUnavailable}
+                onOpenChange={trackFacetMenuOpen}
                 onValueChange={(value) => {
                   if (value === "all" || value === "unopened") {
                     setWorkbenchFilter(value)
@@ -1792,6 +1809,7 @@ export function ConversationManageDialog({
               />
               <Select
                 value={agentFilter}
+                onOpenChange={trackFacetMenuOpen}
                 onValueChange={(v) => setAgentFilter(v as AgentType | "all")}
               >
                 <SelectTrigger className={FACET_SELECT_TRIGGER_CLASS}>
@@ -1819,6 +1837,7 @@ export function ConversationManageDialog({
               </Select>
               <Select
                 value={statusFilter}
+                onOpenChange={trackFacetMenuOpen}
                 onValueChange={(v) => setStatusFilter(v as SessionStatusFilter)}
               >
                 <SelectTrigger
@@ -1854,6 +1873,7 @@ export function ConversationManageDialog({
               </Select>
               <Select
                 value={collaborationFilter}
+                onOpenChange={trackFacetMenuOpen}
                 onValueChange={(value) =>
                   setCollaborationFilter(value as CollaborationFilter)
                 }
