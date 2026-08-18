@@ -495,7 +495,16 @@ T2 后置截图（CDP 9222 可用，基线在 .artifacts）+ 晨间验收报告 
   今天就能写 shadow-auditor playbook（候选，待点头）；其 300s debuff/插话循环翻车反向
   印证我们 R2 每轮一 steer + 5 分钟冷却 + 链深保险丝的保守缺省。Multica=issue 队列制，
   taskboard 远亲，无行动项。
-- 2026-08-19 05:4x 用户提出**编队膨胀问题**（拿本夜编排当参照负载：Claude Code 里子代理
+- 2026-08-19 06:0x **G11 只读侦察完成（未合并）**：fetch origin 后，上游领先 27 提交
+  （分叉点 ea5177ea = v0.26.1），我们领先 181。逐提交扫描：全部落在 markdown 数学渲染
+  修复、codex 会话标题同步、grok token 统计、workspace 快捷操作菜单、composer @/斜杠
+  面板打磨（2fd356a2）、ACP "responding 卡死"修复（1e3e5a10）、右键添加到会话
+  （9d716876）——**零设计领域冲突**（不碰 mailbox/room/collaboration/queue/timer/MCP/
+  skills）。文件重叠 36 个，预计纯文本冲突：connection.rs（我方 MCP 拆分+fmt vs 对方
+  lifecycle 修复）、conversation_service/parsers（fmt 殃及）、i18n×10（双方加键，取并
+  即可）、message-input.*（对方 @ 面板加宽 vs 我方 B 线 G5-13 复用同面板）。执行方案
+  （主线收口后）：**worktree 里试合并**→解冲突→跑门→绿了再落主分支；如解冲突中发现
+  语义级碰撞（非纯文本），停手写分析等用户裁。（拿本夜编排当参照负载：Claude Code 里子代理
   隐形、用完即弃；codeg 里 session.create 拉的工人=顶级常驻 Session，侧栏会炸）。现状
   查实：① `ConversationKind::Delegate`（⟺ parent_id 非空，插入即定不可改）已实现
   "harness 内部子代理嵌进父会话工具视图、不占侧栏"——这层已对齐 Claude Code，管不到
