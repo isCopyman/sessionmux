@@ -19,6 +19,7 @@ use crate::db::service::{
     collaboration_service, conversation_service, folder_service, prompt_queue_service, tab_service,
 };
 use crate::db::AppDatabase;
+use crate::models::prompt_queue::PromptQueueSource;
 use crate::models::{
     AddCollaborationRoomMembersInput, CollaborationChanged, CollaborationDeliveryHint,
     CollaborationDeliveryState, CollaborationFeed, CollaborationInterruptResult,
@@ -29,7 +30,6 @@ use crate::models::{
     SendAndInterruptCollaborationInput, SendAndInterruptCollaborationResult,
     SendCollaborationMessageInput,
 };
-use crate::models::prompt_queue::PromptQueueSource;
 use crate::prompt_queue::PromptQueueHandle;
 use crate::session_dispatcher::connection_is_live;
 use crate::web::event_bridge::{
@@ -121,7 +121,6 @@ fn publish_persisted_message(emitter: &EventEmitter, result: &CollaborationSendR
         publish(emitter, result.affected_conversation_ids.clone());
     }
 }
-
 
 /// No live Harness means there is no "next turn" to wait for. Normal mail
 /// still has to reach the Agent, so the dispatcher must resume the Session.
@@ -874,17 +873,18 @@ impl SessionCollaborationAccess for DbSessionCollaboration {
                 "Session collaboration is disabled in Codeg settings.",
             );
         }
-        let rooms = match collaboration_room_service::list_for_member(
-            &self.db.conn,
-            caller_session_id,
-        )
-        .await
-        {
-            Ok(rooms) => rooms,
-            Err(err) => {
-                return SessionRoomListOutcome::unavailable(Some(caller_session_id), err.to_string())
-            }
-        };
+        let rooms =
+            match collaboration_room_service::list_for_member(&self.db.conn, caller_session_id)
+                .await
+            {
+                Ok(rooms) => rooms,
+                Err(err) => {
+                    return SessionRoomListOutcome::unavailable(
+                        Some(caller_session_id),
+                        err.to_string(),
+                    )
+                }
+            };
         let query = query
             .as_deref()
             .map(str::trim)
@@ -909,6 +909,8 @@ impl SessionCollaborationAccess for DbSessionCollaboration {
                 member_count: room.member_count,
                 unread_count: room.unread_count,
                 mention_unread_count: room.mention_unread_count,
+                needs_reply_count: room.needs_reply_count,
+                awaiting_reply_count: room.awaiting_reply_count,
                 last_event_at: room.last_event_at,
             })
             .collect();
@@ -944,10 +946,17 @@ impl SessionCollaborationAccess for DbSessionCollaboration {
         let detail = match collaboration_room_service::get(&self.db.conn, &query.room_id).await {
             Ok(detail) => detail,
             Err(err) => {
-                return SessionRoomReadOutcome::unavailable(Some(caller_session_id), err.to_string())
+                return SessionRoomReadOutcome::unavailable(
+                    Some(caller_session_id),
+                    err.to_string(),
+                )
             }
         };
-        let mode = if query.unread {
+        let mode = if query.needs_reply {
+            collaboration_room_service::RoomTimelineMode::NeedsReply {
+                conversation_id: caller_session_id,
+            }
+        } else if query.unread {
             collaboration_room_service::RoomTimelineMode::Unread {
                 conversation_id: caller_session_id,
             }
@@ -966,23 +975,40 @@ impl SessionCollaborationAccess for DbSessionCollaboration {
         {
             Ok(timeline) => timeline,
             Err(err) => {
-                return SessionRoomReadOutcome::unavailable(Some(caller_session_id), err.to_string())
+                return SessionRoomReadOutcome::unavailable(
+                    Some(caller_session_id),
+                    err.to_string(),
+                )
             }
         };
-        let event_ids: Vec<String> = timeline.events.iter().map(|event| event.id.clone()).collect();
-        if let Err(err) = collaboration_room_service::consume_room_window(
-            &self.db.conn,
-            &query.room_id,
-            caller_session_id,
-            &event_ids,
-            query.unread,
-        )
-        .await
-        {
-            return SessionRoomReadOutcome::unavailable(Some(caller_session_id), err.to_string());
+        if !query.needs_reply {
+            let event_ids: Vec<String> = timeline
+                .events
+                .iter()
+                .map(|event| event.id.clone())
+                .collect();
+            if let Err(err) = collaboration_room_service::consume_room_window(
+                &self.db.conn,
+                &query.room_id,
+                caller_session_id,
+                &event_ids,
+                query.unread,
+            )
+            .await
+            {
+                return SessionRoomReadOutcome::unavailable(
+                    Some(caller_session_id),
+                    err.to_string(),
+                );
+            }
         }
         let note = if timeline.truncated {
-            if query.unread {
+            if query.needs_reply {
+                Some(
+                    "More unpaid posts remain. Call read_room again with needs_reply=true."
+                        .to_string(),
+                )
+            } else if query.unread {
                 Some("More unread posts remain. Call read_room again with unread=true.".to_string())
             } else if let Some(first) = timeline.events.first() {
                 Some(format!(
@@ -1026,6 +1052,7 @@ impl SessionCollaborationAccess for DbSessionCollaboration {
                     mention_session_ids: event.mention_conversation_ids,
                     mention_human: event.mention_human,
                     from_author_kind: event.author_kind.as_str().to_string(),
+                    expects_reply: event.expects_reply,
                     created_at: event.created_at,
                 })
                 .collect(),
@@ -1637,13 +1664,7 @@ pub async fn collaboration_room_timeline(
     before_event_id: Option<String>,
     db: tauri::State<'_, AppDatabase>,
 ) -> Result<RoomTimeline, AppCommandError> {
-    collaboration_room_timeline_core(
-        &db.conn,
-        &room_id,
-        limit,
-        before_event_id.as_deref(),
-    )
-    .await
+    collaboration_room_timeline_core(&db.conn, &room_id, limit, before_event_id.as_deref()).await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -1671,7 +1692,7 @@ mod tests {
     use crate::acp::connection::ConnectionCommand;
     use crate::acp::internal_bus::EventBusMetrics;
     use crate::acp::session_collaboration::{
-        SessionInboxFilter, SessionMessageDeliveryMode, RoomReadQuery,
+        RoomReadQuery, SessionInboxFilter, SessionMessageDeliveryMode,
     };
     use crate::acp::InternalEventBus;
     use crate::db::test_helpers::{fresh_in_memory_db, seed_conversation, seed_folder};
@@ -2083,7 +2104,10 @@ mod tests {
         .await
         .expect("send normal");
 
-        assert_eq!(result.deliveries[0].state, CollaborationDeliveryState::Pending);
+        assert_eq!(
+            result.deliveries[0].state,
+            CollaborationDeliveryState::Pending
+        );
         assert!(prompt_queue_service::snapshot(&db.conn, target)
             .await
             .unwrap()
@@ -2549,11 +2573,7 @@ mod tests {
             )
             .await;
         assert!(!rejected.accepted);
-        assert!(rejected
-            .note
-            .as_deref()
-            .unwrap_or("")
-            .contains("post_room"));
+        assert!(rejected.note.as_deref().unwrap_or("").contains("post_room"));
 
         let listed = access.list_rooms(source, None, 50).await;
         assert!(listed.available);
@@ -2570,9 +2590,7 @@ mod tests {
                     mention_session_ids: vec![peer],
                     mention_all: false,
                     mention_human: false,
-                    priority: Some(
-                        crate::acp::session_collaboration::SessionMessagePriority::High,
-                    ),
+                    priority: Some(crate::acp::session_collaboration::SessionMessagePriority::High),
                     expects_reply: false,
                     reply_to_event_id: None,
                     client_dedupe_id: "mcp:post-room".into(),
@@ -2591,6 +2609,7 @@ mod tests {
                     room_id: room.id.clone(),
                     limit: 50,
                     unread: false,
+                    needs_reply: false,
                     before_event_id: None,
                 },
             )
@@ -2611,6 +2630,7 @@ mod tests {
                     room_id: room.id.clone(),
                     limit: 50,
                     unread: true,
+                    needs_reply: false,
                     before_event_id: None,
                 },
             )
@@ -2628,6 +2648,7 @@ mod tests {
                     room_id: room.id.clone(),
                     limit: 50,
                     unread: false,
+                    needs_reply: false,
                     before_event_id: None,
                 },
             )

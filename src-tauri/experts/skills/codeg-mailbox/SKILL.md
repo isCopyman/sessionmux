@@ -1,9 +1,9 @@
 ---
-name: codeg-session-collaboration
+name: codeg-mailbox
 description: Use when a managed Codeg Agent needs to consult or notify another existing Codeg Session through the private mailbox (list_sessions, send_message, list_inbox, read_message). Do not use for shared Rooms, creating Sessions, arranging Workbenches, or talking to AgentBus.
 ---
 
-# Codeg Session Collaboration
+# Codeg Mailbox
 
 Contact another **already existing** Codeg Session with the **mailbox**
 tools. This is private mail. It is not a Room post.
@@ -29,15 +29,22 @@ and not a Room.
 - `send_message`: send `title` + `content` to `target_session_ids`.
   Recipients cannot see each other. `priority=high` (default) notifies
   now; `priority=normal` waits for the next ordinary turn. Reply or
-  supplement with `reply_to_event_id`. Never pass `room_id`.
+  supplement with `reply_to_event_id`. A mailbox reply is still a
+  letter to those targets, so they are notified — unlike a Room quote,
+  which does not wake anyone unless you also `@` them. Never pass
+  `room_id`.
 - `list_inbox`: this Session's private mailbox. Room posts never appear
   here. Returns titles, not bodies. Listing does not mark mail read.
 - `read_message`: open one letter by `event_id`. Marks it read even if
   the first delivery already showed the body.
 
 Shared discussion belongs to the `codeg-room` skill (`list_rooms`,
-`read_room`, `post_room`). Host Control `room.create` / `room.add_member`
-creates membership; it does not send mail.
+`read_room`, `post_room`, plus Host Control `room.create` /
+`room.add_member`). Creating a Room does not send mail.
+
+How to start a team, pick planner-coder-reviewer / hub-and-spoke /
+roundtable, or save a pattern belongs to `codeg-multi-agent`. This
+skill is the private-mail channel only.
 
 ## Workflow
 
@@ -81,4 +88,4 @@ Never omit `reply_to_event_id` just because you already answered once.
 - Never pass `room_id` to `send_message`. Rooms use `post_room`.
 - A Room mention envelope (`channel=room`) is not inbox mail. Do not
   answer it with this skill's tools.
-- If these tools are missing, say collaboration is unavailable.
+- If these tools are missing, say the mailbox is unavailable.

@@ -424,22 +424,22 @@ en = "Manages Codeg Sessions through the progressive Codeg MCP gateway."
 
 
 [[expert]]
-id = "codeg-session-collaboration"
+id = "codeg-mailbox"
 category = "execution"
 icon = "MessagesSquare"
 sort_order = 140
 
 [expert.display_name]
-en = "Codeg Session Collaboration"
-"zh-CN" = "Codeg 会话协作"
-"zh-TW" = "Codeg 會話協作"
-ja = "Codeg セッション連携"
-ko = "Codeg 세션 협업"
-es = "Colaboración de sesiones Codeg"
-de = "Codeg-Sitzungszusammenarbeit"
-fr = "Collaboration de sessions Codeg"
-pt = "Colaboração de sessões Codeg"
-ar = "تعاون جلسات Codeg"
+en = "Codeg Mailbox"
+"zh-CN" = "Codeg 邮箱"
+"zh-TW" = "Codeg 信箱"
+ja = "Codeg メールボックス"
+ko = "Codeg 메일함"
+es = "Buzón Codeg"
+de = "Codeg-Postfach"
+fr = "Boîte Codeg"
+pt = "Caixa Codeg"
+ar = "صندوق بريد Codeg"
 
 [expert.description]
 en = "Consults or notifies another existing Codeg Session through the private mailbox (list_sessions, send_message, list_inbox, read_message)."
@@ -473,16 +473,47 @@ pt = "Sala Codeg"
 ar = "غرفة Codeg"
 
 [expert.description]
-en = "Reads and posts in a shared Codeg Room through list_rooms, read_room, and post_room."
-"zh-CN" = "通过 list_rooms、read_room、post_room 读写共享群聊。"
-"zh-TW" = "透過 list_rooms、read_room、post_room 讀寫共享群聊。"
-ja = "list_rooms / read_room / post_room で共有ルームに投稿します。"
-ko = "list_rooms, read_room, post_room으로 공유 룸에 글을 씁니다."
-es = "Lee y publica en una sala compartida Codeg con list_rooms, read_room y post_room."
-de = "Liest und schreibt in einem geteilten Codeg-Raum über list_rooms, read_room und post_room."
-fr = "Lit et publie dans une salle Codeg partagée via list_rooms, read_room et post_room."
-pt = "Lê e publica numa sala Codeg partilhada com list_rooms, read_room e post_room."
-ar = "يقرأ وينشر في غرفة Codeg مشتركة عبر list_rooms و read_room و post_room."
+en = "Creates, joins, reads, and posts in a shared Codeg Room (room.create, room.add_member, list_rooms, read_room, post_room)."
+"zh-CN" = "创建、加入并读写共享群聊（room.create、room.add_member、list_rooms、read_room、post_room）。"
+"zh-TW" = "建立、加入並讀寫共享群聊（room.create、room.add_member、list_rooms、read_room、post_room）。"
+ja = "ルームの作成・参加と list_rooms / read_room / post_room。"
+ko = "룸 생성·참가와 list_rooms, read_room, post_room."
+es = "Crea, une, lee y publica en una sala Codeg (room.create, room.add_member, list_rooms, read_room, post_room)."
+de = "Erstellt, tritt bei, liest und schreibt in einem Codeg-Raum."
+fr = "Crée, rejoint, lit et publie dans une salle Codeg."
+pt = "Cria, entra, lê e publica numa sala Codeg."
+ar = "ينشئ غرفة Codeg وينضم إليها ويقرأ وينشر فيها."
+
+
+[[expert]]
+id = "codeg-multi-agent"
+category = "execution"
+icon = "Users"
+sort_order = 142
+
+[expert.display_name]
+en = "Codeg Multi-Agent"
+"zh-CN" = "Codeg 多智能体协作"
+"zh-TW" = "Codeg 多智能體協作"
+ja = "Codeg マルチエージェント"
+ko = "Codeg 멀티 에이전트"
+es = "Codeg multiagente"
+de = "Codeg Multi-Agent"
+fr = "Codeg multi-agents"
+pt = "Codeg multiagente"
+ar = "Codeg متعدد الوكلاء"
+
+[expert.description]
+en = "Starts flexible multi-session collaboration from one Session using playbook patterns (no personas, no system prompt)."
+"zh-CN" = "由主会话按玩法发起灵活的多会话协作（不是人设中心，不设 system prompt）。"
+"zh-TW" = "由主工作階段依玩法發起靈活的多工作階段協作（不是人設中心，不設 system prompt）。"
+ja = "1つのセッションから柔軟な複数セッション協働を開始します（ペルソナや system prompt は使いません）。"
+ko = "한 세션에서 유연한 다중 세션 협업을 시작합니다(페르소나/시스템 프롬프트 없음)."
+es = "Inicia colaboración flexible entre sesiones desde una sesión (sin personas ni system prompt)."
+de = "Startet flexible Multi-Session-Kollaboration von einer Session (keine Personas, kein System-Prompt)."
+fr = "Démarre une collaboration flexible entre sessions depuis une session (pas de persona ni de system prompt)."
+pt = "Inicia colaboração flexível entre sessões a partir de uma sessão (sem personas nem system prompt)."
+ar = "يبدأ تعاونا مرنا بين الجلسات من جلسة واحدة دون شخصيات أو موجّه نظام."
 
 
 [[expert]]

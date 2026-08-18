@@ -31,6 +31,21 @@ const MAX_STORE_ONLY_DELIVERIES_PER_TURN: usize = 16;
 /// The rest stays in the mailbox / Room ledger; `read_message` / `read_room`
 /// return it. Legal events may be up to `MAX_BODY_BYTES`.
 const MAX_FIRST_DELIVERY_BODY_CHARS: usize = 8_000;
+const MAX_PARENT_SNIPPET_CHARS: usize = 200;
+const DELIVERY_ENVELOPE_SELECT: &str =
+    "SELECT d.id AS delivery_id, e.id AS event_id, e.reply_to_event_id, \
+                    CASE WHEN d.obligation_state = 'awaiting_reply' THEN 1 ELSE 0 END \
+                        AS effective_expects_reply, \
+                    e.source_conversation_id, e.source_title_snapshot, \
+                    e.source_agent_type_snapshot, e.source_folder_path_snapshot, \
+                    e.subject, e.body, e.visibility, e.room_id, \
+                    parent.source_conversation_id AS parent_source_conversation_id, \
+                    parent.source_title_snapshot AS parent_source_title, \
+                    COALESCE(parent.author_kind, 'session') AS parent_author_kind, \
+                    parent.body AS parent_body \
+             FROM collaboration_delivery d \
+             JOIN collaboration_event e ON e.id = d.event_id \
+             LEFT JOIN collaboration_event parent ON parent.id = e.reply_to_event_id";
 // One legal event body may already be MAX_BODY_BYTES. First delivery now
 // truncates, so a 16-item store_only batch stays far below this ceiling.
 const MAX_STORE_ONLY_ENVELOPE_BYTES_PER_TURN: usize = MAX_BODY_BYTES + 128_000;
@@ -499,9 +514,45 @@ fn validate_input(input: &SendCollaborationMessageInput) -> Result<Vec<i32>, DbE
 }
 
 fn truncate_first_delivery_body(body: &str) -> (String, bool) {
+    truncate_chars(body, MAX_FIRST_DELIVERY_BODY_CHARS)
+}
+
+fn truncate_chars(body: &str, max_chars: usize) -> (String, bool) {
     let mut chars = body.chars();
-    let taken: String = chars.by_ref().take(MAX_FIRST_DELIVERY_BODY_CHARS).collect();
+    let taken: String = chars.by_ref().take(max_chars).collect();
     (taken, chars.next().is_some())
+}
+
+fn parent_quote_from_row(row: &QueryResult) -> Result<Option<(String, i32, String)>, DbError> {
+    let Some(parent_id) = row.try_get::<Option<i32>>("", "parent_source_conversation_id")? else {
+        return Ok(None);
+    };
+    let parent_title: Option<String> = row.try_get("", "parent_source_title")?;
+    let parent_kind: Option<String> = row.try_get("", "parent_author_kind")?;
+    let parent_body: Option<String> = row.try_get("", "parent_body")?;
+    let human = parent_kind.as_deref() == Some("human");
+    let label = parent_title
+        .as_deref()
+        .map(str::trim)
+        .filter(|title| !title.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            if human {
+                "the operator".to_string()
+            } else {
+                "Untitled Session".to_string()
+            }
+        });
+    let (snippet, _) = truncate_chars(
+        parent_body.as_deref().unwrap_or(""),
+        MAX_PARENT_SNIPPET_CHARS,
+    );
+    let label = if human && label != "the operator" {
+        format!("{label} (human)")
+    } else {
+        label
+    };
+    Ok(Some((label, parent_id, snippet)))
 }
 
 /// First delivery includes title + a bounded body. Consume is still
@@ -534,7 +585,8 @@ fn prompt_draft_from_delivery_row(row: &QueryResult) -> Result<PromptQueueDraft,
     let is_room = visibility == "room" && room_id.is_some();
     let channel = if is_room { "room" } else { "mailbox" };
     let (body_for_prompt, truncated) = truncate_first_delivery_body(&body);
-    let metadata = serde_json::json!({
+    let parent_quote = parent_quote_from_row(row)?;
+    let mut metadata = serde_json::json!({
         "version": ENVELOPE_VERSION,
         "channel": channel,
         "kind": if is_room { "room_mention" } else { "letter" },
@@ -551,12 +603,26 @@ fn prompt_draft_from_delivery_row(row: &QueryResult) -> Result<PromptQueueDraft,
         "roomId": room_id,
         "bodyTruncated": truncated,
     });
+    if let Some((parent_label, parent_id, parent_snippet)) = parent_quote.as_ref() {
+        metadata["parentSourceConversationId"] = serde_json::json!(parent_id);
+        metadata["parentSourceTitle"] = serde_json::json!(parent_label);
+        metadata["parentSnippet"] = serde_json::json!(parent_snippet);
+    }
     let metadata = serde_json::to_string(&metadata)
         .map_err(|err| validation(format!("Could not serialize collaboration envelope: {err}")))?;
     let reply_hint = if expects_reply != 0 {
         " This letter expects a reply after you read it."
     } else {
         ""
+    };
+    let quoted = match parent_quote.as_ref() {
+        Some((label, parent_id, snippet)) if is_room => format!(
+            "Quoted post by {label} (#{parent_id}): {snippet}\nQuoting does not wake that author. To wake them, also pass mention_session_ids.\n"
+        ),
+        Some((label, parent_id, snippet)) => format!(
+            "Quoted letter by {label} (#{parent_id}): {snippet}\nreply_to_event_id quotes the parent; it does not wake that Session by itself.\n"
+        ),
+        None => String::new(),
     };
     let host_text = if is_room {
         let room = room_id.as_deref().unwrap_or("");
@@ -573,7 +639,7 @@ fn prompt_draft_from_delivery_row(row: &QueryResult) -> Result<PromptQueueDraft,
             "channel={channel}\n\
 This is a Codeg Room mention in {room}. It is not a private letter from Session {source_conversation_id}.\n\
 Mention from {source_label} (#{source_conversation_id}).{reply_hint}\n\
-{consume} Reply with post_room using the same room_id and reply_to_event_id={event_id}. Later supplements must also set reply_to_event_id or they start a new thread. Do not send_message a private letter unless asked."
+{quoted}{consume} Reply with post_room using the same room_id and reply_to_event_id={event_id}. reply_to_event_id quotes the parent; it does not wake that author. To wake them, also pass mention_session_ids. Later supplements must also set reply_to_event_id or they start a new thread. Do not send_message a private letter unless asked."
         )
     } else {
         let consume = if truncated {
@@ -589,7 +655,7 @@ Mention from {source_label} (#{source_conversation_id}).{reply_hint}\n\
             "channel={channel}\n\
 This is a Codeg mailbox letter from {source_label} (#{source_conversation_id}). It is not a Room post.\n\
 Title: 《{letter_title}》.{reply_hint}\n\
-{consume} If a reply is needed, send_message to sourceConversationId and set reply_to_event_id={event_id}. Later supplements to the same thread must also set reply_to_event_id; omitting it starts a new root."
+{quoted}{consume} If a reply is needed, send_message to sourceConversationId and set reply_to_event_id={event_id}. Later supplements to the same thread must also set reply_to_event_id; omitting it starts a new root."
         )
     };
     let text = format!(
@@ -616,16 +682,11 @@ pub(crate) async fn prompt_draft_for_origin<C: ConnectionTrait>(
 ) -> Result<PromptQueueDraft, DbError> {
     let row = conn
         .query_one(statement(
-            "SELECT d.id AS delivery_id, e.id AS event_id, e.reply_to_event_id, \
-                    CASE WHEN d.obligation_state = 'awaiting_reply' THEN 1 ELSE 0 END \
-                        AS effective_expects_reply, \
-                    e.source_conversation_id, e.source_title_snapshot, \
-                    e.source_agent_type_snapshot, e.source_folder_path_snapshot, \
-                    e.subject, e.body, e.visibility, e.room_id \
-             FROM collaboration_delivery d \
-             JOIN collaboration_event e ON e.id = d.event_id \
+            &format!(
+                "{DELIVERY_ENVELOPE_SELECT} \
              WHERE d.event_id = ? AND d.target_conversation_id = ? \
-               AND d.state NOT IN ('dismissed', 'failed')",
+               AND d.state NOT IN ('dismissed', 'failed')"
+            ),
             vec![event_id.into(), target_conversation_id.into()],
         ))
         .await?
@@ -671,14 +732,7 @@ pub(crate) async fn claim_pending_store_only_for_turn(
     let rows = txn
         .query_all(statement(
             &format!(
-                "SELECT d.id AS delivery_id, e.id AS event_id, e.reply_to_event_id, \
-                        CASE WHEN d.obligation_state = 'awaiting_reply' THEN 1 ELSE 0 END \
-                            AS effective_expects_reply, \
-                        e.source_conversation_id, e.source_title_snapshot, \
-                        e.source_agent_type_snapshot, e.source_folder_path_snapshot, \
-                        e.subject, e.body, e.visibility, e.room_id \
-                 FROM collaboration_delivery d \
-                 JOIN collaboration_event e ON e.id = d.event_id \
+                "{DELIVERY_ENVELOPE_SELECT} \
                  WHERE d.target_conversation_id = ? \
                    AND d.invocation_policy = 'store_only' AND d.state = 'pending' \
                  ORDER BY d.created_at ASC, d.rowid ASC \

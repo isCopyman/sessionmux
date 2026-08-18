@@ -1,6 +1,6 @@
 ---
 name: codeg-host-control
-description: Use when a managed Codeg Agent needs to create, inspect or rename Codeg Sessions, organize Sessions into Collections, manage saved Workbenches, or create/list shared Rooms through Codeg's progressive Host Control MCP. Posting in a Room uses the post_room tool from the codeg-room skill, not Host Control.
+description: Use when a managed Codeg Agent needs to create, inspect or rename Codeg Sessions, organize Sessions into Collections, or manage saved Workbenches through Codeg's progressive Host Control MCP. Room create/add-member and posting belong to the codeg-room skill. Private mail belongs to codeg-mailbox. Team playbooks belong to codeg-multi-agent.
 ---
 
 # Codeg Host Control
@@ -37,6 +37,10 @@ the idempotency key outside model-controlled arguments.
   cwd, optionally with a first Prompt and optional `collection_id`. Placement
   happens after the Session exists; a Collection miss keeps the Session.
   It stays in the background unless the user later opens it.
+  For this-run identity use `title` plus `initial_prompt`. That prompt is a
+  user message, not a harness system prompt. Do not ask Host Control for a
+  system prompt field. When the user wants a team assembled, follow
+  `codeg-multi-agent` for who to create and what the first prompt should say.
 - `session.cancel_turn`: cancel only the active Turn and keep the Session/runtime.
 - `session.stop`: stop the managed runtime while preserving Session identity and
   native history for resume.
@@ -60,20 +64,15 @@ the idempotency key outside model-controlled arguments.
   Use this UI-affecting action only when the user asked to open or arrange the
   Workbench. `ui_requested` is not proof that a disconnected View applied it.
 
-## Available Room actions
+## Room actions live in `codeg-room`
 
-- `room.list` / `room.list_workbench`: list Rooms on a Workbench (defaults to
-  Workbench 1). Prefer `list_rooms` when you only need Rooms you already belong
-  to. These two Host Control ids are aliases of each other.
-- `room.create`: create a shared Room. You become owner; pass at least one
-  other Session id.
-- `room.add_member`: add an existing Session to a Room you already belong to.
+`room.create`, `room.add_member`, and `room.list` are still Host Control
+actions (`codeg_help` / `codeg_use`), but when to create a Room, how to
+post, and how `@` works belong to the `codeg-room` skill. Private mail
+belongs to `codeg-mailbox` (`send_message` without a Room id). Flexible
+team playbooks belong to `codeg-multi-agent`.
 
-Do not post through Host Control. Read and write the ledger with
-`read_room` / `post_room` (see `codeg-room`). Private mail stays on
-`send_message` without a Room id.
-
-Room posts are never private mail. Do not answer a Room mention with
+Do not post through Host Control. Do not answer a Room mention with
 `send_message`.
 
 Workbench Pane layout, window mounts and focus remain device-local.

@@ -188,7 +188,7 @@
         },
         "reply_to_event_id": {
           "type": "string",
-          "description": "Event id of the letter this continues. Required for the first reply and for later supplements on the same thread (point at the inbound event_id, or at your last send in that thread). Omitting it creates a new root with no parent. Private follow-ups must target the same peer as that letter. The first linked reply clears expects_reply debt; later supplements stay on the thread and do not reopen it unless expects_reply is true again."
+          "description": "Event id of the letter this continues. Required for the first reply and for later supplements on the same thread (point at the inbound event_id, or at your last send in that thread). Omitting it creates a new root with no parent. Private follow-ups must target the same peer as that letter. The first linked reply clears expects_reply debt; later supplements stay on the thread and do not reopen it unless expects_reply is true again. A mailbox reply still notifies its target_session_ids. That is different from a Room quote: post_room reply_to_event_id does not wake the parent author unless you also mention them."
         }
       }
     }
@@ -240,7 +240,7 @@
   },
   {
     "name": "list_rooms",
-    "description": "List shared Rooms this Session already belongs to. Use this to find a room_id before read_room or post_room. Results include title, member count, channel unread_count (posts since this Session last read), and mention_unread_count (@ deliveries not yet consumed). Creating a Room or adding members is Host Control (room.create / room.add_member), not this tool.",
+    "description": "List shared Rooms this Session already belongs to. Use this to find a room_id before read_room or post_room. Results include title, member count, channel unread_count (posts since this Session last read), mention_unread_count (@ deliveries not yet consumed), needs_reply_count (you still owe a reply), and awaiting_reply_count (someone still owes you a reply). Creating a Room or adding members is Host Control (room.create / room.add_member), not this tool.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -259,7 +259,7 @@
   },
   {
     "name": "read_room",
-    "description": "Read a shared Room timeline this Session belongs to. Returns members and posts with full bodies. Default is the newest window. Set unread=true to catch up from this Session's last-read cursor (all posts, not only @mentions) and advance that cursor. Set before_event_id to page older. Opening consumes Room @ deliveries in the returned window but does not clear a reply obligation. Room posts never appear in list_inbox. A Room mention envelope is marked channel=room and kind=room_mention and already includes that post's body. Reply with post_room using the same room_id and reply_to_event_id; do not send_message a private letter unless asked.",
+    "description": "Read a shared Room timeline this Session belongs to. Returns members and posts with full bodies. Default is the newest window. Set unread=true to catch up from this Session's last-read cursor (all posts, not only @mentions) and advance that cursor. Set needs_reply=true to list unpaid reply obligations that involve you (you owe a reply, or someone still owes you one); that filter does not mark posts read. Set before_event_id to page older. Opening consumes Room @ deliveries in the returned window unless needs_reply=true, and does not clear a reply obligation. Room posts never appear in list_inbox. A Room mention envelope is marked channel=room and kind=room_mention and already includes that post's body, plus a short parent snippet when the mention quotes another post. Reply with post_room using the same room_id and reply_to_event_id. Quoting does not wake the parent author; add mention_session_ids if they must act. Do not send_message a private letter unless asked.",
     "inputSchema": {
       "type": "object",
       "required": ["room_id"],
@@ -279,6 +279,10 @@
           "type": "boolean",
           "description": "If true, return posts after this Session last read, oldest first, including record-only posts that did not @ this Session. Advances the channel cursor. Defaults to false."
         },
+        "needs_reply": {
+          "type": "boolean",
+          "description": "If true, return only unpaid reply obligations that involve this Session (you still owe a reply, or someone still owes you one). Does not mark posts read. Takes precedence over unread and before_event_id. Defaults to false."
+        },
         "before_event_id": {
           "type": "string",
           "minLength": 1,
@@ -289,7 +293,7 @@
   },
   {
     "name": "post_room",
-    "description": "Post to a shared Room this Session already belongs to. A Room post is one message — it has no title; the body is the whole post. Every member can read the body on the Room timeline. Omit mention_session_ids (and mention_all=false) for a record-only post that wakes nobody. Structured mentions create deliveries and may start a turn. Do not expect free-text @names in the body to wake anyone — use mention_session_ids, mention_all, or mention_human. File references in the body are context only. This is not private mail — do not use send_message. For a reply or supplement, set the same room_id and reply_to_event_id.",
+    "description": "Post to a shared Room this Session already belongs to. A Room post is one message — it has no title; the body is the whole post. Every member can read the body on the Room timeline. Omit mention_session_ids (and mention_all=false) for a record-only post that wakes nobody. Structured mentions create deliveries and may start a turn. Do not expect free-text @names in the body to wake anyone — use mention_session_ids, mention_all, or mention_human. File references in the body are context only. This is not private mail — do not use send_message. For a reply or supplement, set the same room_id and reply_to_event_id. reply_to_event_id only quotes the parent on the timeline; it does not wake that author. Wake someone only with mention_session_ids, mention_all, or mention_human.",
     "inputSchema": {
       "type": "object",
       "required": ["room_id", "content"],
@@ -329,7 +333,7 @@
         },
         "reply_to_event_id": {
           "type": "string",
-          "description": "Event id this post continues. Required for replies and later supplements on the same Room thread. Omitting it starts a new root."
+          "description": "Event id this post continues. Quotes that post on the timeline. Does not wake the parent author. To notify them, also pass their Session id in mention_session_ids. Omitting this starts a new root. A linked reply clears this Session's expects_reply debt on that parent."
         }
       }
     }

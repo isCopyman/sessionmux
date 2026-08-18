@@ -551,6 +551,14 @@ pub struct CollaborationRoomSummary {
     /// lists leave this at 0; Agent `list_rooms` fills it per Session.
     #[serde(default)]
     pub mention_unread_count: u32,
+    /// Deliveries to this Session in the Room that still expect a reply.
+    /// Host lists leave this at 0.
+    #[serde(default)]
+    pub needs_reply_count: u32,
+    /// Deliveries from this Session's Room posts that others have not answered.
+    /// Host lists leave this at 0.
+    #[serde(default)]
+    pub awaiting_reply_count: u32,
     pub last_event_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,

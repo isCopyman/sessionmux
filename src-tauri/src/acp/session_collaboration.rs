@@ -383,6 +383,10 @@ pub struct SessionRoomListItem {
     pub unread_count: u32,
     #[serde(default)]
     pub mention_unread_count: u32,
+    #[serde(default)]
+    pub needs_reply_count: u32,
+    #[serde(default)]
+    pub awaiting_reply_count: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_event_at: Option<DateTime<Utc>>,
 }
@@ -431,6 +435,8 @@ pub struct SessionRoomEvent {
     pub mention_human: bool,
     #[serde(default)]
     pub from_author_kind: String,
+    #[serde(default)]
+    pub expects_reply: bool,
     pub created_at: DateTime<Utc>,
 }
 
@@ -454,6 +460,7 @@ pub struct RoomReadQuery {
     pub room_id: String,
     pub limit: u32,
     pub unread: bool,
+    pub needs_reply: bool,
     pub before_event_id: Option<String>,
 }
 

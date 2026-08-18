@@ -331,8 +331,27 @@ const MEMBER_MENTION_UNREAD_SQL: &str = "(SELECT COUNT(*) FROM collaboration_del
                         AND COALESCE(e.visibility, 'direct') = 'room' \
                         AND d.agent_received_at IS NULL \
                         AND d.state <> 'dismissed' AND d.state <> 'failed')";
+const MEMBER_NEEDS_REPLY_SQL: &str = "(SELECT COUNT(*) FROM collaboration_delivery d \
+                      JOIN collaboration_event e ON e.id = d.event_id \
+                      WHERE d.target_conversation_id = me.conversation_id \
+                        AND e.room_id = r.id \
+                        AND COALESCE(e.visibility, 'direct') = 'room' \
+                        AND d.obligation_state = 'awaiting_reply' \
+                        AND d.state <> 'dismissed' AND d.state <> 'failed')";
+const MEMBER_AWAITING_REPLY_SQL: &str = "(SELECT COUNT(*) FROM collaboration_delivery d \
+                      JOIN collaboration_event e ON e.id = d.event_id \
+                      WHERE e.room_id = r.id \
+                        AND e.source_conversation_id = me.conversation_id \
+                        AND COALESCE(e.visibility, 'direct') = 'room' \
+                        AND d.obligation_state = 'awaiting_reply' \
+                        AND d.state <> 'dismissed' AND d.state <> 'failed')";
 
-fn room_summary_select(unread_sql: &str, mention_unread_sql: &str) -> String {
+fn room_summary_select(
+    unread_sql: &str,
+    mention_unread_sql: &str,
+    needs_reply_sql: &str,
+    awaiting_reply_sql: &str,
+) -> String {
     format!(
         "SELECT r.id, r.workbench_id, r.title, r.created_by_conversation_id, \
                 r.collection_id, r.root_folder_id, \
@@ -343,7 +362,9 @@ fn room_summary_select(unread_sql: &str, mention_unread_sql: &str) -> String {
                   WHERE e.room_id = r.id AND COALESCE(e.visibility, 'direct') = 'room') \
                   AS last_event_at, \
                 {unread_sql} AS unread_count, \
-                {mention_unread_sql} AS mention_unread_count \
+                {mention_unread_sql} AS mention_unread_count, \
+                {needs_reply_sql} AS needs_reply_count, \
+                {awaiting_reply_sql} AS awaiting_reply_count \
          FROM collaboration_room r"
     )
 }
@@ -362,7 +383,7 @@ pub async fn list_for_workbench(
                 "{} \
              WHERE r.workbench_id = ? AND r.status = 'active' \
              ORDER BY datetime(COALESCE(last_event_at, r.updated_at)) DESC, r.id DESC",
-                room_summary_select(HOST_CHANNEL_UNREAD_SQL, "0")
+                room_summary_select(HOST_CHANNEL_UNREAD_SQL, "0", "0", "0")
             ),
             vec![workbench_id.into()],
         ))
@@ -392,7 +413,12 @@ pub async fn list_for_member(
                ON me.room_id = r.id AND me.conversation_id = ? \
              WHERE r.status = 'active' \
              ORDER BY datetime(COALESCE(last_event_at, r.updated_at)) DESC, r.id DESC",
-                room_summary_select(MEMBER_CHANNEL_UNREAD_SQL, MEMBER_MENTION_UNREAD_SQL)
+                room_summary_select(
+                    MEMBER_CHANNEL_UNREAD_SQL,
+                    MEMBER_MENTION_UNREAD_SQL,
+                    MEMBER_NEEDS_REPLY_SQL,
+                    MEMBER_AWAITING_REPLY_SQL,
+                )
             ),
             vec![conversation_id.into()],
         ))
@@ -404,6 +430,8 @@ fn summary_from_row(row: &QueryResult) -> Result<CollaborationRoomSummary, DbErr
     let member_count: i64 = row.try_get("", "member_count")?;
     let unread_count: i64 = row.try_get("", "unread_count")?;
     let mention_unread_count: i64 = row.try_get("", "mention_unread_count")?;
+    let needs_reply_count: i64 = row.try_get("", "needs_reply_count")?;
+    let awaiting_reply_count: i64 = row.try_get("", "awaiting_reply_count")?;
     Ok(CollaborationRoomSummary {
         id: row.try_get("", "id")?,
         workbench_id: row.try_get("", "workbench_id")?,
@@ -414,6 +442,8 @@ fn summary_from_row(row: &QueryResult) -> Result<CollaborationRoomSummary, DbErr
         member_count: u32::try_from(member_count.max(0)).unwrap_or(u32::MAX),
         unread_count: u32::try_from(unread_count.max(0)).unwrap_or(u32::MAX),
         mention_unread_count: u32::try_from(mention_unread_count.max(0)).unwrap_or(u32::MAX),
+        needs_reply_count: u32::try_from(needs_reply_count.max(0)).unwrap_or(u32::MAX),
+        awaiting_reply_count: u32::try_from(awaiting_reply_count.max(0)).unwrap_or(u32::MAX),
         last_event_at: parse_optional_timestamp(row, "last_event_at")?,
         created_at: parse_timestamp(row, "created_at")?,
         updated_at: parse_timestamp(row, "updated_at")?,
@@ -668,6 +698,8 @@ pub async fn assign_to_collection(
             member_count: u32::try_from(detail.members.len()).unwrap_or(u32::MAX),
             unread_count: 0,
             mention_unread_count: 0,
+            needs_reply_count: 0,
+            awaiting_reply_count: 0,
             last_event_at: None,
             created_at: detail.created_at,
             updated_at: detail.updated_at,
@@ -716,9 +748,13 @@ pub enum RoomTimelineMode<'a> {
     Unread { conversation_id: i32 },
     /// Page older than `event_id` (still a newest-of-the-older window).
     Before { event_id: &'a str },
+    /// Unpaid reply obligations that involve this Session: it owes a reply,
+    /// or someone still owes it one. Does not advance the read cursor.
+    NeedsReply { conversation_id: i32 },
 }
 
-const EVENT_SELECT: &str = "SELECT e.id, e.room_id, e.source_conversation_id, e.source_title_snapshot, \
+const EVENT_SELECT: &str =
+    "SELECT e.id, e.room_id, e.source_conversation_id, e.source_title_snapshot, \
                     e.source_agent_type_snapshot, e.source_folder_path_snapshot, \
                     e.subject, e.body, e.reply_to_event_id, e.expects_reply, e.urgency, \
                     COALESCE(e.author_kind, 'session') AS author_kind, \
@@ -851,6 +887,44 @@ pub async fn timeline_with(
                 rows
             };
             (rows, truncated)
+        }
+        RoomTimelineMode::NeedsReply { conversation_id } => {
+            require_member(conn, room_id, conversation_id).await?;
+            newest_window(
+                conn,
+                &format!(
+                    "{EVENT_SELECT} \
+                     WHERE e.room_id = ? AND COALESCE(e.visibility, 'direct') = 'room' \
+                       AND (
+                         EXISTS (
+                           SELECT 1 FROM collaboration_delivery d
+                           WHERE d.event_id = e.id
+                             AND d.target_conversation_id = ?
+                             AND d.obligation_state = 'awaiting_reply'
+                             AND d.state NOT IN ('dismissed', 'failed')
+                         )
+                         OR (
+                           e.source_conversation_id = ?
+                           AND EXISTS (
+                             SELECT 1 FROM collaboration_delivery d
+                             WHERE d.event_id = e.id
+                               AND d.obligation_state = 'awaiting_reply'
+                               AND d.state NOT IN ('dismissed', 'failed')
+                           )
+                         )
+                       ) \
+                     ORDER BY datetime(e.created_at) DESC, e.rowid DESC \
+                     LIMIT ?"
+                ),
+                vec![
+                    room_id.into(),
+                    conversation_id.into(),
+                    conversation_id.into(),
+                    fetch_limit.into(),
+                ],
+                limit,
+            )
+            .await?
         }
     };
     let mut events = Vec::with_capacity(rows.len());
@@ -1240,6 +1314,7 @@ mod tests {
         assert!(draft.display_text.starts_with("Codeg room:"));
         assert!(text.contains("check this"));
         assert!(text.contains("Call read_room"));
+        assert!(text.contains("does not wake that author"));
         assert!(!text.contains("Call list_inbox"));
         assert!(!text.contains("Call read_message"));
         assert!(!text.contains("channel=mailbox"));
@@ -1566,6 +1641,146 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn reply_mention_envelope_embeds_a_parent_snippet() {
+        let (db, a, b, _) = seeded().await;
+        let room = make_room(&db, a, vec![a, b]).await;
+        let parent = crate::db::service::collaboration_service::post_room(
+            &db.conn,
+            PostRoomMessageInput {
+                room_id: room.id.clone(),
+                source_conversation_id: a,
+                target_conversation_ids: vec![],
+                mention_all: false,
+                body: "please review the plan".into(),
+                client_dedupe_id: "room-parent-1".into(),
+                invocation_policy: CollaborationInvocationPolicy::StoreOnly,
+                delivery_hint: Default::default(),
+                expects_reply: false,
+                urgency: Default::default(),
+                reply_to_event_id: None,
+                mention_human: false,
+                author_kind: Default::default(),
+            },
+        )
+        .await
+        .expect("parent");
+        let posted = crate::db::service::collaboration_service::post_room(
+            &db.conn,
+            PostRoomMessageInput {
+                room_id: room.id.clone(),
+                source_conversation_id: a,
+                target_conversation_ids: vec![b],
+                mention_all: false,
+                body: "looking now".into(),
+                client_dedupe_id: "room-reply-at".into(),
+                invocation_policy: CollaborationInvocationPolicy::InvokeWhenIdle,
+                delivery_hint: Default::default(),
+                expects_reply: true,
+                urgency: Default::default(),
+                reply_to_event_id: Some(parent.event_id.clone()),
+                mention_human: false,
+                author_kind: Default::default(),
+            },
+        )
+        .await
+        .expect("reply mention");
+        let draft = crate::db::service::collaboration_service::prompt_draft_for_origin(
+            &db.conn,
+            b,
+            &posted.event_id,
+        )
+        .await
+        .expect("reply mention must be injectable");
+        let crate::acp::types::PromptInputBlock::Text { text } = &draft.blocks[0] else {
+            panic!("expected a text envelope");
+        };
+        assert!(text.contains("looking now"));
+        assert!(text.contains("Quoted post"));
+        assert!(text.contains("please review the plan"));
+        assert!(text.contains("\"parentSnippet\":\"please review the plan\""));
+        assert!(text.contains("does not wake that author"));
+    }
+
+    #[tokio::test]
+    async fn list_for_member_counts_unpaid_replies_and_timeline_can_filter_them() {
+        let (db, a, b, _) = seeded().await;
+        let room = make_room(&db, a, vec![a, b]).await;
+        crate::db::service::collaboration_service::post_room(
+            &db.conn,
+            PostRoomMessageInput {
+                room_id: room.id.clone(),
+                source_conversation_id: a,
+                target_conversation_ids: vec![b],
+                mention_all: false,
+                body: "please answer".into(),
+                client_dedupe_id: "room-owes-1".into(),
+                invocation_policy: CollaborationInvocationPolicy::InvokeWhenIdle,
+                delivery_hint: Default::default(),
+                expects_reply: true,
+                urgency: Default::default(),
+                reply_to_event_id: None,
+                mention_human: false,
+                author_kind: Default::default(),
+            },
+        )
+        .await
+        .expect("ask");
+        crate::db::service::collaboration_service::post_room(
+            &db.conn,
+            PostRoomMessageInput {
+                room_id: room.id.clone(),
+                source_conversation_id: a,
+                target_conversation_ids: vec![],
+                mention_all: false,
+                body: "status only".into(),
+                client_dedupe_id: "room-status-1".into(),
+                invocation_policy: CollaborationInvocationPolicy::StoreOnly,
+                delivery_hint: Default::default(),
+                expects_reply: false,
+                urgency: Default::default(),
+                reply_to_event_id: None,
+                mention_human: false,
+                author_kind: Default::default(),
+            },
+        )
+        .await
+        .expect("status");
+
+        let for_a = list_for_member(&db.conn, a).await.unwrap();
+        assert_eq!(for_a[0].awaiting_reply_count, 1);
+        assert_eq!(for_a[0].needs_reply_count, 0);
+        let for_b = list_for_member(&db.conn, b).await.unwrap();
+        assert_eq!(for_b[0].needs_reply_count, 1);
+        assert_eq!(for_b[0].awaiting_reply_count, 0);
+
+        let host = list(&db.conn, 1).await.unwrap();
+        assert_eq!(host[0].needs_reply_count, 0);
+        assert_eq!(host[0].awaiting_reply_count, 0);
+
+        let unpaid = timeline_with(
+            &db.conn,
+            &room.id,
+            Some(50),
+            RoomTimelineMode::NeedsReply { conversation_id: b },
+        )
+        .await
+        .unwrap();
+        assert_eq!(unpaid.events.len(), 1);
+        assert_eq!(unpaid.events[0].body, "please answer");
+
+        let from_asker = timeline_with(
+            &db.conn,
+            &room.id,
+            Some(50),
+            RoomTimelineMode::NeedsReply { conversation_id: a },
+        )
+        .await
+        .unwrap();
+        assert_eq!(from_asker.events.len(), 1);
+        assert_eq!(from_asker.events[0].body, "please answer");
+    }
+
+    #[tokio::test]
     async fn room_placement_is_owned_by_the_room_not_the_creator_session() {
         let (db, a, b, _) = seeded().await;
         let folder_id: i32 = db
@@ -1602,8 +1817,7 @@ mod tests {
             "a Room does not inherit Collection from the creator Session alone"
         );
         assert_eq!(
-            not_the_creators_slot.root_folder_id,
-            None,
+            not_the_creators_slot.root_folder_id, None,
             "a Room does not inherit the creator Session folder"
         );
 
@@ -1730,12 +1944,7 @@ mod tests {
         assert_eq!(human_event.source.agent_type.as_deref(), Some("human"));
     }
 
-    fn record_post(
-        room_id: String,
-        source: i32,
-        dedupe: &str,
-        body: &str,
-    ) -> PostRoomMessageInput {
+    fn record_post(room_id: String, source: i32, dedupe: &str, body: &str) -> PostRoomMessageInput {
         PostRoomMessageInput {
             room_id,
             source_conversation_id: source,
@@ -1914,7 +2123,12 @@ mod tests {
         for index in 1..=3 {
             crate::db::service::collaboration_service::post_room(
                 &db.conn,
-                record_post(room.id.clone(), a, &format!("win-{index}"), &format!("n{index}")),
+                record_post(
+                    room.id.clone(),
+                    a,
+                    &format!("win-{index}"),
+                    &format!("n{index}"),
+                ),
             )
             .await
             .unwrap();

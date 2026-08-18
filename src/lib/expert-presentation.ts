@@ -13,8 +13,12 @@ import {
   ListTodo,
   MessageSquareQuote,
   MessageSquareReply,
+  MessagesSquare,
+  Network,
+  AlarmClock,
   PlayCircle,
   Sparkles,
+  Users,
   type LucideIcon,
 } from "lucide-react"
 
@@ -38,6 +42,10 @@ export const EXPERT_ICON_MAP: Record<string, LucideIcon> = {
   GitMerge,
   Sparkles,
   FileCode2,
+  Network,
+  MessagesSquare,
+  AlarmClock,
+  Users,
 }
 
 /** Resolve an expert's icon name to a Lucide component (Sparkles fallback). */

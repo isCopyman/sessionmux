@@ -621,6 +621,7 @@ impl HostBridgeListener {
                         .limit
                         .unwrap_or(crate::acp::session_collaboration::DEFAULT_ROOM_READ_LIMIT),
                     unread: req.unread,
+                    needs_reply: req.needs_reply,
                     before_event_id: req.before_event_id,
                 },
             )

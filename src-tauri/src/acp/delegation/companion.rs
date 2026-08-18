@@ -718,6 +718,10 @@ async fn build_tools_call_spawn(
                 .get("unread")
                 .and_then(|value| value.as_bool())
                 .unwrap_or(false);
+            let needs_reply = arguments
+                .get("needs_reply")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false);
             let before_event_id = arguments
                 .get("before_event_id")
                 .and_then(|value| value.as_str())
@@ -729,6 +733,7 @@ async fn build_tools_call_spawn(
                 room_id,
                 limit: Some(limit),
                 unread,
+                needs_reply,
                 before_event_id,
             };
             let round_trip =
@@ -1903,13 +1908,21 @@ pub fn render_session_room_list_result(outcome: &Value) -> Value {
                     .and_then(Value::as_u64)
                     .unwrap_or(0);
                 lines.push(format!(
-                    "- {id}: {title} ({members} members, {unread} unread, {mentions} mentions)",
+                    "- {id}: {title} ({members} members, {unread} unread, {mentions} mentions, {needs} need reply, {awaiting} awaiting reply)",
                     unread = room
                         .get("unread_count")
                         .and_then(Value::as_u64)
                         .unwrap_or(0),
                     mentions = room
                         .get("mention_unread_count")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0),
+                    needs = room
+                        .get("needs_reply_count")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0),
+                    awaiting = room
+                        .get("awaiting_reply_count")
                         .and_then(Value::as_u64)
                         .unwrap_or(0)
                 ));
@@ -1959,7 +1972,7 @@ pub fn render_session_room_read_result(outcome: &Value) -> Value {
         let mut lines = vec![
             format!("Room timeline (not mailbox) {room_id}: {title}"),
             "This is a shared Room ledger. Posts never appear in list_inbox.".to_string(),
-            "Reply with post_room using this room_id. Mentions wake members; omit them to record only.".to_string(),
+            "Reply with post_room using this room_id. Mentions wake members; omit them to record only. reply_to_event_id quotes a post and does not wake its author.".to_string(),
         ];
         if events.is_empty() {
             lines.push("No posts yet.".to_string());

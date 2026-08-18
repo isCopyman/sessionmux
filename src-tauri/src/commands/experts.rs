@@ -999,8 +999,7 @@ pub async fn experts_list_all_install_statuses() -> Result<Vec<ExpertInstallStat
                 Err(_) => continue,
             };
             let state = classify_link(&link_path, &expected);
-            let target_path =
-                read_link_target(&link_path).map(|p| p.to_string_lossy().to_string());
+            let target_path = read_link_target(&link_path).map(|p| p.to_string_lossy().to_string());
             out.push(ExpertInstallStatus {
                 expert_id: meta.id.clone(),
                 agent_type: agent,
@@ -1162,5 +1161,39 @@ mod tests {
             .expect("snapshot returns Ok");
         let expected = bundled_metadata().len() * supported_agents().len();
         assert_eq!(rows.len(), expected);
+    }
+
+    #[test]
+    fn every_toml_expert_has_a_bundled_skill_dir() {
+        for meta in bundled_metadata() {
+            let rel = format!("skills/{}", meta.id);
+            assert!(
+                EXPERTS_BUNDLE.get_dir(&rel).is_some(),
+                "experts.toml id '{}' has no bundle dir {rel}",
+                meta.id
+            );
+            hash_bundled_expert(&meta.id)
+                .unwrap_or_else(|e| panic!("hash bundled expert {}: {e}", meta.id));
+        }
+    }
+
+    #[test]
+    fn bundled_ids_include_codeg_collaboration_skills() {
+        let ids = bundled_ids();
+        for id in [
+            "codeg-mailbox",
+            "codeg-room",
+            "codeg-host-control",
+            "codeg-multi-agent",
+        ] {
+            assert!(
+                ids.iter().any(|x| x == id),
+                "{id} missing from experts.toml"
+            );
+        }
+        assert!(
+            hash_bundled_expert("codeg-multi-agent").is_ok(),
+            "codeg-multi-agent references must be part of the bundle hash"
+        );
     }
 }

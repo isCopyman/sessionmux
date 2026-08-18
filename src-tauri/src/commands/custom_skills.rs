@@ -789,6 +789,10 @@ mod tests {
     fn reserved_ids_include_known_bundled() {
         let reserved = reserved_ids();
         assert!(reserved.contains("brainstorming"), "experts id missing");
+        assert!(
+            reserved.contains("codeg-multi-agent"),
+            "playbook skill must be reserved so it is not a custom skill"
+        );
         assert!(!reserved.is_empty());
     }
 

@@ -170,6 +170,8 @@ pub struct BrokerReadRoomRequest {
     pub limit: Option<u32>,
     #[serde(default)]
     pub unread: bool,
+    #[serde(default)]
+    pub needs_reply: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub before_event_id: Option<String>,
 }
