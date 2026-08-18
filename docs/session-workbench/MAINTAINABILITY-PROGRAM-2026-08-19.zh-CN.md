@@ -486,6 +486,15 @@ T2 后置截图（CDP 9222 可用，基线在 .artifacts）+ 晨间验收报告 
   同一步两次失败即停手上升、仓库台账为压缩后唯一事实源、报告必须带数字）+ SKILL.md
   与 patterns-map.md 索引指针。session.create 支持 model 钉档已核实（host_control_
   session.rs:477/616），playbook 所教均为真实能力。
+- 2026-08-19 05:05 **G12-B2/B3 调研完成+裁决**（全文与裁决在
+  MULTI-AGENT-ECOSYSTEM-SURVEY-2026-08-19.zh-CN.md）：**B2 workflow**——方向认可但属
+  大特性，今晚不做；若立项走"Room 看板 + work_task 执行器 + 计划卡片"复用账本，先写
+  RFC 回答与 taskboard/automation 的归并，**待用户点头**；白捡三件：三级验收词汇进
+  delegation brief 惯例、ChainDepth 佐证链深=4、worktree 隔离已是纪律。**B3
+  pi-shadow-mind**——确系多 agent（影子审计编排）；codeg 的 steer 注入即其插话原语，
+  今天就能写 shadow-auditor playbook（候选，待点头）；其 300s debuff/插话循环翻车反向
+  印证我们 R2 每轮一 steer + 5 分钟冷却 + 链深保险丝的保守缺省。Multica=issue 队列制，
+  taskboard 远亲，无行动项。
 - 2026-08-19 04:30 用户睡前追加 **G12 bonus 簇**（明确说是 bonus，排主线后、G11 前）：
   B1 timer worktree 考察（在飞）；B2 是否加 workflow 功能（openteams/multica 参照，在飞）；
   B3 linux.do 帖探索（在飞）；B4 **把本次"fable 规划者 + K3 执行者"编排模式沉淀为 codeg
