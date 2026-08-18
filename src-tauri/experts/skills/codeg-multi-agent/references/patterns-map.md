@@ -17,7 +17,9 @@ inventing a coordination scheme — the existing base carries all of them.
   the answers yourself. On disagreement, open a Room and let the dissenters
   argue where everyone can hear.
 - Orchestrator-workers: `session.create` (with `initial_prompt`) to staff,
-  mailbox to assign, a Room as the shared board. See `star.md`.
+  mailbox to assign, a Room as the shared board. See `star.md`. When the
+  orchestrator runs on a far stronger model than the workers, follow
+  `lead-executor-split.md`.
 - Evaluator-optimizer: drafter and reviewer as two Sessions exchanging
   rounds. Obey the chain-depth rule below.
 - Autonomous long run: one Session plus a continuation timer
