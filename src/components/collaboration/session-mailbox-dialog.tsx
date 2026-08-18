@@ -36,9 +36,11 @@ import {
   mailStatusVisual,
 } from "@/lib/mail-human-status"
 import {
+  buildMailThreadTree,
   groupMailThreads,
   summarizeMailThread,
   type MailThread,
+  type MailThreadNode,
 } from "@/lib/mail-threads"
 import type { CollaborationDelivery } from "@/lib/types"
 import { cn } from "@/lib/utils"
@@ -53,7 +55,7 @@ const COLLABORATION_DISABLED_REASON = "session_collaboration_disabled"
 /**
  * The mail-client shape: lists are folders (inbox/sent, flat, chronological),
  * and the conversation is not an entry point but the reading pane — opening
- * any letter lands in its full reply chain. There is deliberately no third
+ * any letter lands in its reply tree. There is deliberately no third
  * "threads" tab; that role belongs to the right pane.
  */
 type MailScope = "inbox" | "sent"
@@ -91,8 +93,8 @@ function formatMailTime(iso: string): string {
 }
 
 /**
- * Gmail-lite mailbox for one session: thread list on the left, the full reply
- * chain on the right. Reading only — replies stay with the agent, so the only
+ * Gmail-lite mailbox for one session: folder list on the left, the reply tree
+ * on the right. Reading only — replies stay with the agent, so the only
  * actions are open-peer, retry, dismiss/restore.
  */
 export function SessionMailboxDialog({
@@ -188,6 +190,10 @@ export function SessionMailboxDialog({
     threads.find((thread) => thread.rootEventId === selectedThreadId) ??
     threads.find((thread) => thread.rootEventId === fallbackRoot) ??
     null
+  const activeTree = useMemo(
+    () => (activeThread ? buildMailThreadTree(activeThread.items) : []),
+    [activeThread]
+  )
 
   const openLetterInThread = (delivery: CollaborationDelivery) => {
     const root = threadRootByEventId.get(delivery.eventId)
@@ -524,6 +530,27 @@ export function SessionMailboxDialog({
     )
   }
 
+  const renderTreeNode = (
+    thread: MailThread,
+    node: MailThreadNode,
+    depth: number
+  ) => (
+    <div
+      key={node.delivery.id}
+      data-thread-depth={depth}
+      className={cn(depth > 0 && "ml-3 border-l border-border/70 pl-2.5")}
+    >
+      {letterCard(thread, node.delivery)}
+      {node.children.length > 0 ? (
+        <div className="mt-2.5 space-y-2.5">
+          {node.children.map((child) =>
+            renderTreeNode(thread, child, depth + 1)
+          )}
+        </div>
+      ) : null}
+    </div>
+  )
+
   const activeSummary = activeThread
     ? summaries.get(activeThread.rootEventId)
     : null
@@ -707,8 +734,8 @@ export function SessionMailboxDialog({
                   </div>
                 </header>
                 <div className="min-h-0 flex-1 space-y-2.5 overflow-y-auto px-4 py-3">
-                  {activeThread.items.map((delivery) =>
-                    letterCard(activeThread, delivery)
+                  {activeTree.map((node) =>
+                    renderTreeNode(activeThread, node, 0)
                   )}
                 </div>
               </>

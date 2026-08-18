@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest"
 import type { CollaborationDelivery } from "@/lib/types"
-import { groupMailThreads, summarizeMailThread } from "./mail-threads"
+import {
+  buildMailThreadTree,
+  groupMailThreads,
+  summarizeMailThread,
+} from "./mail-threads"
 
 function letter(
   eventId: string,
@@ -63,6 +67,59 @@ describe("groupMailThreads", () => {
     expect(threads[0]?.rootEventId).toBe("e1")
     expect(threads[0]?.subject).toBe("Need review")
     expect(threads[0]?.items.map((item) => item.eventId)).toEqual(["e1", "e2"])
+  })
+})
+
+function treeIds(
+  nodes: ReturnType<typeof buildMailThreadTree>
+): Array<{ id: string; children: ReturnType<typeof treeIds> }> {
+  return nodes.map((node) => ({
+    id: node.delivery.eventId,
+    children: treeIds(node.children),
+  }))
+}
+
+describe("buildMailThreadTree", () => {
+  it("nests follow-ups under the parent and sorts siblings by time", () => {
+    const root = letter("e1", { createdAt: "2026-08-18T00:00:00Z" })
+    const firstReply = letter("e2", {
+      replyToEventId: "e1",
+      createdAt: "2026-08-18T00:02:00Z",
+    })
+    const nested = letter("e3", {
+      replyToEventId: "e2",
+      createdAt: "2026-08-18T00:03:00Z",
+    })
+    const laterSibling = letter("e4", {
+      replyToEventId: "e1",
+      createdAt: "2026-08-18T00:04:00Z",
+    })
+    expect(
+      treeIds(
+        buildMailThreadTree([laterSibling, nested, root, firstReply])
+      )
+    ).toEqual([
+      {
+        id: "e1",
+        children: [
+          {
+            id: "e2",
+            children: [{ id: "e3", children: [] }],
+          },
+          { id: "e4", children: [] },
+        ],
+      },
+    ])
+  })
+
+  it("treats a letter as a root when its parent is not in the mailbox view", () => {
+    const orphan = letter("e9", {
+      replyToEventId: "missing",
+      createdAt: "2026-08-18T00:05:00Z",
+    })
+    expect(treeIds(buildMailThreadTree([orphan]))).toEqual([
+      { id: "e9", children: [] },
+    ])
   })
 })
 

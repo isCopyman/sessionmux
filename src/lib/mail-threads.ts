@@ -7,6 +7,12 @@ export interface MailThread {
   items: CollaborationDelivery[]
 }
 
+/** One letter plus its direct follow-ups, siblings sorted by createdAt. */
+export interface MailThreadNode {
+  delivery: CollaborationDelivery
+  children: MailThreadNode[]
+}
+
 /** List-row facts for one thread, seen from `selfConversationId`'s side. */
 export interface MailThreadSummary {
   /** Inbound letters this session's agent has not received yet. */
@@ -94,4 +100,48 @@ export function groupMailThreads(items: CollaborationDelivery[]): MailThread[] {
       const bLast = b.items[b.items.length - 1]?.createdAt ?? ""
       return new Date(bLast).getTime() - new Date(aLast).getTime()
     })
+}
+
+function byCreatedAt(
+  a: CollaborationDelivery,
+  b: CollaborationDelivery
+): number {
+  return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+}
+
+/**
+ * Session mailbox reading pane: nest by `replyToEventId`, sort siblings by
+ * time. A letter whose parent is missing from this thread becomes a root so
+ * it still shows up.
+ */
+export function buildMailThreadTree(
+  items: CollaborationDelivery[]
+): MailThreadNode[] {
+  const byEvent = new Map<string, CollaborationDelivery>()
+  for (const item of items) {
+    if (!byEvent.has(item.eventId)) byEvent.set(item.eventId, item)
+  }
+
+  const children = new Map<string, CollaborationDelivery[]>()
+  const roots: CollaborationDelivery[] = []
+  for (const item of byEvent.values()) {
+    const parentId = item.replyToEventId
+    if (parentId && byEvent.has(parentId)) {
+      const list = children.get(parentId) ?? []
+      list.push(item)
+      children.set(parentId, list)
+    } else {
+      roots.push(item)
+    }
+  }
+
+  const toNode = (delivery: CollaborationDelivery): MailThreadNode => ({
+    delivery,
+    children: (children.get(delivery.eventId) ?? [])
+      .slice()
+      .sort(byCreatedAt)
+      .map(toNode),
+  })
+
+  return roots.sort(byCreatedAt).map(toNode)
 }
