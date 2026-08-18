@@ -1,6 +1,6 @@
 # 群聊、Mailbox 与人类角色
 
-> 状态：设计拍板稿（2026-08-18）。实现按第 13 节推进：Agent 表面已拆开；`@` 三义已冻结；人类作者、Room 一等 item、侧栏右键按项落地。  
+> 状态：设计拍板稿（2026-08-18）。第 13 节已落地。第 14 节冻结：`codeg://session/<id>` 是地址，动词在工具/作曲器上，不加 URI 字段。下一刀是归档 Session 不可被 `@` 唤醒。  
 > 问题：群聊是不是另一套消息系统？Mailbox 是不是完全私聊？人类该打字还是该发邮件？CCCC 怎么做？  
 > 已有长文：[群聊 RFC](./GROUP-CONVERSATION-RFC.zh-CN.md)、[通信 RFC](./SESSION-COMMUNICATION-RFC.zh-CN.md)、[产品场景](./PRODUCT-SPEC.zh-CN.md#48-建立一个共享讨论室)  
 > 本文只补那三份没讲清的东西：协议边界、人类三条入口、和 CCCC 的真实差别。  
@@ -48,7 +48,7 @@
 ① 是**工作**。② 是**跨 Session 投递**。③ 是**共享可见的讨论**。  
 把 ① 改成“人也必须先给自己发一封邮件”能换来协议一致，但会毁掉 Codeg 的主界面。
 
-输入框里的结构化 `@` 属于 ②，不是 ①。通信 RFC 8.3 已经这样要求；当前代码只插入徽章、不投递。文档和实现都要承认这个缺口，不能假装输入框永远“不是 collaboration”。
+Session 输入框里的结构化 `@session` 徽章属于 ① 的**引用**（`get_session_info`），不是 ②。写信走邮箱面板和 `send_message`。群点名走 Room 目标条和 `post_room`。详见第 14 节。通信 RFC 8.3 把输入框 `@` 算成邮箱，按本节作废，避免和已落地的只读查找打架。
 
 ## 2. Mailbox 是不是完全的私聊？
 
@@ -320,3 +320,21 @@ Agent 工具继续走结构化字段。人类群输入框走目标条 + 徽章�
 5. **人类作者 + `@` 合同**：`author_kind` + `mention_human`；UI 不再冒充群主发言；正文 `@word` 不投递；结构化 URI 才并进目标。
 
 Human Inbox 本体、删 Room API、Agent 互 `@` 仍按第 11 节留到后面，本轮不夹带。
+
+## 14. `codeg://session/<id>` 会不会和邮件抢语义？
+
+不会。号码可以共用，动词必须分开。不要给 URI 加 `?kind=mail` 这类字段。
+
+Slack 同一个 `@user`：频道里是点名，DM 里是私信。CCCC 正文 `@` 只是高亮，真正路由看 `to` chips。Buzz 投递用 p-tag，文件是另一条协议。Multica 把叫醒 Agent、通知人、文件引用拆成三套。Codeg 学这个：地址一个，入口三个。
+
+| 入口 | 动词 | 用什么 | 不要做成 |
+|---|---|---|---|
+| Session 输入框徽章 | 引用这段历史 | `get_session_info`（已落地） | 发送后变成私信 |
+| 邮箱 / 分别发送 | 定向隔离私信 | `send_message`；人用邮箱面板 | 用 `post_room` 或输入框 `@` 偷发 |
+| Room 目标条 / 群徽章 | 公共账本上的点名 | `post_room.mention_session_ids` | 进 mailbox inbox |
+
+Agent 看见同一 URI 时靠**已经落地的信封**分流：`kind=room_mention` → `read_room` / `post_room`；`kind=system_notify` → `list_inbox` / `read_message`。再加 `mention_channel` 只是复制 `visibility`。
+
+真缺口是人类 Session 作曲器：若把同一徽章再接到 `send_message`，就会和 `get_session_info` 抢。所以 **不要接线**。人要写信，用邮箱；人要在群里点名，用 Room。
+
+下一刀功能（第 11 节）：归档 Session 仍可留在群里，但 `@` 不再入队唤醒；然后才是删 Room API、Room 回跳、Human Inbox。文件搬家只插空做，不合并写路径。

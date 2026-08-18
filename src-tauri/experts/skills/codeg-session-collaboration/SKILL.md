@@ -64,7 +64,8 @@ Never omit `reply_to_event_id` just because you already answered once.
 ## Hard rules
 
 - Address only positive numeric Session ids from `list_sessions` or a
-  `codeg://session/<id>` link.
+  `codeg://session/<id>` link. A badge in the current user turn is
+  context for `get_session_info` unless the user asked you to write mail.
 - Never send a private letter to yourself.
 - Never use a display name or `@` text as the final address.
 - Never invent the body from a title or reminder digest.

@@ -51,4 +51,7 @@ A follow-up on the same Room thread must set it.
 - Mentions must already be members.
 - Never answer a Room mention with `send_message`.
 - Never copy a Room post into a private letter unless asked.
+- A `codeg://session/<id>` badge in the current user turn is context,
+  not an automatic Room mention. Use `mention_session_ids` (or
+  `mention_all`) when you intend to wake someone in this Room.
 - If these tools are missing, say Room collaboration is unavailable.
