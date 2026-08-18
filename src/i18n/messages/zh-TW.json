@@ -5176,7 +5176,7 @@
     "stateReplyReceived": "已收到回覆",
     "noReplyNeeded": "無需回覆",
     "worklistFilterLabel": "Session 訊息工作清單",
-    "worklistFilterAll": "全部訊息狀態",
+    "worklistFilterAll": "全部訊息",
     "worklistUnread": "未讀（{count}）",
     "worklistNeedsReply": "需要回覆（{count}）",
     "worklistAwaitingReply": "等待回覆（{count}）",

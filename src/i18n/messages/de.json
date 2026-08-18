@@ -5176,7 +5176,7 @@
     "stateReplyReceived": "Antwort erhalten",
     "noReplyNeeded": "Keine Antwort erforderlich",
     "worklistFilterLabel": "Arbeitsliste für Sitzungsnachrichten",
-    "worklistFilterAll": "Alle Nachrichtenstatus",
+    "worklistFilterAll": "Alle Nachrichten",
     "worklistUnread": "Ungelesen ({count})",
     "worklistNeedsReply": "Antwort erforderlich ({count})",
     "worklistAwaitingReply": "Wartet auf Antwort ({count})",

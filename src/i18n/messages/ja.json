@@ -5176,7 +5176,7 @@
     "stateReplyReceived": "返信を受信",
     "noReplyNeeded": "返信不要",
     "worklistFilterLabel": "Session メッセージ作業リスト",
-    "worklistFilterAll": "すべてのメッセージ状態",
+    "worklistFilterAll": "すべてのメッセージ",
     "worklistUnread": "未読（{count}）",
     "worklistNeedsReply": "返信が必要（{count}）",
     "worklistAwaitingReply": "返信待ち（{count}）",

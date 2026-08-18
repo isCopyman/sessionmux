@@ -5176,7 +5176,7 @@
     "stateReplyReceived": "Reply received",
     "noReplyNeeded": "No reply needed",
     "worklistFilterLabel": "Session message worklist",
-    "worklistFilterAll": "All message states",
+    "worklistFilterAll": "All messages",
     "worklistUnread": "Unread ({count})",
     "worklistNeedsReply": "Needs reply ({count})",
     "worklistAwaitingReply": "Awaiting reply ({count})",

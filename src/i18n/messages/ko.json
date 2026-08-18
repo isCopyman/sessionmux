@@ -5176,7 +5176,7 @@
     "stateReplyReceived": "답변 받음",
     "noReplyNeeded": "답변 필요 없음",
     "worklistFilterLabel": "Session 메시지 작업 목록",
-    "worklistFilterAll": "모든 메시지 상태",
+    "worklistFilterAll": "모든 메시지",
     "worklistUnread": "읽지 않음({count})",
     "worklistNeedsReply": "답변 필요({count})",
     "worklistAwaitingReply": "답변 대기({count})",

@@ -2058,8 +2058,11 @@ export function ConversationManageDialog({
                                 </span>
                               ) : null}
                               {collaboration.awaitingReplyCount > 0 ? (
+                                // Amber like needsReply: one convention —
+                                // amber means a reply is owed, whichever side
+                                // owes it (the title names the direction).
                                 <span
-                                  className="rounded-full bg-violet-500/10 px-1.5 py-0.5 text-violet-700 dark:text-violet-400"
+                                  className="rounded-full bg-amber-500/10 px-1.5 py-0.5 text-amber-700 dark:text-amber-400"
                                   title={tCollaboration("stateAwaitingReply")}
                                 >
                                   {collaboration.awaitingReplyCount}

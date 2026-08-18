@@ -5176,7 +5176,7 @@
     "stateReplyReceived": "تم استلام الرد",
     "noReplyNeeded": "لا حاجة إلى رد",
     "worklistFilterLabel": "قائمة عمل رسائل الجلسة",
-    "worklistFilterAll": "كل حالات الرسائل",
+    "worklistFilterAll": "جميع الرسائل",
     "worklistUnread": "غير مقروءة ({count})",
     "worklistNeedsReply": "تحتاج إلى رد ({count})",
     "worklistAwaitingReply": "بانتظار رد ({count})",
