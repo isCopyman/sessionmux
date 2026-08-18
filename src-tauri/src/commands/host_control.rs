@@ -749,7 +749,7 @@ mod tests {
         let (host, _, caller_id, _) = fixture().await;
         let read_only = host.help(caller(caller_id, false), None, None).await;
         assert!(read_only.available);
-        assert_eq!(read_only.capabilities.len(), 4);
+        assert_eq!(read_only.capabilities.len(), 5);
         assert!(read_only
             .capabilities
             .iter()
@@ -762,6 +762,10 @@ mod tests {
             .capabilities
             .iter()
             .any(|capability| capability.action == "workbench.list"));
+        assert!(read_only
+            .capabilities
+            .iter()
+            .any(|capability| capability.action == "timer.list"));
 
         let writable = host.help(caller(caller_id, true), None, None).await;
         assert!(writable
