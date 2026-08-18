@@ -2273,11 +2273,13 @@ export async function markCollaborationRoomSeen(
 
 export async function getCollaborationRoomTimeline(
   roomId: string,
-  limit?: number
+  limit?: number,
+  beforeEventId?: string | null
 ): Promise<RoomTimeline> {
   return getTransport().call("collaboration_room_timeline", {
     roomId,
     limit: limit ?? null,
+    beforeEventId: beforeEventId ?? null,
   })
 }
 

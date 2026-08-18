@@ -1456,8 +1456,13 @@ pub async fn collaboration_room_timeline_core(
     conn: &sea_orm::DatabaseConnection,
     room_id: &str,
     limit: Option<u32>,
+    before_event_id: Option<&str>,
 ) -> Result<RoomTimeline, AppCommandError> {
-    collaboration_room_service::timeline(conn, room_id, limit)
+    let mode = match before_event_id {
+        Some(event_id) => collaboration_room_service::RoomTimelineMode::Before { event_id },
+        None => collaboration_room_service::RoomTimelineMode::Recent,
+    };
+    collaboration_room_service::timeline_with(conn, room_id, limit, mode)
         .await
         .map_err(AppCommandError::from)
 }
@@ -1600,9 +1605,16 @@ pub async fn collaboration_room_mark_seen(
 pub async fn collaboration_room_timeline(
     room_id: String,
     limit: Option<u32>,
+    before_event_id: Option<String>,
     db: tauri::State<'_, AppDatabase>,
 ) -> Result<RoomTimeline, AppCommandError> {
-    collaboration_room_timeline_core(&db.conn, &room_id, limit).await
+    collaboration_room_timeline_core(
+        &db.conn,
+        &room_id,
+        limit,
+        before_event_id.as_deref(),
+    )
+    .await
 }
 
 #[cfg(feature = "tauri-runtime")]

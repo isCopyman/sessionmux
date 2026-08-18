@@ -73,6 +73,9 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
   const conversations = useAppWorkspaceStore((state) => state.conversations)
   const [detail, setDetail] = useState<CollaborationRoomDetail | null>(null)
   const [events, setEvents] = useState<RoomTimelineEvent[]>([])
+  const [truncated, setTruncated] = useState(false)
+  const [loadingOlder, setLoadingOlder] = useState(false)
+  const [replyTo, setReplyTo] = useState<RoomTimelineEvent | null>(null)
   const [hydrated, setHydrated] = useState(false)
   const [body, setBody] = useState("")
   const [mentionAll, setMentionAll] = useState(false)
@@ -92,8 +95,38 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
     ])
     setDetail(nextDetail)
     setEvents(timeline.events)
+    setTruncated(Boolean(timeline.truncated))
     setHydrated(true)
     void markCollaborationRoomSeen(roomId).catch(() => undefined)
+  }, [roomId])
+
+  const loadOlder = useCallback(async () => {
+    const firstId = events[0]?.id
+    if (!firstId || loadingOlder) return
+    setLoadingOlder(true)
+    try {
+      const older = await getCollaborationRoomTimeline(
+        roomId,
+        undefined,
+        firstId
+      )
+      setEvents((current) => {
+        const seen = new Set(current.map((event) => event.id))
+        return [
+          ...older.events.filter((event) => !seen.has(event.id)),
+          ...current,
+        ]
+      })
+      setTruncated(Boolean(older.truncated))
+    } catch (error) {
+      toast.error(toErrorMessage(error))
+    } finally {
+      setLoadingOlder(false)
+    }
+  }, [events, loadingOlder, roomId])
+
+  useEffect(() => {
+    setReplyTo(null)
   }, [roomId])
 
   useEffect(() => {
@@ -126,6 +159,19 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
     [detail]
   )
   const canPost = Boolean(body.trim()) && !pending && hydrated
+  const speakerName = useCallback(
+    (event: RoomTimelineEvent) => {
+      if (event.authorKind === "human") return t("you")
+      return memberLabel(
+        {
+          conversationId: event.source.conversationId,
+          title: event.source.title,
+        },
+        (id) => t("untitled", { id })
+      )
+    },
+    [t]
+  )
   const candidates = useMemo(() => {
     const query = addQuery.trim().toLowerCase()
     return conversations
@@ -163,11 +209,13 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
         invocationPolicy:
           mentionAll || targets.length > 0 ? "invoke_when_idle" : "store_only",
         expectsReply: mentionAll || targets.length > 0,
+        replyToEventId: replyTo?.id ?? null,
       })
       setBody("")
       setMentioned([])
       setMentionAll(false)
       setMentionHuman(false)
+      setReplyTo(null)
       toast.success(t("posted"))
       await reload()
       void useRoomCatalogStore.getState().refresh()
@@ -177,7 +225,17 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
     } finally {
       setPending(false)
     }
-  }, [body, detail, mentionAll, mentionHuman, mentioned, reload, roomId, t])
+  }, [
+    body,
+    detail,
+    mentionAll,
+    mentionHuman,
+    mentioned,
+    reload,
+    replyTo,
+    roomId,
+    t,
+  ])
 
   const handleRename = useCallback(async () => {
     if (!detail || titleDraft == null) return
@@ -291,6 +349,20 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
       <div className="flex min-h-0 flex-1">
         <ScrollArea className="min-w-0 flex-1">
           <div className="flex flex-col gap-3 p-4">
+            {truncated ? (
+              <div className="flex justify-center">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="h-7 px-2 text-xs"
+                  disabled={loadingOlder}
+                  onClick={() => void loadOlder()}
+                >
+                  {t("loadOlder")}
+                </Button>
+              </div>
+            ) : null}
             {events.length === 0 ? (
               <p className="text-sm text-muted-foreground">
                 {t("timelineEmpty")}
@@ -351,6 +423,17 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
                       ) : null}
                     </div>
                     <p className="whitespace-pre-wrap text-sm">{event.body}</p>
+                    <div className="mt-1 flex justify-end">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        className="h-6 px-1.5 text-[11px] text-muted-foreground"
+                        onClick={() => setReplyTo(event)}
+                      >
+                        {t("reply")}
+                      </Button>
+                    </div>
                   </article>
                 )
               })
@@ -438,6 +521,22 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
         <p className="mb-2 text-[11px] text-muted-foreground">
           {t("wakeHint")}
         </p>
+        {replyTo ? (
+          <div className="mb-2 flex items-center justify-between gap-2 rounded-md bg-muted/50 px-2 py-1 text-xs">
+            <span className="min-w-0 truncate">
+              {t("replyTo", { name: speakerName(replyTo) })}
+            </span>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className="h-6 shrink-0 px-1.5 text-[11px]"
+              onClick={() => setReplyTo(null)}
+            >
+              {t("cancelReply")}
+            </Button>
+          </div>
+        ) : null}
         <div className="mb-2 flex flex-wrap items-center gap-2 text-xs">
           <Button
             type="button"

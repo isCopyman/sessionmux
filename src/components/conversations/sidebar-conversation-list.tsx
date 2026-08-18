@@ -2545,6 +2545,11 @@ export function SidebarConversationList({
         >
           <Users className="h-3.5 w-3.5 shrink-0" />
           <span className="min-w-0 flex-1 truncate">{row.room.title}</span>
+          {row.room.unreadCount > 0 ? (
+            <span className="ms-auto shrink-0 text-[10px] text-muted-foreground">
+              {row.room.unreadCount}
+            </span>
+          ) : null}
         </button>
       )
     }

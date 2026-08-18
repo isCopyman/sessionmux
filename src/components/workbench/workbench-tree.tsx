@@ -605,6 +605,12 @@ export function WorkbenchTree() {
                           <span className="min-w-0 flex-1 truncate">
                             {session.title}
                           </span>
+                          {session.kind === "room" &&
+                          (session.room?.unreadCount ?? 0) > 0 ? (
+                            <span className="ms-auto shrink-0 text-[10px] text-muted-foreground">
+                              {session.room?.unreadCount}
+                            </span>
+                          ) : null}
                         </button>
                       )
                     })

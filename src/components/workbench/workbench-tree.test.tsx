@@ -299,4 +299,24 @@ describe("WorkbenchTree", () => {
       )
     })
   })
+
+  it("shows channel unread on a Room row", async () => {
+    h.rooms.push({
+      id: "rm_unread",
+      workbenchId: 1,
+      title: "Busy room",
+      createdByConversationId: 101,
+      memberCount: 2,
+      unreadCount: 3,
+      createdAt: "2026-08-06T00:00:00.000Z",
+      updatedAt: "2026-08-06T00:00:00.000Z",
+    })
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <WorkbenchTree />
+      </NextIntlClientProvider>
+    )
+    const row = await screen.findByRole("button", { name: /Busy room/ })
+    expect(row.textContent).toContain("3")
+  })
 })

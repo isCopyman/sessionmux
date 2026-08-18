@@ -280,6 +280,7 @@ pub struct MarkRoomSeenParams {
 pub struct RoomTimelineParams {
     pub room_id: String,
     pub limit: Option<u32>,
+    pub before_event_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -399,6 +400,7 @@ pub async fn room_timeline(
             &state.db.conn,
             &params.room_id,
             params.limit,
+            params.before_event_id.as_deref(),
         )
         .await?,
     ))

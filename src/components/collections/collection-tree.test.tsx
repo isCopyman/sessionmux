@@ -776,6 +776,24 @@ describe("CollectionTree", () => {
     })
   })
 
+  it("shows channel unread on a Room row", async () => {
+    h.rooms.push({
+      id: "rm_unread",
+      workbenchId: 1,
+      title: "Busy room",
+      createdByConversationId: 102,
+      collectionId: null,
+      rootFolderId: 7,
+      memberCount: 2,
+      unreadCount: 3,
+      createdAt: "2026-06-04T00:00:00.000Z",
+      updatedAt: "2026-06-04T00:00:00.000Z",
+    })
+    renderTree(vi.fn(), { showSessions: true })
+    const row = await screen.findByRole("button", { name: /Busy room/ })
+    expect(row.textContent).toContain("3")
+  })
+
   it("shows a Room under the Collection it owns, not the creator Session", async () => {
     h.rooms.push({
       id: "rm_sources",
