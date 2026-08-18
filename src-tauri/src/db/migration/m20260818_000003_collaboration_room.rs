@@ -90,7 +90,8 @@ mod tests {
              CREATE TABLE collaboration_event (
                  id TEXT PRIMARY KEY NOT NULL,
                  source_conversation_id INTEGER NOT NULL,
-                 body TEXT NOT NULL
+                 body TEXT NOT NULL,
+                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
              );
              INSERT INTO collaboration_event (id, source_conversation_id, body)
              VALUES ('evt-1', 1, 'hello');",

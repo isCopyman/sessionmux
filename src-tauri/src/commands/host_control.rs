@@ -770,27 +770,30 @@ mod tests {
         let (host, _, caller_id, _) = fixture().await;
         let read_only = host.help(caller(caller_id, false), None, None).await;
         assert!(read_only.available);
-        assert_eq!(read_only.capabilities.len(), 6);
+        // Compare the exact id set, not a bare count: when a module adds a
+        // catalog entry, the diff here names it instead of "7 != 6".
+        let mut read_only_actions: Vec<&str> = read_only
+            .capabilities
+            .iter()
+            .map(|capability| capability.action.as_str())
+            .collect();
+        read_only_actions.sort_unstable();
+        assert_eq!(
+            read_only_actions,
+            [
+                "collection.list",
+                "room.list",
+                "room.list_workbench",
+                "session.get",
+                "session.list",
+                "timer.list",
+                "workbench.list",
+            ]
+        );
         assert!(read_only
             .capabilities
             .iter()
             .all(|capability| capability.access == HostControlAccessLevel::Read));
-        assert!(read_only
-            .capabilities
-            .iter()
-            .any(|capability| capability.action == "collection.list"));
-        assert!(read_only
-            .capabilities
-            .iter()
-            .any(|capability| capability.action == "workbench.list"));
-        assert!(read_only
-            .capabilities
-            .iter()
-            .any(|capability| capability.action == "timer.list"));
-        assert!(read_only
-            .capabilities
-            .iter()
-            .any(|capability| capability.action == "room.list"));
 
         let writable = host.help(caller(caller_id, true), None, None).await;
         assert!(writable
