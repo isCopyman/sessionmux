@@ -126,24 +126,6 @@ describe("SessionTimers", () => {
     expect(screen.getByTitle("Pause")).toBeInTheDocument()
   })
 
-  it("marks the collapsed pill amber while a timer is auto-paused", async () => {
-    listSessionTimers.mockResolvedValue([autoPausedTimer])
-    renderTimers()
-    const pill = screen.getByRole("button", { name: /idle continue/i })
-
-    await waitFor(() => expect(pill.className).toContain("border-amber-500/40"))
-    expect(pill.className).toContain("text-amber-800")
-  })
-
-  it("keeps the collapsed pill neutral while timers run normally", async () => {
-    listSessionTimers.mockResolvedValue([timer])
-    renderTimers()
-    const pill = screen.getByRole("button", { name: /idle continue/i })
-
-    await waitFor(() => expect(pill.className).toContain("border-primary/40"))
-    expect(pill.className).not.toContain("amber")
-  })
-
   it("resets delay on a parked timer with one click", async () => {
     listSessionTimers.mockResolvedValue([autoPausedTimer])
     resetSessionTimerDelay.mockResolvedValue({

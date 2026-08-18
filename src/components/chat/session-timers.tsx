@@ -36,10 +36,6 @@ export function SessionTimers({
 
   if (conversationId == null) return null
 
-  const hasAutoPaused = timers.some(
-    (timer) => timer.enabled && timer.autoPausedAt != null
-  )
-
   const submit = () => {
     const prompt = promptText.trim()
     if (!prompt) {
@@ -74,9 +70,7 @@ export function SessionTimers({
           "border-border/70 bg-muted/40 text-muted-foreground transition-colors hover:bg-muted",
           timers.some((timer) => timer.enabled) &&
             "border-primary/40 text-primary",
-          open && "bg-primary/5 text-foreground",
-          hasAutoPaused &&
-            "border-amber-500/40 text-amber-800 dark:text-amber-300"
+          open && "bg-primary/5 text-foreground"
         )}
         title={t("title")}
       >
