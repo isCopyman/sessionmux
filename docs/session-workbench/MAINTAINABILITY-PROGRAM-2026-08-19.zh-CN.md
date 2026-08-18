@@ -471,6 +471,21 @@ T2 后置截图（CDP 9222 可用，基线在 .artifacts）+ 晨间验收报告 
   **B 线 lane-b-ui**（worker-k3 worktree，G5-2/3/6a/8/9/13）、**bonus-timer**（explore-k3
   只读考察 codex/session-timer worktree 遗产）、**bonus-web**（general-purpose@sonnet 档
   =K3 映射，调研 openteams workflow 形态 + linux.do 帖 2759945，本机有 opencli 可用）。
+- 2026-08-19 04:55 **G12-B1 timer 遗产考察完成+裁决**：codex/session-timer 分支仅领先
+  3 提交、落后主线约 150；其 timer 引擎已被主线同架构重写（同表同 migration，服务层收窄
+  idle-only、类别调度、1s 扫描、host_control_timer），**不可 merge，只能摘想法**。净增量
+  三件的裁决：**A at/interval 挂钟模式** = 真实能力空洞（automation 只会启动新会话，
+  全系统没有"定时戳既有会话"的能力；at_time/interval_secs/next_fire_at 表列主线刻意保留）
+  → 值得立项但属新特性且扩工具面，晨报提案**待用户点头**，接入时需补 source=timer 类别
+  归位；**B repeat_idle 开关** = 琐碎，且主线有意选了"默认永续+指数退避限流"（RFC 0.5
+  记录在案）→ 不做，记录即可；**C Goal 一键 Resume/Edit（队列重发 /goal）** = 与主线
+  de470078 "No resume control" 的有意拍板相反 → 不擅动，晨报呈两面（人机友好收益 vs
+  既有决策），用户裁。
+- 2026-08-19 04:58 **G12-B4 完成**：lead-executor-split.md playbook 入库（编排会话亲笔，
+  沉淀今晚实战纪律：机械验证不信执行者记忆、派单前查目标机制近史、接管先发停手令、
+  同一步两次失败即停手上升、仓库台账为压缩后唯一事实源、报告必须带数字）+ SKILL.md
+  与 patterns-map.md 索引指针。session.create 支持 model 钉档已核实（host_control_
+  session.rs:477/616），playbook 所教均为真实能力。
 - 2026-08-19 04:30 用户睡前追加 **G12 bonus 簇**（明确说是 bonus，排主线后、G11 前）：
   B1 timer worktree 考察（在飞）；B2 是否加 workflow 功能（openteams/multica 参照，在飞）；
   B3 linux.do 帖探索（在飞）；B4 **把本次"fable 规划者 + K3 执行者"编排模式沉淀为 codeg
