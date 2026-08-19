@@ -852,3 +852,16 @@ T2 后置截图（CDP 9222 可用，基线在 .artifacts）+ 晨间验收报告 
   测试 2483→2496 全绿、clippy ×3 零警告；前端未动（上批 vitest/build/eslint 绿
   仍有效）。风险留档：_prompt_guard 未随 detached task 移交（残窗最坏=多一行
   可见可删空行，对比修复前必然焊死错投为净改善）。
+- 2026-08-20 凌晨 **release #4 交付（01:53，含 Tier-1 三件套）+ 体验批派工 + G5
+  快赢批关账**：① release #4 打好已通知换用。② 派三工人：w-room-extra-paths
+  （附加路径第一批照侦察报告：collaboration_room_path 表+命令对+多 root 统一预
+  算+后端 10s deadline+"…"菜单最小入口）、w-pane-maximize（窗格临时放大，视图层
+  标记不动布局树，herdr 参考）、w-g5-quickwins。③ G5 快赢批合并关账（bdecb872+
+  8c5a501c+编排修补 68099938）：定时器删除/成员移除加 AlertDialog 确认（工人先
+  核实真实删除语义再写文案——**纠正编排简报的臆测**：成员读游标实际会删，保留的
+  是时间线；采 AlertDialog 主流模式而非同文件 Dialog 孤例，裁决正确）；成员数
+  "N 位成员"改原生 button 开合成员面板（title 而非 aria-label，避免与图标按钮
+  同名撞 getByRole）。门禁漏网编排修补：两个**既有**测试拿整串副标题当单一文本
+  断言，成员数包进 button 后文本被拆——断言对齐新结构（正则半串+按钮角色）；
+  prettier ×2 eslint --fix。终局 vitest 356 文件全绿、build 绿。工人再确认：
+  Room 成员管理键组在 7 非中文语言仍英文占位——孤儿 i18n 第二轮存量+1。
