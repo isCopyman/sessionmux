@@ -1917,10 +1917,7 @@ mod tests {
                 AgentType::DeepSeek,
                 parsers::deepseek::resolve_deepseek_sessions_root(),
             ),
-            (
-                AgentType::Qoder,
-                parsers::qoder::resolve_qoder_config_dir(),
-            ),
+            (AgentType::Qoder, parsers::qoder::resolve_qoder_config_dir()),
         ];
 
         for (agent_type, resolver_root) in expected {

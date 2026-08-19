@@ -5860,9 +5860,8 @@ mod tests {
         );
 
         // On disk: the CLI's own keys survive the merge untouched.
-        let root: Value =
-            serde_json::from_str(&std::fs::read_to_string(&path).expect("read file"))
-                .expect("parse json");
+        let root: Value = serde_json::from_str(&std::fs::read_to_string(&path).expect("read file"))
+            .expect("parse json");
         assert_eq!(
             root.pointer("/securityScan/enabled"),
             Some(&Value::Bool(true))
@@ -5880,9 +5879,8 @@ mod tests {
             .is_empty());
 
         // Unrelated keys remain even after every server is gone.
-        let root: Value =
-            serde_json::from_str(&std::fs::read_to_string(&path).expect("read file"))
-                .expect("parse json");
+        let root: Value = serde_json::from_str(&std::fs::read_to_string(&path).expect("read file"))
+            .expect("parse json");
         assert_eq!(
             root.get("model").and_then(Value::as_str),
             Some("qoder-default")

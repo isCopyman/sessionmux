@@ -14778,7 +14778,10 @@ wire_api = "chat"
                 // Qoder discovers directory bundles only, never flat `.md`
                 // files.
                 assert_eq!(spec.kind, SkillStorageKind::SkillDirectoryOnly);
-                assert_eq!(spec.project_rel_dirs, vec![".qoder/skills", ".agents/skills"]);
+                assert_eq!(
+                    spec.project_rel_dirs,
+                    vec![".qoder/skills", ".agents/skills"]
+                );
                 // Qoder-native dir first (preferred link target), shared
                 // cross-agent store second.
                 let expected = vec![
