@@ -502,15 +502,7 @@ pub async fn collaboration_restore_core(
 }
 
 fn delivery_state_name(state: CollaborationDeliveryState) -> String {
-    match state {
-        CollaborationDeliveryState::Pending => "pending",
-        CollaborationDeliveryState::Queued => "queued",
-        CollaborationDeliveryState::Embedding => "embedding",
-        CollaborationDeliveryState::Embedded => "embedded",
-        CollaborationDeliveryState::Dismissed => "dismissed",
-        CollaborationDeliveryState::Failed => "failed",
-    }
-    .to_string()
+    state.as_str().to_string()
 }
 
 #[async_trait]

@@ -94,6 +94,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { AgentIcon } from "@/components/agent-icon"
+import { CollaborationUnreadBadge } from "@/components/collaboration/collaboration-unread-badge"
 import { ConversationStatusDot } from "@/components/conversations/conversation-status-dot"
 import { SessionBulkActionBar } from "@/components/conversations/session-bulk-action-bar"
 import { SessionDetailsDialog } from "@/components/conversations/session-details-dialog"
@@ -1566,11 +1567,10 @@ export const CollectionTree = forwardRef<
           >
             <Users className="h-3 w-3 shrink-0" />
             <span className="min-w-0 flex-1 truncate">{room.title}</span>
-            {room.unreadCount > 0 ? (
-              <span className="ms-auto shrink-0 text-[10px] text-muted-foreground">
-                {room.unreadCount}
-              </span>
-            ) : null}
+            <CollaborationUnreadBadge
+              count={room.unreadCount}
+              className="ms-auto"
+            />
           </button>
         </ContextMenuTrigger>
         <ContextMenuContent>

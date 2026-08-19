@@ -127,6 +127,7 @@ import { useSubsessionSync } from "@/hooks/use-subsession-sync"
 import { SessionBulkActionBar } from "./session-bulk-action-bar"
 import { SidebarSectionHeader } from "./sidebar-section-header"
 import { ConversationManageDialog } from "./conversation-manage-dialog"
+import { CollaborationUnreadBadge } from "@/components/collaboration/collaboration-unread-badge"
 import { CloneDialog } from "@/components/layout/clone-dialog"
 import { WorkspaceFolderDialog } from "@/components/layout/workspace-folder-dialog"
 import { Button } from "@/components/ui/button"
@@ -2566,11 +2567,10 @@ export function SidebarConversationList({
         >
           <Users className="h-3.5 w-3.5 shrink-0" />
           <span className="min-w-0 flex-1 truncate">{row.room.title}</span>
-          {row.room.unreadCount > 0 ? (
-            <span className="ms-auto shrink-0 text-[10px] text-muted-foreground">
-              {row.room.unreadCount}
-            </span>
-          ) : null}
+          <CollaborationUnreadBadge
+            count={row.room.unreadCount}
+            className="ms-auto"
+          />
         </button>
       )
     }

@@ -3441,8 +3441,6 @@
         "dueShort": "due",
         "nextFireTitle": "Next reminder in about {time}: {prompt}",
         "delayGrew": "Reminder delay has grown. Reset delay after real progress.",
-        "autoPaused": "Parked by an older waiting rule. Reset delay to use the shortest interval again.",
-        "resumeNow": "Reset delay",
         "errors": {
           "emptyPrompt": "The timer prompt must not be empty"
         }

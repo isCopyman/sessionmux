@@ -170,9 +170,7 @@ export function SessionTimers({
                           className={cn(
                             "h-1.5 w-1.5 shrink-0 rounded-full",
                             timer.enabled
-                              ? timer.autoPausedAt
-                                ? "bg-amber-500"
-                                : "bg-primary"
+                              ? "bg-primary"
                               : "bg-muted-foreground/50"
                           )}
                         />
@@ -221,25 +219,11 @@ export function SessionTimers({
                           <Trash2Icon className="h-3 w-3" />
                         </button>
                       </div>
-                      {timer.strikeCount > 0 && timer.autoPausedAt == null ? (
+                      {timer.strikeCount > 0 ? (
                         <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
                           {t("delayGrew")}
                         </p>
                       ) : null}
-                      {timer.autoPausedAt != null && (
-                        <div className="mt-1 flex items-center gap-1.5 rounded-sm bg-amber-500/15 px-1.5 py-1">
-                          <span className="min-w-0 flex-1 text-[10px] leading-relaxed text-amber-800 dark:text-amber-300">
-                            {t("autoPaused")}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => resetDelay(timer.id)}
-                            className="shrink-0 rounded-sm border border-amber-500/40 px-1.5 py-0.5 text-[10px] font-medium text-amber-800 transition-colors hover:bg-amber-500/20 dark:text-amber-300"
-                          >
-                            {t("resumeNow")}
-                          </button>
-                        </div>
-                      )}
                     </>
                   )}
                 </li>

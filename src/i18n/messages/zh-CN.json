@@ -3441,8 +3441,6 @@
         "dueShort": "待发",
         "nextFireTitle": "约 {time} 后下次提醒:{prompt}",
         "delayGrew": "提醒间隔已经拉长。有进展时点「催勤快点」。",
-        "autoPaused": "旧版等待规则已把闹钟停靠。点「催勤快点」恢复最短间隔。",
-        "resumeNow": "催勤快点",
         "errors": {
           "emptyPrompt": "定时器提示词不能为空"
         }
