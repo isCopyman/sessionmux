@@ -947,3 +947,9 @@ T2 后置截图（CDP 9222 可用，基线在 .artifacts）+ 晨间验收报告 
   newConversation 键，不新增 i18n）+ 新 prop onNewSessionInCollection（向 root 回溯、
   预归档进该分类、跨 Path 默认分类不接）。派 w-collection-newsession（K3）热修。
   ③ release #6 在构建成功后、用户宣布日用前交付——封版纪律已上一条台账记录。
+- 2026-08-20 早 **热修收编：Collection 新建会话入口（cb086355+e5a77d67）**：菜单加项
+  （右键+悬停两处，复用 conversationCard.newConversation 键）+ nearestRootFolderId
+  回溯函数（防环）+ 9 个测试用例（菜单 4 + 回溯 5）。**遗留**：草稿会话无 id，
+  「自动归档进分类」未接——等用户拍板时机（首条消息后/创建即建行）。门禁全绿：
+  fmt 零残渣、clippy ×3、server 2543 过/0 挂/1 忽略、vitest 359 文件、build 成功。
+  release #7 构建中。
