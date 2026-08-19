@@ -3942,7 +3942,7 @@ mod tests {
         .await
         .expect_err("an archived Session refuses new mail");
         let message = err.to_string();
-        assert!(message.contains("archived"), "names the reason: {message}");
+        assert!(message.contains("Archived"), "names the reason: {message}");
         assert!(
             message.contains(&target_a.to_string()),
             "names the archived Session: {message}"
@@ -3955,7 +3955,7 @@ mod tests {
         )
         .await
         .expect_err("one archived target refuses the whole letter");
-        assert!(err.to_string().contains("archived"));
+        assert!(err.to_string().contains("Archived"));
         assert!(
             feed(&db.conn, target_b, None)
                 .await
@@ -3980,7 +3980,7 @@ mod tests {
         let err = send(&db.conn, reply)
             .await
             .expect_err("replies to an archived Session are refused too");
-        assert!(err.to_string().contains("archived"));
+        assert!(err.to_string().contains("Archived"));
     }
 
     #[tokio::test]
