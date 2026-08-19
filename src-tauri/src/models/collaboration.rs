@@ -188,6 +188,17 @@ impl CollaborationInterruptState {
 }
 
 impl CollaborationDeliveryState {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Queued => "queued",
+            Self::Embedding => "embedding",
+            Self::Embedded => "embedded",
+            Self::Dismissed => "dismissed",
+            Self::Failed => "failed",
+        }
+    }
+
     pub(crate) fn parse(value: &str) -> Option<Self> {
         match value {
             "pending" => Some(Self::Pending),
