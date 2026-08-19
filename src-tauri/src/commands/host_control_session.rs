@@ -25,9 +25,7 @@ use crate::commands::acp::{acp_cancel_core, build_session_runtime_env, verify_ag
 use crate::commands::conversations::{
     create_conversation_core_with_source, emit_conversation_deleted, emit_conversation_upsert,
 };
-use crate::db::entities::conversation::{
-    ConversationKind, ConversationStatus, CREATED_BY_AGENT,
-};
+use crate::db::entities::conversation::{ConversationKind, ConversationStatus, CREATED_BY_AGENT};
 use crate::db::service::{conversation_service, folder_service, prompt_queue_service};
 use crate::db::AppDatabase;
 use crate::models::{AgentType, DbConversationSummary};

@@ -202,6 +202,9 @@ mod tests {
                  ) VALUES ('bogus', 1, 2, '{\"blocks\":[]}', 'bogus', 'bogus');",
             )
             .await;
-        assert!(rejected.is_err(), "the CHECK must still reject junk sources");
+        assert!(
+            rejected.is_err(),
+            "the CHECK must still reject junk sources"
+        );
     }
 }

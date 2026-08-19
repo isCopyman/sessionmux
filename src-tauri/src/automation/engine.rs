@@ -1240,12 +1240,9 @@ mod tests {
         let db = fresh_in_memory_db().await;
         let folder_id = seed_folder(&db, "/tmp/codeg-automation-queue-prompt").await;
         let conversation_id = seed_conversation(&db, folder_id, AgentType::Codex).await;
-        let auto = automation_service::create(
-            &db.conn,
-            queue_prompt_draft(Some(conversation_id)),
-        )
-        .await
-        .expect("create automation");
+        let auto = automation_service::create(&db.conn, queue_prompt_draft(Some(conversation_id)))
+            .await
+            .expect("create automation");
 
         let engine = test_engine(&db);
         let run_id = engine
@@ -1255,12 +1252,10 @@ mod tests {
 
         // The prompt lands as a durable middle-class queue item: behind the
         // user's own drafts, ahead of idle-continuation timers.
-        let snapshot = crate::db::service::prompt_queue_service::snapshot(
-            &db.conn,
-            conversation_id,
-        )
-        .await
-        .expect("queue snapshot");
+        let snapshot =
+            crate::db::service::prompt_queue_service::snapshot(&db.conn, conversation_id)
+                .await
+                .expect("queue snapshot");
         assert_eq!(snapshot.items.len(), 1);
         let item = &snapshot.items[0];
         assert_eq!(item.source, PromptQueueSource::Automation);
@@ -1304,23 +1299,18 @@ mod tests {
         conversation_service::update_archive(&db.conn, conversation_id, true)
             .await
             .expect("archive");
-        let auto = automation_service::create(
-            &db.conn,
-            queue_prompt_draft(Some(conversation_id)),
-        )
-        .await
-        .expect("create automation");
+        let auto = automation_service::create(&db.conn, queue_prompt_draft(Some(conversation_id)))
+            .await
+            .expect("create automation");
         let err = engine
             .run_automation(auto.id, "manual", None)
             .await
             .expect_err("an archived target must fail the run");
         assert!(err.contains("archived"), "unexpected error: {err}");
-        let snapshot = crate::db::service::prompt_queue_service::snapshot(
-            &db.conn,
-            conversation_id,
-        )
-        .await
-        .expect("queue snapshot");
+        let snapshot =
+            crate::db::service::prompt_queue_service::snapshot(&db.conn, conversation_id)
+                .await
+                .expect("queue snapshot");
         assert!(
             snapshot.items.is_empty(),
             "a failed run must not leave a queue item behind"

@@ -862,7 +862,7 @@ mod tests {
 
         let outcome = host
             .use_action(
-                caller(caller_id),
+                &caller(caller_id),
                 "req-get-selectors".into(),
                 "session.get_selectors".into(),
                 json!({ "session_id": target_id }),
@@ -897,7 +897,7 @@ mod tests {
 
         let outcome = host
             .use_action(
-                caller(caller_id),
+                &caller(caller_id),
                 "req-get-offline".into(),
                 "session.get_selectors".into(),
                 json!({ "session_id": target_id }),
@@ -921,7 +921,7 @@ mod tests {
 
         let outcome = host
             .use_action(
-                caller(caller_id),
+                &caller(caller_id),
                 "req-set".into(),
                 "session.set_selectors".into(),
                 json!({ "session_id": target_id, "model": "b", "thinking_effort": "high" }),
@@ -974,7 +974,7 @@ mod tests {
 
         let outcome = host
             .use_action(
-                caller(caller_id),
+                &caller(caller_id),
                 "req-set-invalid".into(),
                 "session.set_selectors".into(),
                 json!({ "session_id": target_id, "model": "b", "thinking_effort": "xhigh" }),
@@ -994,7 +994,7 @@ mod tests {
         let (host, runtime, caller_id, target_id) = fixture().await;
         let outcome = host
             .use_action(
-                caller(caller_id),
+                &caller(caller_id),
                 "req-set-offline".into(),
                 "session.set_selectors".into(),
                 json!({ "session_id": target_id, "thinking_effort": "ultra" }),
@@ -1028,7 +1028,7 @@ mod tests {
 
         let outcome = host
             .use_action(
-                caller(caller_id),
+                &caller(caller_id),
                 "req-set-apply-fails".into(),
                 "session.set_selectors".into(),
                 json!({ "session_id": target_id, "model": "b" }),
@@ -1051,7 +1051,7 @@ mod tests {
         let (host, _, caller_id, target_id) = fixture().await;
         let empty = host
             .use_action(
-                caller(caller_id),
+                &caller(caller_id),
                 "req-set-empty".into(),
                 "session.set_selectors".into(),
                 json!({ "session_id": target_id }),
@@ -1062,7 +1062,7 @@ mod tests {
 
         let unknown = host
             .use_action(
-                caller(caller_id),
+                &caller(caller_id),
                 "req-set-unknown".into(),
                 "session.set_selectors".into(),
                 json!({ "session_id": target_id, "mode_id": "plan" }),
@@ -1080,7 +1080,7 @@ mod tests {
 
         let get = host
             .use_action(
-                caller(caller_id),
+                &caller(caller_id),
                 "req-get-cross".into(),
                 "session.get_selectors".into(),
                 json!({ "session_id": other_id }),
@@ -1091,7 +1091,7 @@ mod tests {
 
         let set = host
             .use_action(
-                caller(caller_id),
+                &caller(caller_id),
                 "req-set-cross".into(),
                 "session.set_selectors".into(),
                 json!({ "session_id": other_id, "model": "b" }),
@@ -1107,7 +1107,7 @@ mod tests {
         let input = json!({ "session_id": target_id, "model": "any-model" });
         let first = host
             .use_action(
-                caller(caller_id),
+                &caller(caller_id),
                 "req-set-replay".into(),
                 "session.set_selectors".into(),
                 input.clone(),
@@ -1118,7 +1118,7 @@ mod tests {
 
         let replay = host
             .use_action(
-                caller(caller_id),
+                &caller(caller_id),
                 "req-set-replay".into(),
                 "session.set_selectors".into(),
                 input,
@@ -1130,7 +1130,7 @@ mod tests {
 
         let conflicting = host
             .use_action(
-                caller(caller_id),
+                &caller(caller_id),
                 "req-set-replay".into(),
                 "session.set_selectors".into(),
                 json!({ "session_id": target_id, "model": "another-model" }),
