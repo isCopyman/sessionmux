@@ -27,6 +27,7 @@ use crate::commands::conversations::{
 };
 use crate::commands::host_control_organization::OrganizationHostControl;
 use crate::commands::host_control_room::RoomHostControl;
+use crate::commands::host_control_selectors::SelectorHostControl;
 use crate::commands::host_control_session::SessionHostControlProvider;
 use crate::commands::host_control_timer::TimerHostControl;
 use crate::db::entities::conversation::ConversationKind;
@@ -73,6 +74,7 @@ pub struct DbSessionHostControl {
     chat_channel_manager: ChatChannelManager,
     config: HostControlRuntimeConfig,
     session_lifecycle: SessionHostControlProvider,
+    selectors: SelectorHostControl,
     organization: OrganizationHostControl,
     timer: TimerHostControl,
     room: RoomHostControl,
@@ -92,9 +94,10 @@ impl DbSessionHostControl {
         let session_lifecycle = SessionHostControlProvider::new(
             Arc::clone(&db),
             emitter.clone(),
-            connection_manager,
+            connection_manager.clone_ref(),
             data_dir,
         );
+        let selectors = SelectorHostControl::new(db.clone(), connection_manager);
         let organization = OrganizationHostControl::new(db.clone(), emitter.clone());
         let timer = TimerHostControl::new(db.clone(), emitter.clone());
         let room = RoomHostControl::new(db.clone(), emitter.clone());
@@ -104,6 +107,7 @@ impl DbSessionHostControl {
             chat_channel_manager,
             config,
             session_lifecycle,
+            selectors,
             organization,
             timer,
             room,
@@ -117,6 +121,7 @@ impl DbSessionHostControl {
     pub fn new_for_tests(db: Arc<AppDatabase>, emitter: EventEmitter) -> Self {
         let session_lifecycle =
             SessionHostControlProvider::isolated_for_tests(Arc::clone(&db), emitter.clone());
+        let selectors = SelectorHostControl::isolated_for_tests(db.clone());
         let organization = OrganizationHostControl::new(db.clone(), emitter.clone());
         let timer = TimerHostControl::new(db.clone(), emitter.clone());
         let room = RoomHostControl::new(db.clone(), emitter.clone());
@@ -126,6 +131,7 @@ impl DbSessionHostControl {
             chat_channel_manager: ChatChannelManager::new(),
             config: HostControlRuntimeConfig::new(),
             session_lifecycle,
+            selectors,
             organization,
             timer,
             room,
@@ -275,6 +281,7 @@ impl DbSessionHostControl {
             });
             capabilities.extend(SessionHostControlProvider::capabilities());
         }
+        capabilities.extend(SelectorHostControl::capabilities(writes_allowed));
         capabilities.extend(OrganizationHostControl::capabilities(writes_allowed));
         capabilities.extend(TimerHostControl::capabilities(writes_allowed));
         capabilities.extend(RoomHostControl::capabilities(writes_allowed));
@@ -621,6 +628,23 @@ impl HostControlAccess for DbSessionHostControl {
                     outcome
                 }
             }
+            _ if SelectorHostControl::access_for(&action).is_some() => {
+                if matches!(
+                    SelectorHostControl::access_for(&action),
+                    Some(HostControlAccessLevel::Write)
+                ) && (!config.writes_enabled || !caller.writes_allowed)
+                {
+                    HostControlUseOutcome::rejected(
+                        request_id,
+                        action,
+                        "This Session's live Host policy does not allow Host Control writes.",
+                    )
+                } else {
+                    self.selectors
+                        .use_action(&caller, request_id, action, input)
+                        .await
+                }
+            }
             _ if OrganizationHostControl::access_for(&action).is_some() => {
                 if matches!(
                     OrganizationHostControl::access_for(&action),
@@ -785,6 +809,7 @@ mod tests {
                 "room.list",
                 "room.list_workbench",
                 "session.get",
+                "session.get_selectors",
                 "session.list",
                 "timer.list",
                 "workbench.list",
@@ -800,6 +825,10 @@ mod tests {
             .capabilities
             .iter()
             .any(|capability| capability.action == "session.rename"));
+        assert!(writable
+            .capabilities
+            .iter()
+            .any(|capability| capability.action == "session.set_selectors"));
         assert!(writable
             .capabilities
             .iter()
