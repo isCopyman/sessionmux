@@ -275,7 +275,14 @@ impl CodexParser {
     /// files. Keep this overlay out of `summary_cache`: the cache is keyed by a
     /// rollout's metadata, while `session_index.jsonl` can change independently
     /// when the user renames a thread in another Codex client.
-    fn session_index_titles(&self) -> HashMap<String, String> {
+    ///
+    /// `pub(crate)` because this is also the data source `list_all_conversations_core`
+    /// reads to keep the DB copy of an already-imported session's title current
+    /// (`conversation_service::refresh_codex_auto_titles`). The overlay applied
+    /// below stays in place for direct parser consumers (the import/scan dialog,
+    /// and this parser's own `get_conversation`), which have no DB row to sync
+    /// into and must show the corrected title straight from disk.
+    pub(crate) fn session_index_titles(&self) -> HashMap<String, String> {
         self.base_dir
             .parent()
             .map(|home| read_codex_session_index_titles(&home.join("session_index.jsonl")))
