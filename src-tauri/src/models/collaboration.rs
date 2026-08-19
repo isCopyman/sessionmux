@@ -530,6 +530,17 @@ pub struct CollaborationRoomMember {
     pub last_read_at: Option<DateTime<Utc>>,
 }
 
+/// An extra `@`-search root a Room was given besides its bound
+/// `root_folder_id` — a bare filesystem path the user typed in, not a Folder.
+/// See `collaboration_room_path` (migration `m20260820_000001`).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoomAdditionalPath {
+    pub id: i32,
+    pub path: String,
+    pub created_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CollaborationRoomSummary {
@@ -542,6 +553,10 @@ pub struct CollaborationRoomSummary {
     #[serde(default)]
     pub root_folder_id: Option<i32>,
     pub member_count: u32,
+    /// Extra `@`-search paths added on top of `root_folder_id`. Host /
+    /// Workbench summary lists don't need the full list, only the count.
+    #[serde(default)]
+    pub additional_path_count: u32,
     pub unread_count: u32,
     /// Deliveries of Room `@` this member has not consumed. Host / Workbench
     /// lists leave this at 0; Agent `list_rooms` fills it per Session.
@@ -572,6 +587,10 @@ pub struct CollaborationRoomDetail {
     #[serde(default)]
     pub root_folder_id: Option<i32>,
     pub members: Vec<CollaborationRoomMember>,
+    /// Extra `@`-search paths added on top of `root_folder_id`, in insertion
+    /// order (oldest first) — the "manage paths" dialog's full list.
+    #[serde(default)]
+    pub additional_paths: Vec<RoomAdditionalPath>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

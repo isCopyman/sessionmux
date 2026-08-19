@@ -10,11 +10,17 @@ use crate::db::error::DbError;
 use crate::models::{
     AddCollaborationRoomMembersInput, CollaborationRoomDetail, CollaborationRoomMember,
     CollaborationRoomSummary, CollaborationSessionSnapshot, CollaborationUrgency,
-    CreateCollaborationRoomInput, RoomTimeline, RoomTimelineEvent,
+    CreateCollaborationRoomInput, RoomAdditionalPath, RoomTimeline, RoomTimelineEvent,
 };
 
 const MAX_TITLE_CHARS: usize = 80;
 const MAX_MEMBERS: usize = 32;
+/// A Room's `@`-search roots are scanned under one shared wall-clock deadline
+/// (`WORKSPACE_SCAN_DEADLINE` in `commands::folders`) and one shared entry
+/// budget — piling on additional paths only dilutes both, it never buys more
+/// of either. This caps the list at a size a human is going to manage by hand
+/// through the "manage paths" dialog anyway.
+const MAX_ADDITIONAL_PATHS: usize = 20;
 const DEFAULT_TIMELINE_LIMIT: u32 = 200;
 const MAX_TIMELINE_LIMIT: u32 = 500;
 
@@ -358,6 +364,8 @@ fn room_summary_select(
                 r.created_at, r.updated_at, r.last_seen_at, \
                 (SELECT COUNT(*) FROM collaboration_room_member m \
                   WHERE m.room_id = r.id) AS member_count, \
+                (SELECT COUNT(*) FROM collaboration_room_path p \
+                  WHERE p.room_id = r.id) AS additional_path_count, \
                 (SELECT MAX(e.created_at) FROM collaboration_event e \
                   WHERE e.room_id = r.id AND COALESCE(e.visibility, 'direct') = 'room') \
                   AS last_event_at, \
@@ -421,6 +429,7 @@ pub async fn list_for_member(
 
 fn summary_from_row(row: &QueryResult) -> Result<CollaborationRoomSummary, DbError> {
     let member_count: i64 = row.try_get("", "member_count")?;
+    let additional_path_count: i64 = row.try_get("", "additional_path_count")?;
     let unread_count: i64 = row.try_get("", "unread_count")?;
     let mention_unread_count: i64 = row.try_get("", "mention_unread_count")?;
     let needs_reply_count: i64 = row.try_get("", "needs_reply_count")?;
@@ -433,6 +442,7 @@ fn summary_from_row(row: &QueryResult) -> Result<CollaborationRoomSummary, DbErr
         collection_id: row.try_get("", "collection_id")?,
         root_folder_id: row.try_get("", "root_folder_id")?,
         member_count: u32::try_from(member_count.max(0)).unwrap_or(u32::MAX),
+        additional_path_count: u32::try_from(additional_path_count.max(0)).unwrap_or(u32::MAX),
         unread_count: u32::try_from(unread_count.max(0)).unwrap_or(u32::MAX),
         mention_unread_count: u32::try_from(mention_unread_count.max(0)).unwrap_or(u32::MAX),
         needs_reply_count: u32::try_from(needs_reply_count.max(0)).unwrap_or(u32::MAX),
@@ -457,6 +467,7 @@ pub async fn get(
         .await?
         .ok_or_else(|| DbError::NotFound(format!("Room {room_id}")))?;
     let members = list_members(conn, room_id).await?;
+    let additional_paths = list_paths(conn, room_id).await?;
     Ok(CollaborationRoomDetail {
         id: row.try_get("", "id")?,
         workbench_id: row.try_get("", "workbench_id")?,
@@ -465,6 +476,7 @@ pub async fn get(
         collection_id: row.try_get("", "collection_id")?,
         root_folder_id: row.try_get("", "root_folder_id")?,
         members,
+        additional_paths,
         created_at: parse_timestamp(&row, "created_at")?,
         updated_at: parse_timestamp(&row, "updated_at")?,
     })
@@ -494,6 +506,30 @@ async fn list_members<C: ConnectionTrait>(
                 role: row.try_get("", "role")?,
                 joined_at: parse_timestamp(row, "joined_at")?,
                 last_read_at: parse_optional_timestamp(row, "last_read_at")?,
+            })
+        })
+        .collect()
+}
+
+async fn list_paths<C: ConnectionTrait>(
+    conn: &C,
+    room_id: &str,
+) -> Result<Vec<RoomAdditionalPath>, DbError> {
+    let rows = conn
+        .query_all(statement(
+            "SELECT id, path, created_at \
+             FROM collaboration_room_path \
+             WHERE room_id = ? \
+             ORDER BY id",
+            vec![room_id.into()],
+        ))
+        .await?;
+    rows.iter()
+        .map(|row| {
+            Ok(RoomAdditionalPath {
+                id: row.try_get("", "id")?,
+                path: row.try_get("", "path")?,
+                created_at: parse_timestamp(row, "created_at")?,
             })
         })
         .collect()
@@ -577,6 +613,78 @@ pub async fn remove_member(
         vec![room_id.into(), conversation_id.into()],
     ))
     .await?;
+    touch_room(&txn, room_id).await?;
+    txn.commit().await?;
+    get(conn, room_id).await
+}
+
+/// Adds an extra `@`-search path to a Room, on top of its bound
+/// `root_folder_id`. Unlike a Folder (opened through a picker that already
+/// guarantees this), an additional path is user-typed free text, so it is
+/// validated here — before it is written — to exist and be a directory.
+/// Adding a path already on the room is a silent no-op (`INSERT OR IGNORE`
+/// against the `UNIQUE(room_id, path)` constraint), matching `add_members`'s
+/// "already a member" tolerance rather than erroring.
+pub async fn add_path(
+    conn: &DatabaseConnection,
+    room_id: &str,
+    path: &str,
+) -> Result<CollaborationRoomDetail, DbError> {
+    let _ = room_workbench_id(conn, room_id).await?;
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err(validation("Path cannot be empty"));
+    }
+    match std::fs::metadata(trimmed) {
+        Ok(metadata) if metadata.is_dir() => {}
+        Ok(_) => return Err(validation(format!("Path is not a directory: {trimmed}"))),
+        Err(_) => return Err(validation(format!("Path does not exist: {trimmed}"))),
+    }
+    let existing: i64 = conn
+        .query_one(statement(
+            "SELECT COUNT(*) AS count FROM collaboration_room_path WHERE room_id = ?",
+            vec![room_id.into()],
+        ))
+        .await?
+        .expect("COUNT")
+        .try_get("", "count")?;
+    if existing >= MAX_ADDITIONAL_PATHS as i64 {
+        return Err(validation(format!(
+            "A Room supports at most {MAX_ADDITIONAL_PATHS} additional paths"
+        )));
+    }
+    let txn = conn.begin().await?;
+    txn.execute(statement(
+        "INSERT OR IGNORE INTO collaboration_room_path (room_id, path, created_at) \
+         VALUES (?, ?, CURRENT_TIMESTAMP)",
+        vec![room_id.into(), trimmed.into()],
+    ))
+    .await?;
+    touch_room(&txn, room_id).await?;
+    txn.commit().await?;
+    get(conn, room_id).await
+}
+
+/// Removes an extra `@`-search path from a Room by its row id.
+pub async fn remove_path(
+    conn: &DatabaseConnection,
+    room_id: &str,
+    path_id: i32,
+) -> Result<CollaborationRoomDetail, DbError> {
+    let _ = room_workbench_id(conn, room_id).await?;
+    let txn = conn.begin().await?;
+    let changed = txn
+        .execute(statement(
+            "DELETE FROM collaboration_room_path WHERE id = ? AND room_id = ?",
+            vec![path_id.into(), room_id.into()],
+        ))
+        .await?
+        .rows_affected();
+    if changed == 0 {
+        return Err(DbError::NotFound(format!(
+            "Path {path_id} not found on Room {room_id}"
+        )));
+    }
     touch_room(&txn, room_id).await?;
     txn.commit().await?;
     get(conn, room_id).await
@@ -689,6 +797,8 @@ pub async fn assign_to_collection(
             collection_id: detail.collection_id,
             root_folder_id: detail.root_folder_id,
             member_count: u32::try_from(detail.members.len()).unwrap_or(u32::MAX),
+            additional_path_count: u32::try_from(detail.additional_paths.len())
+                .unwrap_or(u32::MAX),
             unread_count: 0,
             mention_unread_count: 0,
             needs_reply_count: 0,
@@ -1116,6 +1226,112 @@ mod tests {
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].id, room.id);
         assert_eq!(listed[0].member_count, 2);
+    }
+
+    #[tokio::test]
+    async fn add_path_validates_existence_and_directory_before_writing() {
+        let (db, a, b, _) = seeded().await;
+        let room = make_room(&db, a, vec![a, b]).await;
+
+        let missing_err = add_path(&db.conn, &room.id, "/definitely/does/not/exist-xyz")
+            .await
+            .expect_err("a nonexistent path must be rejected");
+        assert!(matches!(missing_err, DbError::Validation(_)));
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file_path = dir.path().join("a-file.txt");
+        std::fs::write(&file_path, b"x").expect("write file");
+        let not_dir_err = add_path(&db.conn, &room.id, &file_path.to_string_lossy())
+            .await
+            .expect_err("a file (not a directory) must be rejected");
+        assert!(matches!(not_dir_err, DbError::Validation(_)));
+
+        let dir_path = dir.path().to_string_lossy().to_string();
+        let updated = add_path(&db.conn, &room.id, &dir_path)
+            .await
+            .expect("a real, existing directory must be accepted");
+        assert_eq!(updated.additional_paths.len(), 1);
+        assert_eq!(updated.additional_paths[0].path, dir_path);
+    }
+
+    #[tokio::test]
+    async fn add_path_is_a_no_op_for_an_exact_duplicate() {
+        let (db, a, b, _) = seeded().await;
+        let room = make_room(&db, a, vec![a, b]).await;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let dir_path = dir.path().to_string_lossy().to_string();
+
+        add_path(&db.conn, &room.id, &dir_path)
+            .await
+            .expect("first add");
+        let updated = add_path(&db.conn, &room.id, &dir_path)
+            .await
+            .expect("re-adding the same path is a no-op, not an error — mirrors add_members");
+        assert_eq!(
+            updated.additional_paths.len(),
+            1,
+            "a duplicate path must not be stored twice"
+        );
+    }
+
+    #[tokio::test]
+    async fn add_path_enforces_the_max_additional_paths_cap() {
+        let (db, a, b, _) = seeded().await;
+        let room = make_room(&db, a, vec![a, b]).await;
+        let dirs: Vec<_> = (0..MAX_ADDITIONAL_PATHS)
+            .map(|_| tempfile::tempdir().expect("tempdir"))
+            .collect();
+        for dir in &dirs {
+            add_path(&db.conn, &room.id, &dir.path().to_string_lossy())
+                .await
+                .expect("adding up to the cap must succeed");
+        }
+
+        let one_more = tempfile::tempdir().expect("tempdir");
+        let err = add_path(&db.conn, &room.id, &one_more.path().to_string_lossy())
+            .await
+            .expect_err("exceeding the cap must be rejected");
+        assert!(matches!(err, DbError::Validation(_)));
+    }
+
+    #[tokio::test]
+    async fn remove_path_deletes_by_id_and_rejects_a_second_removal() {
+        let (db, a, b, _) = seeded().await;
+        let room = make_room(&db, a, vec![a, b]).await;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let updated = add_path(&db.conn, &room.id, &dir.path().to_string_lossy())
+            .await
+            .expect("add");
+        let path_id = updated.additional_paths[0].id;
+
+        let after_remove = remove_path(&db.conn, &room.id, path_id)
+            .await
+            .expect("remove");
+        assert!(after_remove.additional_paths.is_empty());
+
+        let err = remove_path(&db.conn, &room.id, path_id)
+            .await
+            .expect_err("removing an already-removed path id must fail, not silently no-op");
+        assert!(matches!(err, DbError::NotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn room_summary_reports_the_additional_path_count() {
+        let (db, a, b, _) = seeded().await;
+        let room = make_room(&db, a, vec![a, b]).await;
+        let dir = tempfile::tempdir().expect("tempdir");
+        add_path(&db.conn, &room.id, &dir.path().to_string_lossy())
+            .await
+            .expect("add");
+
+        let summaries = list_for_workbench(&db.conn, room.workbench_id)
+            .await
+            .expect("list");
+        let summary = summaries
+            .iter()
+            .find(|s| s.id == room.id)
+            .expect("room present in the workbench listing");
+        assert_eq!(summary.additional_path_count, 1);
     }
 
     #[tokio::test]
