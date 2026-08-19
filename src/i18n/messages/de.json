@@ -2816,6 +2816,7 @@
         "slashCommands": "Slash-Befehle",
         "slashSearchPlaceholder": "Befehle suchen...",
         "slashSearchEmpty": "Keine passenden Befehle",
+        "slashLoading": "Befehle werden geladen…",
         "experts": "Experten",
         "office": "Büroarbeit",
         "research": "Forschung",
