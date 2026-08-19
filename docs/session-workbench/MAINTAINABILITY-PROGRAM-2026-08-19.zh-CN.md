@@ -559,3 +559,18 @@ T2 后置截图（CDP 9222 可用，基线在 .artifacts）+ 晨间验收报告 
   批**（用户明确翻案 de470078："暂停理应能继续"）：Resume=把暂停前镜像的目标文本
   作为 /goal follow-up 经队列重发（忙时排队）；含 Goal Card Resume 按钮。
   执行序：先完成今晚收口（G6 门→T2 截图→G3 小批→G11 上游），新批次其后开工。
+- 2026-08-19 15:3x **收口推进 + 新批次并行开工（用户加令："工人只写码、验证集中做"）**：
+  ① 合并后唯一红测的修复落库 3c86beae：义务提示/欠账计数只统计 state='embedded' 的
+  投递——信还在 pending/queued/本轮随行时是信封的职责，不入提示；三个测试补 embedded
+  种子。门禁全绿：server 2436/0/1、vitest 348 文件 4348 全过、pnpm build 成功
+  （gate-finisher 执行，全程未杀进程）。② wt/playbooks 验收合并 2950aaa8：
+  lead-executor-split.md 增 Fleet hygiene 节（G13-a：一次任务一个 Collection、验收即
+  归档、parent_id 红线），新增 shadow-auditor.md（决策⑤：疑点只升不横传、审计员不改
+  码不指挥），SKILL.md 登记；语言按 references/ 目录惯例保持英文。③ 分工升级落地：
+  开发工人各占独立 worktree 只写码+写测试、不编译不跑测试，主会话串行合并+集中跑
+  门禁（避免 worktree 冷编译互抢 CPU 与 K3 在编译报错上空转）。在飞五工人：
+  w-archive（G13-b 归档动作+拒收提示发件人、G3-3 schema 瘦身、G2-3 措辞、USAGE 同步）、
+  w-g9-hostctl（决策②模型/思考强度）、w-automation（决策③排提示动作 + G13-c
+  created_by 落库）、w-goal-resume（决策⑥ Resume 按钮 + G5-6b 孤儿键）、t2-capture
+  （T2 截图对基线取证）。clippy 三连在 2950aaa8 上后台补跑；全仓 eslint（28 存量、
+  零新增）仍在跑，收敛留待集中 prettier 一次性处理。
