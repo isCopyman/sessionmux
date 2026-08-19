@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{oneshot, Mutex};
+use tokio::sync::{oneshot, Mutex, RwLock};
 
 use sea_orm::{
     ActiveModelTrait, ActiveValue::NotSet, ActiveValue::Set, DatabaseConnection, EntityTrait,
@@ -26,6 +26,7 @@ use crate::acp::question::{
     build_outcome, QuestionAnswer, QuestionOutcome, QuestionSpec, RegisteredQuestion,
     SessionQuestionAccess,
 };
+use crate::acp::session_state::SessionState;
 use crate::acp::terminal_runtime::TerminalShellRuntimeConfig;
 use crate::acp::types::{
     AcpEvent, AgentOptionsSnapshot, ConfigStaleKind, ConnectionInfo, ConnectionStatus,
@@ -33,6 +34,7 @@ use crate::acp::types::{
 };
 use crate::db::entities::collection_conversation;
 use crate::db::entities::conversation::{self, ConversationKind, ConversationStatus};
+use crate::db::error::DbError;
 use crate::db::service::{collaboration_service, conversation_service};
 use crate::db::AppDatabase;
 use crate::models::agent::AgentType;
@@ -188,6 +190,136 @@ async fn wait_for_session_started(
         Err(_) => HandshakeWaitOutcome::TimedOut,
     };
     (outcome, start.elapsed())
+}
+
+/// Resolve which conversation row a `send_prompt_linked_with_message_id` call
+/// belongs to (Branch A: adopt a caller-supplied row; Branch B: create one
+/// from `folder_id`), bind the connection's already-known `external_id` onto
+/// it if one is on state yet, and ONLY THEN announce `ConversationLinked`.
+///
+/// Bind-before-announce is the whole point (ACP-BINDING-AUDIT-2026-08-19,
+/// scenario B2): `ConversationLinked` sets `state.conversation_id`, which is
+/// what makes the caller's `already_linked` check permanently true. The
+/// pre-fix order announced first — so a bind failure left state welded to a
+/// conversation_id the DB never actually associated with this session, and
+/// every later call on the connection would skip straight past the (now
+/// permanently-false) `!already_linked` guard without ever retrying the bind.
+///
+/// Factored out of [`ConnectionManager::send_prompt_linked_with_message_id`]
+/// so the whole sequence can run inside a cancellation-shielded `tokio::spawn`
+/// at the call site (scenario B3): this function's caller holds no lock and
+/// performs no side effect before invoking it, so it is safe to run detached
+/// — a dropped caller (e.g. an HTTP client disconnecting mid-request) can no
+/// longer tear the bind and the announcement apart, because the spawned task
+/// keeps running to completion regardless of whether anyone is left to await
+/// its handle.
+async fn link_and_bind_conversation(
+    db_conn: &DatabaseConnection,
+    state_arc: &Arc<RwLock<SessionState>>,
+    emitter: &EventEmitter,
+    agent_type: AgentType,
+    conversation_id: Option<i32>,
+    folder_id: Option<i32>,
+) -> Result<(), AcpError> {
+    let (target_conversation_id, target_folder_id, created_new_row) =
+        match (conversation_id, folder_id) {
+            // Branch A: caller already owns a row — adopt it. No DB write yet.
+            (Some(caller_conv_id), Some(caller_folder_id)) => {
+                (caller_conv_id, caller_folder_id, false)
+            }
+            // Function-entry guard rejects this combination.
+            (Some(_), None) => unreachable!(
+                "conversation_id without folder_id should have been rejected at function entry"
+            ),
+            // Branch B: backend creates the row from caller-supplied
+            // folder_id. Phase 3c-1 made folder_id required here — every
+            // production caller that reaches this branch passes one, and
+            // silent fallback to working_dir-based find-or-create masked
+            // contract violations.
+            (None, Some(folder_id)) => {
+                let row = conversation_service::create(db_conn, folder_id, agent_type, None, None)
+                    .await
+                    .map_err(|e| AcpError::protocol(e.to_string()))?;
+                (row.id, folder_id, true)
+            }
+            (None, None) => {
+                return Err(AcpError::protocol(
+                    "folder_id required for new conversation row".to_string(),
+                ));
+            }
+        };
+
+    // UI new-conversation path: SessionStarted may have applied
+    // state.external_id back during acp_connect, before conversation_id was
+    // known — bind it now, BEFORE announcing. The chat_channel reverse-order
+    // path (link before SessionStarted) is unaffected; its own SessionStarted
+    // handler binds once the id arrives.
+    let eid_opt = state_arc.read().await.external_id.clone();
+    let preserved_id = if let Some(eid) = eid_opt {
+        match conversation_service::bind_external_id(db_conn, target_conversation_id, eid).await {
+            Ok(outcome) => outcome.preserved_conversation_id,
+            Err(err) => {
+                // Branch B already created a row nobody will ever announce or
+                // reuse — `already_linked` was never set, so the NEXT call
+                // simply re-enters Branch B and creates yet another one.
+                // Soft-delete this one so a rejected bind doesn't leave an
+                // untitled ghost conversation appearing in the sidebar on
+                // refresh (mirrors the cleanup upstream applies on the same
+                // failure path).
+                if created_new_row {
+                    if let Err(cleanup_err) =
+                        conversation_service::soft_delete(db_conn, target_conversation_id).await
+                    {
+                        tracing::warn!(
+                            "[manager] link_and_bind_conversation: failed to clean up \
+                             unbound row {target_conversation_id} after bind failure: {cleanup_err}"
+                        );
+                    }
+                }
+                return Err(AcpError::protocol(err.to_string()));
+            }
+        }
+    } else {
+        tracing::info!(
+            "[manager] send_prompt_linked: conversation linked but external_id \
+             not yet on state (conversation={target_conversation_id}); lifecycle \
+             subscriber will catch up when SessionStarted arrives"
+        );
+        None
+    };
+
+    // Bind succeeded (or there was nothing to bind yet) — safe to announce.
+    emit_with_state(
+        state_arc,
+        emitter,
+        AcpEvent::ConversationLinked {
+            conversation_id: target_conversation_id,
+            folder_id: target_folder_id,
+            parent_conversation_id: None,
+            parent_tool_use_id: None,
+        },
+    )
+    .await;
+
+    // Sidebar sync: a conversation born here (agent path — a prompt sent
+    // without a pre-created row) or one whose external_id just became known
+    // must reach every client immediately via the global
+    // `conversation://changed` channel. Root-only via the helper.
+    crate::commands::conversations::emit_conversation_upsert(
+        emitter,
+        db_conn,
+        target_conversation_id,
+    )
+    .await;
+    if let Some(preserved_id) = preserved_id {
+        // A1/A3: the row's previous session was split off onto its own row
+        // rather than silently overwritten — broadcast it too, or it stays
+        // invisible until an unrelated refresh.
+        crate::commands::conversations::emit_conversation_upsert(emitter, db_conn, preserved_id)
+            .await;
+    }
+
+    Ok(())
 }
 
 pub struct ConnectionManager {
@@ -644,22 +776,47 @@ impl ConnectionManager {
                 native_creation_may_have_started: true,
             });
         };
-        if let Err(error) = conversation_service::update_external_id(
+        match conversation_service::bind_external_id(
             &db.conn,
             conversation_id,
             native_session_id.clone(),
         )
         .await
         {
-            let _ = self.disconnect(&connection_id).await;
-            return Err(BoundAgentSpawnFailure {
-                error: AcpError::protocol(format!(
-                    "could not persist the native Session identity: {error}"
-                )),
-                connection_id,
-                native_session_id: Some(native_session_id),
-                native_creation_may_have_started: true,
-            });
+            Ok(outcome) => {
+                if let Some(preserved_id) = outcome.preserved_conversation_id {
+                    // A1/A3: this row's previous native session was unrelated
+                    // to the one just spawned, so it was split off onto its
+                    // own row rather than silently overwritten. The caller
+                    // broadcasts `conversation_id`'s own upsert as before;
+                    // only this function knows about the preserved sibling,
+                    // so it must announce that one itself or it stays
+                    // invisible until an unrelated refresh.
+                    crate::commands::conversations::emit_conversation_upsert(
+                        &emitter,
+                        &db.conn,
+                        preserved_id,
+                    )
+                    .await;
+                }
+            }
+            Err(error) => {
+                let _ = self.disconnect(&connection_id).await;
+                let message = if matches!(error, DbError::ExternalIdTaken(_)) {
+                    format!(
+                        "this native Session id is already bound to a different \
+                         conversation and cannot be reused: {error}"
+                    )
+                } else {
+                    format!("could not persist the native Session identity: {error}")
+                };
+                return Err(BoundAgentSpawnFailure {
+                    error: AcpError::protocol(message),
+                    connection_id,
+                    native_session_id: Some(native_session_id),
+                    native_creation_may_have_started: true,
+                });
+            }
         }
 
         Ok((connection_id, native_session_id))
@@ -1224,96 +1381,42 @@ impl ConnectionManager {
         let visible_user_blocks = blocks.clone();
 
         if !already_linked {
-            match (conversation_id, folder_id) {
-                // Branch A: caller already owns a row — adopt it. No DB write.
-                (Some(caller_conv_id), Some(caller_folder_id)) => {
-                    emit_with_state(
-                        &state_arc,
-                        &emitter,
-                        AcpEvent::ConversationLinked {
-                            conversation_id: caller_conv_id,
-                            folder_id: caller_folder_id,
-                            parent_conversation_id: None,
-                            parent_tool_use_id: None,
-                        },
-                    )
-                    .await;
+            // CANCELLATION SHIELD for link + bind + announce, mirroring
+            // `fork_session`'s detached-task shape (this file, `tokio::spawn`
+            // + `_prompt_guard` below `persist_fork_outcome`). Once a Branch B
+            // row is created and/or `external_id` is bound, that write and the
+            // `ConversationLinked` announcement that makes `already_linked`
+            // permanently true must land together — bind-before-announce
+            // (see `link_and_bind_conversation`'s doc) only closes half the
+            // hazard; the other half is a caller-side cancellation (e.g. an
+            // HTTP client disconnecting mid-request) tearing bind and announce
+            // apart. Spawning this as its own task means the work keeps
+            // running to completion even if nobody is left to await it — only
+            // the RESULT is discarded, never the operation itself. `_prompt_guard`
+            // deliberately stays held in THIS function (unmoved) for its
+            // existing full-function scope; only the risky link/bind/announce
+            // sequence needs to survive cancellation independently of it.
+            let db_conn = db.conn.clone();
+            let emitter_for_link = emitter.clone();
+            let state_for_link = state_arc.clone();
+            let handle = tokio::spawn(async move {
+                link_and_bind_conversation(
+                    &db_conn,
+                    &state_for_link,
+                    &emitter_for_link,
+                    agent_type,
+                    conversation_id,
+                    folder_id,
+                )
+                .await
+            });
+            match handle.await {
+                Ok(result) => result?,
+                Err(join_err) => {
+                    return Err(AcpError::protocol(format!(
+                        "conversation link task did not complete: {join_err}"
+                    )));
                 }
-                // Function-entry guard rejects this combination.
-                (Some(_), None) => unreachable!(
-                    "conversation_id without folder_id should have been rejected at function entry"
-                ),
-                // Branch B: backend creates the row from caller-supplied
-                // folder_id. Phase 3c-1 made folder_id required here — every
-                // production caller that reaches this branch passes one, and
-                // silent fallback to working_dir-based find-or-create masked
-                // contract violations.
-                (None, Some(folder_id)) => {
-                    let row =
-                        conversation_service::create(&db.conn, folder_id, agent_type, None, None)
-                            .await
-                            .map_err(|e| AcpError::protocol(e.to_string()))?;
-                    emit_with_state(
-                        &state_arc,
-                        &emitter,
-                        AcpEvent::ConversationLinked {
-                            conversation_id: row.id,
-                            folder_id,
-                            parent_conversation_id: None,
-                            parent_tool_use_id: None,
-                        },
-                    )
-                    .await;
-                    // Sidebar sync: a conversation born here (agent path — a
-                    // prompt sent without a pre-created row, not the create
-                    // button) must reach every client immediately via the global
-                    // `conversation://changed` channel. Roots land in the sidebar
-                    // list; delegation children (parent set) are routed into their
-                    // parent's expanded sub-session subtree and bump its chevron.
-                    // Both carry `external_id: null` here (no session yet) — the
-                    // external_id write below re-broadcasts the full summary.
-                    crate::commands::conversations::emit_conversation_upsert(
-                        &emitter, &db.conn, row.id,
-                    )
-                    .await;
-                }
-                (None, None) => {
-                    return Err(AcpError::protocol(
-                        "folder_id required for new conversation row".to_string(),
-                    ));
-                }
-            }
-
-            // UI new-conversation path: SessionStarted applied state.external_id
-            // back during acp_connect, but conversation_id was None then so the
-            // lifecycle subscriber's SessionStarted handler skipped the DB write.
-            // Now that we just linked the row in the same prompt_lock critical
-            // section, snapshot external_id and persist it synchronously — no
-            // dependence on broadcaster eventual consistency. The chat_channel
-            // reverse-order path (link before SessionStarted) is unaffected and
-            // continues to be handled by the lifecycle subscriber.
-            let (cid_opt, eid_opt) = {
-                let s = state_arc.read().await;
-                (s.conversation_id, s.external_id.clone())
-            };
-            if let (Some(cid), Some(eid)) = (cid_opt, eid_opt) {
-                conversation_service::update_external_id(&db.conn, cid, eid)
-                    .await
-                    .map_err(|e| AcpError::protocol(e.to_string()))?;
-                // SessionStarted arrived BEFORE this link, so the lifecycle
-                // subscriber skipped its broadcast (no conversation_id then).
-                // Now that external_id is persisted, converge every client's
-                // sidebar with the complete summary — this also corrects a
-                // Branch B upsert above that necessarily carried
-                // `external_id: null`. Root-only via the helper.
-                crate::commands::conversations::emit_conversation_upsert(&emitter, &db.conn, cid)
-                    .await;
-            } else if cid_opt.is_some() {
-                tracing::info!(
-                    "[manager] send_prompt_linked: conversation linked but \
-                     external_id not yet on state (conn={conn_id}); lifecycle \
-                     subscriber will catch up when SessionStarted arrives"
-                );
             }
         }
 
@@ -4532,7 +4635,7 @@ mod tests {
         )
         .await
         .unwrap();
-        conversation_service::update_external_id(&db.conn, pre.id, "session-S1".into())
+        conversation_service::bind_external_id(&db.conn, pre.id, "session-S1".into())
             .await
             .unwrap();
 
@@ -6383,7 +6486,7 @@ mod tests {
         )
         .await
         .unwrap();
-        conversation_service::update_external_id(&db.conn, c1.id, "session-S1".into())
+        conversation_service::bind_external_id(&db.conn, c1.id, "session-S1".into())
             .await
             .unwrap();
         conversation::Entity::find_by_id(c1.id)
@@ -6659,7 +6762,7 @@ mod tests {
         let db = test_helpers::fresh_in_memory_db().await;
         let folder_id = test_helpers::seed_folder(&db, "/tmp/fork-stale-binding").await;
         let c1 = seed_forkable(&db, folder_id, Some("Binding changed")).await;
-        conversation_service::update_external_id(&db.conn, c1.id, "session-S3".into())
+        conversation_service::bind_external_id(&db.conn, c1.id, "session-S3".into())
             .await
             .unwrap();
 
