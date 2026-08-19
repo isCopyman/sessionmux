@@ -14813,8 +14813,13 @@ wire_api = "chat"
                 assert_eq!(crate::parsers::qoder::resolve_qoder_config_dir(), relocated);
                 // `resolve_qoder_home` is unaffected — it backs the SEPARATE
                 // shared `.agents` store, which does not move with
-                // `QODER_CONFIG_DIR`.
-                assert_eq!(crate::parsers::qoder::resolve_qoder_home(), tmp.path());
+                // `QODER_CONFIG_DIR`. Compare against `dirs::home_dir()`, not
+                // the pinned `HOME`: on Windows the OS home comes from
+                // `USERPROFILE`, so the `HOME` pin only bites on Unix.
+                assert_eq!(
+                    crate::parsers::qoder::resolve_qoder_home(),
+                    dirs::home_dir().unwrap_or_default()
+                );
             },
         );
     }
