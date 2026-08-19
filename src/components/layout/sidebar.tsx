@@ -81,6 +81,7 @@ import {
   type CollectionTreeHandle,
 } from "@/components/collections/collection-tree"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
+import { useCollectionStore } from "@/stores/collection-store"
 
 // Keyboard-shortcut hint at the trailing edge of the New chat / Search rows.
 // Mirrors the folder count badge exactly — same chip (0.9375rem height,
@@ -373,6 +374,24 @@ export function Sidebar() {
       const root = allFolders.find((folder) => folder.id === rootFolderId)
       if (!root) return
       openConversations()
+      openNewConversationTab(root.id, root.path)
+    },
+    [allFolders, openConversations, openNewConversationTab]
+  )
+
+  const handleNewSessionInCollection = useCallback(
+    (collectionId: number) => {
+      const collection = useCollectionStore
+        .getState()
+        .items.find((item) => item.id === collectionId)
+      const rootFolderId = collection?.root_folder_id
+      if (rootFolderId == null) return
+      const root = allFolders.find((folder) => folder.id === rootFolderId)
+      if (!root) return
+      openConversations()
+      // The tab opens as a draft with conversationId: null — the DB row only
+      // exists after the first send, so there is no id here to file into the
+      // Collection via assignConversationsToCollection yet.
       openNewConversationTab(root.id, root.path)
     },
     [allFolders, openConversations, openNewConversationTab]
@@ -691,6 +710,7 @@ export function Sidebar() {
           onOpenSession={handleOpenCollectionSession}
           onOpenSessionInSplit={handleOpenCollectionSessionInSplit}
           onNewSession={handleNewSessionAtPath}
+          onNewSessionInCollection={handleNewSessionInCollection}
           onOpenScope={(scope) => {
             setSessionCenterCollection(scope)
             setSessionCenterOpen(true)

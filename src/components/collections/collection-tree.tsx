@@ -198,6 +198,8 @@ interface CollectionTreeProps {
   ) => void
   /** Start a Session in the chosen canonical Path. */
   onNewSession?: (rootFolderId: number) => void
+  /** Start a Session filed under the chosen Collection. */
+  onNewSessionInCollection?: (collectionId: number) => void
 }
 
 export interface CollectionTreeHandle {
@@ -221,6 +223,25 @@ function descendants(items: CollectionInfo[], id: number) {
     }
   }
   return result
+}
+
+/** Walk the parent chain from a Collection up to the first ancestor (itself
+ * included) owned by a canonical Path. The visited-id set bails out on
+ * parent cycles instead of looping forever. */
+export function nearestRootFolderId(
+  items: CollectionInfo[],
+  collectionId: number
+): number | null {
+  const byId = new Map(items.map((item) => [item.id, item]))
+  const seen = new Set<number>()
+  let current = byId.get(collectionId)
+  while (current && !seen.has(current.id)) {
+    seen.add(current.id)
+    if (current.root_folder_id != null) return current.root_folder_id
+    current =
+      current.parent_id != null ? byId.get(current.parent_id) : undefined
+  }
+  return null
 }
 
 function orderedChildren(items: CollectionInfo[]) {
@@ -266,6 +287,7 @@ export const CollectionTree = forwardRef<
     onOpenSession,
     onOpenSessionInSplit,
     onNewSession,
+    onNewSessionInCollection,
   },
   ref
 ) {
@@ -1778,6 +1800,19 @@ export const CollectionTree = forwardRef<
                         <FolderOpen className="h-4 w-4" />
                         {t("openInSessionCenter")}
                       </ContextMenuItem>
+                      {onNewSessionInCollection &&
+                      item.root_folder_id != null ? (
+                        <ContextMenuItem
+                          onSelect={() => {
+                            if (nearestRootFolderId(items, item.id) != null) {
+                              onNewSessionInCollection(item.id)
+                            }
+                          }}
+                        >
+                          <SquarePen className="h-4 w-4" />
+                          {tConversation("newConversation")}
+                        </ContextMenuItem>
+                      ) : null}
                       <ContextMenuItem
                         onSelect={() =>
                           openEditor({ mode: "create", parentId: item.id })
@@ -1830,6 +1865,19 @@ export const CollectionTree = forwardRef<
                         <FolderOpen className="h-4 w-4" />
                         {t("openInSessionCenter")}
                       </DropdownMenuItem>
+                      {onNewSessionInCollection &&
+                      item.root_folder_id != null ? (
+                        <DropdownMenuItem
+                          onSelect={() => {
+                            if (nearestRootFolderId(items, item.id) != null) {
+                              onNewSessionInCollection(item.id)
+                            }
+                          }}
+                        >
+                          <SquarePen className="h-4 w-4" />
+                          {tConversation("newConversation")}
+                        </DropdownMenuItem>
+                      ) : null}
                       <DropdownMenuItem
                         onSelect={() =>
                           openEditor({ mode: "create", parentId: item.id })
