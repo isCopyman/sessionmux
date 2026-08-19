@@ -1850,6 +1850,7 @@
     "conversationCard": {
       "untitledConversation": "無題の会話",
       "newConversation": "新しい会話",
+      "attachToCurrentSession": "セッションに追加",
       "openRight": "右側に開く",
       "openDown": "下に開く",
       "rename": "名前を変更",

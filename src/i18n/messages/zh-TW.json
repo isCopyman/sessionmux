@@ -1850,6 +1850,7 @@
     "conversationCard": {
       "untitledConversation": "未命名會話",
       "newConversation": "新增會話",
+      "attachToCurrentSession": "添加到會話",
       "openRight": "在右側開啟",
       "openDown": "在下方開啟",
       "rename": "重新命名",

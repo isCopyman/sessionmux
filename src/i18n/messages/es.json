@@ -1850,6 +1850,7 @@
     "conversationCard": {
       "untitledConversation": "Conversación sin título",
       "newConversation": "Nueva conversación",
+      "attachToCurrentSession": "Agregar a la sesión",
       "openRight": "Abrir a la derecha",
       "openDown": "Abrir debajo",
       "rename": "Renombrar",
