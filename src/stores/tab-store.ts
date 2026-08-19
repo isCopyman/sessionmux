@@ -168,6 +168,15 @@ export interface TabStoreState {
   groupSelection: Record<string, string>
   tileByGroup: Record<string, boolean>
   /**
+   * Id of the group temporarily filling the whole pane area ("zoomed", tmux/
+   * VS Code style), or null when every group shows at its normal split rect.
+   * Unlike `groupLayout`/`tileByGroup` above, this is a pure transient
+   * view-layer focus flag — it never enters `persistGroupState`'s blob, so a
+   * restart (or a Workbench switch — see `switchWorkbench`) always starts
+   * unzoomed. See `shouldExitMaximizedGroup` for when it auto-clears.
+   */
+  maximizedGroupId: string | null
+  /**
    * Transient pane tab drag (never persisted): the dragged tab, live pointer
    * position, pane under the pointer, and optional edge-split target. The pane
    * id is null while no move/split target is active. Drives target previews and
@@ -230,6 +239,14 @@ export interface TabStoreState {
   switchTab: (tabId: string) => void
   pinTab: (tabId: string) => void
   toggleGroupTile: (groupId: string) => void
+  /** Toggle `groupId` as the maximized ("zoomed") pane: maximizing also
+   *  focuses that group's own selected tab (so the active tab is always the
+   *  visible one); re-toggling the already-maximized group restores the
+   *  normal split. No-op while unsplit. */
+  toggleGroupMaximized: (groupId: string) => void
+  /** Unconditionally clear `maximizedGroupId`, if set. Used by the Esc
+   *  shortcut and by the auto-exit guard (see `shouldExitMaximizedGroup`). */
+  exitGroupMaximize: () => void
   splitTab: (
     tabId: string,
     direction: SplitDirection,
@@ -1894,6 +1911,7 @@ function initialTabState() {
     draftRetargetRequests: [] as DraftRetargetRequest[],
     tabsHydrated: false,
     ...readPersistedGroupState(activeWorkbenchId),
+    maximizedGroupId: null as string | null,
     tabDrag: null as TabStoreState["tabDrag"],
     childSummaries: new Map<number, DbConversationSummary>(),
     tabs: [] as TabItemInternal[],
@@ -2253,6 +2271,30 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
       tileByGroup: { ...st.tileByGroup, [groupId]: !st.tileByGroup[groupId] },
     })
     persistGroupState()
+  },
+
+  toggleGroupMaximized: (groupId) => {
+    const st = get()
+    if (st.maximizedGroupId === groupId) {
+      set({ maximizedGroupId: null })
+      return
+    }
+    // Nothing to maximize into while unsplit — the single group already
+    // fills the whole area.
+    if (leafIds(st.groupLayout).length < 2) return
+    set({ maximizedGroupId: groupId })
+    // Maximizing a pane the user didn't already have focused (e.g. clicking
+    // its button directly from a sibling pane) must also focus it — otherwise
+    // the active tab would keep pointing at a now-hidden group, and the
+    // auto-exit guard would immediately un-maximize what was just set.
+    const targetTabId = st.groupSelection[groupId]
+    if (targetTabId && targetTabId !== st.activeTabId) {
+      focusTab(targetTabId)
+    }
+  },
+
+  exitGroupMaximize: () => {
+    if (get().maximizedGroupId != null) set({ maximizedGroupId: null })
   },
 
   splitTab: (tabId, direction, opts) => {
@@ -2879,6 +2921,11 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
           tabsHydrated: false,
           rawTabs: [],
           activeTabId: null,
+          // A maximized group id is meaningless across Workbenches: group ids
+          // are per-Workbench, but the unsplit root leaf always reuses the
+          // same constant (`ROOT_GROUP_ID`), so a stale id could otherwise
+          // appear to "match" the incoming Workbench's own root group.
+          maximizedGroupId: null,
           childSummaries: new Map(),
           ...groupState,
         })
@@ -3632,6 +3679,8 @@ export function useTabActions() {
       switchTab: s.switchTab,
       pinTab: s.pinTab,
       toggleGroupTile: s.toggleGroupTile,
+      toggleGroupMaximized: s.toggleGroupMaximized,
+      exitGroupMaximize: s.exitGroupMaximize,
       splitTab: s.splitTab,
       snapTabToSplit: s.snapTabToSplit,
       moveTabToGroup: s.moveTabToGroup,
