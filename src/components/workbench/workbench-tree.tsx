@@ -18,6 +18,7 @@ import {
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 import { AgentIcon } from "@/components/agent-icon"
+import { CollaborationUnreadBadge } from "@/components/collaboration/collaboration-unread-badge"
 import { ConversationStatusDot } from "@/components/conversations/conversation-status-dot"
 
 import { Button } from "@/components/ui/button"
@@ -605,11 +606,11 @@ export function WorkbenchTree() {
                           <span className="min-w-0 flex-1 truncate">
                             {session.title}
                           </span>
-                          {session.kind === "room" &&
-                          (session.room?.unreadCount ?? 0) > 0 ? (
-                            <span className="ms-auto shrink-0 text-[10px] text-muted-foreground">
-                              {session.room?.unreadCount}
-                            </span>
+                          {session.kind === "room" ? (
+                            <CollaborationUnreadBadge
+                              count={session.room?.unreadCount ?? 0}
+                              className="ms-auto"
+                            />
                           ) : null}
                         </button>
                       )

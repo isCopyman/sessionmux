@@ -1,8 +1,13 @@
 "use client"
 
-import { useTranslations } from "next-intl"
 import { cn } from "@/lib/utils"
 
+/**
+ * Small muted unread count for a Room row in a sidebar tree. Renders
+ * nothing at count <= 0. This is the plain inline style the tree views
+ * already use; it is not the pill/avatar-overlay style, which has no
+ * current caller.
+ */
 export function CollaborationUnreadBadge({
   count,
   className,
@@ -10,19 +15,12 @@ export function CollaborationUnreadBadge({
   count: number
   className?: string
 }) {
-  const t = useTranslations("Collaboration")
   if (count <= 0) return null
-  const label = t("unreadCount", { count })
   return (
     <span
-      className={cn(
-        "inline-flex h-[1.125rem] min-w-[1.125rem] shrink-0 items-center justify-center rounded-full bg-primary px-1 text-[0.625rem] font-semibold leading-none tabular-nums text-primary-foreground",
-        className
-      )}
-      title={label}
-      aria-label={label}
+      className={cn("shrink-0 text-[10px] text-muted-foreground", className)}
     >
-      {count > 99 ? "99+" : count}
+      {count}
     </span>
   )
 }
