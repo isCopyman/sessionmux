@@ -1081,3 +1081,46 @@ describe("CollectionTree", () => {
     ).toBe(true)
   })
 })
+
+describe("nearestRootFolderId", () => {
+  const collection = (
+    id: number,
+    parentId: number | null,
+    rootFolderId: number | null
+  ): CollectionInfo => ({
+    id,
+    root_folder_id: rootFolderId,
+    parent_id: parentId,
+    name: `Collection ${id}`,
+    position: 0,
+    created_at: "2026-06-01T00:00:00.000Z",
+    updated_at: "2026-06-01T00:00:00.000Z",
+  })
+
+  it("returns a nested Collection's own canonical Path", () => {
+    expect(nearestRootFolderId(h.items, 11)).toBe(7)
+  })
+
+  it("walks up to the nearest ancestor owned by a canonical Path", () => {
+    const items = [
+      collection(1, null, 7),
+      collection(2, 1, null),
+      collection(3, 2, null),
+    ]
+    expect(nearestRootFolderId(items, 3)).toBe(7)
+  })
+
+  it("returns null when no ancestor owns a canonical Path", () => {
+    const items = [collection(1, null, null), collection(2, 1, null)]
+    expect(nearestRootFolderId(items, 2)).toBeNull()
+  })
+
+  it("stops on a parent cycle instead of looping", () => {
+    const items = [collection(1, 2, null), collection(2, 1, null)]
+    expect(nearestRootFolderId(items, 1)).toBeNull()
+  })
+
+  it("returns null for an unknown Collection id", () => {
+    expect(nearestRootFolderId(h.items, 999)).toBeNull()
+  })
+})
