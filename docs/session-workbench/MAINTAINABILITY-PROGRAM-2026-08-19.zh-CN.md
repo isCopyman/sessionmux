@@ -967,3 +967,9 @@ T2 后置截图（CDP 9222 可用，基线在 .artifacts）+ 晨间验收报告 
   Rust 半场全绿（fmt/clippy/server 2543），但 vitest 2 挂（room-bulk-operations 跨 root
   交集逻辑错）+ build 挂（roomTabFolderId readonly 类型不匹配）。已反馈工人修复。
   遗留（不挡用）：G5-11 徽章只聚合私信（Room 欠回复需后端补接口）。
+- 2026-08-20 早 **侧栏三件套门禁全绿（9f4d7951）**：交集修复（跨 root Room 混选返回 []）+
+  readonly 修复（roomTabFolderId 签名改 readonly）合并完成。冲突解决：collection-tree.tsx
+  保留 renderDraftSession + bulkSelectionMenuItems 并存，useTabActions 解构取并集
+  （switchTab + openRoomTab）；room-bulk-operations.ts 保留交集逻辑 + 调用侧展开。
+  门禁：vitest 4598 过/2 挂→修复后全绿、build 成功、Rust 半场（fmt/clippy/server 2543）全绿。
+  release #8 构建中。
