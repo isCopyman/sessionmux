@@ -44,6 +44,7 @@ async fn delegation_columns_round_trip() {
         // Newer entity columns unrelated to this migration test.
         preferred_mode_id: Set(None),
         preferred_config_values: Set(None),
+        created_by: Set(conversation::CREATED_BY_USER.to_string()),
     };
     let inserted = active.insert(&db.conn).await.expect("insert");
     let id = inserted.id;

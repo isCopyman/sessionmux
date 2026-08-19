@@ -146,7 +146,8 @@ impl HostSelectorRuntime for ManagedSelectorRuntime {
             .find_connection_by_conversation_id(conversation_id)
             .await?;
         let state = self.manager.get_state(&connection_id).await?;
-        state.read().await.config_options.clone()
+        let guard = state.read().await;
+        guard.config_options.clone()
     }
 
     async fn apply_config_option(
