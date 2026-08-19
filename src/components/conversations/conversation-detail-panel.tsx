@@ -2723,9 +2723,7 @@ export function ConversationDetailPanel() {
     const prevGroupLayout = prevGroupLayoutForMaximizeRef.current
     prevGroupLayoutForMaximizeRef.current = groupLayout
     const activeGroupId =
-      activeTabId != null
-        ? groupOfTab(groupOf, groupLayout, activeTabId)
-        : null
+      activeTabId != null ? groupOfTab(groupOf, groupLayout, activeTabId) : null
     if (
       shouldExitMaximizedGroup({
         maximizedGroupId,

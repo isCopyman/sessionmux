@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest"
 import { splitGroup, type LayoutNode } from "./tab-group-layout"
-import { isMaximizeRestoreEscape, shouldExitMaximizedGroup } from "./pane-maximize"
+import {
+  isMaximizeRestoreEscape,
+  shouldExitMaximizedGroup,
+} from "./pane-maximize"
 
 const leaf = (id: string): LayoutNode => ({ type: "group", id })
 

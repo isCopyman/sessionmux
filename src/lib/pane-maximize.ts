@@ -35,7 +35,9 @@ export function shouldExitMaximizedGroup({
   if (!maximizedGroupId) return false
   if (groupLayout !== prevGroupLayout) return true
   if (!leafIds(groupLayout).includes(maximizedGroupId)) return true
-  return activeGroupId !== maximizedGroupId
+  // No active tab is no signal, not a mismatch — transient nulls during tab
+  // switches/closes must not yank the zoom.
+  return activeGroupId !== null && activeGroupId !== maximizedGroupId
 }
 
 /**
