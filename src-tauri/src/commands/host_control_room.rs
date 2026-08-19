@@ -1,7 +1,7 @@
 //! Room lifecycle for Codeg's progressive Host Control MCP.
 //!
 //! The caller is the token-derived current Session. Creating a room always
-//! includes that Session as owner. Messaging lives on the dedicated MCP tools
+//! includes that Session as host. Messaging lives on the dedicated MCP tools
 //! `list_rooms` / `read_room` / `post_room`, not on this gateway.
 
 use std::sync::Arc;
@@ -67,7 +67,7 @@ impl RoomHostControl {
             capabilities.extend([
                 capability(
                     "room.create",
-                    "Create a shared Room. The calling Session becomes owner and is always a member. Pass at least one other Session id. After create, post with post_room, not send_message.",
+                    "Create a shared Room. The calling Session becomes the host and is always a member. Pass at least one other Session id. After create, post with post_room, not send_message.",
                     HostControlAccessLevel::Write,
                     json!({
                         "type": "object",
