@@ -47,6 +47,30 @@ guessing.
   landing is written there alongside the work itself. After a context
   compaction the ledger, not anyone's memory, is the source of truth.
 
+## Fleet hygiene
+
+A batch of executors is a batch of sidebar rows. File them from the
+start, or the panel is a junk drawer by day two.
+
+- Open ONE Collection per run, named after the task ("auth-migration
+  audit", not "executor pool"). File every executor there at creation
+  time — `session.create` takes `collection_id`, and
+  `collection.add_session` fixes stragglers after the fact. A Session
+  has one primary Collection; adding moves it, never copies.
+- A big run with separate workstreams can nest one sub-Collection per
+  workstream under the run's Collection — Collections form a tree. One
+  level is usually enough; a deep tree is as unreadable as a flat pile.
+- When an executor's package lands and is verified, archive its Session.
+  Archived Sessions keep their transcripts but drop out of the default
+  panel view ("Show archived" brings them back), so finished work stops
+  competing with live work for the human's attention. Check `codeg_help`
+  for an archive action; if none is advertised, archiving is the human's
+  panel action — name the finished Sessions in your wrap-up report and
+  ask for the archive there.
+- Never improvise a hierarchy on the Session `parent_id` field. It is a
+  legacy import field from native transcripts, not a filing mechanism.
+  The Collection tree is the only place a belongs-to relationship lives.
+
 ## Communication
 
 - Assignments and reports are letters with `expects_reply=true` (the

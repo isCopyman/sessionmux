@@ -58,6 +58,8 @@ persona packs, subscription filters, or role names as `@` addresses.
 - Research / report writing pipeline: `references/research-writing.md`
 - Expensive reasoning lead, cheap deterministic executors:
   `references/lead-executor-split.md`
+- Read-only second pair of eyes on a key executor:
+  `references/shadow-auditor.md`
 - Long-form or narrative writing: `references/long-form-writing.md`
 - Final convergence meeting on a draft: `references/line-review.md`
 - A saved project or user pattern: read that file; fill missing fields from
