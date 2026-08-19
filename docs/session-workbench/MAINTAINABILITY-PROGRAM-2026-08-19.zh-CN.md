@@ -778,3 +778,15 @@ T2 后置截图（CDP 9222 可用，基线在 .artifacts）+ 晨间验收报告 
   目录入 @ 的研究同源，合并为一份建议随侦察报告回来再定。⑦ 用户重贴两张
   22:08/22:11 截图均为打磨前旧 UI，所指问题已随 release #3 修复；composer 区
   "空荡"观感留待新构建真机复查，残留并入下一轮 UI 打磨。
+- 2026-08-20 凌晨 **ACP 绑定审计验收合并（bc0aeaf1）+ 修复即刻派工**：审计判定
+  **两洞俱在**——我方就是上游修复前的原始形态（update_external_id 裸写覆盖=
+  fbb0ca06 删掉的旧函数逐字节同款；Branch A 先宣告后绑定、失败后状态焊死、二次
+  调用跳过绑定块直发 turn；session_event_subscriber `let _ =` 丢弃返回值后无条件
+  发 pending_prompt 为三处最裸）。编排抽验三处承重论断全属实。意外资产三件：
+  自定义 agent 靠 read_chain_in+continues_from 对历史失联**半免疫**（原生 agent
+  全裸）；fork 方向与上游相反 → 上游 A5 竞态**结构性免疫**；persist_fork_outcome
+  / fork_session 已有"抢锁→校验→INSERT"事务与取消保护模板可直接抄。确认我方
+  DbError::Conflict（CAS 可重试）与上游同名变体语义相反，修复禁用该变体（新设
+  ExternalIdTaken 类命名）。7 条修复设计验收通过（含"设计 1 不带设计 7 会把自定义
+  agent 重启误拆两会话"的交叉依赖），已派 w-acp-binding-fix（Sonnet）按报告实施，
+  与在跑的标题同步工人同文件冲突归编排合并时解。
