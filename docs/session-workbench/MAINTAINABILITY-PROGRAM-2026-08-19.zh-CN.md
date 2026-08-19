@@ -962,3 +962,8 @@ T2 后置截图（CDP 9222 可用，基线在 .artifacts）+ 晨间验收报告 
   （7755a630，新建会话旁加建群入口+成员选择对话框+i18n 10 语言）；G5-12 Room 进多选
   （8ad05edc，Room 行加复选框+混选批量操作，归档/建群对 Room 置灰）。G5-11（欠我回复）
   未开始，已催进度。
+- 2026-08-20 早 **侧栏三件套合并（5df48f97）但门禁红**：G5-5/G5-11/G5-12 已合并，
+  冲突已解决（collection-tree.tsx 的 renderDraftSession + bulkSelectionMenuItems 并存）。
+  Rust 半场全绿（fmt/clippy/server 2543），但 vitest 2 挂（room-bulk-operations 跨 root
+  交集逻辑错）+ build 挂（roomTabFolderId readonly 类型不匹配）。已反馈工人修复。
+  遗留（不挡用）：G5-11 徽章只聚合私信（Room 欠回复需后端补接口）。
