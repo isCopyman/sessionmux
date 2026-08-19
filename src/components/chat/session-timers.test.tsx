@@ -1,4 +1,10 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react"
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react"
 import { NextIntlClientProvider } from "next-intl"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -69,10 +75,9 @@ describe("SessionTimers", () => {
     })
   })
 
-  it("edits, pauses, and stops the same durable timer", async () => {
+  it("edits and pauses the same durable timer", async () => {
     listSessionTimers.mockResolvedValue([timer])
     updateSessionTimer.mockResolvedValue(timer)
-    deleteSessionTimer.mockResolvedValue(undefined)
     renderTimers()
     fireEvent.click(screen.getByRole("button", { name: /idle continue/i }))
     await screen.findByText(timer.promptText)
@@ -101,8 +106,50 @@ describe("SessionTimers", () => {
         expect.objectContaining({ enabled: false })
       )
     )
+  })
+
+  it("asks for confirmation before deleting a timer", async () => {
+    listSessionTimers.mockResolvedValue([timer])
+    renderTimers()
+    fireEvent.click(screen.getByRole("button", { name: /idle continue/i }))
+    await screen.findByText(timer.promptText)
 
     fireEvent.click(screen.getByTitle("Delete"))
+    const dialog = await screen.findByRole("alertdialog")
+    expect(within(dialog).getByText("Delete this timer?")).toBeTruthy()
+    expect(
+      within(dialog).getByText(new RegExp(timer.promptText))
+    ).toBeTruthy()
+    // The dialog only asks — nothing is deleted until confirmed.
+    expect(deleteSessionTimer).not.toHaveBeenCalled()
+  })
+
+  it("keeps the timer when the delete confirmation is canceled", async () => {
+    listSessionTimers.mockResolvedValue([timer])
+    renderTimers()
+    fireEvent.click(screen.getByRole("button", { name: /idle continue/i }))
+    await screen.findByText(timer.promptText)
+
+    fireEvent.click(screen.getByTitle("Delete"))
+    const dialog = await screen.findByRole("alertdialog")
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }))
+
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull())
+    expect(deleteSessionTimer).not.toHaveBeenCalled()
+    expect(screen.getByText(timer.promptText)).toBeTruthy()
+  })
+
+  it("deletes the timer once the confirmation is accepted", async () => {
+    listSessionTimers.mockResolvedValue([timer])
+    deleteSessionTimer.mockResolvedValue(undefined)
+    renderTimers()
+    fireEvent.click(screen.getByRole("button", { name: /idle continue/i }))
+    await screen.findByText(timer.promptText)
+
+    fireEvent.click(screen.getByTitle("Delete"))
+    const dialog = await screen.findByRole("alertdialog")
+    fireEvent.click(within(dialog).getByRole("button", { name: "Delete" }))
+
     await waitFor(() =>
       expect(deleteSessionTimer).toHaveBeenCalledWith(7, "t1")
     )

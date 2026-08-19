@@ -3442,6 +3442,8 @@
         "pause": "Suspendre",
         "resume": "Reprendre",
         "delete": "Supprimer",
+        "deleteTitle": "Supprimer cette minuterie ?",
+        "deleteDescription": "« {prompt} » ne sera plus déclenché. Cette action est irréversible.",
         "edit": "Modifier",
         "save": "Enregistrer",
         "cancel": "Annuler",

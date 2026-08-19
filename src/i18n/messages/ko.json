@@ -3442,6 +3442,8 @@
         "pause": "일시정지",
         "resume": "재개",
         "delete": "삭제",
+        "deleteTitle": "이 타이머를 삭제할까요?",
+        "deleteDescription": "\"{prompt}\" 알림이 더 이상 울리지 않습니다. 이 작업은 되돌릴 수 없습니다.",
         "edit": "편집",
         "save": "저장",
         "cancel": "취소",

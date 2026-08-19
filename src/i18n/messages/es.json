@@ -3442,6 +3442,8 @@
         "pause": "Pausar",
         "resume": "Reanudar",
         "delete": "Eliminar",
+        "deleteTitle": "¿Eliminar este temporizador?",
+        "deleteDescription": "«{prompt}» dejará de activarse. Esta acción no se puede deshacer.",
         "edit": "Editar",
         "save": "Guardar",
         "cancel": "Cancelar",

@@ -3442,6 +3442,8 @@
         "pause": "一時停止",
         "resume": "再開",
         "delete": "削除",
+        "deleteTitle": "このタイマーを削除しますか？",
+        "deleteDescription": "「{prompt}」の催促は今後行われません。この操作は取り消せません。",
         "edit": "編集",
         "save": "保存",
         "cancel": "キャンセル",

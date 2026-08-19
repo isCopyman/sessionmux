@@ -3442,6 +3442,8 @@
         "pause": "Pausieren",
         "resume": "Fortsetzen",
         "delete": "Löschen",
+        "deleteTitle": "Diesen Timer löschen?",
+        "deleteDescription": "„{prompt}“ wird nicht mehr ausgelöst. Diese Aktion kann nicht rückgängig gemacht werden.",
         "edit": "Bearbeiten",
         "save": "Speichern",
         "cancel": "Abbrechen",

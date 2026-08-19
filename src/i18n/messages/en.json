@@ -3442,6 +3442,8 @@
         "pause": "Pause",
         "resume": "Resume",
         "delete": "Delete",
+        "deleteTitle": "Delete this timer?",
+        "deleteDescription": "This will stop \"{prompt}\" from firing again. This action cannot be undone.",
         "edit": "Edit",
         "save": "Save",
         "cancel": "Cancel",
