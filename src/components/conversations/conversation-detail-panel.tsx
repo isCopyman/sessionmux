@@ -1832,9 +1832,11 @@ const ConversationTabView = memo(function ConversationTabView({
   // Goal pause/clear is a live, owner-only action, so decide availability once
   // here (where the connection is owned) rather than in the deep goal card.
   // `null` when the session isn't live or the user is a viewer → the card hides
-  // its buttons. Codex is the only agent that produces goal cards, so no
-  // agent-type gate is needed. Provided only around the main panel's list; the
-  // read-only sub-agent dialog renders its own MessageListView with no provider.
+  // its buttons. Codex is the only agent that produces goal cards with
+  // pause/clear, so no agent-type gate is needed for those (resume below IS
+  // codex-gated — it speaks the `/goal` prompt protocol). Provided only around
+  // the main panel's list; the read-only sub-agent dialog renders its own
+  // MessageListView with no provider.
   // The adapter's ADVERTISED goal-control vocabulary (fail-closed: no
   // controls until the snapshot for this exact connectionId reports a known
   // one — see `useAdvertisedGoalActions`). `connStatus` is what brings the
@@ -1842,6 +1844,7 @@ const ConversationTabView = memo(function ConversationTabView({
   // connection id while `initialize` is still in flight, and the vocabulary
   // isn't decided until that response lands.
   const goalActions = useAdvertisedGoalActions(conn.connectionId, connStatus)
+  const tGoal = useTranslations("Folder.chat.contentParts.goal")
 
   const goalControlValue = useMemo<GoalControlValue>(() => {
     const live =
@@ -1854,6 +1857,25 @@ const ConversationTabView = memo(function ConversationTabView({
             void acpActions.goalControl(tabId, action)
           }
         : null,
+      // Resume re-issues the objective as a `/goal` prompt through the
+      // message queue — codex interprets the slash text, no adapter goal
+      // action exists for it. Unlike pause/clear it needs no live
+      // connection: the durable queue holds the prompt and flushes it when
+      // the session can take one (same guarantee the session-failure retry
+      // relies on), so the only gate is ownership. Codex-only: claude's
+      // neutral goal extension has no `/goal` prompt semantics, and sending
+      // the literal text there would just be a confusing user message.
+      onGoalResume:
+        !conn.isViewer && selectedAgent === "codex"
+          ? (objective) => {
+              const text = `/goal ${objective}`
+              mqEnqueue(
+                { blocks: [{ type: "text", text }], displayText: text },
+                selectedModeId
+              )
+              toast.success(tGoal("resumeQueued"))
+            }
+          : null,
       actions: goalActions,
     }
   }, [
@@ -1863,6 +1885,10 @@ const ConversationTabView = memo(function ConversationTabView({
     acpActions,
     tabId,
     goalActions,
+    selectedAgent,
+    mqEnqueue,
+    selectedModeId,
+    tGoal,
   ])
 
   // AIR session-failure strip actions. `retry` re-submits the LAST user

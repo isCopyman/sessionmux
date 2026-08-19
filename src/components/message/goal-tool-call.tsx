@@ -13,7 +13,7 @@ import {
 import { Shimmer } from "@/components/ai-elements/shimmer"
 import { normalizeToolName } from "@/lib/tool-call-normalization"
 import { cn } from "@/lib/utils"
-import { ChevronRightIcon, PauseIcon, XIcon } from "lucide-react"
+import { ChevronRightIcon, PauseIcon, PlayIcon, XIcon } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { useGoalControl } from "./goal-control-context"
 
@@ -169,6 +169,19 @@ function statusTone(
   }
 }
 
+/** Goal states that stopped without completing, where re-issuing the `/goal`
+ *  prompt is a meaningful "continue": an explicit pause, an interruption
+ *  (blocked/failed), or a budget/usage stop the user may have since raised
+ *  the headroom for. Active goals are running; complete ones are done. */
+const RESUMABLE_GOAL_STATUSES: ReadonlySet<string> = new Set([
+  "paused",
+  "blocked",
+  "failed",
+  "limited",
+  "usage_limited",
+  "budget_limited",
+])
+
 function goalStatusLabel(
   status: string | null,
   normalizedStatus: string | null,
@@ -248,9 +261,12 @@ function GoalCard({
   // dialog), AND only when the adapter's advertised action vocabulary carries
   // the action — claude's neutral goal extension offers no "pause", so its
   // cards show Clear alone. Pause applies to an active goal; Clear to active
-  // OR paused. No "resume" control — resuming is re-issuing the `/goal`
-  // prompt.
-  const { onGoalControl, actions: goalActions } = useGoalControl()
+  // OR paused. Resume is different: codex has no resume control, so resuming
+  // re-issues the objective as a `/goal` prompt through the message queue —
+  // a client-side send that the queue holds even across a disconnect, so it
+  // is offered whenever the user owns the session (not gated on liveness or
+  // on the adapter vocabulary).
+  const { onGoalControl, onGoalResume, actions: goalActions } = useGoalControl()
   const showPause =
     Boolean(onGoalControl) &&
     goalActions.includes("pause") &&
@@ -259,6 +275,11 @@ function GoalCard({
     Boolean(onGoalControl) &&
     goalActions.includes("clear") &&
     (normalizedStatus === "active" || normalizedStatus === "paused")
+  const showResume =
+    Boolean(onGoalResume) &&
+    goal.objective !== null &&
+    normalizedStatus !== null &&
+    RESUMABLE_GOAL_STATUSES.has(normalizedStatus)
 
   return (
     <Collapsible open={bodyOpen} onOpenChange={setBodyOpen} className="w-full">
@@ -370,8 +391,20 @@ function GoalCard({
               )}
             </div>
 
-            {(showPause || showClear) && (
+            {(showPause || showClear || showResume) && (
               <div className="flex flex-wrap items-center gap-2 pt-1">
+                {showResume && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (goal.objective) onGoalResume?.(goal.objective)
+                    }}
+                    className="inline-flex items-center gap-1.5 rounded-md border border-border/60 px-2.5 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                  >
+                    <PlayIcon aria-hidden="true" className="size-3" />
+                    {t("resume")}
+                  </button>
+                )}
                 {showPause && (
                   <button
                     type="button"

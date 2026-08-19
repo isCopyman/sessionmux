@@ -30,18 +30,29 @@ export interface GoalControlValue {
    */
   onGoalControl: ((action: GoalControlAction) => void) | null
   /**
+   * Re-issue the goal's objective as a fresh `/goal` prompt through the
+   * message queue — the resume affordance for a paused/stopped goal. `null`
+   * on the same surfaces as `onGoalControl`, plus any non-codex session:
+   * codex interprets the `/goal` slash text, while claude's neutral goal
+   * extension has no prompt-level equivalent, so a literal "/goal …" prompt
+   * there would just be a confusing user message.
+   */
+  onGoalResume: ((objective: string) => void) | null
+  /**
    * The action vocabulary this connection's adapter actually offers — the
    * advertised `_meta.goal.actions` for neutral-goal adapters (claude 0.66+
    * offers ["set","clear"], NO pause; codex 1.2+ all four), else the legacy
    * default (snapshot `goal_actions`). The card additionally gates each
    * button on membership here, so a claude session never offers a pause the
-   * adapter would reject.
+   * adapter would reject. Resume is NOT gated on this: it is a client-side
+   * prompt re-issue, not an adapter action.
    */
   actions: readonly string[]
 }
 
 const GoalControlContext = createContext<GoalControlValue>({
   onGoalControl: null,
+  onGoalResume: null,
   actions: LEGACY_GOAL_ACTIONS,
 })
 
