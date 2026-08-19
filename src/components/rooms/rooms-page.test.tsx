@@ -284,7 +284,10 @@ describe("RoomWorkspace", () => {
     renderRoom()
 
     expect(await screen.findByText("newest post")).toBeTruthy()
-    expect(screen.getByText("Uncategorized · 1 members")).toBeTruthy()
+    // The member count is its own <button> inside the subtitle now, so the
+    // line's text is split across elements — match the two halves.
+    expect(screen.getByText(/Uncategorized ·/)).toBeTruthy()
+    expect(screen.getByRole("button", { name: "1 members" })).toBeTruthy()
     expect(screen.queryByText("You host this room")).toBeNull()
     expect(screen.queryByText("owner")).toBeNull()
     expect(screen.queryByRole("button", { name: "@human" })).toBeNull()
@@ -302,8 +305,8 @@ describe("RoomWorkspace", () => {
     api.getCollaborationRoomTimeline.mockResolvedValue(timeline([event()]))
     renderRoom()
 
-    expect(await screen.findByText("Research · 1 members")).toBeTruthy()
-    expect(screen.queryByText("Uncategorized · 1 members")).toBeNull()
+    expect(await screen.findByText(/Research ·/)).toBeTruthy()
+    expect(screen.queryByText(/Uncategorized ·/)).toBeNull()
   })
 
   it("highlights the row of a message that mentions @human", async () => {
@@ -745,8 +748,6 @@ describe("RoomWorkspace", () => {
       )
     })
     expect(api.refreshCatalog).toHaveBeenCalled()
-    await waitFor(() =>
-      expect(screen.queryByRole("alertdialog")).toBeNull()
-    )
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull())
   })
 })

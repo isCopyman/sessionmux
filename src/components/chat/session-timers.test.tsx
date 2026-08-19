@@ -117,9 +117,7 @@ describe("SessionTimers", () => {
     fireEvent.click(screen.getByTitle("Delete"))
     const dialog = await screen.findByRole("alertdialog")
     expect(within(dialog).getByText("Delete this timer?")).toBeTruthy()
-    expect(
-      within(dialog).getByText(new RegExp(timer.promptText))
-    ).toBeTruthy()
+    expect(within(dialog).getByText(new RegExp(timer.promptText))).toBeTruthy()
     // The dialog only asks — nothing is deleted until confirmed.
     expect(deleteSessionTimer).not.toHaveBeenCalled()
   })
