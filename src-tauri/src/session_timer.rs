@@ -594,6 +594,20 @@ mod tests {
         )
         .await
         .unwrap();
+        // Debt counts only cover embedded deliveries — a letter still in the
+        // queue is not yet the Session's forgotten debt.
+        sea_orm::ConnectionTrait::execute(
+            &db.conn,
+            sea_orm::Statement::from_sql_and_values(
+                sea_orm::DatabaseBackend::Sqlite,
+                "UPDATE collaboration_delivery \
+                 SET state = 'embedded', embedded_turn_ref = 'turn-debt-1' \
+                 WHERE target_conversation_id = ?",
+                vec![conversation_id.into()],
+            ),
+        )
+        .await
+        .unwrap();
         // An outbound await is not a debt and must not appear.
         crate::db::service::collaboration_service::send(
             &db.conn,

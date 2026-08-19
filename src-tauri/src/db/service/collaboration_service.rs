@@ -2472,7 +2472,7 @@ pub(crate) async fn open_obligation_digest(
              JOIN collaboration_event e ON e.id = d.event_id \
              WHERE d.target_conversation_id = ? \
                AND d.obligation_state = 'awaiting_reply' \
-               AND d.state <> 'dismissed' AND d.state <> 'failed'",
+               AND d.state = 'embedded'",
             vec![conversation_id.into()],
         ))
         .await?
@@ -2499,7 +2499,7 @@ pub(crate) async fn open_obligation_digest(
                  JOIN collaboration_event e ON e.id = d.event_id \
                  WHERE d.target_conversation_id = ? \
                    AND d.obligation_state = 'awaiting_reply' \
-                   AND d.state <> 'dismissed' AND d.state <> 'failed' \
+                   AND d.state = 'embedded' \
                  ORDER BY d.created_at ASC, d.rowid ASC \
                  LIMIT {MAX_OBLIGATION_NOTE_LINES}"
             ),
@@ -2545,6 +2545,11 @@ pub(crate) async fn open_obligation_digest(
 /// only, never bodies. Nothing is claimed or transitioned: the note is
 /// recomputed from the ledger each turn, so a lost or crashed dispatch simply
 /// reappears next time.
+///
+/// Only debts whose delivery is `embedded` qualify: a letter still pending,
+/// queued, or riding THIS very turn is the envelope's job — restating it in
+/// the same prompt would say "you owe a reply" in the same breath as handing
+/// over the letter.
 pub(crate) async fn open_obligation_note_for_turn(
     conn: &DatabaseConnection,
     conversation_id: i32,
@@ -3444,6 +3449,23 @@ mod tests {
         letter.expects_reply = true;
         let sent = send(&db.conn, letter).await.unwrap();
 
+        assert!(
+            open_obligation_note_for_turn(&db.conn, target)
+                .await
+                .unwrap()
+                .is_none(),
+            "a letter that never completed a delivery is the envelope's job, not the note's"
+        );
+        db.conn
+            .execute(statement(
+                "UPDATE collaboration_delivery \
+                 SET state = 'embedded', embedded_turn_ref = 'turn-note-1' \
+                 WHERE target_conversation_id = ?",
+                vec![target.into()],
+            ))
+            .await
+            .unwrap();
+
         let note = open_obligation_note_for_turn(&db.conn, target)
             .await
             .unwrap()
@@ -3453,7 +3475,7 @@ mod tests {
         };
         assert!(text.contains("Fix the parser"));
         assert!(text.contains(&sent.event_id));
-        assert!(text.contains("未读"), "the letter never reached a turn yet");
+        assert!(text.contains("未读"), "embedded but never read stays 未读");
         assert!(
             !text.contains("body must stay in the ledger"),
             "titles only, never bodies"
@@ -3514,6 +3536,15 @@ mod tests {
         )
         .await
         .expect("post");
+        db.conn
+            .execute(statement(
+                "UPDATE collaboration_delivery \
+                 SET state = 'embedded', embedded_turn_ref = 'turn-note-2' \
+                 WHERE target_conversation_id = ?",
+                vec![target.into()],
+            ))
+            .await
+            .unwrap();
         let note = open_obligation_note_for_turn(&db.conn, target)
             .await
             .unwrap()
@@ -3590,6 +3621,15 @@ mod tests {
             "the error points at the Room channel: {err}"
         );
 
+        db.conn
+            .execute(statement(
+                "UPDATE collaboration_delivery \
+                 SET state = 'embedded', embedded_turn_ref = 'turn-room-debt' \
+                 WHERE target_conversation_id = ?",
+                vec![target.into()],
+            ))
+            .await
+            .unwrap();
         let debt = open_obligation_digest(&db.conn, target).await.unwrap();
         assert_eq!(
             debt.room_mentions_owed, 1,
