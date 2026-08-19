@@ -20,10 +20,10 @@ import {
   ChevronDown,
   ChevronRight,
   GitBranch,
+  Folder,
   FolderTree,
   ListChecks,
   Loader2,
-  MessageSquareMore,
   MessageSquareText,
   PanelTopOpen,
   PanelRightOpen,
@@ -31,10 +31,12 @@ import {
   PanelsTopLeft,
   Plus,
   Search,
+  SlidersHorizontal,
   Square,
   Trash2,
   UserRound,
   Users,
+  X,
   Zap,
 } from "lucide-react"
 import {
@@ -44,10 +46,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Skeleton } from "@/components/ui/skeleton"
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
   Command,
   CommandGroup,
@@ -123,6 +127,7 @@ import type {
   ConversationStatus,
   DbConversationSummary,
   MessageTurn,
+  WorkbenchInfo,
 } from "@/lib/types"
 import { ALL_AGENT_TYPES, STATUS_ORDER } from "@/lib/types"
 import {
@@ -245,14 +250,14 @@ function collectionDescendants(items: CollectionInfo[], rootId: number) {
 }
 
 /**
- * Shared metrics for the four facet controls, so the folder picker, the branch
- * popover and the two `Select`s read as one row of equal columns rather than
- * three unrelated widgets.
+ * Shared metrics for the narrowing facets, so the folder picker, the branch
+ * popover and the `Select`s stack as one column of equal fields inside the
+ * Filters popover rather than as unrelated widgets.
  *
  * `w-full max-w-none` is the load-bearing part: `FolderSelect`'s `field`
- * variant is content-sized (`w-auto max-w-[16rem]`), which made the row's
- * columns — and, before the search box moved to its own line, the search box
- * itself — resize every time the picked folder's name changed length.
+ * variant is content-sized (`w-auto max-w-[16rem]`), so without it the folder
+ * field would be narrower than its neighbours and would resize every time the
+ * picked folder's name changed length.
  */
 const FACET_TRIGGER_CLASS = "h-9 w-full min-w-0 max-w-none text-sm"
 
@@ -278,6 +283,39 @@ function StatusGlyph({ status }: { status?: ConversationStatus }) {
       <ConversationStatusDot status={status} />
     </span>
   )
+}
+
+/**
+ * One captioned facet in the Filters popover. The caption is a plain `span`
+ * rather than a `<label for>`: every control below it is a button, which a
+ * label cannot name, so each keeps its own `aria-label` and the caption is
+ * there for sighted users only.
+ */
+function FacetField({
+  label,
+  children,
+}: {
+  label: string
+  children: ReactNode
+}) {
+  return (
+    <div className="flex min-w-0 flex-col gap-1">
+      <span className="text-xs font-medium text-muted-foreground">{label}</span>
+      {children}
+    </div>
+  )
+}
+
+/** What the Filters popover currently narrows by, as one removable chip. */
+interface FacetChip {
+  key: string
+  /** The facet's name. The chip shows only its VALUE, so the name lives in the
+   *  tooltip and in the remove button's accessible name. */
+  label: string
+  value: string
+  icon: ReactNode
+  /** Puts this one facet back to its default. */
+  onClear: () => void
 }
 
 /** One branch the current rows actually use, and how many of them use it. */
@@ -423,12 +461,16 @@ function BranchFilterSelect({
   onChange,
   branches,
   noBranchCount,
+  onOpenChange,
   className,
 }: {
   value: BranchFilter
   onChange: (next: BranchFilter) => void
   branches: readonly BranchOption[]
   noBranchCount: number
+  /** Told on every open and close, including the ones a row selection performs
+   *  directly — Radix reports only its own dismissals. */
+  onOpenChange?: (open: boolean) => void
   className?: string
 }) {
   const t = useTranslations("Folder.sidebar.manageConversations")
@@ -443,8 +485,14 @@ function BranchFilterSelect({
         ? t("branchNone")
         : value.name
 
+  const setPopoverOpen = (next: boolean) => {
+    if (open === next) return
+    setOpen(next)
+    onOpenChange?.(next)
+  }
+
   const select = (next: BranchFilter) => {
-    setOpen(false)
+    setPopoverOpen(false)
     onChange(next)
   }
 
@@ -507,7 +555,7 @@ function BranchFilterSelect({
     <Popover
       open={open}
       onOpenChange={(next) => {
-        setOpen(next)
+        setPopoverOpen(next)
         if (!next) return
         // Each open starts from the whole tree, not from the last search. Reset
         // on the way IN rather than out: picking a row closes the popover by
@@ -637,6 +685,321 @@ function BranchFilterSelect({
   )
 }
 
+/**
+ * The five plain-`Select` facets, one component each.
+ *
+ * They live outside the dialog body purely so the Filters popover reads as a
+ * list of fields rather than three hundred lines of nested `SelectItem`s — the
+ * props are exactly what each one narrows by. Every trigger keeps its own
+ * `aria-label`: the popover's captions are `span`s, which name nothing to a
+ * screen reader.
+ */
+function CollectionFacetSelect({
+  value,
+  onChange,
+  options,
+  disabled,
+  unavailable,
+  onOpenChange,
+}: {
+  value: CollectionFilter
+  onChange: (next: CollectionFilter) => void
+  options: readonly CollectionOption[]
+  disabled: boolean
+  /** Distinct from `disabled`, which is also true while the refs load: only
+   *  this one means the server does not know Collections at all. */
+  unavailable: boolean
+  onOpenChange: (open: boolean) => void
+}) {
+  const t = useTranslations("Folder.sidebar.manageConversations")
+  return (
+    <Select
+      value={typeof value === "number" ? `collection:${value}` : value}
+      disabled={disabled}
+      onOpenChange={onOpenChange}
+      onValueChange={(next) => {
+        if (next === "all" || next === "unclassified") {
+          onChange(next)
+          return
+        }
+        onChange(Number(next.slice("collection:".length)))
+      }}
+    >
+      <SelectTrigger
+        className={FACET_SELECT_TRIGGER_CLASS}
+        aria-label={t("collectionFilterLabel")}
+        title={unavailable ? t("collectionUnavailable") : undefined}
+      >
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value="all">
+          <span className="flex items-center gap-2">
+            <FolderTree className="h-3.5 w-3.5 text-muted-foreground" />
+            {t("collectionFilterAll")}
+          </span>
+        </SelectItem>
+        <SelectItem value="unclassified">
+          <span className="flex items-center gap-2">
+            <FolderTree className="h-3.5 w-3.5 text-muted-foreground/50" />
+            {t("collectionUnclassified")}
+          </span>
+        </SelectItem>
+        {options.map(({ item, depth, path }) => (
+          <SelectItem
+            key={item.id}
+            value={`collection:${item.id}`}
+            title={path}
+          >
+            <span className="flex min-w-0 items-center gap-2">
+              <FolderTree className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              <span className="truncate">
+                {depth > 0 ? `${"· ".repeat(depth)}` : ""}
+                {item.name}
+              </span>
+            </span>
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  )
+}
+
+function WorkbenchFacetSelect({
+  value,
+  onChange,
+  workbenches,
+  counts,
+  unopenedCount,
+  activeWorkbenchId,
+  disabled,
+  unavailable,
+  onOpenChange,
+}: {
+  value: WorkbenchFilter
+  onChange: (next: WorkbenchFilter) => void
+  workbenches: readonly WorkbenchInfo[]
+  /** How many of the matched rows each workbench holds. */
+  counts: ReadonlyMap<number, number>
+  unopenedCount: number
+  activeWorkbenchId: number | null
+  disabled: boolean
+  unavailable: boolean
+  onOpenChange: (open: boolean) => void
+}) {
+  const t = useTranslations("Folder.sidebar.manageConversations")
+  return (
+    <Select
+      value={typeof value === "number" ? `workbench:${value}` : value}
+      disabled={disabled}
+      onOpenChange={onOpenChange}
+      onValueChange={(next) => {
+        if (next === "all" || next === "unopened") {
+          onChange(next)
+          return
+        }
+        onChange(Number(next.slice("workbench:".length)))
+      }}
+    >
+      <SelectTrigger
+        className={FACET_SELECT_TRIGGER_CLASS}
+        aria-label={t("workbenchFilterLabel")}
+        title={unavailable ? t("workbenchOwnershipUnavailable") : undefined}
+      >
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value="all">
+          <span className="flex items-center gap-2">
+            <PanelsTopLeft className="h-3.5 w-3.5 text-muted-foreground" />
+            {t("workbenchFilterAll")}
+          </span>
+        </SelectItem>
+        <SelectItem value="unopened">
+          <span className="flex min-w-0 items-center gap-2">
+            <PanelsTopLeft className="h-3.5 w-3.5 text-muted-foreground/50" />
+            <span className="min-w-0 flex-1 truncate">
+              {t("workbenchFilterUnopened")}
+            </span>
+            <span className="text-xs text-muted-foreground tabular-nums">
+              {unopenedCount}
+            </span>
+          </span>
+        </SelectItem>
+        {workbenches.map((workbench) => (
+          <SelectItem key={workbench.id} value={`workbench:${workbench.id}`}>
+            <span className="flex min-w-0 items-center gap-2">
+              <PanelsTopLeft className="h-3.5 w-3.5 text-muted-foreground" />
+              <span className="min-w-0 flex-1 truncate">
+                {workbench.name}
+                {workbench.id === activeWorkbenchId
+                  ? ` · ${t("currentWorkbench")}`
+                  : ""}
+              </span>
+              <span className="text-xs text-muted-foreground tabular-nums">
+                {counts.get(workbench.id) ?? 0}
+              </span>
+            </span>
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  )
+}
+
+function AgentFacetSelect({
+  value,
+  onChange,
+  onOpenChange,
+}: {
+  value: AgentType | "all"
+  onChange: (next: AgentType | "all") => void
+  onOpenChange: (open: boolean) => void
+}) {
+  const t = useTranslations("Folder.sidebar.manageConversations")
+  return (
+    <Select
+      value={value}
+      onOpenChange={onOpenChange}
+      onValueChange={(next) => onChange(next as AgentType | "all")}
+    >
+      <SelectTrigger
+        className={FACET_SELECT_TRIGGER_CLASS}
+        aria-label={t("agentFilterLabel")}
+      >
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {/* Every row — this one included — leads with a glyph, so the list (and
+            the trigger it mirrors into) has one left edge instead of two. */}
+        <SelectItem value="all">
+          <span className="flex items-center gap-2">
+            <Bot className="h-3.5 w-3.5 text-muted-foreground" />
+            {t("agentFilterAll")}
+          </span>
+        </SelectItem>
+        {ALL_AGENT_TYPES.map((at) => (
+          <SelectItem key={at} value={at}>
+            <span className="flex items-center gap-2">
+              <AgentIcon agentType={at} className="h-3.5 w-3.5" />
+              {getAgentLabel(at)}
+            </span>
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  )
+}
+
+/**
+ * Who started the Session, as opposed to which agent ran it. Applied
+ * client-side over the fetched rows: `list_all_conversations` takes no
+ * `created_by`, and a Session whose row predates the column reads as
+ * user-created (see `conversationSource`).
+ */
+function SourceFacetSelect({
+  value,
+  onChange,
+  onOpenChange,
+}: {
+  value: SessionSourceFilter
+  onChange: (next: SessionSourceFilter) => void
+  onOpenChange: (open: boolean) => void
+}) {
+  const t = useTranslations("Folder.sidebar.manageConversations")
+  return (
+    <Select
+      value={value}
+      onOpenChange={onOpenChange}
+      onValueChange={(next) => onChange(next as SessionSourceFilter)}
+    >
+      <SelectTrigger
+        className={FACET_SELECT_TRIGGER_CLASS}
+        aria-label={t("sourceFilterLabel")}
+      >
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value="all">
+          <span className="flex items-center gap-2">
+            <Users className="h-3.5 w-3.5 text-muted-foreground" />
+            {t("sourceFilterAll")}
+          </span>
+        </SelectItem>
+        <SelectItem value="user">
+          <span className="flex items-center gap-2">
+            <UserRound className="h-3.5 w-3.5 text-muted-foreground" />
+            {t("sourceFilterUser")}
+          </span>
+        </SelectItem>
+        <SelectItem value="agent">
+          <span className="flex items-center gap-2">
+            <Bot className="h-3.5 w-3.5 text-muted-foreground" />
+            {t("sourceFilterAgent")}
+          </span>
+        </SelectItem>
+        <SelectItem value="automation">
+          <span className="flex items-center gap-2">
+            <Zap className="h-3.5 w-3.5 text-muted-foreground" />
+            {t("sourceFilterAutomation")}
+          </span>
+        </SelectItem>
+      </SelectContent>
+    </Select>
+  )
+}
+
+function StatusFacetSelect({
+  value,
+  onChange,
+  onOpenChange,
+}: {
+  value: SessionStatusFilter
+  onChange: (next: SessionStatusFilter) => void
+  onOpenChange: (open: boolean) => void
+}) {
+  const t = useTranslations("Folder.sidebar.manageConversations")
+  const tStatus = useTranslations("Folder.statusLabels")
+  return (
+    <Select
+      value={value}
+      onOpenChange={onOpenChange}
+      onValueChange={(next) => onChange(next as SessionStatusFilter)}
+    >
+      <SelectTrigger
+        className={FACET_SELECT_TRIGGER_CLASS}
+        aria-label={t("statusFilterLabel")}
+      >
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value="all">
+          <span className="flex items-center gap-2">
+            {/* Statusless: the dot's grey fallback, which no real status uses
+                (see STATUS_COLORS). */}
+            <StatusGlyph />
+            {t("statusFilterAll")}
+          </span>
+        </SelectItem>
+        {STATUS_ORDER.map((s) => (
+          <SelectItem key={s} value={s}>
+            <span className="flex items-center gap-2">
+              <StatusGlyph status={s} />
+              {tStatus(s)}
+            </span>
+          </SelectItem>
+        ))}
+        <SelectItem value="archived">
+          <span className="flex items-center gap-2">
+            <Archive className="h-3.5 w-3.5 text-muted-foreground" />
+            {t("archiveFilter")}
+          </span>
+        </SelectItem>
+      </SelectContent>
+    </Select>
+  )
+}
+
 export function ConversationManageDialog({
   open,
   onOpenChange,
@@ -689,14 +1052,26 @@ export function ConversationManageDialog({
   const [sourceFilter, setSourceFilter] = useState<SessionSourceFilter>("all")
   const [collaborationFilter, setCollaborationFilter] =
     useState<CollaborationFilter>(initialCollaborationFilter)
-  // Open facet dropdowns form a layer ABOVE this dialog: while one is open an
-  // Escape belongs to it (collapse the dropdown) and must not reach the dialog,
-  // which would close the whole session center from under the user. The count
-  // feeds DialogContent's onEscapeKeyDown guard below.
+  /** The Filters popover holding the seven narrowing facets. */
+  const [filtersOpen, setFiltersOpen] = useState(false)
+  // Open facet layers stack ABOVE this dialog — the Filters popover, and the
+  // dropdown of any facet opened inside it. While one is open an Escape belongs
+  // to it (collapse that layer) and must not reach the dialog, which would close
+  // the whole session center from under the user. The count feeds
+  // DialogContent's onEscapeKeyDown guard below, and every facet control that
+  // can open a layer reports into it — including `FolderSelect` and
+  // `BranchFilterSelect`, which close themselves on a row click.
   const [openFacetMenus, setOpenFacetMenus] = useState(0)
   const trackFacetMenuOpen = useCallback((open: boolean) => {
     setOpenFacetMenus((count) => Math.max(0, count + (open ? 1 : -1)))
   }, [])
+  const handleFiltersOpenChange = useCallback(
+    (next: boolean) => {
+      setFiltersOpen(next)
+      trackFacetMenuOpen(next)
+    },
+    [trackFacetMenuOpen]
+  )
   const [rows, setRows] = useState<DbConversationSummary[]>([])
   const [contentSnippets, setContentSnippets] = useState<Map<number, string>>(
     new Map()
@@ -802,6 +1177,10 @@ export function ConversationManageDialog({
       setStatusFilter("all")
       setSourceFilter("all")
       setCollaborationFilter(initialCollaborationFilter)
+      setFiltersOpen(false)
+      // A facet layer torn down with the dialog never reports its own close, so
+      // the counter is rebased here rather than left one short on the next open.
+      setOpenFacetMenus(0)
       setSelected(new Map())
       setConfirmDelete(false)
       setError(null)
@@ -1255,6 +1634,180 @@ export function ConversationManageDialog({
     setBranchFilter(ALL_BRANCHES)
   }, [])
 
+  // The seven facets behind the Filters button, and nothing else: the search
+  // box and the worklist segments are visible on their own, so sweeping them
+  // from inside the popover would clear something the user cannot see from
+  // there.
+  const resetFacets = useCallback(() => {
+    handleScopeChange(null)
+    setCollectionFilter("all")
+    setWorkbenchFilter("all")
+    setBranchFilter(ALL_BRANCHES)
+    setAgentFilter("all")
+    setSourceFilter("all")
+    setStatusFilter("all")
+  }, [handleScopeChange])
+
+  // What those facets currently select, one removable chip each — and, by its
+  // length, the count on the Filters button. A facet is "active" exactly when
+  // it has a chip, so the badge and the chips row can never disagree.
+  const activeFacetChips = useMemo<FacetChip[]>(() => {
+    const chips: FacetChip[] = []
+    if (scopeFolderId != null) {
+      const own = folderById.get(scopeFolderId)
+      chips.push({
+        key: "folder",
+        label: t("facetFolder"),
+        // `#<id>` is the only handle left for a folder that has since been
+        // closed or removed — the same idiom the folder picker falls back to.
+        value: own
+          ? formatFolderLabelWithAlias({ name: own.name, alias: own.alias })
+          : `#${scopeFolderId}`,
+        icon: <Folder className="size-3 shrink-0 text-muted-foreground" />,
+        onClear: () => handleScopeChange(null),
+      })
+    }
+    if (collectionFilter !== "all") {
+      chips.push({
+        key: "collection",
+        label: t("facetCollection"),
+        value:
+          collectionFilter === "unclassified"
+            ? t("collectionUnclassified")
+            : (collectionById.get(collectionFilter)?.name ??
+              `#${collectionFilter}`),
+        icon: <FolderTree className="size-3 shrink-0 text-muted-foreground" />,
+        onClear: () => setCollectionFilter("all"),
+      })
+    }
+    if (workbenchFilter !== "all") {
+      chips.push({
+        key: "workbench",
+        label: t("facetWorkbench"),
+        value:
+          workbenchFilter === "unopened"
+            ? t("workbenchFilterUnopened")
+            : (workbenches.find((item) => item.id === workbenchFilter)?.name ??
+              `#${workbenchFilter}`),
+        icon: (
+          <PanelsTopLeft className="size-3 shrink-0 text-muted-foreground" />
+        ),
+        onClear: () => setWorkbenchFilter("all"),
+      })
+    }
+    if (branchFilter.kind !== "all") {
+      chips.push({
+        key: "branch",
+        label: t("facetBranch"),
+        value:
+          branchFilter.kind === "none" ? t("branchNone") : branchFilter.name,
+        icon: <GitBranch className="size-3 shrink-0 text-muted-foreground" />,
+        onClear: () => setBranchFilter(ALL_BRANCHES),
+      })
+    }
+    if (agentFilter !== "all") {
+      chips.push({
+        key: "agent",
+        label: t("facetAgent"),
+        value: getAgentLabel(agentFilter),
+        icon: <AgentIcon agentType={agentFilter} className="size-3 shrink-0" />,
+        onClear: () => setAgentFilter("all"),
+      })
+    }
+    if (sourceFilter !== "all") {
+      const sourceLabels = {
+        user: t("sourceFilterUser"),
+        agent: t("sourceFilterAgent"),
+        automation: t("sourceFilterAutomation"),
+      } as const
+      const SourceIcon = { user: UserRound, agent: Bot, automation: Zap }[
+        sourceFilter
+      ]
+      chips.push({
+        key: "source",
+        label: t("facetSource"),
+        value: sourceLabels[sourceFilter],
+        icon: <SourceIcon className="size-3 shrink-0 text-muted-foreground" />,
+        onClear: () => setSourceFilter("all"),
+      })
+    }
+    if (statusFilter !== "all") {
+      chips.push({
+        key: "status",
+        label: t("facetStatus"),
+        value:
+          statusFilter === "archived"
+            ? t("archiveFilter")
+            : tStatus(statusFilter),
+        icon:
+          statusFilter === "archived" ? (
+            <Archive className="size-3 shrink-0 text-muted-foreground" />
+          ) : (
+            <StatusGlyph status={statusFilter} />
+          ),
+        onClear: () => setStatusFilter("all"),
+      })
+    }
+    return chips
+  }, [
+    agentFilter,
+    branchFilter,
+    collectionById,
+    collectionFilter,
+    folderById,
+    handleScopeChange,
+    scopeFolderId,
+    sourceFilter,
+    statusFilter,
+    t,
+    tStatus,
+    workbenchFilter,
+    workbenches,
+  ])
+
+  // The worklist segments. `failed` is not a permanent axis: it only earns a
+  // slot once something has actually failed — or while it is the current
+  // filter, so the list can never be narrowed by a segment nothing shows.
+  const collaborationSegments = useMemo(() => {
+    const segments: {
+      value: CollaborationFilter
+      label: string
+      count: number
+    }[] = [
+      {
+        value: "all",
+        label: tCollaboration("worklistFilterAll"),
+        count: 0,
+      },
+      {
+        value: "unread",
+        label: tCollaboration("worklistUnread"),
+        count: collaborationOverview.totalUnreadCount,
+      },
+      {
+        value: "needs_reply",
+        label: tCollaboration("worklistNeedsReply"),
+        count: collaborationOverview.totalNeedsReplyCount,
+      },
+      {
+        value: "awaiting_reply",
+        label: tCollaboration("worklistAwaitingReply"),
+        count: collaborationOverview.totalAwaitingReplyCount,
+      },
+    ]
+    if (
+      collaborationOverview.totalFailedCount > 0 ||
+      collaborationFilter === "failed"
+    ) {
+      segments.push({
+        value: "failed",
+        label: tCollaboration("worklistFailed"),
+        count: collaborationOverview.totalFailedCount,
+      })
+    }
+    return segments
+  }, [collaborationFilter, collaborationOverview, tCollaboration])
+
   const toggleOne = useCallback((conv: DbConversationSummary) => {
     setSelected((prev) => {
       const next = new Map(prev)
@@ -1642,9 +2195,13 @@ export function ConversationManageDialog({
             <DialogTitle>{t("title")}</DialogTitle>
           </DialogHeader>
 
-          {/* Facets: free text owns the top line — it is the one that wants
-              every pixel — and the four narrowing controls line up as equal
-              columns beneath it, ordered coarse to fine. */}
+          {/* Facets, in three tiers by how often they move. Free text owns the
+              top line — it is the one that wants every pixel. The worklist, the
+              axis a user flips between all day, is a segmented control. The
+              seven narrowing facets sit behind the Filters button, with
+              whatever they select spelled out as removable chips below: eight
+              controls abreast read as a wall, and on a narrow dialog they wrapped
+              into four rows that ate the list. */}
           <div className="flex flex-col gap-2">
             <div className="flex min-w-0 gap-2">
               <div className="relative min-w-0 flex-1">
@@ -1688,295 +2245,187 @@ export function ConversationManageDialog({
                 {t("contentSearchUnavailable")}
               </p>
             )}
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-8">
-              <FolderSelect
-                folders={folderOptions}
-                value={scopeFolderId}
-                onChange={handleScopeChange}
-                allLabel={t("folderFilterAll")}
-                onSelectAll={() => handleScopeChange(null)}
-                variant="field"
-                className={FACET_TRIGGER_CLASS}
-              />
-              <Select
-                value={
-                  typeof collectionFilter === "number"
-                    ? `collection:${collectionFilter}`
-                    : collectionFilter
-                }
-                disabled={collectionRefsLoading || collectionRefsUnavailable}
-                onOpenChange={trackFacetMenuOpen}
-                onValueChange={(value) => {
-                  if (value === "all" || value === "unclassified") {
-                    setCollectionFilter(value)
-                    return
-                  }
-                  setCollectionFilter(Number(value.slice("collection:".length)))
-                }}
-              >
-                <SelectTrigger
-                  className={FACET_SELECT_TRIGGER_CLASS}
-                  aria-label={t("collectionFilterLabel")}
-                  title={
-                    collectionRefsUnavailable
-                      ? t("collectionUnavailable")
-                      : undefined
+            <div className="flex min-w-0 items-center gap-2">
+              {/* The worklist axis, always visible. A horizontal scroller keeps
+                  the pill whole on a narrow dialog rather than wrapping its
+                  segments into a second, ragged row. */}
+              <div className="min-w-0 flex-1 overflow-x-auto scrollbar-thin">
+                <Tabs
+                  value={collaborationFilter}
+                  onValueChange={(value) =>
+                    setCollaborationFilter(value as CollaborationFilter)
                   }
                 >
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">
-                    <span className="flex items-center gap-2">
-                      <FolderTree className="h-3.5 w-3.5 text-muted-foreground" />
-                      {t("collectionFilterAll")}
-                    </span>
-                  </SelectItem>
-                  <SelectItem value="unclassified">
-                    <span className="flex items-center gap-2">
-                      <FolderTree className="h-3.5 w-3.5 text-muted-foreground/50" />
-                      {t("collectionUnclassified")}
-                    </span>
-                  </SelectItem>
-                  {collectionOptions.map(({ item, depth, path }) => (
-                    <SelectItem
-                      key={item.id}
-                      value={`collection:${item.id}`}
-                      title={path}
-                    >
-                      <span className="flex min-w-0 items-center gap-2">
-                        <FolderTree className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                        <span className="truncate">
-                          {depth > 0 ? `${"· ".repeat(depth)}` : ""}
-                          {item.name}
-                        </span>
-                      </span>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Select
-                value={
-                  typeof workbenchFilter === "number"
-                    ? `workbench:${workbenchFilter}`
-                    : workbenchFilter
-                }
-                disabled={workbenchRefsLoading || workbenchRefsUnavailable}
-                onOpenChange={trackFacetMenuOpen}
-                onValueChange={(value) => {
-                  if (value === "all" || value === "unopened") {
-                    setWorkbenchFilter(value)
-                    return
-                  }
-                  setWorkbenchFilter(Number(value.slice("workbench:".length)))
-                }}
+                  <TabsList aria-label={tCollaboration("worklistFilterLabel")}>
+                    {collaborationSegments.map((segment) => (
+                      <TabsTrigger
+                        key={segment.value}
+                        value={segment.value}
+                        className={cn(
+                          segment.value === "failed" &&
+                            "text-destructive data-active:text-destructive"
+                        )}
+                      >
+                        {segment.label}
+                        {segment.count > 0 ? (
+                          <Badge
+                            variant={
+                              segment.value === "failed"
+                                ? "destructive"
+                                : "secondary"
+                            }
+                            className="h-4 min-w-4 px-1 text-[0.625rem] tabular-nums"
+                          >
+                            {segment.count}
+                          </Badge>
+                        ) : null}
+                      </TabsTrigger>
+                    ))}
+                  </TabsList>
+                </Tabs>
+              </div>
+              <Popover
+                open={filtersOpen}
+                onOpenChange={handleFiltersOpenChange}
               >
-                <SelectTrigger
-                  className={FACET_SELECT_TRIGGER_CLASS}
-                  aria-label={t("workbenchFilterLabel")}
-                  title={
-                    workbenchRefsUnavailable
-                      ? t("workbenchOwnershipUnavailable")
-                      : undefined
-                  }
+                <PopoverTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-9 shrink-0 gap-1.5 rounded-4xl border-input bg-input/30 px-3 font-normal hover:bg-input/50 dark:hover:bg-input/50"
+                  >
+                    <SlidersHorizontal
+                      className="size-3.5 shrink-0 text-muted-foreground"
+                      aria-hidden="true"
+                    />
+                    {t("filtersButton")}
+                    {activeFacetChips.length > 0 ? (
+                      <Badge className="h-4 min-w-4 px-1 text-[0.625rem] tabular-nums">
+                        {activeFacetChips.length}
+                      </Badge>
+                    ) : null}
+                  </Button>
+                </PopoverTrigger>
+                {/* Capped to whatever Radix measures as free beside the trigger:
+                    seven fields are taller than a short window. */}
+                <PopoverContent
+                  align="end"
+                  className="max-h-(--radix-popover-content-available-height) w-[19rem] gap-3 overflow-y-auto p-3"
                 >
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">
-                    <span className="flex items-center gap-2">
-                      <PanelsTopLeft className="h-3.5 w-3.5 text-muted-foreground" />
-                      {t("workbenchFilterAll")}
-                    </span>
-                  </SelectItem>
-                  <SelectItem value="unopened">
-                    <span className="flex min-w-0 items-center gap-2">
-                      <PanelsTopLeft className="h-3.5 w-3.5 text-muted-foreground/50" />
-                      <span className="min-w-0 flex-1 truncate">
-                        {t("workbenchFilterUnopened")}
-                      </span>
-                      <span className="text-xs text-muted-foreground tabular-nums">
-                        {unopenedCount}
-                      </span>
-                    </span>
-                  </SelectItem>
-                  {workbenches.map((workbench) => (
-                    <SelectItem
-                      key={workbench.id}
-                      value={`workbench:${workbench.id}`}
-                    >
-                      <span className="flex min-w-0 items-center gap-2">
-                        <PanelsTopLeft className="h-3.5 w-3.5 text-muted-foreground" />
-                        <span className="min-w-0 flex-1 truncate">
-                          {workbench.name}
-                          {workbench.id === activeWorkbenchId
-                            ? ` · ${t("currentWorkbench")}`
-                            : ""}
-                        </span>
-                        <span className="text-xs text-muted-foreground tabular-nums">
-                          {workbenchCounts.get(workbench.id) ?? 0}
-                        </span>
-                      </span>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <BranchFilterSelect
-                value={branchFilter}
-                onChange={setBranchFilter}
-                branches={branchOptions}
-                noBranchCount={noBranchCount}
-                className={FACET_TRIGGER_CLASS}
-              />
-              <Select
-                value={agentFilter}
-                onOpenChange={trackFacetMenuOpen}
-                onValueChange={(v) => setAgentFilter(v as AgentType | "all")}
-              >
-                <SelectTrigger className={FACET_SELECT_TRIGGER_CLASS}>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {/* Every row — this one included — leads with a glyph, so the
-                      list (and the trigger it mirrors into) has one left edge
-                      instead of two. */}
-                  <SelectItem value="all">
-                    <span className="flex items-center gap-2">
-                      <Bot className="h-3.5 w-3.5 text-muted-foreground" />
-                      {t("agentFilterAll")}
-                    </span>
-                  </SelectItem>
-                  {ALL_AGENT_TYPES.map((at) => (
-                    <SelectItem key={at} value={at}>
-                      <span className="flex items-center gap-2">
-                        <AgentIcon agentType={at} className="h-3.5 w-3.5" />
-                        {getAgentLabel(at)}
-                      </span>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {/* Who started the Session, next to which agent ran it. Applied
-                  client-side over the fetched rows: `list_all_conversations`
-                  takes no `created_by`, and a Session whose row predates the
-                  column reads as user-created (see `conversationSource`). */}
-              <Select
-                value={sourceFilter}
-                onOpenChange={trackFacetMenuOpen}
-                onValueChange={(v) => setSourceFilter(v as SessionSourceFilter)}
-              >
-                <SelectTrigger
-                  className={FACET_SELECT_TRIGGER_CLASS}
-                  aria-label={t("sourceFilterLabel")}
-                >
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">
-                    <span className="flex items-center gap-2">
-                      <Users className="h-3.5 w-3.5 text-muted-foreground" />
-                      {t("sourceFilterAll")}
-                    </span>
-                  </SelectItem>
-                  <SelectItem value="user">
-                    <span className="flex items-center gap-2">
-                      <UserRound className="h-3.5 w-3.5 text-muted-foreground" />
-                      {t("sourceFilterUser")}
-                    </span>
-                  </SelectItem>
-                  <SelectItem value="agent">
-                    <span className="flex items-center gap-2">
-                      <Bot className="h-3.5 w-3.5 text-muted-foreground" />
-                      {t("sourceFilterAgent")}
-                    </span>
-                  </SelectItem>
-                  <SelectItem value="automation">
-                    <span className="flex items-center gap-2">
-                      <Zap className="h-3.5 w-3.5 text-muted-foreground" />
-                      {t("sourceFilterAutomation")}
-                    </span>
-                  </SelectItem>
-                </SelectContent>
-              </Select>
-              <Select
-                value={statusFilter}
-                onOpenChange={trackFacetMenuOpen}
-                onValueChange={(v) => setStatusFilter(v as SessionStatusFilter)}
-              >
-                <SelectTrigger
-                  className={FACET_SELECT_TRIGGER_CLASS}
-                  aria-label={t("statusFilterLabel")}
-                >
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">
-                    <span className="flex items-center gap-2">
-                      {/* Statusless: the dot's grey fallback, which no real
-                          status uses (see STATUS_COLORS). */}
-                      <StatusGlyph />
-                      {t("statusFilterAll")}
-                    </span>
-                  </SelectItem>
-                  {STATUS_ORDER.map((s) => (
-                    <SelectItem key={s} value={s}>
-                      <span className="flex items-center gap-2">
-                        <StatusGlyph status={s} />
-                        {tStatus(s)}
-                      </span>
-                    </SelectItem>
-                  ))}
-                  <SelectItem value="archived">
-                    <span className="flex items-center gap-2">
-                      <Archive className="h-3.5 w-3.5 text-muted-foreground" />
-                      {t("archiveFilter")}
-                    </span>
-                  </SelectItem>
-                </SelectContent>
-              </Select>
-              <Select
-                value={collaborationFilter}
-                onOpenChange={trackFacetMenuOpen}
-                onValueChange={(value) =>
-                  setCollaborationFilter(value as CollaborationFilter)
-                }
-              >
-                <SelectTrigger
-                  className={FACET_SELECT_TRIGGER_CLASS}
-                  aria-label={tCollaboration("worklistFilterLabel")}
-                >
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">
-                    <span className="flex items-center gap-2">
-                      <MessageSquareMore className="h-3.5 w-3.5 text-muted-foreground" />
-                      {tCollaboration("worklistFilterAll")}
-                    </span>
-                  </SelectItem>
-                  <SelectItem value="unread">
-                    {tCollaboration("worklistUnread", {
-                      count: collaborationOverview.totalUnreadCount,
-                    })}
-                  </SelectItem>
-                  <SelectItem value="needs_reply">
-                    {tCollaboration("worklistNeedsReply", {
-                      count: collaborationOverview.totalNeedsReplyCount,
-                    })}
-                  </SelectItem>
-                  <SelectItem value="awaiting_reply">
-                    {tCollaboration("worklistAwaitingReply", {
-                      count: collaborationOverview.totalAwaitingReplyCount,
-                    })}
-                  </SelectItem>
-                  <SelectItem value="failed">
-                    {tCollaboration("worklistFailed", {
-                      count: collaborationOverview.totalFailedCount,
-                    })}
-                  </SelectItem>
-                </SelectContent>
-              </Select>
+                  <FacetField label={t("facetFolder")}>
+                    <FolderSelect
+                      folders={folderOptions}
+                      value={scopeFolderId}
+                      onChange={handleScopeChange}
+                      allLabel={t("folderFilterAll")}
+                      onSelectAll={() => handleScopeChange(null)}
+                      onOpenChange={trackFacetMenuOpen}
+                      variant="field"
+                      className={FACET_TRIGGER_CLASS}
+                    />
+                  </FacetField>
+                  <FacetField label={t("facetCollection")}>
+                    <CollectionFacetSelect
+                      value={collectionFilter}
+                      onChange={setCollectionFilter}
+                      options={collectionOptions}
+                      disabled={
+                        collectionRefsLoading || collectionRefsUnavailable
+                      }
+                      unavailable={collectionRefsUnavailable}
+                      onOpenChange={trackFacetMenuOpen}
+                    />
+                  </FacetField>
+                  <FacetField label={t("facetWorkbench")}>
+                    <WorkbenchFacetSelect
+                      value={workbenchFilter}
+                      onChange={setWorkbenchFilter}
+                      workbenches={workbenches}
+                      counts={workbenchCounts}
+                      unopenedCount={unopenedCount}
+                      activeWorkbenchId={activeWorkbenchId}
+                      disabled={
+                        workbenchRefsLoading || workbenchRefsUnavailable
+                      }
+                      unavailable={workbenchRefsUnavailable}
+                      onOpenChange={trackFacetMenuOpen}
+                    />
+                  </FacetField>
+                  <FacetField label={t("facetBranch")}>
+                    <BranchFilterSelect
+                      value={branchFilter}
+                      onChange={setBranchFilter}
+                      branches={branchOptions}
+                      noBranchCount={noBranchCount}
+                      onOpenChange={trackFacetMenuOpen}
+                      className={FACET_TRIGGER_CLASS}
+                    />
+                  </FacetField>
+                  <FacetField label={t("facetAgent")}>
+                    <AgentFacetSelect
+                      value={agentFilter}
+                      onChange={setAgentFilter}
+                      onOpenChange={trackFacetMenuOpen}
+                    />
+                  </FacetField>
+                  <FacetField label={t("facetSource")}>
+                    <SourceFacetSelect
+                      value={sourceFilter}
+                      onChange={setSourceFilter}
+                      onOpenChange={trackFacetMenuOpen}
+                    />
+                  </FacetField>
+                  <FacetField label={t("facetStatus")}>
+                    <StatusFacetSelect
+                      value={statusFilter}
+                      onChange={setStatusFilter}
+                      onOpenChange={trackFacetMenuOpen}
+                    />
+                  </FacetField>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    disabled={activeFacetChips.length === 0}
+                    onClick={resetFacets}
+                    className="h-8 w-full rounded-4xl"
+                  >
+                    {t("resetFilters")}
+                  </Button>
+                </PopoverContent>
+              </Popover>
             </div>
+            {activeFacetChips.length > 0 ? (
+              // Everything the collapsed facets are doing, undoable one at a
+              // time: a count on a closed popover says how many are on, never
+              // which — and the folder facet in particular decides what the
+              // dialog even queries.
+              <div
+                role="group"
+                aria-label={t("activeFiltersLabel")}
+                className="flex flex-wrap items-center gap-1.5"
+              >
+                {activeFacetChips.map((chip) => (
+                  <span
+                    key={chip.key}
+                    title={`${chip.label} · ${chip.value}`}
+                    className="inline-flex h-7 max-w-[14rem] items-center gap-1.5 rounded-4xl border border-input bg-input/30 ps-2.5 pe-1 text-xs"
+                  >
+                    {chip.icon}
+                    <span className="min-w-0 truncate">{chip.value}</span>
+                    <button
+                      type="button"
+                      onClick={chip.onClear}
+                      aria-label={t("removeFilter", { facet: chip.label })}
+                      className="flex size-5 shrink-0 items-center justify-center rounded-4xl text-muted-foreground hover:bg-muted hover:text-foreground"
+                    >
+                      <X className="size-3" />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            ) : null}
           </div>
 
           <div className="grid min-h-0 flex-1 gap-3 md:grid-cols-[minmax(0,1.15fr)_minmax(18rem,0.85fr)]">
