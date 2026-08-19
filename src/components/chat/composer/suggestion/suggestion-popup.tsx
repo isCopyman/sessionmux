@@ -30,7 +30,9 @@ const FETCH_DEBOUNCE_MS = 150
 // their usual order. This is a *display* order; the search provider keeps its
 // own (file-first) group order, which other code/tests depend on. `skill` is
 // intentionally absent — skills, commands and experts are inserted via the `/`
-// and `$` triggers, not the `@` panel.
+// and `$` triggers, not the `@` panel. This is also just the default: a host
+// can scope the panel to a different subset/order via the `tabOrder` prop
+// (e.g. the Room composer, which drops the agent tab).
 const TAB_ORDER: readonly ReferenceKind[] = [
   "agent",
   "file",
@@ -89,6 +91,13 @@ export interface SuggestionPopupProps {
   /** Localized per-kind tab labels (English fallbacks apply when omitted). */
   tabLabels?: Record<ReferenceKind, string>
   /**
+   * Overrides which tabs are shown and in what order (default: {@link
+   * TAB_ORDER}, agent-first). A host that only offers a subset of kinds — the
+   * Room composer, which never shows an agent tab — passes its own order
+   * here; the first-non-empty default tab and Tab-key cycling both follow it.
+   */
+  tabOrder?: readonly ReferenceKind[]
+  /**
    * Reports the active option's element id (or null when nothing is
    * selectable), so the host can mirror it onto the editor's
    * `aria-activedescendant`. Must be referentially stable.
@@ -119,6 +128,7 @@ export const SuggestionPopup = forwardRef<
     countLabel = (count) => `${count} results`,
     moreLabel = "More results — keep typing to filter",
     tabLabels = DEFAULT_TAB_LABELS,
+    tabOrder = TAB_ORDER,
     onActiveOptionChange,
   },
   ref
@@ -175,14 +185,14 @@ export const SuggestionPopup = forwardRef<
     () => new Map(result.groups.map((group) => [group.kind, group])),
     [result.groups]
   )
-  // Auto-target the first non-empty tab (agent-first) until the user pins one,
-  // so a file/session/… query never strands the user on an empty agent tab.
+  // Auto-target the first non-empty tab (per `tabOrder`) until the user pins
+  // one, so a file/session/… query never strands the user on an empty tab.
   const firstNonEmpty = useMemo(
     () =>
-      TAB_ORDER.find(
+      tabOrder.find(
         (kind) => (groupByKind.get(kind)?.items.length ?? 0) > 0
-      ) ?? TAB_ORDER[0],
-    [groupByKind]
+      ) ?? tabOrder[0],
+    [groupByKind, tabOrder]
   )
   const activeTab = pinnedTab ?? firstNonEmpty
   const activeGroup = useMemo(
@@ -271,11 +281,11 @@ export const SuggestionPopup = forwardRef<
             return true
           case "Tab": {
             // Tab / Shift+Tab move between tabs (pinning the choice); Enter still
-            // selects. Wraps around the five tabs.
+            // selects. Wraps around the tabs in `tabOrder`.
             const dir = event.shiftKey ? -1 : 1
-            const at = TAB_ORDER.indexOf(activeTab)
+            const at = tabOrder.indexOf(activeTab)
             setPinnedTab(
-              TAB_ORDER[(at + dir + TAB_ORDER.length) % TAB_ORDER.length]
+              tabOrder[(at + dir + tabOrder.length) % tabOrder.length]
             )
             setSelectedIndex(0)
             return true
@@ -295,7 +305,7 @@ export const SuggestionPopup = forwardRef<
         }
       },
     }),
-    [flat, selectedIndex, activeTab, onSelect, onClose, state.range]
+    [flat, selectedIndex, activeTab, onSelect, onClose, state.range, tabOrder]
   )
 
   const activeLabel = tabLabels[activeTab]
@@ -345,7 +355,7 @@ export const SuggestionPopup = forwardRef<
           aria-orientation="horizontal"
           className="flex shrink-0 gap-0.5 overflow-x-auto border-b border-border p-1"
         >
-          {TAB_ORDER.map((kind) => {
+          {tabOrder.map((kind) => {
             const isActive = kind === activeTab
             const count = stale ? 0 : (groupByKind.get(kind)?.items.length ?? 0)
             return (

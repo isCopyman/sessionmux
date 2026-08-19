@@ -416,4 +416,57 @@ describe("SuggestionPopup", () => {
     // The polite live region also conveys truncation to screen readers.
     expect(screen.getByRole("status")).toHaveTextContent("More — keep typing")
   })
+
+  describe("tabOrder override", () => {
+    it("keeps the default agent-first four-tab order when tabOrder is omitted", async () => {
+      mountPopup()
+      const tabs = screen.getAllByRole("tab")
+      expect(tabs).toHaveLength(4)
+      expect(tabs[0]).toHaveAccessibleName(/Agents/)
+      expect(tabs[1]).toHaveAccessibleName(/Files/)
+      expect(tabs[2]).toHaveAccessibleName(/Sessions/)
+      expect(tabs[3]).toHaveAccessibleName(/Commits/)
+      await screen.findByText("Codex Helper")
+      expect(screen.getByRole("tab", { selected: true })).toHaveAccessibleName(
+        /Agents/
+      )
+    })
+
+    it("renders only the given tabs, in that order, and defaults to its first non-empty entry", async () => {
+      mountPopup({ tabOrder: ["file", "agent"] })
+      // "file" is first in the custom order and non-empty, so it — not
+      // "agent", which the default TAB_ORDER would pick — is the default tab.
+      expect(await screen.findByText("alpha.md")).toBeInTheDocument()
+      expect(screen.queryByText("Codex Helper")).toBeNull()
+      const tabs = screen.getAllByRole("tab")
+      expect(tabs).toHaveLength(2)
+      expect(tabs[0]).toHaveAccessibleName(/Files/)
+      expect(tabs[1]).toHaveAccessibleName(/Agents/)
+      expect(screen.getByRole("tab", { selected: true })).toHaveAccessibleName(
+        /Files/
+      )
+    })
+
+    it("cycles tabs via Tab/Shift+Tab following a custom tabOrder", async () => {
+      const { ref } = mountPopup({ tabOrder: ["file", "agent"] })
+      await screen.findByText("alpha.md") // file is the default-active tab
+      act(() => {
+        expect(ref.current?.onKeyDown(key("Tab"))).toBe(true)
+      })
+      // file → agent (custom order), not file → session (TAB_ORDER's slot).
+      expect(await screen.findByText("Codex Helper")).toBeInTheDocument()
+      expect(screen.getByRole("tab", { selected: true })).toHaveAccessibleName(
+        /Agents/
+      )
+      act(() => {
+        expect(ref.current?.onKeyDown(key("Tab"))).toBe(true)
+      })
+      // Wraps back to "file" (the custom order's first entry), not to
+      // "commit" (TAB_ORDER's last).
+      expect(await screen.findByText("alpha.md")).toBeInTheDocument()
+      expect(screen.getByRole("tab", { selected: true })).toHaveAccessibleName(
+        /Files/
+      )
+    })
+  })
 })

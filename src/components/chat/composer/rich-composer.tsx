@@ -146,6 +146,14 @@ export interface RichComposerProps {
    */
   tabLabels?: Record<ReferenceKind, string>
   /**
+   * Overrides which reference-kind tabs the `@` panel shows and in what order
+   * (default: the panel's own agent/file/session/commit order). A host that
+   * only wants a subset — e.g. the Room composer, which never offers an agent
+   * tab — passes its own order here. Render-only (forwarded straight to
+   * {@link SuggestionPopup}).
+   */
+  tabOrder?: readonly ReferenceKind[]
+  /**
    * Key binding (matchShortcutEvent form) that sends the message. Default
    * `"enter"`. When set to a non-Enter binding, a plain Enter inserts a newline.
    */
@@ -215,6 +223,7 @@ export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
       referenceSearch,
       mentionUiLabels,
       tabLabels,
+      tabOrder,
       submitShortcut,
       newlineShortcut,
       isExternalMenuOpen,
@@ -601,6 +610,7 @@ export const RichComposer = forwardRef<RichComposerHandle, RichComposerProps>(
             moreLabel={mentionUiLabels?.more}
             countLabel={mentionUiLabels?.count}
             tabLabels={tabLabels}
+            tabOrder={tabOrder}
           />
         )}
       </div>

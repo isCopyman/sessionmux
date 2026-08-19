@@ -45,7 +45,8 @@ import {
 import { ReferenceBadge } from "@/components/chat/composer/badges/reference-badge"
 import { useComposerMentionLabels } from "@/components/chat/composer/use-composer-mention-labels"
 import type { ReferenceSearch } from "@/components/chat/composer/suggestion/types"
-import { rankByTextMatch } from "@/lib/fuzzy-text-match"
+import type { ReferenceKind } from "@/components/chat/composer/types"
+import { useReferenceSearch } from "@/components/chat/composer/use-reference-search"
 import { useTabActions } from "@/contexts/tab-context"
 import { toErrorMessage } from "@/lib/app-error"
 import { formatConversationTitle } from "@/lib/conversation-title"
@@ -72,6 +73,7 @@ import {
   sessionIdsFromAtAliases,
   type RoomBodyPart,
 } from "@/lib/room-message-body"
+import { buildRoomMentionSearch } from "@/components/rooms/room-mention-search"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { useCollectionStore } from "@/stores/collection-store"
 import { useConversationRuntimeStore } from "@/stores/conversation-runtime-store"
@@ -196,6 +198,31 @@ function RoomMessageBody({
     <p className="whitespace-pre-wrap text-[15px] leading-6 text-foreground">
       {parts.map((part, index) => {
         if (part.type === "text") return <span key={index}>{part.value}</span>
+        if (part.type === "reference") {
+          // File/commit references reuse the same inline chip the composer
+          // and the Session transcript use. No badge styling is defined for
+          // any other reference kind yet (the room composer never inserts
+          // one) — read as plain labeled text instead of a dead-end chip.
+          if (part.refType === "file" || part.refType === "commit") {
+            return (
+              <ReferenceBadge
+                key={index}
+                data={{
+                  refType: part.refType,
+                  id: part.uri,
+                  label: part.label,
+                  uri: part.uri,
+                  meta: null,
+                }}
+              />
+            )
+          }
+          return (
+            <span key={index} className={mentionClassName()}>
+              {part.label}
+            </span>
+          )
+        }
         // Session mentions wear the same badge the Session transcript gives a
         // `codeg://session/<id>` reference; @all/@human keep the room pill.
         if (part.kind === "session" && part.conversationId != null) {
@@ -233,10 +260,20 @@ function RoomMessageBody({
   )
 }
 
+// The Room `@` panel never offers an agent tab (agents have no wake semantics
+// inside a room — see `room-mention-search.ts`); session (the member roster)
+// stays first so the panel's default-active tab still lands on members.
+const ROOM_MENTION_TAB_ORDER: readonly ReferenceKind[] = [
+  "session",
+  "file",
+  "commit",
+]
+
 export function RoomWorkspace({ roomId }: { roomId: string }) {
   const t = useTranslations("Room")
   const { openTab, closeTab } = useTabActions()
   const conversations = useAppWorkspaceStore((state) => state.conversations)
+  const allFolders = useAppWorkspaceStore((state) => state.allFolders)
   const collections = useCollectionStore((state) => state.items)
   const [detail, setDetail] = useState<CollaborationRoomDetail | null>(null)
   const [events, setEvents] = useState<RoomTimelineEvent[]>([])
@@ -384,60 +421,41 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
       behavior: "smooth",
     })
   }, [])
+  // Files/commits scoped to the room's own folder (resolved from
+  // `rootFolderId`, never the currently-active folder — a room is a
+  // cross-folder concept, so guessing wrong is worse than showing nothing).
+  const roomFolderPath = useMemo(() => {
+    const rootFolderId = detail?.rootFolderId
+    if (rootFolderId == null) return null
+    return (
+      allFolders.find((folder) => folder.id === rootFolderId)?.path ?? null
+    )
+  }, [allFolders, detail?.rootFolderId])
+  const workspaceReferenceSearch = useReferenceSearch({
+    defaultPath: roomFolderPath,
+    enabled: true,
+    labels: mentionGroupLabels,
+  })
   // The `@` panel: the unified composer suggestion popup, scoped to this
-  // room — members plus the two structured pseudo-mentions (@all / @human).
-  // Every row inserts a reference badge that serializes to a `codeg://` URI
-  // token, so a wake is ALWAYS structured (never typed prose).
-  const roomMentionSearch = useMemo<ReferenceSearch>(() => {
-    const untitled = (id: number) => t("untitled", { id })
-    const pseudo = [
-      {
-        reference: {
-          refType: "session" as const,
-          id: "all",
-          label: t("mentionAll"),
-          uri: "codeg://all",
-          meta: null,
+  // room — members plus the two structured pseudo-mentions (@all / @human)
+  // always lead, folded together with the file/commit groups from the room's
+  // folder (empty when it can't be resolved). Every session row inserts a
+  // reference badge that serializes to a `codeg://` URI token, so a wake is
+  // ALWAYS structured (never typed prose).
+  const roomMentionSearch = useMemo<ReferenceSearch>(
+    () =>
+      buildRoomMentionSearch(
+        members,
+        {
+          sessionGroupLabel: mentionGroupLabels.session,
+          allLabel: t("mentionAll"),
+          humanLabel: t("mentionHuman"),
+          untitled: (id) => t("untitled", { id }),
         },
-        keywords: "all everyone 全体 全體",
-      },
-      {
-        reference: {
-          refType: "session" as const,
-          id: "human",
-          label: t("mentionHuman"),
-          uri: "codeg://human",
-          meta: null,
-        },
-        keywords: "human user 人类 人類",
-      },
-    ]
-    const memberItems = members.map((member) => ({
-      reference: {
-        refType: "session" as const,
-        id: String(member.conversationId),
-        label: memberLabel(member, untitled),
-        uri: `codeg://session/${member.conversationId}`,
-        meta: member.agentType
-          ? { agentType: member.agentType as AgentType }
-          : null,
-      },
-      keywords: String(member.conversationId),
-    }))
-    const all = [...pseudo, ...memberItems]
-    return (query: string) => [
-      {
-        kind: "session" as const,
-        label: mentionGroupLabels.session,
-        items: rankByTextMatch(
-          query,
-          all,
-          (item) => item.reference.label,
-          (item) => item.keywords
-        ),
-      },
-    ]
-  }, [members, t, mentionGroupLabels])
+        workspaceReferenceSearch
+      ),
+    [members, mentionGroupLabels, t, workspaceReferenceSearch]
+  )
 
   // Live "will wake" preview: exactly the parse handlePost performs, so what
   // the host sees is what gets woken — no more silent at-submit resolution.
@@ -978,6 +996,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
             referenceSearch={roomMentionSearch}
             mentionUiLabels={mentionUiLabels}
             tabLabels={mentionGroupLabels}
+            tabOrder={ROOM_MENTION_TAB_ORDER}
             onChange={setBody}
             className="min-h-20 rounded-md border border-input bg-transparent"
           />

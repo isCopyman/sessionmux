@@ -4,6 +4,7 @@ import {
   unwrapReferenceDestination,
 } from "@/lib/reference-link"
 import { formatConversationTitle } from "@/lib/conversation-title"
+import { parseCodegReferenceUri } from "@/components/chat/composer/reference-uri"
 
 export type RoomMemberAlias = {
   conversationId: number
@@ -17,6 +18,12 @@ export type RoomBodyPart =
       kind: "session" | "all" | "human"
       conversationId?: number
       label: string
+    }
+  | {
+      type: "reference"
+      refType: "file" | "commit" | "other"
+      label: string
+      uri: string
     }
 
 const SESSION_URI = /^codeg:\/\/session\/(\d+)$/i
@@ -288,6 +295,20 @@ export function roomMessageBodyParts(input: {
       })
       continue
     }
+    // File/commit badges from the `@` panel's file/commit tabs. Anything else
+    // `parseCodegReferenceUri` recognizes (agent/skill/embedded — the room
+    // composer never inserts those) stays raw text, same as an unrecognized
+    // link.
+    const parsed = parseCodegReferenceUri(uri, label)
+    if (parsed && (parsed.refType === "file" || parsed.refType === "commit")) {
+      parts.push({
+        type: "reference",
+        refType: parsed.refType,
+        label: parsed.label,
+        uri: parsed.uri,
+      })
+      continue
+    }
     parts.push({ type: "text", value: token.raw })
   }
 
@@ -323,18 +344,17 @@ export function roomMessageBodyParts(input: {
   if (extras.length === 0) return mergeText(parts)
   const spacer: RoomBodyPart[] = []
   const last = parts[parts.length - 1]
-  if (
-    last &&
-    last.type === "text" &&
-    last.value.length > 0 &&
-    !/\s$/.test(last.value)
-  ) {
-    spacer.push({ type: "text", value: " " })
-  } else if (!last) {
-    // body empty except metadata — still show mentions
-  } else if (last.type === "mention") {
+  if (last?.type === "text") {
+    if (last.value.length > 0 && !/\s$/.test(last.value)) {
+      spacer.push({ type: "text", value: " " })
+    }
+  } else if (last) {
+    // A non-text part (a mention or a file/commit reference badge) sits right
+    // before the appended extras — without a spacer the two inline chips
+    // would run together with no gap.
     spacer.push({ type: "text", value: " " })
   }
+  // `!last`: body empty except metadata — still show mentions, no spacer needed.
   return mergeText([...parts, ...spacer, ...extras])
 }
 
@@ -348,5 +368,7 @@ function mergeText(parts: RoomBodyPart[]): RoomBodyPart[] {
       out.push({ ...part })
     }
   }
-  return out.filter((part) => part.type === "mention" || part.value.length > 0)
+  // Non-text parts (mentions, file/commit references) are always kept; only a
+  // genuinely empty text run is dropped.
+  return out.filter((part) => part.type !== "text" || part.value.length > 0)
 }

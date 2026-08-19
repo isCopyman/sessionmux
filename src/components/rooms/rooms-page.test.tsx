@@ -70,6 +70,11 @@ vi.mock("@/lib/api", () => ({
 
 vi.mock("@/lib/platform", () => ({
   subscribe: vi.fn().mockResolvedValue(() => {}),
+  // `useReferenceSearch` (now wired into the room's `@` panel) pulls in
+  // `useAcpAgents`, which calls this unconditionally on mount — see
+  // automations-page.test.tsx / task-detail-sheet.follow-up.test.tsx for the
+  // same mock, required for the same reason.
+  onTransportReconnect: vi.fn(() => () => {}),
 }))
 
 vi.mock("@/contexts/tab-context", () => ({
@@ -89,6 +94,7 @@ vi.mock("@/stores/app-workspace-store", () => ({
         title: string
         agent_type: string
       }>
+      allFolders: Array<{ id: number; path: string }>
     }) => unknown
   ) =>
     selector({
@@ -106,6 +112,10 @@ vi.mock("@/stores/app-workspace-store", () => ({
           agent_type: "claude_code",
         },
       ],
+      // None of these fixtures set `rootFolderId` on the room detail, so
+      // `roomFolderPath` resolution never looks this up — kept here (rather
+      // than omitted) to match the real store's shape.
+      allFolders: [],
     }),
 }))
 
@@ -590,6 +600,29 @@ describe("RoomWorkspace", () => {
     expect(within(popup).getByRole("option", { name: "@human" })).toBeTruthy()
     // …but never a Session that is not in the room.
     expect(within(popup).queryByText("Session D")).toBeNull()
+  })
+
+  it("offers session/file/commit tabs but never an agent tab", async () => {
+    api.getCollaborationRoomTimeline.mockResolvedValue(timeline([event()]))
+    renderRoom()
+    await screen.findByText("newest post")
+    const editor = await composerEditor()
+
+    typeInComposer(editor, "@")
+    const popup = await screen.findByTestId("mention-popup", undefined, {
+      timeout: 5000,
+    })
+    await within(popup).findByRole("option", { name: /Planner/ })
+    const tabs = within(popup).getAllByRole("tab")
+    expect(tabs).toHaveLength(3)
+    expect(tabs[0]).toHaveAccessibleName(/Sessions/)
+    expect(tabs[1]).toHaveAccessibleName(/Files/)
+    expect(tabs[2]).toHaveAccessibleName(/Commits/)
+    // Members load first, so the session tab (not an agent tab, which the
+    // room never offers) is the default-active one.
+    expect(within(popup).getByRole("tab", { selected: true })).toHaveAccessibleName(
+      /Sessions/
+    )
   })
 
   it("previews an empty wake list before anyone is mentioned", async () => {

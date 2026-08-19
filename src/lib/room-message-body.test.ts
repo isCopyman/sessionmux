@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 
+import { sessionIdsFromText } from "./collaboration-session-mentions"
 import {
   insertMentionToken,
   mentionAllFromText,
@@ -120,5 +121,70 @@ describe("room message body", () => {
       { type: "mention", kind: "all", label: "@all" },
       { type: "text", value: " 看看" },
     ])
+  })
+
+  it("renders a file reference badge inline without disturbing mention parsing", () => {
+    const parts = roomMessageBodyParts({
+      body: "see [@foo.ts](file:///repo/src/foo.ts) please @all",
+      members,
+      mentionConversationIds: [],
+      allLabel: "@all",
+      humanLabel: "@human",
+      untitled,
+    })
+    expect(parts).toEqual([
+      { type: "text", value: "see " },
+      {
+        type: "reference",
+        refType: "file",
+        label: "@foo.ts",
+        uri: "file:///repo/src/foo.ts",
+      },
+      { type: "text", value: " please " },
+      { type: "mention", kind: "all", label: "@all" },
+    ])
+  })
+
+  it("renders a commit reference badge inline", () => {
+    const parts = roomMessageBodyParts({
+      body: "landed in [a1b2c3d](codeg://commit/%2Frepo@a1b2c3ddeadbeef)",
+      members,
+      mentionConversationIds: [],
+      allLabel: "@all",
+      humanLabel: "@human",
+      untitled,
+    })
+    expect(parts).toEqual([
+      { type: "text", value: "landed in " },
+      {
+        type: "reference",
+        refType: "commit",
+        label: "a1b2c3d",
+        uri: "codeg://commit/%2Frepo@a1b2c3ddeadbeef",
+      },
+    ])
+  })
+
+  it("leaves an unrecognized reference kind (e.g. an agent link) as raw text", () => {
+    const parts = roomMessageBodyParts({
+      body: "ping [@Codex](codeg://agent/codex) now",
+      members,
+      mentionConversationIds: [],
+      allLabel: "@all",
+      humanLabel: "@human",
+      untitled,
+    })
+    expect(parts).toEqual([
+      { type: "text", value: "ping [@Codex](codeg://agent/codex) now" },
+    ])
+  })
+
+  it("does not let a file reference contribute a session id or affect the wake list", () => {
+    const body = "check [@foo.ts](file:///repo/src/foo.ts) @all"
+    // sessionIdsFromText matches only `codeg://session/<id>` — a file:// uri
+    // must never be mistaken for a session mention.
+    expect(sessionIdsFromText(body)).toEqual([])
+    expect(sessionIdsFromAtAliases(body, members, untitled)).toEqual([])
+    expect(mentionAllFromText(body)).toBe(true)
   })
 })
