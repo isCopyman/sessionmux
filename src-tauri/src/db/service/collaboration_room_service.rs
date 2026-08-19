@@ -391,13 +391,6 @@ pub async fn list_for_workbench(
     rows.iter().map(summary_from_row).collect()
 }
 
-pub async fn list(
-    conn: &DatabaseConnection,
-    workbench_id: i32,
-) -> Result<Vec<CollaborationRoomSummary>, DbError> {
-    list_for_workbench(conn, workbench_id).await
-}
-
 /// Rooms the Session already belongs to, across Workbenches. Agents use this
 /// instead of listing every Room on Workbench 1.
 pub async fn list_for_member(
