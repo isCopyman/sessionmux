@@ -818,3 +818,20 @@ T2 后置截图（CDP 9222 可用，基线在 .artifacts）+ 晨间验收报告 
   pub(crate) 撞 pub 函数（private_interfaces）。用户可感收益：别处改的 codex
   会话名下次列表刷新即达侧栏/@ 面板/搜索，手动改名永不被盖，频道 topic 迟到但
   必收敛。
+- 2026-08-20 凌晨 **@ 补全对标侦察验收合并（b2ac633c）+ 三项编排裁决**：报告结论
+  ——我方缺的只是"单 root 假设"（useFileTree/list_workspace_files/RoomDetail 全
+  链单路径），四类来源+分组降级架构够用；对标最值得抄的是 Codex file-search
+  "一次遍历吃所有 root、统一预算与取消"的架构，CC 位图前缀索引/opencode frecency
+  在 50k 量级用不上。裁决：① **全局目录（~/.claude 等 skill/指令目录）不自动入
+  @ 范围**——Room 是多 Session 共享空间，隐私语境异于单用户 CLI；想要就走手动
+  "加路径"同一入口（用户委托事项就此定案）。② **10 秒超时落后端**：deadline 加
+  在 walk_workspace_files 循环内与 50k 硬顶并列为第二跳出条件——前端 Promise.race
+  不取消底层调用、治不了线程占用（Thesis 故障机制本身），采纳用户 10s 建议。
+  ③ 附加路径批组成照报告：collaboration_room_path 表+命令对+useFileTree 多
+  root+后端 deadline 为第一批；"…"菜单细节/截断原因标记/Session 侧对等第二批；
+  frecency/前缀索引/fs 监听/完整取消令牌链一律不做。**paseo 线索证伪**（编排
+  亲验）：其 additionalDirectories 是 Claude Agent SDK 沙箱权限透传（agent 可
+  读写哪些目录），非 @ 补全多路径，UI 层零命中——用户记忆混淆了两个概念，此条
+  已可向用户澄清。指令文件 lint 扫描范围联动建议：默认工作区、用户级目录做
+  显式开关（诊断是用户本机自用，语境异于 room 共享，不同结论并不矛盾），待用户
+  确认。
