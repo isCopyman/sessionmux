@@ -2284,7 +2284,7 @@ pub async fn update_conversation_archive(
     archived: bool,
 ) -> Result<(), AppCommandError> {
     let waived = update_conversation_archive_core(&db.conn, conversation_id, archived).await?;
-    emit_conversation_upsert(&EventEmitter::Tauri(app), &db.conn, conversation_id).await;
+    emit_conversation_upsert(&EventEmitter::Tauri(app.clone()), &db.conn, conversation_id).await;
     emit_obligation_waiver(&EventEmitter::Tauri(app), waived);
     Ok(())
 }
