@@ -1782,7 +1782,8 @@
       "tasks": "ToDo タスク",
       "loadingSubsessions": "サブ会話を読み込み中…",
       "rooms": "ルーム",
-      "newRoom": "新しいルーム"
+      "newRoom": "新しいルーム",
+      "needsReply": "要返信"
     },
     "conversation": {
       "reloadFailed": "会話の再読み込みに失敗しました: {message}",

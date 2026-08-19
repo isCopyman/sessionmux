@@ -1782,7 +1782,8 @@
       "tasks": "To-dos",
       "loadingSubsessions": "Unterkonversationen werden geladen…",
       "rooms": "Räume",
-      "newRoom": "Neuer Raum"
+      "newRoom": "Neuer Raum",
+      "needsReply": "Antwort ausstehend"
     },
     "conversation": {
       "reloadFailed": "Konversation konnte nicht neu geladen werden: {message}",

@@ -10,6 +10,7 @@ import {
   ListChevronsUpDown,
   Search,
   ListTodo,
+  Reply,
   SquarePen,
   Users,
   Zap,
@@ -78,6 +79,7 @@ import { cn } from "@/lib/utils"
 import { WorkbenchTree } from "@/components/workbench/workbench-tree"
 import { ConversationManageDialog } from "@/components/conversations/conversation-manage-dialog"
 import { CreateRoomDialog } from "@/components/rooms/create-room-dialog"
+import { useCollaborationUnreadOverview } from "@/hooks/use-collaboration-unread-overview"
 import {
   CollectionTree,
   type CollectionTreeHandle,
@@ -195,6 +197,12 @@ export function Sidebar() {
   const [allExpanded, setAllExpanded] = useState(true)
   const [sessionCenterOpen, setSessionCenterOpen] = useState(false)
   const [createRoomOpen, setCreateRoomOpen] = useState(false)
+  const [sessionCenterCollabFilter, setSessionCenterCollabFilter] = useState<
+    "all" | "needs_reply"
+  >("all")
+  // Backend-authoritative outstanding-reply count, shared with the Session
+  // Center's needs_reply filter so the badge and the filtered list agree.
+  const { overview: collaborationOverview } = useCollaborationUnreadOverview()
   const [sessionCenterCollection, setSessionCenterCollection] = useState<
     number | "unclassified" | null
   >(null)
@@ -645,8 +653,28 @@ export function Sidebar() {
           label={t("sessionCenter")}
           onClick={() => {
             setSessionCenterCollection(null)
+            setSessionCenterCollabFilter("all")
             setSessionCenterOpen(true)
           }}
+        />
+        {/* "Who owes me a reply" entry: amber badge counts Sessions with an
+            outstanding reply obligation; clicking opens the Session Center
+            pre-filtered to exactly those Sessions. */}
+        <SidebarNavButton
+          icon={Reply}
+          label={t("needsReply")}
+          onClick={() => {
+            setSessionCenterCollection(null)
+            setSessionCenterCollabFilter("needs_reply")
+            setSessionCenterOpen(true)
+          }}
+          trailing={
+            collaborationOverview.totalNeedsReplyCount > 0 ? (
+              <span className="ml-auto inline-flex h-[0.9375rem] min-w-[0.9375rem] shrink-0 items-center justify-center rounded-full bg-amber-500/15 px-1 font-mono text-[0.625rem] font-medium leading-none text-amber-700 dark:text-amber-400">
+                {collaborationOverview.totalNeedsReplyCount}
+              </span>
+            ) : null
+          }
         />
         {/* Both route rows close the mobile Sheet on the way out, like tapping a
             conversation card (handled by the list wrapper below) — otherwise the
@@ -703,6 +731,7 @@ export function Sidebar() {
           onNewSession={handleNewSessionAtPath}
           onOpenScope={(scope) => {
             setSessionCenterCollection(scope)
+            setSessionCenterCollabFilter("all")
             setSessionCenterOpen(true)
           }}
         />
@@ -747,6 +776,7 @@ export function Sidebar() {
           }}
           folderId={null}
           initialCollection={sessionCenterCollection}
+          initialCollaborationFilter={sessionCenterCollabFilter}
         />
       )}
     </aside>

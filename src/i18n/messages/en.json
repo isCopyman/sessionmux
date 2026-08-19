@@ -1782,7 +1782,8 @@
       "rooms": "Rooms",
       "tasks": "To-dos",
       "loadingSubsessions": "Loading sub-conversations…",
-      "newRoom": "New room"
+      "newRoom": "New room",
+      "needsReply": "Needs reply"
     },
     "conversation": {
       "reloadFailed": "Failed to reload conversation: {message}",

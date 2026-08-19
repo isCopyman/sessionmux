@@ -1782,7 +1782,8 @@
       "tasks": "المهام قيد الانتظار",
       "loadingSubsessions": "جارٍ تحميل المحادثات الفرعية…",
       "rooms": "الغرف",
-      "newRoom": "غرفة جديدة"
+      "newRoom": "غرفة جديدة",
+      "needsReply": "بانتظار رد"
     },
     "conversation": {
       "reloadFailed": "فشل إعادة تحميل المحادثة: {message}",
