@@ -5245,6 +5245,8 @@
     "addMemberSearch": "Search Sessions",
     "add": "Add",
     "removeMember": "Remove from room",
+    "removeMemberTitle": "Remove {name} from this room?",
+    "removeMemberDescription": "Their messages stay in the timeline, but they'll stop receiving new posts here until you add them back.",
     "rename": "Rename room",
     "renamed": "Room renamed",
     "added": "Session added to the room",

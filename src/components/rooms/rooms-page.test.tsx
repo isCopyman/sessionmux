@@ -53,6 +53,7 @@ const api = vi.hoisted(() => ({
   postCollaborationRoomMessage: vi.fn(),
   refreshCatalog: vi.fn(),
   deleteCollaborationRoom: vi.fn(),
+  removeCollaborationRoomMember: vi.fn(),
   closeTab: vi.fn(),
   openTab: vi.fn(),
 }))
@@ -63,7 +64,7 @@ vi.mock("@/lib/api", () => ({
   markCollaborationRoomSeen: api.markCollaborationRoomSeen,
   postCollaborationRoomMessage: api.postCollaborationRoomMessage,
   addCollaborationRoomMembers: vi.fn(),
-  removeCollaborationRoomMember: vi.fn(),
+  removeCollaborationRoomMember: api.removeCollaborationRoomMember,
   renameCollaborationRoom: vi.fn(),
   deleteCollaborationRoom: api.deleteCollaborationRoom,
 }))
@@ -667,5 +668,85 @@ describe("RoomWorkspace", () => {
     expect(screen.getByLabelText("Add a Session")).toBeTruthy()
     fireEvent.click(screen.getByRole("button", { name: "Hide members" }))
     expect(screen.queryByLabelText("Add a Session")).toBeNull()
+  })
+
+  it("also opens the members panel from the member-count text in the subtitle", async () => {
+    api.getCollaborationRoomTimeline.mockResolvedValue(timeline([event()]))
+    renderRoom()
+    await screen.findByText("newest post")
+
+    expect(screen.queryByLabelText("Add a Session")).toBeNull()
+    // The clickable entry point is the count itself, not the whole subtitle
+    // line — "Uncategorized" stays plain text.
+    fireEvent.click(screen.getByRole("button", { name: "1 members" }))
+    expect(screen.getByLabelText("Add a Session")).toBeTruthy()
+
+    // Same control toggles it closed again, like the header icon button.
+    fireEvent.click(screen.getByRole("button", { name: "1 members" }))
+    expect(screen.queryByLabelText("Add a Session")).toBeNull()
+  })
+
+  it("asks for confirmation before removing a member", async () => {
+    api.getCollaborationRoomTimeline.mockResolvedValue(timeline([event()]))
+    renderRoom()
+
+    expect(await screen.findByText("newest post")).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "Show members" }))
+    fireEvent.click(screen.getByRole("button", { name: "Remove from room" }))
+
+    const dialog = await screen.findByRole("alertdialog")
+    expect(
+      within(dialog).getByText("Remove Planner from this room?")
+    ).toBeTruthy()
+    // The dialog only asks — nothing is removed until confirmed.
+    expect(api.removeCollaborationRoomMember).not.toHaveBeenCalled()
+  })
+
+  it("keeps the member when the removal confirmation is canceled", async () => {
+    api.getCollaborationRoomTimeline.mockResolvedValue(timeline([event()]))
+    renderRoom()
+
+    expect(await screen.findByText("newest post")).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "Show members" }))
+    fireEvent.click(screen.getByRole("button", { name: "Remove from room" }))
+    const dialog = await screen.findByRole("alertdialog")
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }))
+
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull())
+    expect(api.removeCollaborationRoomMember).not.toHaveBeenCalled()
+    // The member row (and its remove affordance) is still there — canceling
+    // left the roster untouched. ("Planner" itself is ambiguous here: the
+    // open members panel and the timeline's sender name both show it.)
+    expect(
+      screen.getByRole("button", { name: "Remove from room" })
+    ).toBeTruthy()
+  })
+
+  it("removes the member through the API once the confirmation is accepted", async () => {
+    api.getCollaborationRoomTimeline.mockResolvedValue(timeline([event()]))
+    api.removeCollaborationRoomMember.mockResolvedValue({
+      ...roomDetail(),
+      members: [],
+    })
+    renderRoom()
+
+    expect(await screen.findByText("newest post")).toBeTruthy()
+    fireEvent.click(screen.getByRole("button", { name: "Show members" }))
+    fireEvent.click(screen.getByRole("button", { name: "Remove from room" }))
+    const dialog = await screen.findByRole("alertdialog")
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Remove from room" })
+    )
+
+    await waitFor(() => {
+      expect(api.removeCollaborationRoomMember).toHaveBeenCalledWith(
+        roomId,
+        101
+      )
+    })
+    expect(api.refreshCatalog).toHaveBeenCalled()
+    await waitFor(() =>
+      expect(screen.queryByRole("alertdialog")).toBeNull()
+    )
   })
 })

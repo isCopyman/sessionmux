@@ -5245,6 +5245,8 @@
     "addMemberSearch": "Search Sessions",
     "add": "Add",
     "removeMember": "Remove from room",
+    "removeMemberTitle": "{name} をこのルームから外しますか？",
+    "removeMemberDescription": "外した後もタイムライン上のメッセージは残りますが、再度追加するまで新しい投稿は届かなくなります。",
     "rename": "Rename room",
     "renamed": "Room renamed",
     "added": "Session added to the room",

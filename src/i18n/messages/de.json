@@ -5245,6 +5245,8 @@
     "addMemberSearch": "Search Sessions",
     "add": "Add",
     "removeMember": "Remove from room",
+    "removeMemberTitle": "{name} aus diesem Raum entfernen?",
+    "removeMemberDescription": "Ihre Nachrichten bleiben in der Chronik erhalten, aber sie erhalten hier keine neuen Beiträge mehr, bis du sie wieder hinzufügst.",
     "rename": "Rename room",
     "renamed": "Room renamed",
     "added": "Session added to the room",

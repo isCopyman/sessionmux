@@ -5245,6 +5245,8 @@
     "addMemberSearch": "Search Sessions",
     "add": "Add",
     "removeMember": "Remove from room",
+    "removeMemberTitle": "إزالة {name} من هذه الغرفة؟",
+    "removeMemberDescription": "ستبقى رسائلها على الخط الزمني، لكنها لن تتلقى منشورات جديدة هنا حتى تتم إضافتها مرة أخرى.",
     "rename": "Rename room",
     "renamed": "Room renamed",
     "added": "Session added to the room",

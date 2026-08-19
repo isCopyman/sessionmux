@@ -5245,6 +5245,8 @@
     "addMemberSearch": "搜索 Session",
     "add": "加入",
     "removeMember": "移出群聊",
+    "removeMemberTitle": "把 {name} 移出这个群聊？",
+    "removeMemberDescription": "移出后，该 Session 在时间线上的消息仍会保留，但不会再收到群里的新消息，除非重新加回来。",
     "rename": "重命名群聊",
     "renamed": "群聊已改名",
     "added": "已加入群聊",

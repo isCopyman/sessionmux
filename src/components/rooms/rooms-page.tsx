@@ -19,6 +19,16 @@ import { toast } from "sonner"
 import { useShallow } from "zustand/react/shallow"
 
 import { AgentIcon } from "@/components/agent-icon"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import {
@@ -294,6 +304,9 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [membersOpen, setMembersOpen] = useState(false)
+  const [removeTarget, setRemoveTarget] =
+    useState<CollaborationRoomMember | null>(null)
+  const [removingMember, setRemovingMember] = useState(false)
   const composerRef = useRef<RichComposerHandle>(null)
   // Localized chrome for the shared `@` panel (same hook the Session composer
   // uses — the panel reads identically wherever it opens).
@@ -576,16 +589,20 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
 
   const handleRemove = useCallback(
     async (conversationId: number) => {
+      setRemovingMember(true)
       try {
         const updated = await removeCollaborationRoomMember(
           roomId,
           conversationId
         )
         setDetail(updated)
+        setRemoveTarget(null)
         toast.success(t("removed"))
         void useRoomCatalogStore.getState().refresh()
       } catch (error) {
         toast.error(toErrorMessage(error))
+      } finally {
+        setRemovingMember(false)
       }
     },
     [roomId, t]
@@ -661,7 +678,15 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
                 )?.name
               : null) ?? t("uncategorized")}
             {" · "}
-            {t("memberCount", { count: detail.members.length })}
+            <button
+              type="button"
+              className="rounded-xs hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              title={membersOpen ? t("hideMembers") : t("showMembers")}
+              aria-pressed={membersOpen}
+              onClick={() => setMembersOpen((open) => !open)}
+            >
+              {t("memberCount", { count: detail.members.length })}
+            </button>
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-0.5">
@@ -923,7 +948,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
                     variant="ghost"
                     className="h-6 w-6 opacity-0 group-hover:opacity-100"
                     aria-label={t("removeMember")}
-                    onClick={() => void handleRemove(member.conversationId)}
+                    onClick={() => setRemoveTarget(member)}
                   >
                     <X className="h-3 w-3" />
                   </Button>
@@ -1084,6 +1109,41 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog
+        open={removeTarget != null}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) setRemoveTarget(null)
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {t("removeMemberTitle", {
+                name: removeTarget
+                  ? memberLabel(removeTarget, (id) => t("untitled", { id }))
+                  : "",
+              })}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {t("removeMemberDescription")}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t("cancel")}</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={removingMember}
+              onClick={() => {
+                if (removeTarget) {
+                  void handleRemove(removeTarget.conversationId)
+                }
+              }}
+            >
+              {t("removeMember")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }
