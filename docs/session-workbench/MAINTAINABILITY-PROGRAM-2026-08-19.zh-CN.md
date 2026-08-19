@@ -668,3 +668,24 @@ T2 后置截图（CDP 9222 可用，基线在 .artifacts）+ 晨间验收报告 
   支持多 root（现为单 defaultPath）；server 模式文件树本就走后端读取，扩展点在
   use-file-tree 的多源合并与去重。定位为 room 文件@（本次 fix）的 v2 延伸，
   **不阻塞当前派工**，排队顺位在 G11 之后与 fork/rewind RFC 同批评审。
+- 2026-08-19 深夜 **G4 死代码批次合并关账**（fcc303f8 + 修补 2fefd9ff，门禁全绿：
+  clippy×3 零警告、server 测试 2464 绿/1 忽略、vitest 350 文件 4378 绿、build 过）：
+  9 项落地——list 转发壳删除、send 收紧、DeliveryState::as_str、提醒唤醒去重、
+  mail_box→scope 内部改名（wire 键 `box` 逐字节不动）、acp/delegation 与 idle_sweep
+  历史名注释、房间未读徽章三处统一进组件、timer 死 autoPaused UI 清除（含 10 语
+  i18n 键）。两项查证后免改：A1 字段早已随 R4 删净、C11 automation 直发路径已不
+  存在（queue_prompt 落地后三分支全走队列/新会话）。编排裁决两则：**B8 不造
+  mail_box serde alias**（git 史+tool_schema 证明 wire 从来是 `box`，无凭空兼容）；
+  **A5 旧行残留可接受**（琥珀条消失但下次触发自愈+通用重置可手清）。门禁抓到工人
+  两处漏网并由编排整合修补：同文件测试模块的裸 `list(` 调用（工人搜索只匹配带
+  路径前缀的限定名——**教训入派工模板：删符号必须补搜模块内裸调用**）、send 降
+  pub(crate) 后生产编译 dead_code（可见性收紧要连带想 cfg 归属）。
+- 2026-08-19 深夜 **两项新分析并行启动（用户指令：都先分析）**：① 性能——用户体感
+  Monet 丝滑、codeg 不够，派 w-perf-recon（Sonnet 只读）做静态对比诊断（zustand
+  订阅粒度/消息流虚拟化/motion 高频路径/流式更新粒度/blur 密度），报告后编排用
+  CDP 真机 profile 定罪再定改法；② G11 上游——已 fetch，**上游新 37 提交
+  （ea5177ea..0935e1eb，v0.26.2）**，标题可见 qoder 内置 agent（疑似第 14 家）、
+  两个 @ 面板改动（撞在飞的 room 文件@，我方先落、冲突编排解）、两个 ACP 修复、
+  markdown 数学系列、Windows 路径修复、ACP bump（含 grok——待核是否覆盖冻结的
+  1.0.5 先导）。派 w-upstream-recon（Sonnet 只读）出 A可直拿/B需适配/C设计矛盾
+  三类清单，**C 类逐条交用户拍板**；正式合并仍排清理收尾之后。
