@@ -4,7 +4,11 @@ import { NextIntlClientProvider } from "next-intl"
 import { createRef, type RefObject } from "react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
-import { CollectionTree, type CollectionTreeHandle } from "./collection-tree"
+import {
+  CollectionTree,
+  nearestRootFolderId,
+  type CollectionTreeHandle,
+} from "./collection-tree"
 import {
   canDropSessionOnTarget,
   collectionPlacementForRoot,
@@ -13,7 +17,7 @@ import {
   sessionIdsInDrag,
 } from "./collection-tree-dnd"
 import enMessages from "@/i18n/messages/en.json"
-import type { DbConversationSummary } from "@/lib/types"
+import type { CollectionInfo, DbConversationSummary } from "@/lib/types"
 
 const h = vi.hoisted(() => ({
   create: vi.fn(),
@@ -339,6 +343,7 @@ function renderTree(
       direction: "right" | "down"
     ) => void
     onNewSession?: (rootFolderId: number) => void
+    onNewSessionInCollection?: (collectionId: number) => void
     treeRef?: RefObject<CollectionTreeHandle | null>
   } = {}
 ) {
