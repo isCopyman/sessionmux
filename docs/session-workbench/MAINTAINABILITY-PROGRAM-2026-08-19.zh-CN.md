@@ -716,7 +716,24 @@ T2 后置截图（CDP 9222 可用，基线在 .artifacts）+ 晨间验收报告 
   可选优化，性能主线关闭。顺带：release 首启白屏定性为 single-instance 插件互斥
   （dev 实例活着时二实例被拦），用户关 dev 后 release 正常；dev/release 数据库
   分文件（codeg-dev.db/codeg.db），"release 用 dev 数据"=停 release 后备份拷库，
-  等用户配合执行。**② **标题同步采
+  等用户配合执行。**
+- 2026-08-19 深夜 **"开始用起来"交付批**（用户定验收线：bug 修+上游第一批→重打
+  release 日常用，dev 线继续开发）：① **上游第一批 11 提交 cherry-pick 全部零冲突
+  落地**（数学五连+Windows 路径+快捷菜单三连+Office 隐藏文件+ACP bump 含 grok
+  1.0.5；跳过 881a2d06 版本号；防复活黑名单过检无复活）。唯一门禁红=上游新测试
+  硬编码旧文案"Manage conversations"，我方已改名"Session Center"，断言对齐
+  （422ba9ce）——上游测试断我方文案的先例记入 B 类适配套路。② **[DEV] 标题合并**
+  （b71db438）：debug 构建主窗口题"Codeg [DEV]"（cfg! 常量折叠写法）。工人重要
+  发现：**单实例互斥 5 月起就 cfg(not(debug)) 排除 dev**——白屏定性修正为
+  "release 首启慢+重复双击，第二个 release 被第一个自己拦"（56K 空壳进程佐证），
+  dev/release 共存本来就支持。图标调查结论：窗口运行时图标可做（icon-dev.png+
+  set_icon，任务栏可辨），exe 资源图标需独立 bundle 不做。③ **@human Discord 式
+  行高亮+@ 搜索 3 秒超时降级合并**（0029dc5e）：article 单事件粒度、border-l-2
+  透明基线防跳动、超时后成员组必出（悬死根因另查，真机计时需 dev 实例空档）。
+  ④ 三轮门禁全绿（vitest 356 文件/build/eslint/clippy×3/server 2464），worktree
+  全部清理（dev-coexist/room-human-highlight/source-filter 遗留），**release
+  重打中**——交付后用户换用，dev 线继续第二批（qoder 第 14 家/grok token/侧栏
+  右键/@ 面板两连）与标题同步重放。② **标题同步采
   上游语义（DB 单一事实源）**——用户点出 overlay 双源实害：@ 面板/搜索读 DB 标题，
   overlay 只改 parser 输出，同一会话两处名字不一致。定案：列表同步 codex index→DB、
   用户改名锁定、频道传播异步化，在我方代码结构上重放实现，f56ec5e6 overlay 撤除或
