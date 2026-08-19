@@ -7848,6 +7848,40 @@ pub(crate) fn skill_storage_spec(agent_type: AgentType) -> Option<SkillStorageSp
             ],
             project_rel_dirs: vec![".dsh/skills", ".agents/skills"],
         }),
+        // Qoder discovers directory bundles only — `<id>/SKILL.md`, never flat
+        // `<id>.md` files — hence Claude's spec shape rather than Codex's.
+        //
+        // Roots (per the qodercli 1.1.23 README's skill-discovery section),
+        // resolved through `{projectDir: <workDir>/<configDirName>, userDir:
+        // <globalDir>}` (both config-dir names default to `.qoder`):
+        //
+        //   home       `<globalDir>/skills`            ← relocated by QODER_CONFIG_DIR
+        //   home       `~/.agents/skills`               ← shared cross-agent store
+        //   workspace  `<cwd>/.qoder/skills`
+        //   workspace  `<cwd>/.agents/skills`           ← shared cross-agent store
+        //
+        // Qoder's OWN dirs lead in both scopes because they are the ones it
+        // always scans; the `.agents` pair is the shared convention other
+        // agents already follow, kept second so a user relying on it still
+        // sees those skills listed.
+        AgentType::Qoder => Some(SkillStorageSpec {
+            kind: SkillStorageKind::SkillDirectoryOnly,
+            global_dirs: vec![
+                crate::parsers::qoder::resolve_qoder_config_dir().join("skills"),
+                // The shared `.agents` store hangs off Qoder's CLI HOME, not
+                // the config dir — it moves with `QODER_CLI_HOME`/
+                // `GEMINI_CLI_HOME` even when `QODER_CONFIG_DIR` relocates the
+                // config dir itself.
+                crate::parsers::qoder::resolve_qoder_home()
+                    .join(".agents")
+                    .join("skills"),
+            ],
+            // NOTE: unlike `resolve_qoder_config_dir`, this relative path does
+            // not honor a custom `QODER_CONFIG_DIR_NAME` — `project_rel_dirs`
+            // is `&'static str`, and every other agent's entry here is
+            // likewise a fixed literal rather than a resolved name.
+            project_rel_dirs: vec![".qoder/skills", ".agents/skills"],
+        }),
         // codeg cannot detect where an arbitrary ACP agent loads skills from,
         // so custom agents are gated on the user's own declaration: that the
         // agent reads the shared `.agents/skills` store (the cross-agent
@@ -8750,6 +8784,20 @@ fn agent_env_keys(agent_type: AgentType) -> (&'static str, &'static str, &'stati
             "DEEPSEEK_API_KEY",
             "DEEPSEEK_ACP_MODEL",
         ),
+        // Qoder's non-interactive credential is `QODER_PERSONAL_ACCESS_TOKEN`
+        // — the only way to authenticate a headless/server/Docker install,
+        // where the `qoder login` browser flow cannot run. (An interactive
+        // login still outranks it; the credential itself lives in the machine
+        // key store, not this env slot.) `QODER_MODEL` is the env twin of
+        // `-m/--model`. There is no endpoint override, so the base-url slot
+        // stays an inert `QODER_BASE_URL` placeholder — same reason
+        // `CURSOR_API_BASE_URL` above is one — keeping the generic cascade off
+        // the OPENAI_* keys. `QODER_API_KEY` is not something Qoder reads.
+        AgentType::Qoder => (
+            "QODER_BASE_URL",
+            "QODER_PERSONAL_ACCESS_TOKEN",
+            "QODER_MODEL",
+        ),
         _ => ("OPENAI_BASE_URL", "OPENAI_API_KEY", "OPENAI_MODEL"),
     }
 }
@@ -9172,6 +9220,13 @@ fn cascade_update_agent_config(
             // as a runtime env var through the generic agent settings panel;
             // it has no codeg-managed config file and does not participate in
             // the model-provider credential cascade.
+        }
+        AgentType::Qoder => {
+            // Qoder talks only to Qoder's own service — no endpoint override
+            // and no BYO-provider key — so it stays off the model-provider
+            // credential cascade even though its env slots are real. The PAT
+            // (`QODER_PERSONAL_ACCESS_TOKEN`) is set directly in the agent's
+            // env; there is no codeg-managed config file to reconcile it with.
         }
         AgentType::Custom(_) => {
             // Custom agents are deliberately configuration-free: codeg writes
@@ -14700,6 +14755,64 @@ wire_api = "chat"
                 .any(|l| l.path == repo.join(".dsh/skills").to_string_lossy()),
             "the listed project location must be the git root: {:?}",
             listed.locations
+        );
+    }
+
+    #[test]
+    fn qoder_skill_storage_spec_mirrors_qoder_skill_roots() {
+        // `resolve_qoder_config_dir`/`resolve_qoder_home` both fall back to the
+        // process-wide `$HOME` when their own overrides are unset, and other
+        // tests mutate HOME via `temp_env`. Pin it (and clear every relocation
+        // override) so the spec and the expected paths resolve against one
+        // consistent home.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        temp_env::with_vars(
+            [
+                ("HOME", Some(tmp.path())),
+                ("QODER_CONFIG_DIR", None::<&std::path::Path>),
+                ("QODER_CLI_HOME", None::<&std::path::Path>),
+                ("GEMINI_CLI_HOME", None::<&std::path::Path>),
+            ],
+            || {
+                let spec = skill_storage_spec(AgentType::Qoder).expect("Qoder supports skills");
+                // Qoder discovers directory bundles only, never flat `.md`
+                // files.
+                assert_eq!(spec.kind, SkillStorageKind::SkillDirectoryOnly);
+                assert_eq!(spec.project_rel_dirs, vec![".qoder/skills", ".agents/skills"]);
+                // Qoder-native dir first (preferred link target), shared
+                // cross-agent store second.
+                let expected = vec![
+                    crate::parsers::qoder::resolve_qoder_config_dir().join("skills"),
+                    crate::parsers::qoder::resolve_qoder_home()
+                        .join(".agents")
+                        .join("skills"),
+                ];
+                assert_eq!(spec.global_dirs, expected);
+            },
+        );
+    }
+
+    #[test]
+    fn qoder_config_dir_env_var_relocates_ahead_of_cli_home() {
+        // `QODER_CONFIG_DIR` is an absolute override of the config dir itself
+        // (the env form of `--config-dir`), independent of `resolve_qoder_home`
+        // — setting it must NOT still land under `<home>/.qoder`.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let relocated = tmp.path().join("elsewhere");
+        temp_env::with_vars(
+            [
+                ("HOME", Some(tmp.path().as_os_str())),
+                ("QODER_CONFIG_DIR", Some(relocated.as_os_str())),
+                ("QODER_CLI_HOME", None),
+                ("GEMINI_CLI_HOME", None),
+            ],
+            || {
+                assert_eq!(crate::parsers::qoder::resolve_qoder_config_dir(), relocated);
+                // `resolve_qoder_home` is unaffected — it backs the SEPARATE
+                // shared `.agents` store, which does not move with
+                // `QODER_CONFIG_DIR`.
+                assert_eq!(crate::parsers::qoder::resolve_qoder_home(), tmp.path());
+            },
         );
     }
 
