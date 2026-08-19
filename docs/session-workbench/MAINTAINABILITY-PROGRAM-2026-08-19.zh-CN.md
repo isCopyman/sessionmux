@@ -547,3 +547,15 @@ T2 后置截图（CDP 9222 可用，基线在 .artifacts）+ 晨间验收报告 
   可复用参考**（待做：合并两线后作为第 5 个 playbook 写入 codeg-multi-agent/references/，
   内容含：贵脑便宜手分工、开工前 48h 机制核对、停手令/催稿、逐字节验证代替记忆、
   提交锁纪律）。另：用户提示 deja skill 可回溯聊天历史核对身份定位。
+- 2026-08-19 08:3x **用户晨间拍板（六项决策清单逐条定案）**：
+  ① G13 三级全批：G13-a playbook 编队纪律（零代码）；G13-b agent 可归档（语义定案：
+  归档号**拒收新信并提示发件人**；用户澄清后确认归档=已自动隐藏，不重复做）；G13-c
+  收窄为**来源筛选**（只看我开的/隐藏 agent 开的；需补 created_by 落库；"隐藏已归档"
+  已存在不做）。② G9 按编排建议批：**开放 session 模型与思考强度调整**给 host
+  control，**布局类不开放**。③ 挂钟需求定案为**整合进 Automation**：不给 timer 加
+  at/interval 模式，而是给自动化补动作类型"定时给既有 session 排提示"（走队列
+  normal 优先级，最低类不打断）；timer 保持空闲续跑专职。④ workflow **整体暂缓**
+  （含 RFC，以后再说）。⑤ shadow-auditor playbook 批（零代码教程）。⑥ **Goal Resume
+  批**（用户明确翻案 de470078："暂停理应能继续"）：Resume=把暂停前镜像的目标文本
+  作为 /goal follow-up 经队列重发（忙时排队）；含 Goal Card Resume 按钮。
+  执行序：先完成今晚收口（G6 门→T2 截图→G3 小批→G11 上游），新批次其后开工。
