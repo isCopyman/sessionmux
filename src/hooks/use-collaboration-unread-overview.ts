@@ -15,6 +15,8 @@ const EMPTY_OVERVIEW: CollaborationUnreadOverview = {
   totalNeedsReplyCount: 0,
   totalAwaitingReplyCount: 0,
   totalFailedCount: 0,
+  totalRoomUnreadCount: 0,
+  totalRoomNeedsReplyCount: 0,
   sessions: [],
 }
 

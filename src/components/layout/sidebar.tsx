@@ -201,9 +201,14 @@ export function Sidebar() {
   const [sessionCenterCollabFilter, setSessionCenterCollabFilter] = useState<
     "all" | "needs_reply"
   >("all")
-  // Backend-authoritative outstanding-reply count, shared with the Session
-  // Center's needs_reply filter so the badge and the filtered list agree.
+  // Backend-authoritative outstanding-reply count. The badge adds Room debt on
+  // top of direct mail; the Session Center's needs_reply filter still lists
+  // only the direct-mail Sessions, so the two can differ while Rooms are owed
+  // replies. Until Rooms get their own entry, the badge is the honest total.
   const { overview: collaborationOverview } = useCollaborationUnreadOverview()
+  const needsReplyBadge =
+    collaborationOverview.totalNeedsReplyCount +
+    collaborationOverview.totalRoomNeedsReplyCount
   const [sessionCenterCollection, setSessionCenterCollection] = useState<
     number | "unclassified" | null
   >(null)
@@ -676,9 +681,9 @@ export function Sidebar() {
             setSessionCenterOpen(true)
           }}
         />
-        {/* "Who owes me a reply" entry: amber badge counts Sessions with an
-            outstanding reply obligation; clicking opens the Session Center
-            pre-filtered to exactly those Sessions. */}
+        {/* "Who owes me a reply" entry: amber badge counts outstanding reply
+            obligations in direct mail and in Rooms; clicking opens the Session
+            Center pre-filtered to the direct-mail Sessions. */}
         <SidebarNavButton
           icon={Reply}
           label={t("needsReply")}
@@ -688,9 +693,9 @@ export function Sidebar() {
             setSessionCenterOpen(true)
           }}
           trailing={
-            collaborationOverview.totalNeedsReplyCount > 0 ? (
+            needsReplyBadge > 0 ? (
               <span className="ml-auto inline-flex h-[0.9375rem] min-w-[0.9375rem] shrink-0 items-center justify-center rounded-full bg-amber-500/15 px-1 font-mono text-[0.625rem] font-medium leading-none text-amber-700 dark:text-amber-400">
-                {collaborationOverview.totalNeedsReplyCount}
+                {needsReplyBadge}
               </span>
             ) : null
           }

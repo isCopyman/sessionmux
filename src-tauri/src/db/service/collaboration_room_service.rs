@@ -330,6 +330,48 @@ const MEMBER_CHANNEL_UNREAD_SQL: &str = "(SELECT COUNT(*) FROM collaboration_eve
                             AND datetime(e.created_at) >= datetime(COALESCE(me.last_read_at, me.joined_at))
                           )
                         ))";
+/// Room posts that `@`-mentioned the user, since the operator cursor. The
+/// human has no Delivery row of their own — `mention_human` is a flag on the
+/// event, not a fan-out target — so this counts events against
+/// `r.last_seen_at` exactly like `HOST_CHANNEL_UNREAD_SQL`, of which it is a
+/// subset. That is why it cannot reuse the member shape below.
+const HOST_MENTION_UNREAD_SQL: &str = "(SELECT COUNT(*) FROM collaboration_event e \
+                      WHERE e.room_id = r.id AND COALESCE(e.visibility, 'direct') = 'room' \
+                        AND COALESCE(e.mention_human, 0) = 1 \
+                        AND (r.last_seen_at IS NULL OR datetime(e.created_at) > datetime(r.last_seen_at)))";
+/// The operator watches the whole Room, so the reply ledger is not scoped to
+/// one member: this is every obligation still outstanding in the Room
+/// ("somebody in here owes an answer"), which is the sum of
+/// `MEMBER_NEEDS_REPLY_SQL` over its members. A deleted Session can never pay
+/// its debt back, so its rows drop out — otherwise the badge would stay lit
+/// with nothing left to open. Archived members are kept, matching direct mail
+/// in `collaboration_service::unread_overview`.
+const HOST_NEEDS_REPLY_SQL: &str = "(SELECT COUNT(*) FROM collaboration_delivery d \
+                      JOIN collaboration_event e ON e.id = d.event_id \
+                      WHERE e.room_id = r.id \
+                        AND COALESCE(e.visibility, 'direct') = 'room' \
+                        AND d.obligation_state = 'awaiting_reply' \
+                        AND d.state <> 'dismissed' AND d.state <> 'failed' \
+                        AND EXISTS (SELECT 1 FROM conversation c \
+                                     WHERE c.id = d.target_conversation_id \
+                                       AND c.deleted_at IS NULL))";
+/// Direct mail splits the ledger into obligations owed *to* the viewer
+/// (`needs_reply`) and obligations the viewer's own messages created
+/// (`awaiting_reply`). The host posts through the Room UI, which stamps
+/// `author_kind = 'human'`, so the same split here means "the user asked and
+/// nobody has answered yet". It is a subset of `HOST_NEEDS_REPLY_SQL`, not a
+/// second copy of it — a Room-wide sender-side count would re-count the very
+/// same Delivery rows.
+const HOST_AWAITING_REPLY_SQL: &str = "(SELECT COUNT(*) FROM collaboration_delivery d \
+                      JOIN collaboration_event e ON e.id = d.event_id \
+                      WHERE e.room_id = r.id \
+                        AND COALESCE(e.visibility, 'direct') = 'room' \
+                        AND COALESCE(e.author_kind, 'session') = 'human' \
+                        AND d.obligation_state = 'awaiting_reply' \
+                        AND d.state <> 'dismissed' AND d.state <> 'failed' \
+                        AND EXISTS (SELECT 1 FROM conversation c \
+                                     WHERE c.id = d.target_conversation_id \
+                                       AND c.deleted_at IS NULL))";
 const MEMBER_MENTION_UNREAD_SQL: &str = "(SELECT COUNT(*) FROM collaboration_delivery d \
                       JOIN collaboration_event e ON e.id = d.event_id \
                       WHERE d.target_conversation_id = me.conversation_id \
@@ -391,12 +433,50 @@ pub async fn list_for_workbench(
                 "{} \
              WHERE r.workbench_id = ? AND r.status = 'active' \
              ORDER BY datetime(COALESCE(last_event_at, r.updated_at)) DESC, r.id DESC",
-                room_summary_select(HOST_CHANNEL_UNREAD_SQL, "0", "0", "0")
+                room_summary_select(
+                    HOST_CHANNEL_UNREAD_SQL,
+                    HOST_MENTION_UNREAD_SQL,
+                    HOST_NEEDS_REPLY_SQL,
+                    HOST_AWAITING_REPLY_SQL,
+                )
             ),
             vec![workbench_id.into()],
         ))
         .await?;
     rows.iter().map(summary_from_row).collect()
+}
+
+/// Room-side counters for the collaboration unread overview, summed over every
+/// active Room on every Workbench.
+#[derive(Debug, Clone, Copy)]
+pub struct RoomHostTotals {
+    pub unread_count: u32,
+    pub needs_reply_count: u32,
+}
+
+/// Host-view Room debt for the whole install. Deliberately built by summing the
+/// very expressions `list_for_workbench` shows per Room, so the sidebar total
+/// can never drift from the Rooms the user opens to clear it.
+pub async fn host_totals(conn: &DatabaseConnection) -> Result<RoomHostTotals, DbError> {
+    let row = conn
+        .query_one(statement(
+            &format!(
+                "SELECT COALESCE(SUM({HOST_CHANNEL_UNREAD_SQL}), 0) AS unread_count, \
+                        COALESCE(SUM({HOST_NEEDS_REPLY_SQL}), 0) AS needs_reply_count \
+                 FROM collaboration_room r WHERE r.status = 'active'"
+            ),
+            vec![],
+        ))
+        .await?
+        .ok_or_else(|| validation("Could not count outstanding Room replies"))?;
+    let count = |column| -> Result<u32, DbError> {
+        let raw: i64 = row.try_get("", column)?;
+        Ok(u32::try_from(raw.max(0)).unwrap_or(u32::MAX))
+    };
+    Ok(RoomHostTotals {
+        unread_count: count("unread_count")?,
+        needs_reply_count: count("needs_reply_count")?,
+    })
 }
 
 /// Rooms the Session already belongs to, across Workbenches. Agents use this
@@ -1965,8 +2045,14 @@ mod tests {
         assert_eq!(for_b[0].awaiting_reply_count, 0);
 
         let host = list_for_workbench(&db.conn, 1).await.unwrap();
-        assert_eq!(host[0].needs_reply_count, 0);
-        assert_eq!(host[0].awaiting_reply_count, 0);
+        assert_eq!(
+            host[0].needs_reply_count, 1,
+            "the operator sees the Room's debt whoever owes it"
+        );
+        assert_eq!(
+            host[0].awaiting_reply_count, 0,
+            "nobody is waiting on the user: this post came from an Agent"
+        );
 
         let unpaid = timeline_with(
             &db.conn,
@@ -1989,6 +2075,131 @@ mod tests {
         .unwrap();
         assert_eq!(from_asker.events.len(), 1);
         assert_eq!(from_asker.events[0].body, "please answer");
+    }
+
+    fn ask_post(
+        room_id: String,
+        source: i32,
+        targets: Vec<i32>,
+        dedupe: &str,
+        author_kind: crate::models::CollaborationAuthorKind,
+    ) -> PostRoomMessageInput {
+        PostRoomMessageInput {
+            room_id,
+            source_conversation_id: source,
+            target_conversation_ids: targets,
+            mention_all: false,
+            body: "who is on this?".into(),
+            client_dedupe_id: dedupe.into(),
+            invocation_policy: CollaborationInvocationPolicy::InvokeWhenIdle,
+            delivery_hint: Default::default(),
+            expects_reply: true,
+            urgency: Default::default(),
+            reply_to_event_id: None,
+            mention_human: false,
+            author_kind,
+        }
+    }
+
+    #[tokio::test]
+    async fn host_room_counts_span_every_member_and_totals_match_the_list() {
+        use crate::models::CollaborationAuthorKind;
+        let (db, a, b, c) = seeded().await;
+        let room = make_room(&db, a, vec![a, b, c]).await;
+        // Two Agents asking each other, plus the user asking the other two:
+        // four obligations sit in the Room, half of them the user's own.
+        for ask in [
+            ask_post(
+                room.id.clone(),
+                a,
+                vec![b],
+                "host-ask-1",
+                CollaborationAuthorKind::Session,
+            ),
+            ask_post(
+                room.id.clone(),
+                b,
+                vec![c],
+                "host-ask-2",
+                CollaborationAuthorKind::Session,
+            ),
+            ask_post(
+                room.id.clone(),
+                a,
+                vec![b, c],
+                "host-ask-human",
+                CollaborationAuthorKind::Human,
+            ),
+        ] {
+            crate::db::service::collaboration_service::post_room(&db.conn, ask)
+                .await
+                .expect("post");
+        }
+
+        let host = list_for_workbench(&db.conn, 1).await.unwrap();
+        assert_eq!(host.len(), 1);
+        assert_eq!(
+            host[0].needs_reply_count, 4,
+            "two Agent asks plus the user's fan-out to two members"
+        );
+        assert_eq!(
+            host[0].awaiting_reply_count, 2,
+            "only the human-authored post is the user's own outstanding ask"
+        );
+
+        let totals = host_totals(&db.conn).await.unwrap();
+        assert_eq!(
+            totals.needs_reply_count, host[0].needs_reply_count,
+            "the overview total must be the sum of what the Rooms page shows"
+        );
+        assert_eq!(totals.unread_count, host[0].unread_count);
+
+        // A deleted Session can never answer, so its debt must not keep the
+        // badge lit; the user's own ask to that Session goes with it.
+        db.conn
+            .execute(statement(
+                "UPDATE conversation SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?",
+                vec![c.into()],
+            ))
+            .await
+            .unwrap();
+        let after_delete = list_for_workbench(&db.conn, 1).await.unwrap();
+        assert_eq!(after_delete[0].needs_reply_count, 2);
+        assert_eq!(after_delete[0].awaiting_reply_count, 1);
+        assert_eq!(
+            host_totals(&db.conn).await.unwrap().needs_reply_count,
+            after_delete[0].needs_reply_count
+        );
+    }
+
+    #[tokio::test]
+    async fn host_mention_counts_posts_that_at_the_user_until_the_room_is_opened() {
+        let (db, a, b, _) = seeded().await;
+        let room = make_room(&db, a, vec![a, b]).await;
+        crate::db::service::collaboration_service::post_room(
+            &db.conn,
+            record_post(room.id.clone(), a, "host-mention-plain", "just logging"),
+        )
+        .await
+        .unwrap();
+        crate::db::service::collaboration_service::post_room(
+            &db.conn,
+            record_post(room.id.clone(), a, "host-mention-human", "codeg://human ptal"),
+        )
+        .await
+        .unwrap();
+
+        let before = list_for_workbench(&db.conn, 1).await.unwrap();
+        assert_eq!(before[0].unread_count, 2);
+        assert_eq!(
+            before[0].mention_unread_count, 1,
+            "only the post that @-ed the user counts as a mention"
+        );
+
+        mark_seen(&db.conn, &room.id, None).await.unwrap();
+        let after = list_for_workbench(&db.conn, 1).await.unwrap();
+        assert_eq!(after[0].unread_count, 0);
+        assert_eq!(after[0].mention_unread_count, 0);
     }
 
     #[tokio::test]
