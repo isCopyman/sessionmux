@@ -359,7 +359,7 @@ function renderTree(
   } = {}
 ) {
   const { treeRef, ...treeOptions } = options
-  const element = (
+  const buildElement = () => (
     <NextIntlClientProvider locale="en" messages={enMessages}>
       <CollectionTree
         ref={treeRef}
@@ -368,11 +368,14 @@ function renderTree(
       />
     </NextIntlClientProvider>
   )
-  const utils = render(element)
+  const utils = render(buildElement())
   return {
     user: userEvent.setup(),
     onOpenScope,
-    rerenderTree: () => utils.rerender(element),
+    // Fresh element each time: re-rendering the same element reference lets
+    // React bail out of rendering entirely, and the mocked stores (read
+    // during render) would never see the updated hoisted fixtures.
+    rerenderTree: () => utils.rerender(buildElement()),
   }
 }
 
