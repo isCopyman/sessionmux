@@ -1,8 +1,8 @@
 # 交接单：可维护性收敛计划 · 领导会话换棒（2026-08-19 傍晚）
 
-> 前一任领导（Fable）因主会话模型额度耗尽交接。本单是给接班编排者的**唯一入口**，
-> 先读本单 → 再读 `MAINTAINABILITY-PROGRAM-2026-08-19.zh-CN.md`（事实源，§5 进度日志
-> 记到今天下午）→ 再动代码。
+> 前一任领导（Fable）因主会话模型额度耗尽交接。**交棒时状态已刷新到 54cd5cac**
+> （w-archive 批次全部合并+门禁全绿，见 §1 更新）。先读本单 → 再读
+> `MAINTAINABILITY-PROGRAM-2026-08-19.zh-CN.md`（事实源）→ 再动代码。
 
 ## 0. 你是谁、你的职责边界（用户亲口定过的，不许越界）
 
@@ -17,20 +17,21 @@
 - 沟通风格：对用户用大白话+具体场景（用户明确投诉过架构黑话），别堆代号缩写，
   引用代码用 `文件:行号`。
 
-## 1. 当前快照（本单写成时现跑命令核实过）
+## 1. 当前快照（交棒时现跑命令核实过）
 
-- 主分支 `codex/session-message-v1` @ **3a96c5b7**，工作区干净，**未 push**（永远
+- 主分支 `codex/session-message-v1` @ **54cd5cac**，工作区干净，**未 push**（永远
   不 push 到 origin；fork remote 是 sessionmux，也别 push，除非用户明确说）。
-- 门禁最近一次全绿（3a96c5b7 时点）：server lib 测试 **2453 过/0 挂/1 忽略**；
-  三条 clippy（desktop `--features test-utils` / server `--no-default-features --bin
-  codeg-server --lib` / mcp `--no-default-features --bin codeg-mcp`，全部 `-D warnings`）
-  全过；vitest 348 文件/4350 用例全过（注意：CPU 争抢下会闪失败，红了先复跑再下
-  结论）；pnpm build 成功。
-- 桌面模式 `cargo test --features test-utils` 的测试二进制在这台机器上启动即崩
-  （0xc0000139，根因未查明）——**按手册记"编译成功+运行 BLOCKED"，绝不假绿**。
-- 后台老任务：全仓 eslint 还在跑（task be4q7oxmn，type-aware 规则全仓要一两个小时，
-  已知 28 个存量老问题零新增；结果出来后收敛动作=全仓 prettier 一次性格式化，见 §4
-  的 G4 小批次）。**别再起第二份全仓 eslint**。
+- 门禁最近一次全绿（54cd5cac 时点）：server lib 测试 **2464 过/0 挂/1 忽略**；
+  三条 clippy 全过；vitest 348 文件/4350 用例全过（CPU 争抢下会闪失败，红了先复跑）；
+  pnpm build 成功。
+- 已合并的工人批次（全在链上，门禁绿色）：w-playbooks（2950aaa8）、
+  w-goal-resume（8e9be7d4）、w-g9-hostctl（7cd2b12e）、w-automation（79993c0b）、
+  w-archive（e672b386+54cd5cac，含任务 1-8 全部）、w-acp-survey（c4fb1820+abe7f5c8，
+  含 desktop-cc-gui 案例研究 §8）。
+- 桌面模式 `cargo test --features test-utils` 的测试二进制启动即崩（0xc0000139，
+  根因未查明）——按手册记"编译成功+运行 BLOCKED"，绝不假绿。
+- 后台老任务：全仓 eslint 还在跑（task be4q7oxmn，已知 28 个存量老问题零新增；
+  结果出来后收敛动作=全仓 prettier 一次性格式化，见 §4 的 G4 小批次）。别再起第二份。
 - 在飞的工人：见 §3。
 
 ## 2. 今天已交付落库的（全在 3a96c5b7 链上，门禁绿色）
@@ -53,12 +54,10 @@
 
 | 工人 | 状态 | 位置 |
 |---|---|---|
-| **w-archive** | 任务 7 已交（归档免除被欠回信债，fa7fb328）；任务 8（改 tool_schema/SKILL 里"high 会打断"的谎言文案）进行中 | worktree `codeg-wt/archive-mail`，分支 `wt/archive-mail`（基于 3c86beae，共 6+ 笔） |
-| **w-acp-survey** | 新任务：调研 github.com/zhukunpenglinyutong/desktop-cc-gui 的按消息 fork/rewind 实现（用户点名要的），产出追加到 ACP 调研报告 §8 | worktree `codeg-wt/acp-survey`，分支 `wt/acp-survey` |
 | **t2-capture** | 待命等 3000 复活：复采 Escape 三连截（脚本 `_current-esc.mjs` 已备好在 .artifacts/desktop-validation/maintainability-program-2026-08-19/） | 无 worktree |
 
-已收工可复用：gate-finisher（主工作区执行）、w-goal-resume、w-playbooks、
-w-automation、w-g9-hostctl（后两个防门禁踢回中——两门已绿，可放行收工）。
+已收工（全部合并落库、门禁绿色、可复用）：w-playbooks、w-goal-resume、
+w-g9-hostctl、w-automation、w-archive、w-acp-survey、gate-finisher。
 
 ## 4. 待办队列（按序，含已做裁决，别重新裁决）
 
@@ -66,9 +65,8 @@ w-automation、w-g9-hostctl（后两个防门禁踢回中——两门已绿，�
    证据包（t2-capture 16:09 报送）：3000 LISTENING 但 HTTP 永久无响应 40+ 分钟，
    codeg 本体（pid 65788）和 9222 都健康。**杀 63392 → `pnpm tauri dev` 重拉**。
    授权到手后先杀再起，然后叫 t2-capture 补拍 Escape 取证收尾 T2。
-2. **w-archive 整批合并**：交齐任务 8 后一次合并（预期与主分支 collaboration_*.rs
-   有冲突，你解——a2679456 动过同文件；它报告里提过 update_conversation_archive_core
-   签名从 () 变 Vec<i32>，三处调用点它已跟上）。合完跑后端三门。
+2. ~~**w-archive 整批合并**~~ **已完成**：e672b386+54cd5cac 已合并，门禁全绿
+   （2464 过/0 挂）。任务 1-8 全部落库。
 3. **来源过滤 UI（G13-c 前端）**：地基 created_by 已合并。派工：侧栏/会话中心加
    来源筛选（只看用户开的/隐藏 agent 开的），10 语言 i18n。
 4. **G4 小批次**（等 w-archive 落地后派，同一片文件）：两个孤儿函数
