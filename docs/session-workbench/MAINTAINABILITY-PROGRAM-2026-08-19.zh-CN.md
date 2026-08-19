@@ -693,7 +693,13 @@ T2 后置截图（CDP 9222 可用，基线在 .artifacts）+ 晨间验收报告 
   27 实质提交=12 直拿/10 适配/标题链待拍板；grok bump 1.0.5 命中冻结先导；ACP 绑定
   两修复"靶子函数已不存在+DbError::Conflict 同名反语义"禁止顺手合，立独立深挖任务。
   编排抽验三支柱属实。② 性能分析入库（57025081）：shiki 流式重分词/warm-cache=8/
-  React Compiler 未用三嫌疑+六项证伪。③ room 文件@ 合并关账（eee45d6c+修补
+  React Compiler 未用三嫌疑+六项证伪。上游合并**防复活红线（用户 2026-08-19 深夜
+  补充）**：我方已抛弃/替代的功能绝不许经由合并回流——旧委派工作流（3ebcfa25 已删，
+  上位替代=codeg-mcp 异步子智能体委托+邮箱/房间协作面）、ACP replay（13 家原生
+  解析器已替代）、timer autoPaused UI、旧 CollaborationUnreadBadge、list shim、
+  outbound_awaiting_summary 等清理产物均入黑名单；执行上 A 类 cherry-pick 逐个过
+  黑名单，B/C 类手工重放天然免疫，一次性 merge 已禁；**拿不准是否属复活的一律
+  停下交用户判断**。③ room 文件@ 合并关账（eee45d6c+修补
   6ed6bc8f，vitest 351 文件/build/eslint 全绿）：popup tabOrder 可配、room=会话|
   文件|提交、时间线 file/commit 徽章；门禁漏网两处编排修补（parsed.uri 可空、
   prettier×5）。真机验收：tab 结构/默认激活/零控制台错误全对，但**弹层选项数为 0
