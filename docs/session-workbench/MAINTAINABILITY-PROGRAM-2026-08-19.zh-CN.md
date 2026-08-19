@@ -604,3 +604,19 @@ T2 后置截图（CDP 9222 可用，基线在 .artifacts）+ 晨间验收报告 
   加上此前 7 张场景图，T2 全部通过。⑤ 新开两个 opus 工人：w-source-filter（G13-c
   来源筛选 UI）、w-instructions-survey（用户新需求：跨 harness 指令文件管理调研）。
   ⑥ 全仓 eslint 后台任务在切换中丢失，结果作废，G4 批次时重跑。
+- 2026-08-19 17:4x **G10 以收窄范围重开（用户发起）+ 分层架构定案**：用户研判了本地三个
+  参考仓（Monet=纯原生无 ACP、Paseo=Claude/Codex 自写+长尾 ACP、ccgui=per-engine
+  runtime adapter），提出 codeg 分层改造并点名 claude/codex/grok/cursor 四家要
+  fork+rewind。编排裁决（与两份仓内调研收敛一致，Paseo 承重文件已抽验属实）：
+  ① **运行时不换底**——ACP 继续当全部 13 家的默认运行时和长尾，不做 Monet 式全原生
+  重写；② 新增**历史动作层**（history provider）：私约补丁打在现有 ACP 连接上
+  （claude=桥加 _meta.claudeCode.rewindTo 循 #872，codex=桥内翻译 thread/fork，
+  **绝不旁开第二个 SDK/app-server 通道——单一活写入方是铁律**，fork 必须在原 wire
+  返回新 session id 以复用 persist_fork_outcome 全套落盘/防重导入）；③ v1 里
+  fork=rewind：forkAtMessage 即非破坏回退，原地截断与文件回退划出 v1；④ 能力位
+  照 Monet 形状（available/unavailable+reason_code），UI 不认引擎名；⑤ 锚点采集
+  优先走 parser 输出带 uuid/turn-id（可能免建表，RFC 定）；⑥ **grok/cursor 两家
+  先侦察后承诺**（wire 无 fork 广告、无同行先例），已派 w-fork-recon（Sonnet）出
+  可行性档位报告（A原生/B文件手术/C重放降级/D不可行）。分工：RFC 增补由编排出稿，
+  实施排 G11 上游合并之后。另：用户令子代理档位再降 **Sonnet 5**（opus 也太贵），
+  在跑的 opus 工人跑完为止。
