@@ -4,7 +4,7 @@
 > 姐妹篇：[SESSION-FORK-REWIND-SURVEY-2026-08-19](./SESSION-FORK-REWIND-SURVEY-2026-08-19.zh-CN.md)（仓内机制事实，本文不重述）。
 > 本文 ACP 一律指 Zed 系 **Agent Client Protocol**，与 IBM/Linux Foundation 的同名协议无关。
 
-结论先行：**fork/rewind 痛点已有两个现成实现在上游排队**——claude-agent-acp PR #872（`session/fork` 加 `_meta.claudeCode.rewindTo`，按消息 fork，正是 G10"路径A私约"的现成实现）和 PR #966（`_session/rewind` 包原生 /rewind，文件+对话双模式），均 open 且无 maintainer 回应。协议侧：schema 已从 codeg 钉的 0.11.7 走到 **1.6.0**（2026-07-21），v2 alpha 已发，**Session Rewind RFD（PR #1321）在酝酿**但无 maintainer 评审。维护负担侧：官方 ACP Registry 已收 41 个 agent 且版本每小时自动更新，是最接近"可直接依赖的适配器集合"的东西；同行里只有 Vibe Kanban 走"自维护 executor + 原生 headless CLI"路并且原生 fork 覆盖反而更好。**Steer（回合中途注入）侧**：wire 面只有 claude/codex 两家经 `_session/steering` 私约支持；kimi/openclaw 原生有 steer 底座但 ACP 面未暴露；协议层 session/inject（queue+steer 双模式）还在 pre-RFD 阶段——矩阵见 §3。
+结论先行：**fork/rewind 痛点已有两个现成实现在上游排队**——claude-agent-acp PR #872（`session/fork` 加 `_meta.claudeCode.rewindTo`，按消息 fork，正是 G10"路径A私约"的现成实现）和 PR #966（`_session/rewind` 包原生 /rewind，文件+对话双模式），均 open 且无 maintainer 回应。协议侧：schema 已从 codeg 钉的 0.11.7 走到 **1.6.0**（2026-07-21），v2 alpha 已发，**Session Rewind RFD（PR #1321）在酝酿**但无 maintainer 评审。维护负担侧：官方 ACP Registry 已收 41 个 agent 且版本每小时自动更新，是最接近"可直接依赖的适配器集合"的东西；同行里只有 Vibe Kanban 走"自维护 executor + 原生 headless CLI"路并且原生 fork 覆盖反而更好。**Steer（回合中途注入）侧**：wire 面只有 claude/codex 两家经 `_session/steering` 私约支持；kimi/openclaw 原生有 steer 底座但 ACP 面未暴露；协议层 session/inject（queue+steer 双模式）还在 pre-RFD 阶段——矩阵见 §3。**案例研究（§8）**：desktop-cc-gui（4.0k stars，MIT）已上线 claude 文件手术 fork-at-message 和 codex thread/fork(messageId)+archive 伪 rewind——G10 路径B与 codex app-server 路各获一个独立实证，其锚点四级降级链可直接抄。
 
 ## 1. 协议本身的演进
 
@@ -84,3 +84,17 @@
 7. **盯上游两个提案**：Session Rewind RFD（PR #1321）与 v2 replayFrom cursor——任一落地都直接解 G10 痛点①③；可在 #1321 留 codeg 的 use case 增加存在感。
 8. **减负**：接 ACP Registry 的 registry.json 做"新版本监控 + 新 agent 发现"（copilot-cli/goose/qwen-code 是潜在新接入对象），比手工巡 13 家 npm 省力；不建议为此迁到 Vibe Kanban 式全自研 executor。
 9. **不建议**：现在自研任何家的 rewind（claude 等 #966、codex 有 app-server 原生）；把 registry.json 当运行时依赖（只做监控源，pin 权留在 registry.rs）；对无 steer 能力的家承诺"中途必达"（§3 矩阵之外的 wire 行为未定义，只能靠降级链）。
+
+## 8. 案例研究：desktop-cc-gui 的 fork/rewind 实现（2026-08-19 clone 精读，HEAD 64c0873c4 / v0.9.1）
+
+**项目概况**（github.com/zhukunpenglinyutong/desktop-cc-gui）：MIT；GitHub API 实测 4040 stars / 357 forks / 276 open issues；2026-02-03 创建（README 自述源自 CodexMonitor fork），5042 commits，调研当天仍有 push——高活跃、中成熟度。Tauri+TS 的 multi-engine 桌面客户端，**不走 ACP**：capability matrix 注册 8 引擎（claude/codex/gemini/grok/opencode/kimi/pi/dsh，`capability_matrix.rs:24-33`），claude 走 CLI stdio（`--resume`/`--fork-session`/`--session-id`，`engine/claude.rs:1236-1260`），codex 走 app-server JSON-RPC（`thread/*`），dsh 走 host RPC。
+
+**fork/rewind 只有 claude/codex 两家**：UI 闸门 `isRewindSupportedThreadId` 只放行 `claude:`/`codex:` 前缀（`rewindSupportedThreadId.ts`），spec 矩阵其余家 fork=unknown。README:40 的宣称与代码一致（不虚标）；README:33 宣称 DSH 可分叉——实现是 dsh `session.fork` RPC 的整会话 head fork（`engine/dsh/session.rs:149-158`），turn open 时报 `fork-unavailable`（`dsh/host.rs:222-224`），无消息级。
+
+**claude 按消息 fork = 文件手术（G10 路径B 的完整上线实证）**：`fork_claude_session_from_message_in_base_dir`（`engine/claude_history.rs:2662-2730`）：复制 jsonl、**写到目标 user 消息前停笔**（exclusive；`rewind_commands.rs:7` 的注释写 inclusive，与实现矛盾）、递归重写 `session_id/sessionId`（`rewrite_session_id_fields`，1912-1935）、丢弃 Hidden 分类条目、找不到锚点则删半成品报错。锚点 = 条级 `uuid`（fallback `message.id`，1967-1987），前端先把 UI 消息映射回历史 uuid 再下调令。**完全不处理 `parentUuid`**（全文件零命中）——截断点后的悬空引用无修复；subagent 目录不复制。fork 产物用 `--resume <new-uuid>` 拉起。claude **rewind = fork-at-message + 删源会话**（`useThreadActionsSessionRuntime.ts:~900-995`：rename→hide→resume→`deleteClaudeSessionService`；rewind 到首条 = 直接删会话重来；fork 失败回滚文件快照）。三模式 messages-and-files / messages-only / files-only（`rewindMode.ts`）。
+
+**文件回退是自研启发式，不用 claude 原生 rewindFiles**：`claudeRewindRestore.ts` 从 transcript 的 tool 调用反推变更（edit 的 oldText/newText、rename、bash 产物推断——含中文"删除"意图正则），写回/删除/git revert；git 已提交路径跳过（ignoredCommittedPaths）、失败路径记 skippedPaths、整体可快照回滚。两个引擎共用这套。
+
+**codex rewind = fork-at-message + archive 源线程（伪 rewind 范式）**：`rewind_thread_from_message`（`codex/rewind.rs:407-504`）：resume → 解析锚点 → `thread/fork{threadId, messageId}`（`shared/codex_core.rs:776-801`）→ commit 本地 usage 记录 → archive 源线程。**第三方实证：codex app-server 的 thread/fork 吃 `messageId` 参数做按消息 fork**（该参数是否上游官方文档化未验证）。codex fork 同款不 archive。**锚点四级降级**（`codex/rewind.rs:120-188`）：精确 messageId → 规范化文本+第 N 次出现 → **尾部对齐**（runtime 消息多于本地时按计数差对齐索引，吸收 compaction/隐藏消息漂移）→ 序号兜底，全灭报 `[FORK_TARGET_NOT_FOUND]`。
+
+**对 codeg 的借鉴**：① 路径B（claude 文件手术）被一个 4k star 项目独立实现并上线，配方 = 复制+截断+改 sessionId+丢 Hidden，**且不做 parentUuid 修复也敢发**——G10 风险清单里最担心的悬空引用在实践中被直接忽略（代价无记录，查不到其 resume 验证讨论；有没有踩坑未知）；② codex 的 fork+archive"伪 rewind"和 thread/fork messageId 用法，给 G10 建议 3（codex 走 app-server）提供第二个独立实证；③ 锚点四级降级链是"消息锚点采集"最可直接抄的部分（MIT 可抄）；④ 文件回退自建启发式而非原生 rewindFiles，侧面说明 GUI 场景下原生 checkpoint 面不好依赖；⑤ 测试纪律可抄：fork 手术和锚点降级各有独立单测文件（`claude_history_fork_tests.rs`、`codex/rewind.rs:253-405`）。
