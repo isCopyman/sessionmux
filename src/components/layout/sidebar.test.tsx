@@ -22,8 +22,14 @@ const spies = vi.hoisted(() => ({
     showWorktrees?: boolean
     showCompleted?: boolean
     showRecent?: boolean
+    showAgentCreated?: boolean
+    showAutomationCreated?: boolean
     sectionOrder?: readonly string[]
     unreadByConversation?: ReadonlyMap<number, number>
+  } | null,
+  collectionProps: null as {
+    showAgentCreated?: boolean
+    showAutomationCreated?: boolean
   } | null,
   sessionCenterOpen: false,
   sessionCenterCollection: null as number | "unclassified" | null,
@@ -44,6 +50,8 @@ vi.mock("@/components/conversations/sidebar-conversation-list", () => ({
     showWorktrees?: boolean
     showCompleted?: boolean
     showRecent?: boolean
+    showAgentCreated?: boolean
+    showAutomationCreated?: boolean
     sectionOrder?: readonly string[]
     unreadByConversation?: ReadonlyMap<number, number>
   }) => {
@@ -67,11 +75,15 @@ vi.mock("@/components/collections/collection-tree", () => ({
       onOpenScope,
       onNewSession,
       showSessions,
+      showAgentCreated,
+      showAutomationCreated,
       unreadByConversation,
     }: {
       onOpenScope: (scope: number | "unclassified") => void
       onNewSession?: (rootFolderId: number) => void
       showSessions?: boolean
+      showAgentCreated?: boolean
+      showAutomationCreated?: boolean
       unreadByConversation?: ReadonlyMap<number, number>
     },
     ref
@@ -81,6 +93,8 @@ vi.mock("@/components/collections/collection-tree", () => ({
     }))
     // eslint-disable-next-line react-hooks/immutability -- test probe captures rendered props
     spies.collectionShowsSessions = showSessions === true
+    // eslint-disable-next-line react-hooks/immutability -- test probe captures rendered props
+    spies.collectionProps = { showAgentCreated, showAutomationCreated }
     // eslint-disable-next-line react-hooks/immutability -- test probe captures rendered props
     spies.collectionUnread = unreadByConversation ?? null
     return (
@@ -195,6 +209,7 @@ describe("Sidebar — fixed New chat / Search region", () => {
     spies.sessionCenterOpen = false
     spies.sessionCenterCollection = null
     spies.collectionShowsSessions = false
+    spies.collectionProps = null
     spies.workbenchUnread = null
     spies.collectionUnread = null
     spies.collectionScrollToActive.mockClear()
@@ -402,6 +417,73 @@ describe("Sidebar — Show Recent group toggle", () => {
     expect(
       screen.getByRole("menuitemcheckbox", { name: "Show Recent group" })
     ).toBeTruthy()
+  })
+})
+
+describe("Sidebar — Session source switches", () => {
+  beforeEach(() => {
+    localStorage.clear()
+    localStorage.setItem("workspace:sidebar-organization-mode", "locations")
+    spies.listProps = null
+    spies.collectionProps = null
+    mockState.activeFolder = { id: 7, path: "/x" }
+  })
+
+  it("defaults both sources on, so the list is unchanged for a new user", () => {
+    renderSidebar()
+    expect(spies.listProps?.showAgentCreated).toBe(true)
+    expect(spies.listProps?.showAutomationCreated).toBe(true)
+  })
+
+  it("respects explicitly-stored 'false' values from localStorage", () => {
+    localStorage.setItem("workspace:sidebar-show-agent-created", "false")
+    localStorage.setItem("workspace:sidebar-show-automation-created", "false")
+    renderSidebar()
+    expect(spies.listProps?.showAgentCreated).toBe(false)
+    expect(spies.listProps?.showAutomationCreated).toBe(false)
+  })
+
+  it("hides agent-created Sessions without touching automation ones", async () => {
+    const user = userEvent.setup()
+    renderSidebar()
+
+    await user.click(screen.getByRole("button", { name: "View options" }))
+    await user.click(
+      screen.getByRole("menuitemcheckbox", {
+        name: "Show agent-created sessions",
+      })
+    )
+
+    expect(localStorage.getItem("workspace:sidebar-show-agent-created")).toBe(
+      "false"
+    )
+    expect(spies.listProps?.showAgentCreated).toBe(false)
+    expect(spies.listProps?.showAutomationCreated).toBe(true)
+    // A settings panel, like every other option in this menu: it stays open.
+    expect(
+      screen.getByRole("menuitemcheckbox", {
+        name: "Show automation-created sessions",
+      })
+    ).toBeTruthy()
+  })
+
+  it("threads the facet into the Collection tree too", async () => {
+    // Both organization modes list Sessions, so the facet cannot be
+    // locations-only the way "Show worktree folders" is.
+    localStorage.setItem("workspace:sidebar-organization-mode", "collections")
+    const user = userEvent.setup()
+    renderSidebar()
+    expect(spies.collectionProps?.showAutomationCreated).toBe(true)
+
+    await user.click(screen.getByRole("button", { name: "View options" }))
+    await user.click(
+      screen.getByRole("menuitemcheckbox", {
+        name: "Show automation-created sessions",
+      })
+    )
+
+    expect(spies.collectionProps?.showAutomationCreated).toBe(false)
+    expect(spies.collectionProps?.showAgentCreated).toBe(true)
   })
 })
 

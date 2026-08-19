@@ -5,16 +5,22 @@ import {
   loadOrganizationMode,
   loadSectionCollapsed,
   loadSectionOrder,
+  loadShowAgentCreated,
+  loadShowAutomationCreated,
   loadShowRecent,
   moveSectionInOrder,
   normalizeSectionOrder,
   saveSectionOrder,
   saveOrganizationMode,
+  saveShowAgentCreated,
+  saveShowAutomationCreated,
   saveShowRecent,
 } from "./sidebar-view-mode-storage"
 
 const SECTION_ORDER_KEY = "workspace:sidebar-section-order"
 const SHOW_RECENT_KEY = "workspace:sidebar-show-recent"
+const SHOW_AGENT_CREATED_KEY = "workspace:sidebar-show-agent-created"
+const SHOW_AUTOMATION_CREATED_KEY = "workspace:sidebar-show-automation-created"
 
 describe("normalizeSectionOrder", () => {
   it("passes a complete order through unchanged", () => {
@@ -131,6 +137,34 @@ describe("loadShowRecent", () => {
     expect(loadShowRecent()).toBe(false)
     saveShowRecent(true)
     expect(loadShowRecent()).toBe(true)
+  })
+})
+
+describe("session-source switches", () => {
+  beforeEach(() => localStorage.clear())
+
+  it("default to on, so an untouched sidebar lists every source", () => {
+    expect(loadShowAgentCreated()).toBe(true)
+    expect(loadShowAutomationCreated()).toBe(true)
+  })
+
+  it("respect an explicitly-stored false", () => {
+    saveShowAgentCreated(false)
+    expect(localStorage.getItem(SHOW_AGENT_CREATED_KEY)).toBe("false")
+    expect(loadShowAgentCreated()).toBe(false)
+    saveShowAgentCreated(true)
+    expect(loadShowAgentCreated()).toBe(true)
+
+    saveShowAutomationCreated(false)
+    expect(localStorage.getItem(SHOW_AUTOMATION_CREATED_KEY)).toBe("false")
+    expect(loadShowAutomationCreated()).toBe(false)
+  })
+
+  it("are independent of each other", () => {
+    // Keeping scheduled runs while dropping delegation children (or the
+    // reverse) is the whole point of two switches instead of one.
+    saveShowAgentCreated(false)
+    expect(loadShowAutomationCreated()).toBe(true)
   })
 })
 

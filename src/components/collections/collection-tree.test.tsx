@@ -58,6 +58,9 @@ const h = vi.hoisted(() => ({
     createdAt: string
     lastEventAt?: string | null
   }>,
+  // One Session per source, plus 101 which deliberately records none — that is
+  // what a row written before the `created_by` column looks like, and it must
+  // read as user-created rather than vanish behind the source facet.
   conversations: [
     {
       id: 101,
@@ -94,6 +97,7 @@ const h = vi.hoisted(() => ({
       updated_at: "2026-06-02T00:00:00.000Z",
       archived_at: null,
       pinned_at: null,
+      created_by: "user",
     },
     {
       id: 103,
@@ -112,6 +116,7 @@ const h = vi.hoisted(() => ({
       updated_at: "2026-06-01T00:00:00.000Z",
       archived_at: null,
       pinned_at: null,
+      created_by: "agent",
     },
     {
       id: 104,
@@ -130,6 +135,7 @@ const h = vi.hoisted(() => ({
       updated_at: "2026-05-31T00:00:00.000Z",
       archived_at: null,
       pinned_at: null,
+      created_by: "automation",
     },
   ],
   items: [
@@ -325,6 +331,8 @@ function renderTree(
   onOpenScope = vi.fn(),
   options: {
     showSessions?: boolean
+    showAgentCreated?: boolean
+    showAutomationCreated?: boolean
     onOpenSession?: (session: DbConversationSummary) => void
     onOpenSessionInSplit?: (
       session: DbConversationSummary,
@@ -504,6 +512,30 @@ describe("CollectionTree", () => {
     expect(onOpenSession).toHaveBeenCalledWith(
       expect.objectContaining({ id: 101, title: "Evidence review" })
     )
+  })
+
+  it("drops agent-created Sessions when the source switch is off", async () => {
+    renderTree(vi.fn(), { showSessions: true, showAgentCreated: false })
+
+    // 102 is user-created and 103 was started by a delegating agent.
+    expect(await screen.findByText("Loose notes")).toBeTruthy()
+    expect(screen.queryByText("Worktree experiment")).toBeNull()
+  })
+
+  it("keeps a Session with no recorded source under both switches off", async () => {
+    const { user } = renderTree(vi.fn(), {
+      showSessions: true,
+      showAgentCreated: false,
+      showAutomationCreated: false,
+    })
+    // Wait for the tree to hydrate before reaching for a Collection row.
+    expect(await screen.findByText("Loose notes")).toBeTruthy()
+
+    // 101 predates the column: "hide what agents and automations started" must
+    // never be able to hide it, so the facet can't empty the tree.
+    await user.click(screen.getByRole("button", { name: "Research" }))
+    await user.click(screen.getByTitle("Sources"))
+    expect(await screen.findByText("Evidence review")).toBeTruthy()
   })
 
   it("opens an inline Collection Session directly in a chosen pane", async () => {

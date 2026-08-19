@@ -375,6 +375,62 @@ describe("ConversationManageDialog", () => {
     expect(screen.getByText("on feature")).toBeTruthy()
   })
 
+  it("narrows the list to one Session source", async () => {
+    h.listAll.mockResolvedValue([
+      conversation({ id: 1, title: "I started this", created_by: "user" }),
+      conversation({
+        id: 2,
+        title: "a delegate started this",
+        created_by: "agent",
+      }),
+      conversation({
+        id: 3,
+        title: "a timer started this",
+        created_by: "automation",
+      }),
+    ])
+    const user = renderDialog()
+    await screen.findByText("I started this")
+
+    await user.click(screen.getByRole("combobox", { name: "Filter by source" }))
+    await user.click(screen.getByRole("option", { name: "Created by me" }))
+
+    expect(screen.getByText("I started this")).toBeTruthy()
+    expect(screen.queryByText("a delegate started this")).toBeNull()
+    expect(screen.queryByText("a timer started this")).toBeNull()
+  })
+
+  it("counts a Session with no recorded source as user-created", async () => {
+    // Rows written before `created_by` existed, and payloads from a server
+    // that doesn't send the column — both belong under "Created by me" rather
+    // than falling out of every source view.
+    h.listAll.mockResolvedValue([
+      conversation({ id: 1, title: "legacy row" }),
+      conversation({ id: 2, title: "agent row", created_by: "agent" }),
+    ])
+    const user = renderDialog()
+    await screen.findByText("legacy row")
+
+    await user.click(screen.getByRole("combobox", { name: "Filter by source" }))
+    await user.click(screen.getByRole("option", { name: "Created by me" }))
+
+    expect(screen.getByText("legacy row")).toBeTruthy()
+    expect(screen.queryByText("agent row")).toBeNull()
+  })
+
+  it("lists every source until the facet is moved off 'all'", async () => {
+    h.listAll.mockResolvedValue([
+      conversation({ id: 1, title: "mine", created_by: "user" }),
+      conversation({ id: 2, title: "delegated", created_by: "agent" }),
+      conversation({ id: 3, title: "scheduled", created_by: "automation" }),
+    ])
+    renderDialog()
+    await screen.findByText("mine")
+
+    expect(screen.getByText("delegated")).toBeTruthy()
+    expect(screen.getByText("scheduled")).toBeTruthy()
+  })
+
   it("collapses an open filter dropdown on Escape before the dialog closes", async () => {
     const onOpenChange = vi.fn()
     render(
