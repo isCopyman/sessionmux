@@ -31,17 +31,95 @@ use crate::web::event_bridge::{
     IMPORT_SCAN_PROGRESS_EVENT, TABS_CHANGED_EVENT,
 };
 
-#[allow(clippy::too_many_arguments)]
+/// Query parameters for [`list_all_conversations_core`]. Bundled into a struct
+/// once the Codex title-sync dependencies (`emitter`, `chat_channel_manager`)
+/// joined the function's own args — a positional call at that width stops
+/// being reviewable, and a struct lets tests default the fields they don't
+/// care about via `..Default::default()`.
+#[derive(Default)]
+pub(crate) struct ListAllConversationsOptions {
+    pub(crate) folder_ids: Option<Vec<i32>>,
+    pub(crate) agent_type: Option<AgentType>,
+    pub(crate) search: Option<String>,
+    pub(crate) sort_by: Option<String>,
+    pub(crate) status: Option<String>,
+    pub(crate) archived: bool,
+    pub(crate) include_children: bool,
+}
+
+/// The sidebar/@-panel/workspace list's primary read. Before applying its own
+/// filters, this synchronizes every live, unlocked Codex conversation's title
+/// from `session_index.jsonl` into the DB — the DB is the single source of
+/// truth every one of those surfaces reads, and without this sync a rename made
+/// in another Codex client stayed invisible until the user happened to open
+/// that conversation's detail view (the only other path that adopts it, via the
+/// per-turn auto-title backfill in `get_folder_conversation_with_live_core`).
+///
+/// Syncing here — not the parser layer — means a title update lands before
+/// `search` is applied below, so a rename is searchable on this same call.
+///
+/// The DB write and its sidebar broadcast happen inline (cheap, and the
+/// response this call is about to build must not disagree with what other
+/// clients were just told); chat-channel propagation is detached onto its own
+/// task by [`notify_codex_title_refresh`] so a slow/unreachable Telegram costs
+/// a late topic rename, not a hung list read (this is a per-keystroke,
+/// 300ms-debounced call from the search and manage dialogs).
 pub async fn list_all_conversations_core(
     conn: &sea_orm::DatabaseConnection,
-    folder_ids: Option<Vec<i32>>,
-    agent_type: Option<AgentType>,
-    search: Option<String>,
-    sort_by: Option<String>,
-    status: Option<String>,
-    archived: bool,
-    include_children: bool,
+    emitter: &EventEmitter,
+    chat_channel_manager: &crate::chat_channel::manager::ChatChannelManager,
+    options: ListAllConversationsOptions,
 ) -> Result<Vec<DbConversationSummary>, AppCommandError> {
+    let codex_titles = match tokio::task::spawn_blocking(|| {
+        CodexParser::new().session_index_titles()
+    })
+    .await
+    {
+        Ok(titles) => titles,
+        Err(error) => {
+            tracing::warn!(
+                error = %error,
+                "conversation list: failed to load Codex session titles; continuing without refresh"
+            );
+            HashMap::new()
+        }
+    };
+    list_all_conversations_core_with_codex_titles(
+        conn,
+        emitter,
+        chat_channel_manager,
+        options,
+        &codex_titles,
+    )
+    .await
+}
+
+/// Test seam for [`list_all_conversations_core`]: takes the Codex title map as
+/// input instead of reading `~/.codex/sessions/../session_index.jsonl`, so the
+/// sync/lock/notify behavior is testable without fixture session directories.
+async fn list_all_conversations_core_with_codex_titles(
+    conn: &sea_orm::DatabaseConnection,
+    emitter: &EventEmitter,
+    chat_channel_manager: &crate::chat_channel::manager::ChatChannelManager,
+    options: ListAllConversationsOptions,
+    codex_titles: &HashMap<String, String>,
+) -> Result<Vec<DbConversationSummary>, AppCommandError> {
+    // Synchronize before `list_all` builds any folder/agent/search/status
+    // filters so a freshly generated Codex title is visible on this same call.
+    let refreshed_ids = conversation_service::refresh_codex_auto_titles(conn, codex_titles).await;
+    // Detached on purpose — see `notify_codex_title_refresh`. The list must not
+    // wait on Telegram.
+    drop(notify_codex_title_refresh(conn, emitter, chat_channel_manager, refreshed_ids).await);
+
+    let ListAllConversationsOptions {
+        folder_ids,
+        agent_type,
+        search,
+        sort_by,
+        status,
+        archived,
+        include_children,
+    } = options;
     conversation_service::list_all(
         conn,
         folder_ids,
@@ -60,7 +138,9 @@ pub async fn list_all_conversations_core(
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 #[allow(clippy::too_many_arguments)]
 pub async fn list_all_conversations(
+    app: tauri::AppHandle,
     db: tauri::State<'_, AppDatabase>,
+    chat_channel_manager: tauri::State<'_, crate::chat_channel::manager::ChatChannelManager>,
     folder_ids: Option<Vec<i32>>,
     agent_type: Option<AgentType>,
     search: Option<String>,
@@ -71,13 +151,17 @@ pub async fn list_all_conversations(
 ) -> Result<Vec<DbConversationSummary>, AppCommandError> {
     list_all_conversations_core(
         &db.conn,
-        folder_ids,
-        agent_type,
-        search,
-        sort_by,
-        status,
-        archived.unwrap_or(false),
-        include_children.unwrap_or(false),
+        &EventEmitter::Tauri(app),
+        &chat_channel_manager,
+        ListAllConversationsOptions {
+            folder_ids,
+            agent_type,
+            search,
+            sort_by,
+            status,
+            archived: archived.unwrap_or(false),
+            include_children: include_children.unwrap_or(false),
+        },
     )
     .await
 }
@@ -1781,6 +1865,90 @@ pub(crate) async fn emit_conversation_upsert(
     }
 }
 
+/// Push one conversation's CURRENT title to its bound chat threads, then
+/// confirm it is still current — re-sending if it is not.
+///
+/// This is the convergence-safe counterpart to [`sync_conversation_title_to_channels_core`],
+/// needed specifically because [`notify_codex_title_refresh`] runs detached: a
+/// provider edit is a remote call that can land arbitrarily late, so two syncs
+/// for the same conversation (e.g. this batch's and a manual rename landing
+/// while it is in flight) could reach the provider out of order and leave a
+/// bound thread named after a title the user already replaced, with nothing
+/// left to retry. Re-reading the title before every attempt closes that gap:
+/// the loop exits only when the value it just read equals the one it last
+/// sent, so an exit always leaves the provider holding the row's current
+/// title. `update_conversation_title` and the per-turn auto-title backfill
+/// stay on the simpler single-pass helper — they run inline on a
+/// request/response path, where an unbounded retry loop would reintroduce the
+/// latency this whole detached path exists to avoid.
+///
+/// Deliberately NOT capped at N attempts: an iteration only happens when a NEW
+/// title was observed, so it terminates as soon as renames stop, and any fixed
+/// cap would exit stale on a long enough run of mid-flight renames.
+async fn sync_conversation_title_until_current(
+    conn: &sea_orm::DatabaseConnection,
+    chat_channel_manager: &crate::chat_channel::manager::ChatChannelManager,
+    conversation_id: i32,
+) {
+    let mut sent: Option<String> = None;
+    loop {
+        let summary = match conversation_service::get_by_id(conn, conversation_id).await {
+            Ok(summary) => summary,
+            Err(e) => {
+                tracing::warn!(
+                    "[conversations] Codex title channel sync stopped for {conversation_id} \
+                     (get_by_id failed): {e}"
+                );
+                return;
+            }
+        };
+        let Some(title) = summary.title else { return };
+        if sent.as_deref() == Some(title.as_str()) {
+            return;
+        }
+        chat_channel_manager
+            .sync_conversation_title(conn, conversation_id, &title)
+            .await;
+        sent = Some(title);
+    }
+}
+
+/// Broadcast a sidebar upsert for every conversation [`conversation_service::refresh_codex_auto_titles`]
+/// just rewrote, then propagate the new title to any bound chat-channel thread.
+///
+/// The two halves are deliberately NOT symmetric:
+///
+/// * The sidebar upsert is emitted inline. It is DB-only and cheap, and the
+///   list this was called from must not disagree with what other clients were
+///   just told.
+/// * Chat-channel propagation is detached onto its own task, because it ends in
+///   outbound HTTP (Telegram `editForumTopic`, a 60s per-request timeout, once
+///   per bound thread). `list_all_conversations` is the sidebar's primary read
+///   — driven per-keystroke behind a 300ms debounce by the search and manage
+///   dialogs — so it must never await a remote service.
+///
+/// Returns the detached task's handle so tests can join it; production callers
+/// drop it (the work is best-effort and already logged on failure).
+async fn notify_codex_title_refresh(
+    conn: &sea_orm::DatabaseConnection,
+    emitter: &EventEmitter,
+    chat_channel_manager: &crate::chat_channel::manager::ChatChannelManager,
+    conversation_ids: Vec<i32>,
+) -> tokio::task::JoinHandle<()> {
+    for &conversation_id in &conversation_ids {
+        emit_conversation_upsert(emitter, conn, conversation_id).await;
+    }
+
+    let conn = conn.clone();
+    let chat_channel_manager = chat_channel_manager.clone_ref();
+    tokio::spawn(async move {
+        for conversation_id in conversation_ids {
+            sync_conversation_title_until_current(&conn, &chat_channel_manager, conversation_id)
+                .await;
+        }
+    })
+}
+
 /// Emit a `conversation://changed` Deleted for `conversation_id` so every
 /// client removes the row. No re-fetch: the row is already soft-deleted.
 pub(crate) fn emit_conversation_deleted(emitter: &EventEmitter, conversation_id: i32) {
@@ -3291,9 +3459,14 @@ mod tests {
 
         // It surfaces in the default sidebar query (active-folder scope).
         let rows =
-            list_all_conversations_core(&db.conn, None, None, None, None, None, false, false)
-                .await
-                .expect("list");
+            list_all_conversations_core(
+                &db.conn,
+                &EventEmitter::Noop,
+                &crate::chat_channel::manager::ChatChannelManager::new(),
+                ListAllConversationsOptions::default(),
+            )
+            .await
+            .expect("list");
         assert!(rows.iter().any(|c| c.id == result.conversation_id));
     }
 
@@ -3682,9 +3855,14 @@ mod tests {
     async fn list_all_conversations_core_empty_db_returns_empty() {
         let db = fresh_in_memory_db().await;
         let rows =
-            list_all_conversations_core(&db.conn, None, None, None, None, None, false, false)
-                .await
-                .expect("list");
+            list_all_conversations_core(
+                &db.conn,
+                &EventEmitter::Noop,
+                &crate::chat_channel::manager::ChatChannelManager::new(),
+                ListAllConversationsOptions::default(),
+            )
+            .await
+            .expect("list");
         assert!(rows.is_empty(), "fresh db must have zero conversations");
     }
 
@@ -4124,9 +4302,14 @@ mod tests {
             .expect("delete");
         // After soft delete the row should no longer show up in list_all.
         let remaining =
-            list_all_conversations_core(&db.conn, None, None, None, None, None, false, false)
-                .await
-                .expect("list");
+            list_all_conversations_core(
+                &db.conn,
+                &EventEmitter::Noop,
+                &crate::chat_channel::manager::ChatChannelManager::new(),
+                ListAllConversationsOptions::default(),
+            )
+            .await
+            .expect("list");
         assert!(
             remaining.iter().all(|c| c.id != conv_id),
             "soft-deleted conversation must not appear in list_all"
@@ -4375,6 +4558,555 @@ mod tests {
         assert!(
             saw_parent_upsert,
             "parent must re-broadcast an Upsert for child_count convergence"
+        );
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // Codex session-title sync (`list_all_conversations_core`): the DB is the
+    // single source of truth every list-reading surface (sidebar, @-panel,
+    // workspace list) sees, kept current here rather than via a read-time
+    // parser overlay. Covers sync-before-search ordering, the `title_locked`
+    // guard, best-effort degradation when the index is missing/unreadable,
+    // and the detached chat-channel convergence loop.
+    // ──────────────────────────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn list_all_conversations_core_syncs_codex_index_title_before_search() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/codeg-list-codex-index").await;
+        let row = conversation_service::create(
+            &db.conn,
+            folder_id,
+            AgentType::Codex,
+            Some("Makefile 文件的作用".into()),
+            None,
+        )
+        .await
+        .expect("create conversation");
+        conversation_service::update_external_id(
+            &db.conn,
+            row.id,
+            "01a00496-1418-7273-a06f-dc4fae5cfa64".into(),
+        )
+        .await
+        .expect("set external id");
+        let before = conversation_service::get_by_id(&db.conn, row.id)
+            .await
+            .expect("get before");
+        let titles = HashMap::from([(
+            "01a00496-1418-7273-a06f-dc4fae5cfa64".to_string(),
+            "解释 Makefile 文件作用".to_string(),
+        )]);
+
+        let rows = list_all_conversations_core_with_codex_titles(
+            &db.conn,
+            &EventEmitter::Noop,
+            &crate::chat_channel::manager::ChatChannelManager::new(),
+            ListAllConversationsOptions {
+                agent_type: Some(AgentType::Codex),
+                search: Some("解释 Makefile".into()),
+                ..Default::default()
+            },
+            &titles,
+        )
+        .await
+        .expect("list");
+
+        assert_eq!(
+            rows.len(),
+            1,
+            "the new title must satisfy this same call's search"
+        );
+        assert_eq!(rows[0].id, row.id);
+        assert_eq!(rows[0].title.as_deref(), Some("解释 Makefile 文件作用"));
+        let stored = conversation_service::get_by_id(&db.conn, row.id)
+            .await
+            .expect("get stored");
+        assert_eq!(stored.title.as_deref(), Some("解释 Makefile 文件作用"));
+        assert_eq!(stored.updated_at, before.updated_at);
+    }
+
+    #[tokio::test]
+    async fn list_all_conversations_core_preserves_locked_codex_title() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/codeg-list-codex-locked").await;
+        let row = conversation_service::create(
+            &db.conn,
+            folder_id,
+            AgentType::Codex,
+            Some("initial".into()),
+            None,
+        )
+        .await
+        .expect("create conversation");
+        conversation_service::update_external_id(&db.conn, row.id, "locked-session".into())
+            .await
+            .expect("set external id");
+        conversation_service::update_title(&db.conn, row.id, "我的手动标题".into())
+            .await
+            .expect("manual rename");
+        let titles = HashMap::from([("locked-session".to_string(), "Codex 自动标题".to_string())]);
+
+        let rows = list_all_conversations_core_with_codex_titles(
+            &db.conn,
+            &EventEmitter::Noop,
+            &crate::chat_channel::manager::ChatChannelManager::new(),
+            ListAllConversationsOptions::default(),
+            &titles,
+        )
+        .await
+        .expect("list");
+
+        let listed = rows
+            .iter()
+            .find(|item| item.id == row.id)
+            .expect("listed row");
+        assert_eq!(listed.title.as_deref(), Some("我的手动标题"));
+        assert!(listed.title_locked);
+        let stored = conversation_service::get_by_id(&db.conn, row.id)
+            .await
+            .expect("get stored");
+        assert_eq!(stored.title.as_deref(), Some("我的手动标题"));
+        assert!(stored.title_locked);
+    }
+
+    #[tokio::test]
+    async fn list_all_conversations_core_keeps_title_when_codex_index_is_missing() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/codeg-list-codex-no-index").await;
+        let row = conversation_service::create(
+            &db.conn,
+            folder_id,
+            AgentType::Codex,
+            Some("数据库原标题".into()),
+            None,
+        )
+        .await
+        .expect("create conversation");
+        conversation_service::update_external_id(&db.conn, row.id, "missing-index-session".into())
+            .await
+            .expect("set external id");
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let titles = CodexParser::with_base_dir(temp_dir.path().join("missing-sessions"))
+            .session_index_titles();
+        assert!(
+            titles.is_empty(),
+            "a missing index must produce no title updates"
+        );
+
+        let rows = list_all_conversations_core_with_codex_titles(
+            &db.conn,
+            &EventEmitter::Noop,
+            &crate::chat_channel::manager::ChatChannelManager::new(),
+            ListAllConversationsOptions::default(),
+            &titles,
+        )
+        .await
+        .expect("list");
+
+        let listed = rows
+            .iter()
+            .find(|item| item.id == row.id)
+            .expect("listed row");
+        assert_eq!(listed.title.as_deref(), Some("数据库原标题"));
+        let stored = conversation_service::get_by_id(&db.conn, row.id)
+            .await
+            .expect("get stored");
+        assert_eq!(stored.title.as_deref(), Some("数据库原标题"));
+    }
+
+    #[tokio::test]
+    async fn list_all_conversations_core_returns_persisted_rows_when_title_sync_fails() {
+        use sea_orm::{ConnectionTrait, DbBackend, Statement};
+
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/codeg-list-codex-sync-failure").await;
+        let row = conversation_service::create(
+            &db.conn,
+            folder_id,
+            AgentType::Codex,
+            Some("persisted title".into()),
+            None,
+        )
+        .await
+        .expect("create conversation");
+        conversation_service::update_external_id(&db.conn, row.id, "failing-session".into())
+            .await
+            .expect("set external id");
+        db.conn
+            .execute(Statement::from_string(
+                DbBackend::Sqlite,
+                format!(
+                    r#"CREATE TRIGGER fail_codex_title_sync_list
+                       BEFORE UPDATE OF title ON conversation
+                       WHEN OLD.id = {}
+                       BEGIN
+                         SELECT RAISE(FAIL, 'injected title sync failure');
+                       END"#,
+                    row.id
+                ),
+            ))
+            .await
+            .expect("install title failure trigger");
+        let titles =
+            HashMap::from([("failing-session".to_string(), "new Codex title".to_string())]);
+
+        let rows = list_all_conversations_core_with_codex_titles(
+            &db.conn,
+            &EventEmitter::Noop,
+            &crate::chat_channel::manager::ChatChannelManager::new(),
+            ListAllConversationsOptions::default(),
+            &titles,
+        )
+        .await
+        .expect("list must degrade to persisted rows");
+
+        let listed = rows
+            .iter()
+            .find(|item| item.id == row.id)
+            .expect("persisted row remains visible");
+        assert_eq!(listed.title.as_deref(), Some("persisted title"));
+    }
+
+    /// Applies one queued rename per provider edit, so the rename provably
+    /// lands while that edit is still in flight — the exact interleaving a
+    /// detached sync has to survive.
+    #[derive(Clone)]
+    struct RenameDuringEdit {
+        conn: sea_orm::DatabaseConnection,
+        conversation_id: i32,
+        pending: std::sync::Arc<tokio::sync::Mutex<std::collections::VecDeque<String>>>,
+    }
+
+    #[derive(Clone)]
+    struct TitleEditRecorder {
+        titles: std::sync::Arc<tokio::sync::Mutex<Vec<String>>>,
+        /// Stands in for Telegram's latency. Open by default; `blocked()` parks
+        /// every `edit_thread_title` until the test hands out permits, which is
+        /// how the detachment test proves the caller did not wait.
+        gate: std::sync::Arc<tokio::sync::Semaphore>,
+        rename_during_edit: Option<RenameDuringEdit>,
+    }
+
+    impl Default for TitleEditRecorder {
+        fn default() -> Self {
+            Self {
+                titles: Default::default(),
+                gate: std::sync::Arc::new(tokio::sync::Semaphore::new(
+                    tokio::sync::Semaphore::MAX_PERMITS,
+                )),
+                rename_during_edit: None,
+            }
+        }
+    }
+
+    impl TitleEditRecorder {
+        fn blocked() -> Self {
+            Self {
+                gate: std::sync::Arc::new(tokio::sync::Semaphore::new(0)),
+                ..Default::default()
+            }
+        }
+
+        /// Open gate, but every edit is overtaken by the next queued rename.
+        fn renaming_mid_edit(
+            db: &crate::db::AppDatabase,
+            conversation_id: i32,
+            renames: &[&str],
+        ) -> Self {
+            Self {
+                rename_during_edit: Some(RenameDuringEdit {
+                    conn: db.conn.clone(),
+                    conversation_id,
+                    pending: std::sync::Arc::new(tokio::sync::Mutex::new(
+                        renames.iter().map(|t| (*t).to_string()).collect(),
+                    )),
+                }),
+                ..Default::default()
+            }
+        }
+
+        fn unblock(&self, edits: usize) {
+            self.gate.add_permits(edits);
+        }
+
+        async fn recorded(&self) -> Vec<String> {
+            self.titles.lock().await.clone()
+        }
+    }
+
+    struct RecordingTitleBackend {
+        recorder: TitleEditRecorder,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::chat_channel::traits::ChatChannelBackend for RecordingTitleBackend {
+        fn channel_type(&self) -> crate::chat_channel::types::ChannelType {
+            crate::chat_channel::types::ChannelType::Telegram
+        }
+
+        async fn start(
+            &self,
+            _command_tx: tokio::sync::mpsc::Sender<crate::chat_channel::types::IncomingCommand>,
+        ) -> Result<(), crate::chat_channel::error::ChatChannelError> {
+            Ok(())
+        }
+
+        async fn stop(&self) -> Result<(), crate::chat_channel::error::ChatChannelError> {
+            Ok(())
+        }
+
+        async fn status(&self) -> crate::chat_channel::types::ChannelConnectionStatus {
+            crate::chat_channel::types::ChannelConnectionStatus::Connected
+        }
+
+        async fn send_message(
+            &self,
+            _text: &str,
+        ) -> Result<
+            crate::chat_channel::types::SentMessageId,
+            crate::chat_channel::error::ChatChannelError,
+        > {
+            Ok(crate::chat_channel::types::SentMessageId("sent".into()))
+        }
+
+        async fn send_rich_message(
+            &self,
+            _message: &crate::chat_channel::types::RichMessage,
+        ) -> Result<
+            crate::chat_channel::types::SentMessageId,
+            crate::chat_channel::error::ChatChannelError,
+        > {
+            Ok(crate::chat_channel::types::SentMessageId("sent".into()))
+        }
+
+        async fn edit_thread_title(
+            &self,
+            _target: &crate::chat_channel::types::ChannelMessageTarget,
+            title: &str,
+        ) -> Result<(), crate::chat_channel::error::ChatChannelError> {
+            self.recorder
+                .gate
+                .acquire()
+                .await
+                .expect("title edit gate closed")
+                .forget();
+            self.recorder.titles.lock().await.push(title.to_string());
+            if let Some(hook) = &self.recorder.rename_during_edit {
+                let next = hook.pending.lock().await.pop_front();
+                if let Some(next) = next {
+                    conversation_service::update_title(&hook.conn, hook.conversation_id, next)
+                        .await
+                        .expect("rename during in-flight edit");
+                }
+            }
+            Ok(())
+        }
+
+        async fn test_connection(&self) -> Result<(), crate::chat_channel::error::ChatChannelError> {
+            Ok(())
+        }
+    }
+
+    async fn title_sync_test_manager_with(
+        db: &crate::db::AppDatabase,
+        conversation_id: i32,
+        recorder: TitleEditRecorder,
+    ) -> (
+        crate::chat_channel::manager::ChatChannelManager,
+        TitleEditRecorder,
+    ) {
+        let channel = crate::db::service::chat_channel_service::create(
+            &db.conn,
+            "title sync test".into(),
+            "telegram".into(),
+            "{}".into(),
+            true,
+            false,
+            None,
+        )
+        .await
+        .expect("create chat channel");
+        let manager = crate::chat_channel::manager::ChatChannelManager::new();
+        manager
+            .add_channel(
+                channel.id,
+                channel.name,
+                crate::chat_channel::types::ChannelType::Telegram,
+                Box::new(RecordingTitleBackend {
+                    recorder: recorder.clone(),
+                }),
+            )
+            .await
+            .expect("connect recording channel");
+        let target = crate::chat_channel::types::ChannelMessageTarget::telegram_forum_topic(
+            channel.id, "chat-1", "topic-1",
+        );
+        crate::db::service::thread_binding_service::upsert_for_target(
+            &db.conn,
+            &target,
+            "telegram",
+            conversation_id,
+            None,
+            "test-user",
+            Some("old topic title".into()),
+        )
+        .await
+        .expect("bind conversation thread");
+        (manager, recorder)
+    }
+
+    /// The channel half of a title notification must not be on the caller's
+    /// critical path: `edit_thread_title` reaches Telegram with a 60s per-call
+    /// timeout, and `list_all_conversations` is the sidebar's primary read.
+    #[tokio::test]
+    async fn notify_codex_title_refresh_detaches_channel_sync_from_the_caller() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/codeg-notify-detached").await;
+        let row = conversation_service::create(
+            &db.conn,
+            folder_id,
+            AgentType::Codex,
+            Some("detached title".into()),
+            None,
+        )
+        .await
+        .expect("create conversation");
+        let (broadcaster, emitter) = sync_test_emitter();
+        let mut events = broadcaster.subscribe();
+        let (chat_channel_manager, title_edits) =
+            title_sync_test_manager_with(&db, row.id, TitleEditRecorder::blocked()).await;
+
+        let handle =
+            notify_codex_title_refresh(&db.conn, &emitter, &chat_channel_manager, vec![row.id])
+                .await;
+
+        // Returned while the backend is still parked: the sidebar upsert is
+        // already out, the outbound edit has not even been attempted.
+        let event = events.try_recv().expect("upsert must be emitted inline");
+        assert_eq!(event.payload["summary"]["title"], "detached title");
+        assert!(
+            title_edits.recorded().await.is_empty(),
+            "caller must not wait on the chat backend"
+        );
+
+        title_edits.unblock(1);
+        handle.await.expect("detached title sync task");
+        assert_eq!(
+            title_edits.recorded().await.as_slice(),
+            [format!("#{} detached title", row.id)],
+            "the detached task still propagates the title"
+        );
+    }
+
+    /// A detached edit can land after a rename that happened while it was in
+    /// flight. The last value the provider (and the binding's `display_title`)
+    /// ends up with must be the conversation's CURRENT title, not the one the
+    /// stalled sync started with — nothing retries afterwards.
+    #[tokio::test]
+    async fn detached_title_sync_converges_on_a_rename_that_lands_mid_flight() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/codeg-notify-late-rename").await;
+        let row = conversation_service::create(
+            &db.conn,
+            folder_id,
+            AgentType::Codex,
+            Some("auto title".into()),
+            None,
+        )
+        .await
+        .expect("create conversation");
+        let (_broadcaster, emitter) = sync_test_emitter();
+        let (chat_channel_manager, title_edits) =
+            title_sync_test_manager_with(&db, row.id, TitleEditRecorder::blocked()).await;
+
+        let handle =
+            notify_codex_title_refresh(&db.conn, &emitter, &chat_channel_manager, vec![row.id])
+                .await;
+
+        // The auto-title edit is parked mid-flight; the user renames underneath it.
+        conversation_service::update_title(&db.conn, row.id, "manual rename".into())
+            .await
+            .expect("manual rename");
+
+        title_edits.unblock(8);
+        handle.await.expect("detached title sync task");
+
+        let recorded = title_edits.recorded().await;
+        assert_eq!(
+            recorded.last().map(String::as_str),
+            Some(format!("#{} manual rename", row.id).as_str()),
+            "the provider must end on the newest title, not the stalled one: {recorded:?}"
+        );
+        let bindings =
+            crate::db::service::thread_binding_service::list_by_conversation(&db.conn, row.id)
+                .await
+                .expect("list bindings");
+        assert_eq!(
+            bindings[0].display_title.as_deref(),
+            Some(format!("#{} manual rename", row.id).as_str()),
+            "the persisted display title must match what the provider was last told"
+        );
+    }
+
+    /// The convergence loop must not be defeated by a RUN of renames that each
+    /// land mid-flight. Any fixed retry cap exits stale on a long enough run —
+    /// this drives more consecutive mid-flight renames than any such cap.
+    #[tokio::test]
+    async fn detached_title_sync_converges_after_a_run_of_mid_flight_renames() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/codeg-notify-rename-run").await;
+        let row = conversation_service::create(
+            &db.conn,
+            folder_id,
+            AgentType::Codex,
+            Some("title 1".into()),
+            None,
+        )
+        .await
+        .expect("create conversation");
+        let (_broadcaster, emitter) = sync_test_emitter();
+        // Each provider edit is overtaken by the next rename before it returns.
+        let (chat_channel_manager, title_edits) = title_sync_test_manager_with(
+            &db,
+            row.id,
+            TitleEditRecorder::renaming_mid_edit(
+                &db,
+                row.id,
+                &["title 2", "title 3", "title 4", "title 5", "title 6"],
+            ),
+        )
+        .await;
+
+        notify_codex_title_refresh(&db.conn, &emitter, &chat_channel_manager, vec![row.id])
+            .await
+            .await
+            .expect("detached title sync task");
+
+        let recorded = title_edits.recorded().await;
+        let current = conversation_service::get_by_id(&db.conn, row.id)
+            .await
+            .expect("read conversation")
+            .title
+            .expect("conversation has a title");
+        // The invariant, stated against whatever the row actually ended on: the
+        // last thing the provider was told IS the conversation's current title.
+        assert_eq!(
+            recorded.last().map(String::as_str),
+            Some(format!("#{} {current}", row.id).as_str()),
+            "provider must end on the row's current title however long the run: {recorded:?}"
+        );
+        assert_eq!(
+            current, "title 6",
+            "fixture must exhaust every queued rename, or it is not testing a long run"
+        );
+        let bindings =
+            crate::db::service::thread_binding_service::list_by_conversation(&db.conn, row.id)
+                .await
+                .expect("list bindings");
+        assert_eq!(
+            bindings[0].display_title.as_deref(),
+            Some(format!("#{} title 6", row.id).as_str())
         );
     }
 
