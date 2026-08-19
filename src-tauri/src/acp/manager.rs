@@ -713,7 +713,7 @@ impl ConnectionManager {
             None,
             runtime_env,
             owner_window_label,
-            emitter,
+            emitter.clone(),
             self.connections.clone(),
             preferred_mode_id,
             preferred_config_values,
