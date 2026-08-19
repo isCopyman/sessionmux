@@ -1108,7 +1108,9 @@ mod session_started_bind_tests {
             bridge.lock().await.get("c-conflict").is_none(),
             "a refused bind that is still current must tear down the route"
         );
-        let conv = conversation_service::get_by_id(&db.conn, mine).await.unwrap();
+        let conv = conversation_service::get_by_id(&db.conn, mine)
+            .await
+            .unwrap();
         assert_eq!(
             conv.status, "cancelled",
             "the torn-down conversation must be marked cancelled"
@@ -1163,7 +1165,9 @@ mod session_started_bind_tests {
             bridge.lock().await.get("c-stale").is_some(),
             "a stale refusal (event superseded by a newer session) must not tear down the route"
         );
-        let conv = conversation_service::get_by_id(&db.conn, mine).await.unwrap();
+        let conv = conversation_service::get_by_id(&db.conn, mine)
+            .await
+            .unwrap();
         assert_ne!(
             conv.status, "cancelled",
             "a stale, skipped teardown must not cancel the conversation"

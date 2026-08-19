@@ -605,14 +605,13 @@ async fn record_transcript_header_continuing(
         cwd,
         crate::acp_transcript::now_epoch_ms(),
     );
-    let is_continuation = if let Some(previous) =
-        continues_from.filter(|p| !p.is_empty() && *p != session_id)
-    {
-        header = header.continuing(previous);
-        true
-    } else {
-        false
-    };
+    let is_continuation =
+        if let Some(previous) = continues_from.filter(|p| !p.is_empty() && *p != session_id) {
+            header = header.continuing(previous);
+            true
+        } else {
+            false
+        };
     let ack = crate::acp_transcript::record_header(dir, &header);
     if !is_continuation {
         drop(ack);

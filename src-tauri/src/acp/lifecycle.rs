@@ -463,9 +463,10 @@ mod tests {
 
         // The old session must not have vanished: some OTHER row now carries
         // it.
-        let all = conversation_service::list_all(&db.conn, None, None, None, None, None, false, false)
-            .await
-            .unwrap();
+        let all =
+            conversation_service::list_all(&db.conn, None, None, None, None, None, false, false)
+                .await
+                .unwrap();
         let preserved = all
             .iter()
             .find(|c| c.id != conversation_id && c.external_id.as_deref() == Some("session-old"))

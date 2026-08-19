@@ -760,8 +760,7 @@ pub async fn bind_external_id(
                 // interrupted split, or an unrelated fork already claimed
                 // it) rather than inserting a duplicate that would collide
                 // with the same unique index.
-                let prev =
-                    previous_external_id.expect("is_continuation's None arm returned above");
+                let prev = previous_external_id.expect("is_continuation's None arm returned above");
                 let already_preserved = conversation::Entity::find()
                     .filter(conversation::Column::ExternalId.eq(prev.clone()))
                     .filter(conversation::Column::AgentType.eq(current.agent_type.clone()))
@@ -781,8 +780,7 @@ pub async fn bind_external_id(
                         // already reflects a settled conversation (a normal
                         // end, a refusal, an explicit cancel) and is carried
                         // over unchanged rather than relabeled.
-                        let preserved_status = if current.status == ConversationStatus::InProgress
-                        {
+                        let preserved_status = if current.status == ConversationStatus::InProgress {
                             ConversationStatus::Cancelled
                         } else {
                             current.status.clone()
@@ -1843,7 +1841,9 @@ mod tests {
         bind_external_id(&db.conn, holder.id, "session-ghost".into())
             .await
             .expect("seed holder");
-        soft_delete(&db.conn, holder.id).await.expect("soft delete holder");
+        soft_delete(&db.conn, holder.id)
+            .await
+            .expect("soft delete holder");
 
         let challenger = create(&db.conn, folder, AgentType::ClaudeCode, None, None)
             .await
@@ -1887,7 +1887,9 @@ mod tests {
         let live = get_by_id(&db.conn, row.id).await.expect("get live");
         assert_eq!(live.external_id.as_deref(), Some("session-S2"));
 
-        let preserved = get_by_id(&db.conn, preserved_id).await.expect("get preserved");
+        let preserved = get_by_id(&db.conn, preserved_id)
+            .await
+            .expect("get preserved");
         assert_eq!(preserved.external_id.as_deref(), Some("session-S1"));
         assert_eq!(
             preserved.title.as_deref(),
@@ -1921,7 +1923,9 @@ mod tests {
             .await
             .expect("takeover bind");
         let preserved_id = outcome.preserved_conversation_id.expect("must split");
-        let preserved = get_by_id(&db.conn, preserved_id).await.expect("get preserved");
+        let preserved = get_by_id(&db.conn, preserved_id)
+            .await
+            .expect("get preserved");
         assert_eq!(
             preserved.status, "completed",
             "a settled status is carried over, not forced to cancelled"
@@ -2021,7 +2025,8 @@ mod tests {
         // test cannot redirect. The chain-membership check this proves is
         // the exact predicate `bind_external_id` evaluates inline; see its
         // `is_continuation` computation.
-        let ancestors = crate::acp_transcript::continued_session_ids_in(&root, custom, "session-S2");
+        let ancestors =
+            crate::acp_transcript::continued_session_ids_in(&root, custom, "session-S2");
         assert!(
             ancestors.contains("session-S1"),
             "S1 must be recognized as S2's continuation ancestor"
