@@ -879,3 +879,20 @@ T2 后置截图（CDP 9222 可用，基线在 .artifacts）+ 晨间验收报告 
   activeGroupId=null（瞬时无活跃 tab）被当焦点错位误退出，改为 null=无信号不
   退出（测试意图为准）；prettier ×2。终局 vitest 358 文件全绿（+2 新测试文件）、
   build 绿。真机验证清单挂账：重命名弹窗开着时双击标题栏不得误触放大。
+- 2026-08-20 凌晨 **Room 附加路径第一批关账（ba5057f4+编排修补 ×3）**：工人 6 提交
+  ——collaboration_room_path 表（UNIQUE(room_id,path)+级联删除，迁移序号无撞车）、
+  add/remove_path 命令对（校验在 service 层贴仓库惯例：存在+是目录+幂等+上限 20）、
+  **方案 B 后端原生多 root**（编排确认拍板正确：list_workspace_files 加可选
+  extra_paths，旧调用方零改动；每 root 独立完整走 WalkBuilder 防连坐忽略，共享
+  50k 预算+10s deadline，canonical root 去重）、WORKSPACE_SCAN_DEADLINE=10s 作
+  第二跳出条件（deadline 参数化可注入测试）、前端 useFileTree/useReferenceSearch
+  多 root、房间"…"菜单「管理路径」对话框 ×10 语言。工人自查出两处派工外必改：
+  lib.rs generate_handler 注册（漏了桌面端调不通）、React key 撞车（双 root 同名
+  相对路径，key 加 uri tiebreaker，id 语义不动）。门禁三轮编排修补：①
+  RoomAdditionalPath 忘进 models/mod.rs 再导出（E0432×2）；② **真 bug：多 root
+  去重键分隔符混用**——Windows canonical root 反斜杠+verbatim 前缀 vs 相对路径
+  正斜杠，嵌套 root 永不相等去重失效（工人测试自逮；注意 components() 归一化
+  在 verbatim 前缀下无效，改统一正斜杠字符串）；③ prettier×3 + exhaustive-deps
+  disable 注释错位一行导致指令落空+真警告漏出（挪贴目标行）。终局：server 测试
+  2511 全绿、clippy ×3、vitest 359 文件、build、eslint 全净。体验批三件全部
+  落地，待 CDP 真机验收后打 release #5。
