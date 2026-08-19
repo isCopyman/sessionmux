@@ -1782,7 +1782,8 @@
       "tasks": "Tareas pendientes",
       "loadingSubsessions": "Cargando subconversaciones…",
       "rooms": "Salas",
-      "newRoom": "Nueva sala"
+      "newRoom": "Nueva sala",
+      "needsReply": "Pendiente de respuesta"
     },
     "conversation": {
       "reloadFailed": "No se pudo recargar la conversación: {message}",

@@ -156,6 +156,9 @@ interface ConversationManageDialogProps {
   folderId?: number | null
   /** Optional semantic scope selected from the sidebar Collection tree. */
   initialCollection?: number | "unclassified" | null
+  /** Optional initial collaboration facet — the sidebar needs-reply entry
+   *  opens the Session Center pre-filtered to the Sessions that owe a reply. */
+  initialCollaborationFilter?: CollaborationFilter
 }
 
 /**
@@ -178,7 +181,7 @@ type WorkbenchFilter = "all" | "unopened" | number
 type SessionSearchScope = "all" | "metadata" | "content"
 
 type SessionStatusFilter = ConversationStatus | "all" | "archived"
-type CollaborationFilter =
+export type CollaborationFilter =
   | "all"
   | "unread"
   | "needs_reply"
@@ -639,6 +642,7 @@ export function ConversationManageDialog({
   onOpenChange,
   folderId,
   initialCollection = null,
+  initialCollaborationFilter = "all",
 }: ConversationManageDialogProps) {
   const t = useTranslations("Folder.sidebar.manageConversations")
   const tCommon = useTranslations("Folder.common")
@@ -684,7 +688,7 @@ export function ConversationManageDialog({
   const [statusFilter, setStatusFilter] = useState<SessionStatusFilter>("all")
   const [sourceFilter, setSourceFilter] = useState<SessionSourceFilter>("all")
   const [collaborationFilter, setCollaborationFilter] =
-    useState<CollaborationFilter>("all")
+    useState<CollaborationFilter>(initialCollaborationFilter)
   // Open facet dropdowns form a layer ABOVE this dialog: while one is open an
   // Escape belongs to it (collapse the dropdown) and must not reach the dialog,
   // which would close the whole session center from under the user. The count
@@ -797,7 +801,7 @@ export function ConversationManageDialog({
       setAgentFilter("all")
       setStatusFilter("all")
       setSourceFilter("all")
-      setCollaborationFilter("all")
+      setCollaborationFilter(initialCollaborationFilter)
       setSelected(new Map())
       setConfirmDelete(false)
       setError(null)
@@ -816,7 +820,7 @@ export function ConversationManageDialog({
       setOpeningWorkbenchId(null)
       setBulkOpening(false)
     }
-  }, [open, folderId, initialCollection])
+  }, [open, folderId, initialCollection, initialCollaborationFilter])
 
   useEffect(() => {
     if (!open || workbenchesHydrated) return

@@ -1782,7 +1782,8 @@
       "tasks": "Tarefas a fazer",
       "loadingSubsessions": "Carregando subconversas…",
       "rooms": "Salas",
-      "newRoom": "Nova sala"
+      "newRoom": "Nova sala",
+      "needsReply": "Aguardando resposta"
     },
     "conversation": {
       "reloadFailed": "Falha ao recarregar conversa: {message}",

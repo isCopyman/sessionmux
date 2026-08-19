@@ -1782,7 +1782,8 @@
       "tasks": "할 일",
       "loadingSubsessions": "하위 대화 로드 중…",
       "rooms": "룸",
-      "newRoom": "새 룸"
+      "newRoom": "새 룸",
+      "needsReply": "답장 대기"
     },
     "conversation": {
       "reloadFailed": "대화 다시 불러오기 실패: {message}",

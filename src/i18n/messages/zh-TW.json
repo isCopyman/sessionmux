@@ -1782,7 +1782,8 @@
       "tasks": "待辦任務",
       "loadingSubsessions": "正在載入子會話…",
       "rooms": "群聊",
-      "newRoom": "新建群聊"
+      "newRoom": "新建群聊",
+      "needsReply": "待回覆"
     },
     "conversation": {
       "reloadFailed": "會話重新載入失敗：{message}",
