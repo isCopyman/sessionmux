@@ -639,3 +639,32 @@ T2 后置截图（CDP 9222 可用，基线在 .artifacts）+ 晨间验收报告 
   AGENTS.md 6 次提交）；建议排序 lint 诊断 > 幂等一行写入 > playbook（前置）> 现状，
   不自研全量生成器。**待用户拍板**：诊断扫描范围只管工作区还是含用户级目录（隐私
   预期）。派工模板修正：worktree 路径一律改正斜杠（反斜杠进 bash 被吞已两见）。
+- 2026-08-19 深夜 **G10 fork/rewind 二次冻结（用户拍板）+ 属性跟随问题立案**：用户确认
+  fork/rewind 现在不实施，调研历史全部保留（G10 survey、ACP survey §8 ccgui 案例、
+  fork-recon 四家档位、4.4 分层定案，均已在库）。grok 1.0.5 升级先导任务随之一并冻结。
+  用户同时提出关键设计问题记入未来 RFC 必答清单：**fork 时邮箱、义务、定时器等
+  session 绑定属性是否跟随**。现状（今日头部 fork 链路 persist_fork_outcome）：
+  folder/kind/model/git_branch/origin_cwd/选择器 pin/集合归属**跟随**，邮箱账本、
+  义务、定时器、房间成员身份**不跟随**——新 fork 是白户。RFC 需逐字段裁决并给
+  "fork 语义=分叉时点快照 or 白户"的统一原则，倾向按"消息历史分叉、协作身份不分叉"
+  处理（fork 出来的会话不该自动继承房间席位和未清义务，否则一个债务人 fork 十次
+  就有十一个欠条主体），但此裁决冻结至 RFC 阶段，不预定案。
+- 2026-08-19 深夜 **Room 文件@ 缺失诊断定案 + 派工**（用户报障：room 里 @ 不出任何
+  文件）：根因不是坏而是**从未接线**——rooms-page.tsx:391 roomMentionSearch 是手写
+  单组搜索（仅成员+@all/@human），未接 useReferenceSearch；popup tab 栏渲染固定
+  TAB_ORDER 四 kind（suggestion-popup.tsx:34），空组照样出 tab，故"文件"tab 可见
+  却永远空。方案四步（已派 w-room-file-mention，Sonnet，wt/room-file-mention）：
+  ① popup 加可选 tabOrder prop（默认原序，主 composer 零变化）；② room 组合搜索=
+  session 组（原样）+ 标准搜索的 file/commit 组，agent 组砍（room 内无唤醒语义），
+  folder root 取 detail.rootFolderId 解析，null 则文件组空（不猜当前激活 folder——
+  room 跨 folder，猜错仓比空更糟）；③ room 传 tabOrder=[session,file,commit]，
+  默认 tab 停在成员，@ 唤醒主流程不动；④ 时间线渲染补 file/commit 徽章（现状
+  room-message-body.ts:291 把非 mention 引用降级 raw markdown 文本）。wake 解析
+  天然不受 file URI 影响（只认 codeg://session|all|human），测试钉住。
+- 2026-08-19 深夜 **新想法立案（用户提出，后议）：room/session 附加路径**——除绑定
+  folder 根之外允许手动添加额外路径进 @ 补全/文件上下文；对远程 session（server
+  模式下本地无 folder）尤有用；用户提及 paseo 似有此功能，待调研其形态。编排初判：
+  数据模型上是 room/conversation 增 extra_paths 列表；前端 useReferenceSearch 需
+  支持多 root（现为单 defaultPath）；server 模式文件树本就走后端读取，扩展点在
+  use-file-tree 的多源合并与去重。定位为 room 文件@（本次 fix）的 v2 延伸，
+  **不阻塞当前派工**，排队顺位在 G11 之后与 fork/rewind RFC 同批评审。
