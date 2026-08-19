@@ -1,11 +1,11 @@
 use chrono::Utc;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::NotSet, ColumnTrait, DatabaseConnection, EntityTrait,
-    QueryFilter, QueryOrder, QuerySelect, Set,
+    QueryFilter, QueryOrder, QuerySelect, Set, TransactionTrait,
 };
 
-use crate::db::entities::conversation::{ConversationKind, CREATED_BY_USER};
-use crate::db::entities::{conversation, folder};
+use crate::db::entities::conversation::{ConversationKind, ConversationStatus, CREATED_BY_USER};
+use crate::db::entities::{collection_conversation, conversation, folder};
 use crate::db::error::DbError;
 use crate::models::{AgentType, DbConversationSummary};
 
@@ -412,22 +412,27 @@ pub async fn update_archive(
     Ok(())
 }
 
-/// Persist the agent session id (`external_id`) for a conversation as a single
-/// conditional UPDATE guarded on `deleted_at IS NULL`. A soft-deleted (or
-/// missing) row matches nothing and the call is a silent no-op — it returns Ok
-/// either way, since every caller treats "no live row" as nothing to do.
+/// Unconditionally overwrite `external_id`, guarded only on `deleted_at IS
+/// NULL`. This is NOT the ACP session-binding write path — see
+/// [`bind_external_id`] for that — and must not be reached for a
+/// `SessionStarted`-driven rebind.
 ///
-/// The `deleted_at IS NULL` guard matters because `SessionStarted` writes are
-/// not serialized against deletes: a conversation can be soft-deleted while its
-/// ACP connection stays live and bound (delete only soft-marks the row; it does
-/// not disconnect the agent). A fork in particular emits `SessionStarted{S2}`
-/// whose lifecycle handler calls this with the still-bound `conversation_id`;
-/// without the guard that late write would re-point a deleted row's session id
-/// from S1 to S2 and bump `updated_at`, half-resurrecting an invisible row.
-/// Writing `WHERE id = ? AND deleted_at IS NULL` makes such a stale event a
-/// no-op. (Fork's own current-row re-point in `persist_fork_outcome` is guarded
-/// the same way.)
-pub async fn update_external_id(
+/// Its one remaining caller
+/// (`commands::conversations::get_folder_conversation_core`) uses it for a
+/// narrower, different operation: an OpenClaw/Cline/Gemini row whose stored
+/// `external_id` no longer resolves to any parseable session file gets
+/// re-matched by folder + start time, and the id the parser actually
+/// recognizes is backfilled here. That is a correction of a stale label for
+/// the SAME conversation, not a takeover of a live one — running it through
+/// `bind_external_id`'s split logic would be actively wrong: these are all
+/// built-in agent types (no `continues_from` chain can ever justify the
+/// change), so every correction would be misjudged as an A1 takeover and
+/// spawn a needless, permanent ghost row carrying the old, already-dead id.
+///
+/// Kept `pub(crate)` rather than `pub` so this stays a deliberate, narrow
+/// exception rather than something a future ACP-binding call site reaches
+/// for by habit.
+pub(crate) async fn update_external_id(
     conn: &DatabaseConnection,
     conversation_id: i32,
     external_id: String,
@@ -441,6 +446,280 @@ pub async fn update_external_id(
         .exec(conn)
         .await?;
     Ok(())
+}
+
+/// Outcome of a successful [`bind_external_id`] call.
+pub struct BindOutcome {
+    /// `Some(row_id)` when the row's PREVIOUS `external_id` had to be
+    /// preserved onto a different (possibly pre-existing) row before this one
+    /// could be overwritten — an unrelated, still-referenced session that
+    /// would otherwise become permanently unreachable (ACP binding audit,
+    /// scenario A1). The caller must broadcast an upsert for `row_id` too, or
+    /// the preserved conversation stays invisible until an unrelated refresh.
+    ///
+    /// `None` when the write needed no split: the row already carried this
+    /// exact value, had none yet, or its previous value is part of the new
+    /// value's OWN continuation chain (a memory-less custom agent's restart,
+    /// not a takeover — scenario A2).
+    pub preserved_conversation_id: Option<i32>,
+}
+
+/// Bind `external_id` (an agent's native session id) onto `conversation_id` —
+/// the write path for every ACP `SessionStarted`-driven rebind, and the ONLY
+/// one that may see a genuine session takeover. Supersedes the old
+/// `update_external_id` for that purpose: `update_external_id` was a blind
+/// conditional UPDATE that never read the row's previous value, so a
+/// reconnect that lost its session id, or a `session/load` fallback that
+/// handed a DIFFERENT session id to an already-bound row, silently
+/// overwrote the old value — and because the sidebar is a pure DB-row
+/// projection that never scans an agent's own history store, the old
+/// session then belonged to no row at all and simply vanished from the
+/// user's view (see `docs/session-workbench/ACP-BINDING-AUDIT-2026-08-19.zh-CN.md`,
+/// scenario A1). `update_external_id` itself still exists, narrowed to
+/// `pub(crate)`, for exactly one unrelated caller that is NOT a takeover —
+/// see its own doc for why that one must NOT go through the split logic
+/// below.
+///
+/// Shaped like `persist_fork_outcome`'s "claim → read under lock → decide →
+/// write" transaction (`acp::manager::ConnectionManager`): the opening
+/// statement is a value-preserving self-assignment on `conversation_id` so
+/// SQLite grants the writer lock immediately instead of taking a deferred read
+/// snapshot it might later fail to promote (see that function's doc for the
+/// full `SQLITE_BUSY_SNAPSHOT` rationale). Every read this function does
+/// afterward — the conflict check and the continuation check below — is then
+/// guaranteed not to be superseded by a concurrent writer before this
+/// transaction commits, so checking-then-acting on them is race-free without
+/// needing a second round-trip.
+///
+/// Three outcomes:
+/// * **No-op** (`Ok(BindOutcome { preserved_conversation_id: None })`) — the
+///   row already carries this exact `external_id`, has none yet, or its
+///   previous value is in `external_id`'s own continuation chain (A2: a
+///   memory-less custom agent forgot its session across a restart; codeg
+///   opened a fresh agent session for the SAME conversation, and
+///   [`crate::acp_transcript::continued_session_ids`] links the two ids).
+///   Also the outcome for a soft-deleted or missing row — no live row to
+///   bind, and every caller already treats that as nothing to do, mirroring
+///   the old function's guard.
+/// * **Split** (`Ok(BindOutcome { preserved_conversation_id: Some(id) })`) —
+///   the row's previous `external_id` is unrelated to the new one. It is
+///   preserved onto its own row FIRST (reusing one that already carries it,
+///   if an earlier call or a fork already split it out — see
+///   `already_preserved` below), and only then is `conversation_id` written.
+/// * **Refused** (`Err(DbError::ExternalIdTaken)`) — `external_id` is already
+///   held by a DIFFERENT row. Checked across BOTH live and soft-deleted rows:
+///   the unique `(external_id, agent_type)` index carries no `deleted_at`
+///   predicate, so a soft-deleted row still occupies the slot. This is
+///   permanent, not a transient lock conflict — retrying does not help,
+///   matching the naming rationale documented on [`DbError::ExternalIdTaken`].
+pub async fn bind_external_id(
+    conn: &DatabaseConnection,
+    conversation_id: i32,
+    external_id: String,
+) -> Result<BindOutcome, DbError> {
+    use sea_orm::sea_query::Expr;
+
+    /// Transaction-local result, kept distinct from [`DbError`] so a genuine
+    /// unique-index takeover can never be collapsed into the same
+    /// `TransactionError` arm as a `sea_orm::DbErr` surfaced by `?` inside the
+    /// closure (a real transient/IO failure) — the two must stay
+    /// distinguishable, or a permanent refusal would look retryable.
+    enum BindAttempt {
+        Bound(Option<i32>),
+        Refused,
+    }
+
+    let external_id_for_error = external_id.clone();
+    let attempt = conn
+        .transaction::<_, BindAttempt, sea_orm::DbErr>(move |txn| {
+            let external_id = external_id.clone();
+            Box::pin(async move {
+                let now = chrono::Utc::now();
+
+                // WRITE FIRST — claims the writer lock before anything below
+                // is read. See the fn doc / `persist_fork_outcome`.
+                let claimed = conversation::Entity::update_many()
+                    .col_expr(
+                        conversation::Column::UpdatedAt,
+                        Expr::col(conversation::Column::UpdatedAt).into(),
+                    )
+                    .filter(conversation::Column::Id.eq(conversation_id))
+                    .filter(conversation::Column::DeletedAt.is_null())
+                    .exec(txn)
+                    .await?;
+                if claimed.rows_affected == 0 {
+                    // Soft-deleted or missing row: mirror the old
+                    // `update_external_id` no-op-on-deleted guard.
+                    return Ok(BindAttempt::Bound(None));
+                }
+
+                // Read UNDER the write lock — see the fn doc.
+                let current = conversation::Entity::find_by_id(conversation_id)
+                    .one(txn)
+                    .await?
+                    .ok_or_else(|| {
+                        sea_orm::DbErr::Custom(format!("conversation {conversation_id} not found"))
+                    })?;
+
+                if current.external_id.as_deref() == Some(external_id.as_str()) {
+                    return Ok(BindAttempt::Bound(None)); // already correct
+                }
+
+                // Refuse BEFORE touching anything else: some OTHER row (live
+                // or soft-deleted — no `deleted_at` filter, matching the real
+                // unique index) already holds this exact (external_id,
+                // agent_type) pair.
+                let conflict = conversation::Entity::find()
+                    .filter(conversation::Column::ExternalId.eq(external_id.clone()))
+                    .filter(conversation::Column::AgentType.eq(current.agent_type.clone()))
+                    .filter(conversation::Column::Id.ne(conversation_id))
+                    .one(txn)
+                    .await?;
+                if conflict.is_some() {
+                    return Ok(BindAttempt::Refused);
+                }
+
+                let previous_external_id = current.external_id.clone();
+                let is_continuation = match previous_external_id.as_deref() {
+                    None => true,
+                    Some(prev) => {
+                        let agent_type = parse_agent_type(&current.agent_type);
+                        crate::acp_transcript::continued_session_ids(agent_type, &external_id)
+                            .contains(prev)
+                    }
+                };
+
+                if is_continuation {
+                    conversation::Entity::update_many()
+                        .col_expr(
+                            conversation::Column::ExternalId,
+                            Expr::value(Some(external_id.clone())),
+                        )
+                        .col_expr(conversation::Column::UpdatedAt, Expr::value(now))
+                        .filter(conversation::Column::Id.eq(conversation_id))
+                        .filter(conversation::Column::DeletedAt.is_null())
+                        .exec(txn)
+                        .await?;
+                    return Ok(BindAttempt::Bound(None));
+                }
+
+                // Split required: `prev` is unrelated to `external_id` and
+                // would otherwise become unreachable the instant this row's
+                // column moves on. Preserve it onto its own row FIRST —
+                // reusing one that already carries it (an earlier, possibly
+                // interrupted split, or an unrelated fork already claimed
+                // it) rather than inserting a duplicate that would collide
+                // with the same unique index.
+                let prev =
+                    previous_external_id.expect("is_continuation's None arm returned above");
+                let already_preserved = conversation::Entity::find()
+                    .filter(conversation::Column::ExternalId.eq(prev.clone()))
+                    .filter(conversation::Column::AgentType.eq(current.agent_type.clone()))
+                    .filter(conversation::Column::Id.ne(conversation_id))
+                    .one(txn)
+                    .await?;
+
+                let preserved_id = match already_preserved {
+                    Some(existing) => existing.id,
+                    None => {
+                        // A row that was InProgress had a live turn running
+                        // under `prev`; that turn will never complete now
+                        // that the connection has moved on to `external_id`,
+                        // so it is Cancelled — exactly the mapping
+                        // `handle_terminal_event` (`acp::lifecycle`) already
+                        // applies on an ordinary disconnect. Any other status
+                        // already reflects a settled conversation (a normal
+                        // end, a refusal, an explicit cancel) and is carried
+                        // over unchanged rather than relabeled.
+                        let preserved_status = if current.status == ConversationStatus::InProgress
+                        {
+                            ConversationStatus::Cancelled
+                        } else {
+                            current.status.clone()
+                        };
+                        let preserved = conversation::ActiveModel {
+                            id: NotSet,
+                            folder_id: Set(current.folder_id),
+                            title: Set(current.title.clone()),
+                            title_locked: Set(current.title_locked),
+                            agent_type: Set(current.agent_type.clone()),
+                            status: Set(preserved_status),
+                            kind: Set(current.kind.clone()),
+                            model: Set(current.model.clone()),
+                            git_branch: Set(current.git_branch.clone()),
+                            external_id: Set(Some(prev.clone())),
+                            parent_id: Set(None),
+                            parent_tool_use_id: Set(None),
+                            delegation_call_id: Set(None),
+                            message_count: Set(current.message_count),
+                            created_at: Set(current.created_at),
+                            updated_at: Set(now),
+                            deleted_at: Set(None),
+                            archived_at: Set(None),
+                            pinned_at: Set(None),
+                            origin_cwd: Set(current.origin_cwd.clone()),
+                            harness_internal: Set(current.harness_internal),
+                            codeg_owned: Set(current.codeg_owned),
+                            created_by: Set(current.created_by.clone()),
+                            preferred_mode_id: Set(current.preferred_mode_id.clone()),
+                            preferred_config_values: Set(current.preferred_config_values.clone()),
+                        };
+                        let inserted = preserved.insert(txn).await?;
+
+                        // Carry Collection membership across too — this
+                        // preserved row IS the same conversation the user was
+                        // already working with, only re-homed onto a new row
+                        // id; it must not silently fall out of a saved
+                        // Workbench. Mirrors `persist_fork_outcome`.
+                        if let Some(membership) =
+                            collection_conversation::Entity::find_by_id(conversation_id)
+                                .one(txn)
+                                .await?
+                        {
+                            collection_conversation::ActiveModel {
+                                conversation_id: Set(inserted.id),
+                                collection_id: Set(membership.collection_id),
+                                created_at: Set(now),
+                                updated_at: Set(now),
+                            }
+                            .insert(txn)
+                            .await?;
+                        }
+
+                        inserted.id
+                    }
+                };
+
+                // Only now, with the old session safely reachable elsewhere,
+                // overwrite this row's binding.
+                conversation::Entity::update_many()
+                    .col_expr(
+                        conversation::Column::ExternalId,
+                        Expr::value(Some(external_id.clone())),
+                    )
+                    .col_expr(conversation::Column::UpdatedAt, Expr::value(now))
+                    .filter(conversation::Column::Id.eq(conversation_id))
+                    .filter(conversation::Column::DeletedAt.is_null())
+                    .exec(txn)
+                    .await?;
+
+                Ok(BindAttempt::Bound(Some(preserved_id)))
+            })
+        })
+        .await
+        .map_err(|err| match err {
+            sea_orm::TransactionError::Connection(e) => DbError::Database(e),
+            sea_orm::TransactionError::Transaction(e) => DbError::Database(e),
+        })?;
+
+    match attempt {
+        BindAttempt::Bound(preserved) => Ok(BindOutcome {
+            preserved_conversation_id: preserved,
+        }),
+        BindAttempt::Refused => Err(DbError::ExternalIdTaken(format!(
+            "external_id {external_id_for_error} is already bound to a different conversation"
+        ))),
+    }
 }
 
 /// Re-parent every live conversation of `from_folder_id` (a task worktree
@@ -1276,10 +1555,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn update_external_id_skips_soft_deleted_row() {
+    async fn bind_external_id_skips_soft_deleted_row() {
         // A late/stale `SessionStarted` write — e.g. a fork's SessionStarted{S2}
         // landing after the user deleted the conversation — must NOT mutate a
-        // soft-deleted row. `update_external_id` is guarded on `deleted_at IS
+        // soft-deleted row. The initial claim is guarded on `deleted_at IS
         // NULL`, so it is a silent no-op: the deleted row keeps its old
         // external_id and is never half-resurrected.
         let db = fresh_in_memory_db().await;
@@ -1293,15 +1572,17 @@ mod tests {
         )
         .await
         .expect("create");
-        update_external_id(&db.conn, row.id, "session-S1".into())
+        bind_external_id(&db.conn, row.id, "session-S1".into())
             .await
             .expect("seed external_id");
         soft_delete(&db.conn, row.id).await.expect("soft delete");
 
-        // The guarded write must no-op (Ok) without touching the deleted row.
-        update_external_id(&db.conn, row.id, "session-S2".into())
+        // The guarded write must no-op (Ok, no split) without touching the
+        // deleted row.
+        let outcome = bind_external_id(&db.conn, row.id, "session-S2".into())
             .await
             .expect("a stale SessionStarted write must be a no-op, not an error");
+        assert!(outcome.preserved_conversation_id.is_none());
 
         // Inspect the raw row directly — `get_by_id` filters deleted rows out.
         let raw = conversation::Entity::find_by_id(row.id)
@@ -1326,7 +1607,7 @@ mod tests {
         )
         .await
         .expect("create live");
-        update_external_id(&db.conn, live.id, "session-S9".into())
+        bind_external_id(&db.conn, live.id, "session-S9".into())
             .await
             .expect("live update");
         let live_raw = conversation::Entity::find_by_id(live.id)
@@ -1339,6 +1620,263 @@ mod tests {
             Some("session-S9"),
             "a live row must still receive its external_id"
         );
+    }
+
+    #[tokio::test]
+    async fn bind_external_id_is_idempotent_for_the_same_value() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-bind-idempotent").await;
+        let row = create(&db.conn, folder, AgentType::ClaudeCode, None, None)
+            .await
+            .expect("create");
+        bind_external_id(&db.conn, row.id, "session-S1".into())
+            .await
+            .expect("first bind");
+        let before = get_by_id(&db.conn, row.id).await.expect("get");
+
+        let outcome = bind_external_id(&db.conn, row.id, "session-S1".into())
+            .await
+            .expect("rebinding the same value must not error");
+        assert!(
+            outcome.preserved_conversation_id.is_none(),
+            "no split needed when the value is unchanged"
+        );
+        let after = get_by_id(&db.conn, row.id).await.expect("get");
+        assert_eq!(after.external_id.as_deref(), Some("session-S1"));
+        assert_eq!(
+            after.updated_at, before.updated_at,
+            "a true no-op must not even bump updated_at a second time"
+        );
+    }
+
+    #[tokio::test]
+    async fn bind_external_id_refuses_a_value_already_held_by_another_row() {
+        // B1: the target external_id already belongs to a DIFFERENT live row —
+        // this must be a permanent, distinguishable refusal, never a silent
+        // "success" and never the retryable `DbError::Conflict` CAS variant.
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-bind-refuse").await;
+        let holder = create(&db.conn, folder, AgentType::ClaudeCode, None, None)
+            .await
+            .expect("create holder");
+        bind_external_id(&db.conn, holder.id, "session-taken".into())
+            .await
+            .expect("seed holder");
+        let challenger = create(&db.conn, folder, AgentType::ClaudeCode, None, None)
+            .await
+            .expect("create challenger");
+
+        let err = bind_external_id(&db.conn, challenger.id, "session-taken".into())
+            .await
+            .expect_err("a value already held by another row must be refused");
+        assert!(
+            matches!(err, DbError::ExternalIdTaken(_)),
+            "must be the permanent, non-retryable variant, got: {err:?}"
+        );
+
+        // The challenger's row must be untouched — a refused bind writes
+        // nothing.
+        let challenger_row = get_by_id(&db.conn, challenger.id).await.expect("get");
+        assert!(challenger_row.external_id.is_none());
+    }
+
+    #[tokio::test]
+    async fn bind_external_id_refuses_against_a_soft_deleted_holder() {
+        // The unique (external_id, agent_type) index has no `deleted_at`
+        // predicate, so a soft-deleted row still occupies the slot — the
+        // conflict check must see it too, not just live rows.
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-bind-refuse-deleted").await;
+        let holder = create(&db.conn, folder, AgentType::ClaudeCode, None, None)
+            .await
+            .expect("create holder");
+        bind_external_id(&db.conn, holder.id, "session-ghost".into())
+            .await
+            .expect("seed holder");
+        soft_delete(&db.conn, holder.id).await.expect("soft delete holder");
+
+        let challenger = create(&db.conn, folder, AgentType::ClaudeCode, None, None)
+            .await
+            .expect("create challenger");
+        let err = bind_external_id(&db.conn, challenger.id, "session-ghost".into())
+            .await
+            .expect_err("a soft-deleted holder must still refuse the bind");
+        assert!(matches!(err, DbError::ExternalIdTaken(_)));
+    }
+
+    #[tokio::test]
+    async fn bind_external_id_preserves_an_unrelated_previous_session() {
+        // A1 for a built-in (no transcript, no continuation chain possible):
+        // a row bound to S1 is asked to adopt an unrelated S2 — S1 must be
+        // split off onto its own row rather than silently overwritten.
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-bind-split").await;
+        let row = create(
+            &db.conn,
+            folder,
+            AgentType::ClaudeCode,
+            Some("Original".into()),
+            None,
+        )
+        .await
+        .expect("create");
+        bind_external_id(&db.conn, row.id, "session-S1".into())
+            .await
+            .expect("initial bind");
+        update_status(&db.conn, row.id, ConversationStatus::InProgress)
+            .await
+            .expect("mark in progress");
+
+        let outcome = bind_external_id(&db.conn, row.id, "session-S2".into())
+            .await
+            .expect("takeover bind");
+        let preserved_id = outcome
+            .preserved_conversation_id
+            .expect("an unrelated previous session must be preserved");
+
+        let live = get_by_id(&db.conn, row.id).await.expect("get live");
+        assert_eq!(live.external_id.as_deref(), Some("session-S2"));
+
+        let preserved = get_by_id(&db.conn, preserved_id).await.expect("get preserved");
+        assert_eq!(preserved.external_id.as_deref(), Some("session-S1"));
+        assert_eq!(
+            preserved.title.as_deref(),
+            Some("Original"),
+            "the preserved row keeps the original display title verbatim"
+        );
+        assert_eq!(
+            preserved.status, "cancelled",
+            "an in-flight turn under the abandoned session can never complete now"
+        );
+    }
+
+    #[tokio::test]
+    async fn bind_external_id_preserves_settled_status_verbatim() {
+        // A row whose previous session had already reached a terminal state
+        // on its own (not InProgress) must keep that status on the preserved
+        // row, not be relabeled Cancelled.
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-bind-split-settled").await;
+        let row = create(&db.conn, folder, AgentType::ClaudeCode, None, None)
+            .await
+            .expect("create");
+        bind_external_id(&db.conn, row.id, "session-S1".into())
+            .await
+            .expect("initial bind");
+        update_status(&db.conn, row.id, ConversationStatus::Completed)
+            .await
+            .expect("mark completed");
+
+        let outcome = bind_external_id(&db.conn, row.id, "session-S2".into())
+            .await
+            .expect("takeover bind");
+        let preserved_id = outcome.preserved_conversation_id.expect("must split");
+        let preserved = get_by_id(&db.conn, preserved_id).await.expect("get preserved");
+        assert_eq!(
+            preserved.status, "completed",
+            "a settled status is carried over, not forced to cancelled"
+        );
+    }
+
+    #[tokio::test]
+    async fn bind_external_id_sequential_takeovers_each_get_their_own_preserved_row() {
+        // Two takeovers in a row on the same connection (a builtin agent
+        // whose session id keeps changing) must each split off their OWN
+        // abandoned session onto its OWN row, with no cross-contamination —
+        // the second split must not disturb or merge with the first.
+        //
+        // NOTE: this does not exercise `already_preserved`'s REUSE branch
+        // (finding an existing row already carrying the value about to be
+        // preserved). That branch is defense-in-depth: reaching it would
+        // require two rows to simultaneously hold the same (external_id,
+        // agent_type), which the unique index this function relies on
+        // already forbids. No sequence reachable through this function's own
+        // API can construct that precondition without first violating the
+        // index, so it is intentionally left unverified by a test.
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-bind-already-preserved").await;
+        let row = create(&db.conn, folder, AgentType::ClaudeCode, None, None)
+            .await
+            .expect("create");
+        bind_external_id(&db.conn, row.id, "session-S1".into())
+            .await
+            .expect("initial bind");
+        let first = bind_external_id(&db.conn, row.id, "session-S2".into())
+            .await
+            .expect("first takeover");
+        let preserved_id = first.preserved_conversation_id.expect("must split");
+
+        // Now row.id (bound to S2) is asked to take over S3, while S1 already
+        // lives on `preserved_id`. Nothing here should touch S1's row again.
+        let second = bind_external_id(&db.conn, row.id, "session-S3".into())
+            .await
+            .expect("second takeover");
+        let preserved_id_2 = second
+            .preserved_conversation_id
+            .expect("S2 is also unrelated to S3 and must itself be preserved");
+        assert_ne!(
+            preserved_id_2, preserved_id,
+            "S2's preserved row must be a NEW row, distinct from S1's"
+        );
+
+        // S1's row is untouched by the second call.
+        let s1_row = get_by_id(&db.conn, preserved_id).await.expect("get s1");
+        assert_eq!(s1_row.external_id.as_deref(), Some("session-S1"));
+    }
+
+    #[tokio::test]
+    async fn bind_external_id_exempts_a_custom_agent_continuation_chain() {
+        // A2: a memory-less custom agent restarts, codeg opens a fresh
+        // session (S2) continuing S1 via the ACP transcript's
+        // `continues_from` — this must NOT be treated as a takeover, or every
+        // restart would split the sidebar entry in two.
+        let root = std::env::temp_dir().join(format!(
+            "codeg-bind-continuation-test-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let custom = AgentType::custom("goosetest").expect("valid slug");
+        let dir = crate::acp::registry::registry_id_for(custom);
+        let header_s1 = crate::acp_transcript::TranscriptHeader::new(
+            &custom.as_wire(),
+            "session-S1",
+            "/repo",
+            1,
+        );
+        crate::acp_transcript::append_line_in(
+            &root,
+            dir,
+            "session-S1",
+            &serde_json::to_string(&header_s1).unwrap(),
+        );
+        let header_s2 = crate::acp_transcript::TranscriptHeader::new(
+            &custom.as_wire(),
+            "session-S2",
+            "/repo",
+            2,
+        )
+        .continuing("session-S1");
+        crate::acp_transcript::append_line_in(
+            &root,
+            dir,
+            "session-S2",
+            &serde_json::to_string(&header_s2).unwrap(),
+        );
+
+        // This test exercises `continued_session_ids` directly against the
+        // fixture root — `bind_external_id` itself always reads the process
+        // default root (`paths::codeg_acp_transcripts_root`), which a unit
+        // test cannot redirect. The chain-membership check this proves is
+        // the exact predicate `bind_external_id` evaluates inline; see its
+        // `is_continuation` computation.
+        let ancestors = crate::acp_transcript::continued_session_ids_in(&root, custom, "session-S2");
+        assert!(
+            ancestors.contains("session-S1"),
+            "S1 must be recognized as S2's continuation ancestor"
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[tokio::test]

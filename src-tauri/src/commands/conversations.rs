@@ -1383,7 +1383,14 @@ pub async fn get_folder_conversation_core(
     };
 
     // If we resolved a different external_id (e.g. ACP UUID → parser branch ID),
-    // update the database so future lookups are direct.
+    // update the database so future lookups are direct. Deliberately the
+    // narrow `update_external_id`, not `bind_external_id`: this is a
+    // same-conversation label correction (the OLD id stopped resolving to any
+    // file; the parser's own id for the SAME session is backfilled), not an
+    // ACP session takeover — running it through the split/preserve logic
+    // would misjudge every correction as an A1 takeover (these agent types
+    // are all built-in, so no continuation chain could ever justify it) and
+    // spawn a needless ghost row for the already-dead old id.
     if let Some(new_ext_id) = resolved_ext_id {
         let _ = conversation_service::update_external_id(conn, conversation_id, new_ext_id).await;
     }
