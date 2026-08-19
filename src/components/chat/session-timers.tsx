@@ -13,12 +13,23 @@ import {
   XIcon,
 } from "lucide-react"
 import { useTranslations } from "next-intl"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { useSessionTimers } from "@/hooks/use-session-timers"
 import {
   formatCompactCountdown,
   nextFireTimer,
 } from "@/lib/session-timer-next-fire"
 import { cn } from "@/lib/utils"
+import type { SessionTimer } from "@/lib/types"
 
 /**
  * Lightweight Session continuation control. The frontend never counts down:
@@ -37,6 +48,7 @@ export function SessionTimers({
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editingText, setEditingText] = useState("")
   const [error, setError] = useState<string | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<SessionTimer | null>(null)
   // Ticks the pill's countdown estimate. The backend is the trigger authority;
   // this only repaints the "~in 3m" hint (see session-timer-next-fire).
   const [now, setNow] = useState(() => Date.now())
@@ -212,7 +224,7 @@ export function SessionTimers({
                         </button>
                         <button
                           type="button"
-                          onClick={() => remove(timer.id)}
+                          onClick={() => setDeleteTarget(timer)}
                           className="shrink-0 rounded-sm p-0.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
                           title={t("delete")}
                         >
@@ -255,6 +267,35 @@ export function SessionTimers({
           </div>
         </div>
       )}
+
+      <AlertDialog
+        open={deleteTarget != null}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) setDeleteTarget(null)
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("deleteTitle")}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t("deleteDescription", {
+                prompt: deleteTarget?.promptText ?? "",
+              })}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t("cancel")}</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (deleteTarget) remove(deleteTarget.id)
+                setDeleteTarget(null)
+              }}
+            >
+              {t("delete")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }
