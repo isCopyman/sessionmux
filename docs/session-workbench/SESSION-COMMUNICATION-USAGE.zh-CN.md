@@ -70,8 +70,6 @@ sequenceDiagram
 
 `normal` 信搭顺风车时，信封排在用户正文**前面**，一轮最多捎 16 封。
 
-可选的 `delivery_hint: "steer_if_supported"` 是 `high` 下的非破坏提示：只在对方忙时尝试注入，绝不打断。
-
 ### 信封里有什么
 
 投递进对方那一轮的是结构化信封，不是裸文本：私信标 `channel=mailbox / kind=letter`，带来源 Session（标题+id）、标题、正文（长则截断并提示用 `read_message` 取全文）、event_id、是否要回信。群 @ 的信封标 `channel=room / kind=room_mention`，正文已在信封里，引用了别帖还附一小段原文。认准这两个标记就不会把群消息当私信回。催办 digest 是另一种纯文本提醒，只有标题，不带正文。

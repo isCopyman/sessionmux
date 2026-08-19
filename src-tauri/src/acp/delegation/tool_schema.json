@@ -144,7 +144,7 @@
   },
   {
     "name": "send_message",
-    "description": "Send a durable private mailbox letter. Letters have a short title and a body. The first delivery copies title plus body into the target's prompt (truncated if long). Call read_message(event_id) to mark the letter read and to fetch any truncated remainder. Time-out reminders are title-only and do not repeat the body. Mailbox envelopes are marked channel=mailbox and kind=letter. This is not a Room post — Room mentions are channel=room / kind=room_mention and use post_room. priority=high (default) tells the target now: steer into the running turn when that channel exists, otherwise stop the turn and deliver; a closed Session is started. priority=normal waits for the target's next ordinary turn — the letter is still for the Agent. For a private reply or a follow-up supplement on the same thread, target the same peer and set reply_to_event_id. Omitting reply_to_event_id starts a new thread.",
+    "description": "Send a durable private mailbox letter. Letters have a short title and a body. The first delivery copies title plus body into the target's prompt (truncated if long). Call read_message(event_id) to mark the letter read and to fetch any truncated remainder. Time-out reminders are title-only and do not repeat the body. Mailbox envelopes are marked channel=mailbox and kind=letter. This is not a Room post — Room mentions are channel=room / kind=room_mention and use post_room. priority=high (default) tells the target now: steer into the running turn when that channel exists, otherwise stop the turn and deliver; a closed Session is started. priority=normal waits for the target's next ordinary turn — the letter is still for the Agent. For a private reply or a follow-up supplement on the same thread, target the same peer and set reply_to_event_id. Omitting reply_to_event_id starts a new thread. An archived Session refuses new mail: the send is rejected and the note names the archived Session.",
     "inputSchema": {
       "type": "object",
       "required": ["target_session_ids", "title", "content"],
@@ -170,17 +170,7 @@
         "priority": {
           "type": "string",
           "enum": ["high", "normal"],
-          "description": "How soon the target Agent should see this letter. high (default): notify now — steer into the running turn if supported, otherwise stop that turn and deliver; start/resume a closed Session. normal: keep it in the mailbox until the next ordinary turn; a closed Session is still started so that turn can happen. Both are Agent mail. delivery_mode=queue/deliver_only is a legacy alias for high/normal."
-        },
-        "delivery_mode": {
-          "type": "string",
-          "enum": ["queue", "deliver_only"],
-          "description": "Legacy alias. queue = priority high; deliver_only = priority normal. Prefer `priority`."
-        },
-        "delivery_hint": {
-          "type": "string",
-          "enum": ["default", "steer_if_supported"],
-          "description": "Optional non-destructive hint for queue mode. steer_if_supported tries proven native steering only while the target is busy; unsupported, stale, oversized, or idle cases remain in the durable queue. It never interrupts the target."
+          "description": "How soon the target Agent should see this letter. high (default): notify now — steer into the running turn if supported, otherwise stop that turn and deliver; start/resume a closed Session. normal: keep it in the mailbox until the next ordinary turn; a closed Session is still started so that turn can happen. Both are Agent mail."
         },
         "expects_reply": {
           "type": "boolean",
@@ -293,7 +283,7 @@
   },
   {
     "name": "post_room",
-    "description": "Post to a shared Room this Session already belongs to. A Room post is one message — it has no title; the body is the whole post. Every member can read the body on the Room timeline. Omit mention_session_ids (and mention_all=false) for a record-only post that wakes nobody. Structured mentions create deliveries and may start a turn. Do not expect free-text @names in the body to wake anyone — use mention_session_ids, mention_all, or mention_human. File references in the body are context only. This is not private mail — do not use send_message. For a reply or supplement, set the same room_id and reply_to_event_id. reply_to_event_id only quotes the parent on the timeline; it does not wake that author. Wake someone only with mention_session_ids, mention_all, or mention_human.",
+    "description": "Post to a shared Room this Session already belongs to. A Room post is one message — it has no title; the body is the whole post. Every member can read the body on the Room timeline. Omit mention_session_ids (and mention_all=false) for a record-only post that wakes nobody. Structured mentions create deliveries and may start a turn. Do not expect free-text @names in the body to wake anyone — use mention_session_ids, mention_all, or mention_human. File references in the body are context only. This is not private mail — do not use send_message. For a reply or supplement, set the same room_id and reply_to_event_id. reply_to_event_id only quotes the parent on the timeline; it does not wake that author. Wake someone only with mention_session_ids, mention_all, or mention_human. An archived member stays named on the timeline but is not woken — their Delivery comes back failed with reason target_archived.",
     "inputSchema": {
       "type": "object",
       "required": ["room_id", "content"],
