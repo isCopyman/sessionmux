@@ -574,3 +574,18 @@ T2 后置截图（CDP 9222 可用，基线在 .artifacts）+ 晨间验收报告 
   created_by 落库）、w-goal-resume（决策⑥ Resume 按钮 + G5-6b 孤儿键）、t2-capture
   （T2 截图对基线取证）。clippy 三连在 2950aaa8 上后台补跑；全仓 eslint（28 存量、
   零新增）仍在跑，收敛留待集中 prettier 一次性处理。
+- 2026-08-19 15:5x **clippy 存量清账 + T2 截图 7/7 亲验通过 + 两个新发现**：
+  ① clippy 三模式全红（lib 11 + 桌面测试 2，皆为 R 系列/车道存量非 3c86beae 引入）。
+  逐条裁决后交 gate-finisher 清账：collaboration_service.rs:837 "identical if blocks"
+  经亲读**判非 bug**（SQL 分支真分叉、values 本应相同，塌缩即可）；两处 too_many_arguments
+  裁 `#[allow]` 不重构签名（G11 在即，改签名最大化冲突面，记为已接受债）；余者按建议机械修。
+  ② T2：7 张 current-0x 对基线逐张亲验**全过**——工作区/分类树9项/房间成员栏/信箱
+  收11发18/信件卡#291/会话中心筛选(等待回复1命中SessionC)/定时器药丸；差异均为数据演进
+  （信件状态已读→已回复、筛选默认文案改"全部消息"），零渲染回归。Escape 三连截被
+  dev 实例连环重启阻断（根因=我方主工作区 clippy/合并触发 cargo tauri dev 重编译，
+  **非事故**；next dev :3000 一度 LISTENING 不响应，t2 已令低频观察待命，不许动进程；
+  若施工完毕后仍挂死→上报用户申请重启授权）。**新发现（G5 备选）**：Session C 时间线
+  首开时虚拟化列表只撑高度不渲染条目（scrollTop=0 视口全白，innerText 齐全，滚底再回
+  才挂载）——待收口后立项。③ G3-1 亲核确认仍是死分支（access_for:107-113 无 room.post，
+  195 行迁移提示不可达），已追加给 w-archive 与 G2-3 同文件批次做；G4-2 的 timer 前置
+  条件（方向稳定）已满足，排 w-archive 落地后的下一后端批次。
