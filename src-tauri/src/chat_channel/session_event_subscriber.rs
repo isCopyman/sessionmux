@@ -14,10 +14,12 @@ use crate::acp::internal_bus::InternalEventBus;
 use crate::acp::manager::ConnectionManager;
 use crate::acp::types::{AcpEvent, ConnectionStatus, EventEnvelope, PromptInputBlock};
 
+use crate::db::error::DbError;
 use crate::db::service::{
     app_metadata_service, conversation_service, sender_context_service, thread_binding_service,
 };
 use crate::logging::throttle::{LagLogThrottle, LAG_LOG_WINDOW};
+use crate::web::event_bridge::EventEmitter;
 
 use super::manager::ChatChannelManager;
 
@@ -28,12 +30,21 @@ const MESSAGE_LANGUAGE_KEY: &str = "chat_message_language";
 const COMMAND_PREFIX_KEY: &str = "chat_command_prefix";
 const DEFAULT_COMMAND_PREFIX: &str = "/";
 
+/// `emitter` is the process-level broadcaster (desktop `Tauri` handle or
+/// server `WebOnly` broadcaster/bus pair) — NOT looked up per `connection_id`
+/// from `conn_mgr`. A per-connection lookup would race connection cleanup: a
+/// connection's entry can be removed from `conn_mgr` immediately after its
+/// terminal event is queued here, so an emitter fetched from the connection
+/// map at handling time could already find nothing and silently swallow a
+/// broadcast this subscriber still needs to make (e.g. the preserved-row
+/// upsert after a `SessionStarted` bind-conflict split).
 pub fn spawn_session_event_subscriber(
     bus: Arc<InternalEventBus>,
     bridge: Arc<Mutex<SessionBridge>>,
     manager: ChatChannelManager,
     conn_mgr: ConnectionManager,
     db_conn: DatabaseConnection,
+    emitter: EventEmitter,
 ) -> JoinHandle<()> {
     let mut rx = bus.subscribe();
     let metrics = Arc::clone(bus.metrics());
@@ -69,6 +80,7 @@ pub fn spawn_session_event_subscriber(
                         &manager,
                         &conn_mgr,
                         &db_conn,
+                        &emitter,
                     )
                     .await;
                 }
@@ -110,55 +122,109 @@ async fn handle_acp_envelope(
     manager: &ChatChannelManager,
     conn_mgr: &ConnectionManager,
     db: &DatabaseConnection,
+    emitter: &EventEmitter,
 ) {
     let connection_id = envelope.connection_id.as_str();
 
     match &envelope.payload {
         AcpEvent::SessionStarted { session_id } => {
-            let mut guard = bridge.lock().await;
-            if let Some(session) = guard.get_mut(connection_id) {
-                let _ = conversation_service::update_external_id(
-                    db,
-                    session.conversation_id,
-                    session_id.clone(),
-                )
-                .await;
+            let conversation_id = {
+                let mut guard = bridge.lock().await;
+                match guard.get_mut(connection_id) {
+                    Some(session) => session.conversation_id,
+                    None => return,
+                }
+            };
 
-                if let Some(prompt_text) = session.pending_prompt.take() {
-                    // Clone so the prompt can be RESTORED (not dropped) if a turn
-                    // is already in flight — see the TurnInProgress arm below.
-                    let blocks = vec![PromptInputBlock::Text {
-                        text: prompt_text.clone(),
-                    }];
-                    if let Err(e) = conn_mgr
-                        .send_prompt_queue_aware(db, connection_id, blocks)
-                        .await
-                    {
-                        // A turn is already in flight on this shared connection
-                        // (another client raced this kickoff between
-                        // SessionStarted and here). Transient, not a failure —
-                        // RESTORE the pending prompt so the TurnComplete handler
-                        // retries the kickoff once the in-flight turn finishes,
-                        // instead of silently dropping the task's initial prompt.
-                        if matches!(e, crate::acp::error::AcpError::TurnInProgress) {
-                            session.pending_prompt = Some(prompt_text);
-                            tracing::warn!(
-                                "[SessionEventSub] kickoff deferred; a turn is already in \
-                                 progress, will retry on TurnComplete"
-                            );
-                            let target = session.target.clone();
-                            let lang = get_lang(db).await;
-                            let msg = RichMessage::info(
-                                super::i18n::task_deferred_busy(lang).to_string(),
-                            );
-                            let _ = manager.send_to_target(&target, &msg).await;
-                        } else {
-                            tracing::error!("[SessionEventSub] failed to send pending prompt: {e}");
-                            let target = session.target.clone();
-                            let msg = RichMessage::error(format!("Failed to send task: {e}"));
-                            let _ = manager.send_to_target(&target, &msg).await;
-                        }
+            match conversation_service::bind_external_id(db, conversation_id, session_id.clone())
+                .await
+            {
+                Ok(outcome) => {
+                    crate::commands::conversations::emit_conversation_upsert(
+                        emitter,
+                        db,
+                        conversation_id,
+                    )
+                    .await;
+                    if let Some(preserved_id) = outcome.preserved_conversation_id {
+                        // A1/A3: an unrelated previous session was split off
+                        // this row rather than silently overwritten —
+                        // broadcast it too, or it stays invisible until an
+                        // unrelated refresh.
+                        crate::commands::conversations::emit_conversation_upsert(
+                            emitter,
+                            db,
+                            preserved_id,
+                        )
+                        .await;
                     }
+                    dispatch_pending_kickoff(bridge, manager, conn_mgr, db, connection_id).await;
+                }
+                Err(DbError::ExternalIdTaken(msg)) => {
+                    // B1/B4: a DIFFERENT row already holds this session id —
+                    // this route can never legitimately kick off on it.
+                    // Unlike a transient failure, `pending_prompt` must NOT
+                    // be dispatched: that would send the task's opening
+                    // prompt into a session this conversation doesn't own.
+                    tracing::warn!(
+                        "[SessionEventSub] SessionStarted refused for connection={connection_id}: \
+                         external_id already bound elsewhere ({msg}); tearing down this route"
+                    );
+                    // Staleness guard: only tear down if this event still
+                    // describes the connection's CURRENT external_id. A fork
+                    // (or a later, legitimate SessionStarted) may have
+                    // already moved the connection on since this event was
+                    // queued — tearing down a route that has already
+                    // healthily switched to a new session would be exactly
+                    // the bug this check exists to prevent.
+                    let still_current = match conn_mgr.get_state(connection_id).await {
+                        Some(state) => {
+                            state.read().await.external_id.as_deref() == Some(session_id.as_str())
+                        }
+                        None => false,
+                    };
+                    if !still_current {
+                        tracing::debug!(
+                            "[SessionEventSub] stale SessionStarted for connection={connection_id} \
+                             superseded before teardown; leaving its (already-updated) routing alone"
+                        );
+                        return;
+                    }
+                    let torn_down = bridge.lock().await.remove(connection_id);
+                    if let Some(session) = torn_down {
+                        let channel_id = session.channel_id;
+                        let sender_id = session.sender_id.clone();
+                        let target = session.target.clone();
+                        let _ = conversation_service::update_status(
+                            db,
+                            session.conversation_id,
+                            crate::db::entities::conversation::ConversationStatus::Cancelled,
+                        )
+                        .await;
+                        clear_session_route(db, channel_id, &sender_id, &target).await;
+                        let lang = get_lang(db).await;
+                        let body = match lang {
+                            Lang::ZhCn | Lang::ZhTw => {
+                                "该聊天连接已被另一个会话接管，无法继续，请重新发起。".to_string()
+                            }
+                            _ => "This chat connection was taken over by another session and \
+                                  cannot continue — please start again."
+                                .to_string(),
+                        };
+                        let msg = RichMessage::error(body);
+                        let _ = manager.send_to_target(&target, &msg).await;
+                    }
+                }
+                Err(err) => {
+                    // Transient/other DB failure: log and still attempt the
+                    // dispatch, matching the pre-fix behavior — a hiccup
+                    // here must not silently swallow the task's opening
+                    // prompt.
+                    tracing::warn!(
+                        "[SessionEventSub] bind_external_id failed for connection={connection_id}, \
+                         continuing to dispatch the pending prompt: {err}"
+                    );
+                    dispatch_pending_kickoff(bridge, manager, conn_mgr, db, connection_id).await;
                 }
             }
         }
@@ -502,6 +568,60 @@ async fn handle_acp_envelope(
     }
 }
 
+/// Send a connection's deferred kickoff prompt now that `SessionStarted` has
+/// landed (bound successfully, or failed with a non-fatal DB error the
+/// caller has chosen to proceed past anyway). Factored out of
+/// `handle_acp_envelope`'s `SessionStarted` arm so both the success path and
+/// the transient-failure fallback share one copy — an `ExternalIdTaken`
+/// refusal deliberately does NOT call this, since dispatching would send the
+/// task's opening prompt into a session this conversation doesn't own.
+async fn dispatch_pending_kickoff(
+    bridge: &Arc<Mutex<SessionBridge>>,
+    manager: &ChatChannelManager,
+    conn_mgr: &ConnectionManager,
+    db: &DatabaseConnection,
+    connection_id: &str,
+) {
+    let mut guard = bridge.lock().await;
+    let Some(session) = guard.get_mut(connection_id) else {
+        return;
+    };
+    let Some(prompt_text) = session.pending_prompt.take() else {
+        return;
+    };
+    // Clone so the prompt can be RESTORED (not dropped) if a turn is already
+    // in flight — see the TurnInProgress arm below.
+    let blocks = vec![PromptInputBlock::Text {
+        text: prompt_text.clone(),
+    }];
+    if let Err(e) = conn_mgr
+        .send_prompt_queue_aware(db, connection_id, blocks)
+        .await
+    {
+        // A turn is already in flight on this shared connection (another
+        // client raced this kickoff between SessionStarted and here).
+        // Transient, not a failure — RESTORE the pending prompt so the
+        // TurnComplete handler retries the kickoff once the in-flight turn
+        // finishes, instead of silently dropping the task's initial prompt.
+        if matches!(e, crate::acp::error::AcpError::TurnInProgress) {
+            session.pending_prompt = Some(prompt_text);
+            tracing::warn!(
+                "[SessionEventSub] kickoff deferred; a turn is already in \
+                 progress, will retry on TurnComplete"
+            );
+            let target = session.target.clone();
+            let lang = get_lang(db).await;
+            let msg = RichMessage::info(super::i18n::task_deferred_busy(lang).to_string());
+            let _ = manager.send_to_target(&target, &msg).await;
+        } else {
+            tracing::error!("[SessionEventSub] failed to send pending prompt: {e}");
+            let target = session.target.clone();
+            let msg = RichMessage::error(format!("Failed to send task: {e}"));
+            let _ = manager.send_to_target(&target, &msg).await;
+        }
+    }
+}
+
 async fn flush_progress(
     bridge: &Arc<Mutex<SessionBridge>>,
     manager: &ChatChannelManager,
@@ -771,7 +891,15 @@ mod error_terminal_gate_tests {
                 terminal: false,
             },
         };
-        handle_acp_envelope(&envelope, &bridge, &chat_mgr, &conn_mgr, &db.conn).await;
+        handle_acp_envelope(
+            &envelope,
+            &bridge,
+            &chat_mgr,
+            &conn_mgr,
+            &db.conn,
+            &EventEmitter::Noop,
+        )
+        .await;
 
         // Session bridge entry is preserved — the next user message on the
         // same connection can still flow through it.
@@ -804,7 +932,15 @@ mod error_terminal_gate_tests {
                 terminal: true,
             },
         };
-        handle_acp_envelope(&envelope, &bridge, &chat_mgr, &conn_mgr, &db.conn).await;
+        handle_acp_envelope(
+            &envelope,
+            &bridge,
+            &chat_mgr,
+            &conn_mgr,
+            &db.conn,
+            &EventEmitter::Noop,
+        )
+        .await;
 
         assert!(
             bridge.lock().await.get("c-term").is_none(),
@@ -813,6 +949,224 @@ mod error_terminal_gate_tests {
         assert_eq!(
             read_row_status(&db, conv_id).await,
             ConversationStatus::Cancelled
+        );
+    }
+}
+
+#[cfg(test)]
+mod session_started_bind_tests {
+    //! Coverage for the `SessionStarted` arm's `bind_external_id` integration
+    //! (ACP-BINDING-AUDIT-2026-08-19, B1/B4): a bind conflict must tear down
+    //! this route's bridge entry and mark the conversation Cancelled, but
+    //! ONLY when the refusing event still describes the connection's
+    //! CURRENT external_id — a stale, superseded event must leave an
+    //! already-healthy route alone.
+    use super::*;
+    use crate::acp::connection::AgentConnection;
+    use crate::acp::session_state::SessionState;
+    use crate::chat_channel::manager::ChatChannelManager;
+    use crate::chat_channel::session_bridge::{ActiveSession, SessionBridge};
+    use crate::db::test_helpers;
+    use crate::models::agent::AgentType;
+    use std::sync::Arc;
+    use std::time::Instant;
+    use tokio::sync::{mpsc, Mutex, RwLock};
+
+    /// Register a fake connection in `conn_mgr` whose `SessionState.external_id`
+    /// is already `external_id` — the staleness check reads exactly this field.
+    async fn register_fake_connection(
+        conn_mgr: &ConnectionManager,
+        connection_id: &str,
+        external_id: &str,
+    ) {
+        let (cmd_tx, _cmd_rx) = mpsc::channel(1);
+        let mut state = SessionState::new(
+            connection_id.to_string(),
+            AgentType::ClaudeCode,
+            None,
+            "test-window".to_string(),
+            None,
+        );
+        state.external_id = Some(external_id.to_string());
+        conn_mgr.connections.lock().await.insert(
+            connection_id.to_string(),
+            AgentConnection {
+                id: connection_id.to_string(),
+                agent_type: AgentType::ClaudeCode,
+                status: ConnectionStatus::Connected,
+                owner_window_label: "test-window".to_string(),
+                cmd_tx,
+                state: Arc::new(RwLock::new(state)),
+                emitter: EventEmitter::Noop,
+                prompt_lock: Arc::new(tokio::sync::Mutex::new(())),
+                config_fingerprint: String::new(),
+                last_observed_fingerprint: String::new(),
+                child_pid: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            },
+        );
+    }
+
+    async fn seed_bridge_session(
+        connection_id: &str,
+        conversation_id: i32,
+    ) -> Arc<Mutex<SessionBridge>> {
+        let bridge = Arc::new(Mutex::new(SessionBridge::new()));
+        bridge.lock().await.register(
+            connection_id.to_string(),
+            ActiveSession {
+                channel_id: 7,
+                sender_id: "u1".into(),
+                target: crate::chat_channel::types::ChannelMessageTarget::channel(7),
+                conversation_id,
+                connection_id: connection_id.to_string(),
+                agent_type: AgentType::ClaudeCode,
+                content_buffer: String::new(),
+                tool_calls: Vec::new(),
+                tool_call_inputs: std::collections::HashMap::new(),
+                last_flushed: Instant::now(),
+                pending_prompt: None,
+                permission_pending: None,
+            },
+        );
+        bridge
+    }
+
+    #[tokio::test]
+    async fn session_started_binds_without_conflict_and_keeps_the_route() {
+        let db = test_helpers::fresh_in_memory_db().await;
+        let folder_id = test_helpers::seed_folder(&db, "/tmp/sesb-bind-ok").await;
+        let conv_id = test_helpers::seed_conversation(&db, folder_id, AgentType::ClaudeCode).await;
+        let bridge = seed_bridge_session("c-ok", conv_id).await;
+        let chat_mgr = ChatChannelManager::new();
+        let conn_mgr = ConnectionManager::new();
+
+        let envelope = EventEnvelope {
+            seq: 1,
+            connection_id: "c-ok".to_string(),
+            payload: AcpEvent::SessionStarted {
+                session_id: "session-fresh".to_string(),
+            },
+        };
+        handle_acp_envelope(
+            &envelope,
+            &bridge,
+            &chat_mgr,
+            &conn_mgr,
+            &db.conn,
+            &EventEmitter::Noop,
+        )
+        .await;
+
+        assert!(
+            bridge.lock().await.get("c-ok").is_some(),
+            "a clean bind must not tear down the route"
+        );
+        let conv = conversation_service::get_by_id(&db.conn, conv_id)
+            .await
+            .unwrap();
+        assert_eq!(conv.external_id.as_deref(), Some("session-fresh"));
+    }
+
+    #[tokio::test]
+    async fn session_started_conflict_tears_down_the_route_when_still_current() {
+        let db = test_helpers::fresh_in_memory_db().await;
+        let folder_id = test_helpers::seed_folder(&db, "/tmp/sesb-conflict").await;
+        let mine = test_helpers::seed_conversation(&db, folder_id, AgentType::ClaudeCode).await;
+        conversation_service::bind_external_id(&db.conn, mine, "session-mine".into())
+            .await
+            .unwrap();
+        let holder = test_helpers::seed_conversation(&db, folder_id, AgentType::ClaudeCode).await;
+        conversation_service::bind_external_id(&db.conn, holder, "session-taken".into())
+            .await
+            .unwrap();
+
+        let bridge = seed_bridge_session("c-conflict", mine).await;
+        let chat_mgr = ChatChannelManager::new();
+        let conn_mgr = ConnectionManager::new();
+        // The connection's OWN current state already reflects "session-taken"
+        // — this event is not stale.
+        register_fake_connection(&conn_mgr, "c-conflict", "session-taken").await;
+
+        let envelope = EventEnvelope {
+            seq: 1,
+            connection_id: "c-conflict".to_string(),
+            payload: AcpEvent::SessionStarted {
+                session_id: "session-taken".to_string(),
+            },
+        };
+        handle_acp_envelope(
+            &envelope,
+            &bridge,
+            &chat_mgr,
+            &conn_mgr,
+            &db.conn,
+            &EventEmitter::Noop,
+        )
+        .await;
+
+        assert!(
+            bridge.lock().await.get("c-conflict").is_none(),
+            "a refused bind that is still current must tear down the route"
+        );
+        let conv = conversation_service::get_by_id(&db.conn, mine).await.unwrap();
+        assert_eq!(
+            conv.status, "cancelled",
+            "the torn-down conversation must be marked cancelled"
+        );
+        assert_eq!(
+            conv.external_id.as_deref(),
+            Some("session-mine"),
+            "a refused bind must not have touched the row's external_id"
+        );
+    }
+
+    #[tokio::test]
+    async fn session_started_conflict_skips_teardown_when_event_is_stale() {
+        let db = test_helpers::fresh_in_memory_db().await;
+        let folder_id = test_helpers::seed_folder(&db, "/tmp/sesb-stale").await;
+        let mine = test_helpers::seed_conversation(&db, folder_id, AgentType::ClaudeCode).await;
+        conversation_service::bind_external_id(&db.conn, mine, "session-mine".into())
+            .await
+            .unwrap();
+        let holder = test_helpers::seed_conversation(&db, folder_id, AgentType::ClaudeCode).await;
+        conversation_service::bind_external_id(&db.conn, holder, "session-taken".into())
+            .await
+            .unwrap();
+
+        let bridge = seed_bridge_session("c-stale", mine).await;
+        let chat_mgr = ChatChannelManager::new();
+        let conn_mgr = ConnectionManager::new();
+        // The connection has ALREADY moved on to a newer session by the time
+        // this (slow-to-arrive) SessionStarted{"session-taken"} is handled —
+        // e.g. a fork happened in between. Tearing down here would kill an
+        // already-healthy route.
+        register_fake_connection(&conn_mgr, "c-stale", "session-even-newer").await;
+
+        let envelope = EventEnvelope {
+            seq: 1,
+            connection_id: "c-stale".to_string(),
+            payload: AcpEvent::SessionStarted {
+                session_id: "session-taken".to_string(),
+            },
+        };
+        handle_acp_envelope(
+            &envelope,
+            &bridge,
+            &chat_mgr,
+            &conn_mgr,
+            &db.conn,
+            &EventEmitter::Noop,
+        )
+        .await;
+
+        assert!(
+            bridge.lock().await.get("c-stale").is_some(),
+            "a stale refusal (event superseded by a newer session) must not tear down the route"
+        );
+        let conv = conversation_service::get_by_id(&db.conn, mine).await.unwrap();
+        assert_ne!(
+            conv.status, "cancelled",
+            "a stale, skipped teardown must not cancel the conversation"
         );
     }
 }

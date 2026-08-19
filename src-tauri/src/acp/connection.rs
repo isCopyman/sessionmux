@@ -565,8 +565,8 @@ fn transcript_dir_for(agent_type: AgentType) -> Option<&'static str> {
 /// Ensure a custom agent's transcript file exists with its header. No-op for
 /// built-ins, and idempotent per session (a reconnect keeps the original
 /// header, so the session's original cwd/start time survive).
-fn record_transcript_header(agent_type: AgentType, session_id: &str, cwd: &str) {
-    record_transcript_header_continuing(agent_type, session_id, cwd, None);
+async fn record_transcript_header(agent_type: AgentType, session_id: &str, cwd: &str) {
+    record_transcript_header_continuing(agent_type, session_id, cwd, None).await;
 }
 
 /// [`record_transcript_header`] for a session that carries an existing
@@ -576,7 +576,21 @@ fn record_transcript_header(agent_type: AgentType, session_id: &str, cwd: &str) 
 /// agent session for the same conversation: the earlier turns stay where they
 /// are and this header links back to them, so the reader still sees one
 /// history. See [`crate::acp_transcript::TranscriptHeader::continues_from`].
-fn record_transcript_header_continuing(
+///
+/// When `continues_from` is `Some`, this bound-waits (up to 2s) for the
+/// header to actually land on disk before returning. This matters beyond the
+/// transcript reader: `conversation_service::bind_external_id`'s A2 exemption
+/// (a memory-less custom agent's restart is a continuation, not a takeover)
+/// decides by reading THIS EXACT header's `continues_from` chain via
+/// `acp_transcript::continued_session_ids`. If the caller broadcast
+/// `SessionStarted` before this header landed, that read would see an empty
+/// chain and misjudge an ordinary restart as an unrelated takeover —
+/// permanently splitting the SAME conversation into two rows on every
+/// restart, which is precisely what the A2 exemption exists to prevent. The
+/// plain (non-continuing) case skips the wait: nothing downstream depends on
+/// its durability ordering relative to anything else, so it stays
+/// fire-and-forget exactly as before.
+async fn record_transcript_header_continuing(
     agent_type: AgentType,
     session_id: &str,
     cwd: &str,
@@ -591,10 +605,36 @@ fn record_transcript_header_continuing(
         cwd,
         crate::acp_transcript::now_epoch_ms(),
     );
-    if let Some(previous) = continues_from.filter(|p| !p.is_empty() && *p != session_id) {
+    let is_continuation = if let Some(previous) =
+        continues_from.filter(|p| !p.is_empty() && *p != session_id)
+    {
         header = header.continuing(previous);
+        true
+    } else {
+        false
+    };
+    let ack = crate::acp_transcript::record_header(dir, &header);
+    if !is_continuation {
+        drop(ack);
+        return;
     }
-    drop(crate::acp_transcript::record_header(dir, &header));
+    // Best-effort durability wait, matching this module's existing "recording
+    // must never block or fail a turn" contract: a timeout or a dropped
+    // sender (writer queue full / poisoned) is logged, not propagated — the
+    // caller still proceeds. This narrows the race in the common case
+    // instead of trying to eliminate it outright.
+    let landed = matches!(
+        tokio::time::timeout(std::time::Duration::from_secs(2), ack).await,
+        Ok(Ok(()))
+    );
+    if !landed {
+        tracing::warn!(
+            "[acp] record_transcript_header_continuing: header for session \
+             {session_id} (continues_from={continues_from:?}) did not confirm \
+             landing within 2s; a continuation-chain read racing this write \
+             may still see it as missing"
+        );
+    }
 }
 
 /// Record an outgoing prompt for a custom agent, and wait (briefly) for it to
@@ -4442,7 +4482,8 @@ async fn run_connection(
                             // notification (e.g. an early AvailableCommandsUpdate)
                             // is consumed and forwarded by run_conversation_loop.
 
-                            record_transcript_header(agent_type, &sid, &cwd.to_string_lossy());
+                            record_transcript_header(agent_type, &sid, &cwd.to_string_lossy())
+                                .await;
                             emit_with_state(
                                 &state,
                                 &emitter_clone,
@@ -4592,7 +4633,7 @@ async fn run_connection(
                         // so writing it after the drain would leave a hydrated
                         // transcript permanently headerless (no cwd, no start
                         // time, hence no folder in the conversation list).
-                        record_transcript_header(agent_type, &sid, &cwd.to_string_lossy());
+                        record_transcript_header(agent_type, &sid, &cwd.to_string_lossy()).await;
                         let mut drained = 0u32;
                         // Cleared if the writer ever stalls: from then on the
                         // drain still runs to completion (the session is not
@@ -4852,7 +4893,8 @@ async fn run_connection(
                             &fallback_sid,
                             &cwd.to_string_lossy(),
                             Some(sid.as_str()),
-                        );
+                        )
+                        .await;
                         emit_with_state(
                             &state,
                             &emitter_clone,
@@ -4934,7 +4976,7 @@ async fn run_connection(
                 let grok_model_specs = (agent_type == AgentType::Grok)
                     .then(|| parse_grok_model_specs(grok_models_raw.as_ref()));
                 let mut session = cx.attach_session(new_resp, Default::default())?;
-                record_transcript_header(agent_type, &sid, &cwd.to_string_lossy());
+                record_transcript_header(agent_type, &sid, &cwd.to_string_lossy()).await;
                 emit_with_state(
                     &state,
                     &emitter_clone,
@@ -6763,7 +6805,7 @@ async fn handle_fork_or_exit(
     // A fork is a new session id, hence a new transcript file. Its history
     // starts empty and accumulates from the fork point — the pre-fork turns
     // stay in the parent's transcript, which is what forking means.
-    record_transcript_header(agent_type, &new_sid, cwd_string);
+    record_transcript_header(agent_type, &new_sid, cwd_string).await;
     emit_with_state(
         state,
         emitter,

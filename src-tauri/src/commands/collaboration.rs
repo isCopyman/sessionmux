@@ -2069,10 +2069,10 @@ mod tests {
         let source = seed_conversation(&db, folder, AgentType::Codex).await;
         let target = seed_conversation(&db, folder, AgentType::ClaudeCode).await;
         let draft = seed_conversation(&db, folder, AgentType::Gemini).await;
-        conversation_service::update_external_id(&db.conn, source, "codex-source".into())
+        conversation_service::bind_external_id(&db.conn, source, "codex-source".into())
             .await
             .unwrap();
-        conversation_service::update_external_id(&db.conn, target, "claude-target".into())
+        conversation_service::bind_external_id(&db.conn, target, "claude-target".into())
             .await
             .unwrap();
         let access = enabled_agent_access(&db, EventEmitter::Noop).await;

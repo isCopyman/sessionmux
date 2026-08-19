@@ -1162,6 +1162,75 @@ pub fn read_chain_in(root: &Path, agent_dir: &str, session_id: &str) -> Transcri
     merged
 }
 
+/// Every session id that `session_id`'s continuation chain covers — every
+/// earlier link reachable by following `continues_from` backward, NOT
+/// including `session_id` itself.
+///
+/// Built-in agents keep their history in their own native store rather than
+/// an ACP transcript ([`crate::acp::connection`]'s `transcript_dir_for`
+/// returns `None` for them), so they never continue anything: only a custom
+/// agent's memory-less-restart chain can make an older id "the same
+/// conversation" as a newer one. This is `bind_external_id`'s (A2) rebind
+/// exemption — see
+/// [`crate::db::service::conversation_service::bind_external_id`], which
+/// calls this to tell a genuine restart-continuation from a takeover of an
+/// unrelated session: overwriting a row's `external_id` without preserving
+/// the old value is safe exactly when the old value is in this set.
+pub fn continued_session_ids(
+    agent_type: crate::models::AgentType,
+    session_id: &str,
+) -> std::collections::HashSet<String> {
+    continued_session_ids_in(
+        &crate::paths::codeg_acp_transcripts_root(),
+        agent_type,
+        session_id,
+    )
+}
+
+/// Root-injectable core of [`continued_session_ids`].
+pub fn continued_session_ids_in(
+    root: &Path,
+    agent_type: crate::models::AgentType,
+    session_id: &str,
+) -> std::collections::HashSet<String> {
+    let mut ids = std::collections::HashSet::new();
+    // Mirrors `transcript_dir_for`: only a custom agent has a transcript
+    // directory at all, so a built-in's chain is always empty.
+    let Some(dir) = agent_type
+        .custom_id()
+        .map(|_| crate::acp::registry::registry_id_for(agent_type))
+    else {
+        return ids;
+    };
+    let mut cursor = Some(session_id.to_string());
+    let mut visited: std::collections::HashSet<String> = std::collections::HashSet::new();
+    while let Some(id) = cursor.take() {
+        // Cycle / depth guards mirror `read_chain_in` — a hand-edited or
+        // corrupted header must not make this walk unbounded.
+        if !visited.insert(id.clone()) {
+            tracing::debug!("[acp-transcript] continuation cycle at {id}; stopping walk");
+            break;
+        }
+        if ids.len() >= MAX_CONTINUATION_DEPTH {
+            tracing::debug!(
+                "[acp-transcript] continuation chain exceeded {MAX_CONTINUATION_DEPTH}; truncating"
+            );
+            break;
+        }
+        let Some(header) = read_header_in(root, dir, &id) else {
+            break;
+        };
+        match header.continues_from {
+            Some(prev) => {
+                ids.insert(prev.clone());
+                cursor = Some(prev);
+            }
+            None => break,
+        }
+    }
+    ids
+}
+
 /// Session ids under `<root>/<agent_dir>/` that some other transcript continues.
 ///
 /// A superseded transcript is a prefix of its successor, so listing both would
@@ -1396,6 +1465,42 @@ mod tests {
         assert_eq!(superseded.len(), 2);
         assert!(superseded.contains("s0") && superseded.contains("s1"));
         assert!(!superseded.contains("s2"), "the head is never superseded");
+
+        // `continued_session_ids_in` is the write-side counterpart: walking
+        // back from the head must name every earlier link (but never the
+        // head itself), which is exactly `bind_external_id`'s A2 exemption
+        // set for "is this a restart-continuation, not a takeover".
+        let goose = crate::models::AgentType::custom("goose").expect("valid slug");
+        let ancestors = continued_session_ids_in(&root, goose, "s2");
+        assert_eq!(ancestors.len(), 2);
+        assert!(ancestors.contains("s0") && ancestors.contains("s1"));
+        assert!(
+            !ancestors.contains("s2"),
+            "the session's own id is not its own ancestor"
+        );
+        assert_eq!(
+            continued_session_ids_in(&root, goose, "s1")
+                .into_iter()
+                .collect::<Vec<_>>(),
+            vec!["s0".to_string()],
+            "a mid-chain id only ancestors back to the root"
+        );
+        assert!(
+            continued_session_ids_in(&root, goose, "s0").is_empty(),
+            "the root of the chain has no ancestors"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn continued_session_ids_is_always_empty_for_builtin_agents() {
+        // Built-ins keep history in their own native store, never an ACP
+        // transcript — even a session id that collides with a real custom
+        // transcript file on disk must not be treated as continued.
+        let root = temp_root();
+        append_line_in(&root, "claude-acp", "s0", &header_line("s0"));
+        let claude = crate::models::AgentType::ClaudeCode;
+        assert!(continued_session_ids_in(&root, claude, "s0").is_empty());
         let _ = std::fs::remove_dir_all(&root);
     }
 

@@ -26,6 +26,7 @@ use crate::commands::conversations::{
     create_conversation_core_with_source, emit_conversation_deleted, emit_conversation_upsert,
 };
 use crate::db::entities::conversation::{ConversationKind, ConversationStatus, CREATED_BY_AGENT};
+use crate::db::error::DbError;
 use crate::db::service::{conversation_service, folder_service, prompt_queue_service};
 use crate::db::AppDatabase;
 use crate::models::{AgentType, DbConversationSummary};
@@ -703,39 +704,61 @@ impl SessionHostControlProvider {
                     )),
                 };
             };
-            if let Err(error) = conversation_service::update_external_id(
+            match conversation_service::bind_external_id(
                 &self.db.conn,
                 conversation_id,
                 native_session_id.clone(),
             )
             .await
             {
-                let _ = conversation_service::update_status(
-                    &self.db.conn,
-                    conversation_id,
-                    ConversationStatus::Cancelled,
-                )
-                .await;
-                emit_conversation_upsert(&self.emitter, &self.db.conn, conversation_id).await;
-                return HostControlUseOutcome {
-                    accepted: false,
-                    request_id,
-                    action,
-                    stage: "creation_recovery_required".to_string(),
-                    replayed: false,
-                    data: json!({
-                        "session_id": conversation_id,
-                        "native_session_id": runtime.native_session_id,
-                        "connection_id": runtime.connection_id,
-                        "runtime_active": false,
-                        "session_preserved": true,
-                        "opened": false,
-                        "focused": false,
-                    }),
-                    note: Some(format!(
-                        "The Harness created a native Session, but Codeg could not persist its resume identity ({error}). The provisional row was retained explicitly for recovery."
-                    )),
-                };
+                Ok(outcome) => {
+                    if let Some(preserved_id) = outcome.preserved_conversation_id {
+                        // A1/A3: this row's previous native session was
+                        // unrelated to the one just created, so it was split
+                        // off onto its own row rather than silently
+                        // overwritten. `emit_conversation_upsert` below still
+                        // covers `conversation_id` itself; only this call
+                        // site knows about the preserved sibling.
+                        emit_conversation_upsert(&self.emitter, &self.db.conn, preserved_id).await;
+                    }
+                }
+                Err(error) => {
+                    let _ = conversation_service::update_status(
+                        &self.db.conn,
+                        conversation_id,
+                        ConversationStatus::Cancelled,
+                    )
+                    .await;
+                    emit_conversation_upsert(&self.emitter, &self.db.conn, conversation_id).await;
+                    let note = if matches!(error, DbError::ExternalIdTaken(_)) {
+                        format!(
+                            "The Harness created a native Session, but its resume identity is \
+                             already bound to a different Codeg Session and cannot be reused \
+                             ({error}). The provisional row was retained explicitly for recovery."
+                        )
+                    } else {
+                        format!(
+                            "The Harness created a native Session, but Codeg could not persist its resume identity ({error}). The provisional row was retained explicitly for recovery."
+                        )
+                    };
+                    return HostControlUseOutcome {
+                        accepted: false,
+                        request_id,
+                        action,
+                        stage: "creation_recovery_required".to_string(),
+                        replayed: false,
+                        data: json!({
+                            "session_id": conversation_id,
+                            "native_session_id": runtime.native_session_id,
+                            "connection_id": runtime.connection_id,
+                            "runtime_active": false,
+                            "session_preserved": true,
+                            "opened": false,
+                            "focused": false,
+                        }),
+                        note: Some(note),
+                    };
+                }
             }
         }
         if runtime.prompt == InitialPromptStage::NotRequested {

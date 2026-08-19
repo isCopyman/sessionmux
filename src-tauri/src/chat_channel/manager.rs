@@ -363,7 +363,12 @@ impl ChatChannelManager {
             bridge.clone(),
         );
 
-        // Spawn session event subscriber (ACP event routing to channels)
+        // Spawn session event subscriber (ACP event routing to channels).
+        // `emitter` is the process-level broadcaster — passed through
+        // (cloned) rather than looked up per-connection later, so a
+        // preserved-row upsert broadcast after a SessionStarted bind
+        // conflict can never race a connection's own cleanup. `emitter`
+        // itself is still needed below for the command dispatcher.
         let manager_for_session_events = self.clone_ref();
         super::session_event_subscriber::spawn_session_event_subscriber(
             bus,
@@ -371,6 +376,7 @@ impl ChatChannelManager {
             manager_for_session_events,
             conn_mgr.clone_ref(),
             db_conn.clone(),
+            emitter.clone(),
         );
 
         // Spawn command dispatcher
