@@ -1,6 +1,6 @@
 ---
 name: codeg-host-control
-description: Use when a managed Codeg Agent needs to create, inspect or rename Codeg Sessions, organize Sessions into Collections, or manage saved Workbenches through Codeg's progressive Host Control MCP. Room create/add-member and posting belong to the codeg-room skill. Private mail belongs to codeg-mailbox. Team playbooks belong to codeg-multi-agent.
+description: Use when a managed Codeg Agent needs to create, inspect, rename or retune (model / thinking effort) Codeg Sessions, organize Sessions into Collections, or manage saved Workbenches through Codeg's progressive Host Control MCP. Room create/add-member and posting belong to the codeg-room skill. Private mail belongs to codeg-mailbox. Team playbooks belong to codeg-multi-agent.
 ---
 
 # Codeg Host Control
@@ -46,6 +46,15 @@ the idempotency key outside model-controlled arguments.
 - `session.cancel_turn`: cancel only the active Turn and keep the Session/runtime.
 - `session.stop`: stop the managed runtime while preserving Session identity and
   native history for resume.
+- `session.get_selectors`: read a Session's model and thinking-effort
+  selectors — the Host-pinned values plus, while a runtime is live, the
+  Harness-advertised current value and available choices.
+- `session.set_selectors`: pin a Session's model and/or thinking effort (at
+  least one is required). The pin applies at every later runtime (re)start and
+  wins over the user's saved per-agent defaults; with a live runtime the switch
+  is also requested immediately for subsequent Turns. Read
+  `session.get_selectors` first and pick from the advertised choices — effort
+  vocabularies differ per Harness.
 
 ## Available organization actions
 

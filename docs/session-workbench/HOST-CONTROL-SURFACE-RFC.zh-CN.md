@@ -633,6 +633,14 @@ Capability。Codeg 受管 Session 只走结构化渐进式 MCP；Buzz 式 CLI �
 > 2026-08-19 对账：`session.list` / `session.get` / `session.rename` / `session.create` /
 > `session.cancel_turn` / `session.stop` 已落地；极小 capability gateway 即 `codeg_help` /
 > `codeg_use`（见 4.1）；fork / archive / open / focus 与 `wait_sessions` 仍未做。
+>
+> 2026-08-19 对账（selector 控制）：`session.get_selectors` / `session.set_selectors` 已落地，
+> 覆盖运行中 Session 的模型与思考力度。写入把语义键（`__codeg_host_model__` /
+> `__codeg_host_thought_level__`）pin 进 `conversation.preferred_config_values`，每次
+> (re)connect 时解析为该 Harness 广告的 selector（ACP category `model` / `thought_level`，
+> Grok 特例 `reasoning_effort`），并在应用顺序上压在客户端 localStorage 模板之后（Host pin 胜出）；
+> 目标有 live runtime 时按广告的取值校验并立即请求切换（后续 Turn 生效），无 runtime 时只做
+> 持久化覆盖、下次连接生效。布局类控制仍不做。
 
 - list/search/get；
 - create/import/resume/fork/rename/archive/open/focus；

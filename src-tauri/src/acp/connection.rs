@@ -2604,11 +2604,27 @@ fn parse_steer_outcome(raw: &serde_json::Value) -> Result<SteerOutcome, AcpError
     }
 }
 
+/// Read a Grok selector pin: the concrete per-Harness id first, then the Host
+/// Control semantic key for the same selector. Grok never advertises standard
+/// config options, so the generic `resolve_preferred_config_id` path cannot
+/// resolve Host pins for it.
+fn grok_preferred_value<'a>(
+    preferred_config_values: &'a BTreeMap<String, String>,
+    concrete_id: &str,
+    semantic_key: &str,
+) -> Option<&'a String> {
+    preferred_config_values
+        .get(concrete_id)
+        .or_else(|| preferred_config_values.get(semantic_key))
+}
+
 /// On reconnect, re-apply the user's last-picked Grok model AND reasoning effort
 /// (both saved per agent by the frontend and shipped back as preferred config
 /// values), reflecting each in its selector's `current_value`. Model is applied
 /// first (a pure switch, effort untouched); effort is then re-applied on top of
-/// the now-current model via `set_model`'s `_meta.reasoningEffort`.
+/// the now-current model via `set_model`'s `_meta.reasoningEffort`. A Host
+/// Control semantic pin (`__codeg_host_*__`) is honored when no concrete pin
+/// for the same selector exists.
 async fn apply_grok_preferred_options(
     cx: &ConnectionTo<Agent>,
     session_id: &SessionId,
@@ -2619,7 +2635,13 @@ async fn apply_grok_preferred_options(
     // Model preference — a pure `set_model` (no effort override). On success we
     // also re-point the effort selector at the newly-preferred model (grok ships
     // per-model effort only at birth, never on set_model).
-    if let Some(pref) = preferred_config_values.get(GROK_MODEL_OPTION_ID).cloned() {
+    if let Some(pref) = grok_preferred_value(
+        preferred_config_values,
+        GROK_MODEL_OPTION_ID,
+        PREFERRED_MODEL_CONFIG_KEY,
+    )
+    .cloned()
+    {
         // Split the eligibility read (immutable) from the rebuild (mutable) so we
         // never hold a `&mut opts` borrow across `set_grok_effort_selector_for_model`.
         let eligible = opts
@@ -2657,7 +2679,11 @@ async fn apply_grok_preferred_options(
     // Effort preference — re-applied on top of the (possibly just-switched)
     // current model. The effort selector was rebuilt above for that model, so an
     // unsupported model (no selector) or an unoffered value is skipped here.
-    if let Some(pref) = preferred_config_values.get(GROK_EFFORT_OPTION_ID) {
+    if let Some(pref) = grok_preferred_value(
+        preferred_config_values,
+        GROK_EFFORT_OPTION_ID,
+        PREFERRED_THOUGHT_LEVEL_CONFIG_KEY,
+    ) {
         let model_id = current_grok_model_id_from_opts(opts);
         if let Some(SessionConfigKindInfo::Select(sel)) = opts
             .iter_mut()
@@ -5778,6 +5804,18 @@ async fn send_goal_control(
 /// resolves it to the concrete config id published by this Harness.
 pub(crate) const PREFERRED_MODEL_CONFIG_KEY: &str = "__codeg_host_model__";
 
+/// Same idea for the thinking-effort selector: Host Control pins the intent,
+/// the connection resolves it to this Harness's effort option (ACP category
+/// `thought_level`; Grok's synthesized `reasoning_effort` id is matched as a
+/// fallback below and in `apply_grok_preferred_options`).
+pub(crate) const PREFERRED_THOUGHT_LEVEL_CONFIG_KEY: &str = "__codeg_host_thought_level__";
+
+/// Whether a preferred-config key is a Host Control semantic pin rather than
+/// a concrete Harness config id.
+fn is_host_semantic_config_key(key: &str) -> bool {
+    key == PREFERRED_MODEL_CONFIG_KEY || key == PREFERRED_THOUGHT_LEVEL_CONFIG_KEY
+}
+
 fn resolve_preferred_config_id(
     options: &[SessionConfigOption],
     requested_config_id: &str,
@@ -5787,9 +5825,41 @@ fn resolve_preferred_config_id(
             .iter()
             .find(|option| matches!(option.category, Some(SessionConfigOptionCategory::Model)))
             .map(|option| option.id.to_string())
+    } else if requested_config_id == PREFERRED_THOUGHT_LEVEL_CONFIG_KEY {
+        options
+            .iter()
+            .find(|option| {
+                matches!(
+                    option.category,
+                    Some(SessionConfigOptionCategory::ThoughtLevel)
+                )
+            })
+            .or_else(|| {
+                options.iter().find(|option| {
+                    matches!(
+                        option.id.to_string().as_str(),
+                        "thought_level" | "reasoning_effort"
+                    )
+                })
+            })
+            .map(|option| option.id.to_string())
     } else {
         Some(requested_config_id.to_string())
     }
+}
+
+/// Order preferred-config entries for application: concrete config ids first,
+/// Host semantic pins (`__codeg_host_*__`) last. The concrete set can carry the
+/// client's per-agent template (its saved localStorage defaults), and a Host
+/// pin is a deliberate per-Session override that must still win over that
+/// template when both target the same selector.
+fn ordered_preferred_entries(
+    preferred_config_values: &BTreeMap<String, String>,
+) -> Vec<(&String, &String)> {
+    let (semantic, concrete): (Vec<_>, Vec<_>) = preferred_config_values
+        .iter()
+        .partition(|(key, _)| is_host_semantic_config_key(key.as_str()));
+    concrete.into_iter().chain(semantic).collect()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -5823,13 +5893,13 @@ async fn apply_preferred_session_options(
 
     let session_id = session.session_id().clone();
     let mut options = initial_config_options;
-    for (requested_config_id, value_id) in preferred_config_values {
+    for (requested_config_id, value_id) in ordered_preferred_entries(preferred_config_values) {
         let config_id = match resolve_preferred_config_id(&options, requested_config_id) {
             Some(config_id) => config_id,
             None => {
                 tracing::error!(
-                    "[ACP] failed to apply preferred model '{value_id}': \
-                     the agent did not advertise a model config option"
+                    "[ACP] failed to apply preferred config '{requested_config_id}'='{value_id}': \
+                     the agent did not advertise a matching config option"
                 );
                 continue;
             }
@@ -16036,6 +16106,97 @@ mod tests {
         );
         assert_eq!(
             resolve_preferred_config_id(&[], PREFERRED_MODEL_CONFIG_KEY),
+            None
+        );
+    }
+
+    #[test]
+    fn host_effort_preference_resolves_thought_level_category_then_known_ids() {
+        let categorized: SessionConfigOption = serde_json::from_value(serde_json::json!({
+            "type": "select",
+            "id": "provider-specific-effort-id",
+            "name": "Thinking",
+            "category": "thought_level",
+            "currentValue": "medium",
+            "options": [{"value": "medium", "name": "Medium"}]
+        }))
+        .expect("effort option must parse");
+        assert_eq!(
+            resolve_preferred_config_id(&[categorized], PREFERRED_THOUGHT_LEVEL_CONFIG_KEY)
+                .as_deref(),
+            Some("provider-specific-effort-id")
+        );
+
+        // Harnesses that ship a bare id with no category (pi-acp's
+        // `thought_level`, Grok's synthesized `reasoning_effort`) still resolve.
+        for bare_id in ["thought_level", "reasoning_effort"] {
+            let bare: SessionConfigOption = serde_json::from_value(serde_json::json!({
+                "type": "select",
+                "id": bare_id,
+                "name": "Reasoning effort",
+                "currentValue": "high",
+                "options": [{"value": "high", "name": "High"}]
+            }))
+            .expect("bare effort option must parse");
+            assert_eq!(
+                resolve_preferred_config_id(&[bare], PREFERRED_THOUGHT_LEVEL_CONFIG_KEY).as_deref(),
+                Some(bare_id)
+            );
+        }
+
+        assert_eq!(
+            resolve_preferred_config_id(&[], PREFERRED_THOUGHT_LEVEL_CONFIG_KEY),
+            None
+        );
+    }
+
+    #[test]
+    fn host_semantic_pins_apply_after_concrete_template_entries() {
+        let mut prefs = BTreeMap::new();
+        prefs.insert(
+            PREFERRED_MODEL_CONFIG_KEY.to_string(),
+            "host-model".to_string(),
+        );
+        prefs.insert("model".to_string(), "template-model".to_string());
+        prefs.insert("sandbox".to_string(), "on".to_string());
+
+        let ordered: Vec<&str> = ordered_preferred_entries(&prefs)
+            .into_iter()
+            .map(|(key, _)| key.as_str())
+            .collect();
+        assert_eq!(ordered, ["model", "sandbox", PREFERRED_MODEL_CONFIG_KEY]);
+    }
+
+    #[test]
+    fn grok_pin_lookup_falls_back_to_host_semantic_keys() {
+        let mut prefs = BTreeMap::new();
+        prefs.insert(
+            PREFERRED_THOUGHT_LEVEL_CONFIG_KEY.to_string(),
+            "high".to_string(),
+        );
+        assert_eq!(
+            grok_preferred_value(
+                &prefs,
+                GROK_EFFORT_OPTION_ID,
+                PREFERRED_THOUGHT_LEVEL_CONFIG_KEY
+            )
+            .map(String::as_str),
+            Some("high")
+        );
+
+        // A concrete Grok pin wins over the semantic one for the same selector.
+        prefs.insert(GROK_EFFORT_OPTION_ID.to_string(), "low".to_string());
+        assert_eq!(
+            grok_preferred_value(
+                &prefs,
+                GROK_EFFORT_OPTION_ID,
+                PREFERRED_THOUGHT_LEVEL_CONFIG_KEY
+            )
+            .map(String::as_str),
+            Some("low")
+        );
+        assert_eq!(
+            grok_preferred_value(&prefs, GROK_MODEL_OPTION_ID, PREFERRED_MODEL_CONFIG_KEY),
             None
         );
     }
