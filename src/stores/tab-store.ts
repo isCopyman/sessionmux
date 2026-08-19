@@ -941,9 +941,8 @@ function isPersistableTab(tab: TabItemInternal): boolean {
 }
 
 function roomTitle(roomId: string): string | undefined {
-  return useRoomCatalogStore
-    .getState()
-    .rooms.find((room) => room.id === roomId)?.title
+  return useRoomCatalogStore.getState().rooms.find((room) => room.id === roomId)
+    ?.title
 }
 
 function openedTabSyncKey(it: OpenedTab): string | null {
@@ -1348,8 +1347,7 @@ function persistGroupState() {
     drafts,
     // Only a DRAFT focus needs restoring here; conversation focus rides the
     // synced `opened_tabs.is_active`.
-    activeDraft:
-      activeTab && isDraftTab(activeTab) ? activeTab.id : null,
+    activeDraft: activeTab && isDraftTab(activeTab) ? activeTab.id : null,
     sessionViewState,
   })
   if (blob === lastGroupBlob) return
@@ -2551,11 +2549,13 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
     const tabId = makeNewConversationTabId()
     const prevState = get()
     // Per-group draft singleton: reuse the target group's existing draft tab
-    // (regardless of folder), so each group carries at most one draft.
+    // (regardless of folder), so each group carries at most one draft. Room
+    // tabs also have a null conversationId but are not drafts — isDraftTab
+    // guards on kind, or a room tab in the group would swallow this click.
     const targetGroup = resolveTargetGroup(prevState, options?.targetGroup)
     const existingTab = prevState.rawTabs.find(
       (t) =>
-        t.conversationId == null &&
+        isDraftTab(t) &&
         groupOfTab(prevState.groupOf, prevState.groupLayout, t.id) ===
           targetGroup
     )
@@ -2641,7 +2641,7 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
     const inTargetGroup = (t: TabItemInternal) =>
       groupOfTab(st.groupOf, st.groupLayout, t.id) === targetGroup
     const existingDraft = st.rawTabs.find(
-      (t) => t.conversationId == null && inTargetGroup(t)
+      (t) => isDraftTab(t) && inTargetGroup(t)
     )
     const needsDisconnect =
       existingDraft != null &&
@@ -2650,7 +2650,7 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
     const tabId = makeNewConversationTabId()
     const prevState = get()
     const existingTab = prevState.rawTabs.find(
-      (t) => t.conversationId == null && inTargetGroup(t)
+      (t) => isDraftTab(t) && inTargetGroup(t)
     )
 
     if (!existingTab) {
@@ -3835,9 +3835,8 @@ function applyRemoteSnapshot(change: TabsChanged) {
   }
 
   const remoteActiveId = remoteActive
-    ? (nextTabs.find(
-        (tb) => tabSyncKey(tb) === openedTabSyncKey(remoteActive)
-      )?.id ?? null)
+    ? (nextTabs.find((tb) => tabSyncKey(tb) === openedTabSyncKey(remoteActive))
+        ?.id ?? null)
     : null
 
   // Focus resolution (focus is mirrored across clients):
