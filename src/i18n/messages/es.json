@@ -3441,8 +3441,6 @@
         "dueShort": "pendiente",
         "nextFireTitle": "Próximo recordatorio en aprox. {time}: {prompt}",
         "delayGrew": "La espera del recordatorio ha crecido. Restablécela tras un progreso real.",
-        "autoPaused": "Pausado por una regla de espera anterior. Restablece la espera para el intervalo más corto.",
-        "resumeNow": "Restablecer espera",
         "errors": {
           "emptyPrompt": "La indicación no puede estar vacía"
         }

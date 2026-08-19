@@ -3441,8 +3441,6 @@
         "dueShort": "pendente",
         "nextFireTitle": "Próximo lembrete em cerca de {time}: {prompt}",
         "delayGrew": "A espera do lembrete cresceu. Redefina após progresso real.",
-        "autoPaused": "Parado por uma regra antiga de espera. Redefina para o intervalo mais curto.",
-        "resumeNow": "Redefinir espera",
         "errors": {
           "emptyPrompt": "O prompt não pode estar vazio"
         }

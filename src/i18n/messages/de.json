@@ -3441,8 +3441,6 @@
         "dueShort": "fällig",
         "nextFireTitle": "Nächste Erinnerung in ca. {time}: {prompt}",
         "delayGrew": "Die Erinnerungspause ist gewachsen. Nach echtem Fortschritt zurücksetzen.",
-        "autoPaused": "Durch eine ältere Warte-Regel geparkt. Pause zurücksetzen für das kürzeste Intervall.",
-        "resumeNow": "Pause zurücksetzen",
         "errors": {
           "emptyPrompt": "Die Prompt darf nicht leer sein"
         }

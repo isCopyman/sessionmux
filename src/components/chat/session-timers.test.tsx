@@ -46,13 +46,6 @@ const timer = {
   updatedAt: "2026-08-16T00:00:00Z",
 }
 
-const autoPausedTimer = {
-  ...timer,
-  strikeCount: 3,
-  autoPausedAt: "2026-08-18T00:00:00Z",
-  autoPauseReason: "waiting_no_progress",
-}
-
 describe("SessionTimers", () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -115,28 +108,17 @@ describe("SessionTimers", () => {
     )
   })
 
-  it("surfaces the backoff auto-pause without flipping enabled", async () => {
-    listSessionTimers.mockResolvedValue([autoPausedTimer])
-    renderTimers()
-    fireEvent.click(screen.getByRole("button", { name: /idle continue/i }))
-    await screen.findByText(autoPausedTimer.promptText)
-
-    expect(screen.getByText(/older waiting rule/i)).toBeInTheDocument()
-    // enabled is still true, so the row keeps the Pause toggle (not Resume).
-    expect(screen.getByTitle("Pause")).toBeInTheDocument()
-  })
-
-  it("resets delay on a parked timer with one click", async () => {
-    listSessionTimers.mockResolvedValue([autoPausedTimer])
+  it("resets delay on a timer with one click", async () => {
+    listSessionTimers.mockResolvedValue([timer])
     resetSessionTimerDelay.mockResolvedValue({
       ...timer,
       updatedAt: "2026-08-18T00:01:00Z",
     })
     renderTimers()
     fireEvent.click(screen.getByRole("button", { name: /idle continue/i }))
-    await screen.findByText(/older waiting rule/i)
+    await screen.findByText(timer.promptText)
 
-    fireEvent.click(screen.getByText("Reset delay"))
+    fireEvent.click(screen.getByTitle("Reset delay"))
     await waitFor(() =>
       expect(resetSessionTimerDelay).toHaveBeenCalledWith(7, "t1")
     )

@@ -3441,8 +3441,6 @@
         "dueShort": "attendu",
         "nextFireTitle": "Prochain rappel dans environ {time} : {prompt}",
         "delayGrew": "Le délai de rappel s'est allongé. Réinitialisez-le après un vrai progrès.",
-        "autoPaused": "Suspendu par une ancienne règle d'attente. Réinitialisez le délai pour l'intervalle le plus court.",
-        "resumeNow": "Réinitialiser le délai",
         "errors": {
           "emptyPrompt": "L'invite ne peut pas être vide"
         }

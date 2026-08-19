@@ -3441,8 +3441,6 @@
         "dueShort": "예정됨",
         "nextFireTitle": "다음 알림까지 약 {time}: {prompt}",
         "delayGrew": "알림 간격이 길어졌습니다. 진전이 있으면 간격을 초기화하세요.",
-        "autoPaused": "이전 대기 규칙으로 멈춰 있습니다. 간격을 초기화하면 가장 짧게 돌아갑니다.",
-        "resumeNow": "대기 간격 초기화",
         "errors": {
           "emptyPrompt": "프롬프트를 입력하세요"
         }
