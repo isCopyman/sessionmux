@@ -797,8 +797,7 @@ pub async fn assign_to_collection(
             collection_id: detail.collection_id,
             root_folder_id: detail.root_folder_id,
             member_count: u32::try_from(detail.members.len()).unwrap_or(u32::MAX),
-            additional_path_count: u32::try_from(detail.additional_paths.len())
-                .unwrap_or(u32::MAX),
+            additional_path_count: u32::try_from(detail.additional_paths.len()).unwrap_or(u32::MAX),
             unread_count: 0,
             mention_unread_count: 0,
             needs_reply_count: 0,

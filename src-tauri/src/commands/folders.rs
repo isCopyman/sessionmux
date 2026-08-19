@@ -4730,8 +4730,7 @@ pub async fn list_workspace_files(
     })
     .await
     .map_err(|e| {
-        AppCommandError::task_execution_failed("File scan task failed")
-            .with_detail(e.to_string())
+        AppCommandError::task_execution_failed("File scan task failed").with_detail(e.to_string())
     })
 }
 
@@ -6674,7 +6673,8 @@ mod tests {
         write_file(b.path(), "from_b.txt", "x");
 
         let roots = vec![a.path().to_path_buf(), b.path().to_path_buf()];
-        let entries = walk_workspace_files_multi(&roots, MAX_WORKSPACE_FILE_ENTRIES, far_off_deadline());
+        let entries =
+            walk_workspace_files_multi(&roots, MAX_WORKSPACE_FILE_ENTRIES, far_off_deadline());
         let paths: std::collections::HashSet<&str> =
             entries.iter().map(|e| e.path.as_str()).collect();
         assert!(paths.contains("from_a.txt"));
@@ -6698,7 +6698,8 @@ mod tests {
         // The additional path is a subdirectory of the bound root — every
         // file under it is reachable through *both* roots.
         let roots = vec![outer.path().to_path_buf(), inner.clone()];
-        let entries = walk_workspace_files_multi(&roots, MAX_WORKSPACE_FILE_ENTRIES, far_off_deadline());
+        let entries =
+            walk_workspace_files_multi(&roots, MAX_WORKSPACE_FILE_ENTRIES, far_off_deadline());
         let inner_matches: Vec<_> = entries.iter().filter(|e| e.name == "inner.txt").collect();
         assert_eq!(
             inner_matches.len(),
@@ -6741,7 +6742,8 @@ mod tests {
         let missing = a.path().join("does-not-exist");
 
         let roots = vec![a.path().to_path_buf(), missing];
-        let entries = walk_workspace_files_multi(&roots, MAX_WORKSPACE_FILE_ENTRIES, far_off_deadline());
+        let entries =
+            walk_workspace_files_multi(&roots, MAX_WORKSPACE_FILE_ENTRIES, far_off_deadline());
         assert_eq!(
             entries.len(),
             1,
@@ -6783,7 +6785,10 @@ mod tests {
         let paths: std::collections::HashSet<&str> =
             entries.iter().map(|e| e.path.as_str()).collect();
         assert!(paths.contains("main.rs"), "primary root's files are listed");
-        assert!(paths.contains("notes.md"), "extra path's files are listed too");
+        assert!(
+            paths.contains("notes.md"),
+            "extra path's files are listed too"
+        );
     }
 
     #[test]

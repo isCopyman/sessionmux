@@ -283,8 +283,7 @@ pub struct ListWorkspaceFilesParams {
 pub async fn list_workspace_files(
     Json(params): Json<ListWorkspaceFilesParams>,
 ) -> Result<Json<Vec<folder_commands::WorkspaceFileEntry>>, AppCommandError> {
-    let result =
-        folder_commands::list_workspace_files(params.path, params.extra_paths).await?;
+    let result = folder_commands::list_workspace_files(params.path, params.extra_paths).await?;
     Ok(Json(result))
 }
 

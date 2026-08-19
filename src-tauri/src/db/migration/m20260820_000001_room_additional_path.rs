@@ -119,6 +119,9 @@ mod tests {
             .expect("row")
             .try_get("", "count")
             .expect("column");
-        assert_eq!(remaining, 0, "ON DELETE CASCADE must remove the room's paths");
+        assert_eq!(
+            remaining, 0,
+            "ON DELETE CASCADE must remove the room's paths"
+        );
     }
 }
