@@ -987,3 +987,12 @@ T2 后置截图（CDP 9222 可用，基线在 .artifacts）+ 晨间验收报告 
   应该可搜）；③ 会话中心搜索的实现机制（LIKE/FTS/标题还是内容）；④ 与 deja/ctx 的
   定位差异+能否搜 subagent/tool 内容。全部待调研（explore-k3 只读），产出报告给用户
   过目不直接实施。
+- 2026-08-20 夜 **Fable 领导接手 handoff，全队列自主推进 + P7 dogfooding 落库**：
+  ① 用户睡前指令：子代理改用 opus/sonnet（不再钉 K3）、细节和模糊意图领导决断、
+  以用户友好为准、逐个完成不停、功能完成必须测试。② 新任务 P7（队列清空后启动）：
+  在 codeg dev 里以人类身份用 codeg 自身持久化多 agent 协作开发 rewind/fork
+  （解冻），主模型 Claude Code + Opus 5、协作模型 Grok Build + Grok 4.6，边开发边
+  收集 skill/交互工具/UI/结构不便之处。③ 已并行派工：w-ime（P0，opus）、
+  w-roomcount（P5 后端 Room 欠回复聚合，opus）、r-atperf（P1 调研，opus 只读）、
+  r-search（P2 调研，sonnet 只读）。P5 证据已现勘更正：unread_overview 在
+  db/service/collaboration_service.rs（非交接单写的 services/ 路径）。

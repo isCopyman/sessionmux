@@ -122,9 +122,28 @@ ASCII（`@docs`）正常。
 - 全仓 eslint/prettier 扫尾（一条命令）
 - dev 任务栏图标角标（icon-dev.png + set_icon）
 
+### P7：Dogfooding——用 codeg 开发 codeg（用户 2026-08-20 睡前布置，P0-P6 全清后启动）
+
+用户原话要点："这些功能都完成后……直接尝试在 codeg dev 中实际使用，继续开发 codeg？
+例如做 rewind 和 fork 那块，一边开发一边测试 codeg 是否有不便之处，skill 的优化、
+交互工具的优化、ui 界面的优化、以及各种结构优化……在 codeg 里协作那就不是用
+subagent 了，而是更好的持久化多 agent 协作……你变成了我这个人类的身份。"
+
+- 领导在本会话直接操作 codeg dev 实例，身份=人类用户，体验并记录协作流程。
+- 协作走 codeg 自身（Room/mailbox/Host Control），不走 Claude Code subagent。
+- 模型配置（用户建议）：主模型 Claude Code + Opus 5（省 token）；协作模型
+  Grok Build + Grok 4.6。思考强度由领导定。
+- 首个课题：**rewind/fork**（原冻结项，此指令明确解冻，作为 dogfooding 载体）。
+- 产出：功能进展 + 不便之处清单（skill/交互工具/UI/结构）入台账。
+
 ### 冻结不动
 
-fork/rewind、workflow 功能、hooks 注入。
+workflow 功能、hooks 注入。（fork/rewind 已解冻，见 P7。）
+
+### 子代理模型（2026-08-20 夜用户改口）
+
+本批次子代理用 **opus 或 sonnet**（用户切主会话到 Fable 后亲口指定），不再钉 K3。
+细节和模糊意图由领导决断，以用户友好为最高准则。功能完成后必须测试。
 
 ## 4. 门禁套餐（照抄；输出重定向+逐段 echo EXIT:$?，只认显式标记）
 
