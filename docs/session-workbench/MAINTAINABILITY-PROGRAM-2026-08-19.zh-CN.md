@@ -953,3 +953,12 @@ T2 后置截图（CDP 9222 可用，基线在 .artifacts）+ 晨间验收报告 
   「自动归档进分类」未接——等用户拍板时机（首条消息后/创建即建行）。门禁全绿：
   fmt 零残渣、clippy ×3、server 2543 过/0 挂/1 忽略、vitest 359 文件、build 成功。
   release #7 构建中。
+- 2026-08-20 早 **Collection 草稿显示修复收编（9e1f8f2a+82518fb4）**：草稿会话（conversationId=null）
+  现在显示在对应 Collection 下（斜体+弱化样式，点击激活 tab），与 Workbench 行为对齐。实现：
+  draftsByCollection 按 folderId→root_folder_id→collectionId 匹配，firstCollectionByRoot 处理
+  同 root 多 Collection（树序第一个认领）。测试 45/45 全绿（含 rerender element bailout 修复）。
+  遗留（不挡用）：同 root 多 Collection 时草稿挂在第一个；root 下无 Collection 时草稿不进未分类。
+- 2026-08-20 早 **w-sidebar-ux-2 接手半成品，G5-5+G5-12 已提交**：G5-5 建群入口显眼化
+  （7755a630，新建会话旁加建群入口+成员选择对话框+i18n 10 语言）；G5-12 Room 进多选
+  （8ad05edc，Room 行加复选框+混选批量操作，归档/建群对 Room 置灰）。G5-11（欠我回复）
+  未开始，已催进度。
