@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from "@testing-library/react"
+import { act, fireEvent, render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { NextIntlClientProvider } from "next-intl"
 import { forwardRef, useImperativeHandle } from "react"
@@ -48,6 +48,7 @@ const mockState = vi.hoisted(() => ({
   // sidebar badge is the sum, so tests drive both halves from here.
   needsReplyCount: 0,
   roomNeedsReplyCount: 0,
+  unseenFailures: 0,
 }))
 
 // The conversation list is irrelevant here — stub it so the test exercises only
@@ -177,7 +178,7 @@ vi.mock("@/contexts/search-dialog-context", () => ({
 vi.mock("@/contexts/automations-view-context", () => ({
   useAutomationsView: () => ({
     automations: [],
-    unseenFailures: 0,
+    unseenFailures: mockState.unseenFailures,
     refetch: async () => {},
   }),
 }))
@@ -255,6 +256,7 @@ describe("Sidebar — fixed New chat / Search region", () => {
     mockState.activeFolder = { id: 7, path: "/x" }
     mockState.needsReplyCount = 0
     mockState.roomNeedsReplyCount = 0
+    mockState.unseenFailures = 0
   })
 
   it("counts Room reply debt in the Session Center row's badge", () => {
@@ -318,6 +320,19 @@ describe("Sidebar — fixed New chat / Search region", () => {
   it("Automations navigates to the automations route", () => {
     const { getByText } = renderSidebar()
     fireEvent.click(getByText("Automations"))
+    expect(spies.setRoute).toHaveBeenCalledWith("automations")
+  })
+
+  it("keeps an inert count badge inside the row's click target", async () => {
+    const user = userEvent.setup()
+    mockState.unseenFailures = 2
+    renderSidebar()
+
+    // The failure count is decoration, not a destination: it lives INSIDE the
+    // row's button, so the pixels under it navigate like the rest of the pill.
+    // Only a badge that is its own destination may sit outside the button.
+    const row = screen.getByTitle("Automations")
+    await user.click(within(row).getByText("2"))
     expect(spies.setRoute).toHaveBeenCalledWith("automations")
   })
 

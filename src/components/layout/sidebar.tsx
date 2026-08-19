@@ -120,18 +120,38 @@ const NEEDS_REPLY_BADGE_CLASS = cn(
   "focus-visible:ring-2 focus-visible:ring-ring"
 )
 
+// One row geometry, split across two class lists because an interactive
+// trailing element moves the pill surface off the button and onto a wrapping
+// container. SURFACE is the pill itself (height, radius, hover/active tint,
+// the `group` that reveals shortcut hints); MAIN is the icon rail + label half.
+// Whichever element ends up wearing them, the rendered geometry is identical.
+const NAV_ROW_SURFACE_CLASS = cn(
+  "group flex h-8 w-full items-center rounded-full pr-1.5",
+  "text-[0.875rem] text-sidebar-foreground",
+  "transition-colors duration-150 hover:bg-sidebar-accent"
+)
+const NAV_ROW_ACTIVE_CLASS = "bg-sidebar-primary/8"
+const NAV_ROW_MAIN_CLASS = cn(
+  "flex min-w-0 items-center gap-[0.4375rem] pl-[0.4375rem]",
+  "outline-none focus-visible:ring-2 focus-visible:ring-ring",
+  "focus-visible:ring-inset"
+)
+
 /**
  * A fixed top-of-sidebar action / route row. `active` marks the row as the
- * current workbench route (selected styling); `trailing` carries a shortcut hint
- * or a count badge. Extracting this keeps every fixed nav item — and any future
- * route — on one geometry instead of copy-pasting the className.
+ * current workbench route (selected styling). Extracting this keeps every fixed
+ * nav item — and any future route — on one geometry instead of copy-pasting the
+ * className.
  *
- * The row is a container holding the main action as a `flex-1` button with
- * `trailing` as its SIBLING, not its child: the Session Center's badge is itself
- * a button (its own destination), and a button inside a button is invalid HTML.
- * The container carries the surface and the `group` class, so a
- * `group-hover`-revealed trailing element still works and hovering the trailing
- * edge still lights the row.
+ * The two trailing slots differ in where they render, which decides whether the
+ * pixels under them are part of the row's click target:
+ *
+ * - `trailing` (shortcut hints, count badges) is inert, so it renders INSIDE
+ *   the row's button and the whole pill stays one click target.
+ * - `trailingAction` is itself interactive, so it renders BESIDE the button — a
+ *   button inside a button is invalid HTML. A wrapping container takes over the
+ *   pill surface, so hover, the active tint and `group-hover` still cover the
+ *   whole row.
  */
 function SidebarNavButton({
   icon: Icon,
@@ -139,37 +159,44 @@ function SidebarNavButton({
   onClick,
   active,
   trailing,
+  trailingAction,
 }: {
   icon: LucideIcon
   label: string
   onClick: () => void
   active?: boolean
+  /** Inert decoration — a shortcut hint or a count. Shares the row's button. */
   trailing?: ReactNode
+  /** A second destination, self-contained (its own button, label and focus). */
+  trailingAction?: ReactNode
 }) {
-  return (
-    <div
+  const mainAction = (
+    <button
+      type="button"
+      onClick={onClick}
+      title={label}
+      aria-current={active ? "page" : undefined}
       className={cn(
-        "group flex h-8 w-full items-center rounded-full pr-1.5",
-        "text-[0.875rem] text-sidebar-foreground",
-        "transition-colors duration-150 hover:bg-sidebar-accent",
-        active && "bg-sidebar-primary/8"
+        NAV_ROW_MAIN_CLASS,
+        trailingAction
+          ? // The row's flexible first child; the container is the pill.
+            "h-full flex-1 rounded-full"
+          : // No sibling to make room for: the button IS the pill.
+            cn(NAV_ROW_SURFACE_CLASS, active && NAV_ROW_ACTIVE_CLASS)
       )}
     >
-      <button
-        type="button"
-        onClick={onClick}
-        title={label}
-        aria-current={active ? "page" : undefined}
-        className={cn(
-          "flex h-full min-w-0 flex-1 items-center gap-[0.4375rem]",
-          "rounded-full pl-[0.4375rem] text-left outline-none",
-          "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
-        )}
-      >
-        <Icon className="h-[0.875rem] w-[0.875rem] shrink-0 text-muted-foreground" />
-        <span className="truncate">{label}</span>
-      </button>
+      <Icon className="h-[0.875rem] w-[0.875rem] shrink-0 text-muted-foreground" />
+      <span className="truncate">{label}</span>
       {trailing}
+    </button>
+  )
+
+  if (!trailingAction) return mainAction
+
+  return (
+    <div className={cn(NAV_ROW_SURFACE_CLASS, active && NAV_ROW_ACTIVE_CLASS)}>
+      {mainAction}
+      {trailingAction}
     </div>
   )
 }
@@ -698,7 +725,7 @@ export function Sidebar() {
           icon={LibraryBig}
           label={t("sessionCenter")}
           onClick={() => openSessionCenter()}
-          trailing={
+          trailingAction={
             needsReplyBadge > 0 ? (
               <button
                 type="button"
