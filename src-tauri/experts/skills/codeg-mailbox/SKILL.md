@@ -19,9 +19,9 @@ A letter has two parts, like email:
 A successful `send_message` means Codeg stored a private letter.
 `priority=high` (default) notifies now: if the target is working, Codeg
 steers the letter into the current turn when that channel exists,
-otherwise it stops the turn and delivers. `priority=normal` waits for
-the target's next turn. Both are Agent mail. It is not user approval
-and not a Room.
+otherwise the letter is delivered when that turn finishes — high never
+stops a turn. `priority=normal` waits for the target's next turn. Both
+are Agent mail. It is not user approval and not a Room.
 
 ## Tools
 
@@ -33,7 +33,9 @@ and not a Room.
   supplement with `reply_to_event_id`. A mailbox reply is still a
   letter to those targets, so they are notified — unlike a Room quote,
   which does not wake anyone unless you also `@` them. Never pass
-  `room_id`.
+  `room_id`. An archived Session refuses new mail: the send is rejected
+  and the note names the archived Session; it accepts mail again once a
+  Host Control `session.unarchive` restores it.
 - `list_inbox`: this Session's private mailbox. Room posts never appear
   here. Returns titles, not bodies. Listing does not mark mail read.
 - `read_message`: open one letter by `event_id`. Marks it read even if

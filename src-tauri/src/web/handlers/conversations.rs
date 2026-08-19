@@ -373,7 +373,7 @@ pub async fn update_conversation_archive(
     Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<UpdateConversationArchiveParams>,
 ) -> Result<Json<()>, AppCommandError> {
-    conv_commands::update_conversation_archive_core(
+    let waived = conv_commands::update_conversation_archive_core(
         &state.db.conn,
         params.conversation_id,
         params.archived,
@@ -381,6 +381,7 @@ pub async fn update_conversation_archive(
     .await?;
     conv_commands::emit_conversation_upsert(&state.emitter, &state.db.conn, params.conversation_id)
         .await;
+    conv_commands::emit_obligation_waiver(&state.emitter, waived);
     Ok(Json(()))
 }
 

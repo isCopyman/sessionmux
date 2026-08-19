@@ -75,7 +75,9 @@ These live on the `codeg-room` MCP server, not `codeg-mcp`. Host Control
 - `post_room`: write to the Room.
   - Omit `mention_session_ids` (and `mention_all=false`) to record only.
   - Pass `mention_session_ids` or `mention_all=true` to tap a Session.
-    An archived Session is still named on the timeline; it is not woken.
+    An archived Session is still named on the timeline; it is not woken,
+    and its Delivery comes back `failed (target_archived)` so you see who
+    was skipped.
   - Pass `mention_human=true` (or `codeg://human`) to tap the operator.
     That does not wake a Session.
   - File / path text in the body is context, not a Delivery.
