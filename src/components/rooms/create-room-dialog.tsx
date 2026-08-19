@@ -52,7 +52,10 @@ export function CreateRoomDialog({
     [conversations, query]
   )
   const conversationById = useMemo(
-    () => new Map(conversations.map((conversation) => [conversation.id, conversation])),
+    () =>
+      new Map(
+        conversations.map((conversation) => [conversation.id, conversation])
+      ),
     [conversations]
   )
   // Selection order, not list order: the first pick becomes the Room creator.
