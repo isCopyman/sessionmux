@@ -5,51 +5,11 @@ import type {
 } from "@/lib/types"
 import { roomItemKey, sessionItemKey } from "@/lib/sidebar-item-selection"
 
-export function visibleCollectionSessionIds(args: {
-  pathRoots: readonly { id: number }[]
-  childrenByParent: Map<number | null, CollectionInfo[]>
-  conversationsByCollection: Map<number, readonly DbConversationSummary[]>
-  unclassifiedByRoot: Map<number, readonly DbConversationSummary[]>
-  expanded: ReadonlySet<number>
-  collapsedPaths: ReadonlySet<number>
-  collapsedUnclassified: ReadonlySet<number>
-}): number[] {
-  const ids: number[] = []
-
-  const walkCollections = (
-    parent: number | null,
-    rootFolderId: number | null
-  ) => {
-    for (const item of args.childrenByParent.get(parent) ?? []) {
-      if ((item.root_folder_id ?? null) !== rootFolderId) continue
-      if (!args.expanded.has(item.id)) continue
-      for (const session of args.conversationsByCollection.get(item.id) ?? []) {
-        ids.push(session.id)
-      }
-      walkCollections(item.id, rootFolderId)
-    }
-  }
-
-  for (const root of args.pathRoots) {
-    if (args.collapsedPaths.has(root.id)) continue
-    walkCollections(null, root.id)
-    if (!args.collapsedUnclassified.has(root.id)) {
-      for (const session of args.unclassifiedByRoot.get(root.id) ?? []) {
-        ids.push(session.id)
-      }
-    }
-  }
-
-  walkCollections(null, null)
-  return ids
-}
-
 /**
  * Mixed Session/Room visibility order for the Collection tree's multi-select:
- * the same traversal as {@link visibleCollectionSessionIds}, but each bucket
- * also emits its Rooms (Rooms render right after a bucket's Sessions, matching
- * `renderItems` / `renderUnclassified` in collection-tree.tsx). Keys are the
- * prefixed selection keys from `sidebar-item-selection`.
+ * a top-down walk in which every bucket emits its Sessions and then its Rooms,
+ * matching `renderItems` / `renderUnclassified` in collection-tree.tsx. Keys
+ * are the prefixed selection keys from `sidebar-item-selection`.
  */
 export function visibleCollectionItemKeys(args: {
   pathRoots: readonly { id: number }[]

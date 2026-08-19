@@ -10,7 +10,6 @@ import {
   ListChevronsUpDown,
   Search,
   ListTodo,
-  Reply,
   SquarePen,
   Users,
   Zap,
@@ -21,6 +20,7 @@ import { useActiveFolder } from "@/contexts/active-folder-context"
 import { useSidebarContext } from "@/contexts/sidebar-context"
 import { useTabActions, useTabStore } from "@/contexts/tab-context"
 import { useSearchDialog } from "@/contexts/search-dialog-context"
+import { useSessionCenter } from "@/contexts/session-center-context"
 import { useAutomationsView } from "@/contexts/automations-view-context"
 import { useTasksView } from "@/contexts/tasks-view-context"
 import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
@@ -77,7 +77,6 @@ import {
 import { SidebarSectionOrderControl } from "./sidebar-section-order-control"
 import { cn } from "@/lib/utils"
 import { WorkbenchTree } from "@/components/workbench/workbench-tree"
-import { ConversationManageDialog } from "@/components/conversations/conversation-manage-dialog"
 import { CreateRoomDialog } from "@/components/rooms/create-room-dialog"
 import { useCollaborationUnreadOverview } from "@/hooks/use-collaboration-unread-overview"
 import {
@@ -109,12 +108,50 @@ const SHORTCUT_BADGE_CLASS = cn(
 const NO_HIDDEN_SECTIONS: ReadonlySet<SidebarSectionId> = new Set()
 const RECENT_HIDDEN: ReadonlySet<SidebarSectionId> = new Set(["recent"])
 
+// The Session Center's needs-reply badge. Unlike the count badges beside it
+// this one is clickable — it opens the same dialog pre-filtered — so it needs
+// hover / focus states of its own.
+const NEEDS_REPLY_BADGE_CLASS = cn(
+  "inline-flex h-[0.9375rem] min-w-[0.9375rem] shrink-0 items-center",
+  "justify-center rounded-full bg-amber-500/15 px-1 outline-none",
+  "font-mono text-[0.625rem] font-medium leading-none",
+  "text-amber-700 dark:text-amber-400",
+  "transition-colors duration-150 hover:bg-amber-500/30",
+  "focus-visible:ring-2 focus-visible:ring-ring"
+)
+
+// One row geometry, split across two class lists because an interactive
+// trailing element moves the pill surface off the button and onto a wrapping
+// container. SURFACE is the pill itself (height, radius, hover/active tint,
+// the `group` that reveals shortcut hints); MAIN is the icon rail + label half.
+// Whichever element ends up wearing them, the rendered geometry is identical.
+const NAV_ROW_SURFACE_CLASS = cn(
+  "group flex h-8 w-full items-center rounded-full pr-1.5",
+  "text-[0.875rem] text-sidebar-foreground",
+  "transition-colors duration-150 hover:bg-sidebar-accent"
+)
+const NAV_ROW_ACTIVE_CLASS = "bg-sidebar-primary/8"
+const NAV_ROW_MAIN_CLASS = cn(
+  "flex min-w-0 items-center gap-[0.4375rem] pl-[0.4375rem]",
+  "outline-none focus-visible:ring-2 focus-visible:ring-ring",
+  "focus-visible:ring-inset"
+)
+
 /**
  * A fixed top-of-sidebar action / route row. `active` marks the row as the
- * current workbench route (selected styling); `trailing` carries a shortcut hint
- * or a count badge. Extracting this keeps every fixed nav item — and any future
- * route — on one geometry instead of copy-pasting the className. Each row is a
- * `group` so a `group-hover`-revealed trailing element works.
+ * current workbench route (selected styling). Extracting this keeps every fixed
+ * nav item — and any future route — on one geometry instead of copy-pasting the
+ * className.
+ *
+ * The two trailing slots differ in where they render, which decides whether the
+ * pixels under them are part of the row's click target:
+ *
+ * - `trailing` (shortcut hints, count badges) is inert, so it renders INSIDE
+ *   the row's button and the whole pill stays one click target.
+ * - `trailingAction` is itself interactive, so it renders BESIDE the button — a
+ *   button inside a button is invalid HTML. A wrapping container takes over the
+ *   pill surface, so hover, the active tint and `group-hover` still cover the
+ *   whole row.
  */
 function SidebarNavButton({
   icon: Icon,
@@ -122,31 +159,45 @@ function SidebarNavButton({
   onClick,
   active,
   trailing,
+  trailingAction,
 }: {
   icon: LucideIcon
   label: string
   onClick: () => void
   active?: boolean
+  /** Inert decoration — a shortcut hint or a count. Shares the row's button. */
   trailing?: ReactNode
+  /** A second destination, self-contained (its own button, label and focus). */
+  trailingAction?: ReactNode
 }) {
-  return (
+  const mainAction = (
     <button
       type="button"
       onClick={onClick}
       title={label}
       aria-current={active ? "page" : undefined}
       className={cn(
-        "group flex h-8 w-full items-center gap-[0.4375rem] rounded-full pl-[0.4375rem] pr-1.5",
-        "text-[0.875rem] text-sidebar-foreground outline-none",
-        "transition-colors duration-150 hover:bg-sidebar-accent",
-        "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
-        active && "bg-sidebar-primary/8"
+        NAV_ROW_MAIN_CLASS,
+        trailingAction
+          ? // The row's flexible first child; the container is the pill.
+            "h-full flex-1 rounded-full"
+          : // No sibling to make room for: the button IS the pill.
+            cn(NAV_ROW_SURFACE_CLASS, active && NAV_ROW_ACTIVE_CLASS)
       )}
     >
       <Icon className="h-[0.875rem] w-[0.875rem] shrink-0 text-muted-foreground" />
       <span className="truncate">{label}</span>
       {trailing}
     </button>
+  )
+
+  if (!trailingAction) return mainAction
+
+  return (
+    <div className={cn(NAV_ROW_SURFACE_CLASS, active && NAV_ROW_ACTIVE_CLASS)}>
+      {mainAction}
+      {trailingAction}
+    </div>
   )
 }
 
@@ -157,6 +208,7 @@ export function Sidebar() {
   const allFolders = useAppWorkspaceStore((state) => state.allFolders)
   const { openNewConversationTab, openChatModeTab, openTab } = useTabActions()
   const { setOpen: setSearchOpen } = useSearchDialog()
+  const { openSessionCenter, closedRevision } = useSessionCenter()
   const { unseenFailures } = useAutomationsView()
   const { attentionCount } = useTasksView()
   const { routeId, setRoute, openConversations } = useWorkbenchRoute()
@@ -196,11 +248,7 @@ export function Sidebar() {
     DEFAULT_SECTION_ORDER
   )
   const [allExpanded, setAllExpanded] = useState(true)
-  const [sessionCenterOpen, setSessionCenterOpen] = useState(false)
   const [createRoomOpen, setCreateRoomOpen] = useState(false)
-  const [sessionCenterCollabFilter, setSessionCenterCollabFilter] = useState<
-    "all" | "needs_reply"
-  >("all")
   // Backend-authoritative outstanding-reply count. The badge adds Room debt on
   // top of direct mail; the Session Center's needs_reply filter still lists
   // only the direct-mail Sessions, so the two can differ while Rooms are owed
@@ -209,10 +257,6 @@ export function Sidebar() {
   const needsReplyBadge =
     collaborationOverview.totalNeedsReplyCount +
     collaborationOverview.totalRoomNeedsReplyCount
-  const [sessionCenterCollection, setSessionCenterCollection] = useState<
-    number | "unclassified" | null
-  >(null)
-  const [collectionRefreshKey, setCollectionRefreshKey] = useState(0)
   const searchShortcutLabel = formatShortcutLabel(
     shortcuts.toggle_search,
     isMac
@@ -672,31 +716,31 @@ export function Sidebar() {
             ) : null
           }
         />
+        {/* One entry, two destinations. The row opens the Session Center
+            unfiltered; the amber badge — outstanding reply obligations across
+            direct mail and Rooms — opens it pre-filtered to what owes a reply.
+            "Needs reply" is a facet of the Session Center, so it gets a badge
+            on this row rather than a row of its own. */}
         <SidebarNavButton
           icon={LibraryBig}
           label={t("sessionCenter")}
-          onClick={() => {
-            setSessionCenterCollection(null)
-            setSessionCenterCollabFilter("all")
-            setSessionCenterOpen(true)
-          }}
-        />
-        {/* "Who owes me a reply" entry: amber badge counts outstanding reply
-            obligations in direct mail and in Rooms; clicking opens the Session
-            Center pre-filtered to the direct-mail Sessions. */}
-        <SidebarNavButton
-          icon={Reply}
-          label={t("needsReply")}
-          onClick={() => {
-            setSessionCenterCollection(null)
-            setSessionCenterCollabFilter("needs_reply")
-            setSessionCenterOpen(true)
-          }}
-          trailing={
+          onClick={() => openSessionCenter()}
+          trailingAction={
             needsReplyBadge > 0 ? (
-              <span className="ml-auto inline-flex h-[0.9375rem] min-w-[0.9375rem] shrink-0 items-center justify-center rounded-full bg-amber-500/15 px-1 font-mono text-[0.625rem] font-medium leading-none text-amber-700 dark:text-amber-400">
+              <button
+                type="button"
+                onClick={() =>
+                  openSessionCenter({ collabFilter: "needs_reply" })
+                }
+                title={t("needsReply")}
+                className={NEEDS_REPLY_BADGE_CLASS}
+              >
+                {/* Names the button "Needs reply <count>" for assistive tech.
+                    An aria-label would REPLACE the count instead of prefixing
+                    it, dropping the one thing the badge is there to say. */}
+                <span className="sr-only">{t("needsReply")}</span>
                 {needsReplyBadge}
-              </span>
+              </button>
             ) : null
           }
         />
@@ -749,16 +793,12 @@ export function Sidebar() {
           showAgentCreated={showAgentCreated}
           showAutomationCreated={showAutomationCreated}
           sortMode={sortMode}
-          refreshKey={collectionRefreshKey}
+          refreshKey={closedRevision}
           onOpenSession={handleOpenCollectionSession}
           onOpenSessionInSplit={handleOpenCollectionSessionInSplit}
           onNewSession={handleNewSessionAtPath}
           onNewSessionInCollection={handleNewSessionInCollection}
-          onOpenScope={(scope) => {
-            setSessionCenterCollection(scope)
-            setSessionCenterCollabFilter("all")
-            setSessionCenterOpen(true)
-          }}
+          onOpenScope={(scope) => openSessionCenter({ collection: scope })}
         />
       ) : (
         /* On mobile, clicking a conversation card auto-closes the Sheet */
@@ -790,20 +830,6 @@ export function Sidebar() {
       {createRoomOpen ? (
         <CreateRoomDialog open onOpenChange={setCreateRoomOpen} />
       ) : null}
-      {sessionCenterOpen && (
-        <ConversationManageDialog
-          open
-          onOpenChange={(open) => {
-            setSessionCenterOpen(open)
-            if (!open) {
-              setCollectionRefreshKey((current) => current + 1)
-            }
-          }}
-          folderId={null}
-          initialCollection={sessionCenterCollection}
-          initialCollaborationFilter={sessionCenterCollabFilter}
-        />
-      )}
     </aside>
   )
 }

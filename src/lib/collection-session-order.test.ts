@@ -5,10 +5,7 @@ import type {
   CollectionInfo,
   DbConversationSummary,
 } from "@/lib/types"
-import {
-  visibleCollectionItemKeys,
-  visibleCollectionSessionIds,
-} from "./collection-session-order"
+import { visibleCollectionItemKeys } from "./collection-session-order"
 
 function collection(
   id: number,
@@ -46,62 +43,6 @@ function session(id: number): DbConversationSummary {
     pinned_at: null,
   }
 }
-
-describe("visibleCollectionSessionIds", () => {
-  const research = collection(10, null, 7)
-  const sources = collection(11, 10, 7)
-  const childrenByParent = new Map<number | null, CollectionInfo[]>([
-    [null, [research]],
-    [10, [sources]],
-  ])
-  const conversationsByCollection = new Map([
-    [10, [session(101)]],
-    [11, [session(102)]],
-  ])
-  const unclassifiedByRoot = new Map([[7, [session(201), session(202)]]])
-
-  it("lists unclassified sessions when the path is open and collections are collapsed", () => {
-    expect(
-      visibleCollectionSessionIds({
-        pathRoots: [{ id: 7 }],
-        childrenByParent,
-        conversationsByCollection,
-        unclassifiedByRoot,
-        expanded: new Set(),
-        collapsedPaths: new Set(),
-        collapsedUnclassified: new Set(),
-      })
-    ).toEqual([201, 202])
-  })
-
-  it("walks expanded collections before unclassified, matching the tree", () => {
-    expect(
-      visibleCollectionSessionIds({
-        pathRoots: [{ id: 7 }],
-        childrenByParent,
-        conversationsByCollection,
-        unclassifiedByRoot,
-        expanded: new Set([10, 11]),
-        collapsedPaths: new Set(),
-        collapsedUnclassified: new Set(),
-      })
-    ).toEqual([101, 102, 201, 202])
-  })
-
-  it("hides a collapsed path entirely", () => {
-    expect(
-      visibleCollectionSessionIds({
-        pathRoots: [{ id: 7 }],
-        childrenByParent,
-        conversationsByCollection,
-        unclassifiedByRoot,
-        expanded: new Set([10, 11]),
-        collapsedPaths: new Set([7]),
-        collapsedUnclassified: new Set(),
-      })
-    ).toEqual([])
-  })
-})
 
 function room(id: string): CollaborationRoomSummary {
   return {

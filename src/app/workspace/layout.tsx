@@ -28,6 +28,7 @@ import { TabProvider, useTabStore, useTabActions } from "@/contexts/tab-context"
 import { selectIsSplit } from "@/stores/tab-store"
 import { SidebarProvider, useSidebarContext } from "@/contexts/sidebar-context"
 import { SearchDialogProvider } from "@/contexts/search-dialog-context"
+import { SessionCenterProvider } from "@/contexts/session-center-context"
 import { AutomationsViewProvider } from "@/contexts/automations-view-context"
 import { TasksViewProvider } from "@/contexts/tasks-view-context"
 import {
@@ -1218,9 +1219,17 @@ function WorkspaceLayoutInner({ children }: { children: React.ReactNode }) {
                                           listener calls openConversations() to
                                           surface a launcher-opened folder. */}
                                   <WorkspaceOpenFolderListener />
-                                  <FolderLayoutShell>
-                                    {children}
-                                  </FolderLayoutShell>
+                                  {/* Sits below WorkbenchRouteProvider, unlike
+                                          SearchDialogProvider above: this one
+                                          owns the Session Center dialog too,
+                                          and that dialog calls
+                                          useWorkbenchRoute / useTabActions to
+                                          open what you pick. */}
+                                  <SessionCenterProvider>
+                                    <FolderLayoutShell>
+                                      {children}
+                                    </FolderLayoutShell>
+                                  </SessionCenterProvider>
                                 </WorkbenchRouteProvider>
                               </TasksViewProvider>
                             </AutomationsViewProvider>

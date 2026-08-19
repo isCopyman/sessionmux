@@ -1,10 +1,11 @@
-import { act, fireEvent, render, screen } from "@testing-library/react"
+import { act, fireEvent, render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { NextIntlClientProvider } from "next-intl"
 import { forwardRef, useImperativeHandle } from "react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { Sidebar } from "./sidebar"
+import { SessionCenterProvider } from "@/contexts/session-center-context"
 import enMessages from "@/i18n/messages/en.json"
 
 // Stable spies + mutable active-folder, referenced from the hoisted mock
@@ -33,6 +34,8 @@ const spies = vi.hoisted(() => ({
   } | null,
   sessionCenterOpen: false,
   sessionCenterCollection: null as number | "unclassified" | null,
+  sessionCenterCollabFilter: null as string | null,
+  collectionRefreshKey: null as number | null,
   collectionShowsSessions: false,
   workbenchUnread: null as ReadonlyMap<number, number> | null,
   collectionUnread: null as ReadonlyMap<number, number> | null,
@@ -45,6 +48,7 @@ const mockState = vi.hoisted(() => ({
   // sidebar badge is the sum, so tests drive both halves from here.
   needsReplyCount: 0,
   roomNeedsReplyCount: 0,
+  unseenFailures: 0,
 }))
 
 // The conversation list is irrelevant here — stub it so the test exercises only
@@ -81,6 +85,7 @@ vi.mock("@/components/collections/collection-tree", () => ({
       showSessions,
       showAgentCreated,
       showAutomationCreated,
+      refreshKey,
       unreadByConversation,
     }: {
       onOpenScope: (scope: number | "unclassified") => void
@@ -88,6 +93,7 @@ vi.mock("@/components/collections/collection-tree", () => ({
       showSessions?: boolean
       showAgentCreated?: boolean
       showAutomationCreated?: boolean
+      refreshKey?: number
       unreadByConversation?: ReadonlyMap<number, number>
     },
     ref
@@ -95,6 +101,8 @@ vi.mock("@/components/collections/collection-tree", () => ({
     useImperativeHandle(ref, () => ({
       scrollToActive: spies.collectionScrollToActive,
     }))
+    // eslint-disable-next-line react-hooks/immutability -- test probe captures rendered props
+    spies.collectionRefreshKey = refreshKey ?? null
     // eslint-disable-next-line react-hooks/immutability -- test probe captures rendered props
     spies.collectionShowsSessions = showSessions === true
     // eslint-disable-next-line react-hooks/immutability -- test probe captures rendered props
@@ -113,17 +121,32 @@ vi.mock("@/components/collections/collection-tree", () => ({
     )
   }),
 }))
+// Mounted by SessionCenterProvider now, not by the sidebar — the module mock
+// still intercepts it, and `renderSidebar` wraps the real provider so these
+// tests exercise the actual open/close wiring.
 vi.mock("@/components/conversations/conversation-manage-dialog", () => ({
   ConversationManageDialog: ({
     open,
+    onOpenChange,
     initialCollection,
+    initialCollaborationFilter,
   }: {
     open: boolean
+    onOpenChange: (open: boolean) => void
     initialCollection?: number | "unclassified" | null
+    initialCollaborationFilter?: string
   }) => {
     spies.sessionCenterOpen = open
     spies.sessionCenterCollection = initialCollection ?? null
-    return open ? <div>Session Center Dialog</div> : null
+    spies.sessionCenterCollabFilter = initialCollaborationFilter ?? null
+    return open ? (
+      <div>
+        Session Center Dialog
+        <button type="button" onClick={() => onOpenChange(false)}>
+          Close Session Center
+        </button>
+      </div>
+    ) : null
   },
 }))
 // Stubbed for its import graph, not its behavior: the real dialog pulls in
@@ -158,7 +181,7 @@ vi.mock("@/contexts/search-dialog-context", () => ({
 vi.mock("@/contexts/automations-view-context", () => ({
   useAutomationsView: () => ({
     automations: [],
-    unseenFailures: 0,
+    unseenFailures: mockState.unseenFailures,
     refetch: async () => {},
   }),
 }))
@@ -208,7 +231,9 @@ vi.mock("@/hooks/use-collaboration-unread-overview", () => ({
 function renderSidebar() {
   return render(
     <NextIntlClientProvider locale="en" messages={enMessages}>
-      <Sidebar />
+      <SessionCenterProvider>
+        <Sidebar />
+      </SessionCenterProvider>
     </NextIntlClientProvider>
   )
 }
@@ -223,6 +248,8 @@ describe("Sidebar — fixed New chat / Search region", () => {
     spies.openConversations.mockClear()
     spies.sessionCenterOpen = false
     spies.sessionCenterCollection = null
+    spies.sessionCenterCollabFilter = null
+    spies.collectionRefreshKey = null
     spies.collectionShowsSessions = false
     spies.collectionProps = null
     spies.workbenchUnread = null
@@ -232,23 +259,83 @@ describe("Sidebar — fixed New chat / Search region", () => {
     mockState.activeFolder = { id: 7, path: "/x" }
     mockState.needsReplyCount = 0
     mockState.roomNeedsReplyCount = 0
+    mockState.unseenFailures = 0
   })
 
-  it("counts Room reply debt in the needs-reply badge", () => {
+  it("counts Room reply debt in the Session Center row's badge", () => {
     mockState.needsReplyCount = 2
     mockState.roomNeedsReplyCount = 3
     renderSidebar()
-    expect(screen.getByTitle("Needs reply").textContent).toBe("Needs reply5")
+
+    // Direct mail + Rooms on one badge. The sr-only label rides along so the
+    // count is not the badge's whole name for a screen reader.
+    const badge = screen.getByTitle("Needs reply")
+    expect(badge.textContent).toBe("Needs reply5")
+    // It hangs off the Session Center row rather than a row of its own.
+    expect(badge.parentElement?.textContent).toContain("Session Center")
   })
 
-  it("hides the needs-reply badge when nothing is owed", () => {
+  it("drops the badge, and the standalone row, when nothing is owed", () => {
     renderSidebar()
-    expect(screen.getByTitle("Needs reply").textContent).toBe("Needs reply")
+    expect(screen.queryByTitle("Needs reply")).toBeNull()
+    // The retired row was a nav button named exactly "Needs reply"; only the
+    // badge may carry that name now, and it is gone at zero.
+    expect(screen.queryByRole("button", { name: "Needs reply" })).toBeNull()
+  })
+
+  it("opens the Session Center pre-filtered from the badge", async () => {
+    const user = userEvent.setup()
+    mockState.needsReplyCount = 1
+    renderSidebar()
+
+    await user.click(screen.getByTitle("Needs reply"))
+    expect(spies.sessionCenterOpen).toBe(true)
+    expect(spies.sessionCenterCollabFilter).toBe("needs_reply")
+    expect(spies.sessionCenterCollection).toBeNull()
+  })
+
+  it("activates the badge from the keyboard", async () => {
+    const user = userEvent.setup()
+    mockState.needsReplyCount = 4
+    renderSidebar()
+
+    // A real <button> beside the row's button, not a clickable span inside it:
+    // focus + Enter has to reach it.
+    const badge = screen.getByTitle("Needs reply")
+    act(() => badge.focus())
+    await user.keyboard("{Enter}")
+    expect(spies.sessionCenterCollabFilter).toBe("needs_reply")
+  })
+
+  it("refreshes the Collection tree once the Session Center closes", async () => {
+    const user = userEvent.setup()
+    renderSidebar()
+    const before = spies.collectionRefreshKey
+
+    await user.click(screen.getByText("Session Center"))
+    await user.click(screen.getByText("Close Session Center"))
+
+    // The dialog can move Sessions between Collections, so the tree behind it
+    // is stale on close — the provider's closedRevision is what refetches it.
+    expect(spies.collectionRefreshKey).toBe((before ?? 0) + 1)
   })
 
   it("Automations navigates to the automations route", () => {
     const { getByText } = renderSidebar()
     fireEvent.click(getByText("Automations"))
+    expect(spies.setRoute).toHaveBeenCalledWith("automations")
+  })
+
+  it("keeps an inert count badge inside the row's click target", async () => {
+    const user = userEvent.setup()
+    mockState.unseenFailures = 2
+    renderSidebar()
+
+    // The failure count is decoration, not a destination: it lives INSIDE the
+    // row's button, so the pixels under it navigate like the rest of the pill.
+    // Only a badge that is its own destination may sit outside the button.
+    const row = screen.getByTitle("Automations")
+    await user.click(within(row).getByText("2"))
     expect(spies.setRoute).toHaveBeenCalledWith("automations")
   })
 
@@ -270,11 +357,14 @@ describe("Sidebar — fixed New chat / Search region", () => {
     expect(spies.setSearchOpen).toHaveBeenCalledWith(true)
   })
 
-  it("Session Center opens the global conversation manager", () => {
+  it("Session Center opens the global conversation manager unfiltered", () => {
     const { getByText } = renderSidebar()
     expect(screen.queryByLabelText("3 unread")).toBeNull()
     fireEvent.click(getByText("Session Center"))
     expect(spies.sessionCenterOpen).toBe(true)
+    // The row body is the unfiltered destination; only its badge pre-filters.
+    expect(spies.sessionCenterCollabFilter).toBe("all")
+    expect(spies.sessionCenterCollection).toBeNull()
     expect(getByText("Session Center Dialog")).toBeTruthy()
   })
 
