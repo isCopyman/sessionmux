@@ -908,3 +908,12 @@ T2 后置截图（CDP 9222 可用，基线在 .artifacts）+ 晨间验收报告 
   最后一个"会点到远端工作区菜单，须按几何+title 定位；bash heredoc 会吃模板串
   转义（\\n→真换行进正则），验收脚本一律用 Write 工具写。dev 实例已停、孤儿
   已清（43136）。
+- 2026-08-20 凌晨 **额度耗尽收官（用户令：停工人写交接）**：① 三小件批关账——
+  六道门禁一把全绿（server 2515/vitest 359/clippy ×3/build），grok 真实用量、
+  侧栏添加到会话、@ 面板锚定 composer 落地，工人补交三态报告（tabOrder/房间三组/
+  tiebreaker/3s 降级四项既有行为逐行号复核保留）。② qoder 批已合并（44936f7b+
+  fmt 9be2c4a0，31 文件 +2101，防复活亲验零命中，companion.rs 有 delegate_to_agent
+  防复活断言）但**门禁未跑**——接班第一件事。③ 三工人被停：i18n-sweep 留六语言
+  未提交半成品（worktree 保留待复核）、sidebar-ux/playbook 零产出（worktree 已清，
+  待重派）。④ 交接单 HANDOFF-2026-08-20-quota-close.zh-CN.md（含提速模式：并行
+  派工+攒批合并共享门禁+发版前一次总真机验证——用户嫌慢后的现行操作法）。
