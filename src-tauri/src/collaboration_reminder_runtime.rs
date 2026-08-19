@@ -211,11 +211,14 @@ async fn enqueue_mailbox_attention(
         .await
         .map_err(|error| error.to_string())?;
         if inserted {
+            // No second `prompt_queue.wake` here: the unconditional call at the
+            // top of this function already woke `target.conversation_id`, and
+            // nothing between there and here changes which conversation needs
+            // waking.
             if let Ok(snapshot) = prompt_queue_service::snapshot(conn, target.conversation_id).await
             {
                 emit_event(emitter, PROMPT_QUEUE_CHANGED_EVENT, snapshot);
             }
-            prompt_queue.wake(target.conversation_id);
         }
         return Ok(inserted);
     }
