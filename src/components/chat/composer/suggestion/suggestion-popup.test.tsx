@@ -395,13 +395,92 @@ describe("SuggestionPopup", () => {
     const { rerender } = render(view("a", 2))
     await screen.findByText("Codex Helper") // fresh results for "a"
 
-    // Query advances; the shown results now answer the *previous* query.
+    // Query advances; the shown results now answer the *previous* query. They
+    // stay on screen (see the keep-rendering test below) but must be inert:
+    // committing one would insert a reference that was never offered for what
+    // the user just typed.
     rerender(view("ab", 3))
-    expect(screen.queryByText("Codex Helper")).toBeNull()
-    expect(
-      within(screen.getByTestId("mention-popup")).getByText("Loading")
-    ).toBeInTheDocument()
+    act(() => ref.current?.onKeyDown(key("Enter")))
+    expect(onSelect).not.toHaveBeenCalled()
 
+    const row = screen.getByRole("option", { name: "Codex Helper" })
+    act(() => {
+      row.dispatchEvent(
+        new MouseEvent("mousedown", { bubbles: true, cancelable: true })
+      )
+    })
+    expect(onSelect).not.toHaveBeenCalled()
+  })
+
+  it("keeps the previous results rendered (dimmed) while the next query resolves", async () => {
+    // Blanking the list on every keystroke was the whole reason the panel felt
+    // like it re-searched the disk per character — no fetch happens at all.
+    const ref = createRef<SuggestionPopupHandle>()
+    const onSelect = vi.fn()
+    const view = (query: string, to: number) => (
+      <SuggestionPopup
+        ref={ref}
+        state={{ query, range: { from: 1, to }, getClientRect: () => null }}
+        search={search}
+        onSelect={onSelect}
+        onClose={vi.fn()}
+        loadingLabel="Loading"
+      />
+    )
+    const { rerender } = render(view("a", 2))
+    await screen.findByText("Codex Helper")
+
+    rerender(view("ab", 3))
+    // Rows, tab counts and the "Searching…" placeholder: the first two stay,
+    // the third never appears.
+    expect(screen.getByText("Codex Helper")).toBeInTheDocument()
+    expect(screen.getByRole("tab", { name: /Agents/ })).toHaveTextContent("2")
+    expect(
+      within(screen.getByTestId("mention-popup")).queryByText("Loading")
+    ).toBeNull()
+    const list = screen
+      .getByText("Codex Helper")
+      .closest(".overflow-y-auto") as HTMLElement
+    expect(list).toHaveClass("opacity-60")
+
+    // Once the fresh answer lands the dimming lifts and Enter commits again.
+    await waitFor(() => expect(list).not.toHaveClass("opacity-60"))
+    act(() => ref.current?.onKeyDown(key("Enter")))
+    expect(onSelect).toHaveBeenCalledWith(agentRef, { from: 1, to: 3 })
+  })
+
+  it("still shows the loading label on the first open (nothing to keep)", () => {
+    // No previous answer exists yet, so there is no list to hold on to — the
+    // panel is genuinely loading rather than a keystroke behind.
+    const pendingSearch: ReferenceSearch = () =>
+      new Promise<SuggestionGroup[]>(() => {})
+    mountPopup({ search: pendingSearch, loadingLabel: "Loading" })
+    const panel = screen.getByTestId("mention-popup")
+    expect(within(panel).getByText("Loading")).toBeInTheDocument()
+    expect(panel.querySelectorAll('[role="option"]')).toHaveLength(0)
+  })
+
+  it("moves the highlight over stale rows without ever committing one", async () => {
+    const ref = createRef<SuggestionPopupHandle>()
+    const onSelect = vi.fn()
+    const view = (query: string, to: number) => (
+      <SuggestionPopup
+        ref={ref}
+        state={{ query, range: { from: 1, to }, getClientRect: () => null }}
+        search={search}
+        onSelect={onSelect}
+        onClose={vi.fn()}
+      />
+    )
+    const { rerender } = render(view("a", 2))
+    await screen.findByText("Codex Helper")
+
+    rerender(view("ab", 3))
+    act(() => ref.current?.onKeyDown(key("ArrowDown")))
+    const options = screen
+      .getByTestId("mention-popup")
+      .querySelectorAll('[role="option"]')
+    expect(options[1]).toHaveAttribute("data-active", "true")
     act(() => ref.current?.onKeyDown(key("Enter")))
     expect(onSelect).not.toHaveBeenCalled()
   })

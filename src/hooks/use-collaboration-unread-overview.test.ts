@@ -56,6 +56,16 @@ function emit(conversationIds: number[]) {
   for (const handler of transport.handlers) handler({ conversationIds })
 }
 
+/** Trailing window the hook batches incoming reload triggers into. */
+const RELOAD_COALESCE_MS = 250
+
+/** Let the subscribe → hydrate promise chain settle under fake timers. */
+const settle = () =>
+  act(async () => {
+    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(0)
+  })
+
 beforeEach(() => {
   vi.clearAllMocks()
   transport.handlers.clear()
@@ -122,6 +132,51 @@ describe("useCollaborationUnreadOverview", () => {
     expect(result.current.unreadByConversation.has(7)).toBe(false)
   })
 
+  it("coalesces a burst of change events into a single refetch", async () => {
+    // A busy Room emits one event per message and `unread_overview` is a
+    // whole-table query; back-to-back reloads are the expensive failure mode.
+    vi.useFakeTimers()
+    try {
+      const { result } = renderHook(() => useCollaborationUnreadOverview())
+      await settle()
+      expect(result.current.hydrated).toBe(true)
+      expect(api.get).toHaveBeenCalledTimes(1) // the initial snapshot
+
+      act(() => {
+        emit([1])
+        emit([2])
+        emit([3])
+      })
+      // Trailing-only: the first event waits out the window with the rest, so
+      // nothing has been issued yet.
+      expect(api.get).toHaveBeenCalledTimes(1)
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(RELOAD_COALESCE_MS)
+      })
+      expect(api.get).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("drops a pending coalesced reload when the hook unmounts", async () => {
+    vi.useFakeTimers()
+    try {
+      const { unmount } = renderHook(() => useCollaborationUnreadOverview())
+      await settle()
+      act(() => emit([1]))
+      unmount()
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(RELOAD_COALESCE_MS)
+      })
+      // Only the hydration call; the queued one went out with the timer.
+      expect(api.get).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it("reloads after a transport reconnect", async () => {
     api.get
       .mockResolvedValueOnce(overview([]))
@@ -129,6 +184,8 @@ describe("useCollaborationUnreadOverview", () => {
     const { result } = renderHook(() => useCollaborationUnreadOverview())
     await waitFor(() => expect(result.current.hydrated).toBe(true))
 
+    // Routed through the same coalescing window as change events, so this
+    // lands one window later rather than immediately.
     act(() => transport.reconnect?.())
     await waitFor(() =>
       expect(result.current.unreadByConversation.get(5)).toBe(1)

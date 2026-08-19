@@ -173,11 +173,17 @@ export const SuggestionPopup = forwardRef<
 ) {
   // Results are tagged with the query they answer. While that tag doesn't match
   // the live query (initial mount, or mid-debounce after the query changed) the
-  // panel is "stale": it shows loading and nothing is selectable, so Enter can
-  // never insert a row from a previous query.
+  // panel is "stale": nothing is selectable, so Enter can never insert a row
+  // from a previous query.
+  //
+  // Stale rows keep *rendering* though — blanking the list on every keystroke
+  // was the whole reason the panel felt like it re-searched the disk per
+  // character, when in truth no fetch happens at all. So rendering reads the
+  // last answered groups and only the confirm actions are gated on freshness;
+  // the list dims to say "these answer what you typed a moment ago".
   const [result, setResult] = useState<{
-    // null until the first fetch resolves, so results read as "stale"
-    // (and the panel shows loading) before any search has answered.
+    // null until the first fetch resolves: results read as "stale" before any
+    // search has answered, and with nothing to keep the panel shows loading.
     query: string | null
     groups: SuggestionGroup[]
   }>({ query: null, groups: [] })
@@ -200,6 +206,9 @@ export const SuggestionPopup = forwardRef<
   const [anchorHidden, setAnchorHidden] = useState(false)
   const listRef = useRef<HTMLDivElement>(null)
   const stale = result.query !== state.query
+  // No search has answered yet, so there is nothing to keep showing — the panel
+  // is genuinely loading rather than displaying a slightly-behind list.
+  const firstLoad = result.query === null
 
   // Debounced, abortable fetch on every query change. All state updates run
   // inside the (async) timer callback, never synchronously in the effect body.
@@ -239,16 +248,15 @@ export const SuggestionPopup = forwardRef<
     [groupByKind, tabOrder]
   )
   const activeTab = pinnedTab ?? firstNonEmpty
-  const activeGroup = useMemo(
-    () => (stale ? null : (groupByKind.get(activeTab) ?? null)),
-    [stale, groupByKind, activeTab]
+  const shownGroup = useMemo(
+    () => groupByKind.get(activeTab) ?? null,
+    [groupByKind, activeTab]
   )
-  // Only the active tab's fresh items are selectable; selection resets to 0 on
-  // each fetch and on every tab switch.
-  const flat = useMemo(
-    () => (stale || !activeGroup ? [] : activeGroup.items),
-    [stale, activeGroup]
-  )
+  // What the active tab renders and what the arrow keys walk — the last
+  // answered items, stale or not. Selection resets to 0 on each fetch and on
+  // every tab switch. Confirming a row is gated separately on `stale`: moving
+  // a highlight over yesterday's list is harmless, inserting from it is not.
+  const flat = useMemo(() => shownGroup?.items ?? [], [shownGroup])
 
   // Scroll the active option into view (scoped to options so it never targets
   // the active tab button, which also carries an active marker via class only).
@@ -428,10 +436,13 @@ export const SuggestionPopup = forwardRef<
             return true
           }
           case "Enter": {
-            const chosen = flat[selectedIndex]
+            // `stale` is the load-bearing guard, not `flat`: the rows on screen
+            // answer an earlier query, so inserting one would put a reference
+            // the user never saw offered for what they just typed into the
+            // document. Consume the key either way — no insert, no submit.
+            // Escape dismisses the panel.
+            const chosen = stale ? undefined : flat[selectedIndex]
             if (chosen) onSelect(chosen.reference, state.range)
-            // No fresh row (still loading, or empty tab): consume without
-            // inserting or submitting. Escape dismisses the panel.
             return true
           }
           case "Escape":
@@ -442,11 +453,20 @@ export const SuggestionPopup = forwardRef<
         }
       },
     }),
-    [flat, selectedIndex, activeTab, onSelect, onClose, state.range, tabOrder]
+    [
+      flat,
+      selectedIndex,
+      activeTab,
+      onSelect,
+      onClose,
+      stale,
+      state.range,
+      tabOrder,
+    ]
   )
 
   const activeLabel = tabLabels[activeTab]
-  const truncated = !stale && activeGroup?.truncated === true
+  const truncated = shownGroup?.truncated === true
   const liveStatus = stale
     ? loadingLabel
     : flat.length === 0
@@ -507,7 +527,7 @@ export const SuggestionPopup = forwardRef<
         >
           {tabOrder.map((kind) => {
             const isActive = kind === activeTab
-            const count = stale ? 0 : (groupByKind.get(kind)?.items.length ?? 0)
+            const count = groupByKind.get(kind)?.items.length ?? 0
             return (
               <button
                 key={kind}
@@ -533,7 +553,7 @@ export const SuggestionPopup = forwardRef<
                 )}
               >
                 <span>{tabLabels[kind]}</span>
-                {!stale && count > 0 && (
+                {count > 0 && (
                   <span className="rounded bg-muted px-1 text-[0.7rem] tabular-nums text-muted-foreground">
                     {count}
                   </span>
@@ -542,10 +562,18 @@ export const SuggestionPopup = forwardRef<
             )
           })}
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto p-1">
+        <div
+          className={cn(
+            "min-h-0 flex-1 overflow-y-auto p-1",
+            // The only visual trace of staleness: rows stay put and readable,
+            // but read as "not answering this keystroke yet" — and, since
+            // Enter is inert here, as not-currently-actionable.
+            stale && !firstLoad && "opacity-60"
+          )}
+        >
           {/* Status text lives *outside* the listbox: a listbox may only own
               options. (The sr-only live region below announces it to AT.) */}
-          {stale ? (
+          {firstLoad ? (
             <div className="px-2 py-3 text-sm text-muted-foreground">
               {loadingLabel}
             </div>
@@ -561,70 +589,75 @@ export const SuggestionPopup = forwardRef<
             role="listbox"
             aria-label={`${listboxLabel}: ${activeLabel}`}
           >
-            {!stale &&
-              activeGroup?.items.map((item, index) => {
-                const active = index === selectedIndex
-                return (
-                  <button
-                    // `uri` is appended as a tiebreaker (falling back to
-                    // `index`): a Room's multi-root file search can legitimately
-                    // produce two file items with the same relative-path `id`
-                    // (e.g. "README.md" in two unrelated additional paths) —
-                    // their `uri`s still differ because it's built from each
-                    // entry's own root, so this keeps the key unique instead of
-                    // silently colliding two distinct rows into one.
-                    key={`${activeGroup.kind}:${item.reference.id}:${item.reference.uri ?? index}`}
-                    type="button"
-                    id={mentionOptionId(activeGroup.kind, index)}
-                    role="option"
-                    aria-selected={active}
-                    data-active={active}
-                    className={cn(
-                      // `text-start`, not `text-left`: the panel portals to
-                      // `body`, so under Arabic (`dir="rtl"`) a physical
-                      // left-align would pin the grown detail's text to the far
-                      // edge of its box — the very void this row layout removes,
-                      // mirrored.
-                      "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-start text-sm",
-                      active
-                        ? "bg-accent text-accent-foreground"
-                        : "hover:bg-accent/50"
-                    )}
-                    onMouseDown={(event) => {
-                      // Keep editor focus; insert on click.
-                      event.preventDefault()
-                      onSelect(item.reference, state.range)
-                    }}
-                    onMouseEnter={() => setSelectedIndex(index)}
+            {shownGroup?.items.map((item, index) => {
+              const active = index === selectedIndex
+              return (
+                <button
+                  // `uri` is appended as a tiebreaker (falling back to
+                  // `index`): a Room's multi-root file search can legitimately
+                  // produce two file items with the same relative-path `id`
+                  // (e.g. "README.md" in two unrelated additional paths) —
+                  // their `uri`s still differ because it's built from each
+                  // entry's own root, so this keeps the key unique instead of
+                  // silently colliding two distinct rows into one.
+                  // `activeTab` *is* the shown group's kind (the group came out
+                  // of the map under that key), and using it keeps these ids
+                  // identical to the `aria-activedescendant` the effect above
+                  // reports by construction.
+                  key={`${activeTab}:${item.reference.id}:${item.reference.uri ?? index}`}
+                  type="button"
+                  id={mentionOptionId(activeTab, index)}
+                  role="option"
+                  aria-selected={active}
+                  data-active={active}
+                  className={cn(
+                    // `text-start`, not `text-left`: the panel portals to
+                    // `body`, so under Arabic (`dir="rtl"`) a physical
+                    // left-align would pin the grown detail's text to the far
+                    // edge of its box — the very void this row layout removes,
+                    // mirrored.
+                    "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-start text-sm",
+                    active
+                      ? "bg-accent text-accent-foreground"
+                      : "hover:bg-accent/50"
+                  )}
+                  onMouseDown={(event) => {
+                    // Keep editor focus either way; a stale row is inert for
+                    // the same reason Enter is (it answers an earlier query).
+                    event.preventDefault()
+                    if (stale) return
+                    onSelect(item.reference, state.range)
+                  }}
+                  onMouseEnter={() => setSelectedIndex(index)}
+                >
+                  <ReferenceIcon data={item.reference} variant="option" />
+                  {/* Label at its content width (shrinking + truncating only
+                      when the row is too narrow), detail packed right after
+                      it. The panel is as wide as the composer, so a stretched
+                      label used to shove the detail against the far edge —
+                      and a hard cap on the detail truncated it there even
+                      with hundreds of spare pixels beside it. The detail now
+                      takes the slack instead; its basis floor keeps it
+                      readable next to a long label rather than shrinking it
+                      away to nothing. Same reading order as the `/` panel's
+                      skill rows. */}
+                  <span
+                    className="min-w-0 truncate"
+                    title={item.reference.label || item.reference.id}
                   >
-                    <ReferenceIcon data={item.reference} variant="option" />
-                    {/* Label at its content width (shrinking + truncating only
-                        when the row is too narrow), detail packed right after
-                        it. The panel is as wide as the composer, so a stretched
-                        label used to shove the detail against the far edge —
-                        and a hard cap on the detail truncated it there even
-                        with hundreds of spare pixels beside it. The detail now
-                        takes the slack instead; its basis floor keeps it
-                        readable next to a long label rather than shrinking it
-                        away to nothing. Same reading order as the `/` panel's
-                        skill rows. */}
+                    {item.reference.label || item.reference.id}
+                  </span>
+                  {item.detail && (
                     <span
-                      className="min-w-0 truncate"
-                      title={item.reference.label || item.reference.id}
+                      className="min-w-0 grow basis-24 truncate text-xs text-muted-foreground"
+                      title={item.detail}
                     >
-                      {item.reference.label || item.reference.id}
+                      {item.detail}
                     </span>
-                    {item.detail && (
-                      <span
-                        className="min-w-0 grow basis-24 truncate text-xs text-muted-foreground"
-                        title={item.detail}
-                      >
-                        {item.detail}
-                      </span>
-                    )}
-                  </button>
-                )
-              })}
+                  )}
+                </button>
+              )
+            })}
           </div>
           {truncated && (
             // aria-hidden: a visual "refine" affordance, not an option — keeps

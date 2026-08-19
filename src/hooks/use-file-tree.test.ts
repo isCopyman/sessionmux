@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import type { WorkspaceFileEntry } from "@/lib/types"
 
-import { useFileTree } from "./use-file-tree"
+import { __resetFileTreeCacheForTest, useFileTree } from "./use-file-tree"
 
 const mocks = vi.hoisted(() => ({
   listWorkspaceFiles: vi.fn(),
@@ -21,9 +21,19 @@ function entry(
   return { name: path.split("/").pop() ?? path, path, kind, root }
 }
 
+/** Drain resolved promises deterministically under fake timers. */
+const flush = () =>
+  act(async () => {
+    await vi.advanceTimersByTimeAsync(0)
+  })
+
 describe("useFileTree", () => {
   beforeEach(() => {
     mocks.listWorkspaceFiles.mockReset().mockResolvedValue([])
+    // The listing cache is module-level and outlives every hook instance, so
+    // without this each case would inherit the previous one's loaded roots
+    // (and its request count).
+    __resetFileTreeCacheForTest()
   })
 
   it("does not fetch while disabled or without a folder path", () => {
@@ -153,7 +163,7 @@ describe("useFileTree", () => {
     expect(result.current.allFiles).toEqual([])
   })
 
-  it("reset() clears the cache so a later re-enable triggers a fresh load", async () => {
+  it("reset() invalidates the roots so a later re-enable triggers a fresh load", async () => {
     mocks.listWorkspaceFiles.mockResolvedValue([entry("a.ts", "/repo")])
     const { result, rerender } = renderHook(
       (props: { enabled: boolean }) =>
@@ -163,10 +173,10 @@ describe("useFileTree", () => {
     await waitFor(() => expect(result.current.loaded).toBe(true))
     expect(mocks.listWorkspaceFiles).toHaveBeenCalledTimes(1)
 
-    // Clearing the cache alone does not itself re-invoke the effect (nothing
-    // it depends on changed yet) — `reset()`'s contract is to make the *next*
-    // dependency change (here, re-enabling) see a cache miss instead of the
-    // stale "already loaded for this key" hit.
+    // Invalidating alone does not itself re-invoke the effect (nothing it
+    // depends on changed yet) — `reset()`'s contract is to make the *next*
+    // dependency change (here, re-enabling) see a stale entry instead of the
+    // "already loaded for this key" hit.
     act(() => {
       result.current.reset()
     })
@@ -177,5 +187,124 @@ describe("useFileTree", () => {
     await waitFor(() =>
       expect(mocks.listWorkspaceFiles).toHaveBeenCalledTimes(2)
     )
+  })
+
+  it("shares one backend walk between hook instances on the same roots", async () => {
+    // Four composer tabs on the same folder used to mean four full workspace
+    // walks of the same tree; the listing now lives above the hook.
+    mocks.listWorkspaceFiles.mockResolvedValue([entry("a.ts", "/repo")])
+    const first = renderHook(() =>
+      useFileTree({ folderPath: "/repo", enabled: true })
+    )
+    await waitFor(() => expect(first.result.current.loaded).toBe(true))
+
+    const second = renderHook(() =>
+      useFileTree({ folderPath: "/repo", enabled: true })
+    )
+    await waitFor(() => expect(second.result.current.loaded).toBe(true))
+    expect(second.result.current.allFiles).toHaveLength(1)
+    expect(mocks.listWorkspaceFiles).toHaveBeenCalledTimes(1)
+  })
+
+  it("dedups concurrent first loads of the same roots into one request", async () => {
+    let resolveWalk!: (files: WorkspaceFileEntry[]) => void
+    mocks.listWorkspaceFiles.mockImplementation(
+      () =>
+        new Promise<WorkspaceFileEntry[]>((resolve) => {
+          resolveWalk = resolve
+        })
+    )
+    // Both mount while the walk is still in flight: the second must join it,
+    // not start a second one.
+    const first = renderHook(() =>
+      useFileTree({ folderPath: "/repo", enabled: true })
+    )
+    const second = renderHook(() =>
+      useFileTree({ folderPath: "/repo", enabled: true })
+    )
+    expect(mocks.listWorkspaceFiles).toHaveBeenCalledTimes(1)
+
+    await act(async () => {
+      resolveWalk([entry("a.ts", "/repo")])
+    })
+    await waitFor(() => {
+      expect(first.result.current.allFiles).toHaveLength(1)
+      expect(second.result.current.allFiles).toHaveLength(1)
+    })
+    expect(mocks.listWorkspaceFiles).toHaveBeenCalledTimes(1)
+  })
+
+  it("serves an expired listing immediately and swaps in the refresh", async () => {
+    vi.useFakeTimers()
+    try {
+      mocks.listWorkspaceFiles.mockResolvedValue([entry("old.ts", "/repo")])
+      const first = renderHook(() =>
+        useFileTree({ folderPath: "/repo", enabled: true })
+      )
+      await flush()
+      expect(first.result.current.allFiles.map((f) => f.name)).toEqual([
+        "old.ts",
+      ])
+      first.unmount()
+
+      // Past the 60s TTL, with a different listing waiting on the backend.
+      vi.advanceTimersByTime(61_000)
+      mocks.listWorkspaceFiles.mockResolvedValue([entry("new.ts", "/repo")])
+      const second = renderHook(() =>
+        useFileTree({ folderPath: "/repo", enabled: true })
+      )
+
+      // Stale-while-revalidate: the expired listing is on screen from the
+      // first commit, so the `@` panel never waits out the TTL…
+      expect(second.result.current.allFiles.map((f) => f.name)).toEqual([
+        "old.ts",
+      ])
+      expect(mocks.listWorkspaceFiles).toHaveBeenCalledTimes(2)
+
+      // …and the refresh replaces it when it lands.
+      await flush()
+      expect(second.result.current.allFiles.map((f) => f.name)).toEqual([
+        "new.ts",
+      ])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("does not refetch a listing that is still within its TTL", async () => {
+    vi.useFakeTimers()
+    try {
+      mocks.listWorkspaceFiles.mockResolvedValue([entry("a.ts", "/repo")])
+      const first = renderHook(() =>
+        useFileTree({ folderPath: "/repo", enabled: true })
+      )
+      await flush()
+      first.unmount()
+
+      vi.advanceTimersByTime(30_000)
+      renderHook(() => useFileTree({ folderPath: "/repo", enabled: true }))
+      await flush()
+      expect(mocks.listWorkspaceFiles).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("revalidates on window focus so files created outside the app appear", async () => {
+    mocks.listWorkspaceFiles.mockResolvedValue([entry("a.ts", "/repo")])
+    const { result } = renderHook(() =>
+      useFileTree({ folderPath: "/repo", enabled: true })
+    )
+    await waitFor(() => expect(result.current.loaded).toBe(true))
+
+    mocks.listWorkspaceFiles.mockResolvedValue([
+      entry("a.ts", "/repo"),
+      entry("b.ts", "/repo"),
+    ])
+    act(() => {
+      window.dispatchEvent(new Event("focus"))
+    })
+    await waitFor(() => expect(result.current.allFiles).toHaveLength(2))
+    expect(mocks.listWorkspaceFiles).toHaveBeenCalledTimes(2)
   })
 })

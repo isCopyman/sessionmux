@@ -121,6 +121,16 @@ describe("sessionToSuggestion", () => {
       ).reference.label
     ).toBe("Reviewer #123")
   })
+  it("uses a caller-supplied title instead of folding again", () => {
+    // The `@` panel folds every title up front to count duplicates; handing
+    // the fold back in is what keeps it from happening twice per session.
+    const item = sessionToSuggestion(
+      { ...base, title: "[README.md](file:///repo/README.md) fix" },
+      { title: "README.md fix" }
+    )
+    expect(item.reference.label).toBe("README.md fix")
+    expect(item.keywords).toBe("README.md fix codex")
+  })
 })
 
 describe("commitToSuggestion", () => {

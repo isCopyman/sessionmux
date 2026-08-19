@@ -17,6 +17,35 @@ import {
   type ReferenceSearchSources,
 } from "./use-reference-search"
 
+// The adapters are spied (call-through) so the prefix-refinement and
+// stop-at-the-cap tests can assert on work *not* done — "did it re-adapt?" is
+// the only externally visible difference between a refined and a rebuilt
+// group, which otherwise hold identical items.
+vi.mock("./suggestion/adapters", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./suggestion/adapters")>()
+  return {
+    ...actual,
+    fileToSuggestion: vi.fn(actual.fileToSuggestion),
+    agentToSuggestion: vi.fn(actual.agentToSuggestion),
+    sessionToSuggestion: vi.fn(actual.sessionToSuggestion),
+    commitToSuggestion: vi.fn(actual.commitToSuggestion),
+    sessionMentionTitle: vi.fn(actual.sessionMentionTitle),
+  }
+})
+
+import {
+  fileToSuggestion,
+  sessionMentionTitle,
+  sessionToSuggestion,
+} from "./suggestion/adapters"
+
+beforeEach(() => {
+  // `mockClear`, not `mockReset`: these keep the real implementation.
+  vi.mocked(fileToSuggestion).mockClear()
+  vi.mocked(sessionMentionTitle).mockClear()
+  vi.mocked(sessionToSuggestion).mockClear()
+})
+
 // --- fixtures ---------------------------------------------------------------
 
 function makeFile(
@@ -333,6 +362,168 @@ describe("buildReferenceGroups", () => {
   })
 })
 
+// --- session group: one title fold, stop at the cap (P0-3) -------------------
+
+describe("buildReferenceGroups session group", () => {
+  it("folds each session title exactly once per build", () => {
+    const sessions = [
+      makeConversation(1, "Reviewer"),
+      makeConversation(2, "Reviewer"),
+      makeConversation(3, "Planner"),
+    ]
+    buildReferenceGroups("", emptySources({ sessions }))
+    // One pass over the list, feeding both the duplicate count and the
+    // adapter — not one pass to count and another to adapt.
+    expect(sessionMentionTitle).toHaveBeenCalledTimes(3)
+  })
+
+  it("hands the adapter the title it already folded", () => {
+    const sessions = [makeConversation(7, "Login refactor")]
+    buildReferenceGroups("", emptySources({ sessions }))
+    expect(sessionToSuggestion).toHaveBeenCalledWith(sessions[0], {
+      disambiguateId: false,
+      title: "Login refactor",
+    })
+  })
+
+  it("stops adapting sessions once the cap is filled", () => {
+    // The backend session list has no LIMIT, so an unbounded scan here is a
+    // per-keystroke cost proportional to the whole database.
+    const sessions = Array.from({ length: 200 }, (_, i) =>
+      makeConversation(i + 1, `Session ${i + 1}`)
+    )
+    const groups = buildReferenceGroups("session", emptySources({ sessions }))
+    const group = groups.find((g) => g.kind === "session")
+    expect(group?.items).toHaveLength(50)
+    expect(group?.truncated).toBe(true)
+    // 50 kept plus the 51st, which is what proved the overflow.
+    expect(sessionToSuggestion).toHaveBeenCalledTimes(51)
+  })
+
+  it("counts duplicate titles across the whole list, including past the cap", () => {
+    // The `#id` suffixes on the 50 shown rows are decided by a count that saw
+    // the 10 the adapt scan never reached — the count pass stays complete.
+    const sessions = Array.from({ length: 60 }, (_, i) =>
+      makeConversation(i + 1, "Reviewer")
+    )
+    const items = itemsOf(
+      buildReferenceGroups("", emptySources({ sessions })),
+      "session"
+    )
+    expect(items).toHaveLength(50)
+    expect(items[0].reference.label).toBe("Reviewer #1")
+  })
+})
+
+// --- prefix refinement (P0-2) ------------------------------------------------
+
+describe("buildReferenceGroups prefix refinement", () => {
+  it("narrows the previous result instead of rescanning the sources", () => {
+    const sources = emptySources({
+      sessions: [
+        makeConversation(1, "Reviewer"),
+        makeConversation(2, "Router"),
+      ],
+    })
+    const first = buildReferenceGroups("r", sources)
+    expect(itemsOf(first, "session")).toHaveLength(2)
+
+    vi.mocked(sessionToSuggestion).mockClear()
+    const second = buildReferenceGroups("re", sources, DEFAULT_GROUP_LABELS, {
+      query: "r",
+      groups: first,
+    })
+    expect(itemsOf(second, "session").map((i) => i.reference.id)).toEqual(["1"])
+    expect(sessionToSuggestion).not.toHaveBeenCalled()
+  })
+
+  it("rebuilds a truncated group — its matches can sit past the cap", () => {
+    // f0…f59 all match "f", so the group stops at f49 and never adapts
+    // f50…f59 — which are exactly the rows "f5" needs.
+    const files = Array.from({ length: 60 }, (_, i) => makeFile(`f${i}.ts`))
+    const sources = emptySources({ files, workspaceRoot: "/repo" })
+    const first = buildReferenceGroups("f", sources)
+    expect(first.find((g) => g.kind === "file")?.truncated).toBe(true)
+
+    vi.mocked(fileToSuggestion).mockClear()
+    const second = buildReferenceGroups("f5", sources, DEFAULT_GROUP_LABELS, {
+      query: "f",
+      groups: first,
+    })
+    // f5.ts + f50…f59; refining the previous items would have found only f5.
+    expect(itemsOf(second, "file")).toHaveLength(11)
+    expect(fileToSuggestion).toHaveBeenCalled()
+  })
+
+  it("decides truncation per group, so one capped group does not block the rest", () => {
+    const sources = emptySources({
+      files: Array.from({ length: 60 }, (_, i) => makeFile(`f${i}.ts`)),
+      workspaceRoot: "/repo",
+      sessions: [makeConversation(1, "Fixture"), makeConversation(2, "Folder")],
+    })
+    const first = buildReferenceGroups("f", sources)
+
+    vi.mocked(fileToSuggestion).mockClear()
+    vi.mocked(sessionToSuggestion).mockClear()
+    buildReferenceGroups("fi", sources, DEFAULT_GROUP_LABELS, {
+      query: "f",
+      groups: first,
+    })
+    // Files rebuilt (truncated), sessions refined (not truncated).
+    expect(fileToSuggestion).toHaveBeenCalled()
+    expect(sessionToSuggestion).not.toHaveBeenCalled()
+  })
+
+  it("rebuilds when the new query is not an extension of the previous one", () => {
+    const sources = emptySources({
+      sessions: [
+        makeConversation(1, "Reviewer"),
+        makeConversation(2, "Router"),
+      ],
+    })
+    const first = buildReferenceGroups("re", sources)
+
+    vi.mocked(sessionToSuggestion).mockClear()
+    const second = buildReferenceGroups("r", sources, DEFAULT_GROUP_LABELS, {
+      query: "re",
+      groups: first,
+    })
+    expect(sessionToSuggestion).toHaveBeenCalled()
+    expect(itemsOf(second, "session")).toHaveLength(2)
+  })
+
+  it("refines case-insensitively, matching the full-build semantics", () => {
+    const sources = emptySources({
+      files: [makeFile("src/App.tsx"), makeFile("src/api.ts")],
+      workspaceRoot: "/repo",
+    })
+    const first = buildReferenceGroups("A", sources)
+    const refined = buildReferenceGroups("APP", sources, DEFAULT_GROUP_LABELS, {
+      query: "A",
+      groups: first,
+    })
+    expect(itemsOf(refined, "file").map((i) => i.reference.id)).toEqual(
+      itemsOf(buildReferenceGroups("APP", sources), "file").map(
+        (i) => i.reference.id
+      )
+    )
+    expect(itemsOf(refined, "file")).toHaveLength(1)
+  })
+
+  it("re-labels a refined group so a locale switch still lands", () => {
+    const sources = emptySources({
+      sessions: [makeConversation(1, "Reviewer")],
+    })
+    const first = buildReferenceGroups("r", sources)
+    const localized = { ...DEFAULT_GROUP_LABELS, session: "会话" }
+    const second = buildReferenceGroups("re", sources, localized, {
+      query: "r",
+      groups: first,
+    })
+    expect(second.find((g) => g.kind === "session")?.label).toBe("会话")
+  })
+})
+
 // --- hook --------------------------------------------------------------------
 
 const mocks = vi.hoisted(() => ({
@@ -537,6 +728,59 @@ describe("useReferenceSearch", () => {
     // The stale invocation must not render repo A commits into repo B's panel;
     // it bails so the next keystroke re-queries the current folder.
     expect(groups).toEqual([])
+  })
+
+  it("reuses the previous result for a prefix keystroke", async () => {
+    mocks.listAllConversations.mockResolvedValue([
+      makeConversation(1, "Reviewer"),
+      makeConversation(2, "Router"),
+    ])
+    const { result } = renderHook(() => useReferenceSearch({ enabled: true }))
+    await act(async () => {
+      await result.current("r")
+    })
+    const adaptedForR = vi.mocked(sessionToSuggestion).mock.calls.length
+    expect(adaptedForR).toBeGreaterThan(0)
+
+    let groups!: SuggestionGroup[]
+    await act(async () => {
+      groups = (await result.current("re")) as SuggestionGroup[]
+    })
+    // Nothing re-adapted: the second keystroke filtered the rows the first one
+    // already built.
+    expect(vi.mocked(sessionToSuggestion).mock.calls.length).toBe(adaptedForR)
+    expect(itemsOf(groups, "session").map((i) => i.reference.id)).toEqual(["1"])
+  })
+
+  it("rebuilds a prefix keystroke when a source reloaded underneath it", async () => {
+    mocks.listAllConversations.mockResolvedValue([
+      makeConversation(1, "Reviewer"),
+    ])
+    const { result } = renderHook(() => useReferenceSearch({ enabled: true }))
+    await act(async () => {
+      await result.current("r")
+    })
+    const adaptedForR = vi.mocked(sessionToSuggestion).mock.calls.length
+
+    // Window focus busts the session cache, so the next search resolves a
+    // *different* array. Filtering the old result would hide the new row for
+    // as long as the user keeps extending the query.
+    mocks.listAllConversations.mockResolvedValue([
+      makeConversation(1, "Reviewer"),
+      makeConversation(3, "Rebase fix"),
+    ])
+    act(() => {
+      window.dispatchEvent(new Event("focus"))
+    })
+
+    let groups!: SuggestionGroup[]
+    await act(async () => {
+      groups = (await result.current("re")) as SuggestionGroup[]
+    })
+    expect(vi.mocked(sessionToSuggestion).mock.calls.length).toBeGreaterThan(
+      adaptedForR
+    )
+    expect(itemsOf(groups, "session")).toHaveLength(2)
   })
 
   it("retries a lazy fetch after it rejects (a failure is never cached)", async () => {

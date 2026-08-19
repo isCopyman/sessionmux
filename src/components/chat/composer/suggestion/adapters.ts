@@ -76,14 +76,20 @@ export function sessionMentionTitle(
 
 export function sessionToSuggestion(
   conversation: DbConversationSummary,
-  options?: { disambiguateId?: boolean }
+  options?: {
+    disambiguateId?: boolean
+    /** The caller's already-computed {@link sessionMentionTitle}. The `@`
+     * panel needs every title up front to count duplicates, so without this
+     * every session would be folded twice per keystroke. */
+    title?: string
+  }
 ): SuggestionItem {
   // Fold any inline reference badges in the title (`[name](file://…)`, …) down
   // to their bracket text, so the panel row and the inserted session badge read
   // like the sidebar's title (`README.md fix`, not raw `[README.md](…)`) rather
   // than leaking serialized Markdown. The numeric `#id` fallback also covers a
   // whitespace-only title (folding can't turn blank into non-blank).
-  const baseLabel = sessionMentionTitle(conversation)
+  const baseLabel = options?.title ?? sessionMentionTitle(conversation)
   const label =
     options?.disambiguateId && !baseLabel.endsWith(`#${conversation.id}`)
       ? `${baseLabel} #${conversation.id}`
