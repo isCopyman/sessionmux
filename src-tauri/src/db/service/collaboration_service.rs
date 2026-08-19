@@ -3989,9 +3989,12 @@ mod tests {
         crate::db::service::conversation_service::update_archive(&db.conn, target, true)
             .await
             .expect("archive");
-        send(&db.conn, input(source, vec![target], "while-archived", "held"))
-            .await
-            .expect_err("archived Sessions refuse mail");
+        send(
+            &db.conn,
+            input(source, vec![target], "while-archived", "held"),
+        )
+        .await
+        .expect_err("archived Sessions refuse mail");
         crate::db::service::conversation_service::update_archive(&db.conn, target, false)
             .await
             .expect("restore");
@@ -4046,9 +4049,12 @@ mod tests {
     #[tokio::test]
     async fn archived_debtor_is_skipped_by_the_reminder_sweep() {
         let (db, source, target, _) = seeded_memory().await;
-        let sent = send(&db.conn, invoke_input(source, vec![target], "due-archived", "hello"))
-            .await
-            .unwrap();
+        let sent = send(
+            &db.conn,
+            invoke_input(source, vec![target], "due-archived", "hello"),
+        )
+        .await
+        .unwrap();
         db.conn
             .execute(Statement::from_sql_and_values(
                 DbBackend::Sqlite,
