@@ -23,6 +23,7 @@ import type {
   SuggestionGroup,
   SuggestionItem,
 } from "./suggestion/types"
+import type { ReferenceKind } from "./types"
 
 // Commit-synchronous on the client (so the guard-critical refs are updated
 // during commit, before any later macrotask/microtask can resolve a stale
@@ -91,29 +92,20 @@ function suggestionMatches(item: SuggestionItem, lowerQuery: string): boolean {
   )
 }
 
-/**
- * Pure: filter + adapt the raw sources into the fixed-order grouped suggestions
- * the `@` panel renders (files → agents → sessions → commits). Each group is
- * independently capped at {@link MAX_PER_GROUP}; empty groups are kept
- * (the popup hides them) so the order is always stable. Extracted from the hook
- * so the matching/ordering/dedup logic is testable without React.
- */
-export function buildReferenceGroups(
-  query: string,
+/** Files: filter the (potentially large) list on its pre-lowered fields before
+ * paying to adapt the survivors. `truncated` is a cheap boolean — set when a
+ * match is found past the cap — so we never scan the whole list for a count.
+ * Gated on *some* root existing (primary or additional) rather than only
+ * `workspaceRoot`, so a Room can still search its additional paths even when
+ * its bound folder itself didn't resolve (R8's "no root → no files" still
+ * holds for the plain composer, which never has `additionalRoots`). */
+function buildFileGroup(
+  q: string,
   sources: ReferenceSearchSources,
-  labels: ReferenceGroupLabels = DEFAULT_GROUP_LABELS
-): SuggestionGroup[] {
-  const q = query.trim().toLowerCase()
-
-  // Files: filter the (potentially large) list on its pre-lowered fields before
-  // paying to adapt the survivors. `truncated` is a cheap boolean — set when a
-  // match is found past the cap — so we never scan the whole list for a count.
-  // Gated on *some* root existing (primary or additional) rather than only
-  // `workspaceRoot`, so a Room can still search its additional paths even when
-  // its bound folder itself didn't resolve (R8's "no root → no files" still
-  // holds for the plain composer, which never has `additionalRoots`).
-  const fileItems: SuggestionItem[] = []
-  let fileTruncated = false
+  label: string
+): SuggestionGroup {
+  const items: SuggestionItem[] = []
+  let truncated = false
   const hasFileRoot =
     Boolean(sources.workspaceRoot) || sources.additionalRoots.length > 0
   if (hasFileRoot) {
@@ -121,79 +113,195 @@ export function buildReferenceGroups(
       if (q && !entry.lowerName.includes(q) && !entry.lowerPath.includes(q)) {
         continue
       }
-      if (fileItems.length >= MAX_PER_GROUP) {
-        fileTruncated = true
+      if (items.length >= MAX_PER_GROUP) {
+        truncated = true
         break
       }
-      fileItems.push(fileToSuggestion(entry))
+      items.push(fileToSuggestion(entry))
     }
   }
+  return { kind: "file", label, items, truncated }
+}
 
-  // Only enabled agents are mentionable — a disabled agent (toggled off in
-  // settings) can't be referenced, so it never appears in the `@` panel (its
-  // tab count and `truncated` flag follow from this filtered set too).
-  const agentMatches = sources.agents
+/** Only enabled agents are mentionable — a disabled agent (toggled off in
+ * settings) can't be referenced, so it never appears in the `@` panel (its
+ * tab count and `truncated` flag follow from this filtered set too). */
+function buildAgentGroup(
+  q: string,
+  sources: ReferenceSearchSources,
+  label: string
+): SuggestionGroup {
+  const matches = sources.agents
     .filter((agent) => agent.enabled)
     .map(agentToSuggestion)
     .filter((item) => suggestionMatches(item, q))
-  const agentItems = agentMatches.slice(0, MAX_PER_GROUP)
-
-  const sessionTitleCounts = new Map<string, number>()
-  for (const session of sources.sessions) {
-    const title = sessionMentionTitle(session)
-    sessionTitleCounts.set(title, (sessionTitleCounts.get(title) ?? 0) + 1)
+  return {
+    kind: "agent",
+    label,
+    items: matches.slice(0, MAX_PER_GROUP),
+    truncated: matches.length > MAX_PER_GROUP,
   }
-  const sessionMatches = sources.sessions
-    .map((session) =>
-      sessionToSuggestion(session, {
-        disambiguateId:
-          (sessionTitleCounts.get(sessionMentionTitle(session)) ?? 0) > 1,
-      })
-    )
-    .filter((item) => suggestionMatches(item, q))
-  const sessionItems = sessionMatches.slice(0, MAX_PER_GROUP)
+}
 
-  const commitItems: SuggestionItem[] = []
-  let commitTruncated = false
+/** Sessions need every title up front (duplicate titles get their `#id`
+ * appended), so the titles are folded once into an index-aligned array that
+ * feeds both the duplicate count and the adapter — the adapter is never left
+ * to recompute a title the count pass already produced. Scanning then stops at
+ * the first match past the cap, like the file and commit groups, instead of
+ * adapting every session in a list the backend does not bound. */
+function buildSessionGroup(
+  q: string,
+  sources: ReferenceSearchSources,
+  label: string
+): SuggestionGroup {
+  const titles = sources.sessions.map(sessionMentionTitle)
+  const titleCounts = new Map<string, number>()
+  for (const title of titles) {
+    titleCounts.set(title, (titleCounts.get(title) ?? 0) + 1)
+  }
+
+  const items: SuggestionItem[] = []
+  let truncated = false
+  for (let index = 0; index < sources.sessions.length; index++) {
+    const title = titles[index]
+    const item = sessionToSuggestion(sources.sessions[index], {
+      disambiguateId: (titleCounts.get(title) ?? 0) > 1,
+      title,
+    })
+    if (!suggestionMatches(item, q)) continue
+    if (items.length >= MAX_PER_GROUP) {
+      truncated = true
+      break
+    }
+    items.push(item)
+  }
+  return { kind: "session", label, items, truncated }
+}
+
+function buildCommitGroup(
+  q: string,
+  sources: ReferenceSearchSources,
+  label: string
+): SuggestionGroup {
+  const items: SuggestionItem[] = []
+  let truncated = false
   if (sources.repoKey) {
     const repoKey = sources.repoKey
     for (const entry of sources.commits) {
       const item = commitToSuggestion(entry, repoKey)
       if (!suggestionMatches(item, q)) continue
-      if (commitItems.length >= MAX_PER_GROUP) {
-        commitTruncated = true
+      if (items.length >= MAX_PER_GROUP) {
+        truncated = true
         break
       }
-      commitItems.push(item)
+      items.push(item)
     }
   }
+  return { kind: "commit", label, items, truncated }
+}
+
+/** A previously-built result the builder may narrow instead of rebuilding. */
+export interface PreviousReferenceResult {
+  /** The raw query string `groups` answered. */
+  query: string
+  groups: SuggestionGroup[]
+}
+
+/**
+ * Narrow one already-adapted group to a longer query, or null when that isn't
+ * sound and the group has to be rebuilt from the sources.
+ *
+ * Refusing on `truncated` is the correctness boundary, and it is decided **per
+ * group**: a truncated group stopped scanning at {@link MAX_PER_GROUP}, so
+ * entries that match the longer query can still be sitting past the cap in the
+ * source list and filtering `items` would drop them for good. The file group
+ * truncating (50k entries, empty query) must not cost the session group its
+ * refinement, which is why this is not a whole-result decision.
+ *
+ * Re-labels from the caller's current `labels` so a locale switch mid-typing
+ * doesn't carry the previous group's heading forward.
+ */
+function refineGroup(
+  previous: SuggestionGroup[] | null,
+  kind: ReferenceKind,
+  q: string,
+  label: string
+): SuggestionGroup | null {
+  const group = previous?.find((entry) => entry.kind === kind)
+  if (!group || group.truncated === true) return null
+  return {
+    kind,
+    label,
+    items: group.items.filter((item) => suggestionMatches(item, q)),
+    // A non-truncated group held *every* match of the shorter query, so the
+    // filtered subset is complete by construction.
+    truncated: false,
+  }
+}
+
+/**
+ * Pure: filter + adapt the raw sources into the fixed-order grouped suggestions
+ * the `@` panel renders (files → agents → sessions → commits). Each group is
+ * independently capped at {@link MAX_PER_GROUP}; empty groups are kept
+ * (the popup hides them) so the order is always stable. Extracted from the hook
+ * so the matching/ordering/dedup logic is testable without React.
+ *
+ * `previous` opts into prefix refinement: every matcher here is a plain
+ * substring test, so a query that extends the one `previous` answered can only
+ * ever match a subset of its items. Passing it turns `re` → `rea` into a filter
+ * over ~50 adapted rows instead of a rescan of every file, session and commit.
+ * The caller owns freshness — it must only pass a result built from the very
+ * same source arrays (see `useReferenceSearch`).
+ */
+export function buildReferenceGroups(
+  query: string,
+  sources: ReferenceSearchSources,
+  labels: ReferenceGroupLabels = DEFAULT_GROUP_LABELS,
+  previous?: PreviousReferenceResult
+): SuggestionGroup[] {
+  const q = query.trim().toLowerCase()
+  const previousQuery = previous ? previous.query.trim().toLowerCase() : null
+  const reusable =
+    previous && previousQuery !== null && q.startsWith(previousQuery)
+      ? previous.groups
+      : null
 
   return [
-    {
-      kind: "file",
-      label: labels.file,
-      items: fileItems,
-      truncated: fileTruncated,
-    },
-    {
-      kind: "agent",
-      label: labels.agent,
-      items: agentItems,
-      truncated: agentMatches.length > MAX_PER_GROUP,
-    },
-    {
-      kind: "session",
-      label: labels.session,
-      items: sessionItems,
-      truncated: sessionMatches.length > MAX_PER_GROUP,
-    },
-    {
-      kind: "commit",
-      label: labels.commit,
-      items: commitItems,
-      truncated: commitTruncated,
-    },
+    refineGroup(reusable, "file", q, labels.file) ??
+      buildFileGroup(q, sources, labels.file),
+    refineGroup(reusable, "agent", q, labels.agent) ??
+      buildAgentGroup(q, sources, labels.agent),
+    refineGroup(reusable, "session", q, labels.session) ??
+      buildSessionGroup(q, sources, labels.session),
+    refineGroup(reusable, "commit", q, labels.commit) ??
+      buildCommitGroup(q, sources, labels.commit),
   ]
+}
+
+/**
+ * Are two source sets literally the same data? Prefix refinement replays a
+ * filter over the previous *result*, so it is only sound while nothing behind
+ * it has been replaced: a file-tree reload, a focus-busted session cache or a
+ * folder switch all swap an array for a new one and must force a full rebuild
+ * rather than being filtered away behind a stale row set. Reference equality
+ * is exactly the right test for the big arrays (they are React state / cached
+ * promise results, stable until they genuinely change); `additionalRoots` is
+ * compared by value because a host may rebuild that tiny array per render.
+ */
+function sameSources(
+  a: ReferenceSearchSources,
+  b: ReferenceSearchSources
+): boolean {
+  return (
+    a.files === b.files &&
+    a.agents === b.agents &&
+    a.sessions === b.sessions &&
+    a.commits === b.commits &&
+    a.workspaceRoot === b.workspaceRoot &&
+    a.repoKey === b.repoKey &&
+    a.additionalRoots.length === b.additionalRoots.length &&
+    a.additionalRoots.every((root, index) => root === b.additionalRoots[index])
+  )
 }
 
 export interface UseReferenceSearchOptions {
@@ -309,6 +417,16 @@ export function useReferenceSearch({
     promise: Promise<GitLogEntry[]>
   } | null>(null)
 
+  // Last answered result, kept for prefix refinement. It carries the exact
+  // sources it was built from; `sameSources` is what keeps a refinement from
+  // outliving the data underneath it, so nothing else has to remember to clear
+  // this ref when a source reloads.
+  const lastResultRef = useRef<{
+    query: string
+    groups: SuggestionGroup[]
+    sources: ReferenceSearchSources
+  } | null>(null)
+
   // Bust the lazy caches when the window regains focus so a session created in
   // another window (or new commits) show up on the next `@` — matching the
   // focus-refresh idiom of the other data hooks, without per-keystroke fetches.
@@ -379,18 +497,25 @@ export function useReferenceSearch({
     }
 
     const fileState = filesRef.current
-    return buildReferenceGroups(
+    const sources: ReferenceSearchSources = {
+      files: fileState.files,
+      workspaceRoot: fileState.root,
+      additionalRoots: fileState.additionalRoots,
+      agents: agentsRef.current,
+      sessions,
+      commits,
+      repoKey: path,
+    }
+    const last = lastResultRef.current
+    const groups = buildReferenceGroups(
       query,
-      {
-        files: fileState.files,
-        workspaceRoot: fileState.root,
-        additionalRoots: fileState.additionalRoots,
-        agents: agentsRef.current,
-        sessions,
-        commits,
-        repoKey: path,
-      },
-      labelsRef.current ?? DEFAULT_GROUP_LABELS
+      sources,
+      labelsRef.current ?? DEFAULT_GROUP_LABELS,
+      last && sameSources(last.sources, sources)
+        ? { query: last.query, groups: last.groups }
+        : undefined
     )
+    lastResultRef.current = { query, groups, sources }
+    return groups
   }, [])
 }
