@@ -109,6 +109,9 @@ interface FolderSelectProps {
   /** Called when the pinned "all folders" row is picked. Required with
    *  `allLabel`. */
   onSelectAll?: () => void
+  /** Told whenever the picker's own popover opens or closes. Callers nested in
+   *  a dialog use it to keep an Escape from collapsing two layers at once. */
+  onOpenChange?: (open: boolean) => void
   variant?: FolderSelectVariant
   disabled?: boolean
   /** Prefixes the trigger tooltip, e.g. "Working folder". Tooltip only — the
@@ -135,6 +138,7 @@ export function FolderSelect({
   allLabel,
   placeholder,
   onSelectAll,
+  onOpenChange,
   variant = "pill",
   disabled = false,
   title,
@@ -169,11 +173,21 @@ export function FolderSelect({
     .filter(Boolean)
     .join(" · ")
 
+  // Every open and close goes through here, including the ones a row selection
+  // performs directly — Radix reports only the dismissals it drives itself, so
+  // `onOpenChange` would otherwise miss half the transitions and leave a caller
+  // counting open layers permanently out of balance.
+  const setPopoverOpen = (next: boolean) => {
+    if (open === next) return
+    setOpen(next)
+    onOpenChange?.(next)
+  }
+
   return (
     <Popover
       open={open}
       onOpenChange={(o) => {
-        if (!disabled) setOpen(o)
+        if (!disabled) setPopoverOpen(o)
       }}
     >
       <PopoverTrigger asChild>
@@ -233,7 +247,7 @@ export function FolderSelect({
                     value="__all_folders__"
                     forceMount
                     onSelect={() => {
-                      setOpen(false)
+                      setPopoverOpen(false)
                       onSelectAll?.()
                     }}
                   >
@@ -256,7 +270,7 @@ export function FolderSelect({
                   folder={f}
                   selected={f.id === value}
                   onSelect={() => {
-                    setOpen(false)
+                    setPopoverOpen(false)
                     onChange(f.id)
                   }}
                 />

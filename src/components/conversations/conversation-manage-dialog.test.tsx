@@ -256,6 +256,7 @@ function renderGlobalDialog() {
       <ConversationManageDialog open onOpenChange={vi.fn()} folderId={null} />
     </NextIntlClientProvider>
   )
+  return userEvent.setup()
 }
 
 function renderCollectionDialog(collection: number | "unclassified") {
@@ -285,6 +286,25 @@ function defer<T>() {
     resolve = r
   })
   return { promise, resolve }
+}
+
+type User = ReturnType<typeof userEvent.setup>
+
+/** The Filters button, whose text carries the active-facet count ("Filters2"). */
+function filtersButton(): HTMLElement {
+  return screen.getByRole("button", { name: /^Filters/ })
+}
+
+/** The seven narrowing facets live behind that button now, so every test that
+ *  moves one opens the popover first. */
+async function openFilters(user: User) {
+  await user.click(filtersButton())
+}
+
+/** ...and closes it again before touching the list or the footer, so the click
+ *  lands on the row rather than on the popover's dismissal. */
+async function closeFilters(user: User) {
+  await user.keyboard("{Escape}")
 }
 
 /** A row inside an open command palette (the trigger renders the same text). */
@@ -366,13 +386,49 @@ describe("ConversationManageDialog", () => {
     const user = renderDialog()
     await screen.findByText("on main")
 
-    await user.click(
-      screen.getByRole("combobox", { name: "Session message worklist" })
-    )
-    await user.click(screen.getByRole("option", { name: "Needs reply (1)" }))
+    const needsReply = screen.getByRole("tab", { name: /Needs reply/ })
+    // The count rides in a badge beside the label rather than inside it.
+    expect(needsReply.textContent).toContain("1")
+    // Nothing has failed, so that segment does not take up a slot at all.
+    expect(screen.queryByRole("tab", { name: /Failed/ })).toBeNull()
+
+    await user.click(needsReply)
 
     expect(screen.queryByText("on main")).toBeNull()
     expect(screen.getByText("on feature")).toBeTruthy()
+  })
+
+  it("keeps a segment with nothing behind it, minus the badge", async () => {
+    renderDialog()
+    await screen.findByText("on main")
+
+    // Empty worklists still offer their segment — a facet that disappears at
+    // zero is one the user cannot learn is empty.
+    const unread = screen.getByRole("tab", { name: /Unread/ })
+    expect(unread.textContent).toBe("Unread")
+  })
+
+  it("adds the failed segment once a Session has failures", async () => {
+    h.collaborationSessions = [
+      {
+        conversationId: 3,
+        revision: 2,
+        unreadCount: 0,
+        needsReplyCount: 0,
+        awaitingReplyCount: 0,
+        failedCount: 2,
+      },
+    ]
+    const user = renderDialog()
+    await screen.findByText("on main")
+
+    const failed = screen.getByRole("tab", { name: /Failed/ })
+    expect(failed.textContent).toContain("2")
+
+    await user.click(failed)
+
+    expect(screen.getByText("branchless")).toBeTruthy()
+    expect(screen.queryByText("on main")).toBeNull()
   })
 
   it("opens pre-filtered when initialCollaborationFilter is set", async () => {
@@ -402,6 +458,11 @@ describe("ConversationManageDialog", () => {
     expect(await screen.findByText("on feature")).toBeTruthy()
     expect(screen.queryByText("on main")).toBeNull()
     expect(screen.queryByText("branchless")).toBeNull()
+    // ...and the segmented control opens on the matching segment, so the view
+    // is never narrowed by a filter nothing on screen shows.
+    expect(screen.getByRole("tab", { selected: true }).textContent).toContain(
+      "Needs reply"
+    )
   })
 
   it("narrows the list to one Session source", async () => {
@@ -421,6 +482,7 @@ describe("ConversationManageDialog", () => {
     const user = renderDialog()
     await screen.findByText("I started this")
 
+    await openFilters(user)
     await user.click(screen.getByRole("combobox", { name: "Filter by source" }))
     await user.click(screen.getByRole("option", { name: "Created by me" }))
 
@@ -440,6 +502,7 @@ describe("ConversationManageDialog", () => {
     const user = renderDialog()
     await screen.findByText("legacy row")
 
+    await openFilters(user)
     await user.click(screen.getByRole("combobox", { name: "Filter by source" }))
     await user.click(screen.getByRole("option", { name: "Created by me" }))
 
@@ -460,7 +523,7 @@ describe("ConversationManageDialog", () => {
     expect(screen.getByText("scheduled")).toBeTruthy()
   })
 
-  it("collapses an open filter dropdown on Escape before the dialog closes", async () => {
+  it("unwinds the filter layers one Escape at a time", async () => {
     const onOpenChange = vi.fn()
     render(
       <NextIntlClientProvider locale="en" messages={enMessages}>
@@ -474,22 +537,113 @@ describe("ConversationManageDialog", () => {
     const user = userEvent.setup()
     await screen.findByText("on main")
 
-    await user.click(
-      screen.getByRole("combobox", { name: "Session message worklist" })
-    )
+    // Two layers above the dialog: the Filters popover, and a facet dropdown
+    // opened inside it.
+    await openFilters(user)
+    await user.click(screen.getByRole("combobox", { name: "Filter by status" }))
     await screen.findByRole("listbox")
 
-    // First Escape: the dropdown eats it — the dialog must stay open.
+    // First Escape: the dropdown eats it.
     await user.keyboard("{Escape}")
     await waitFor(() =>
       expect(screen.queryByRole("listbox")).not.toBeInTheDocument()
     )
     expect(onOpenChange).not.toHaveBeenCalled()
+
+    // Second: the popover, which is still one layer above the dialog.
+    await user.keyboard("{Escape}")
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("combobox", { name: "Filter by status" })
+      ).toBeNull()
+    )
+    expect(onOpenChange).not.toHaveBeenCalled()
     expect(screen.getByText("on main")).toBeTruthy()
 
-    // Second Escape, nothing layered above the dialog: the dialog closes.
+    // Third, with nothing layered above it: the dialog closes.
     await user.keyboard("{Escape}")
     expect(onOpenChange).toHaveBeenCalledWith(false)
+  })
+
+  it("collapses a folder picker that closes itself on the pick", async () => {
+    // `FolderSelect` and the branch picker close on a row click rather than
+    // through Radix, so their close has to be reported by hand — miss it and
+    // the open-layer count never returns to zero, leaving the dialog unable to
+    // close on Escape at all.
+    const onOpenChange = vi.fn()
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <ConversationManageDialog
+          open
+          onOpenChange={onOpenChange}
+          folderId={1}
+        />
+      </NextIntlClientProvider>
+    )
+    const user = userEvent.setup()
+    await screen.findByText("on main")
+
+    await openFilters(user)
+    await user.click(screen.getByRole("button", { name: /alpha/ }))
+    await user.click(paletteRow("beta"))
+
+    await user.keyboard("{Escape}")
+    expect(onOpenChange).not.toHaveBeenCalled()
+    await user.keyboard("{Escape}")
+    expect(onOpenChange).toHaveBeenCalledWith(false)
+  })
+
+  it("counts a collapsed facet and spells its value out in a chip", async () => {
+    const user = renderDialog()
+    await screen.findByText("on main")
+
+    // The folder the dialog was opened on is already one narrowing facet, so
+    // the count starts at one rather than at zero.
+    expect(filtersButton().textContent).toBe("Filters1")
+    expect(screen.getByTitle("Folder · alpha")).toBeTruthy()
+
+    await openFilters(user)
+    await user.click(screen.getByRole("combobox", { name: "Filter by source" }))
+    await user.click(screen.getByRole("option", { name: "Created by me" }))
+
+    expect(filtersButton().textContent).toBe("Filters2")
+    expect(screen.getByTitle("Source · Created by me")).toBeTruthy()
+  })
+
+  it("puts one facet back from its chip and leaves the rest alone", async () => {
+    const user = renderDialog()
+    await screen.findByText("on main")
+
+    await openFilters(user)
+    await user.click(screen.getByRole("combobox", { name: "Filter by source" }))
+    await user.click(screen.getByRole("option", { name: "Created by me" }))
+    await closeFilters(user)
+
+    await user.click(
+      screen.getByRole("button", { name: "Clear the Source filter" })
+    )
+
+    expect(screen.queryByTitle("Source · Created by me")).toBeNull()
+    expect(screen.getByTitle("Folder · alpha")).toBeTruthy()
+    expect(filtersButton().textContent).toBe("Filters1")
+  })
+
+  it("resets every collapsed facet at once, folder scope included", async () => {
+    const user = renderDialog()
+    await screen.findByText("on main")
+
+    await openFilters(user)
+    await user.click(screen.getByRole("combobox", { name: "Filter by status" }))
+    await user.click(screen.getByRole("option", { name: "Archived" }))
+    expect(filtersButton().textContent).toBe("Filters2")
+
+    await user.click(screen.getByRole("button", { name: "Reset filters" }))
+
+    expect(filtersButton().textContent).toBe("Filters")
+    expect(screen.queryByTitle("Folder · alpha")).toBeNull()
+    // Clearing the folder facet widens the query to the whole workspace, which
+    // only happens if the reset went through `handleScopeChange`.
+    await waitFor(() => expect(lastQueryFolderIds()).toEqual([1, 2, 3]))
   })
 
   it("opens scoped to the folder it was invoked on, plus that folder's worktrees", async () => {
@@ -505,6 +659,7 @@ describe("ConversationManageDialog", () => {
     const user = renderDialog()
     await screen.findByText("on main")
 
+    await openFilters(user)
     await user.click(screen.getByRole("button", { name: /alpha/ }))
     await user.click(paletteRow("beta"))
 
@@ -515,6 +670,7 @@ describe("ConversationManageDialog", () => {
     const user = renderDialog()
     await screen.findByText("on main")
 
+    await openFilters(user)
     await user.click(screen.getByRole("button", { name: /alpha/ }))
     await user.click(paletteRow("All folders"))
 
@@ -522,11 +678,14 @@ describe("ConversationManageDialog", () => {
   })
 
   it("opens the global Session Center across every user-facing folder", async () => {
-    renderGlobalDialog()
+    const user = renderGlobalDialog()
     await screen.findByText("on main")
 
     expect(lastQueryFolderIds()).toEqual([1, 2, 3])
+    await openFilters(user)
     expect(screen.getByRole("button", { name: /All folders/ })).toBeTruthy()
+    // Nothing is narrowed, so the Filters button carries no count.
+    expect(filtersButton().textContent).toBe("Filters")
   })
 
   it("drops a reply that lands after its folder scope moved on", async () => {
@@ -539,6 +698,7 @@ describe("ConversationManageDialog", () => {
     const user = renderDialog()
     await waitFor(() => expect(h.listAll).toHaveBeenCalledTimes(1))
 
+    await openFilters(user)
     await user.click(screen.getByRole("button", { name: /alpha/ }))
     await user.click(paletteRow("beta"))
     await waitFor(() => expect(h.listAll).toHaveBeenCalledTimes(2))
@@ -562,6 +722,7 @@ describe("ConversationManageDialog", () => {
     const user = renderDialog()
     await waitFor(() => expect(h.listAll).toHaveBeenCalledTimes(1))
 
+    await openFilters(user)
     await user.click(screen.getByRole("button", { name: /#1/ }))
     await user.click(paletteRow("All folders"))
 
@@ -584,6 +745,7 @@ describe("ConversationManageDialog", () => {
     const user = userEvent.setup()
     await waitFor(() => expect(lastQueryFolderIds()).toEqual([2]))
 
+    await openFilters(user)
     const trigger = screen.getByRole("button", { name: /alpha-feature/ })
     await user.click(trigger)
     await user.click(paletteRow("All folders"))
@@ -600,6 +762,7 @@ describe("ConversationManageDialog", () => {
     await screen.findByText("on main")
     const callsBefore = h.listAll.mock.calls.length
 
+    await openFilters(user)
     await user.click(screen.getByRole("button", { name: /All branches/ }))
     // Each branch is offered with the number of conversations on it.
     expect(paletteRow("feature/x").textContent).toContain("1")
@@ -622,6 +785,7 @@ describe("ConversationManageDialog", () => {
     const user = renderDialog()
     await screen.findByText("on 49")
 
+    await openFilters(user)
     await user.click(screen.getByRole("button", { name: /All branches/ }))
 
     // The shared prefix becomes one header carrying both branches, folded — so
@@ -649,6 +813,7 @@ describe("ConversationManageDialog", () => {
     const user = renderDialog()
     await screen.findByText("on 49")
 
+    await openFilters(user)
     await user.click(screen.getByRole("button", { name: /All branches/ }))
     await user.click(paletteRow("task/"))
     await user.click(paletteRow("49"))
@@ -667,6 +832,7 @@ describe("ConversationManageDialog", () => {
     const user = renderDialog()
     await screen.findByText("on 49")
 
+    await openFilters(user)
     await user.click(screen.getByRole("button", { name: /All branches/ }))
     await user.type(screen.getByPlaceholderText(/Search branches/), "49")
 
@@ -680,6 +846,7 @@ describe("ConversationManageDialog", () => {
     const user = renderDialog()
     await screen.findByText("on main")
 
+    await openFilters(user)
     await user.click(screen.getByRole("button", { name: /All branches/ }))
     await user.click(paletteRow("No branch"))
 
@@ -691,6 +858,7 @@ describe("ConversationManageDialog", () => {
     const user = renderDialog()
     await screen.findByText("on main")
 
+    await openFilters(user)
     await user.click(screen.getByRole("button", { name: /All branches/ }))
     await user.click(paletteRow("feature/x"))
     expect(screen.queryByText("on main")).toBeNull()
@@ -710,6 +878,7 @@ describe("ConversationManageDialog", () => {
     // Scoped to one folder the column is redundant, so it isn't drawn.
     expect(screen.queryByText("beta")).toBeNull()
 
+    await openFilters(user)
     await user.click(screen.getByRole("button", { name: /alpha/ }))
     await user.click(paletteRow("All folders"))
 
@@ -721,8 +890,10 @@ describe("ConversationManageDialog", () => {
     await screen.findByText("on main")
 
     await user.click(screen.getByRole("button", { name: "Select on main" }))
+    await openFilters(user)
     await user.click(screen.getByRole("button", { name: /All branches/ }))
     await user.click(paletteRow("feature/x"))
+    await closeFilters(user)
     // Out of view, still selected — and still what Delete acts on.
     expect(screen.getByText("1 selected")).toBeTruthy()
 
@@ -828,8 +999,10 @@ describe("ConversationManageDialog", () => {
     await waitFor(() => expect(h.updateArchive).toHaveBeenCalledWith(1, true))
     expect(h.closeConversationTab).not.toHaveBeenCalled()
 
+    await openFilters(user)
     await user.click(screen.getByRole("combobox", { name: "Filter by status" }))
     await user.click(screen.getByRole("option", { name: "Archived" }))
+    await closeFilters(user)
     await screen.findByText("on main")
     await user.click(screen.getByRole("button", { name: "Select on main" }))
     await user.click(screen.getByRole("button", { name: "Restore" }))
@@ -917,6 +1090,7 @@ describe("ConversationManageDialog", () => {
     await screen.findByText("on main")
     await waitFor(() => expect(h.listWorkbenchRefs).toHaveBeenCalled())
 
+    await openFilters(user)
     await user.click(
       screen.getByRole("combobox", { name: "Filter by workbench" })
     )
