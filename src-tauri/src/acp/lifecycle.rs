@@ -59,13 +59,36 @@ async fn handle_event_with_retry(
     manager: &ConnectionManager,
     envelope: &EventEnvelope,
 ) {
-    if handle_event(db, manager, envelope).await.is_ok() {
-        return;
+    match handle_event(db, manager, envelope).await {
+        Ok(()) => return,
+        // B1: a permanent refusal, not a transient failure — retrying a
+        // takeover that's already been rejected can never succeed, since the
+        // holder of the external_id does not change on its own. Log once at
+        // WARN (this is an expected outcome of a lost race, not a bug) and
+        // skip the backoff loop entirely rather than burning two retries and
+        // an ERROR log on something retrying cannot fix.
+        Err(DbError::ExternalIdTaken(msg)) => {
+            tracing::warn!(
+                "[lifecycle][WARN] handle_event: external_id already bound elsewhere for {:?}, \
+                 not retrying: {msg}",
+                envelope.payload
+            );
+            return;
+        }
+        Err(_) => {}
     }
     for (attempt, backoff) in HANDLE_EVENT_RETRY_BACKOFFS.iter().enumerate() {
         tokio::time::sleep(*backoff).await;
         match handle_event(db, manager, envelope).await {
             Ok(()) => return,
+            Err(DbError::ExternalIdTaken(msg)) => {
+                tracing::warn!(
+                    "[lifecycle][WARN] handle_event: external_id already bound elsewhere for \
+                     {:?}, not retrying further: {msg}",
+                    envelope.payload
+                );
+                return;
+            }
             Err(err) => tracing::warn!(
                 "[lifecycle][{}] handle_event attempt {} failed for {:?}: {err}",
                 if attempt + 1 == HANDLE_EVENT_RETRY_BACKOFFS.len() {
@@ -93,14 +116,25 @@ pub(crate) async fn handle_event(
                 return Ok(());
             };
             if let Some(conversation_id) = state.read().await.conversation_id {
-                conversation_service::update_external_id(db, conversation_id, session_id.clone())
-                    .await?;
+                let outcome =
+                    conversation_service::bind_external_id(db, conversation_id, session_id.clone())
+                        .await?;
                 crate::commands::conversations::emit_conversation_upsert(
                     &emitter,
                     db,
                     conversation_id,
                 )
                 .await;
+                if let Some(preserved_id) = outcome.preserved_conversation_id {
+                    // A1/A3: an unrelated previous session was split off this
+                    // row rather than silently overwritten — broadcast it too.
+                    crate::commands::conversations::emit_conversation_upsert(
+                        &emitter,
+                        db,
+                        preserved_id,
+                    )
+                    .await;
+                }
             }
             Ok(())
         }
@@ -393,6 +427,105 @@ mod tests {
             conversation.external_id.as_deref(),
             Some("native-session-1")
         );
+    }
+
+    /// A1 via the SessionStarted consumer: the bound row already carries an
+    /// unrelated session (a reconnect lost the old id, or `session/load`
+    /// fell back to `session/new`). `handle_event` must split the old value
+    /// off onto its own row via `bind_external_id` and broadcast an upsert
+    /// for BOTH rows (A3) rather than silently overwriting the old session.
+    #[tokio::test]
+    async fn session_started_splits_and_broadcasts_an_unrelated_previous_session() {
+        let (db, manager, conversation_id) =
+            seed_bound_conversation("/tmp/lifecycle-session-started-split").await;
+        conversation_service::bind_external_id(&db.conn, conversation_id, "session-old".into())
+            .await
+            .unwrap();
+
+        handle_event(
+            &db.conn,
+            &manager,
+            &EventEnvelope {
+                seq: 1,
+                connection_id: "connection-1".into(),
+                payload: AcpEvent::SessionStarted {
+                    session_id: "session-new".into(),
+                },
+            },
+        )
+        .await
+        .unwrap();
+
+        let live = conversation_service::get_by_id(&db.conn, conversation_id)
+            .await
+            .unwrap();
+        assert_eq!(live.external_id.as_deref(), Some("session-new"));
+
+        // The old session must not have vanished: some OTHER row now carries
+        // it.
+        let all = conversation_service::list_all(&db.conn, None, None, None, None, None, false, false)
+            .await
+            .unwrap();
+        let preserved = all
+            .iter()
+            .find(|c| c.id != conversation_id && c.external_id.as_deref() == Some("session-old"))
+            .expect("the abandoned session must be preserved on its own row");
+        assert_eq!(
+            preserved.status, "cancelled",
+            "the abandoned in-flight session is marked cancelled, matching the \
+             disconnect convention `handle_terminal_event` already applies"
+        );
+    }
+
+    /// B1 at the lifecycle consumer: a permanent refusal must not be retried.
+    /// `handle_event_with_retry`'s only observable signal for "did it retry"
+    /// is elapsed time (nothing in the DB changes between attempts, so a
+    /// retried and a non-retried call reach the same final state) — this
+    /// asserts completion well under the first backoff
+    /// (`HANDLE_EVENT_RETRY_BACKOFFS[0]` = 100ms), which a retry loop could
+    /// not achieve.
+    #[tokio::test]
+    async fn handle_event_with_retry_skips_backoff_on_permanent_refusal() {
+        let (db, manager, conversation_id) =
+            seed_bound_conversation("/tmp/lifecycle-retry-skip").await;
+        conversation_service::bind_external_id(&db.conn, conversation_id, "session-mine".into())
+            .await
+            .unwrap();
+        // A second, unrelated row already holds the id this event will try
+        // to bind — guaranteed permanent refusal.
+        let folder_id = test_helpers::seed_folder(&db, "/tmp/lifecycle-retry-skip-2").await;
+        let other =
+            conversation_service::create(&db.conn, folder_id, AgentType::ClaudeCode, None, None)
+                .await
+                .unwrap();
+        conversation_service::bind_external_id(&db.conn, other.id, "session-taken".into())
+            .await
+            .unwrap();
+
+        let start = std::time::Instant::now();
+        handle_event_with_retry(
+            &db.conn,
+            &manager,
+            &EventEnvelope {
+                seq: 1,
+                connection_id: "connection-1".into(),
+                payload: AcpEvent::SessionStarted {
+                    session_id: "session-taken".into(),
+                },
+            },
+        )
+        .await;
+        assert!(
+            start.elapsed() < Duration::from_millis(80),
+            "a permanent ExternalIdTaken refusal must return before the first \
+             100ms backoff, not after exhausting the retry loop"
+        );
+
+        // The refusal must not have mutated the row that was already correct.
+        let unchanged = conversation_service::get_by_id(&db.conn, conversation_id)
+            .await
+            .unwrap();
+        assert_eq!(unchanged.external_id.as_deref(), Some("session-mine"));
     }
 
     #[tokio::test]
