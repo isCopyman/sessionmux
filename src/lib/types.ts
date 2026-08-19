@@ -1464,6 +1464,15 @@ export interface CollaborationRoomMember {
   lastReadAt?: string | null
 }
 
+/** An extra `@`-search root a Room was given besides its bound
+ * `rootFolderId` — a bare filesystem path the user typed in, not a Folder.
+ * See `collaboration_room_path` (migration `m20260820_000001`). */
+export interface RoomAdditionalPath {
+  id: number
+  path: string
+  createdAt: string
+}
+
 export interface CollaborationRoomSummary {
   id: string
   workbenchId: number
@@ -1472,6 +1481,8 @@ export interface CollaborationRoomSummary {
   collectionId?: number | null
   rootFolderId?: number | null
   memberCount: number
+  /** Extra `@`-search paths added on top of `rootFolderId`. */
+  additionalPathCount?: number
   unreadCount: number
   mentionUnreadCount?: number
   lastEventAt?: string | null
@@ -1487,6 +1498,8 @@ export interface CollaborationRoomDetail {
   collectionId?: number | null
   rootFolderId?: number | null
   members: CollaborationRoomMember[]
+  /** Extra `@`-search paths added on top of `rootFolderId`, oldest first. */
+  additionalPaths?: RoomAdditionalPath[]
   createdAt: string
   updatedAt: string
 }
@@ -3574,6 +3587,11 @@ export interface WorkspaceFileEntry {
   /** Path relative to the workspace root, always forward-slashed. */
   path: string
   kind: "file" | "dir"
+  /** The root this entry was resolved under — one of the call's `path` or
+   * `extraPaths`, echoed back exactly as given. Lets a multi-root call (a
+   * Room's bound folder plus its additional paths) tell entries from
+   * different roots apart even when their relative `path` collides. */
+  root: string
 }
 
 /**

@@ -21,7 +21,8 @@ import {
 
 function makeFile(
   relativePath: string,
-  kind: "file" | "dir" = "file"
+  kind: "file" | "dir" = "file",
+  root = "/repo"
 ): FlatFileEntry {
   const name = relativePath.split("/").pop() ?? relativePath
   return {
@@ -30,6 +31,7 @@ function makeFile(
     kind,
     lowerPath: relativePath.toLowerCase(),
     lowerName: name.toLowerCase(),
+    root,
   }
 }
 
@@ -79,6 +81,7 @@ function emptySources(
   return {
     files: [],
     workspaceRoot: null,
+    additionalRoots: [],
     agents: [],
     sessions: [],
     commits: [],
@@ -167,6 +170,40 @@ describe("buildReferenceGroups", () => {
       emptySources({ files: [makeFile("a.ts")], workspaceRoot: null })
     )
     expect(itemsOf(groups, "file")).toHaveLength(0)
+  })
+
+  it("still shows files from additionalRoots when workspaceRoot is null (Room whose bound folder didn't resolve)", () => {
+    const groups = buildReferenceGroups(
+      "",
+      emptySources({
+        files: [makeFile("notes.md", "file", "/extra")],
+        workspaceRoot: null,
+        additionalRoots: ["/extra"],
+      })
+    )
+    const files = itemsOf(groups, "file")
+    expect(files).toHaveLength(1)
+    expect(files[0].reference.uri).toBe("file:///extra/notes.md")
+  })
+
+  it("merges files from multiple roots and keeps each entry's own root in its uri", () => {
+    const groups = buildReferenceGroups(
+      "",
+      emptySources({
+        files: [
+          makeFile("README.md", "file", "/repo"),
+          makeFile("README.md", "file", "/extra"),
+        ],
+        workspaceRoot: "/repo",
+        additionalRoots: ["/extra"],
+      })
+    )
+    const files = itemsOf(groups, "file")
+    expect(files).toHaveLength(2)
+    expect(files.map((f) => f.reference.uri).sort()).toEqual([
+      "file:///extra/README.md",
+      "file:///repo/README.md",
+    ])
   })
 
   it("filters agents by name / type / description", () => {

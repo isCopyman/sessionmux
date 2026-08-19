@@ -16,17 +16,20 @@ function joinPath(root: string, relative: string): string {
   return left ? `${left}/${right}` : right
 }
 
-/** Workspace file → file reference (uri built from the workspace root). */
-export function fileToSuggestion(
-  entry: FlatFileEntry,
-  workspaceRoot: string
-): SuggestionItem {
+/**
+ * Workspace file → file reference (uri built from the entry's own root).
+ * The root travels with the entry itself (`FlatFileEntry.root`) rather than
+ * being passed in separately, because a multi-root search (a Room's bound
+ * folder plus its additional paths) can no longer assume every entry it
+ * adapts came from the same root.
+ */
+export function fileToSuggestion(entry: FlatFileEntry): SuggestionItem {
   return {
     reference: {
       refType: "file",
       id: entry.relativePath,
       label: entry.name,
-      uri: buildFileUri(joinPath(workspaceRoot, entry.relativePath)),
+      uri: buildFileUri(joinPath(entry.root, entry.relativePath)),
       meta: { fileKind: entry.kind },
     },
     detail: entry.relativePath,

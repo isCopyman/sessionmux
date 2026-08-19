@@ -2259,6 +2259,23 @@ export async function renameCollaborationRoom(
   return getTransport().call("collaboration_room_rename", { roomId, title })
 }
 
+export async function addCollaborationRoomPath(
+  roomId: string,
+  path: string
+): Promise<CollaborationRoomDetail> {
+  return getTransport().call("collaboration_room_add_path", { roomId, path })
+}
+
+export async function removeCollaborationRoomPath(
+  roomId: string,
+  pathId: number
+): Promise<CollaborationRoomDetail> {
+  return getTransport().call("collaboration_room_remove_path", {
+    roomId,
+    pathId,
+  })
+}
+
 export async function deleteCollaborationRoom(roomId: string): Promise<void> {
   return getTransport().call("collaboration_room_delete", { roomId })
 }
@@ -4386,9 +4403,13 @@ export async function getFileTree(
  * nested files are reachable while the payload stays small. Used by file search.
  */
 export async function listWorkspaceFiles(
-  path: string
+  path: string,
+  extraPaths?: string[]
 ): Promise<WorkspaceFileEntry[]> {
-  return getTransport().call("list_workspace_files", { path })
+  return getTransport().call("list_workspace_files", {
+    path,
+    extraPaths: extraPaths ?? null,
+  })
 }
 
 export async function startWorkspaceStateStream(

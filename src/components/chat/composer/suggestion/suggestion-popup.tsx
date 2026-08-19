@@ -415,7 +415,14 @@ export const SuggestionPopup = forwardRef<
                 const active = index === selectedIndex
                 return (
                   <button
-                    key={`${activeGroup.kind}:${item.reference.id}`}
+                    // `uri` is appended as a tiebreaker (falling back to
+                    // `index`): a Room's multi-root file search can legitimately
+                    // produce two file items with the same relative-path `id`
+                    // (e.g. "README.md" in two unrelated additional paths) —
+                    // their `uri`s still differ because it's built from each
+                    // entry's own root, so this keeps the key unique instead of
+                    // silently colliding two distinct rows into one.
+                    key={`${activeGroup.kind}:${item.reference.id}:${item.reference.uri ?? index}`}
                     type="button"
                     id={mentionOptionId(activeGroup.kind, index)}
                     role="option"
