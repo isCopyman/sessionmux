@@ -1781,7 +1781,8 @@
       "automations": "自动化",
       "tasks": "待办任务",
       "loadingSubsessions": "正在加载子会话…",
-      "rooms": "群聊"
+      "rooms": "群聊",
+      "newRoom": "新建群聊"
     },
     "conversation": {
       "reloadFailed": "会话重新加载失败：{message}",
@@ -5289,6 +5290,13 @@
     "delete": "删除群聊",
     "deleteTitle": "删除这个群聊？",
     "deleteConfirm": "帖子、成员和这个标签页会被删除。Session 本身不受影响。",
-    "deleted": "群聊已删除"
+    "deleted": "群聊已删除",
+    "createTitle": "创建群聊",
+    "createNamePlaceholder": "群聊标题",
+    "createHint": "至少选择两个 Session。",
+    "createSubmit": "建群",
+    "createNeedTwo": "至少选择两个 Session 才能建群",
+    "createNoCandidates": "没有可选的 Session。",
+    "createFailed": "建群失败：{message}"
   }
 }

@@ -1781,7 +1781,8 @@
       "automations": "الأتمتة",
       "tasks": "المهام قيد الانتظار",
       "loadingSubsessions": "جارٍ تحميل المحادثات الفرعية…",
-      "rooms": "الغرف"
+      "rooms": "الغرف",
+      "newRoom": "غرفة جديدة"
     },
     "conversation": {
       "reloadFailed": "فشل إعادة تحميل المحادثة: {message}",
@@ -5289,6 +5290,13 @@
     "delete": "حذف الغرفة",
     "deleteTitle": "حذف هذه الغرفة؟",
     "deleteConfirm": "ستُحذف المنشورات والأعضاء وعلامة التبويب هذه. جلسات Session تبقى كما هي.",
-    "deleted": "تم حذف الغرفة"
+    "deleted": "تم حذف الغرفة",
+    "createTitle": "إنشاء غرفة",
+    "createNamePlaceholder": "عنوان الغرفة",
+    "createHint": "اختر جلستين على الأقل.",
+    "createSubmit": "إنشاء",
+    "createNeedTwo": "اختر جلستين على الأقل لإنشاء غرفة",
+    "createNoCandidates": "لا توجد جلسات متاحة.",
+    "createFailed": "تعذر إنشاء الغرفة: {message}"
   }
 }
