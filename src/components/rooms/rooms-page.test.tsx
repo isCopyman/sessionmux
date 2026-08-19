@@ -278,7 +278,7 @@ describe("RoomWorkspace", () => {
     expect(api.markCollaborationRoomSeen).toHaveBeenCalledWith(roomId)
   })
 
-  it("does not show owner ranks or an @human chip in the host composer", async () => {
+  it("does not show owner ranks or @all/@human chips in the host composer", async () => {
     api.getCollaborationRoomTimeline.mockResolvedValue(timeline([event()]))
     renderRoom()
 
@@ -287,7 +287,10 @@ describe("RoomWorkspace", () => {
     expect(screen.queryByText("You host this room")).toBeNull()
     expect(screen.queryByText("owner")).toBeNull()
     expect(screen.queryByRole("button", { name: "@human" })).toBeNull()
-    expect(screen.getByRole("button", { name: "@all" })).toBeTruthy()
+    // The dedicated @all chip was removed as redundant — the @ panel's own
+    // "@all" option (see "scopes the @ panel to room members plus
+    // @all/@human" below) already covers picking it.
+    expect(screen.queryByRole("button", { name: "@all" })).toBeNull()
   })
 
   it("shows the Collection name instead of a Session folder breadcrumb", async () => {
@@ -427,16 +430,17 @@ describe("RoomWorkspace", () => {
     expect(within(screen.getByRole("article")).getByText("@all")).toBeTruthy()
   })
 
-  it("inserts a structured @all badge when the chip is pressed", async () => {
+  it("inserts a structured @all badge when picked from the @ panel", async () => {
     api.getCollaborationRoomTimeline.mockResolvedValue(timeline([event()]))
     renderRoom()
     await screen.findByText("newest post")
     const editor = await composerEditor()
 
-    fireEvent.click(screen.getByRole("button", { name: "@all" }))
+    typeInComposer(editor, "@all")
+    await pickMentionRow("@all")
 
-    // The chip inserts the same badge the @ panel would — a structured
-    // `codeg://all` token, never bare prose.
+    // The panel inserts the same structured `codeg://all` token the
+    // now-removed dedicated chip used to insert — never bare prose.
     await waitFor(() => expect(editor.getText()).toContain("(codeg://all)"))
     // …and the wake preview says so before anything is sent.
     expect(screen.getByTestId("wake-preview").textContent).toContain("@all")
@@ -650,7 +654,7 @@ describe("RoomWorkspace", () => {
     await screen.findByText("newest post")
     await composerEditor()
     expect(screen.getByTestId("wake-preview").textContent).toBe(
-      "Will wake: no one — the post lands on the timeline"
+      "Plain message — recorded to the timeline, wakes no one"
     )
   })
 

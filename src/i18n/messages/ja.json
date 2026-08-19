@@ -5251,7 +5251,7 @@
     "cancel": "Cancel",
     "wakeHint": "Plain messages stay on the shared timeline. @ a Session to wake it.",
     "wakePreview": "起動する: {names}",
-    "wakePreviewEmpty": "起動する: なし — タイムラインにのみ投稿されます",
+    "wakePreviewEmpty": "通常のメッセージ — タイムラインに記録されるだけで、誰も起動しません",
     "loadOlder": "Load older posts",
     "reply": "Reply",
     "replyTo": "Replying to {name}",

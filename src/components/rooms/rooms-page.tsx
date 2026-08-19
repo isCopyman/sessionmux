@@ -474,23 +474,6 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
     return names
   }, [body, members, t])
 
-  const insertBadge = useCallback((uri: string, id: string, label: string) => {
-    const handle = composerRef.current
-    const editor = handle?.getEditor()
-    if (!handle || !editor) return
-    // One badge per target: the serialized text carries the uri, so a
-    // repeat click on the same pseudo-mention is a no-op refocus.
-    if (handle.getText().includes(uri)) {
-      editor.commands.focus()
-      return
-    }
-    editor
-      .chain()
-      .focus()
-      .insertReference({ refType: "session", id, label, uri, meta: null })
-      .insertContent(" ")
-      .run()
-  }, [])
   const candidates = useMemo(() => {
     const query = addQuery.trim().toLowerCase()
     return conversations
@@ -671,7 +654,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
               }}
             />
           )}
-          <p className="truncate text-[11px] text-muted-foreground">
+          <p className="mt-1 ps-8 truncate text-[11px] text-muted-foreground">
             {(detail.collectionId != null
               ? collections.find(
                   (collection) => collection.id === detail.collectionId
@@ -968,25 +951,14 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
               </Button>
             </div>
           ) : null}
-          <div className="mb-2 flex flex-wrap items-center gap-2 text-xs">
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              className="h-7 px-2 text-xs"
-              onClick={() => insertBadge("codeg://all", "all", t("mentionAll"))}
-            >
-              {t("mentionAll")}
-            </Button>
-            <span
-              data-testid="wake-preview"
-              className="min-w-0 truncate text-[11px] text-muted-foreground"
-            >
-              {wakePreview.length > 0
-                ? t("wakePreview", { names: wakePreview.join(", ") })
-                : t("wakePreviewEmpty")}
-            </span>
-          </div>
+          <p
+            data-testid="wake-preview"
+            className="mb-1.5 truncate text-[11px] text-muted-foreground"
+          >
+            {wakePreview.length > 0
+              ? t("wakePreview", { names: wakePreview.join(", ") })
+              : t("wakePreviewEmpty")}
+          </p>
           <RichComposer
             ref={composerRef}
             placeholder={
@@ -1002,7 +974,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
             onChange={setBody}
             className="min-h-20 rounded-md border border-input bg-transparent"
           />
-          <div className="mt-2 flex items-center justify-end gap-2">
+          <div className="mt-1.5 flex items-center justify-end gap-2">
             <Button
               type="button"
               size="sm"

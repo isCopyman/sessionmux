@@ -5251,7 +5251,7 @@
     "cancel": "Cancel",
     "wakeHint": "Plain messages stay on the shared timeline. @ a Session to wake it.",
     "wakePreview": "깨울 대상: {names}",
-    "wakePreviewEmpty": "깨울 대상: 없음 — 타임라인에만 게시됩니다",
+    "wakePreviewEmpty": "일반 메시지 — 타임라인에만 기록되고, 아무도 깨우지 않습니다",
     "loadOlder": "Load older posts",
     "reply": "Reply",
     "replyTo": "Replying to {name}",

@@ -5251,7 +5251,7 @@
     "cancel": "Cancel",
     "wakeHint": "Plain messages stay on the shared timeline. @ a Session to wake it.",
     "wakePreview": "Vai acordar: {names}",
-    "wakePreviewEmpty": "Vai acordar: ninguém — a mensagem fica apenas na linha do tempo",
+    "wakePreviewEmpty": "Mensagem simples — só fica registrada na linha do tempo, não acorda ninguém",
     "loadOlder": "Load older posts",
     "reply": "Reply",
     "replyTo": "Replying to {name}",
