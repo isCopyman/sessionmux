@@ -398,9 +398,10 @@ export const SuggestionPopup = forwardRef<
     ref,
     (): SuggestionPopupHandle => ({
       onKeyDown: (event) => {
-        // Mid-composition the key is the IME's: on WebKit the Enter that picks
-        // a CJK candidate arrives after `compositionend`, so the plugin's
-        // `allow` gate has already reopened and only the event itself says so.
+        // Mid-composition the key is the IME's. ProseMirror stops most of them
+        // before any plugin sees them, but not the WebKit case where the Enter
+        // that picks a CJK candidate arrives *after* `compositionend`: by then
+        // only the event's own IME flags still say what it was.
         if (isImeCompositionKey(event)) return false
         switch (event.key) {
           case "ArrowDown":
