@@ -72,7 +72,7 @@ export function openRoomsInCurrentWorkbench(args: {
     args.openRoomTab({
       roomId: room.id,
       title: room.title,
-      folderId: roomTabFolderId(room, args.folders),
+      folderId: roomTabFolderId(room, [...args.folders]),
       agentType: ROOM_TAB_PLACEHOLDER_AGENT,
     })
   }
