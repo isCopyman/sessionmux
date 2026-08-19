@@ -2831,6 +2831,7 @@
         "persistFailed": "대기 메시지를 저장하지 못했습니다: {error}. 메시지 텍스트를 입력창에 복원했습니다.",
         "sourceCollaboration": "메일",
         "sourceReminder": "리마인더",
+        "sourceAutomation": "자동화",
         "sourceTimer": "타이머"
       },
       "welcomeInputPanel": {

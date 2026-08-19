@@ -2831,6 +2831,7 @@
         "persistFailed": "Não foi possível salvar a mensagem na fila: {error}. O texto foi restaurado no campo de entrada.",
         "sourceCollaboration": "Carta",
         "sourceReminder": "Lembrete",
+        "sourceAutomation": "Automação",
         "sourceTimer": "Temporizador"
       },
       "welcomeInputPanel": {

@@ -2831,6 +2831,7 @@
         "persistFailed": "无法保存排队消息：{error}。消息文字已恢复到输入框。",
         "sourceCollaboration": "信件",
         "sourceReminder": "催办",
+        "sourceAutomation": "自动化",
         "sourceTimer": "定时续跑"
       },
       "welcomeInputPanel": {

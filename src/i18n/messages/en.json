@@ -2831,6 +2831,7 @@
         "persistFailed": "Could not save the queued message: {error}. Its text was restored to the composer.",
         "sourceCollaboration": "Letter",
         "sourceReminder": "Reminder",
+        "sourceAutomation": "Automation",
         "sourceTimer": "Timer"
       },
       "welcomeInputPanel": {

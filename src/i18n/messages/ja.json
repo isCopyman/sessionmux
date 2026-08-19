@@ -2831,6 +2831,7 @@
         "persistFailed": "キューのメッセージを保存できませんでした：{error}。本文を入力欄に戻しました。",
         "sourceCollaboration": "メール",
         "sourceReminder": "リマインダー",
+        "sourceAutomation": "自動化",
         "sourceTimer": "タイマー"
       },
       "welcomeInputPanel": {

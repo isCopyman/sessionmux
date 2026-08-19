@@ -2831,6 +2831,7 @@
         "persistFailed": "تعذر حفظ الرسالة المنتظرة: {error}. تمت استعادة النص في مربع الإدخال.",
         "sourceCollaboration": "رسالة",
         "sourceReminder": "تذكير",
+        "sourceAutomation": "الأتمتة",
         "sourceTimer": "مؤقت"
       },
       "welcomeInputPanel": {

@@ -2831,6 +2831,7 @@
         "persistFailed": "無法儲存排隊訊息：{error}。訊息文字已恢復到輸入框。",
         "sourceCollaboration": "信件",
         "sourceReminder": "催辦",
+        "sourceAutomation": "自動化",
         "sourceTimer": "定時續跑"
       },
       "welcomeInputPanel": {

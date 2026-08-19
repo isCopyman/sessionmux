@@ -2831,6 +2831,7 @@
         "persistFailed": "Die wartende Nachricht konnte nicht gespeichert werden: {error}. Der Text wurde im Eingabefeld wiederhergestellt.",
         "sourceCollaboration": "Brief",
         "sourceReminder": "Erinnerung",
+        "sourceAutomation": "Automatisierung",
         "sourceTimer": "Timer"
       },
       "welcomeInputPanel": {

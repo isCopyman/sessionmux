@@ -2831,6 +2831,7 @@
         "persistFailed": "Impossible d’enregistrer le message en attente : {error}. Son texte a été restauré dans la zone de saisie.",
         "sourceCollaboration": "Lettre",
         "sourceReminder": "Rappel",
+        "sourceAutomation": "Automatisation",
         "sourceTimer": "Minuteur"
       },
       "welcomeInputPanel": {

@@ -40,6 +40,7 @@ interface QueueItemProps {
 const SOURCE_LABEL_KEY = {
   collaboration: "sourceCollaboration",
   reminder: "sourceReminder",
+  automation: "sourceAutomation",
   timer: "sourceTimer",
 } as const
 

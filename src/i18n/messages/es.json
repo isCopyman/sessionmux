@@ -2831,6 +2831,7 @@
         "persistFailed": "No se pudo guardar el mensaje en cola: {error}. El texto se restauró en el campo de entrada.",
         "sourceCollaboration": "Carta",
         "sourceReminder": "Recordatorio",
+        "sourceAutomation": "Automatización",
         "sourceTimer": "Temporizador"
       },
       "welcomeInputPanel": {
