@@ -1450,6 +1450,8 @@ mod tauri_app {
                 collaboration_commands::collaboration_room_add_members,
                 collaboration_commands::collaboration_room_remove_member,
                 collaboration_commands::collaboration_room_rename,
+                collaboration_commands::collaboration_room_add_path,
+                collaboration_commands::collaboration_room_remove_path,
                 collaboration_commands::collaboration_room_delete,
                 collaboration_commands::collaboration_room_assign_collection,
                 collaboration_commands::collaboration_room_mark_seen,

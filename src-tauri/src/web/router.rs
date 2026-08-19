@@ -1373,6 +1373,14 @@ pub fn build_router(
             post(handlers::collaboration::room_rename),
         )
         .route(
+            "/collaboration_room_add_path",
+            post(handlers::collaboration::room_add_path),
+        )
+        .route(
+            "/collaboration_room_remove_path",
+            post(handlers::collaboration::room_remove_path),
+        )
+        .route(
             "/collaboration_room_delete",
             post(handlers::collaboration::room_delete),
         )

@@ -262,6 +262,20 @@ pub struct RenameRoomParams {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct AddRoomPathParams {
+    pub room_id: String,
+    pub path: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoveRoomPathParams {
+    pub room_id: String,
+    pub path_id: i32,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AssignRoomCollectionParams {
     pub room_ids: Vec<String>,
     pub collection_id: Option<i32>,
@@ -355,6 +369,36 @@ pub async fn room_rename(
             &state.emitter,
             &params.room_id,
             &params.title,
+        )
+        .await?,
+    ))
+}
+
+pub async fn room_add_path(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<AddRoomPathParams>,
+) -> Result<Json<CollaborationRoomDetail>, AppCommandError> {
+    Ok(Json(
+        collaboration::collaboration_room_add_path_core(
+            &state.db.conn,
+            &state.emitter,
+            &params.room_id,
+            &params.path,
+        )
+        .await?,
+    ))
+}
+
+pub async fn room_remove_path(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<RemoveRoomPathParams>,
+) -> Result<Json<CollaborationRoomDetail>, AppCommandError> {
+    Ok(Json(
+        collaboration::collaboration_room_remove_path_core(
+            &state.db.conn,
+            &state.emitter,
+            &params.room_id,
+            params.path_id,
         )
         .await?,
     ))
