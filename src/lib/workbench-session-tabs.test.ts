@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
-import type { DbConversationSummary, OpenedTab } from "@/lib/types"
+import type {
+  CollaborationRoomSummary,
+  DbConversationSummary,
+  OpenedTab,
+} from "@/lib/types"
 
 const api = vi.hoisted(() => ({
   listOpenedTabs: vi.fn(),
@@ -10,11 +14,20 @@ const api = vi.hoisted(() => ({
 }))
 
 vi.mock("@/lib/api", () => api)
+vi.mock("@/lib/open-room", () => ({
+  ROOM_TAB_PLACEHOLDER_AGENT: "claude_code",
+  roomTabFolderId: (
+    room: { rootFolderId?: number | null },
+    folders: { id: number }[]
+  ) => room.rootFolderId ?? folders[0]?.id ?? 1,
+}))
 
 import {
   appendConversationTabs,
   appendConversationsToWorkbench,
+  appendRoomTabs,
   conversationIdsInTabs,
+  roomIdsInTabs,
   SESSION_CENTER_TAB_ORIGIN,
 } from "./workbench-session-tabs"
 
@@ -137,5 +150,96 @@ describe("appendConversationsToWorkbench", () => {
     expect(api.listOpenedTabs).toHaveBeenCalled()
     expect(api.saveOpenedTabs).toHaveBeenCalled()
     expect(api.listWorkbenchTabs).not.toHaveBeenCalled()
+  })
+})
+
+function room(id: string): CollaborationRoomSummary {
+  return {
+    id,
+    workbenchId: 1,
+    title: `Room ${id}`,
+    createdByConversationId: 1,
+    memberCount: 2,
+    unreadCount: 0,
+    createdAt: "2026-06-01T00:00:00.000Z",
+    updatedAt: "2026-06-01T00:00:00.000Z",
+  }
+}
+
+function roomTab(roomId: string, position: number): OpenedTab {
+  return {
+    id: position + 1000,
+    folder_id: 7,
+    conversation_id: null,
+    room_id: roomId,
+    agent_type: "claude_code",
+    position,
+    is_active: false,
+    is_pinned: true,
+  }
+}
+
+describe("roomIdsInTabs", () => {
+  it("collects room ids, ignoring session-only tabs", () => {
+    expect(roomIdsInTabs([tab(3, 0), roomTab("rm_a", 1)])).toEqual(
+      new Set(["rm_a"])
+    )
+  })
+})
+
+describe("appendRoomTabs", () => {
+  it("appends missing Rooms as pinned placeholder-agent tabs after the last position", () => {
+    const result = appendRoomTabs(
+      [tab(1, 4)],
+      [room("rm_a"), room("rm_b")],
+      [{ id: 7 }]
+    )
+    expect(result).toEqual({
+      added: 2,
+      skipped: 0,
+      items: [
+        tab(1, 4),
+        {
+          id: 0,
+          folder_id: 7,
+          conversation_id: null,
+          room_id: "rm_a",
+          agent_type: "claude_code",
+          position: 5,
+          is_active: false,
+          is_pinned: true,
+        },
+        {
+          id: 0,
+          folder_id: 7,
+          conversation_id: null,
+          room_id: "rm_b",
+          agent_type: "claude_code",
+          position: 6,
+          is_active: false,
+          is_pinned: true,
+        },
+      ],
+    })
+  })
+
+  it("dedupes Rooms already open in the workbench", () => {
+    const result = appendRoomTabs(
+      [roomTab("rm_a", 0)],
+      [room("rm_a"), room("rm_b")],
+      [{ id: 7 }]
+    )
+    expect(result.added).toBe(1)
+    expect(result.skipped).toBe(1)
+    expect(result.items.map((item) => item.room_id)).toEqual([
+      "rm_a",
+      "rm_b",
+    ])
+  })
+
+  it("returns the existing list untouched when every Room is already open", () => {
+    const existing = [roomTab("rm_a", 0)]
+    const result = appendRoomTabs(existing, [room("rm_a")], [{ id: 7 }])
+    expect(result).toEqual({ items: existing, added: 0, skipped: 1 })
   })
 })

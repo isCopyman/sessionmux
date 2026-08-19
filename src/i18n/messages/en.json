@@ -1758,7 +1758,16 @@
         "toastRoomCreated": "Created room {title}",
         "toastRoomNeedTwo": "Select at least two Sessions to create a room",
         "bulkActions": "Session actions",
-        "toastOpFailed": "Operation failed: {message}"
+        "toastOpFailed": "Operation failed: {message}",
+        "selectRoom": "Select {title}",
+        "toastDeletedMixed": "Deleted {sessions} session(s) and {rooms} room(s)",
+        "toastRoomsDeleted": "Deleted {count} room(s)",
+        "toastMovedMixed": "Moved {sessions} session(s) and {rooms} room(s) to a collection",
+        "toastRoomsMoved": "Moved {count} room(s) to a collection",
+        "toastRoomsAlreadyInWorkbench": "Selected rooms are already in {workbench}",
+        "toastRoomsAddedToWorkbench": "Added {count} room(s) to {workbench}",
+        "confirmDeleteMixedTitle": "Delete {sessions} session(s) and {rooms} room(s)?",
+        "confirmDeleteRoomsTitle": "Delete {count} room(s)?"
       },
       "sectionPinned": "Pinned",
       "sectionFolders": "Folders",
@@ -1772,7 +1781,9 @@
       "automations": "Automations",
       "rooms": "Rooms",
       "tasks": "To-dos",
-      "loadingSubsessions": "Loading sub-conversations…"
+      "loadingSubsessions": "Loading sub-conversations…",
+      "newRoom": "New room",
+      "needsReply": "Needs reply"
     },
     "conversation": {
       "reloadFailed": "Failed to reload conversation: {message}",
@@ -5280,6 +5291,13 @@
     "delete": "Delete room",
     "deleteTitle": "Delete this room?",
     "deleteConfirm": "Posts, members, and this tab will be removed. The Sessions stay.",
-    "deleted": "Room deleted"
+    "deleted": "Room deleted",
+    "createTitle": "Create a room",
+    "createNamePlaceholder": "Room title",
+    "createHint": "Pick at least two Sessions.",
+    "createSubmit": "Create room",
+    "createNeedTwo": "Select at least two Sessions to create a room",
+    "createNoCandidates": "No Sessions available.",
+    "createFailed": "Could not create the room: {message}"
   }
 }

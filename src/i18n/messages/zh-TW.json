@@ -1758,7 +1758,16 @@
         "toastOpFailed": "操作失敗：{message}",
         "createRoom": "建群",
         "toastRoomCreated": "已建立群聊 {title}",
-        "toastRoomNeedTwo": "建群至少需要選中兩個 Session"
+        "toastRoomNeedTwo": "建群至少需要選中兩個 Session",
+        "selectRoom": "選取 {title}",
+        "toastDeletedMixed": "已刪除 {sessions} 個會話和 {rooms} 個群聊",
+        "toastRoomsDeleted": "已刪除 {count} 個群聊",
+        "toastMovedMixed": "已將 {sessions} 個會話和 {rooms} 個群聊移入分類",
+        "toastRoomsMoved": "已將 {count} 個群聊移入分類",
+        "toastRoomsAlreadyInWorkbench": "所選群聊已在 {workbench} 中",
+        "toastRoomsAddedToWorkbench": "已將 {count} 個群聊加入 {workbench}",
+        "confirmDeleteMixedTitle": "刪除 {sessions} 個會話和 {rooms} 個群聊？",
+        "confirmDeleteRoomsTitle": "刪除 {count} 個群聊？"
       },
       "sectionPinned": "已置頂",
       "sectionFolders": "資料夾",
@@ -1772,7 +1781,9 @@
       "automations": "自動化",
       "tasks": "待辦任務",
       "loadingSubsessions": "正在載入子會話…",
-      "rooms": "群聊"
+      "rooms": "群聊",
+      "newRoom": "新建群聊",
+      "needsReply": "待回覆"
     },
     "conversation": {
       "reloadFailed": "會話重新載入失敗：{message}",
@@ -5280,6 +5291,13 @@
     "delete": "刪除群聊",
     "deleteTitle": "刪除這個群聊？",
     "deleteConfirm": "帖子、成員和這個分頁會被刪除。Session 本身不受影響。",
-    "deleted": "群聊已刪除"
+    "deleted": "群聊已刪除",
+    "createTitle": "建立群聊",
+    "createNamePlaceholder": "群聊標題",
+    "createHint": "至少選擇兩個 Session。",
+    "createSubmit": "建群",
+    "createNeedTwo": "至少選擇兩個 Session 才能建群",
+    "createNoCandidates": "沒有可選的 Session。",
+    "createFailed": "建群失敗：{message}"
   }
 }

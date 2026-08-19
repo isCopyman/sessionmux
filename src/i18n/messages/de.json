@@ -1758,7 +1758,16 @@
         "toastOpFailed": "Aktion fehlgeschlagen: {message}",
         "createRoom": "Raum erstellen",
         "toastRoomCreated": "Raum {title} erstellt",
-        "toastRoomNeedTwo": "Wähle mindestens zwei Sessions, um einen Raum zu erstellen"
+        "toastRoomNeedTwo": "Wähle mindestens zwei Sessions, um einen Raum zu erstellen",
+        "selectRoom": "{title} auswählen",
+        "toastDeletedMixed": "{sessions} Sitzung(en) und {rooms} Raum/Räume gelöscht",
+        "toastRoomsDeleted": "{count} Raum/Räume gelöscht",
+        "toastMovedMixed": "{sessions} Sitzung(en) und {rooms} Raum/Räume in eine Sammlung verschoben",
+        "toastRoomsMoved": "{count} Raum/Räume in eine Sammlung verschoben",
+        "toastRoomsAlreadyInWorkbench": "Ausgewählte Räume sind bereits in {workbench}",
+        "toastRoomsAddedToWorkbench": "{count} Raum/Räume zu {workbench} hinzugefügt",
+        "confirmDeleteMixedTitle": "{sessions} Sitzung(en) und {rooms} Raum/Räume löschen?",
+        "confirmDeleteRoomsTitle": "{count} Raum/Räume löschen?"
       },
       "sectionPinned": "Angeheftet",
       "sectionFolders": "Ordner",
@@ -1772,7 +1781,9 @@
       "automations": "Automatisierungen",
       "tasks": "Aufgaben",
       "loadingSubsessions": "Unterkonversationen werden geladen…",
-      "rooms": "Räume"
+      "rooms": "Räume",
+      "newRoom": "Neuer Raum",
+      "needsReply": "Antwort ausstehend"
     },
     "conversation": {
       "reloadFailed": "Konversation konnte nicht neu geladen werden: {message}",
@@ -5280,6 +5291,13 @@
     "delete": "Raum löschen",
     "deleteTitle": "Diesen Raum löschen?",
     "deleteConfirm": "Beiträge, Mitglieder und dieser Tab werden gelöscht. Die Sessions bleiben erhalten.",
-    "deleted": "Raum gelöscht"
+    "deleted": "Raum gelöscht",
+    "createTitle": "Raum erstellen",
+    "createNamePlaceholder": "Raumtitel",
+    "createHint": "Wähle mindestens zwei Sessions.",
+    "createSubmit": "Erstellen",
+    "createNeedTwo": "Wähle mindestens zwei Sessions, um einen Raum zu erstellen",
+    "createNoCandidates": "Keine Sessions verfügbar.",
+    "createFailed": "Raum konnte nicht erstellt werden: {message}"
   }
 }

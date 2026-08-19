@@ -375,6 +375,35 @@ describe("ConversationManageDialog", () => {
     expect(screen.getByText("on feature")).toBeTruthy()
   })
 
+  it("opens pre-filtered when initialCollaborationFilter is set", async () => {
+    // The sidebar needs-reply entry deep-links here: the worklist facet starts
+    // on needs_reply, so only the Session that owes a reply is listed.
+    h.collaborationSessions = [
+      {
+        conversationId: 2,
+        revision: 4,
+        unreadCount: 0,
+        needsReplyCount: 1,
+        awaitingReplyCount: 0,
+        failedCount: 0,
+      },
+    ]
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <ConversationManageDialog
+          open
+          onOpenChange={vi.fn()}
+          folderId={1}
+          initialCollaborationFilter="needs_reply"
+        />
+      </NextIntlClientProvider>
+    )
+
+    expect(await screen.findByText("on feature")).toBeTruthy()
+    expect(screen.queryByText("on main")).toBeNull()
+    expect(screen.queryByText("branchless")).toBeNull()
+  })
+
   it("narrows the list to one Session source", async () => {
     h.listAll.mockResolvedValue([
       conversation({ id: 1, title: "I started this", created_by: "user" }),

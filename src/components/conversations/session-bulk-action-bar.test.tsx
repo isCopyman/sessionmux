@@ -3,7 +3,10 @@ import userEvent from "@testing-library/user-event"
 import { NextIntlClientProvider } from "next-intl"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
-import type { DbConversationSummary } from "@/lib/types"
+import type {
+  CollaborationRoomSummary,
+  DbConversationSummary,
+} from "@/lib/types"
 import enMessages from "@/i18n/messages/en.json"
 
 const h = vi.hoisted(() => ({
@@ -11,14 +14,20 @@ const h = vi.hoisted(() => ({
   deleteSessions: vi.fn(),
   moveSessionsToCollection: vi.fn(),
   appendConversationsToWorkbench: vi.fn(),
+  appendRoomsToWorkbench: vi.fn(),
   closeConversationTab: vi.fn(),
+  closeTab: vi.fn(),
   openTab: vi.fn(),
+  openRoomTab: vi.fn(),
   openConversations: vi.fn(),
   createOnly: vi.fn(),
   createCollaborationRoom: vi.fn(),
   listConversationCollectionRefs: vi.fn(),
   setRoute: vi.fn(),
   openRoom: vi.fn(),
+  deleteRooms: vi.fn(),
+  moveRoomsToCollection: vi.fn(),
+  openRoomsInCurrentWorkbench: vi.fn(),
 }))
 
 vi.mock("sonner", () => ({
@@ -31,6 +40,17 @@ vi.mock("@/lib/session-bulk-operations", () => ({
   moveSessionsToCollection: h.moveSessionsToCollection,
 }))
 
+vi.mock("@/lib/room-bulk-operations", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@/lib/room-bulk-operations")>()
+  return {
+    ...actual,
+    deleteRooms: h.deleteRooms,
+    moveRoomsToCollection: h.moveRoomsToCollection,
+    openRoomsInCurrentWorkbench: h.openRoomsInCurrentWorkbench,
+  }
+})
+
 vi.mock("@/lib/api", () => ({
   createCollaborationRoom: h.createCollaborationRoom,
   listConversationCollectionRefs: h.listConversationCollectionRefs,
@@ -38,10 +58,13 @@ vi.mock("@/lib/api", () => ({
 
 vi.mock("@/lib/open-room", () => ({
   useOpenRoom: () => h.openRoom,
+  ROOM_TAB_PLACEHOLDER_AGENT: "claude_code",
+  roomTabFolderId: () => 7,
 }))
 
 vi.mock("@/lib/workbench-session-tabs", () => ({
   appendConversationsToWorkbench: h.appendConversationsToWorkbench,
+  appendRoomsToWorkbench: h.appendRoomsToWorkbench,
   SESSION_CENTER_TAB_ORIGIN: "session-center",
   SIDEBAR_BULK_TAB_ORIGIN: "sidebar-bulk",
 }))
@@ -49,7 +72,9 @@ vi.mock("@/lib/workbench-session-tabs", () => ({
 vi.mock("@/contexts/tab-context", () => ({
   useTabActions: () => ({
     closeConversationTab: h.closeConversationTab,
+    closeTab: h.closeTab,
     openTab: h.openTab,
+    openRoomTab: h.openRoomTab,
   }),
 }))
 
@@ -66,6 +91,7 @@ vi.mock("@/stores/tab-store", () => ({
       activeWorkbenchId: 1,
       rawTabs: [],
     }),
+  makeRoomTabId: (roomId: string) => `room:${roomId}`,
 }))
 
 vi.mock("@/stores/workbench-store", () => ({
@@ -99,6 +125,13 @@ vi.mock("@/stores/collection-store", () => ({
     }),
 }))
 
+vi.mock("@/stores/app-workspace-store", () => ({
+  useAppWorkspaceStore: (selector: (state: unknown) => unknown) =>
+    selector({
+      folders: [{ id: 7 }],
+    }),
+}))
+
 import { SessionBulkActionBar } from "./session-bulk-action-bar"
 
 function conversation(id: number): DbConversationSummary {
@@ -122,16 +155,34 @@ function conversation(id: number): DbConversationSummary {
   }
 }
 
+function room(id: string): CollaborationRoomSummary {
+  return {
+    id,
+    workbenchId: 1,
+    title: `Room ${id}`,
+    createdByConversationId: 1,
+    memberCount: 2,
+    unreadCount: 0,
+    createdAt: "2026-06-01T00:00:00.000Z",
+    updatedAt: "2026-06-01T00:00:00.000Z",
+  }
+}
+
 function renderBar(
   selected = new Map([
     [1, conversation(1)],
     [2, conversation(2)],
   ]),
-  onClear = vi.fn()
+  onClear = vi.fn(),
+  selectedRooms?: CollaborationRoomSummary[]
 ) {
   render(
     <NextIntlClientProvider locale="en" messages={enMessages}>
-      <SessionBulkActionBar selected={selected} onClear={onClear} />
+      <SessionBulkActionBar
+        selected={selected}
+        selectedRooms={selectedRooms}
+        onClear={onClear}
+      />
     </NextIntlClientProvider>
   )
   return { onClear, user: userEvent.setup() }
@@ -228,5 +279,48 @@ describe("SessionBulkActionBar", () => {
     expect(h.deleteSessions).not.toHaveBeenCalled()
     await user.click(screen.getByRole("button", { name: "Confirm" }))
     await waitFor(() => expect(h.deleteSessions).toHaveBeenCalled())
+  })
+
+  it("greys out Archive and Create room while a Room is in the selection", () => {
+    renderBar(undefined, undefined, [room("rm_a")])
+    expect(screen.getByRole("button", { name: "Archive" })).toBeDisabled()
+    expect(screen.getByRole("button", { name: "Create room" })).toBeDisabled()
+    expect(screen.getByRole("button", { name: "Delete" })).toBeEnabled()
+  })
+
+  it("counts Sessions and Rooms together in the selection label", () => {
+    renderBar(undefined, undefined, [room("rm_a"), room("rm_b")])
+    expect(screen.getByText("4 selected")).toBeInTheDocument()
+  })
+
+  it("moves a mixed selection, Rooms included", async () => {
+    const { onClear, user } = renderBar(undefined, undefined, [room("rm_a")])
+    await user.click(screen.getByRole("button", { name: /Move to collection/ }))
+    await user.click(screen.getByRole("menuitem", { name: "Research" }))
+    await waitFor(() => {
+      expect(h.moveSessionsToCollection).toHaveBeenCalledWith([1, 2], 10)
+      expect(h.moveRoomsToCollection).toHaveBeenCalledWith(
+        [expect.objectContaining({ id: "rm_a" })],
+        10
+      )
+    })
+    expect(onClear).toHaveBeenCalled()
+  })
+
+  it("deletes a Rooms-only selection through the shared confirm dialog", async () => {
+    h.deleteRooms.mockResolvedValue(undefined)
+    const { user } = renderBar(new Map(), undefined, [room("rm_a")])
+    await user.click(screen.getByRole("button", { name: "Delete" }))
+    expect(
+      screen.getByText("Delete 1 room(s)?")
+    ).toBeInTheDocument()
+    await user.click(screen.getByRole("button", { name: "Confirm" }))
+    await waitFor(() =>
+      expect(h.deleteRooms).toHaveBeenCalledWith(
+        [expect.objectContaining({ id: "rm_a" })],
+        h.closeTab
+      )
+    )
+    expect(h.deleteSessions).not.toHaveBeenCalled()
   })
 })

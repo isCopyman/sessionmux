@@ -1758,7 +1758,16 @@
         "toastOpFailed": "Falha na operação: {message}",
         "createRoom": "Criar sala",
         "toastRoomCreated": "Sala {title} criada",
-        "toastRoomNeedTwo": "Selecione pelo menos duas Sessions para criar uma sala"
+        "toastRoomNeedTwo": "Selecione pelo menos duas Sessions para criar uma sala",
+        "selectRoom": "Selecionar {title}",
+        "toastDeletedMixed": "{sessions} sessão(ões) e {rooms} sala(s) excluída(s)",
+        "toastRoomsDeleted": "{count} sala(s) excluída(s)",
+        "toastMovedMixed": "{sessions} sessão(ões) e {rooms} sala(s) movida(s) para uma coleção",
+        "toastRoomsMoved": "{count} sala(s) movida(s) para uma coleção",
+        "toastRoomsAlreadyInWorkbench": "As salas selecionadas já estão em {workbench}",
+        "toastRoomsAddedToWorkbench": "{count} sala(s) adicionada(s) a {workbench}",
+        "confirmDeleteMixedTitle": "Excluir {sessions} sessão(ões) e {rooms} sala(s)?",
+        "confirmDeleteRoomsTitle": "Excluir {count} sala(s)?"
       },
       "sectionPinned": "Fixadas",
       "sectionFolders": "Pastas",
@@ -1772,7 +1781,9 @@
       "automations": "Automações",
       "tasks": "Tarefas a fazer",
       "loadingSubsessions": "Carregando subconversas…",
-      "rooms": "Salas"
+      "rooms": "Salas",
+      "newRoom": "Nova sala",
+      "needsReply": "Aguardando resposta"
     },
     "conversation": {
       "reloadFailed": "Falha ao recarregar conversa: {message}",
@@ -5280,6 +5291,13 @@
     "delete": "Excluir sala",
     "deleteTitle": "Excluir esta sala?",
     "deleteConfirm": "As mensagens, os membros e esta aba serão removidos. As Sessions permanecem.",
-    "deleted": "Sala excluída"
+    "deleted": "Sala excluída",
+    "createTitle": "Criar uma sala",
+    "createNamePlaceholder": "Título da sala",
+    "createHint": "Selecione pelo menos duas Sessions.",
+    "createSubmit": "Criar",
+    "createNeedTwo": "Selecione pelo menos duas Sessions para criar uma sala",
+    "createNoCandidates": "Não há Sessions disponíveis.",
+    "createFailed": "Não foi possível criar a sala: {message}"
   }
 }

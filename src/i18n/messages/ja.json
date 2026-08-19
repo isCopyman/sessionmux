@@ -1758,7 +1758,16 @@
         "toastOpFailed": "操作に失敗しました: {message}",
         "createRoom": "ルームを作成",
         "toastRoomCreated": "ルーム {title} を作成しました",
-        "toastRoomNeedTwo": "ルーム作成には Session を2つ以上選択してください"
+        "toastRoomNeedTwo": "ルーム作成には Session を2つ以上選択してください",
+        "selectRoom": "{title} を選択",
+        "toastDeletedMixed": "{sessions} 件のセッションと {rooms} 件のルームを削除しました",
+        "toastRoomsDeleted": "{count} 件のルームを削除しました",
+        "toastMovedMixed": "{sessions} 件のセッションと {rooms} 件のルームをコレクションに移動しました",
+        "toastRoomsMoved": "{count} 件のルームをコレクションに移動しました",
+        "toastRoomsAlreadyInWorkbench": "選択したルームは既に {workbench} にあります",
+        "toastRoomsAddedToWorkbench": "{count} 件のルームを {workbench} に追加しました",
+        "confirmDeleteMixedTitle": "{sessions} 件のセッションと {rooms} 件のルームを削除しますか？",
+        "confirmDeleteRoomsTitle": "{count} 件のルームを削除しますか？"
       },
       "sectionPinned": "ピン留め",
       "sectionFolders": "フォルダ",
@@ -1772,7 +1781,9 @@
       "automations": "オートメーション",
       "tasks": "ToDo タスク",
       "loadingSubsessions": "サブ会話を読み込み中…",
-      "rooms": "ルーム"
+      "rooms": "ルーム",
+      "newRoom": "新しいルーム",
+      "needsReply": "要返信"
     },
     "conversation": {
       "reloadFailed": "会話の再読み込みに失敗しました: {message}",
@@ -5280,6 +5291,13 @@
     "delete": "ルームを削除",
     "deleteTitle": "このルームを削除しますか？",
     "deleteConfirm": "投稿、メンバー、このタブは削除されます。Session 自体は残ります。",
-    "deleted": "ルームを削除しました"
+    "deleted": "ルームを削除しました",
+    "createTitle": "ルームを作成",
+    "createNamePlaceholder": "ルーム名",
+    "createHint": "Session を2つ以上選んでください。",
+    "createSubmit": "作成",
+    "createNeedTwo": "ルームを作成するには Session を2つ以上選択してください",
+    "createNoCandidates": "選択できる Session がありません。",
+    "createFailed": "ルームを作成できませんでした: {message}"
   }
 }
