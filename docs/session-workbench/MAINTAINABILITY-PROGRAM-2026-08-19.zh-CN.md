@@ -620,3 +620,22 @@ T2 后置截图（CDP 9222 可用，基线在 .artifacts）+ 晨间验收报告 
   可行性档位报告（A原生/B文件手术/C重放降级/D不可行）。分工：RFC 增补由编排出稿，
   实施排 G11 上游合并之后。另：用户令子代理档位再降 **Sonnet 5**（opus 也太贵），
   在跑的 opus 工人跑完为止。
+- 2026-08-19 晚 **"今晚能用"冲刺：新建会话修复 + 两个门禁漏网 + G13-c 落地 + 两份调研**：
+  ① **新建会话死点修复**（8e6e8652）：房间标签 conversationId 为空撞上"草稿单例"裸
+  谓词，任何分组内有房间标签时新建会话被吞成聚焦房间。三处查找改走 isDraftTab（该
+  helper 及其"房间≠草稿"测试早已存在，只是查找没用）；回归测试双向证明（无修复红/
+  有修复绿），CDP 真机鼠标事件验收通过（标签 18→23 草稿打开）。诊断全程按手册 §4.3
+  活实例取证法。② build 类型门抓到 automation 来源漏网：SOURCE_LABEL_KEY 与 10 语
+  i18n 补 sourceAutomation（349bfba9）。③ **G13-c 来源筛选合并**（c4bd6d2a，opus 工
+  w-source-filter）：会话中心第 8 个筛选下拉 + 侧栏漏斗两开关（默认全显，未知来源按
+  user，列表不可被筛空，Pinned/计数豁免沿既有先例）。④ **fork-recon 侦察入库**
+  （8c19ad26）：四家档位 claude=A、codex=A、**grok=A 待实测**（重大新发现：第三方
+  grok-app 实证 grok CLI 有 x.ai/rewind/points|execute 私扩展 + targetPromptIndex
+  锚点，与我方 grok.rs:723 已读的 _meta/promptIndex 对齐；我方注释停在 1.0.4 旧握手，
+  1.0.5 已发——**先导任务：升 1.0.5 亲测 initialize**）、cursor=C（重放降级，protobuf
+  DAG 手术零先例高风险）。⑤ **指令文件调研入库**（4477320b）：AGENTS.md 事实标准
+  （12/13 家）、Claude 用 @AGENTS.md import 一行接入、Windows symlink 不可用、
+  "大而全"反模式有两篇 arXiv 硬证据、codeg 自身即漂移标本（CLAUDE.md 15 次 vs
+  AGENTS.md 6 次提交）；建议排序 lint 诊断 > 幂等一行写入 > playbook（前置）> 现状，
+  不自研全量生成器。**待用户拍板**：诊断扫描范围只管工作区还是含用户级目录（隐私
+  预期）。派工模板修正：worktree 路径一律改正斜杠（反斜杠进 bash 被吞已两见）。
