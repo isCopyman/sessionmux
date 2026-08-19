@@ -1707,9 +1707,15 @@ mod tests {
     async fn refresh_codex_auto_title_candidate_rechecks_external_id_at_write_time() {
         let db = fresh_in_memory_db().await;
         let folder = seed_folder(&db, "/tmp/codeg-codex-index-race").await;
-        let row = create(&db.conn, folder, AgentType::Codex, Some("old title".into()), None)
-            .await
-            .expect("create");
+        let row = create(
+            &db.conn,
+            folder,
+            AgentType::Codex,
+            Some("old title".into()),
+            None,
+        )
+        .await
+        .expect("create");
         update_external_id(&db.conn, row.id, "session-before".into())
             .await
             .expect("set initial external id");
@@ -1851,7 +1857,10 @@ mod tests {
         .await
         .expect("conditional refresh");
 
-        assert!(!wrote, "a stale candidate must not overwrite a locked title");
+        assert!(
+            !wrote,
+            "a stale candidate must not overwrite a locked title"
+        );
         let current = get_by_id(&db.conn, row.id).await.expect("read current row");
         assert!(current.title_locked);
         assert_eq!(current.title.as_deref(), Some("same manual title"));

@@ -3458,15 +3458,14 @@ mod tests {
         assert!(summary.git_branch.is_none());
 
         // It surfaces in the default sidebar query (active-folder scope).
-        let rows =
-            list_all_conversations_core(
-                &db.conn,
-                &EventEmitter::Noop,
-                &crate::chat_channel::manager::ChatChannelManager::new(),
-                ListAllConversationsOptions::default(),
-            )
-            .await
-            .expect("list");
+        let rows = list_all_conversations_core(
+            &db.conn,
+            &EventEmitter::Noop,
+            &crate::chat_channel::manager::ChatChannelManager::new(),
+            ListAllConversationsOptions::default(),
+        )
+        .await
+        .expect("list");
         assert!(rows.iter().any(|c| c.id == result.conversation_id));
     }
 
@@ -3854,15 +3853,14 @@ mod tests {
     #[tokio::test]
     async fn list_all_conversations_core_empty_db_returns_empty() {
         let db = fresh_in_memory_db().await;
-        let rows =
-            list_all_conversations_core(
-                &db.conn,
-                &EventEmitter::Noop,
-                &crate::chat_channel::manager::ChatChannelManager::new(),
-                ListAllConversationsOptions::default(),
-            )
-            .await
-            .expect("list");
+        let rows = list_all_conversations_core(
+            &db.conn,
+            &EventEmitter::Noop,
+            &crate::chat_channel::manager::ChatChannelManager::new(),
+            ListAllConversationsOptions::default(),
+        )
+        .await
+        .expect("list");
         assert!(rows.is_empty(), "fresh db must have zero conversations");
     }
 
@@ -4301,15 +4299,14 @@ mod tests {
             .await
             .expect("delete");
         // After soft delete the row should no longer show up in list_all.
-        let remaining =
-            list_all_conversations_core(
-                &db.conn,
-                &EventEmitter::Noop,
-                &crate::chat_channel::manager::ChatChannelManager::new(),
-                ListAllConversationsOptions::default(),
-            )
-            .await
-            .expect("list");
+        let remaining = list_all_conversations_core(
+            &db.conn,
+            &EventEmitter::Noop,
+            &crate::chat_channel::manager::ChatChannelManager::new(),
+            ListAllConversationsOptions::default(),
+        )
+        .await
+        .expect("list");
         assert!(
             remaining.iter().all(|c| c.id != conv_id),
             "soft-deleted conversation must not appear in list_all"
@@ -4903,7 +4900,9 @@ mod tests {
             Ok(())
         }
 
-        async fn test_connection(&self) -> Result<(), crate::chat_channel::error::ChatChannelError> {
+        async fn test_connection(
+            &self,
+        ) -> Result<(), crate::chat_channel::error::ChatChannelError> {
             Ok(())
         }
     }
