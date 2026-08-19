@@ -137,8 +137,11 @@ pub struct BrokerSendMessageRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BrokerListInboxRequest {
     pub token: String,
+    /// Wire key stays `box` (the tool schema's parameter name); the field is
+    /// named `scope` internally to match `SessionMailboxScope`, the type this
+    /// eventually parses into.
     #[serde(default, rename = "box", skip_serializing_if = "Option::is_none")]
-    pub mail_box: Option<String>,
+    pub scope: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub peer_session_id: Option<i32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

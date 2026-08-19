@@ -635,7 +635,7 @@ async fn build_tools_call_spawn(
                 Ok(filter) => filter,
                 Err(message) => return LineAction::Respond(err(id, -32602, message)),
             };
-            let mail_box = match parse_inbox_box(&arguments) {
+            let scope = match parse_inbox_box(&arguments) {
                 Ok(value) => value,
                 Err(message) => return LineAction::Respond(err(id, -32602, message)),
             };
@@ -646,7 +646,7 @@ async fn build_tools_call_spawn(
             let limit = parse_inbox_limit(&arguments);
             let req = BrokerListInboxRequest {
                 token: ctx.token.clone(),
-                mail_box,
+                scope,
                 peer_session_id,
                 filter,
                 limit: Some(limit),
