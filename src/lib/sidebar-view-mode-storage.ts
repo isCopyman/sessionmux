@@ -4,6 +4,8 @@ const FOLDER_EXPANDED_KEY = "workspace:sidebar-folder-expanded"
 const SHOW_COMPLETED_KEY = "workspace:sidebar-show-completed"
 const SHOW_WORKTREES_KEY = "workspace:sidebar-show-worktrees"
 const SHOW_RECENT_KEY = "workspace:sidebar-show-recent"
+const SHOW_AGENT_CREATED_KEY = "workspace:sidebar-show-agent-created"
+const SHOW_AUTOMATION_CREATED_KEY = "workspace:sidebar-show-automation-created"
 const SORT_MODE_KEY = "workspace:sidebar-sort-mode"
 const SECTION_ORDER_KEY = "workspace:sidebar-section-order"
 const SECTION_COLLAPSED_KEY = "workspace:sidebar-section-collapsed"
@@ -229,6 +231,56 @@ export function saveShowRecent(value: boolean): void {
   if (typeof window === "undefined") return
   try {
     localStorage.setItem(SHOW_RECENT_KEY, String(value))
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Whether Sessions a delegating agent started are listed in the sidebar.
+ *  Defaults to ON — the source facets exist to let a user narrow to their own
+ *  work, never to hide sessions from someone who never opened the menu. Only an
+ *  explicitly-stored "false" takes them out of the list. */
+export function loadShowAgentCreated(): boolean {
+  if (typeof window === "undefined") return true
+  try {
+    const raw = localStorage.getItem(SHOW_AGENT_CREATED_KEY)
+    if (raw === "false") return false
+    if (raw === "true") return true
+  } catch {
+    /* ignore */
+  }
+  return true
+}
+
+export function saveShowAgentCreated(value: boolean): void {
+  if (typeof window === "undefined") return
+  try {
+    localStorage.setItem(SHOW_AGENT_CREATED_KEY, String(value))
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Whether Sessions an automation (timer, trigger) started are listed in the
+ *  sidebar. Defaults to ON, on the same reasoning as
+ *  {@link loadShowAgentCreated}; the two switches are independent so a user can
+ *  keep scheduled runs while dropping delegation children, or the reverse. */
+export function loadShowAutomationCreated(): boolean {
+  if (typeof window === "undefined") return true
+  try {
+    const raw = localStorage.getItem(SHOW_AUTOMATION_CREATED_KEY)
+    if (raw === "false") return false
+    if (raw === "true") return true
+  } catch {
+    /* ignore */
+  }
+  return true
+}
+
+export function saveShowAutomationCreated(value: boolean): void {
+  if (typeof window === "undefined") return
+  try {
+    localStorage.setItem(SHOW_AUTOMATION_CREATED_KEY, String(value))
   } catch {
     /* ignore */
   }

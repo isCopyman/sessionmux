@@ -50,6 +50,8 @@ import { leftChromeReserve } from "@/lib/window-chrome"
 import type { DbConversationSummary } from "@/lib/types"
 import {
   loadShowCompleted,
+  loadShowAgentCreated,
+  loadShowAutomationCreated,
   loadShowRecent,
   loadShowWorktrees,
   loadOrganizationMode,
@@ -57,6 +59,8 @@ import {
   loadSectionOrder,
   moveSectionInOrder,
   saveShowCompleted,
+  saveShowAgentCreated,
+  saveShowAutomationCreated,
   saveShowRecent,
   saveShowWorktrees,
   saveOrganizationMode,
@@ -176,6 +180,10 @@ export function Sidebar() {
   const [showCompleted, setShowCompleted] = useState(false)
   const [showWorktrees, setShowWorktrees] = useState(true)
   const [showRecent, setShowRecent] = useState(true)
+  // Both source switches default ON, so the list a user who never opens the
+  // funnel sees is exactly the list they saw before the facet existed.
+  const [showAgentCreated, setShowAgentCreated] = useState(true)
+  const [showAutomationCreated, setShowAutomationCreated] = useState(true)
   const [sortMode, setSortMode] = useState<SidebarSortMode>("created")
   const [organizationMode, setOrganizationMode] =
     useState<SidebarOrganizationMode>("collections")
@@ -211,6 +219,8 @@ export function Sidebar() {
     setShowCompleted(loadShowCompleted())
     setShowWorktrees(loadShowWorktrees())
     setShowRecent(loadShowRecent())
+    setShowAgentCreated(loadShowAgentCreated())
+    setShowAutomationCreated(loadShowAutomationCreated())
     setOrganizationMode(loadOrganizationMode())
     setSortMode(loadSortMode())
     setSectionOrder(loadSectionOrder())
@@ -262,6 +272,16 @@ export function Sidebar() {
   const handleSetShowRecent = useCallback((value: boolean) => {
     setShowRecent(value)
     saveShowRecent(value)
+  }, [])
+
+  const handleSetShowAgentCreated = useCallback((value: boolean) => {
+    setShowAgentCreated(value)
+    saveShowAgentCreated(value)
+  }, [])
+
+  const handleSetShowAutomationCreated = useCallback((value: boolean) => {
+    setShowAutomationCreated(value)
+    saveShowAutomationCreated(value)
   }, [])
 
   const handleSetSortMode = useCallback((value: string) => {
@@ -521,6 +541,28 @@ export function Sidebar() {
                   </DropdownMenuCheckboxItem>
                 </>
               ) : null}
+              {/* Session source. Two switches rather than the Session Center's
+                  one-of-N dropdown, because that is the shape every option in
+                  this menu already has; the semantics match, since unchecking
+                  both leaves exactly "only the ones I started". Outside the
+                  locations-only block above: both organization modes list
+                  Sessions, so both honour the facet. */}
+              <DropdownMenuSeparator />
+              <DropdownMenuLabel>{t("sessionSource")}</DropdownMenuLabel>
+              <DropdownMenuCheckboxItem
+                checked={showAgentCreated}
+                onCheckedChange={handleSetShowAgentCreated}
+                onSelect={(event) => event.preventDefault()}
+              >
+                {t("showAgentCreated")}
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuCheckboxItem
+                checked={showAutomationCreated}
+                onCheckedChange={handleSetShowAutomationCreated}
+                onSelect={(event) => event.preventDefault()}
+              >
+                {t("showAutomationCreated")}
+              </DropdownMenuCheckboxItem>
               <DropdownMenuSeparator />
               <DropdownMenuLabel>{t("sortBy")}</DropdownMenuLabel>
               <DropdownMenuRadioGroup
@@ -642,6 +684,8 @@ export function Sidebar() {
           ref={collectionTreeRef}
           showSessions
           showCompleted={showCompleted}
+          showAgentCreated={showAgentCreated}
+          showAutomationCreated={showAutomationCreated}
           sortMode={sortMode}
           refreshKey={collectionRefreshKey}
           onOpenSession={handleOpenCollectionSession}
@@ -670,6 +714,8 @@ export function Sidebar() {
           <SidebarConversationList
             ref={listRef}
             showCompleted={showCompleted}
+            showAgentCreated={showAgentCreated}
+            showAutomationCreated={showAutomationCreated}
             showWorktrees={showWorktrees}
             showRecent={showRecent}
             sortMode={sortMode}

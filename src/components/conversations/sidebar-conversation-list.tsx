@@ -161,6 +161,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { cn } from "@/lib/utils"
+import { isSessionSourceVisible } from "@/lib/conversation-source"
 import { FolderAliasLabel } from "./folder-alias-label"
 import { toErrorMessage } from "@/lib/app-error"
 import {
@@ -740,6 +741,10 @@ export interface SidebarConversationListHandle {
 
 export interface SidebarConversationListProps {
   showCompleted?: boolean
+  /** Session-source facet, mirroring the sidebar funnel's two switches. Both
+   *  default ON here, so a caller that doesn't pass them lists every source. */
+  showAgentCreated?: boolean
+  showAutomationCreated?: boolean
   sortMode?: SidebarSortMode
   sectionOrder?: SidebarSectionOrder
   /** When on, each repo's worktree child folders render as indented sub-groups
@@ -754,6 +759,8 @@ export interface SidebarConversationListProps {
 export function SidebarConversationList({
   ref,
   showCompleted = true,
+  showAgentCreated = true,
+  showAutomationCreated = true,
   sortMode = "created",
   sectionOrder = DEFAULT_SECTION_ORDER,
   showWorktrees = false,
@@ -1081,16 +1088,30 @@ export function SidebarConversationList({
     return () => clearInterval(interval)
   }, [])
 
+  // Session-source facet, applied once for every bucket that honours it: the
+  // Folder, Chat and Recent sections below all read this instead of the raw
+  // store list. The Pinned bucket deliberately does not — like "Show
+  // completed", an explicit pin outranks a view filter, whoever started the
+  // Session. The two count maps further down also stay on the raw list: they
+  // answer "is anything hidden here" and "is anything running here", which a
+  // filter must not be able to change.
+  const sourceVisibleConversations = useMemo(() => {
+    if (showAgentCreated && showAutomationCreated) return conversations
+    return conversations.filter((c) =>
+      isSessionSourceVisible(c, { showAgentCreated, showAutomationCreated })
+    )
+  }, [conversations, showAgentCreated, showAutomationCreated])
+
   // Folder grouping source: pinned conversations are surfaced in the dedicated
   // Pinned section, and folderless chat conversations in the dedicated Chat
   // section, so exclude both here; then apply the completed filter as before.
   const folderConversations = useMemo(() => {
-    const base = conversations.filter(
+    const base = sourceVisibleConversations.filter(
       (c) => c.pinned_at == null && c.kind !== "chat"
     )
     if (showCompleted) return base
     return base.filter((c) => c.status !== "completed")
-  }, [conversations, showCompleted])
+  }, [sourceVisibleConversations, showCompleted])
 
   // Flat "Chat" bucket: folderless chat-mode conversations, most-recently-updated
   // first, with reference reuse (so an unrelated status event doesn't rebuild it
@@ -1098,13 +1119,13 @@ export function SidebarConversationList({
   const chatConvsRef = useRef<DbConversationSummary[]>([])
   const chatConversations = useMemo(() => {
     const next = selectChatConversationsWithReuse(
-      conversations,
+      sourceVisibleConversations,
       showCompleted,
       chatConvsRef.current
     )
     chatConvsRef.current = next
     return next
-  }, [conversations, showCompleted])
+  }, [sourceVisibleConversations, showCompleted])
 
   // Pinned bucket: the FULL conversation list (ignores "Show completed" — a
   // pinned conversation stays visible regardless), sorted most-recently-pinned
@@ -1131,7 +1152,7 @@ export function SidebarConversationList({
   const recentConvsRef = useRef<DbConversationSummary[]>([])
   const recentConversations = useMemo(() => {
     const next = selectRecentConversationsWithReuse(
-      conversations,
+      sourceVisibleConversations,
       showCompleted,
       sortMode,
       openFolderIds,
@@ -1139,7 +1160,7 @@ export function SidebarConversationList({
     )
     recentConvsRef.current = next
     return next
-  }, [conversations, showCompleted, sortMode, openFolderIds])
+  }, [sourceVisibleConversations, showCompleted, sortMode, openFolderIds])
 
   // Maps each open worktree child folder → its (open) root folder. A child is
   // only redirected when its parent is also open, so a worktree whose root was

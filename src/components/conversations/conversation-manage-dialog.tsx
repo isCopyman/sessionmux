@@ -33,6 +33,9 @@ import {
   Search,
   Square,
   Trash2,
+  UserRound,
+  Users,
+  Zap,
 } from "lucide-react"
 import {
   Dialog,
@@ -122,6 +125,10 @@ import type {
   MessageTurn,
 } from "@/lib/types"
 import { ALL_AGENT_TYPES, STATUS_ORDER } from "@/lib/types"
+import {
+  matchesSessionSource,
+  type SessionSourceFilter,
+} from "@/lib/conversation-source"
 import { getAgentLabel } from "@/lib/custom-agents"
 import {
   excludeChatFolders,
@@ -675,6 +682,7 @@ export function ConversationManageDialog({
   )
   const [agentFilter, setAgentFilter] = useState<AgentType | "all">("all")
   const [statusFilter, setStatusFilter] = useState<SessionStatusFilter>("all")
+  const [sourceFilter, setSourceFilter] = useState<SessionSourceFilter>("all")
   const [collaborationFilter, setCollaborationFilter] =
     useState<CollaborationFilter>("all")
   // Open facet dropdowns form a layer ABOVE this dialog: while one is open an
@@ -788,6 +796,7 @@ export function ConversationManageDialog({
       setCollectionFilter(initialCollection ?? "all")
       setAgentFilter("all")
       setStatusFilter("all")
+      setSourceFilter("all")
       setCollaborationFilter("all")
       setSelected(new Map())
       setConfirmDelete(false)
@@ -1122,8 +1131,10 @@ export function ConversationManageDialog({
     return { workbenchCounts: counts, unopenedCount: unopened }
   }, [rows, workbenchRefsByConversation])
 
-  // Branch is the one facet applied client-side: it shares its source of truth
-  // with the option list above, and the rows are already in memory.
+  // Branch is the first facet applied client-side: it shares its source of
+  // truth with the option list above, and the rows are already in memory. The
+  // Collection, workbench, source and worklist facets join it below for the
+  // same reason — `list_all_conversations` has a parameter for none of them.
   const visibleRows = useMemo(() => {
     let matched: DbConversationSummary[]
     switch (branchFilter.kind) {
@@ -1160,6 +1171,10 @@ export function ConversationManageDialog({
       })
     }
 
+    if (sourceFilter !== "all") {
+      matched = matched.filter((row) => matchesSessionSource(row, sourceFilter))
+    }
+
     if (collaborationFilter !== "all") {
       matched = matched.filter((row) => {
         const status = statusByConversation.get(row.id)
@@ -1183,6 +1198,7 @@ export function ConversationManageDialog({
     collectionRefByConversation,
     collectionScopeIds,
     rows,
+    sourceFilter,
     statusByConversation,
     workbenchFilter,
     workbenchRefsByConversation,
@@ -1602,6 +1618,7 @@ export function ConversationManageDialog({
     workbenchFilter !== "all" ||
     agentFilter !== "all" ||
     statusFilter !== "all" ||
+    sourceFilter !== "all" ||
     collaborationFilter !== "all"
 
   return (
@@ -1667,7 +1684,7 @@ export function ConversationManageDialog({
                 {t("contentSearchUnavailable")}
               </p>
             )}
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-7">
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-8">
               <FolderSelect
                 folders={folderOptions}
                 value={scopeFolderId}
@@ -1833,6 +1850,48 @@ export function ConversationManageDialog({
                       </span>
                     </SelectItem>
                   ))}
+                </SelectContent>
+              </Select>
+              {/* Who started the Session, next to which agent ran it. Applied
+                  client-side over the fetched rows: `list_all_conversations`
+                  takes no `created_by`, and a Session whose row predates the
+                  column reads as user-created (see `conversationSource`). */}
+              <Select
+                value={sourceFilter}
+                onOpenChange={trackFacetMenuOpen}
+                onValueChange={(v) => setSourceFilter(v as SessionSourceFilter)}
+              >
+                <SelectTrigger
+                  className={FACET_SELECT_TRIGGER_CLASS}
+                  aria-label={t("sourceFilterLabel")}
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">
+                    <span className="flex items-center gap-2">
+                      <Users className="h-3.5 w-3.5 text-muted-foreground" />
+                      {t("sourceFilterAll")}
+                    </span>
+                  </SelectItem>
+                  <SelectItem value="user">
+                    <span className="flex items-center gap-2">
+                      <UserRound className="h-3.5 w-3.5 text-muted-foreground" />
+                      {t("sourceFilterUser")}
+                    </span>
+                  </SelectItem>
+                  <SelectItem value="agent">
+                    <span className="flex items-center gap-2">
+                      <Bot className="h-3.5 w-3.5 text-muted-foreground" />
+                      {t("sourceFilterAgent")}
+                    </span>
+                  </SelectItem>
+                  <SelectItem value="automation">
+                    <span className="flex items-center gap-2">
+                      <Zap className="h-3.5 w-3.5 text-muted-foreground" />
+                      {t("sourceFilterAutomation")}
+                    </span>
+                  </SelectItem>
                 </SelectContent>
               </Select>
               <Select

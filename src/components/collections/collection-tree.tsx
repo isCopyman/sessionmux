@@ -127,6 +127,7 @@ import {
   updateConversationTitle,
 } from "@/lib/api"
 import { visibleCollectionSessionIds } from "@/lib/collection-session-order"
+import { isSessionSourceVisible } from "@/lib/conversation-source"
 import { formatConversationTitle } from "@/lib/conversation-title"
 import { compareRoomsForSidebar } from "@/lib/room-sidebar-order"
 import { sessionClickIntent } from "@/lib/session-multi-select"
@@ -183,6 +184,10 @@ interface CollectionTreeProps {
    * Session Center shortcut tree. */
   showSessions?: boolean
   showCompleted?: boolean
+  /** Session-source facet, mirroring the sidebar funnel's two switches. Both
+   *  default ON here, so a caller that doesn't pass them lists every source. */
+  showAgentCreated?: boolean
+  showAutomationCreated?: boolean
   sortMode?: SidebarSortMode
   refreshKey?: number
   onOpenSession?: (session: DbConversationSummary) => void
@@ -253,6 +258,8 @@ export const CollectionTree = forwardRef<
     onOpenScope,
     showSessions = false,
     showCompleted = false,
+    showAgentCreated = true,
+    showAutomationCreated = true,
     sortMode = "created",
     refreshKey = 0,
     onOpenSession,
@@ -437,7 +444,11 @@ export const CollectionTree = forwardRef<
     const next = conversations.filter(
       (conversation) =>
         conversation.archived_at == null &&
-        (showCompleted || conversation.status !== "completed")
+        (showCompleted || conversation.status !== "completed") &&
+        isSessionSourceVisible(conversation, {
+          showAgentCreated,
+          showAutomationCreated,
+        })
     )
     return next.sort((a, b) => {
       const aTime = Date.parse(
@@ -451,6 +462,8 @@ export const CollectionTree = forwardRef<
   }, [
     conversations,
     membershipsHydrated,
+    showAgentCreated,
+    showAutomationCreated,
     showCompleted,
     showSessions,
     sortMode,
