@@ -865,3 +865,17 @@ T2 后置截图（CDP 9222 可用，基线在 .artifacts）+ 晨间验收报告 
   断言，成员数包进 button 后文本被拆——断言对齐新结构（正则半串+按钮角色）；
   prettier ×2 eslint --fix。终局 vitest 356 文件全绿、build 绿。工人再确认：
   Room 成员管理键组在 7 非中文语言仍英文占位——孤儿 i18n 第二轮存量+1。
+- 2026-08-20 凌晨 **窗格临时放大批关账（合并+编排修补 25539084）**：用户需求
+  （tmux zoom 式 focus）落地。工人关键发现：仓内已有同构先例 filesMaximized
+  （workspace-context，文件面板最大化），隐藏手法（invisible+inert）、按钮视觉
+  （Maximize2/Minimize2）、十语言词条全部沿用——全应用交互一致。实现：tab-store
+  加 maximizedGroupId 纯视图标记（**不进持久化白名单**，重启即复原；
+  switchWorkbench 显式清空防 ROOT_GROUP_ID 跨工作台假匹配）、纯函数
+  shouldExitMaximizedGroup/isMaximizeRestoreEscape（树引用变/放大组不再是叶/
+  焦点移到别组→自动退出；Esc 让位弹层与可编辑焦点）、放大组 rect 强制铺满其余
+  组隐藏不卸载、分屏把手放大时不渲染、双击标题栏切换（closest 排除菜单/输入）、
+  tab 带尾部按钮。herdr 对照印证布尔标记设计，其"拒绝操作"式改为更贴 GUI 的
+  "自动退出再执行"。门禁漏网编排修补：**工人自己的测试逮住实现分支缺失**——
+  activeGroupId=null（瞬时无活跃 tab）被当焦点错位误退出，改为 null=无信号不
+  退出（测试意图为准）；prettier ×2。终局 vitest 358 文件全绿（+2 新测试文件）、
+  build 绿。真机验证清单挂账：重命名弹窗开着时双击标题栏不得误触放大。
