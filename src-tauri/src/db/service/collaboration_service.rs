@@ -351,6 +351,7 @@ async fn validate_dedupe_payload<C: ConnectionTrait>(
     conn: &C,
     event_id: &str,
     input: &SendCollaborationMessageInput,
+    effective_expects_reply: bool,
 ) -> Result<(), DbError> {
     let row = conn
         .query_one(statement(
@@ -373,7 +374,7 @@ async fn validate_dedupe_payload<C: ConnectionTrait>(
     if subject != expected_subject
         || body != input.body
         || reply_to != input.reply_to_event_id
-        || (expects_reply != 0) != input.expects_reply
+        || (expects_reply != 0) != effective_expects_reply
         || urgency != input.urgency.as_str()
     {
         return Err(validation(
@@ -1334,14 +1335,20 @@ async fn send_with_initially_inactive_targets_guarded(
     let source = require_live_session(&txn, input.source_conversation_id).await?;
 
     if let Some(reply_to) = input.reply_to_event_id.as_deref() {
+        validate_direct_reply(&txn, reply_to).await?;
         validate_reply_relation(&txn, input.source_conversation_id, &target_ids, reply_to).await?;
     }
     let chain_depth = child_chain_depth(&txn, input.reply_to_event_id.as_deref()).await?;
+    // Mailbox letters are always Agent-authored, so the chain-depth fuse
+    // applies to every send: at the limit the letter still lands, but it can
+    // no longer ask for a reply. Human UI sends go through post_room, which
+    // applies the fuse to Agent authors only.
+    let expects_reply = input.expects_reply && chain_depth < MAX_AGENT_REPLY_CHAIN_DEPTH;
 
     if let Some(event_id) =
         event_id_for_dedupe(&txn, input.source_conversation_id, &input.client_dedupe_id).await?
     {
-        validate_dedupe_payload(&txn, &event_id, &input).await?;
+        validate_dedupe_payload(&txn, &event_id, &input, expects_reply).await?;
         let deliveries = deliveries_for_event(&txn, &event_id).await?;
         let mut affected = BTreeSet::from([input.source_conversation_id]);
         affected.extend(deliveries.iter().map(|item| item.target.conversation_id));
@@ -1378,7 +1385,7 @@ async fn send_with_initially_inactive_targets_guarded(
                 subject.clone().into(),
                 input.body.clone().into(),
                 input.reply_to_event_id.clone().into(),
-                (input.expects_reply as i32).into(),
+                (expects_reply as i32).into(),
                 input.urgency.as_str().into(),
                 input.client_dedupe_id.clone().into(),
                 chain_depth.into(),
@@ -1403,7 +1410,7 @@ async fn send_with_initially_inactive_targets_guarded(
                 subject.clone().into(),
                 input.body.clone().into(),
                 input.reply_to_event_id.clone().into(),
-                (input.expects_reply as i32).into(),
+                (expects_reply as i32).into(),
                 input.urgency.as_str().into(),
                 input.client_dedupe_id.clone().into(),
                 chain_depth.into(),
@@ -1419,7 +1426,7 @@ async fn send_with_initially_inactive_targets_guarded(
         if let Some(existing_id) =
             event_id_for_dedupe(&txn, input.source_conversation_id, &input.client_dedupe_id).await?
         {
-            validate_dedupe_payload(&txn, &existing_id, &input).await?;
+            validate_dedupe_payload(&txn, &existing_id, &input, expects_reply).await?;
             let deliveries = deliveries_for_event(&txn, &existing_id).await?;
             let mut affected = BTreeSet::from([input.source_conversation_id]);
             affected.extend(deliveries.iter().map(|item| item.target.conversation_id));
@@ -1483,7 +1490,7 @@ async fn send_with_initially_inactive_targets_guarded(
             ),
         };
         let delivery_id = uuid::Uuid::new_v4().to_string();
-        let obligation_state = if input.expects_reply && target.is_some() {
+        let obligation_state = if expects_reply && target.is_some() {
             CollaborationObligationState::AwaitingReply
         } else {
             CollaborationObligationState::None
@@ -1508,7 +1515,7 @@ async fn send_with_initially_inactive_targets_guarded(
                 input.delivery_hint.as_str().into(),
                 state.into(),
                 obligation_state.as_str().into(),
-                (input.expects_reply as i32).into(),
+                (expects_reply as i32).into(),
                 error.into(),
             ],
         ))
@@ -1543,6 +1550,31 @@ async fn send_with_initially_inactive_targets_guarded(
         affected_conversation_ids: affected.into_iter().collect(),
         deduplicated: false,
     }))
+}
+
+/// A mailbox reply must quote a mailbox event, symmetric with
+/// `validate_room_reply`. Answering a Room post with a private letter would
+/// clear the Room obligation while the Room timeline never sees the answer;
+/// the whole membership loses the thread.
+async fn validate_direct_reply<C: ConnectionTrait>(
+    conn: &C,
+    reply_to_event_id: &str,
+) -> Result<(), DbError> {
+    let row = conn
+        .query_one(statement(
+            "SELECT COALESCE(visibility, 'direct') AS visibility \
+             FROM collaboration_event WHERE id = ?",
+            vec![reply_to_event_id.into()],
+        ))
+        .await?
+        .ok_or_else(|| DbError::NotFound(format!("Collaboration event {reply_to_event_id}")))?;
+    let visibility: String = row.try_get("", "visibility")?;
+    if visibility != "direct" {
+        return Err(validation(format!(
+            "Collaboration event {reply_to_event_id} is a Room post; answer it with post_room in the same Room, not send_message"
+        )));
+    }
+    Ok(())
 }
 
 async fn validate_room_reply<C: ConnectionTrait>(
@@ -1650,6 +1682,12 @@ pub async fn post_room(
         validate_room_reply(&txn, &input.room_id, reply_to).await?;
     }
     let chain_depth = child_chain_depth(&txn, input.reply_to_event_id.as_deref()).await?;
+    // The chain-depth fuse binds Agent authors only: a Room thread at the
+    // limit still accepts the post but it can no longer ask for a reply.
+    // Human UI posts stay unrestricted (red line).
+    let expects_reply = input.expects_reply
+        && (input.author_kind == CollaborationAuthorKind::Human
+            || chain_depth < MAX_AGENT_REPLY_CHAIN_DEPTH);
     if let Some(event_id) =
         event_id_for_dedupe(&txn, ledger_source_id, &input.client_dedupe_id).await?
     {
@@ -1692,7 +1730,7 @@ pub async fn post_room(
                 subject.into(),
                 input.body.clone().into(),
                 input.reply_to_event_id.clone().into(),
-                (input.expects_reply as i32).into(),
+                (expects_reply as i32).into(),
                 input.urgency.as_str().into(),
                 input.client_dedupe_id.clone().into(),
                 chain_depth.into(),
@@ -1768,7 +1806,7 @@ pub async fn post_room(
             ),
         };
         let delivery_id = uuid::Uuid::new_v4().to_string();
-        let obligation_state = if input.expects_reply && target.is_some() && !archived {
+        let obligation_state = if expects_reply && target.is_some() && !archived {
             CollaborationObligationState::AwaitingReply
         } else {
             CollaborationObligationState::None
@@ -2392,83 +2430,168 @@ pub async fn reset_idle_reminder_cursors(conn: &DatabaseConnection) -> Result<()
     Ok(())
 }
 
-/// Outbound letters this Session sent that still owe it a reply. This is the
-/// implicit "I am waiting for someone" declaration the idle-continuation
-/// timer consults before nagging: sending with expects_reply opened the
-/// obligation, and the peer's reply (or no_reply_needed) closes it.
+/// One open reply obligation, titles only. The tail note on ordinary turns
+/// (compact-safe debt recovery) lists these; the idle-continuation timer only
+/// needs the counts.
+#[derive(Debug, Clone)]
+pub(crate) struct OpenObligationLine {
+    pub event_id: String,
+    pub from_session_id: i32,
+    pub from_title: String,
+    pub letter_title: String,
+    pub is_room: bool,
+    pub room_id: Option<String>,
+    pub agent_received: bool,
+}
+
 #[derive(Debug, Clone, Default)]
-pub struct OutboundAwaitingSummary {
-    pub letter_count: u32,
-    pub oldest_since: Option<DateTime<Utc>>,
-    /// Peer Session ids ordered by how long they have kept us waiting.
-    pub peer_conversation_ids: Vec<i32>,
+pub(crate) struct OpenObligationDigest {
+    /// Direct letters this Session owes a reply.
+    pub letters_owed: u32,
+    /// Room `@` mentions this Session owes a reply.
+    pub room_mentions_owed: u32,
+    /// Oldest first, capped; titles derived, bodies never leave the ledger.
+    pub lines: Vec<OpenObligationLine>,
 }
 
-pub async fn outbound_awaiting_summary(
-    conn: &DatabaseConnection,
-    source_conversation_id: i32,
-) -> Result<OutboundAwaitingSummary, DbError> {
-    let rows = conn
-        .query_all(statement(
-            "SELECT d.target_conversation_id AS peer_id, \
-                    COUNT(*) AS letters, \
-                    MIN(datetime(COALESCE(d.obligation_created_at, d.created_at))) AS oldest_since \
-             FROM collaboration_delivery d \
-             JOIN collaboration_event e ON e.id = d.event_id \
-             JOIN conversation c ON c.id = d.target_conversation_id AND c.deleted_at IS NULL \
-             WHERE e.source_conversation_id = ? \
-               AND d.obligation_state = 'awaiting_reply' \
-               AND d.state <> 'dismissed' AND d.state <> 'failed' \
-             GROUP BY d.target_conversation_id \
-             ORDER BY oldest_since ASC",
-            vec![source_conversation_id.into()],
-        ))
-        .await?;
-    let mut summary = OutboundAwaitingSummary::default();
-    for row in rows {
-        let letters: i64 = row.try_get("", "letters")?;
-        summary.letter_count = summary
-            .letter_count
-            .saturating_add(u32::try_from(letters.max(0)).unwrap_or(u32::MAX));
-        let oldest = parse_optional_timestamp(&row, "oldest_since")?;
-        if summary.oldest_since.is_none() {
-            summary.oldest_since = oldest;
-        }
-        summary
-            .peer_conversation_ids
-            .push(row.try_get("", "peer_id")?);
-    }
-    Ok(summary)
-}
+const MAX_OBLIGATION_NOTE_LINES: usize = 8;
 
-/// The newest moment the mailbox produced real information for this Session:
-/// an inbound letter arriving, or one of its own outbound reply obligations
-/// getting resolved. The idle-continuation timer compares this against its
-/// last fire to decide whether a poke would repeat already-known state.
-pub async fn latest_mailbox_info_at(
+/// Snapshot every open reply obligation a Session carries: direct letters it
+/// has not answered plus Room `@` mentions still awaiting its reply.
+pub(crate) async fn open_obligation_digest(
     conn: &DatabaseConnection,
     conversation_id: i32,
-) -> Result<Option<DateTime<Utc>>, DbError> {
-    let row = conn
+) -> Result<OpenObligationDigest, DbError> {
+    let counts = conn
         .query_one(statement(
-            "SELECT MAX(ts) AS ts FROM ( \
-                 SELECT MAX(datetime(d.created_at)) AS ts \
-                 FROM collaboration_delivery d \
-                 WHERE d.target_conversation_id = ? \
-                 UNION ALL \
-                 SELECT MAX(datetime(d.obligation_resolved_at)) AS ts \
+            "SELECT COALESCE(SUM(CASE WHEN COALESCE(e.visibility, 'direct') = 'direct' \
+                     THEN 1 ELSE 0 END), 0) AS letters, \
+                    COALESCE(SUM(CASE WHEN COALESCE(e.visibility, 'direct') = 'room' \
+                     THEN 1 ELSE 0 END), 0) AS room_mentions \
+             FROM collaboration_delivery d \
+             JOIN collaboration_event e ON e.id = d.event_id \
+             WHERE d.target_conversation_id = ? \
+               AND d.obligation_state = 'awaiting_reply' \
+               AND d.state <> 'dismissed' AND d.state <> 'failed'",
+            vec![conversation_id.into()],
+        ))
+        .await?
+        .ok_or_else(|| validation("Could not count open reply obligations"))?;
+    let to_u32 = |raw: i64| u32::try_from(raw.max(0)).unwrap_or(u32::MAX);
+    let letters_owed = to_u32(counts.try_get("", "letters")?);
+    let room_mentions_owed = to_u32(counts.try_get("", "room_mentions")?);
+    let mut digest = OpenObligationDigest {
+        letters_owed,
+        room_mentions_owed,
+        lines: Vec::new(),
+    };
+    if letters_owed == 0 && room_mentions_owed == 0 {
+        return Ok(digest);
+    }
+    let rows = conn
+        .query_all(statement(
+            &format!(
+                "SELECT e.id AS event_id, e.subject, e.body, \
+                        e.source_conversation_id, e.source_title_snapshot, \
+                        COALESCE(e.visibility, 'direct') AS visibility, e.room_id, \
+                        d.agent_received_at IS NOT NULL AS agent_received \
                  FROM collaboration_delivery d \
                  JOIN collaboration_event e ON e.id = d.event_id \
-                 WHERE e.source_conversation_id = ? \
-                   AND d.obligation_resolved_at IS NOT NULL \
-             )",
-            vec![conversation_id.into(), conversation_id.into()],
+                 WHERE d.target_conversation_id = ? \
+                   AND d.obligation_state = 'awaiting_reply' \
+                   AND d.state <> 'dismissed' AND d.state <> 'failed' \
+                 ORDER BY d.created_at ASC, d.rowid ASC \
+                 LIMIT {MAX_OBLIGATION_NOTE_LINES}"
+            ),
+            vec![conversation_id.into()],
         ))
         .await?;
-    match row {
-        Some(row) => parse_optional_timestamp(&row, "ts"),
-        None => Ok(None),
+    for row in rows {
+        let subject: String = row
+            .try_get::<Option<String>>("", "subject")?
+            .unwrap_or_default();
+        let body: String = row
+            .try_get::<Option<String>>("", "body")?
+            .unwrap_or_default();
+        let from_session_id: i32 = row.try_get("", "source_conversation_id")?;
+        let from_title: Option<String> = row.try_get("", "source_title_snapshot")?;
+        let visibility: String = row
+            .try_get::<Option<String>>("", "visibility")?
+            .unwrap_or_else(|| "direct".to_string());
+        let is_room = visibility == "room";
+        digest.lines.push(OpenObligationLine {
+            event_id: row.try_get("", "event_id")?,
+            from_session_id,
+            from_title: from_title
+                .filter(|title| !title.trim().is_empty())
+                .unwrap_or_else(|| format!("Session {from_session_id}")),
+            letter_title: if is_room {
+                crate::acp::session_collaboration::inbox_preview(&body)
+            } else {
+                crate::acp::session_collaboration::letter_title(&subject, &body)
+            },
+            is_room,
+            room_id: row.try_get("", "room_id")?,
+            agent_received: row.try_get::<i64>("", "agent_received")? != 0,
+        });
     }
+    Ok(digest)
+}
+
+/// Host-authored tail note for an ordinary turn: the titles of this Session's
+/// open reply obligations. A context compact drops every delivered envelope
+/// from the Agent's working memory; re-stating the debts on the next ordinary
+/// turn is the compact-safe recovery — no extra wake, no extra turn. Titles
+/// only, never bodies. Nothing is claimed or transitioned: the note is
+/// recomputed from the ledger each turn, so a lost or crashed dispatch simply
+/// reappears next time.
+pub(crate) async fn open_obligation_note_for_turn(
+    conn: &DatabaseConnection,
+    conversation_id: i32,
+) -> Result<Option<PromptInputBlock>, DbError> {
+    let digest = open_obligation_digest(conn, conversation_id).await?;
+    let total = digest
+        .letters_owed
+        .saturating_add(digest.room_mentions_owed);
+    if total == 0 {
+        return Ok(None);
+    }
+    let mut entries = Vec::with_capacity(digest.lines.len());
+    for line in &digest.lines {
+        let flag = if line.agent_received {
+            "已读未回"
+        } else {
+            "未读"
+        };
+        if line.is_room {
+            entries.push(format!(
+                "群点名《{}》来自 {} #{}（{}，room_id={}，event_id={}）",
+                line.letter_title,
+                line.from_title,
+                line.from_session_id,
+                flag,
+                line.room_id.as_deref().unwrap_or("room"),
+                line.event_id
+            ));
+        } else {
+            entries.push(format!(
+                "《{}》来自 {} #{}（{}，event_id={}）",
+                line.letter_title, line.from_title, line.from_session_id, flag, line.event_id
+            ));
+        }
+    }
+    let listed = u32::try_from(digest.lines.len()).unwrap_or(u32::MAX);
+    let more = if total > listed {
+        format!("，另还有 {} 笔未列出", total - listed)
+    } else {
+        String::new()
+    };
+    let text = format!(
+        "Codeg 宿主附注（系统事实，不是新来信）：你有 {total} 笔未结回复义务{more}：{}。\
+只列标题不含正文；用 list_inbox / read_message 处理信件，用 read_room / post_room 处理群点名，回复后义务自动清账。",
+        entries.join("；")
+    );
+    Ok(Some(PromptInputBlock::Text { text }))
 }
 
 pub struct CollaborationMutationResult {
@@ -3309,6 +3432,194 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn open_obligation_note_restates_debt_titles_until_the_reply_lands() {
+        let (db, source, target, _) = seeded_memory().await;
+        let mut letter = input(
+            source,
+            vec![target],
+            "note-debt",
+            "body must stay in the ledger",
+        );
+        letter.subject = "Fix the parser".into();
+        letter.expects_reply = true;
+        let sent = send(&db.conn, letter).await.unwrap();
+
+        let note = open_obligation_note_for_turn(&db.conn, target)
+            .await
+            .unwrap()
+            .expect("an open obligation produces a tail note");
+        let PromptInputBlock::Text { text } = note else {
+            panic!("the note is a text block");
+        };
+        assert!(text.contains("Fix the parser"));
+        assert!(text.contains(&sent.event_id));
+        assert!(text.contains("未读"), "the letter never reached a turn yet");
+        assert!(
+            !text.contains("body must stay in the ledger"),
+            "titles only, never bodies"
+        );
+        assert!(
+            open_obligation_note_for_turn(&db.conn, source)
+                .await
+                .unwrap()
+                .is_none(),
+            "the sender carries no debt"
+        );
+
+        let mut reply = input(target, vec![source], "note-reply", "done");
+        reply.reply_to_event_id = Some(sent.event_id);
+        send(&db.conn, reply).await.unwrap();
+        assert!(
+            open_obligation_note_for_turn(&db.conn, target)
+                .await
+                .unwrap()
+                .is_none(),
+            "the reply cleared the debt, so the note stands down"
+        );
+    }
+
+    #[tokio::test]
+    async fn open_obligation_note_marks_room_mentions_with_their_room() {
+        let (db, source, target, _) = seeded_memory().await;
+        let room = collaboration_room_service::create(
+            &db.conn,
+            crate::models::CreateCollaborationRoomInput {
+                workbench_id: 1,
+                title: "Plan".into(),
+                member_conversation_ids: vec![source, target],
+                created_by_conversation_id: source,
+                collection_id: None,
+                root_folder_id: None,
+            },
+        )
+        .await
+        .expect("create room");
+        let posted = post_room(
+            &db.conn,
+            PostRoomMessageInput {
+                room_id: room.id.clone(),
+                source_conversation_id: source,
+                target_conversation_ids: vec![target],
+                mention_all: false,
+                body: "look at the plan".into(),
+                client_dedupe_id: "note-room-1".into(),
+                invocation_policy: CollaborationInvocationPolicy::InvokeWhenIdle,
+                delivery_hint: CollaborationDeliveryHint::Default,
+                expects_reply: true,
+                urgency: CollaborationUrgency::Normal,
+                reply_to_event_id: None,
+                mention_human: false,
+                author_kind: Default::default(),
+            },
+        )
+        .await
+        .expect("post");
+        let note = open_obligation_note_for_turn(&db.conn, target)
+            .await
+            .unwrap()
+            .expect("an unanswered Room mention is an open obligation");
+        let PromptInputBlock::Text { text } = note else {
+            panic!("the note is a text block");
+        };
+        assert!(text.contains("群点名"));
+        assert!(text.contains(&format!("room_id={}", room.id)));
+        assert!(text.contains(&posted.event_id));
+    }
+
+    async fn seeded_room(
+        db: &crate::db::AppDatabase,
+        source: i32,
+        target: i32,
+    ) -> crate::models::CollaborationRoomDetail {
+        collaboration_room_service::create(
+            &db.conn,
+            crate::models::CreateCollaborationRoomInput {
+                workbench_id: 1,
+                title: "Plan".into(),
+                member_conversation_ids: vec![source, target],
+                created_by_conversation_id: source,
+                collection_id: None,
+                root_folder_id: None,
+            },
+        )
+        .await
+        .expect("create room")
+    }
+
+    fn room_post(
+        room_id: &str,
+        source: i32,
+        targets: Vec<i32>,
+        dedupe: &str,
+    ) -> PostRoomMessageInput {
+        PostRoomMessageInput {
+            room_id: room_id.to_string(),
+            source_conversation_id: source,
+            target_conversation_ids: targets,
+            mention_all: false,
+            body: "look at the plan".into(),
+            client_dedupe_id: dedupe.into(),
+            invocation_policy: CollaborationInvocationPolicy::InvokeWhenIdle,
+            delivery_hint: CollaborationDeliveryHint::Default,
+            expects_reply: true,
+            urgency: CollaborationUrgency::Normal,
+            reply_to_event_id: None,
+            mention_human: false,
+            author_kind: Default::default(),
+        }
+    }
+
+    #[tokio::test]
+    async fn mailbox_reply_to_a_room_event_is_rejected_and_keeps_the_room_debt() {
+        let (db, source, target, _) = seeded_memory().await;
+        let room = seeded_room(&db, source, target).await;
+        let posted = post_room(
+            &db.conn,
+            room_post(&room.id, source, vec![target], "room-q"),
+        )
+        .await
+        .expect("post");
+
+        let mut letter = input(target, vec![source], "sneaky-reply", "answering privately");
+        letter.reply_to_event_id = Some(posted.event_id.clone());
+        let err = send(&db.conn, letter)
+            .await
+            .expect_err("a Room post must be answered in the Room");
+        assert!(
+            err.to_string().contains("post_room"),
+            "the error points at the Room channel: {err}"
+        );
+
+        let debt = open_obligation_digest(&db.conn, target).await.unwrap();
+        assert_eq!(
+            debt.room_mentions_owed, 1,
+            "a rejected private reply must not clear the Room obligation"
+        );
+    }
+
+    #[tokio::test]
+    async fn room_reply_to_a_mailbox_letter_is_rejected() {
+        let (db, source, target, _) = seeded_memory().await;
+        let room = seeded_room(&db, source, target).await;
+        let sent = send(
+            &db.conn,
+            input(source, vec![target], "direct-q", "private question"),
+        )
+        .await
+        .expect("send");
+
+        let mut post = room_post(&room.id, target, vec![source], "room-sneaky");
+        post.reply_to_event_id = Some(sent.event_id.clone());
+        let err = post_room(&db.conn, post)
+            .await
+            .expect_err("a mailbox letter must be answered by mailbox");
+        assert!(
+            err.to_string().contains("same Room"),
+            "symmetric with the mailbox direction: {err}"
+        );
+    }
+
+    #[tokio::test]
     async fn explicit_agent_reply_suppresses_the_automatic_fallback() {
         let (db, source, target, _) = seeded_memory().await;
         let mut question = invoke_input(
@@ -3357,7 +3668,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn core_keeps_explicit_human_reply_chains_unrestricted() {
+    async fn agent_reply_chain_stops_asking_for_replies_at_the_fuse() {
         let (db, first, second, _) = seeded_memory().await;
         let mut source = first;
         let mut target = second;
@@ -3367,13 +3678,31 @@ mod tests {
             let mut next = input(
                 source,
                 vec![target],
-                &format!("human-depth-{depth}"),
+                &format!("agent-depth-{depth}"),
                 "continue the discussion",
             );
             next.expects_reply = true;
             next.reply_to_event_id = reply_to_event_id.clone();
             let sent = send(&db.conn, next).await.unwrap();
-            assert!(sent.deliveries[0].expects_reply);
+            if depth < MAX_AGENT_REPLY_CHAIN_DEPTH {
+                assert!(
+                    sent.deliveries[0].expects_reply,
+                    "depth {depth} is below the fuse"
+                );
+                assert_eq!(
+                    sent.deliveries[0].obligation_state,
+                    CollaborationObligationState::AwaitingReply
+                );
+            } else {
+                assert!(
+                    !sent.deliveries[0].expects_reply,
+                    "depth {depth} hits the fuse: the letter lands but cannot ask for a reply"
+                );
+                assert_eq!(
+                    sent.deliveries[0].obligation_state,
+                    CollaborationObligationState::None
+                );
+            }
             reply_to_event_id = Some(sent.event_id);
             std::mem::swap(&mut source, &mut target);
         }
@@ -3388,7 +3717,43 @@ mod tests {
             .unwrap()
             .unwrap();
         let stored_depth: i32 = row.try_get("", "chain_depth").unwrap();
-        assert_eq!(stored_depth, MAX_AGENT_REPLY_CHAIN_DEPTH + 1);
+        assert_eq!(
+            stored_depth,
+            MAX_AGENT_REPLY_CHAIN_DEPTH + 1,
+            "chain depth keeps being recorded past the fuse"
+        );
+    }
+
+    #[tokio::test]
+    async fn human_room_posts_keep_asking_for_replies_past_the_fuse() {
+        let (db, a, b, _) = seeded_memory().await;
+        let room = seeded_room(&db, a, b).await;
+        // Grow an Agent thread up to the fuse: the last Agent post lands at
+        // depth MAX and loses its reply request.
+        let mut reply_to = None;
+        let mut author = a;
+        let mut other = b;
+        for depth in 0..=MAX_AGENT_REPLY_CHAIN_DEPTH {
+            let mut post = room_post(&room.id, author, vec![other], &format!("fuse-{depth}"));
+            post.reply_to_event_id = reply_to.clone();
+            let posted = post_room(&db.conn, post).await.expect("post");
+            assert_eq!(
+                posted.deliveries[0].expects_reply,
+                depth < MAX_AGENT_REPLY_CHAIN_DEPTH,
+                "agent post at depth {depth}"
+            );
+            reply_to = Some(posted.event_id);
+            std::mem::swap(&mut author, &mut other);
+        }
+        // A human follow-up on the depth-MAX thread still asks for a reply.
+        let mut human = room_post(&room.id, a, vec![b], "human-past-fuse");
+        human.reply_to_event_id = reply_to;
+        human.author_kind = CollaborationAuthorKind::Human;
+        let posted = post_room(&db.conn, human).await.expect("human post");
+        assert!(
+            posted.deliveries[0].expects_reply,
+            "human UI posts stay unrestricted"
+        );
     }
 
     #[tokio::test]

@@ -85,10 +85,10 @@ Room 与多收件人邮件的差异只有一个，却是不可省略的差异：
 戳醒成员直接复用 2026-08-18 落地的统一消息调度（见
 [Trigger RFC 第 0 节](./SESSION-TRIGGERS-GOALS-AUTOMATION-RFC.zh-CN.md)）：room poke 生成的
 队列项就是 collaboration 类（user > collaboration/reminder > timer 的第二类），类内 FIFO，
-不需要 Room 专属调度器。回复链深度目前**只记账、不拦截**（2026-08-19 对账）：每条 event 落
-`chain_depth`（父链深 +1），常量 `MAX_AGENT_REPLY_CHAIN_DEPTH = 4` 仅供测试参考，超过该深度
-仍照常入账（测试钉死 depth 0..=4 全部 accepted，且人显式参与的回复链不受限）。强制拦截列入
-维护计划；Room Thread 的链深继承同一计数。
+不需要 Room 专属调度器。回复链深度**记账并强制**（2026-08-19 R6 落地）：每条 event 落
+`chain_depth`（父链深 +1）；Agent 消息达到 `MAX_AGENT_REPLY_CHAIN_DEPTH = 4` 层仍照常入账，
+但 `expects_reply` 被强制落 false（信照送、不能再挂债），链深继续向下记录；人显式参与的发送
+（`author_kind=human`）不受此限。Room Thread 的链深继承同一计数与同一保险丝。
 
 一次 `post_room` 从落账到唤醒的完整分流（2026-08-19 对账，与代码一致——
 `collaboration_service.rs::post_room`、`collaboration_room_service.rs::consume_room_window`）：
@@ -645,8 +645,8 @@ collaboration_delivery
 ### R2：Agent 间协作
 
 2026-08-19 对账：Agent 互 `@`（`post_room.mention_session_ids`，归档成员记名不唤醒）与成员
-已读游标（迁移 m20260818_000005）已落地；其余（链深强制拦截、轮数/预算、循环保护、新成员
-摘要）仍未做，列入维护计划。
+已读游标（迁移 m20260818_000005）已落地；链深保险丝同日晚强制落地（见 §0.3）；其余
+（轮数/预算、循环保护、新成员摘要）仍未做，列入维护计划。
 
 - Agent 在 Room 中 `@` 其他成员；
 - 回复链、成员上下文游标、置顶背景和稳定的只读历史资源；

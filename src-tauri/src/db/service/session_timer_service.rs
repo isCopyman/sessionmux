@@ -86,11 +86,19 @@ pub async fn list(
     rows.iter().map(parse_timer).collect()
 }
 
+/// Every enabled timer whose Session still exists. A soft-deleted Session
+/// keeps its rows, but its timers must stop earning queue entries: the engine
+/// scans this list for due candidates, so the liveness join is the bouncer.
 pub async fn enabled(conn: &impl ConnectionTrait) -> Result<Vec<SessionTimerInfo>, DbError> {
     let rows = conn
         .query_all(statement(
-            "SELECT * FROM conversation_timer WHERE enabled = 1 \
-             ORDER BY conversation_id ASC, created_at ASC",
+            "SELECT t.id, t.conversation_id, t.idle_secs, t.prompt_text, t.enabled, \
+                    t.last_fired_at, t.fire_count, t.strike_count, \
+                    t.auto_paused_at, t.auto_pause_reason, t.created_at, t.updated_at \
+             FROM conversation_timer t \
+             JOIN conversation c ON c.id = t.conversation_id AND c.deleted_at IS NULL \
+             WHERE t.enabled = 1 \
+             ORDER BY t.conversation_id ASC, t.created_at ASC",
             vec![],
         ))
         .await?;
@@ -178,7 +186,8 @@ pub async fn update(
     let enabled = input.enabled.unwrap_or(existing.enabled);
     let now = Utc::now();
     // Any deliberate edit is fresh intent from the user: the no-progress
-    // strike streak and an automatic backoff pause never survive it.
+    // strike streak never survives it. The legacy auto-pause columns are
+    // cleared alongside; nothing writes them any more.
     let result = conn
         .execute(statement(
             "UPDATE conversation_timer \
@@ -271,40 +280,6 @@ pub async fn reset_delay(
     if result.rows_affected() != 1 {
         return Err(DbError::Conflict(format!(
             "Session timer {id} changed before its delay could be reset"
-        )));
-    }
-    find(conn, id).await
-}
-
-/// Park a timer that kept poking without any new information while its
-/// Session is waiting on unanswered letters. `enabled` is deliberately left
-/// untouched: this is backoff stretched to "until something new happens",
-/// not a user decision. Real new mailbox information or any user edit
-/// revives the timer.
-pub async fn auto_pause(
-    conn: &impl ConnectionTrait,
-    id: &str,
-    previous_updated_at: DateTime<Utc>,
-    reason: &str,
-) -> Result<SessionTimerInfo, DbError> {
-    let now = Utc::now();
-    let result = conn
-        .execute(statement(
-            "UPDATE conversation_timer \
-             SET auto_paused_at = ?, auto_pause_reason = ?, updated_at = ? \
-             WHERE id = ? AND updated_at = ? AND enabled = 1",
-            vec![
-                now.into(),
-                reason.into(),
-                now.into(),
-                id.into(),
-                previous_updated_at.into(),
-            ],
-        ))
-        .await?;
-    if result.rows_affected() != 1 {
-        return Err(DbError::Conflict(format!(
-            "Session timer {id} changed before it could auto-pause"
         )));
     }
     find(conn, id).await
@@ -408,31 +383,25 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn auto_pause_keeps_enabled_and_any_edit_clears_it() {
+    async fn enabled_skips_timers_whose_conversation_was_deleted() {
         let (db, conversation_id) = setup().await;
-        let timer = create(&db.conn, input(conversation_id, "brake"))
+        create(&db.conn, input(conversation_id, "doomed"))
             .await
             .unwrap();
-        let parked = auto_pause(&db.conn, &timer.id, timer.updated_at, "waiting_no_progress")
-            .await
-            .unwrap();
-        assert!(parked.enabled, "the brake never flips the user's switch");
-        assert!(parked.auto_paused_at.is_some());
+        assert_eq!(enabled(&db.conn).await.unwrap().len(), 1);
 
-        let revived = update(
-            &db.conn,
-            &timer.id,
-            UpdateSessionTimerInput {
-                prompt_text: None,
-                enabled: Some(true),
-                idle_grace_secs: None,
-                expected_updated_at: parked.updated_at,
-            },
-        )
-        .await
-        .unwrap();
-        assert!(revived.auto_paused_at.is_none());
-        assert_eq!(revived.strike_count, 0);
+        db.conn
+            .execute(Statement::from_sql_and_values(
+                DbBackend::Sqlite,
+                "UPDATE conversation SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?",
+                vec![conversation_id.into()],
+            ))
+            .await
+            .unwrap();
+        assert!(
+            enabled(&db.conn).await.unwrap().is_empty(),
+            "a soft-deleted Session's timer must stop earning queue entries"
+        );
     }
 
     #[tokio::test]

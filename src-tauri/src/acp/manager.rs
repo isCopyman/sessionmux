@@ -1010,6 +1010,23 @@ impl ConnectionManager {
             None
         };
 
+        // Tail host fact: re-state open reply-obligation titles on every
+        // ordinary turn so a context compact cannot make the Agent forget
+        // its debts. Titles only; recomputed from the ledger each turn.
+        if let Some(conversation_id) = conversation_id {
+            match collaboration_service::open_obligation_note_for_turn(db, conversation_id).await {
+                Ok(Some(note)) => blocks.push(note),
+                Ok(None) => {}
+                Err(err) => {
+                    tracing::warn!(
+                        connection_id = %conn_id,
+                        conversation_id,
+                        "[ACP] could not attach the open-obligation note: {err}"
+                    );
+                }
+            }
+        }
+
         let outcome = self
             .send_prompt_inner(conn_id, blocks, None, claimed.is_some())
             .await;
@@ -1392,6 +1409,26 @@ impl ConnectionManager {
         } else {
             None
         };
+
+        // Tail host fact on ordinary turns (same gate as the store-only
+        // ride-along): re-state open reply-obligation titles so a context
+        // compact cannot make the Agent forget its debts. Titles only;
+        // recomputed from the ledger each turn, nothing is claimed.
+        if client_message_id.is_some() {
+            if let Some(cid) = conversation_id_for_status {
+                match collaboration_service::open_obligation_note_for_turn(&db.conn, cid).await {
+                    Ok(Some(note)) => blocks.push(note),
+                    Ok(None) => {}
+                    Err(err) => {
+                        tracing::warn!(
+                            connection_id = %conn_id,
+                            conversation_id = cid,
+                            "[ACP] could not attach the open-obligation note: {err}"
+                        );
+                    }
+                }
+            }
+        }
 
         // Capture a bounded preview of the user's message BEFORE `blocks` is
         // moved into `send_prompt_inner`. Only on the genuine UI path

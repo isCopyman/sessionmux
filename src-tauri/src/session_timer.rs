@@ -211,11 +211,27 @@ impl SessionTimerRuntime {
             }
 
             let next_strike = timer.strike_count.saturating_add(1);
-            let facts = continuation_hint(
+            let mut facts = continuation_hint(
                 timer.fire_count.saturating_add(1),
                 reminder_delay_secs(timer.idle_grace_secs, next_strike),
                 timer.strike_count,
-            );
+            )
+            .unwrap_or_default();
+            // Host-observed debt counts ride every fire: the Agent may have
+            // compacted away the letters themselves, and the counts tell it
+            // whether idling is really "waiting on others" or "debts unpaid".
+            match crate::db::service::collaboration_service::open_obligation_digest(
+                &self.db.conn,
+                timer.conversation_id,
+            )
+            .await
+            {
+                Ok(digest) => facts.push_str(&obligation_debt_line(&digest)),
+                Err(error) => {
+                    tracing::warn!("[session-timer] obligation count failed: {error}")
+                }
+            }
+            let facts = if facts.is_empty() { None } else { Some(facts) };
             self.fire(timer, next_strike, facts).await;
         }
     }
@@ -319,6 +335,29 @@ fn continuation_hint(occurrence: i32, next_delay_secs: i64, current_strike: i32)
         "\n\n——\nCodeg idle reminder #{occurrence}. Next reminder delay is about {}. Call timer.reset_delay if you made progress or can continue. Skip it if you are still waiting and have nothing else to do.",
         humanize_duration(Duration::seconds(next_delay_secs))
     ))
+}
+
+/// Host-observed debt counts appended to a continuation fire. Counts only,
+/// never bodies; the titles themselves already ride ordinary turns via the
+/// open-obligation tail note. Empty when the Session owes nothing, so a
+/// debt-free fire keeps the user's configured text verbatim.
+fn obligation_debt_line(
+    digest: &crate::db::service::collaboration_service::OpenObligationDigest,
+) -> String {
+    let mut parts = Vec::new();
+    if digest.letters_owed > 0 {
+        parts.push(format!("{} 封会话信件", digest.letters_owed));
+    }
+    if digest.room_mentions_owed > 0 {
+        parts.push(format!("{} 条群点名", digest.room_mentions_owed));
+    }
+    if parts.is_empty() {
+        return String::new();
+    }
+    format!(
+        "\n\n——\nCodeg 宿主事实：你欠回复 {}（仅计数，不含正文；用 list_inbox / read_room 查看并回复）。",
+        parts.join("，")
+    )
 }
 
 fn reminder_delay_secs(grace: i64, strike: i32) -> i64 {
@@ -542,6 +581,46 @@ mod tests {
             .unwrap();
         assert!(timer.auto_paused_at.is_none());
         assert_eq!(timer.strike_count, 1);
+    }
+
+    #[tokio::test]
+    async fn fire_appends_open_debt_counts_to_the_continuation() {
+        let (db, conversation_id, peer_id) = setup().await;
+        create_timer(&db, conversation_id, "debt-facts").await;
+        // An inbound letter the Session owes a reply: the fire must say so.
+        crate::db::service::collaboration_service::send(
+            &db.conn,
+            letter(peer_id, conversation_id, "owed-1", true),
+        )
+        .await
+        .unwrap();
+        // An outbound await is not a debt and must not appear.
+        crate::db::service::collaboration_service::send(
+            &db.conn,
+            letter(conversation_id, peer_id, "waiting-1", true),
+        )
+        .await
+        .unwrap();
+
+        let mut runtime = runtime(crate::db::AppDatabase {
+            conn: db.conn.clone(),
+        });
+        runtime
+            .idle_since
+            .insert(conversation_id, Utc::now() - Duration::seconds(5));
+        runtime.fire_due(None).await;
+        let texts = queue_text(&db, conversation_id).await;
+        assert_eq!(texts.len(), 1);
+        assert!(
+            texts[0].contains("你欠回复 1 封会话信件"),
+            "the fire names the open debt count: {}",
+            texts[0]
+        );
+        assert!(
+            !texts[0].contains('2'),
+            "outbound awaits are not the Session's debt: {}",
+            texts[0]
+        );
     }
 
     #[tokio::test]
