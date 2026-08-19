@@ -17,6 +17,7 @@ import {
   Folder,
   GitBranch,
   ListFilter,
+  ListPlus,
   Loader2,
   MoreHorizontal,
   MousePointerClick,
@@ -1112,6 +1113,19 @@ function AutomationDetail({
               // engine mints the worktree); show what firing does instead.
               <StatItem icon={<SquareKanban />} label={t("sectionAction")}>
                 {t("actionEnqueueTask")}
+              </StatItem>
+            ) : config?.action === "queue_prompt" ? (
+              // A queued prompt lands on an existing Session — name that
+              // target instead of isolation/branch, which never apply.
+              <StatItem icon={<ListPlus />} label={t("sectionAction")}>
+                <span className="block truncate">
+                  {t("actionQueuePrompt")}
+                  {" · "}
+                  {labels?.session_label ??
+                    (config?.target_conversation_id != null
+                      ? `#${config.target_conversation_id}`
+                      : "—")}
+                </span>
               </StatItem>
             ) : (
               <StatItem icon={<GitBranch />} label={t("isolation")}>

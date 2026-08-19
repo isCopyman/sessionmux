@@ -419,6 +419,10 @@ export interface ConversationWorkbenchRef {
   workbench_position: number
 }
 
+/** Who created a Session row (`conversation.created_by`). Sessions from before
+ *  the column existed read as "user". */
+export type ConversationCreatedBy = "user" | "agent" | "automation"
+
 export interface DbConversationSummary {
   id: number
   folder_id: number
@@ -456,6 +460,10 @@ export interface DbConversationSummary {
   origin_cwd?: string | null
   /** Harness-internal subagent hidden from ordinary Session projections. */
   harness_internal?: boolean
+  /** Mirrors `conversation.created_by` — who spawned this Session. Optional in
+   *  the mirror so older test fixtures keep compiling; the backend always
+   *  sends it. */
+  created_by?: ConversationCreatedBy
 }
 
 export interface SessionContentSearchHit {
@@ -1182,10 +1190,15 @@ export type PromptQueueItemState = "queued" | "claimed" | "paused"
 
 /**
  * Scheduling class assigned by the backend (clients cannot set it). The
- * worker claims by class first (user > collaboration/reminder > timer),
- * FIFO inside a class; snapshots come back in the same order.
+ * worker claims by class first (user > collaboration/reminder/automation >
+ * timer), FIFO inside a class; snapshots come back in the same order.
  */
-export type PromptQueueSource = "user" | "collaboration" | "reminder" | "timer"
+export type PromptQueueSource =
+  | "user"
+  | "collaboration"
+  | "reminder"
+  | "automation"
+  | "timer"
 
 export interface PromptQueueItem {
   id: string
@@ -1673,11 +1686,14 @@ export interface AutomationLabelSnapshot {
   config_labels?: Record<string, string>
   folder_label?: string
   branch_label?: string
+  /** `queue_prompt` target Session's title at save time, so the detail page
+   *  renders a name even after the Session is renamed or deleted. */
+  session_label?: string
 }
 
 /** What firing the automation does. Optional in stored configs — absent means
  *  the legacy `launch_session`. */
-export type AutomationAction = "launch_session" | "enqueue_task"
+export type AutomationAction = "launch_session" | "enqueue_task" | "queue_prompt"
 
 /** The captured composer snapshot stored in `automation.config`. The model
  *  rides inside `config_values["model"]`, never as its own field. */
@@ -1688,6 +1704,8 @@ export interface AutomationConfig {
   mode_id?: string | null
   config_values: Record<string, string>
   label_snapshot?: AutomationLabelSnapshot | null
+  /** `queue_prompt` target: the existing Session the prompt is enqueued into. */
+  target_conversation_id?: number | null
 }
 
 export interface Automation {

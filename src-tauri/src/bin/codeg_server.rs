@@ -535,6 +535,7 @@ async fn async_main() -> ExitCode {
         state.emitter.clone(),
         state.acp_event_bus.clone(),
         state.data_dir.clone(),
+        state.prompt_queue.clone(),
     ) {
         tokio::spawn(codeg_lib::automation::run_automation_engine(engine));
     }

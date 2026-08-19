@@ -26,7 +26,9 @@ use crate::acp::manager::ConnectionManager;
 use crate::acp::types::{AcpEvent, EventEnvelope, PromptInputBlock};
 use crate::acp::InternalEventBus;
 use crate::commands::acp::{build_session_runtime_env, verify_agent_installed};
-use crate::commands::conversations::{create_conversation_core, emit_conversation_upsert};
+use crate::commands::conversations::{
+    create_conversation_core_with_source, emit_conversation_upsert,
+};
 use crate::commands::folders::{
     emit_folder_upsert, get_folder_core, git_checkout, git_is_clean, git_list_branches,
     git_worktree_add, open_worktree_folder_core, resolve_worktree_folder_core,
@@ -36,8 +38,10 @@ use crate::db::service::{automation_service, conversation_service};
 use crate::db::AppDatabase;
 use crate::logging::throttle::{LagLogThrottle, LAG_LOG_WINDOW};
 use crate::models::{
-    AgentType, AutomationConfig, AutomationInfo, AutomationRunStatus, IsolationMode,
+    AgentType, AutomationConfig, AutomationInfo, AutomationRunStatus, EnqueuePromptQueueItem,
+    IsolationMode, PromptQueueDraft, PromptQueueSource,
 };
+use crate::prompt_queue::PromptQueueHandle;
 use crate::web::event_bridge::{
     emit_event, AutomationChange, EventEmitter, AUTOMATION_CHANGED_EVENT,
 };
@@ -71,6 +75,9 @@ pub struct AutomationEngine {
     emitter: EventEmitter,
     bus: Arc<InternalEventBus>,
     data_dir: PathBuf,
+    /// Queue worker nudge for `queue_prompt` runs: after the item lands, the
+    /// target Session's runtime is woken so it dispatches on the next idle edge.
+    prompt_queue: PromptQueueHandle,
     /// Live automation runs: `connection_id -> (run_id, automation_id)`. The only
     /// way `TurnComplete` (keyed by connection_id) maps back to a run. Lost on
     /// restart — which is why boot reconcile + the conversation-status backstop
@@ -116,6 +123,7 @@ pub fn build_engine(
     emitter: EventEmitter,
     bus: Arc<InternalEventBus>,
     data_dir: PathBuf,
+    prompt_queue: PromptQueueHandle,
 ) -> Option<Arc<AutomationEngine>> {
     let engine_lock = match acquire_engine_ownership(&data_dir) {
         Ownership::Exclusive(file) => file,
@@ -142,6 +150,7 @@ pub fn build_engine(
         emitter,
         bus,
         data_dir,
+        prompt_queue,
         index: Arc::new(Mutex::new(HashMap::new())),
         automation_locks: Arc::new(Mutex::new(HashMap::new())),
         root_locks: Arc::new(Mutex::new(HashMap::new())),
@@ -422,6 +431,89 @@ impl AutomationEngine {
         Ok(())
     }
 
+    /// Fire a queue-prompt automation: land the captured prompt in the target
+    /// Session's durable prompt queue (middle dispatch class — never ahead of
+    /// the user's own typing, never down with idle-continuation timers), then
+    /// settle the run synchronously. Like `enqueue_task`, no session machinery
+    /// is touched, so none of the TurnComplete / reconcile settle paths ever
+    /// see this run.
+    async fn queue_prompt(
+        &self,
+        auto: &AutomationInfo,
+        cfg: &AutomationConfig,
+        run_id: i32,
+    ) -> Result<(), String> {
+        let conversation_id = cfg
+            .target_conversation_id
+            .ok_or_else(|| "queue_prompt automation has no target session".to_string())?;
+        // A target that is gone (or archived away) can never drain its queue —
+        // skip the enqueue and settle the run failed so the silence is visible.
+        let target = conversation::Entity::find_by_id(conversation_id)
+            .one(&self.db.conn)
+            .await
+            .map_err(|e| e.to_string())?
+            .filter(|row| row.deleted_at.is_none())
+            .ok_or_else(|| format!("target session #{conversation_id} no longer exists"))?;
+        if target.archived_at.is_some() {
+            return Err(format!(
+                "target session #{conversation_id} is archived — unarchive it or pick another target"
+            ));
+        }
+
+        let blocks = cfg
+            .prompt_blocks
+            .iter()
+            .map(|v| serde_json::from_value::<PromptInputBlock>(v.clone()))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("bad prompt blocks: {e}"))?;
+        if blocks.is_empty() {
+            return Err("prompt is empty".to_string());
+        }
+
+        // The dedupe key is stable per run, so a fire retried after a lost
+        // response re-reads the queue instead of double-enqueueing.
+        let item = EnqueuePromptQueueItem {
+            conversation_id,
+            id: format!("automation-prompt-{}", uuid::Uuid::new_v4()),
+            client_dedupe_id: format!("automation:{}:run:{}", auto.id, run_id),
+            draft: PromptQueueDraft {
+                blocks,
+                display_text: cfg.display_text.clone(),
+            },
+            mode_id: cfg.mode_id.clone(),
+            source: PromptQueueSource::Automation,
+        };
+        // The command core (not the bare service) so every client gets its
+        // `prompt_queue://changed` snapshot and the queue worker its wake.
+        crate::commands::prompt_queue::prompt_queue_enqueue_core(
+            &self.db.conn,
+            &self.emitter,
+            &self.prompt_queue,
+            item,
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+
+        let settled = automation_service::settle_run(
+            &self.db.conn,
+            run_id,
+            AutomationRunStatus::Succeeded,
+            None,
+            None,
+            Some(format!("queued prompt to session #{conversation_id}")),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+        if settled {
+            self.emit(AutomationChange::RunSettled {
+                automation_id: auto.id,
+                run_id,
+                status: "succeeded".to_string(),
+            });
+        }
+        Ok(())
+    }
+
     /// Replay the captured composer snapshot through the existing launch chain.
     async fn launch(&self, auto: &AutomationInfo, run_id: i32) -> Result<(), String> {
         let cfg: AutomationConfig =
@@ -430,6 +522,11 @@ impl AutomationEngine {
         // no worktree, no spawn; the work-task engine owns execution.
         if cfg.action == crate::models::AutomationAction::EnqueueTask {
             return self.enqueue_task(auto, &cfg, run_id).await;
+        }
+        // Queue-prompt automations only land a durable queue item on an existing
+        // Session — likewise no worktree, no spawn.
+        if cfg.action == crate::models::AutomationAction::QueuePrompt {
+            return self.queue_prompt(auto, &cfg, run_id).await;
         }
         let agent_type = parse_agent_type(&auto.agent_type)?;
         let blocks = cfg
@@ -510,16 +607,21 @@ impl AutomationEngine {
         // title was no more distinguishing anyway: the prompt is fixed, so
         // every run of an automation carried the identical one.
         let title = first_chars(&auto.name, 80);
-        let conversation_id =
-            match create_conversation_core(&self.db.conn, cwd.folder_id, agent_type, Some(title))
-                .await
-            {
-                Ok(id) => id,
-                Err(e) => {
-                    let _ = self.manager.disconnect(&conn_id).await;
-                    return Err(e.to_string());
-                }
-            };
+        let conversation_id = match create_conversation_core_with_source(
+            &self.db.conn,
+            cwd.folder_id,
+            agent_type,
+            Some(title),
+            conversation::CREATED_BY_AUTOMATION,
+        )
+        .await
+        {
+            Ok(id) => id,
+            Err(e) => {
+                let _ = self.manager.disconnect(&conn_id).await;
+                return Err(e.to_string());
+            }
+        };
         // Strictly before the upsert below: that broadcast is how any client
         // first learns this id, so locking first makes a backfill on this row
         // impossible rather than merely unlikely. Failing to lock only costs
@@ -1084,6 +1186,146 @@ fn short_suffix(run_id: i32) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A minimal engine good for the queue-prompt path: no real connections,
+    /// a Noop emitter, and a disconnected queue handle (wake is a no-op).
+    fn test_engine(db: &AppDatabase) -> Arc<AutomationEngine> {
+        Arc::new(AutomationEngine {
+            db: AppDatabase {
+                conn: db.conn.clone(),
+            },
+            manager: ConnectionManager::new(),
+            emitter: EventEmitter::Noop,
+            bus: Arc::new(crate::acp::InternalEventBus::new(Arc::new(
+                crate::acp::EventBusMetrics::default(),
+            ))),
+            data_dir: PathBuf::from("/tmp/codeg-automation-engine-test"),
+            prompt_queue: PromptQueueHandle::disconnected_for_test(),
+            index: Arc::new(Mutex::new(HashMap::new())),
+            automation_locks: Arc::new(Mutex::new(HashMap::new())),
+            root_locks: Arc::new(Mutex::new(HashMap::new())),
+            _engine_lock: tempfile::NamedTempFile::new()
+                .expect("lock file")
+                .into_file(),
+        })
+    }
+
+    fn queue_prompt_draft(target_conversation_id: Option<i32>) -> crate::models::AutomationDraft {
+        let cfg = AutomationConfig {
+            action: crate::models::AutomationAction::QueuePrompt,
+            prompt_blocks: vec![serde_json::json!({"type": "text", "text": "standup please"})],
+            display_text: "standup please".to_string(),
+            target_conversation_id,
+            ..Default::default()
+        };
+        crate::models::AutomationDraft {
+            name: "daily standup".into(),
+            enabled: true,
+            trigger_kind: crate::models::TriggerKind::Manual,
+            cron: None,
+            timezone: "UTC".into(),
+            agent_type: "codex".into(),
+            root_folder_id: None,
+            isolation: IsolationMode::WorktreePerRun,
+            branch: None,
+            is_remote_branch: false,
+            config: serde_json::to_value(&cfg).expect("config serializes"),
+        }
+    }
+
+    #[tokio::test]
+    async fn queue_prompt_run_enqueues_into_the_target_sessions_queue() {
+        use crate::db::test_helpers::{fresh_in_memory_db, seed_conversation, seed_folder};
+
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/codeg-automation-queue-prompt").await;
+        let conversation_id = seed_conversation(&db, folder_id, AgentType::Codex).await;
+        let auto = automation_service::create(
+            &db.conn,
+            queue_prompt_draft(Some(conversation_id)),
+        )
+        .await
+        .expect("create automation");
+
+        let engine = test_engine(&db);
+        let run_id = engine
+            .run_automation(auto.id, "manual", None)
+            .await
+            .expect("queue_prompt run");
+
+        // The prompt lands as a durable middle-class queue item: behind the
+        // user's own drafts, ahead of idle-continuation timers.
+        let snapshot = crate::db::service::prompt_queue_service::snapshot(
+            &db.conn,
+            conversation_id,
+        )
+        .await
+        .expect("queue snapshot");
+        assert_eq!(snapshot.items.len(), 1);
+        let item = &snapshot.items[0];
+        assert_eq!(item.source, PromptQueueSource::Automation);
+        assert_eq!(
+            item.draft.as_ref().expect("draft").display_text,
+            "standup please"
+        );
+
+        let runs = automation_service::list_runs(&db.conn, auto.id, 10)
+            .await
+            .expect("runs");
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].id, run_id);
+        assert_eq!(runs[0].status, AutomationRunStatus::Succeeded);
+    }
+
+    #[tokio::test]
+    async fn queue_prompt_run_fails_visibly_when_the_target_is_unusable() {
+        use crate::db::test_helpers::{fresh_in_memory_db, seed_conversation, seed_folder};
+
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/codeg-automation-queue-missing").await;
+
+        // Case 1: the target session was deleted (or never existed).
+        let auto = automation_service::create(&db.conn, queue_prompt_draft(Some(999_999)))
+            .await
+            .expect("create automation");
+        let engine = test_engine(&db);
+        let err = engine
+            .run_automation(auto.id, "manual", None)
+            .await
+            .expect_err("a deleted target must fail the run");
+        assert!(err.contains("no longer exists"), "unexpected error: {err}");
+        let runs = automation_service::list_runs(&db.conn, auto.id, 10)
+            .await
+            .expect("runs");
+        assert_eq!(runs[0].status, AutomationRunStatus::Failed);
+
+        // Case 2: the target is archived — its queue would never drain.
+        let conversation_id = seed_conversation(&db, folder_id, AgentType::Codex).await;
+        conversation_service::update_archive(&db.conn, conversation_id, true)
+            .await
+            .expect("archive");
+        let auto = automation_service::create(
+            &db.conn,
+            queue_prompt_draft(Some(conversation_id)),
+        )
+        .await
+        .expect("create automation");
+        let err = engine
+            .run_automation(auto.id, "manual", None)
+            .await
+            .expect_err("an archived target must fail the run");
+        assert!(err.contains("archived"), "unexpected error: {err}");
+        let snapshot = crate::db::service::prompt_queue_service::snapshot(
+            &db.conn,
+            conversation_id,
+        )
+        .await
+        .expect("queue snapshot");
+        assert!(
+            snapshot.items.is_empty(),
+            "a failed run must not leave a queue item behind"
+        );
+    }
 
     #[test]
     fn classify_stop_reason_maps_outcomes() {

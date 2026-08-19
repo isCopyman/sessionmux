@@ -81,6 +81,9 @@ pub struct DbConversationSummary {
     /// returns them.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub harness_internal: bool,
+    /// Mirror of `conversation.created_by`: who created this Session — one of
+    /// the `CREATED_BY_*` constants ("user" | "agent" | "automation").
+    pub created_by: String,
 }
 
 /// One full-text hit from an optional local history index. The conversation

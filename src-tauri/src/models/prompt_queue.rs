@@ -12,15 +12,20 @@ pub struct PromptQueueDraft {
 }
 
 /// Who put this item into the execution queue. The scheduler claims by
-/// class first (user > collaboration/reminder > timer), FIFO inside a class:
-/// a person's own follow-ups always run before automation, and automation
-/// can never jump a letter the user is expecting the Agent to read.
+/// class first (user > collaboration/reminder/automation > timer), FIFO
+/// inside a class: a person's own follow-ups always run before automation,
+/// and automation can never jump a letter the user is expecting the Agent
+/// to read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PromptQueueSource {
     User,
     Collaboration,
     Reminder,
+    /// A scheduled prompt an Automation enqueued into an existing Session.
+    /// Shares the middle class with letters and reminders: behind the user's
+    /// own typing, ahead of idle-continuation timers.
+    Automation,
     Timer,
 }
 
@@ -36,6 +41,7 @@ impl PromptQueueSource {
             Self::User => "user",
             Self::Collaboration => "collaboration",
             Self::Reminder => "reminder",
+            Self::Automation => "automation",
             Self::Timer => "timer",
         }
     }
@@ -45,6 +51,7 @@ impl PromptQueueSource {
             "user" => Some(Self::User),
             "collaboration" => Some(Self::Collaboration),
             "reminder" => Some(Self::Reminder),
+            "automation" => Some(Self::Automation),
             "timer" => Some(Self::Timer),
             _ => None,
         }

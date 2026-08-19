@@ -1341,6 +1341,7 @@ mod tests {
                 delegation_call_id: None,
                 origin_cwd: None,
                 harness_internal: false,
+                created_by: "user".into(),
             },
             turns,
             session_stats: stats,

@@ -2134,6 +2134,10 @@ impl ConnectionManager {
                         origin_cwd: Set(current.origin_cwd.clone()),
                         harness_internal: Set(false),
                         codeg_owned: Set(true),
+                        // A fork continues the same work under the same
+                        // provenance: an automation Session's fork is still
+                        // automation-created.
+                        created_by: Set(current.created_by.clone()),
                         // A fork continues the same work: it inherits the
                         // source Session's pinned model / thinking effort and
                         // diverges only when the user re-picks in the fork.
