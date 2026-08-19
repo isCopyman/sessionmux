@@ -5,6 +5,11 @@
 //! close has no server-side hook), and possible on desktop after panics.
 //! The sweep prevents long-lived processes from leaking ACP child
 //! processes, file handles, and memory.
+//!
+//! Despite the name, this owns no scheduling policy — it does not schedule
+//! turns, timers, or reminders (see `session_timer.rs` and
+//! `collaboration_reminder_runtime.rs` for those). This is a connection
+//! reaper: a garbage collector for stale ACP connections, nothing more.
 
 use std::time::Duration;
 
