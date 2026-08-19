@@ -465,6 +465,36 @@ describe("ConversationManageDialog", () => {
     )
   })
 
+  it("opens on the search term an entry point handed over", async () => {
+    // The command palette matches titles only and delegates the deep search
+    // here, so the box starts on its query and the first fetch is already
+    // narrowed by it — content included.
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <ConversationManageDialog
+          open
+          onOpenChange={vi.fn()}
+          folderId={1}
+          initialSearch="feature"
+        />
+      </NextIntlClientProvider>
+    )
+
+    const box = await screen.findByPlaceholderText(
+      "Search titles or conversation content…"
+    )
+    expect((box as HTMLInputElement).value).toBe("feature")
+
+    await waitFor(() =>
+      expect(h.listAll).toHaveBeenCalledWith(
+        expect.objectContaining({ search: "feature" })
+      )
+    )
+    expect(h.searchContent).toHaveBeenCalledWith(
+      expect.objectContaining({ query: "feature" })
+    )
+  })
+
   it("narrows the list to one Session source", async () => {
     h.listAll.mockResolvedValue([
       conversation({ id: 1, title: "I started this", created_by: "user" }),

@@ -23,6 +23,9 @@ export type SessionCenterCollaborationFilter = "all" | "needs_reply"
 export interface OpenSessionCenterOptions {
   collabFilter?: SessionCenterCollaborationFilter
   collection?: SessionCenterCollection
+  /** Free text to open the Session Center's own search on — the command
+   *  palette hands its query over rather than searching content itself. */
+  search?: string
 }
 
 interface SessionCenterContextValue {
@@ -61,6 +64,7 @@ export function SessionCenterProvider({ children }: { children: ReactNode }) {
   const [collection, setCollection] = useState<SessionCenterCollection>(null)
   const [collabFilter, setCollabFilter] =
     useState<SessionCenterCollaborationFilter>("all")
+  const [search, setSearch] = useState("")
   const [closedRevision, setClosedRevision] = useState(0)
 
   const openSessionCenter = useCallback(
@@ -70,6 +74,7 @@ export function SessionCenterProvider({ children }: { children: ReactNode }) {
       // one.
       setCollection(options?.collection ?? null)
       setCollabFilter(options?.collabFilter ?? "all")
+      setSearch(options?.search ?? "")
       setOpen(true)
     },
     []
@@ -97,6 +102,7 @@ export function SessionCenterProvider({ children }: { children: ReactNode }) {
           folderId={null}
           initialCollection={collection}
           initialCollaborationFilter={collabFilter}
+          initialSearch={search}
         />
       ) : null}
     </SessionCenterContext.Provider>
