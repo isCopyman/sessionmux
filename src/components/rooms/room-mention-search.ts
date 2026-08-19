@@ -126,6 +126,17 @@ export function combineRoomMentionGroups(
 }
 
 /**
+ * Bounds how long the room's `@` search waits on the workspace-wide
+ * file/commit lookup. A wedged git-log / file-tree / session-list fetch (the
+ * underlying hang is tracked separately) must never leave the room's panel
+ * stuck on "searching…" forever — past this budget we degrade exactly like
+ * a throwing/rejecting search would. The race below never cancels the
+ * underlying call; a result that arrives after the deadline just resolves
+ * into nothing, unused.
+ */
+const REFERENCE_SEARCH_TIMEOUT_MS = 3000
+
+/**
  * Builds the Room composer's `@` search: the member roster (+ @all/@human)
  * always first, then the file/commit groups from a workspace-wide search
  * scoped to the room's resolved folder — empty (not missing) when the room
@@ -133,9 +144,9 @@ export function combineRoomMentionGroups(
  * group shape with empty items rather than omitting them. See
  * `RoomWorkspace` for how the folder is resolved (never falling back to the
  * currently-active folder — a room is a cross-folder concept). If the
- * underlying search itself throws or rejects, the file/commit groups are
- * dropped instead — the member roster must never disappear just because a
- * git-log / file-tree fetch failed.
+ * underlying search itself throws, rejects, or simply never settles, the
+ * file/commit groups are dropped instead — the member roster must never
+ * disappear just because a git-log / file-tree fetch failed or hung.
  */
 export function buildRoomMentionSearch(
   members: readonly RoomSessionMember[],
@@ -144,13 +155,19 @@ export function buildRoomMentionSearch(
 ): ReferenceSearch {
   return async (query, signal) => {
     const sessionGroup = buildRoomSessionGroup(query, members, labels)
-    // A failure in the workspace-wide file/commit lookup (a throwing or
-    // rejecting git-log / file-tree / session-list fetch) must never take the
-    // room's own member roster down with it — degrade to just the session
-    // group rather than losing @all/@human/members too.
+    // A failure — or a hang — in the workspace-wide file/commit lookup (a
+    // throwing, rejecting, or wedged git-log / file-tree / session-list
+    // fetch) must never take the room's own member roster down with it —
+    // degrade to just the session group rather than losing
+    // @all/@human/members too.
     let searchGroups: SuggestionGroup[]
     try {
-      searchGroups = await referenceSearch(query, signal)
+      searchGroups = await Promise.race([
+        referenceSearch(query, signal),
+        new Promise<SuggestionGroup[]>((resolve) => {
+          setTimeout(() => resolve([]), REFERENCE_SEARCH_TIMEOUT_MS)
+        }),
+      ])
     } catch {
       searchGroups = []
     }
