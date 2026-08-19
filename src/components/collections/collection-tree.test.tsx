@@ -40,6 +40,7 @@ const h = vi.hoisted(() => ({
   closeConversationTab: vi.fn(),
   closeTab: vi.fn(),
   openTab: vi.fn(),
+  switchTab: vi.fn(),
   openConversations: vi.fn(),
   openRoom: vi.fn(),
   deleteRoom: vi.fn(),
@@ -49,6 +50,14 @@ const h = vi.hoisted(() => ({
     conversationId: 102 as number | null,
     roomId: undefined as string | undefined,
   },
+  draftTabs: [] as Array<{
+    id: string
+    kind: "conversation"
+    folderId: number
+    conversationId: null
+    agentType: string
+    title: string
+  }>,
   rooms: [] as Array<{
     id: string
     workbenchId: number
@@ -254,12 +263,14 @@ vi.mock("@/contexts/tab-context", () => ({
           conversationId: h.activeTab.conversationId,
           roomId: h.activeTab.roomId,
         },
+        ...h.draftTabs,
       ],
     }),
   useTabActions: () => ({
     closeConversationTab: h.closeConversationTab,
     closeTab: h.closeTab,
     openTab: h.openTab,
+    switchTab: h.switchTab,
   }),
 }))
 
@@ -348,7 +359,7 @@ function renderTree(
   } = {}
 ) {
   const { treeRef, ...treeOptions } = options
-  render(
+  const element = (
     <NextIntlClientProvider locale="en" messages={enMessages}>
       <CollectionTree
         ref={treeRef}
@@ -357,13 +368,19 @@ function renderTree(
       />
     </NextIntlClientProvider>
   )
-  return { user: userEvent.setup(), onOpenScope }
+  const utils = render(element)
+  return {
+    user: userEvent.setup(),
+    onOpenScope,
+    rerenderTree: () => utils.rerender(element),
+  }
 }
 
 describe("CollectionTree", () => {
   beforeEach(() => {
     vi.clearAllMocks()
     h.rooms.length = 0
+    h.draftTabs.length = 0
     h.activeTab.id = "conv-102"
     h.activeTab.kind = "conversation"
     h.activeTab.conversationId = 102
@@ -517,6 +534,92 @@ describe("CollectionTree", () => {
     expect(onOpenSession).toHaveBeenCalledWith(
       expect.objectContaining({ id: 101, title: "Evidence review" })
     )
+  })
+
+  it("shows an open draft tab under the Collection owning its Path", async () => {
+    h.draftTabs.push(
+      {
+        id: "draft-1",
+        kind: "conversation",
+        folderId: 7,
+        conversationId: null,
+        agentType: "claude",
+        title: "",
+      },
+      {
+        id: "draft-2",
+        kind: "conversation",
+        folderId: 8,
+        conversationId: null,
+        agentType: "codex",
+        title: "Worktree draft",
+      },
+      {
+        id: "draft-chat",
+        kind: "conversation",
+        folderId: 0,
+        conversationId: null,
+        agentType: "claude",
+        title: "",
+      }
+    )
+    const { user } = renderTree(vi.fn(), { showSessions: true })
+
+    await user.click(screen.getByRole("button", { name: "Research" }))
+
+    // An untitled draft falls back to the Workbench draft label; the worktree
+    // draft resolves through the worktree's parent Path to the same root.
+    expect(await screen.findByText("New session")).toBeTruthy()
+    expect(screen.getByText("Worktree draft")).toBeTruthy()
+    // The chat-mode draft (folderId 0) owns no Path and never renders here.
+    expect(document.querySelectorAll("[data-draft-tab-id]")).toHaveLength(2)
+    expect(
+      document.querySelector('[data-draft-tab-id="draft-chat"]')
+    ).toBeNull()
+    // Drafts read as placeholders next to the DB-backed rows: italic + muted.
+    const draftRow = document.querySelector('[data-draft-tab-id="draft-1"]')
+    expect(draftRow?.querySelector(".italic")).toBeTruthy()
+  })
+
+  it("activates the draft tab on click instead of opening a conversation", async () => {
+    const onOpenSession = vi.fn()
+    h.draftTabs.push({
+      id: "draft-1",
+      kind: "conversation",
+      folderId: 7,
+      conversationId: null,
+      agentType: "claude",
+      title: "",
+    })
+    const { user } = renderTree(vi.fn(), { showSessions: true, onOpenSession })
+    await user.click(screen.getByRole("button", { name: "Research" }))
+
+    await user.click(await screen.findByRole("button", { name: "New session" }))
+
+    expect(h.switchTab).toHaveBeenCalledWith("draft-1")
+    expect(h.openConversations).toHaveBeenCalled()
+    expect(h.openTab).not.toHaveBeenCalled()
+    expect(onOpenSession).not.toHaveBeenCalled()
+  })
+
+  it("drops the draft row once its tab is gone", async () => {
+    h.draftTabs.push({
+      id: "draft-1",
+      kind: "conversation",
+      folderId: 7,
+      conversationId: null,
+      agentType: "claude",
+      title: "",
+    })
+    const { user, rerenderTree } = renderTree(vi.fn(), { showSessions: true })
+    await user.click(screen.getByRole("button", { name: "Research" }))
+    expect(await screen.findByText("New session")).toBeTruthy()
+
+    h.draftTabs.length = 0
+    rerenderTree()
+
+    expect(screen.queryByText("New session")).toBeNull()
+    expect(document.querySelector("[data-draft-tab-id]")).toBeNull()
   })
 
   it("offers New Conversation on a Collection's context menu", async () => {

@@ -158,7 +158,7 @@ import { useWorkbenchStore } from "@/stores/workbench-store"
 import { useOrganizationRevisionStore } from "@/stores/organization-revision-store"
 import type { SidebarSortMode } from "@/lib/sidebar-view-mode-storage"
 import { useTabActions, useTabStore } from "@/contexts/tab-context"
-import { makeRoomTabId } from "@/stores/tab-store"
+import { makeRoomTabId, type TabItemInternal } from "@/stores/tab-store"
 import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
 
 type OpenScope = number | "unclassified"
@@ -299,6 +299,7 @@ export const CollectionTree = forwardRef<
   const tStatus = useTranslations("Folder.statusLabels")
   const tDetails = useTranslations("Folder.sessionDetails")
   const tRoom = useTranslations("Room")
+  const tWorkbench = useTranslations("Folder.workbench")
   const ime = useImeGuard()
   const items = useCollectionStore((state) => state.items)
   const hydrated = useCollectionStore((state) => state.hydrated)
@@ -324,7 +325,8 @@ export const CollectionTree = forwardRef<
   )
   const activeTabId = useTabStore((state) => state.activeTabId)
   const tabs = useTabStore((state) => state.tabs)
-  const { closeConversationTab, closeTab, openTab } = useTabActions()
+  const { closeConversationTab, closeTab, openTab, switchTab } =
+    useTabActions()
   const { openConversations } = useWorkbenchRoute()
   const openRoom = useOpenRoom()
   const catalogRooms = useRoomCatalogStore((state) => state.rooms)
@@ -508,6 +510,40 @@ export const CollectionTree = forwardRef<
     [allFolders]
   )
 
+  /** First Collection in tree order that owns each canonical Path. A draft tab
+   * carries only a folderId (never a Collection id), so when several
+   * Collections share one root the earliest one claims the draft. */
+  const firstCollectionByRoot = useMemo(() => {
+    const map = new Map<number, number>()
+    for (const { item } of options) {
+      if (item.root_folder_id == null) continue
+      if (!map.has(item.root_folder_id)) map.set(item.root_folder_id, item.id)
+    }
+    return map
+  }, [options])
+
+  /** Draft tabs (conversationId == null) live only in memory, so the DB
+   * membership query above can never file them under a Collection. Group them
+   * here by matching the draft's canonical root against each Collection's
+   * root_folder_id instead. Chat-mode drafts carry folderId 0, which owns no
+   * Collection and never matches. */
+  const draftsByCollection = useMemo(() => {
+    const grouped = new Map<number, TabItemInternal[]>()
+    if (!showSessions) return grouped
+    for (const tab of tabs) {
+      if (tab.kind !== "conversation" || tab.conversationId != null) continue
+      const folder = folderById.get(tab.folderId)
+      if (folder?.kind === "chat") continue
+      const rootId = folder ? (folder.parent_id ?? folder.id) : tab.folderId
+      const collectionId = firstCollectionByRoot.get(rootId)
+      if (collectionId == null) continue
+      const group = grouped.get(collectionId) ?? []
+      group.push(tab)
+      grouped.set(collectionId, group)
+    }
+    return grouped
+  }, [firstCollectionByRoot, folderById, showSessions, tabs])
+
   /** Canonical execution roots in the same order as the location sidebar.
    * Worktree folders contribute their parent Path instead of another root. */
   const pathRoots = useMemo(() => {
@@ -633,9 +669,18 @@ export const CollectionTree = forwardRef<
     for (const [rootId, rooms] of roomsByUnclassifiedRoot) {
       result.set(rootId, (result.get(rootId) ?? 0) + rooms.length)
     }
+    for (const [collectionId, drafts] of draftsByCollection) {
+      const collection = collectionById.get(collectionId)
+      if (collection?.root_folder_id == null) continue
+      result.set(
+        collection.root_folder_id,
+        (result.get(collection.root_folder_id) ?? 0) + drafts.length
+      )
+    }
     return result
   }, [
     collectionById,
+    draftsByCollection,
     folderById,
     membershipByConversation,
     roomsByCollection,
@@ -1253,6 +1298,50 @@ export const CollectionTree = forwardRef<
     }
   }
 
+  const renderDraftSession = (tab: TabItemInternal, depth: number) => {
+    const selected = tab.id === activeTabId
+    const title =
+      formatConversationTitle(tab.title) || tWorkbench("draftSession")
+    return (
+      <button
+        key={tab.id}
+        type="button"
+        data-draft-tab-id={tab.id}
+        data-focused-session={selected ? "true" : undefined}
+        title={title}
+        aria-current={selected ? "page" : undefined}
+        className={cn(
+          "flex h-7 w-full min-w-0 items-center gap-1.5 rounded-md pe-2 text-start text-xs",
+          "hover:bg-sidebar-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
+          selected &&
+            "bg-primary/8 text-primary ring-1 ring-inset ring-primary/30"
+        )}
+        style={{ paddingInlineStart: `${0.75 + depth * 0.75}rem` }}
+        onClick={() => {
+          openConversations()
+          switchTab(tab.id)
+        }}
+      >
+        <span
+          aria-hidden
+          className="relative flex h-3.5 w-3.5 shrink-0 items-center justify-center"
+        >
+          <AgentIcon agentType={tab.agentType} className="h-3 w-3" />
+          {tab.status ? (
+            <ConversationStatusDot
+              status={tab.status}
+              size="sm"
+              className="absolute -bottom-0.5 -right-0.5 ring-1 ring-sidebar"
+            />
+          ) : null}
+        </span>
+        <span className="min-w-0 flex-1 truncate italic text-muted-foreground">
+          {title}
+        </span>
+      </button>
+    )
+  }
+
   const renderSession = (
     conversation: DbConversationSummary,
     depth: number,
@@ -1645,6 +1734,9 @@ export const CollectionTree = forwardRef<
       )
       .map((item) => {
         const childItems = children.get(item.id) ?? []
+        const memberDrafts = showSessions
+          ? (draftsByCollection.get(item.id) ?? [])
+          : []
         const memberSessions = showSessions
           ? (conversationsByCollection.get(item.id) ?? [])
           : []
@@ -1653,8 +1745,11 @@ export const CollectionTree = forwardRef<
           : []
         const expandable =
           childItems.length > 0 ||
+          memberDrafts.length > 0 ||
           memberSessions.length > 0 ||
           memberRooms.length > 0
+        const memberCount =
+          memberDrafts.length + memberSessions.length + memberRooms.length
         const isExpanded = expanded.has(item.id)
         return (
           <TreeDndBindings
@@ -1786,10 +1881,9 @@ export const CollectionTree = forwardRef<
                             <Folder className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                           )}
                           <span className="truncate">{item.name}</span>
-                          {showSessions &&
-                          memberSessions.length + memberRooms.length > 0 ? (
+                          {showSessions && memberCount > 0 ? (
                             <span className="ms-auto shrink-0 text-[10px] text-muted-foreground">
-                              {memberSessions.length + memberRooms.length}
+                              {memberCount}
                             </span>
                           ) : null}
                         </button>
@@ -1916,6 +2010,9 @@ export const CollectionTree = forwardRef<
                 </div>
                 {isExpanded ? (
                   <>
+                    {memberDrafts.map((tab) =>
+                      renderDraftSession(tab, depth + 1)
+                    )}
                     {memberSessions.map((session) =>
                       renderSession(session, depth + 1, item.id)
                     )}
