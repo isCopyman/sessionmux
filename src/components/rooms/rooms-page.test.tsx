@@ -585,9 +585,7 @@ describe("RoomWorkspace", () => {
     const dialog = await screen.findByRole("dialog")
     expect(within(dialog).getByText("/extra/notes")).toBeTruthy()
 
-    fireEvent.click(
-      within(dialog).getByRole("button", { name: "Remove path" })
-    )
+    fireEvent.click(within(dialog).getByRole("button", { name: "Remove path" }))
 
     await waitFor(() => {
       expect(api.removeCollaborationRoomPath).toHaveBeenCalledWith(roomId, 5)

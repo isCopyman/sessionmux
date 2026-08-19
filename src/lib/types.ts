@@ -1706,7 +1706,10 @@ export interface AutomationLabelSnapshot {
 
 /** What firing the automation does. Optional in stored configs — absent means
  *  the legacy `launch_session`. */
-export type AutomationAction = "launch_session" | "enqueue_task" | "queue_prompt"
+export type AutomationAction =
+  | "launch_session"
+  | "enqueue_task"
+  | "queue_prompt"
 
 /** The captured composer snapshot stored in `automation.config`. The model
  *  rides inside `config_values["model"]`, never as its own field. */

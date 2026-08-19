@@ -124,9 +124,10 @@ export function useFileTree({
     return () => {
       canceled = true
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- `roots`/`key` are
-    // derived fresh every render from `folderPath`/`additionalPaths`; `key`
-    // alone is the right dependency (it's what gates re-fetching).
+    // `roots`/`key` are derived fresh every render from
+    // `folderPath`/`additionalPaths`; `key` alone is the right dependency
+    // (it's what gates re-fetching, pinned by the identity-change test).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, key])
 
   const reset = useCallback(() => {

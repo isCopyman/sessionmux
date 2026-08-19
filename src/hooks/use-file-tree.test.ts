@@ -10,8 +10,7 @@ const mocks = vi.hoisted(() => ({
 }))
 
 vi.mock("@/lib/api", () => ({
-  listWorkspaceFiles: (...args: unknown[]) =>
-    mocks.listWorkspaceFiles(...args),
+  listWorkspaceFiles: (...args: unknown[]) => mocks.listWorkspaceFiles(...args),
 }))
 
 function entry(
