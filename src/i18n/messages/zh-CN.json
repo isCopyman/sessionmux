@@ -1868,7 +1868,9 @@
       "markCompleted": "标记为已完成",
       "reopen": "重新打开",
       "expandSubsessions": "展开子会话",
-      "collapseSubsessions": "折叠子会话"
+      "collapseSubsessions": "折叠子会话",
+      "maximize": "最大化",
+      "restore": "还原"
     },
     "search": {
       "dialogTitle": "搜索",

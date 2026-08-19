@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Reorder } from "motion/react"
 import type { PanInfo } from "motion/react"
-import { SquarePen } from "lucide-react"
+import { Maximize2, Minimize2, SquarePen } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { cn } from "@/lib/utils"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
@@ -64,6 +64,7 @@ export function TabBar({ groupId }: TabBarProps) {
   const groupLayout = useTabStore((s) => s.groupLayout)
   const groupSelection = useTabStore((s) => s.groupSelection)
   const tileByGroup = useTabStore((s) => s.tileByGroup)
+  const maximizedGroupId = useTabStore((s) => s.maximizedGroupId)
   const {
     switchTab,
     closeTab,
@@ -71,6 +72,7 @@ export function TabBar({ groupId }: TabBarProps) {
     closeAllTabs,
     pinTab,
     toggleGroupTile,
+    toggleGroupMaximized,
     splitTab,
     snapTabToSplit,
     moveTabToGroup,
@@ -113,6 +115,12 @@ export function TabBar({ groupId }: TabBarProps) {
     () => toggleGroupTile(stripGroupId),
     [toggleGroupTile, stripGroupId]
   )
+  // Maximize ("zoom") only applies to a real split-group strip — the unsplit
+  // strip (`groupId == null`) already fills the whole pane area.
+  const isMaximized = groupId != null && maximizedGroupId === groupId
+  const handleToggleMaximize = useCallback(() => {
+    if (groupId != null) toggleGroupMaximized(groupId)
+  }, [groupId, toggleGroupMaximized])
 
   // Split-group context-menu wiring, shared by every tab in this strip.
   const orderedLeaves = useMemo(() => leafIds(groupLayout), [groupLayout])
@@ -594,6 +602,30 @@ export function TabBar({ groupId }: TabBarProps) {
             a Tauri drag region makes a tiny tab gesture restore and move a
             maximized application window. */}
         <div data-pane-tab-strip-filler className="h-full min-w-10 flex-1" />
+        {groupId != null && (
+          <button
+            type="button"
+            onClick={handleToggleMaximize}
+            // Toggle-style square icon button (matching the files-pane
+            // maximize button in file-workspace-tab-bar.tsx) at the strip's
+            // trailing edge; `self-start` matches THIS strip's own
+            // new-conversation button so both trailing controls share one
+            // baseline against the group's `pt-1.5` top.
+            className={cn(
+              "mr-1.5 flex h-7 w-7 shrink-0 items-center justify-center self-start rounded-md text-muted-foreground backdrop-blur-sm transition-colors hover:bg-foreground/10 hover:text-foreground",
+              isMaximized && "text-primary"
+            )}
+            aria-label={isMaximized ? t("restore") : t("maximize")}
+            aria-pressed={isMaximized}
+            title={isMaximized ? t("restore") : t("maximize")}
+          >
+            {isMaximized ? (
+              <Minimize2 className="h-4 w-4" />
+            ) : (
+              <Maximize2 className="h-4 w-4" />
+            )}
+          </button>
+        )}
       </div>
     </Reorder.Group>
   )

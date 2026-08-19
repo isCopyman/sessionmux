@@ -1868,7 +1868,9 @@
       "markCompleted": "وضع علامة كمكتمل",
       "reopen": "إعادة فتح",
       "expandSubsessions": "توسيع المحادثات الفرعية",
-      "collapseSubsessions": "طي المحادثات الفرعية"
+      "collapseSubsessions": "طي المحادثات الفرعية",
+      "maximize": "تكبير",
+      "restore": "استعادة"
     },
     "search": {
       "dialogTitle": "بحث",

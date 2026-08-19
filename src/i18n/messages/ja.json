@@ -1868,7 +1868,9 @@
       "markCompleted": "完了にする",
       "reopen": "再開する",
       "expandSubsessions": "サブ会話を展開",
-      "collapseSubsessions": "サブ会話を折りたたむ"
+      "collapseSubsessions": "サブ会話を折りたたむ",
+      "maximize": "最大化",
+      "restore": "元に戻す"
     },
     "search": {
       "dialogTitle": "検索",
