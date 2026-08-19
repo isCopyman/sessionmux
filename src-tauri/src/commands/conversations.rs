@@ -37,14 +37,14 @@ use crate::web::event_bridge::{
 /// being reviewable, and a struct lets tests default the fields they don't
 /// care about via `..Default::default()`.
 #[derive(Default)]
-pub(crate) struct ListAllConversationsOptions {
-    pub(crate) folder_ids: Option<Vec<i32>>,
-    pub(crate) agent_type: Option<AgentType>,
-    pub(crate) search: Option<String>,
-    pub(crate) sort_by: Option<String>,
-    pub(crate) status: Option<String>,
-    pub(crate) archived: bool,
-    pub(crate) include_children: bool,
+pub struct ListAllConversationsOptions {
+    pub folder_ids: Option<Vec<i32>>,
+    pub agent_type: Option<AgentType>,
+    pub search: Option<String>,
+    pub sort_by: Option<String>,
+    pub status: Option<String>,
+    pub archived: bool,
+    pub include_children: bool,
 }
 
 /// The sidebar/@-panel/workspace list's primary read. Before applying its own
