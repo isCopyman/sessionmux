@@ -45,6 +45,10 @@ import {
   shouldRetainWorkbenchRuntimeOnUnmount,
 } from "@/stores/tab-store"
 import { computeRects, leafIds } from "@/lib/tab-group-layout"
+import {
+  isMaximizeRestoreEscape,
+  shouldExitMaximizedGroup,
+} from "@/lib/pane-maximize"
 import type { SplitDropEdge } from "@/lib/tab-drag-drop"
 import { useTaskContext } from "@/contexts/task-context"
 import { cn, copyTextFromMenu, randomUUID } from "@/lib/utils"
@@ -2343,6 +2347,9 @@ export function ConversationDetailPanel() {
   const groupOf = useTabStore((s) => s.groupOf)
   const groupSelection = useTabStore((s) => s.groupSelection)
   const tileByGroup = useTabStore((s) => s.tileByGroup)
+  // The pane temporarily filling the whole area ("zoomed"), or null. A pure
+  // view-layer flag — see shouldExitMaximizedGroup for the auto-restore rules.
+  const maximizedGroupId = useTabStore((s) => s.maximizedGroupId)
   // Narrow: only the drop-TARGET group id (for the shell highlight ring) — the
   // per-frame x/y writes during a drag never re-render the panel.
   const dragOverGroupId = useTabStore((s) => s.tabDrag?.overGroupId ?? null)
@@ -2353,6 +2360,8 @@ export function ConversationDetailPanel() {
     switchTab,
     resizeGroupSplit,
     onPreviewTabReplaced,
+    toggleGroupMaximized,
+    exitGroupMaximize,
   } = useTabActions()
   const newConversation = useMemo(() => {
     const activeTab = tabs.find((tab) => tab.id === activeTabId)
@@ -2703,6 +2712,60 @@ export function ConversationDetailPanel() {
     }
   }, [dissolveGroup, orderedGroupIds, tabsByGroup, tabsHydrated])
 
+  // Auto-exit the maximized pane whenever a real layout-level operation makes
+  // the flag stale: any new `groupLayout` reference (split, dissolve, merge,
+  // orientation flip, remote layout sync) or the active tab's focus moving to
+  // a different, now-hidden group (next/prev-tab, a remote tab-switch, …).
+  // The decision core (shouldExitMaximizedGroup) is independently unit-tested;
+  // this effect only wires it to the live layout/focus state.
+  const prevGroupLayoutForMaximizeRef = useRef(groupLayout)
+  useEffect(() => {
+    const prevGroupLayout = prevGroupLayoutForMaximizeRef.current
+    prevGroupLayoutForMaximizeRef.current = groupLayout
+    const activeGroupId =
+      activeTabId != null
+        ? groupOfTab(groupOf, groupLayout, activeTabId)
+        : null
+    if (
+      shouldExitMaximizedGroup({
+        maximizedGroupId,
+        prevGroupLayout,
+        groupLayout,
+        activeGroupId,
+      })
+    ) {
+      exitGroupMaximize()
+    }
+  }, [activeTabId, exitGroupMaximize, groupLayout, groupOf, maximizedGroupId])
+
+  // Esc restores the maximized pane — but only when nothing else already owns
+  // Esc: an open dialog/alertdialog/menu takes priority, and so does focus
+  // sitting in an editable element, matching useSessionMultiSelect's gate.
+  useEffect(() => {
+    if (!maximizedGroupId) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      const active = document.activeElement
+      const focusIsEditable =
+        active instanceof HTMLElement &&
+        (active.tagName === "INPUT" ||
+          active.tagName === "TEXTAREA" ||
+          active.isContentEditable)
+      const hasOpenOverlay =
+        document.querySelector(
+          '[role="dialog"], [role="alertdialog"], [role="menu"]'
+        ) != null
+      if (
+        !isMaximizeRestoreEscape(event, { hasOpenOverlay, focusIsEditable })
+      ) {
+        return
+      }
+      event.preventDefault()
+      exitGroupMaximize()
+    }
+    window.addEventListener("keydown", onKeyDown)
+    return () => window.removeEventListener("keydown", onKeyDown)
+  }, [exitGroupMaximize, maximizedGroupId])
+
   const tileTabRefs = useRef<Map<string, HTMLDivElement | null>>(new Map())
   const groupContainerRef = useRef<HTMLDivElement | null>(null)
 
@@ -2815,6 +2878,11 @@ export function ConversationDetailPanel() {
   const renderGroupShell = (groupId: string) => {
     const rect = groupRects.get(groupId)
     if (!rect) return null
+    const isMaximized = maximizedGroupId === groupId
+    // Every OTHER group while one is maximized: still mounted (its Session /
+    // terminal / scroll position stay alive), just not painted or reachable —
+    // never remove it from `orderedGroupIds.map(renderGroupShell)` below.
+    const hiddenByMaximize = maximizedGroupId != null && !isMaximized
     const groupTabs = tabsByGroup.get(groupId) ?? []
     // Tab order is presentation state. Keep the mounted conversation DOM in a
     // stable order so a strip reorder never moves the large live subtree; tile
@@ -2843,13 +2911,28 @@ export function ConversationDetailPanel() {
       <div
         key={groupId}
         data-conv-group-shell={groupId}
-        className="absolute flex min-h-0 flex-col overflow-hidden"
-        style={{
-          left: `${rect.x}%`,
-          top: `${rect.y}%`,
-          width: `${rect.w}%`,
-          height: `${rect.h}%`,
-        }}
+        data-group-maximized={isMaximized ? "true" : undefined}
+        className={cn(
+          "absolute flex min-h-0 flex-col overflow-hidden",
+          // Hidden but mounted, exactly like the workbench-route / files-
+          // maximized overlays: `invisible` stops it painting (keeps mount +
+          // layout + scroll position); `conversation-tab-hidden` hardens that
+          // (kills transitions so it snaps instead of ghosting, re-hides
+          // Monaco's diff panes). `inert` drops the whole subtree from focus
+          // and pointer events so a hidden pane can't be tabbed/clicked into.
+          hiddenByMaximize && "conversation-tab-hidden invisible"
+        )}
+        style={
+          isMaximized
+            ? { left: 0, top: 0, width: "100%", height: "100%" }
+            : {
+                left: `${rect.x}%`,
+                top: `${rect.y}%`,
+                width: `${rect.w}%`,
+                height: `${rect.h}%`,
+              }
+        }
+        inert={hiddenByMaximize || undefined}
       >
         {/* While split, each group owns its own Session strip below the shared
             window-level Workbench strip. */}
@@ -2869,6 +2952,22 @@ export function ConversationDetailPanel() {
               if (selected && selected !== useTabStore.getState().activeTabId) {
                 switchTab(selected)
               }
+            }}
+            // Double-click the pane's title bar to toggle maximize (VS Code's
+            // "double click tab to maximize editor group"). Ignore clicks
+            // that land on an actual control (the ⋯ menu, an inline rename
+            // input/dialog, …) so this coarse gesture never fires underneath
+            // one of the header's own interactions.
+            onDoubleClick={(event) => {
+              const target = event.target as HTMLElement
+              if (
+                target.closest(
+                  'input, textarea, [contenteditable="true"], button, [role="dialog"], [role="alertdialog"], [role="menu"], [role="menuitem"]'
+                )
+              ) {
+                return
+              }
+              toggleGroupMaximized(groupId)
             }}
           >
             {selTab.kind === "room" ? null : (
@@ -2956,7 +3055,11 @@ export function ConversationDetailPanel() {
                   sibling tabs remount and a live streaming response is torn
                   down. */}
               {orderedGroupIds.map((groupId) => renderGroupShell(groupId))}
+              {/* A divider between a visible pane and a hidden one is
+                  meaningless (and would sit on top of the maximized pane's
+                  own content) — hide every handle while a pane is maximized. */}
               {isSplit &&
+                !maximizedGroupId &&
                 groupHandles.map((handle) => (
                   <GroupSplitHandle
                     key={`${handle.splitId}:${handle.index}`}

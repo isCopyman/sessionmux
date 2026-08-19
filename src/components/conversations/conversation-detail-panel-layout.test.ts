@@ -263,7 +263,7 @@ describe("ConversationDetailPanel split-group render model", () => {
   // under its strip, and the global single header steps aside while split.
   it("pairs every split group with its own title bar and gates the global one", () => {
     const shellStart = source.indexOf("const renderGroupShell = (groupId")
-    const shellBody = source.slice(shellStart, shellStart + 6000)
+    const shellBody = source.slice(shellStart, shellStart + 9000)
     expect(shellBody).toContain("{isSplit && selTab && (")
     expect(shellBody).toContain("<ConversationDetailHeader")
     expect(shellBody).toContain("tabId={selTab.id}")
@@ -284,7 +284,7 @@ describe("ConversationDetailPanel split-group render model", () => {
     // Panel: every split group has a Session strip, but fixed window controls
     // are reserved only once by the Workbench strip above the panel tree.
     const shellStart = source.indexOf("const renderGroupShell = (groupId")
-    const shellBody = source.slice(shellStart, shellStart + 6000)
+    const shellBody = source.slice(shellStart, shellStart + 9000)
     expect(shellBody).toContain("<TabBar groupId={groupId} />")
     expect(shellBody).not.toContain("SplitStripCornerReserve")
 
@@ -299,6 +299,104 @@ describe("ConversationDetailPanel split-group render model", () => {
       '<div data-pane-tab-strip-filler className="h-full min-w-10 flex-1" />'
     )
     expect(fileTabBarSource).toContain("data-pane-tab-strip-filler")
+  })
+})
+
+describe("ConversationDetailPanel pane maximize", () => {
+  // The maximized pane is a pure view-layer overlay on the SAME flat-sibling
+  // render model as the split feature above: the maximized shell paints at a
+  // full-area rect while every OTHER shell stays a mounted sibling, just
+  // hidden with the same "keep-alive but invisible" treatment used elsewhere
+  // in this file (workbench routes, the files-maximized overlay). Nothing
+  // here should ever conditionally OMIT a shell from
+  // `orderedGroupIds.map(renderGroupShell)` — that would unmount a live
+  // Session instead of merely hiding it.
+  it("hides every non-maximized shell with the shared keep-alive treatment instead of unmounting it", () => {
+    const shellStart = source.indexOf("const renderGroupShell = (groupId")
+    const shellBody = source.slice(shellStart, shellStart + 9000)
+    expect(shellBody).toContain(
+      "const isMaximized = maximizedGroupId === groupId"
+    )
+    expect(shellBody).toContain(
+      "const hiddenByMaximize = maximizedGroupId != null && !isMaximized"
+    )
+    expect(shellBody).toContain(
+      'hiddenByMaximize && "conversation-tab-hidden invisible"'
+    )
+    expect(shellBody).toContain("inert={hiddenByMaximize || undefined}")
+    // The hardening class must stay coupled to `invisible` here too (see the
+    // "snaps the hidden keep-alive tab" test above for why).
+    expect(globalsCssSource).toContain(".conversation-tab-hidden *")
+  })
+
+  it("overrides the maximized shell to a full-area rect instead of its split rect", () => {
+    const shellStart = source.indexOf("const renderGroupShell = (groupId")
+    const shellBody = source.slice(shellStart, shellStart + 9000)
+    expect(shellBody).toContain(
+      '{ left: 0, top: 0, width: "100%", height: "100%" }'
+    )
+    expect(shellBody).toContain("`${rect.x}%`")
+  })
+
+  it("hides the split dividers while a pane is maximized", () => {
+    const handlesIdx = source.indexOf("groupHandles.map((handle) => (")
+    expect(handlesIdx).toBeGreaterThan(-1)
+    expect(source.slice(handlesIdx - 80, handlesIdx)).toContain(
+      "!maximizedGroupId &&"
+    )
+  })
+
+  // Double-click the pane's title bar toggles maximize (VS Code's "double
+  // click tab to maximize editor group"), but must not fire underneath the
+  // header's own controls (the ⋯ menu, an inline rename dialog/input).
+  it("gates the title-bar double-click on the click target, not on document.activeElement", () => {
+    const dblClickIdx = source.indexOf("onDoubleClick={(event) => {")
+    expect(dblClickIdx).toBeGreaterThan(-1)
+    const handlerBody = source.slice(dblClickIdx, dblClickIdx + 600)
+    expect(handlerBody).toContain("event.target as HTMLElement")
+    expect(handlerBody).toContain("target.closest(")
+    expect(handlerBody).toContain("toggleGroupMaximized(groupId)")
+    // Real interactive/overlay elements are excluded so the coarse gesture
+    // never steals a click meant for a button, an open menu, or a dialog.
+    for (const excluded of [
+      "input",
+      "textarea",
+      "button",
+      'role="dialog"',
+      'role="menu"',
+    ]) {
+      expect(handlerBody).toContain(excluded)
+    }
+  })
+
+  // The decision core lives in a pure, independently unit-tested module
+  // (src/lib/pane-maximize.test.ts); these assert it is actually wired into
+  // the panel's live layout/focus state and its Esc shortcut.
+  it("wires the auto-exit guard to every layout/focus change that can stale the flag", () => {
+    expect(source).toContain(
+      'import {\n  isMaximizeRestoreEscape,\n  shouldExitMaximizedGroup,\n} from "@/lib/pane-maximize"'
+    )
+    const guardIdx = source.indexOf("shouldExitMaximizedGroup({")
+    expect(guardIdx).toBeGreaterThan(-1)
+    const guardBody = source.slice(guardIdx - 600, guardIdx + 300)
+    expect(guardBody).toContain("prevGroupLayoutForMaximizeRef")
+    expect(guardBody).toContain("groupOfTab(groupOf, groupLayout, activeTabId)")
+    expect(guardBody).toContain("exitGroupMaximize()")
+  })
+
+  it("gates the Esc-to-restore shortcut on no open overlay and no editable focus", () => {
+    const escIdx = source.indexOf("isMaximizeRestoreEscape(event,")
+    expect(escIdx).toBeGreaterThan(-1)
+    const escEffectStart = source.lastIndexOf("useEffect(() => {", escIdx)
+    const escBody = source.slice(escEffectStart, escIdx + 300)
+    expect(escBody).toContain("if (!maximizedGroupId) return")
+    expect(escBody).toContain('active.tagName === "INPUT"')
+    expect(escBody).toContain('active.tagName === "TEXTAREA"')
+    expect(escBody).toContain("active.isContentEditable")
+    expect(escBody).toContain(
+      '[role="dialog"], [role="alertdialog"], [role="menu"]'
+    )
+    expect(escBody).toContain('window.addEventListener("keydown"')
   })
 })
 
