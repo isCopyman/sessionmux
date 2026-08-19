@@ -5,7 +5,7 @@ use std::io::Write;
 use std::path::{Component, Path, PathBuf};
 use std::process::Stdio;
 use std::sync::LazyLock;
-use std::time::UNIX_EPOCH;
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use base64::Engine as _;
 use ignore::WalkBuilder;
@@ -292,6 +292,13 @@ pub struct WorkspaceFileEntry {
     /// Path relative to the workspace root, always forward-slashed.
     pub path: String,
     pub kind: WorkspaceEntryKind,
+    /// The root this entry was resolved under — one of `list_workspace_files`'
+    /// `path` or `extra_paths`, echoed back exactly as given (not forward-slash
+    /// normalized, unlike `path` above), so the caller can join it back onto
+    /// `path` the same way it already joins a single root today. Needed once a
+    /// call can span more than one root: `path` alone is no longer enough to
+    /// know which root it is relative to.
+    pub root: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -4379,6 +4386,17 @@ fn prefix_tree_paths(nodes: &mut [FileTreeNode], prefix: &str) {
 /// with) before it exhausts memory or occupies its worker thread indefinitely.
 const MAX_WORKSPACE_FILE_ENTRIES: usize = 50_000;
 
+/// Wall-clock budget for one [`list_workspace_files`] call, shared across
+/// every root it walks (the bound `path` plus any `extra_paths`) the same way
+/// [`MAX_WORKSPACE_FILE_ENTRIES`] is a shared *entry-count* budget. It exists
+/// because the entry cap alone only bounds memory/result size, not time: a
+/// directory can be slow to enumerate (a network mount, or one `ignore` must
+/// stat entry-by-entry before it can even decide whether to prune it) without
+/// ever approaching 50,000 entries. Room "additional paths" are user-typed
+/// free text rather than an already-opened Folder, so they get no prior
+/// chance to prove themselves well-behaved — this deadline is the backstop.
+const WORKSPACE_SCAN_DEADLINE: Duration = Duration::from_secs(10);
+
 /// The walk below is synchronous disk I/O (`WalkDir`), so it runs on a
 /// blocking-pool thread (`spawn_blocking`) rather than the async runtime: a
 /// huge non-git directory (nothing for `.gitignore` to prune) previously ran
@@ -4683,29 +4701,114 @@ fn build_file_tree(
 /// directory (nothing for `.gitignore` to prune) previously ran this loop
 /// straight on a runtime worker and starved every other in-flight command
 /// until it finished.
+///
+/// `extra_paths` lets a caller with more than one search root (a Room's bound
+/// Folder plus its manually-added additional paths) fold them into a single
+/// scan rather than issuing one `list_workspace_files` call per root: every
+/// root shares the same [`MAX_WORKSPACE_FILE_ENTRIES`] budget and the same
+/// [`WORKSPACE_SCAN_DEADLINE`], and the merged result is deduplicated so a
+/// path reachable through two overlapping roots (an additional path that
+/// happens to be a subdirectory of the bound Folder, say) is reported once.
+/// Omitted/empty for the plain single-folder callers (the file panel, the
+/// composer's own workspace), whose behavior is unchanged.
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn list_workspace_files(
     path: String,
+    extra_paths: Option<Vec<String>>,
 ) -> Result<Vec<WorkspaceFileEntry>, AppCommandError> {
-    let root = PathBuf::from(&path);
-    tokio::task::spawn_blocking(move || walk_workspace_files(&root, MAX_WORKSPACE_FILE_ENTRIES))
-        .await
-        .map_err(|e| {
-            AppCommandError::task_execution_failed("File scan task failed")
-                .with_detail(e.to_string())
-        })
+    let mut roots = vec![PathBuf::from(&path)];
+    roots.extend(
+        extra_paths
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|p| !p.trim().is_empty())
+            .map(PathBuf::from),
+    );
+    tokio::task::spawn_blocking(move || {
+        let deadline = Instant::now() + WORKSPACE_SCAN_DEADLINE;
+        walk_workspace_files_multi(&roots, MAX_WORKSPACE_FILE_ENTRIES, deadline)
+    })
+    .await
+    .map_err(|e| {
+        AppCommandError::task_execution_failed("File scan task failed")
+            .with_detail(e.to_string())
+    })
 }
 
-/// Synchronous core of [`list_workspace_files`], split out so it can run under
-/// `spawn_blocking` and be exercised directly in tests without creating tens
-/// of thousands of files.
+/// Walks every root in `roots` in order, sharing one entry-count budget and
+/// one deadline across all of them — the same way a single root already
+/// shares its budget between its main walk and its linked directories. Each
+/// root is walked in full and independently (so a root nested under another
+/// still gets its own `.gitignore` applied starting from itself, and isn't
+/// silently starved of results just because an ancestor directory name
+/// happens to match a hardcoded ignore elsewhere); the results are then
+/// merged and deduplicated by canonicalized absolute path, so a file
+/// reachable through two overlapping roots is reported once, attributed to
+/// whichever root the de-duplicated list encountered it under first.
 ///
-/// Stops once `cap` entries have been collected. The main walk and the
-/// linked-directory pass below it share this single budget — a workspace with
-/// several huge links can't buy each one its own separate allotment.
-/// Truncation is silent: the return type carries no flag, only fewer entries
-/// than the tree actually has.
-fn walk_workspace_files(root: &Path, cap: usize) -> Vec<WorkspaceFileEntry> {
+/// A root that does not exist (or is not a directory) is skipped — logged,
+/// not returned as an error — so one bad root (typically a manually-typed
+/// additional path that no longer resolves) does not blank out the others.
+fn walk_workspace_files_multi(
+    roots: &[PathBuf],
+    cap: usize,
+    deadline: Instant,
+) -> Vec<WorkspaceFileEntry> {
+    // Canonicalize once per root — cheap (a handful of roots, never one
+    // syscall per file) — both to drop an exact/nested duplicate root before
+    // wasting budget walking it twice, and to let the per-entry merge below
+    // recognize a nested root's files as duplicates of the outer root's
+    // without canonicalizing every single entry.
+    let mut seen_roots: HashSet<PathBuf> = HashSet::new();
+    let mut ordered_roots: Vec<(PathBuf, PathBuf)> = Vec::new();
+    for root in roots {
+        let canonical = std::fs::canonicalize(root).unwrap_or_else(|_| root.clone());
+        if seen_roots.insert(canonical.clone()) {
+            ordered_roots.push((root.clone(), canonical));
+        }
+    }
+
+    let mut entries: Vec<WorkspaceFileEntry> = Vec::new();
+    let mut seen_files: HashSet<String> = HashSet::new();
+    for (original_root, canonical_root) in &ordered_roots {
+        if entries.len() >= cap || Instant::now() >= deadline {
+            break;
+        }
+        if !original_root.is_dir() {
+            tracing::warn!(
+                root = %original_root.display(),
+                "workspace scan root does not exist or is not a directory, skipping"
+            );
+            continue;
+        }
+        let remaining = cap.saturating_sub(entries.len());
+        let root_entries = walk_workspace_files(original_root, remaining, deadline);
+        for entry in root_entries {
+            let key = format!("{}/{}", canonical_root.to_string_lossy(), entry.path);
+            if seen_files.insert(key) {
+                entries.push(entry);
+            }
+        }
+    }
+    entries
+}
+
+/// Synchronous core of [`list_workspace_files`] for a single root, split out
+/// so it can run under `spawn_blocking` and be exercised directly in tests
+/// without creating tens of thousands of files.
+///
+/// Stops once `cap` entries have been collected or `deadline` has passed,
+/// whichever comes first. The main walk and the linked-directory pass below
+/// it share this single entry budget — a workspace with several huge links
+/// can't buy each one its own separate allotment — and both also share
+/// `deadline`, the same wall-clock budget [`walk_workspace_files_multi`]
+/// splits across every root in a multi-root call. Truncation is silent: the
+/// return type carries no flag, only fewer entries than the tree actually has.
+fn walk_workspace_files(root: &Path, cap: usize, deadline: Instant) -> Vec<WorkspaceFileEntry> {
+    // Stamped on every entry emitted below, so a multi-root caller can tell
+    // which of its roots each entry came from (see `WorkspaceFileEntry::root`).
+    let root_str = root.to_string_lossy().into_owned();
+
     // Linked directories are walked separately below, rooted at the link so
     // their own `.gitignore` applies. Excluded from the main pass because the
     // walker reports a symlink as a leaf file.
@@ -4745,8 +4848,10 @@ fn walk_workspace_files(root: &Path, cap: usize) -> Vec<WorkspaceFileEntry> {
     let mut entries: Vec<WorkspaceFileEntry> = Vec::new();
     for result in walker {
         // Checked before consuming each entry so a directory far larger than
-        // `cap` never finishes being enumerated.
-        if entries.len() >= cap {
+        // `cap` never finishes being enumerated, and so a slow walk (a network
+        // mount, or heavy per-entry `ignore` matching) never runs past its
+        // wall-clock budget either — whichever limit is hit first wins.
+        if entries.len() >= cap || Instant::now() >= deadline {
             break;
         }
         // Skip unreadable entries (permission errors, transient races) rather
@@ -4779,39 +4884,54 @@ fn walk_workspace_files(root: &Path, cap: usize) -> Vec<WorkspaceFileEntry> {
             } else {
                 WorkspaceEntryKind::File
             },
+            root: root_str.clone(),
         });
     }
 
     for (link_name, target) in linked {
-        if entries.len() >= cap {
+        if entries.len() >= cap || Instant::now() >= deadline {
             break;
         }
         entries.push(WorkspaceFileEntry {
             name: link_name.clone(),
             path: link_name.clone(),
             kind: WorkspaceEntryKind::Dir,
+            root: root_str.clone(),
         });
         // Rooted at the resolved target so the linked project's own ignore
         // files apply, then re-prefixed with the link name so every path stays
         // relative to the workspace root and resolves back through the link.
         // `remaining` is what's left of the *shared* budget above, not a fresh
-        // allotment for this link.
+        // allotment for this link; `deadline` is the same shared wall-clock
+        // budget too.
         let remaining = cap.saturating_sub(entries.len());
-        entries.extend(list_files_under(&target, &link_name, remaining));
+        entries.extend(list_files_under(
+            &target, &link_name, remaining, deadline, &root_str,
+        ));
     }
 
     entries
 }
 
-/// Flat listing of `root`, with every path prefixed by `prefix/`. Shares the
-/// ignore configuration of [`list_workspace_files`]; nested symlinks are not
+/// Flat listing of `dir`, with every path prefixed by `prefix/` and every
+/// entry's [`WorkspaceFileEntry::root`] stamped as `reported_root` (the
+/// *outer* workspace root the caller is walking — `dir` itself is a linked
+/// directory's resolved target, not that root). Shares the ignore
+/// configuration of [`list_workspace_files`]; nested symlinks are not
 /// followed, so this cannot recurse.
 ///
-/// `cap` bounds the number of entries returned — the same silent-truncation
-/// contract as [`walk_workspace_files`], whose remaining budget is what
-/// callers pass in here.
-fn list_files_under(root: &Path, prefix: &str, cap: usize) -> Vec<WorkspaceFileEntry> {
-    let walker = WalkBuilder::new(root)
+/// `cap` and `deadline` bound the number of entries returned and the
+/// wall-clock time spent, respectively — the same silent-truncation contract
+/// as [`walk_workspace_files`], whose remaining shared budget and deadline are
+/// what callers pass in here.
+fn list_files_under(
+    dir: &Path,
+    prefix: &str,
+    cap: usize,
+    deadline: Instant,
+    reported_root: &str,
+) -> Vec<WorkspaceFileEntry> {
+    let walker = WalkBuilder::new(dir)
         .hidden(false)
         .parents(false)
         .ignore(true)
@@ -4834,15 +4954,15 @@ fn list_files_under(root: &Path, prefix: &str, cap: usize) -> Vec<WorkspaceFileE
 
     let mut entries = Vec::new();
     for result in walker {
-        if entries.len() >= cap {
+        if entries.len() >= cap || Instant::now() >= deadline {
             break;
         }
         let Ok(entry) = result else { continue };
         let entry_path = entry.path();
-        if entry_path == root {
+        if entry_path == dir {
             continue;
         }
-        let Ok(rel) = entry_path.strip_prefix(root) else {
+        let Ok(rel) = entry_path.strip_prefix(dir) else {
             continue;
         };
         let is_dir = entry
@@ -4856,6 +4976,7 @@ fn list_files_under(root: &Path, prefix: &str, cap: usize) -> Vec<WorkspaceFileE
             } else {
                 WorkspaceEntryKind::File
             },
+            root: reported_root.to_string(),
         });
     }
     entries
@@ -6395,7 +6516,7 @@ mod tests {
         // A normal file that must survive.
         write_file(root, "src/main.rs", "fn main() {}");
 
-        let entries = list_workspace_files(root.to_string_lossy().to_string())
+        let entries = list_workspace_files(root.to_string_lossy().to_string(), None)
             .await
             .expect("list_workspace_files");
         let paths: std::collections::HashSet<&str> =
@@ -6440,6 +6561,13 @@ mod tests {
         );
     }
 
+    /// A generous deadline that will not fire during a fast in-memory test —
+    /// used everywhere a test wants the *cap*, not the deadline, to be what
+    /// stops the walk.
+    fn far_off_deadline() -> Instant {
+        Instant::now() + Duration::from_secs(60)
+    }
+
     #[test]
     fn walk_workspace_files_respects_cap() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -6448,7 +6576,7 @@ mod tests {
             write_file(root, &format!("f{i:02}.txt"), "x");
         }
 
-        let capped = walk_workspace_files(root, 10);
+        let capped = walk_workspace_files(root, 10, far_off_deadline());
         assert_eq!(
             capped.len(),
             10,
@@ -6456,12 +6584,34 @@ mod tests {
             capped.len()
         );
 
-        let uncapped = walk_workspace_files(root, 1_000);
+        let uncapped = walk_workspace_files(root, 1_000, far_off_deadline());
         assert_eq!(
             uncapped.len(),
             25,
             "a generous cap must not drop any entry, got {} entries",
             uncapped.len()
+        );
+    }
+
+    #[test]
+    fn walk_workspace_files_respects_deadline() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        for i in 0..25 {
+            write_file(root, &format!("f{i:02}.txt"), "x");
+        }
+
+        // A deadline that has already passed before the walk starts must stop
+        // it immediately, regardless of the (generous) cap — this is the
+        // mechanism `list_workspace_files` relies on to bound wall-clock time
+        // independently of entry count.
+        let already_past = Instant::now() - Duration::from_secs(1);
+        let entries = walk_workspace_files(root, 1_000, already_past);
+        assert_eq!(
+            entries.len(),
+            0,
+            "an already-past deadline must stop the walk before it collects anything, got {} entries",
+            entries.len()
         );
     }
 
@@ -6473,15 +6623,167 @@ mod tests {
             write_file(root, &format!("f{i:02}.txt"), "x");
         }
 
-        let capped = list_files_under(root, "linked", 10);
+        let capped = list_files_under(root, "linked", 10, far_off_deadline(), "root");
         assert_eq!(
             capped.len(),
             10,
             "the linked-directory pass must honor its own cap argument"
         );
 
-        let uncapped = list_files_under(root, "linked", 1_000);
+        let uncapped = list_files_under(root, "linked", 1_000, far_off_deadline(), "root");
         assert_eq!(uncapped.len(), 25, "a generous cap must not drop any entry");
+    }
+
+    #[test]
+    fn list_files_under_respects_deadline() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        for i in 0..25 {
+            write_file(root, &format!("f{i:02}.txt"), "x");
+        }
+
+        let already_past = Instant::now() - Duration::from_secs(1);
+        let entries = list_files_under(root, "linked", 1_000, already_past, "root");
+        assert_eq!(
+            entries.len(),
+            0,
+            "an already-past deadline must stop the linked-directory pass immediately"
+        );
+    }
+
+    #[test]
+    fn list_files_under_stamps_the_reported_root_not_the_walked_dir() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        write_file(root, "note.md", "x");
+
+        let entries = list_files_under(root, "linked", 10, far_off_deadline(), "/workspace");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries[0].root, "/workspace",
+            "entries report the outer workspace root the caller is walking, \
+             not the linked directory `dir` itself"
+        );
+    }
+
+    #[test]
+    fn walk_workspace_files_multi_merges_two_disjoint_roots() {
+        let a = tempfile::tempdir().expect("tempdir a");
+        let b = tempfile::tempdir().expect("tempdir b");
+        write_file(a.path(), "from_a.txt", "x");
+        write_file(b.path(), "from_b.txt", "x");
+
+        let roots = vec![a.path().to_path_buf(), b.path().to_path_buf()];
+        let entries = walk_workspace_files_multi(&roots, MAX_WORKSPACE_FILE_ENTRIES, far_off_deadline());
+        let paths: std::collections::HashSet<&str> =
+            entries.iter().map(|e| e.path.as_str()).collect();
+        assert!(paths.contains("from_a.txt"));
+        assert!(paths.contains("from_b.txt"));
+
+        let a_str = a.path().to_string_lossy().to_string();
+        let b_str = b.path().to_string_lossy().to_string();
+        let roots_seen: std::collections::HashSet<&str> =
+            entries.iter().map(|e| e.root.as_str()).collect();
+        assert!(roots_seen.contains(a_str.as_str()), "entries report root a");
+        assert!(roots_seen.contains(b_str.as_str()), "entries report root b");
+    }
+
+    #[test]
+    fn walk_workspace_files_multi_dedupes_a_root_nested_inside_another() {
+        let outer = tempfile::tempdir().expect("outer");
+        write_file(outer.path(), "top.txt", "x");
+        write_file(outer.path(), "sub/inner.txt", "x");
+        let inner = outer.path().join("sub");
+
+        // The additional path is a subdirectory of the bound root — every
+        // file under it is reachable through *both* roots.
+        let roots = vec![outer.path().to_path_buf(), inner.clone()];
+        let entries = walk_workspace_files_multi(&roots, MAX_WORKSPACE_FILE_ENTRIES, far_off_deadline());
+        let inner_matches: Vec<_> = entries.iter().filter(|e| e.name == "inner.txt").collect();
+        assert_eq!(
+            inner_matches.len(),
+            1,
+            "a file reachable through two overlapping roots must be reported once, got {entries:?}"
+        );
+        // Attributed to the first root in the list (the outer/bound root),
+        // not the redundant nested additional path.
+        assert_eq!(
+            inner_matches[0].root,
+            outer.path().to_string_lossy().to_string(),
+            "the surviving entry is attributed to whichever root listed first found it"
+        );
+    }
+
+    #[test]
+    fn walk_workspace_files_multi_shares_the_entry_budget_across_roots() {
+        let a = tempfile::tempdir().expect("tempdir a");
+        let b = tempfile::tempdir().expect("tempdir b");
+        for i in 0..10 {
+            write_file(a.path(), &format!("a{i:02}.txt"), "x");
+            write_file(b.path(), &format!("b{i:02}.txt"), "x");
+        }
+
+        // 20 files total across both roots, but a cap of 12 — the second root
+        // must not get its own separate 12-entry allotment.
+        let roots = vec![a.path().to_path_buf(), b.path().to_path_buf()];
+        let entries = walk_workspace_files_multi(&roots, 12, far_off_deadline());
+        assert_eq!(
+            entries.len(),
+            12,
+            "the cap must be shared across every root, not repeated per root"
+        );
+    }
+
+    #[test]
+    fn walk_workspace_files_multi_skips_a_missing_root_without_failing_the_scan() {
+        let a = tempfile::tempdir().expect("tempdir a");
+        write_file(a.path(), "present.txt", "x");
+        let missing = a.path().join("does-not-exist");
+
+        let roots = vec![a.path().to_path_buf(), missing];
+        let entries = walk_workspace_files_multi(&roots, MAX_WORKSPACE_FILE_ENTRIES, far_off_deadline());
+        assert_eq!(
+            entries.len(),
+            1,
+            "a nonexistent root must be skipped, not fail (or blank out) the whole scan"
+        );
+        assert_eq!(entries[0].name, "present.txt");
+    }
+
+    #[test]
+    fn walk_workspace_files_multi_respects_a_shared_deadline() {
+        let a = tempfile::tempdir().expect("tempdir a");
+        let b = tempfile::tempdir().expect("tempdir b");
+        write_file(a.path(), "from_a.txt", "x");
+        write_file(b.path(), "from_b.txt", "x");
+
+        let roots = vec![a.path().to_path_buf(), b.path().to_path_buf()];
+        let already_past = Instant::now() - Duration::from_secs(1);
+        let entries = walk_workspace_files_multi(&roots, MAX_WORKSPACE_FILE_ENTRIES, already_past);
+        assert_eq!(
+            entries.len(),
+            0,
+            "an already-past deadline must stop the scan before any root is walked"
+        );
+    }
+
+    #[tokio::test]
+    async fn list_workspace_files_command_merges_extra_paths() {
+        let primary = tempfile::tempdir().expect("primary");
+        let extra = tempfile::tempdir().expect("extra");
+        write_file(primary.path(), "main.rs", "fn main() {}");
+        write_file(extra.path(), "notes.md", "hello");
+
+        let entries = list_workspace_files(
+            primary.path().to_string_lossy().into_owned(),
+            Some(vec![extra.path().to_string_lossy().into_owned()]),
+        )
+        .await
+        .expect("list_workspace_files with extra_paths");
+        let paths: std::collections::HashSet<&str> =
+            entries.iter().map(|e| e.path.as_str()).collect();
+        assert!(paths.contains("main.rs"), "primary root's files are listed");
+        assert!(paths.contains("notes.md"), "extra path's files are listed too");
     }
 
     #[test]
@@ -8628,7 +8930,7 @@ mod workspace_confinement_tests {
         std::fs::write(stray.path().join("secret.txt"), b"x").expect("write");
         symlink(stray.path(), root.path().join("evil")).expect("symlink");
 
-        let entries = list_workspace_files(root.path().to_string_lossy().into_owned())
+        let entries = list_workspace_files(root.path().to_string_lossy().into_owned(), None)
             .await
             .expect("list");
 
@@ -8719,7 +9021,7 @@ mod workspace_confinement_tests {
         let canonical_target = std::fs::canonicalize(linked.path()).expect("canon");
         crate::folder_links::register(root.path(), &canonical_target);
 
-        let entries = list_workspace_files(root.path().to_string_lossy().into_owned())
+        let entries = list_workspace_files(root.path().to_string_lossy().into_owned(), None)
             .await
             .expect("list");
         let paths: Vec<&str> = entries.iter().map(|e| e.path.as_str()).collect();

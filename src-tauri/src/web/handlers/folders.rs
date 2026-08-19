@@ -277,12 +277,14 @@ pub async fn get_file_tree(
 #[serde(rename_all = "camelCase")]
 pub struct ListWorkspaceFilesParams {
     pub path: String,
+    pub extra_paths: Option<Vec<String>>,
 }
 
 pub async fn list_workspace_files(
     Json(params): Json<ListWorkspaceFilesParams>,
 ) -> Result<Json<Vec<folder_commands::WorkspaceFileEntry>>, AppCommandError> {
-    let result = folder_commands::list_workspace_files(params.path).await?;
+    let result =
+        folder_commands::list_workspace_files(params.path, params.extra_paths).await?;
     Ok(Json(result))
 }
 
