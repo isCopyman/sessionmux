@@ -1628,7 +1628,9 @@ fn prompt_usage(usage: &Value) -> Option<TurnUsage> {
         // Saturating rather than wrapping: a build that ever reports cache
         // counters exceeding `inputTokens` keeps its cache buckets and drops the
         // uncached remainder to zero, instead of inventing a colossal input.
-        input_tokens: input.saturating_sub(cache_read).saturating_sub(cache_create),
+        input_tokens: input
+            .saturating_sub(cache_read)
+            .saturating_sub(cache_create),
         output_tokens: output,
         cache_creation_input_tokens: cache_create,
         cache_read_input_tokens: cache_read,
@@ -2305,12 +2307,18 @@ mod tests {
     /// real capture (`~/.grok/sessions/…/019f96d5…/updates.jsonl`), which is what
     /// makes the arithmetic below meaningful rather than self-referential.
     const USAGE_UPDATES: &str = concat!(
-        r#"{"method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"one"},"_meta":{"promptIndex":0}},"_meta":{"turnStartMs":1000,"totalTokens":9000}},"timestamp":1783584019}"#, "\n",
-        r#"{"method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"first"}},"_meta":{"totalTokens":18000,"agentTimestampMs":3000}},"timestamp":1783584024}"#, "\n",
-        r#"{"method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"turn_completed","prompt_id":"e526ba42","stop_reason":"rate_limit","usage":{"inputTokens":86174,"outputTokens":1652,"totalTokens":87826,"cachedReadTokens":56960,"reasoningTokens":574,"modelCalls":5,"numTurns":5}}},"timestamp":1783584025}"#, "\n",
-        r#"{"method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"two"},"_meta":{"promptIndex":1}},"_meta":{"turnStartMs":6000,"totalTokens":22000}},"timestamp":1783584030}"#, "\n",
-        r#"{"method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"second"}},"_meta":{"totalTokens":31628,"agentTimestampMs":9000}},"timestamp":1783584035}"#, "\n",
-        r#"{"method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"turn_completed","prompt_id":"56468252","stop_reason":"end_turn","usage":{"inputTokens":198457,"outputTokens":6224,"totalTokens":204681,"cachedReadTokens":167680,"reasoningTokens":931,"modelCalls":7,"numTurns":7}}},"timestamp":1783584036}"#, "\n",
+        r#"{"method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"one"},"_meta":{"promptIndex":0}},"_meta":{"turnStartMs":1000,"totalTokens":9000}},"timestamp":1783584019}"#,
+        "\n",
+        r#"{"method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"first"}},"_meta":{"totalTokens":18000,"agentTimestampMs":3000}},"timestamp":1783584024}"#,
+        "\n",
+        r#"{"method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"turn_completed","prompt_id":"e526ba42","stop_reason":"rate_limit","usage":{"inputTokens":86174,"outputTokens":1652,"totalTokens":87826,"cachedReadTokens":56960,"reasoningTokens":574,"modelCalls":5,"numTurns":5}}},"timestamp":1783584025}"#,
+        "\n",
+        r#"{"method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"two"},"_meta":{"promptIndex":1}},"_meta":{"turnStartMs":6000,"totalTokens":22000}},"timestamp":1783584030}"#,
+        "\n",
+        r#"{"method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"second"}},"_meta":{"totalTokens":31628,"agentTimestampMs":9000}},"timestamp":1783584035}"#,
+        "\n",
+        r#"{"method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"turn_completed","prompt_id":"56468252","stop_reason":"end_turn","usage":{"inputTokens":198457,"outputTokens":6224,"totalTokens":204681,"cachedReadTokens":167680,"reasoningTokens":931,"modelCalls":7,"numTurns":7}}},"timestamp":1783584036}"#,
+        "\n",
     );
 
     #[test]
