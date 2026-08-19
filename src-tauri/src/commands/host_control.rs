@@ -25,6 +25,7 @@ use crate::chat_channel::manager::ChatChannelManager;
 use crate::commands::conversations::{
     emit_conversation_upsert, emit_obligation_waiver, list_all_conversations_core,
     sync_conversation_title_to_channels_core, update_conversation_archive_core,
+    ListAllConversationsOptions,
 };
 use crate::commands::host_control_organization::OrganizationHostControl;
 use crate::commands::host_control_room::RoomHostControl;
@@ -347,13 +348,14 @@ impl DbSessionHostControl {
         };
         let sessions = match list_all_conversations_core(
             &self.db.conn,
-            Some(vec![caller_scope.folder_id]),
-            None,
-            query,
-            None,
-            None,
-            params.archived,
-            false,
+            &self.emitter,
+            &self.chat_channel_manager,
+            ListAllConversationsOptions {
+                folder_ids: Some(vec![caller_scope.folder_id]),
+                search: query,
+                archived: params.archived,
+                ..Default::default()
+            },
         )
         .await
         {

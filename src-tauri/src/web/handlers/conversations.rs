@@ -27,13 +27,17 @@ pub async fn list_all_conversations(
     Ok(Json(
         conv_commands::list_all_conversations_core(
             &state.db.conn,
-            params.folder_ids,
-            params.agent_type,
-            params.search,
-            params.sort_by,
-            params.status,
-            params.archived.unwrap_or(false),
-            params.include_children.unwrap_or(false),
+            &state.emitter,
+            &state.chat_channel_manager,
+            conv_commands::ListAllConversationsOptions {
+                folder_ids: params.folder_ids,
+                agent_type: params.agent_type,
+                search: params.search,
+                sort_by: params.sort_by,
+                status: params.status,
+                archived: params.archived.unwrap_or(false),
+                include_children: params.include_children.unwrap_or(false),
+            },
         )
         .await?,
     ))
