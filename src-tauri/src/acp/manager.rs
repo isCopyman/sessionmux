@@ -6774,9 +6774,15 @@ mod tests {
             .unwrap_err();
         let _ = join.await;
         assert!(error.to_string().contains("binding changed"));
+        // The setup rebind S1→S3 split S1 onto its own preserved row (the
+        // bind_external_id A1 guard) — the rejected fork must add NOTHING
+        // beyond those two rows, and no row may carry the fork's S2.
         let rows = conversation::Entity::find().all(&db.conn).await.unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].external_id.as_deref(), Some("session-S3"));
+        assert_eq!(rows.len(), 2);
+        let c1_row = rows.iter().find(|r| r.id == c1.id).unwrap();
+        assert_eq!(c1_row.external_id.as_deref(), Some("session-S3"));
+        let preserved = rows.iter().find(|r| r.id != c1.id).unwrap();
+        assert_eq!(preserved.external_id.as_deref(), Some("session-S1"));
     }
 
     #[tokio::test]
