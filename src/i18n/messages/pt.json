@@ -1868,7 +1868,9 @@
       "markCompleted": "Marcar como concluída",
       "reopen": "Reabrir",
       "expandSubsessions": "Expandir subconversas",
-      "collapseSubsessions": "Recolher subconversas"
+      "collapseSubsessions": "Recolher subconversas",
+      "maximize": "Maximizar",
+      "restore": "Restaurar"
     },
     "search": {
       "dialogTitle": "Buscar",

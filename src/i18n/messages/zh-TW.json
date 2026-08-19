@@ -1868,7 +1868,9 @@
       "markCompleted": "標記為已完成",
       "reopen": "重新開啟",
       "expandSubsessions": "展開子會話",
-      "collapseSubsessions": "摺疊子會話"
+      "collapseSubsessions": "摺疊子會話",
+      "maximize": "最大化",
+      "restore": "還原"
     },
     "search": {
       "dialogTitle": "搜尋",
