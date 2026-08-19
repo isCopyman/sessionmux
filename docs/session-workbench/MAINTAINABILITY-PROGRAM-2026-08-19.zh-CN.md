@@ -802,3 +802,19 @@ T2 后置截图（CDP 9222 可用，基线在 .artifacts）+ 晨间验收报告 
   多路由 reverseMap/重键代际/echo 门控通知），会话不再永久卡"回复中"。另：门禁
   后台任务的进程级 exit code 会被收尾命令污染，**以日志内显式 EXIT 标记为准**
   （本批任务级 exit 1 实为三绿）。
+- 2026-08-20 凌晨 **标题同步批关账（95300618+fmt 916b4711+可见性修补）**：按用户
+  拍板的"DB 单一事实源"落地——list_all 读路径先 spawn_blocking 读 codex
+  session_index.jsonl，refresh_codex_auto_titles 分块（500/批）做带锁 CAS 同步
+  （复查 title_locked/kind≠loop/harness_internal/活 folder/旧值相等，绝不 bump
+  updated_at，精确返回改动集）；侧栏 upsert 内联保一致、Telegram 传播 tokio::spawn
+  摘挂+收敛循环（每轮重读标题，防止迟到的自动同步盖掉手动改名）。**免迁移**：
+  title_locked 列及 lock/retitle 机制我方早已有（m20260608，比上游更通用），上游
+  5 提交也从未建迁移——工人核实非假设。编排批准四项设计偏离：① overlay 保留但
+  **收编为同步数据源**（撤的是双源实害而非解析逻辑；无 DB 行的导入扫描仍需它，
+  上游同样保留）；② 3e8148c5 证实为无关测试修复，**标题链实为 4 提交**（分析
+  文档更正）；③ CAS 范围比上游更严（对齐 list_all 可见集，防隐藏行被 upsert
+  广播进侧栏）；④ 只接 list_all（导入路径本就 DB 为准）。门禁：server 测试
+  2467→2483 全绿、clippy ×3 零警告；漏网两处编排修补——fmt 残留、新参数结构体
+  pub(crate) 撞 pub 函数（private_interfaces）。用户可感收益：别处改的 codex
+  会话名下次列表刷新即达侧栏/@ 面板/搜索，手动改名永不被盖，频道 topic 迟到但
+  必收敛。
