@@ -519,6 +519,76 @@ describe("CollectionTree", () => {
     )
   })
 
+  it("offers New Conversation on a Collection's context menu", async () => {
+    const onNewSessionInCollection = vi.fn()
+    renderTree(vi.fn(), { onNewSessionInCollection })
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Research" }))
+    await userEvent.click(
+      screen.getByRole("menuitem", { name: "New Conversation" })
+    )
+
+    expect(onNewSessionInCollection).toHaveBeenCalledWith(10)
+  })
+
+  it("offers New Conversation on a Collection's hover menu", async () => {
+    const onNewSessionInCollection = vi.fn()
+    const { user } = renderTree(vi.fn(), { onNewSessionInCollection })
+
+    await user.click(
+      screen.getByRole("button", { name: "Actions for Research" })
+    )
+    await user.click(
+      screen.getByRole("menuitem", { name: "New Conversation" })
+    )
+
+    expect(onNewSessionInCollection).toHaveBeenCalledWith(10)
+  })
+
+  it("reports the nested Collection's own id, not its ancestor's", async () => {
+    const onNewSessionInCollection = vi.fn()
+    const { user } = renderTree(vi.fn(), { onNewSessionInCollection })
+
+    await user.click(
+      screen.getAllByRole("button", { name: "Expand collection" })[0]
+    )
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Sources" }))
+    await userEvent.click(
+      screen.getByRole("menuitem", { name: "New Conversation" })
+    )
+
+    expect(onNewSessionInCollection).toHaveBeenCalledWith(11)
+  })
+
+  it("hides New Conversation on a legacy Collection with no canonical Path", async () => {
+    h.items.push({
+      id: 20,
+      root_folder_id: null,
+      parent_id: null,
+      name: "Legacy inbox",
+      position: 9,
+      created_at: "2026-06-01T00:00:00.000Z",
+      updated_at: "2026-06-01T00:00:00.000Z",
+    })
+    try {
+      renderTree(vi.fn(), { onNewSessionInCollection: vi.fn() })
+
+      fireEvent.contextMenu(
+        screen.getByRole("button", { name: "Legacy inbox" })
+      )
+
+      expect(
+        screen.queryByRole("menuitem", { name: "New Conversation" })
+      ).toBeNull()
+      // The rest of the menu is untouched.
+      expect(
+        screen.getByRole("menuitem", { name: "New nested collection" })
+      ).toBeTruthy()
+    } finally {
+      h.items.length = 4
+    }
+  })
+
   it("drops agent-created Sessions when the source switch is off", async () => {
     renderTree(vi.fn(), { showSessions: true, showAgentCreated: false })
 
