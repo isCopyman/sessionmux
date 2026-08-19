@@ -620,9 +620,9 @@ describe("RoomWorkspace", () => {
     expect(tabs[2]).toHaveAccessibleName(/Commits/)
     // Members load first, so the session tab (not an agent tab, which the
     // room never offers) is the default-active one.
-    expect(within(popup).getByRole("tab", { selected: true })).toHaveAccessibleName(
-      /Sessions/
-    )
+    expect(
+      within(popup).getByRole("tab", { selected: true })
+    ).toHaveAccessibleName(/Sessions/)
   })
 
   it("previews an empty wake list before anyone is mentioned", async () => {

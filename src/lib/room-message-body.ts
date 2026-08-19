@@ -305,7 +305,8 @@ export function roomMessageBodyParts(input: {
         type: "reference",
         refType: parsed.refType,
         label: parsed.label,
-        uri: parsed.uri,
+        // The pre-parse uri (`parsed.uri` is nullable for uri-less kinds).
+        uri,
       })
       continue
     }

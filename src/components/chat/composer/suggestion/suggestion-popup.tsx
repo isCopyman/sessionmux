@@ -189,9 +189,8 @@ export const SuggestionPopup = forwardRef<
   // one, so a file/session/… query never strands the user on an empty tab.
   const firstNonEmpty = useMemo(
     () =>
-      tabOrder.find(
-        (kind) => (groupByKind.get(kind)?.items.length ?? 0) > 0
-      ) ?? tabOrder[0],
+      tabOrder.find((kind) => (groupByKind.get(kind)?.items.length ?? 0) > 0) ??
+      tabOrder[0],
     [groupByKind, tabOrder]
   )
   const activeTab = pinnedTab ?? firstNonEmpty

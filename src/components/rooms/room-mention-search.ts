@@ -36,7 +36,9 @@ function memberLabel(
   untitled: (id: number) => string
 ): string {
   const title = member.title?.trim()
-  return title ? formatConversationTitle(title) : untitled(member.conversationId)
+  return title
+    ? formatConversationTitle(title)
+    : untitled(member.conversationId)
 }
 
 /**

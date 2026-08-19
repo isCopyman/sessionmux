@@ -427,9 +427,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
   const roomFolderPath = useMemo(() => {
     const rootFolderId = detail?.rootFolderId
     if (rootFolderId == null) return null
-    return (
-      allFolders.find((folder) => folder.id === rootFolderId)?.path ?? null
-    )
+    return allFolders.find((folder) => folder.id === rootFolderId)?.path ?? null
   }, [allFolders, detail?.rootFolderId])
   const workspaceReferenceSearch = useReferenceSearch({
     defaultPath: roomFolderPath,
