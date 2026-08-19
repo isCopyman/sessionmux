@@ -756,17 +756,34 @@ pub async fn bind_external_id(
 
                 // Split required: `prev` is unrelated to `external_id` and
                 // would otherwise become unreachable the instant this row's
-                // column moves on. Preserve it onto its own row FIRST —
-                // reusing one that already carries it (an earlier, possibly
-                // interrupted split, or an unrelated fork already claimed
-                // it) rather than inserting a duplicate that would collide
-                // with the same unique index.
+                // column moves on. Everything below is one transaction —
+                // readers never observe an intermediate state and a failure
+                // rolls the whole split back — so the statement order is
+                // dictated purely by the unique `(external_id, agent_type)`
+                // index, which SQLite enforces PER STATEMENT: this row must
+                // release `prev` before another row may carry it. Reuse a row
+                // that already holds `prev` (an earlier, possibly interrupted
+                // split, or an unrelated fork already claimed it) rather than
+                // inserting a duplicate that would collide with that index.
                 let prev = previous_external_id.expect("is_continuation's None arm returned above");
                 let already_preserved = conversation::Entity::find()
                     .filter(conversation::Column::ExternalId.eq(prev.clone()))
                     .filter(conversation::Column::AgentType.eq(current.agent_type.clone()))
                     .filter(conversation::Column::Id.ne(conversation_id))
                     .one(txn)
+                    .await?;
+
+                // Release `prev` first — see the ordering note above. The new
+                // value was verified free by the conflict check.
+                conversation::Entity::update_many()
+                    .col_expr(
+                        conversation::Column::ExternalId,
+                        Expr::value(Some(external_id.clone())),
+                    )
+                    .col_expr(conversation::Column::UpdatedAt, Expr::value(now))
+                    .filter(conversation::Column::Id.eq(conversation_id))
+                    .filter(conversation::Column::DeletedAt.is_null())
+                    .exec(txn)
                     .await?;
 
                 let preserved_id = match already_preserved {
@@ -838,19 +855,6 @@ pub async fn bind_external_id(
                         inserted.id
                     }
                 };
-
-                // Only now, with the old session safely reachable elsewhere,
-                // overwrite this row's binding.
-                conversation::Entity::update_many()
-                    .col_expr(
-                        conversation::Column::ExternalId,
-                        Expr::value(Some(external_id.clone())),
-                    )
-                    .col_expr(conversation::Column::UpdatedAt, Expr::value(now))
-                    .filter(conversation::Column::Id.eq(conversation_id))
-                    .filter(conversation::Column::DeletedAt.is_null())
-                    .exec(txn)
-                    .await?;
 
                 Ok(BindAttempt::Bound(Some(preserved_id)))
             })
