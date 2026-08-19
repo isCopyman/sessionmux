@@ -757,6 +757,23 @@ function importantEnvKeysByAgent(agentType: AgentType): ImportantEnvKeys {
       model: ["DEEPSEEK_ACP_MODEL"],
     }
   }
+  if (agentType === "qoder") {
+    // Qoder's non-interactive credential is QODER_PERSONAL_ACCESS_TOKEN — the
+    // only way to authenticate a headless/server/Docker install, where the
+    // `qoder login` browser flow cannot run (an interactive login still
+    // outranks it). QODER_MODEL is the env twin of `-m/--model`. There is no
+    // real endpoint override, so QODER_BASE_URL is an inert placeholder —
+    // mirrors the backend `agent_env_keys(Qoder)` — kept as a single-element
+    // list rather than empty: `patchEnvByImportantKey` below indexes
+    // `keys.apiBaseUrl[0]` unguarded, and an empty list would patch an env var
+    // literally named "undefined". Generic OPENAI_*/API_KEY aliases are NOT
+    // read by Qoder.
+    return {
+      apiBaseUrl: ["QODER_BASE_URL"],
+      apiKey: ["QODER_PERSONAL_ACCESS_TOKEN"],
+      model: ["QODER_MODEL"],
+    }
+  }
   return {
     apiBaseUrl: ["OPENAI_BASE_URL", "API_BASE_URL"],
     apiKey: ["OPENAI_API_KEY", "API_KEY"],

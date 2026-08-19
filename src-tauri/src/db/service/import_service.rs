@@ -20,10 +20,11 @@ use crate::parsers::kimi_code::KimiCodeParser;
 use crate::parsers::openclaw::OpenClawParser;
 use crate::parsers::opencode::OpenCodeParser;
 use crate::parsers::pi::PiParser;
+use crate::parsers::qoder::QoderParser;
 use crate::parsers::{path_eq_for_matching, AgentParser};
 
 /// Every locally-parsable agent, in the canonical parser order.
-const ALL_PARSER_AGENTS: [AgentType; 13] = [
+const ALL_PARSER_AGENTS: [AgentType; 14] = [
     AgentType::ClaudeCode,
     AgentType::Codex,
     AgentType::OpenCode,
@@ -37,6 +38,7 @@ const ALL_PARSER_AGENTS: [AgentType; 13] = [
     AgentType::Grok,
     AgentType::Cursor,
     AgentType::DeepSeek,
+    AgentType::Qoder,
 ];
 
 fn build_parser(agent_type: AgentType) -> Box<dyn AgentParser> {
@@ -54,6 +56,7 @@ fn build_parser(agent_type: AgentType) -> Box<dyn AgentParser> {
         AgentType::Grok => Box::new(GrokParser::new()),
         AgentType::Cursor => Box::new(CursorParser::new()),
         AgentType::DeepSeek => Box::new(DeepSeekParser::new()),
+        AgentType::Qoder => Box::new(QoderParser::new()),
         // Custom agents' history lives in codeg's own ACP transcript.
         AgentType::Custom(_) => {
             Box::new(crate::parsers::acp_native::AcpNativeParser::new(agent_type))
