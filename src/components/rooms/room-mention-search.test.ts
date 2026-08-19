@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 
 import type { SuggestionGroup } from "@/components/chat/composer/suggestion/types"
 
@@ -184,6 +184,49 @@ describe("buildRoomMentionSearch", () => {
     })
     const groups = await search("")
     expect(groups).toEqual([buildRoomSessionGroup("", members, labels)])
+  })
+
+  it("degrades to just the session group when the workspace search hangs past the timeout", async () => {
+    vi.useFakeTimers()
+    try {
+      const search = buildRoomMentionSearch(
+        members,
+        labels,
+        // A wedged git-log / file-tree fetch: never settles on its own.
+        () => new Promise<SuggestionGroup[]>(() => {})
+      )
+      let groups: SuggestionGroup[] | undefined
+      // `search(...)` is typed as `ReferenceSearch`, whose return type
+      // includes the synchronous `SuggestionGroup[]` branch — wrap in
+      // `Promise.resolve` so `.then` type-checks regardless of which branch
+      // the real implementation (always async here) takes.
+      const pending = Promise.resolve(search("")).then((result) => {
+        groups = result
+      })
+      await vi.advanceTimersByTimeAsync(3000)
+      await pending
+      expect(groups).toEqual([buildRoomSessionGroup("", members, labels)])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("still returns file/commit groups when the workspace search resolves before the timeout", async () => {
+    vi.useFakeTimers()
+    try {
+      const search = buildRoomMentionSearch(members, labels, async () => [
+        fileGroup([fileItem]),
+        commitGroup(),
+      ])
+      const groups = await search("")
+      expect(groups.map((group) => group.kind)).toEqual([
+        "session",
+        "file",
+        "commit",
+      ])
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it("forwards the query and abort signal to the underlying workspace search", async () => {

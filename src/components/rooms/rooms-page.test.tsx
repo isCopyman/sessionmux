@@ -302,6 +302,25 @@ describe("RoomWorkspace", () => {
     expect(screen.queryByText("Uncategorized · 1 members")).toBeNull()
   })
 
+  it("highlights the row of a message that mentions @human", async () => {
+    api.getCollaborationRoomTimeline.mockResolvedValue(
+      timeline([
+        event({ id: "evt-plain", body: "just fyi", mentionHuman: false }),
+        event({
+          id: "evt-mention",
+          body: "wake up please",
+          mentionHuman: true,
+        }),
+      ])
+    )
+    renderRoom()
+
+    const plainRow = (await screen.findByText("just fyi")).closest("article")
+    const mentionRow = screen.getByText("wake up please").closest("article")
+    expect(plainRow?.getAttribute("data-mention-human")).toBeNull()
+    expect(mentionRow?.getAttribute("data-mention-human")).toBe("true")
+  })
+
   it("marks a member as running only while liveMessage is set", async () => {
     runtime.byConversationId.set(101, { liveMessage: { id: "live-1" } })
     api.getCollaborationRoomTimeline.mockResolvedValue(timeline([event()]))

@@ -785,9 +785,13 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
                   <article
                     key={event.id}
                     id={`room-event-${event.id}`}
+                    data-mention-human={event.mentionHuman ? "true" : undefined}
                     className={cn(
-                      "group flex gap-3 px-4 hover:bg-muted/40",
-                      grouped ? "py-0.5" : "mt-2 py-1.5"
+                      "group flex gap-3 border-l-2 px-4 hover:bg-muted/40",
+                      grouped ? "py-0.5" : "mt-2 py-1.5",
+                      event.mentionHuman
+                        ? "border-amber-500 bg-amber-500/10"
+                        : "border-transparent"
                     )}
                   >
                     {grouped ? (
