@@ -41,7 +41,7 @@
       "appearance": "外观",
       "agents": "智能体",
       "mcp": "MCP",
-      "skills": "Skills",
+      "skills": "技能",
       "shortcuts": "快捷键",
       "version_control": "版本控制",
       "system": "系统",
@@ -419,7 +419,7 @@
     }
   },
   "SkillsSettings": {
-    "title": "Skills",
+    "title": "技能",
     "description": "左侧选择 Skill，右侧默认预览 Markdown，点击编辑后可修改并保存。",
     "loadingAgents": "正在加载支持 Skills 的 Agent...",
     "emptyNoManageableAgents": "当前没有可管理 Skills 的 Agent。",
@@ -575,7 +575,7 @@
       "configJson": "MCP 配置(JSON)",
       "draftTitle": "新建 MCP",
       "draftDescription": "填写 Server ID 与配置以创建本地 MCP 服务器。",
-      "serverIdLabel": "Server ID",
+      "serverIdLabel": "服务器 ID",
       "serverIdPlaceholder": "Server ID（例如：my-mcp）",
       "typeHint": "支持类型：stdio、http（别名 streamable-http、streamableHttp）、sse。env 仅适用于 stdio；远端 MCP 请通过 headers 字段传递鉴权 token。",
       "envOnRemoteWarning": "检测到远端 MCP 配置中包含 env 字段。env 仅 stdio 类型使用，远端 MCP 应通过 headers 携带鉴权信息，env 字段保存时会被忽略。"
