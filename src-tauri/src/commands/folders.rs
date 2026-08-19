@@ -4783,7 +4783,14 @@ fn walk_workspace_files_multi(
         let remaining = cap.saturating_sub(entries.len());
         let root_entries = walk_workspace_files(original_root, remaining, deadline);
         for entry in root_entries {
-            let key = format!("{}/{}", canonical_root.to_string_lossy(), entry.path);
+            // Normalize to forward slashes: on Windows the canonical root uses
+            // `\` (and a `\\?\` verbatim prefix) while entry paths use `/`, so
+            // a raw concatenation would never collide for a nested root.
+            let key = format!(
+                "{}/{}",
+                canonical_root.to_string_lossy().replace('\\', "/"),
+                entry.path
+            );
             if seen_files.insert(key) {
                 entries.push(entry);
             }
