@@ -79,6 +79,10 @@ pub enum AutomationAction {
     /// Enqueue a work task (status todo) on the target folder's board; the
     /// work-task engine owns the actual execution.
     EnqueueTask,
+    /// Enqueue the captured prompt into an existing Session's prompt queue
+    /// (middle dispatch class, behind the user's own typing). No session is
+    /// launched — the target Session's own runtime picks the item up.
+    QueuePrompt,
 }
 
 /// The structured shape stored inside `automation.config`. Kept tolerant
@@ -99,4 +103,8 @@ pub struct AutomationConfig {
     pub config_values: std::collections::BTreeMap<String, String>,
     #[serde(default)]
     pub label_snapshot: Option<serde_json::Value>,
+    /// `queue_prompt` target: the existing Session the captured prompt is
+    /// enqueued into. Unused by the other actions.
+    #[serde(default)]
+    pub target_conversation_id: Option<i32>,
 }

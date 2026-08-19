@@ -1,6 +1,16 @@
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
+/// Who created a Session row (`conversation.created_by`). Stable lowercase wire
+/// values, constrained by the same set in the migration CHECK; sessions created
+/// before the column existed backfill to [`CREATED_BY_USER`].
+pub const CREATED_BY_USER: &str = "user";
+/// An Agent created the Session through the Host Control MCP tools.
+pub const CREATED_BY_AGENT: &str = "agent";
+/// A host engine created the Session without a human at the composer
+/// (Automation runs, work-task engine launches).
+pub const CREATED_BY_AUTOMATION: &str = "automation";
+
 #[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
 #[sea_orm(rs_type = "String", db_type = "String(StringLen::None)")]
 #[serde(rename_all = "snake_case")]
@@ -90,6 +100,9 @@ pub struct Model {
     /// automation, fork). Those rows stay visible even if native metadata
     /// later says `thread_source=subagent`.
     pub codeg_owned: bool,
+    /// Who created this Session: one of the `CREATED_BY_*` constants. Written
+    /// once at insert; a fork inherits its source row's value.
+    pub created_by: String,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

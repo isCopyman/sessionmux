@@ -31,8 +31,9 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { FolderSelect } from "@/components/shared/folder-select"
+import { SessionSelect } from "@/components/shared/session-select"
 import { cn } from "@/lib/utils"
-import { automationComputeNextRun } from "@/lib/api"
+import { automationComputeNextRun, listAllConversations } from "@/lib/api"
 import type {
   AgentType,
   Automation,
@@ -40,6 +41,7 @@ import type {
   AutomationDraft,
   AutomationIsolation,
   AutomationTriggerKind,
+  DbConversationSummary,
   PromptInputBlock,
 } from "@/lib/types"
 
@@ -114,6 +116,12 @@ export function AutomationEditor({
   const [isRemoteBranch, setIsRemoteBranch] = useState(
     automation?.is_remote_branch ?? false
   )
+  // queue_prompt target: the existing Session the captured prompt is enqueued
+  // into. The list is fetched lazily — only when the action asks for it.
+  const [targetSessionId, setTargetSessionId] = useState<number | null>(
+    automation?.config?.target_conversation_id ?? null
+  )
+  const [sessions, setSessions] = useState<DbConversationSummary[]>([])
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [nextRun, setNextRun] = useState<string | null>(null)
@@ -208,18 +216,41 @@ export function AutomationEditor({
     }
   }, [selectableFolders, folderId, automation])
 
+  // Load the pickable target Sessions only when the queue-prompt action is
+  // chosen — a launch/task automation never renders the picker. Archived
+  // sessions are excluded: their queue would never drain (the engine refuses
+  // them at fire time too).
+  useEffect(() => {
+    if (action !== "queue_prompt") return
+    let cancelled = false
+    listAllConversations({ archived: false })
+      .then((rows) => {
+        if (!cancelled) setSessions(rows)
+      })
+      .catch(() => {
+        if (!cancelled) setSessions([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [action])
+
   const submit = async () => {
     setError(null)
     const editor = editorRef.current?.getEditor()
     const displayText = (editorRef.current?.getText() ?? prompt).trim()
+    const queuePrompt = action === "queue_prompt"
     if (!name.trim()) return setError(t("errorName"))
     if (!displayText) return setError(t("errorPrompt"))
     if (trigger === "schedule" && !cron.trim()) return setError(t("errorCron"))
-    if (folderId == null) return setError(t("errorFolder"))
+    // Queue-prompt automations target an existing Session, not a folder.
+    if (!queuePrompt && folderId == null) return setError(t("errorFolder"))
+    if (queuePrompt && targetSessionId == null)
+      return setError(t("errorTargetSession"))
     // Folder selected but its path is still resolving; the probe would be global.
     // The Save button is disabled in this state, so this is a race-safety net —
     // bail silently and let it re-enable once the path resolves.
-    if (folderPathResolving) return
+    if (!queuePrompt && folderPathResolving) return
 
     const blocks: PromptInputBlock[] = editor
       ? docToPromptBlocks(editor)
@@ -255,15 +286,24 @@ export function AutomationEditor({
       const persistedAgentType = fellBackToSubstitute
         ? automation.agent_type
         : agentType
+      // The target Session's title rides in the label snapshot so the detail
+      // page can still name it after a rename or deletion.
+      const targetSessionTitle =
+        sessions.find((s) => s.id === targetSessionId)?.title ?? null
       const label_snapshot = {
         agent_label: getAgentLabel(agentType) ?? agentType,
         ...(folderName ? { folder_label: folderName } : {}),
+        ...(queuePrompt && targetSessionId != null
+          ? { session_label: targetSessionTitle ?? `#${targetSessionId}` }
+          : {}),
         ...snapshotLabels(snapshot, mode_id, config_values),
       }
 
-      // Enqueue-task automations never run in place: canonicalize the
-      // session-only fields so the stored row can't carry a stale branch.
+      // Enqueue-task and queue-prompt automations never run in place:
+      // canonicalize the session-only fields so the stored row can't carry a
+      // stale branch (or, for queue-prompt, a folder it never uses).
       const enqueue = action === "enqueue_task"
+      const sessionless = enqueue || queuePrompt
       const draft: AutomationDraft = {
         name: name.trim(),
         // Enable/disable lives on the detail header + row menu now; preserve an
@@ -273,14 +313,14 @@ export function AutomationEditor({
         cron: trigger === "schedule" ? cron.trim() : null,
         timezone,
         agent_type: persistedAgentType,
-        root_folder_id: folderId,
-        isolation: enqueue ? "worktree_per_run" : isolation,
+        root_folder_id: queuePrompt ? null : folderId,
+        isolation: sessionless ? "worktree_per_run" : isolation,
         branch:
-          !enqueue && isolation === "shared_in_root" && branch.trim()
+          !sessionless && isolation === "shared_in_root" && branch.trim()
             ? branch.trim()
             : null,
         is_remote_branch:
-          !enqueue && isolation === "shared_in_root" && branch.trim()
+          !sessionless && isolation === "shared_in_root" && branch.trim()
             ? isRemoteBranch
             : false,
         config: fellBackToSubstitute
@@ -294,6 +334,7 @@ export function AutomationEditor({
               config_values: automation.config?.config_values ?? {},
               label_snapshot:
                 automation.config?.label_snapshot ?? label_snapshot,
+              target_conversation_id: queuePrompt ? targetSessionId : null,
             }
           : {
               action,
@@ -302,6 +343,7 @@ export function AutomationEditor({
               mode_id,
               config_values,
               label_snapshot,
+              target_conversation_id: queuePrompt ? targetSessionId : null,
             },
       }
       await onSubmit(draft)
@@ -405,8 +447,9 @@ export function AutomationEditor({
         </div>
       </div>
 
-      {/* Action — what a fire does: launch a session (legacy) or enqueue a
-          task on the folder's board. */}
+      {/* Action — what a fire does: launch a session (legacy), enqueue a
+          task on the folder's board, or queue a prompt into an existing
+          Session. */}
       <div className="flex flex-col gap-2">
         <h3 className="text-[0.6875rem] font-medium uppercase tracking-wide text-muted-foreground">
           {t("sectionAction")}
@@ -420,6 +463,7 @@ export function AutomationEditor({
             [
               { value: "launch_session", label: t("actionLaunchSession") },
               { value: "enqueue_task", label: t("actionEnqueueTask") },
+              { value: "queue_prompt", label: t("actionQueuePrompt") },
             ] as Array<{ value: AutomationAction; label: string }>
           ).map((opt) => (
             <button
@@ -456,30 +500,48 @@ export function AutomationEditor({
             {t("actionEnqueueTaskHint")}
           </p>
         ) : null}
+        {action === "queue_prompt" ? (
+          <p className="text-xs text-muted-foreground">
+            {t("actionQueuePromptHint")}
+          </p>
+        ) : null}
       </div>
 
-      {/* Target — where the run happens: workspace folder, isolation, branch. */}
+      {/* Target — where the run happens: workspace folder, isolation, branch.
+          A queue-prompt automation targets an existing Session instead. */}
       <div className="flex flex-col gap-2">
         <h3 className="text-[0.6875rem] font-medium uppercase tracking-wide text-muted-foreground">
           {t("sectionTarget")}
         </h3>
         <div className="flex flex-wrap items-center gap-2">
-          <FolderSelect
-            variant="field"
-            folders={selectableFolders}
-            value={folderId}
-            // A branch belongs to a specific repo, so switching folders must drop
-            // the previous folder's branch (else it'd be saved against the new
-            // one). Done in this user-action handler, not a folderId effect, so
-            // the initial hydrate/backfill never wipes a seeded branch on edit.
-            onChange={(id) => {
-              setFolderId(id)
-              setBranch("")
-              setIsRemoteBranch(false)
-            }}
-            placeholder={t("folderPlaceholder")}
-            title={t("folder")}
-          />
+          {action === "queue_prompt" ? (
+            <SessionSelect
+              sessions={sessions}
+              value={targetSessionId}
+              onChange={setTargetSessionId}
+              placeholder={t("sessionPlaceholder")}
+              searchPlaceholder={t("searchSession")}
+              emptyLabel={t("noSessions")}
+              title={t("targetSession")}
+            />
+          ) : (
+            <FolderSelect
+              variant="field"
+              folders={selectableFolders}
+              value={folderId}
+              // A branch belongs to a specific repo, so switching folders must drop
+              // the previous folder's branch (else it'd be saved against the new
+              // one). Done in this user-action handler, not a folderId effect, so
+              // the initial hydrate/backfill never wipes a seeded branch on edit.
+              onChange={(id) => {
+                setFolderId(id)
+                setBranch("")
+                setIsRemoteBranch(false)
+              }}
+              placeholder={t("folderPlaceholder")}
+              title={t("folder")}
+            />
+          )}
 
           {/* A worktree run gets its own fresh tree, so a branch only applies to
               the shared-folder case — the picker shows there and the checkbox

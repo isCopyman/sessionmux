@@ -23,9 +23,11 @@ use crate::acp::types::{
 };
 use crate::commands::acp::{acp_cancel_core, build_session_runtime_env, verify_agent_installed};
 use crate::commands::conversations::{
-    create_conversation_core, emit_conversation_deleted, emit_conversation_upsert,
+    create_conversation_core_with_source, emit_conversation_deleted, emit_conversation_upsert,
 };
-use crate::db::entities::conversation::{ConversationKind, ConversationStatus};
+use crate::db::entities::conversation::{
+    ConversationKind, ConversationStatus, CREATED_BY_AGENT,
+};
 use crate::db::service::{conversation_service, folder_service, prompt_queue_service};
 use crate::db::AppDatabase;
 use crate::models::{AgentType, DbConversationSummary};
@@ -631,11 +633,12 @@ impl SessionHostControlProvider {
             Err(note) => return HostControlUseOutcome::rejected(request_id, action, note),
         };
 
-        let conversation_id = match create_conversation_core(
+        let conversation_id = match create_conversation_core_with_source(
             &self.db.conn,
             caller_session.folder_id,
             params.harness,
             title.clone(),
+            CREATED_BY_AGENT,
         )
         .await
         {

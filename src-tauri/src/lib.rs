@@ -831,6 +831,9 @@ mod tauri_app {
                         .inner()
                         .clone(),
                     effective_data_dir.clone(),
+                    app.state::<crate::prompt_queue::PromptQueueHandle>()
+                        .inner()
+                        .clone(),
                 ) {
                     tauri::async_runtime::spawn(crate::automation::run_automation_engine(engine));
                 }

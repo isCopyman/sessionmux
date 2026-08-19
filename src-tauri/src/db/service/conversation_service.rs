@@ -4,7 +4,7 @@ use sea_orm::{
     QueryFilter, QueryOrder, QuerySelect, Set,
 };
 
-use crate::db::entities::conversation::ConversationKind;
+use crate::db::entities::conversation::{ConversationKind, CREATED_BY_USER};
 use crate::db::entities::{conversation, folder};
 use crate::db::error::DbError;
 use crate::models::{AgentType, DbConversationSummary};
@@ -16,6 +16,28 @@ pub async fn create(
     title: Option<String>,
     git_branch: Option<String>,
 ) -> Result<conversation::Model, DbError> {
+    create_with_source(
+        conn,
+        folder_id,
+        agent_type,
+        title,
+        git_branch,
+        CREATED_BY_USER,
+    )
+    .await
+}
+
+/// Mirror of [`create`] for rows a machine spawned: the caller names the
+/// provenance (`created_by`) instead of defaulting to the user. Regular kind,
+/// like [`create`].
+pub async fn create_with_source(
+    conn: &DatabaseConnection,
+    folder_id: i32,
+    agent_type: AgentType,
+    title: Option<String>,
+    git_branch: Option<String>,
+    created_by: &str,
+) -> Result<conversation::Model, DbError> {
     create_inner(
         conn,
         folder_id,
@@ -23,6 +45,7 @@ pub async fn create(
         title,
         git_branch,
         ConversationKind::Regular,
+        created_by,
     )
     .await
 }
@@ -45,6 +68,7 @@ pub async fn create_chat(
         title,
         git_branch,
         ConversationKind::Chat,
+        CREATED_BY_USER,
     )
     .await
 }
@@ -56,6 +80,7 @@ async fn create_inner(
     title: Option<String>,
     git_branch: Option<String>,
     kind: ConversationKind,
+    created_by: &str,
 ) -> Result<conversation::Model, DbError> {
     let at_str = serde_json::to_value(agent_type)
         .ok()
@@ -85,6 +110,7 @@ async fn create_inner(
         origin_cwd: Set(None),
         harness_internal: Set(false),
         codeg_owned: Set(true),
+        created_by: Set(created_by.to_string()),
         preferred_mode_id: Set(None),
         preferred_config_values: Set(None),
     };
@@ -499,6 +525,7 @@ fn conv_to_summary(r: conversation::Model) -> DbConversationSummary {
         delegation_call_id: r.delegation_call_id,
         origin_cwd: r.origin_cwd,
         harness_internal: r.harness_internal,
+        created_by: r.created_by,
     }
 }
 
@@ -898,6 +925,37 @@ mod tests {
         .await
         .expect("child");
         (parent.id, child.id)
+    }
+
+    #[tokio::test]
+    async fn created_by_defaults_to_user_and_honors_explicit_provenance() {
+        use crate::db::entities::conversation::CREATED_BY_AGENT;
+
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/codeg-created-by").await;
+
+        let user_row = create(&db.conn, folder_id, AgentType::Codex, None, None)
+            .await
+            .expect("user-created row");
+        assert_eq!(user_row.created_by, CREATED_BY_USER);
+
+        let agent_row = create_with_source(
+            &db.conn,
+            folder_id,
+            AgentType::Codex,
+            None,
+            None,
+            CREATED_BY_AGENT,
+        )
+        .await
+        .expect("agent-created row");
+        assert_eq!(agent_row.created_by, CREATED_BY_AGENT);
+
+        // The summary the list APIs ship carries the provenance through.
+        let summary = get_by_id(&db.conn, agent_row.id).await.expect("summary");
+        assert_eq!(summary.created_by, CREATED_BY_AGENT);
+        let summary = get_by_id(&db.conn, user_row.id).await.expect("summary");
+        assert_eq!(summary.created_by, CREATED_BY_USER);
     }
 
     #[tokio::test]

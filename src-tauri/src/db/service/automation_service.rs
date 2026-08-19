@@ -193,6 +193,16 @@ fn validate_draft(draft: &AutomationDraft) -> Result<(), DbError> {
             "a target folder is required to enqueue tasks".into(),
         ));
     }
+    // Queue-prompt automations enqueue into an existing Session; reject a
+    // targetless draft at save for the same reason. (Existence is checked at
+    // fire — a Session can be deleted or archived at any time.)
+    if cfg.action == crate::models::AutomationAction::QueuePrompt
+        && cfg.target_conversation_id.is_none()
+    {
+        return Err(DbError::Validation(
+            "a target session is required to queue a prompt".into(),
+        ));
+    }
     // A remote branch is resolved by minting a per-run worktree that tracks it;
     // it can't be checked out in the shared root tree (the engine would refuse
     // at fire time). Reject the combination at save so the misconfiguration

@@ -487,6 +487,9 @@ async fn import_one(
         origin_cwd: Set(None),
         harness_internal: Set(false),
         codeg_owned: Set(false),
+        // Imported rows were authored outside Codeg (a human ran the agent's
+        // own CLI); 'user' is the closest provenance the value domain has.
+        created_by: Set(conversation::CREATED_BY_USER.to_string()),
         preferred_mode_id: Set(None),
         preferred_config_values: Set(None),
     };
@@ -1072,6 +1075,7 @@ mod tests {
             origin_cwd: Set(None),
             harness_internal: Set(false),
             codeg_owned: Set(false),
+            created_by: Set(conversation::CREATED_BY_USER.to_string()),
             preferred_mode_id: Set(None),
             preferred_config_values: Set(None),
         }

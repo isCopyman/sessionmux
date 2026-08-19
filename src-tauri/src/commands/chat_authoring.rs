@@ -237,6 +237,9 @@ impl ChatAuthoringAccess for DbChatAuthoring {
             mode_id: None,
             config_values: BTreeMap::new(),
             label_snapshot: None,
+            // The authoring tool's action allowlist (companion.rs) only admits
+            // launch_session / enqueue_task, so no target session exists here.
+            target_conversation_id: None,
         };
         let config = match serde_json::to_value(&config) {
             Ok(v) => v,

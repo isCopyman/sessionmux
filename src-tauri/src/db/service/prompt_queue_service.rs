@@ -15,16 +15,17 @@ use crate::models::prompt_queue::{
 };
 
 const MAX_QUEUE_ITEMS: usize = 1_000;
-/// Dispatch order: the user's own follow-ups first, then letters and mailbox
-/// reminders, then idle-continuation timers; FIFO inside each class. This is
-/// the single ordering every head inspection and claim must share.
+/// Dispatch order: the user's own follow-ups first, then letters, mailbox
+/// reminders, and automation-scheduled prompts, then idle-continuation timers;
+/// FIFO inside each class. This is the single ordering every head inspection
+/// and claim must share.
 const CLASS_ORDER_SQL: &str = "CASE source \
      WHEN 'user' THEN 0 WHEN 'collaboration' THEN 1 WHEN 'reminder' THEN 1 \
-     ELSE 2 END ASC, position ASC, created_at ASC, id ASC";
+     WHEN 'automation' THEN 1 ELSE 2 END ASC, position ASC, created_at ASC, id ASC";
 /// Same ordering with the `q.` alias for queries that join other tables.
 const CLASS_ORDER_SQL_Q: &str = "CASE q.source \
      WHEN 'user' THEN 0 WHEN 'collaboration' THEN 1 WHEN 'reminder' THEN 1 \
-     ELSE 2 END ASC, q.position ASC, q.created_at ASC, q.id ASC";
+     WHEN 'automation' THEN 1 ELSE 2 END ASC, q.position ASC, q.created_at ASC, q.id ASC";
 /// Idle flush and busy steer both merge consecutive collaboration origins
 /// into one prompt. Buzz's FlushBatch: one round, several envelopes.
 const MAX_COLLABORATION_FLUSH_BATCH: usize = 16;

@@ -1880,6 +1880,26 @@ pub async fn create_conversation_core(
     agent_type: AgentType,
     title: Option<String>,
 ) -> Result<i32, AppCommandError> {
+    create_conversation_core_with_source(
+        conn,
+        folder_id,
+        agent_type,
+        title,
+        crate::db::entities::conversation::CREATED_BY_USER,
+    )
+    .await
+}
+
+/// [`create_conversation_core`] with an explicit provenance: machine-driven
+/// creators (Host Control tools, the automation / work-task engines) pass
+/// their `CREATED_BY_*` value instead of the user default.
+pub async fn create_conversation_core_with_source(
+    conn: &sea_orm::DatabaseConnection,
+    folder_id: i32,
+    agent_type: AgentType,
+    title: Option<String>,
+    created_by: &str,
+) -> Result<i32, AppCommandError> {
     let git_branch = if let Some(folder) = folder_service::get_folder_by_id(conn, folder_id)
         .await
         .map_err(AppCommandError::from)?
@@ -1889,9 +1909,11 @@ pub async fn create_conversation_core(
         None
     };
 
-    let model = conversation_service::create(conn, folder_id, agent_type, title, git_branch)
-        .await
-        .map_err(AppCommandError::from)?;
+    let model = conversation_service::create_with_source(
+        conn, folder_id, agent_type, title, git_branch, created_by,
+    )
+    .await
+    .map_err(AppCommandError::from)?;
     Ok(model.id)
 }
 
@@ -2503,6 +2525,7 @@ mod tests {
             delegation_call_id: Some("call-1".into()),
             origin_cwd: None,
             harness_internal: false,
+            created_by: "user".into(),
         }
     }
 
@@ -5096,6 +5119,7 @@ mod tests {
                 delegation_call_id: None,
                 origin_cwd: None,
                 harness_internal: false,
+                created_by: "user".into(),
             },
             turns,
             session_stats: None,

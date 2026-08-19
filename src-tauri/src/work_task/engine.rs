@@ -31,7 +31,9 @@ use crate::acp::types::{AcpEvent, EventEnvelope, PromptCapabilitiesInfo, PromptI
 use crate::acp::work_task_tools::{TaskReportAck, WorkTaskToolAccess};
 use crate::acp::InternalEventBus;
 use crate::commands::acp::{build_session_runtime_env, verify_agent_installed};
-use crate::commands::conversations::{create_conversation_core, emit_conversation_upsert};
+use crate::commands::conversations::{
+    create_conversation_core_with_source, emit_conversation_upsert,
+};
 use crate::commands::folders::{
     emit_folder_deleted, emit_folder_upsert, get_folder_core, git_worktree_add,
     open_worktree_folder_core, resolve_git_head,
@@ -1036,11 +1038,14 @@ impl TaskEngine {
             task.conversation_id.expect("resumed implies conversation")
         } else {
             let title = conversation_title_for_task(&task.title);
-            let id = match create_conversation_core(
+            // The work-task engine spawns this Session without a human at the
+            // composer — same provenance as an automation run.
+            let id = match create_conversation_core_with_source(
                 &self.db.conn,
                 wt.folder_id,
                 agent_type,
                 Some(title),
+                conversation::CREATED_BY_AUTOMATION,
             )
             .await
             {
