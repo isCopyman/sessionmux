@@ -13,10 +13,20 @@ export interface FlatFileEntry {
   lowerPath: string
   /** Pre-computed lowercase name for filtering */
   lowerName: string
+  /** The root this entry was resolved under (same as WorkspaceFileEntry.root)
+   * — `folderPath` for the plain single-folder case, or one of `folderPath`/
+   * `additionalPaths` when multiple roots are in play. Needed to join back to
+   * an absolute path once a search can span more than one root. */
+  root: string
 }
 
 interface UseFileTreeOptions {
   folderPath: string | undefined
+  /** Extra roots merged into the same search, alongside `folderPath` — a
+   * Room's manually-added paths. Omit/leave empty for the plain single-folder
+   * case (the file panel, a Session's own composer); their behavior is
+   * unchanged by this option existing. */
+  additionalPaths?: string[]
   enabled: boolean
 }
 
@@ -28,36 +38,67 @@ interface UseFileTreeResult {
   reset: () => void
 }
 
+const EMPTY_ADDITIONAL_PATHS: string[] = []
+
+/** Every non-empty root, `folderPath` first, then `additionalPaths` in the
+ * order given. `null` when there is nothing to search at all. */
+function combinedRoots(
+  folderPath: string | undefined,
+  additionalPaths: readonly string[]
+): string[] | null {
+  const roots = [folderPath, ...additionalPaths].filter(
+    (root): root is string => Boolean(root && root.length > 0)
+  )
+  return roots.length > 0 ? roots : null
+}
+
+/** Stable cache key for a root combination — order-sensitive (there's no need
+ * to sort; a different order is treated as a different combination). Joined
+ * with the pipe character: reserved in a Windows path and vanishingly
+ * unlikely in a POSIX one, so two different root lists essentially cannot
+ * collide into the same key the way joining with a space or comma could. */
+function rootsKey(roots: string[] | null): string | null {
+  return roots ? roots.join("|") : null
+}
+
 /**
  * Loads a flat, gitignore-aware listing of every file/dir under `folderPath`
- * (lazily, when `enabled`) for in-memory file search — shared by the search
- * dialog and the composer `@`-mention picker.
+ * plus any `additionalPaths` (lazily, when `enabled`) for in-memory file
+ * search — shared by the search dialog and the composer `@`-mention picker.
  *
- * Discovery and gitignore filtering run on the backend (`list_workspace_files`),
- * which prunes ignored directories *during* the walk and applies no depth cap,
- * so deeply nested files are reachable while `node_modules`/`target`/… are never
- * descended. The result is cached per folder path; a folder switch keeps showing
+ * Discovery, gitignore filtering, dedup across roots, and the entry-count /
+ * wall-clock budgets all run on the backend in a single `list_workspace_files`
+ * call (which prunes ignored directories *during* the walk and applies no
+ * depth cap, so deeply nested files are reachable while `node_modules`/
+ * `target`/… are never descended). The result is cached per root combination;
+ * switching folders (or a room's additional-path list changing) keeps showing
  * the previous list until the new one loads (`loaded` gates that transition).
  */
 export function useFileTree({
   folderPath,
+  additionalPaths = EMPTY_ADDITIONAL_PATHS,
   enabled,
 }: UseFileTreeOptions): UseFileTreeResult {
   const [allFiles, setAllFiles] = useState<FlatFileEntry[]>([])
   const [loading, setLoading] = useState(false)
-  const loadedForPathRef = useRef<string | null>(null)
+  const loadedForKeyRef = useRef<string | null>(null)
+
+  const roots = combinedRoots(folderPath, additionalPaths)
+  const key = rootsKey(roots)
 
   useEffect(() => {
-    if (!enabled || !folderPath) return
-    if (loadedForPathRef.current === folderPath) return
+    if (!enabled || !roots || !key) return
+    if (loadedForKeyRef.current === key) return
 
     let canceled = false
     setLoading(true)
 
     async function load() {
       try {
+        const [primary, ...extra] = roots!
         const files: WorkspaceFileEntry[] = await listWorkspaceFiles(
-          folderPath!
+          primary,
+          extra.length > 0 ? extra : undefined
         )
         const flat: FlatFileEntry[] = files.map((f) => ({
           name: f.name,
@@ -65,11 +106,12 @@ export function useFileTree({
           kind: f.kind,
           lowerPath: f.path.toLowerCase(),
           lowerName: f.name.toLowerCase(),
+          root: f.root,
         }))
 
         if (!canceled) {
           setAllFiles(flat)
-          loadedForPathRef.current = folderPath!
+          loadedForKeyRef.current = key
         }
       } catch {
         if (!canceled) setAllFiles([])
@@ -82,17 +124,20 @@ export function useFileTree({
     return () => {
       canceled = true
     }
-  }, [enabled, folderPath])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `roots`/`key` are
+    // derived fresh every render from `folderPath`/`additionalPaths`; `key`
+    // alone is the right dependency (it's what gates re-fetching).
+  }, [enabled, key])
 
   const reset = useCallback(() => {
-    loadedForPathRef.current = null
+    loadedForKeyRef.current = null
     setAllFiles([])
   }, [])
 
   return {
     allFiles,
     loading,
-    loaded: loadedForPathRef.current === folderPath,
+    loaded: loadedForKeyRef.current === key,
     reset,
   }
 }

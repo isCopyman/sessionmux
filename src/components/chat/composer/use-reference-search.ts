@@ -33,6 +33,9 @@ const useIsomorphicLayoutEffect =
 
 /** Max rows surfaced per group (mirrors the textarea `@` menu's file cap). */
 const MAX_PER_GROUP = 50
+/** Stable empty array so an omitted `additionalPaths` doesn't change identity
+ * every render and retrigger the sync effect below. */
+const EMPTY_ADDITIONAL_PATHS: string[] = []
 /** How many commits the git-log group pulls (client-filtered down from here). */
 const GIT_LOG_LIMIT = 100
 const EMPTY_COMMITS: Promise<GitLogEntry[]> = Promise.resolve([])
@@ -61,8 +64,14 @@ export const DEFAULT_GROUP_LABELS: ReferenceGroupLabels = {
 /** Raw, already-loaded data the pure group builder turns into suggestions. */
 export interface ReferenceSearchSources {
   files: FlatFileEntry[]
-  /** Workspace root the `files` were loaded under; null disables the group. */
+  /** Workspace root the `files` were loaded under; null disables the group
+   * unless `additionalRoots` covers it instead — the file group only needs
+   * *some* resolved root, not specifically this one (a Room whose bound
+   * folder didn't resolve can still search its additional paths). */
   workspaceRoot: string | null
+  /** Room-only: extra roots merged into the same file search alongside
+   * `workspaceRoot`. Empty for the plain composer. */
+  additionalRoots: string[]
   agents: AcpAgentInfo[]
   sessions: DbConversationSummary[]
   commits: GitLogEntry[]
@@ -99,10 +108,15 @@ export function buildReferenceGroups(
   // Files: filter the (potentially large) list on its pre-lowered fields before
   // paying to adapt the survivors. `truncated` is a cheap boolean — set when a
   // match is found past the cap — so we never scan the whole list for a count.
+  // Gated on *some* root existing (primary or additional) rather than only
+  // `workspaceRoot`, so a Room can still search its additional paths even when
+  // its bound folder itself didn't resolve (R8's "no root → no files" still
+  // holds for the plain composer, which never has `additionalRoots`).
   const fileItems: SuggestionItem[] = []
   let fileTruncated = false
-  const root = sources.workspaceRoot
-  if (root) {
+  const hasFileRoot =
+    Boolean(sources.workspaceRoot) || sources.additionalRoots.length > 0
+  if (hasFileRoot) {
     for (const entry of sources.files) {
       if (q && !entry.lowerName.includes(q) && !entry.lowerPath.includes(q)) {
         continue
@@ -111,7 +125,7 @@ export function buildReferenceGroups(
         fileTruncated = true
         break
       }
-      fileItems.push(fileToSuggestion(entry, root))
+      fileItems.push(fileToSuggestion(entry))
     }
   }
 
@@ -186,9 +200,18 @@ export interface UseReferenceSearchOptions {
   /**
    * Workspace root for the file + commit groups (and the commit `repoKey`).
    * When empty/null those two groups stay empty while agents/sessions still
-   * resolve, so a brand-new draft tab degrades gracefully (R8).
+   * resolve, so a brand-new draft tab degrades gracefully (R8) — unless
+   * `additionalPaths` picks up the file group anyway (see below).
    */
   defaultPath?: string | null
+  /**
+   * Room-only: extra roots merged into the file group alongside `defaultPath`
+   * — a Room's manually-added paths. Does not affect the commit group or its
+   * `repoKey`, which stay scoped to `defaultPath` alone (a Room's git log is
+   * its bound folder's history, not a blend of unrelated repos). Omit for the
+   * plain composer.
+   */
+  additionalPaths?: string[]
   /**
    * Gates loading. When false the search resolves to empty groups and the file
    * tree is never fetched — let the host pre-warm only the active composer.
@@ -218,6 +241,7 @@ export interface UseReferenceSearchOptions {
  */
 export function useReferenceSearch({
   defaultPath,
+  additionalPaths = EMPTY_ADDITIONAL_PATHS,
   enabled = true,
   labels,
 }: UseReferenceSearchOptions): ReferenceSearch {
@@ -225,6 +249,7 @@ export function useReferenceSearch({
 
   const { allFiles, loaded } = useFileTree({
     folderPath: path ?? undefined,
+    additionalPaths,
     enabled,
   })
   const { agents } = useAcpAgents()
@@ -232,8 +257,13 @@ export function useReferenceSearch({
   // Mirror every changing source into a ref so `search` can stay identity-stable
   // (see the doc comment). Initialized from the first render so the refs are
   // sane even before the sync effect below runs.
-  const filesRef = useRef<{ root: string | null; files: FlatFileEntry[] }>({
+  const filesRef = useRef<{
+    root: string | null
+    additionalRoots: string[]
+    files: FlatFileEntry[]
+  }>({
     root: null,
+    additionalRoots: [],
     files: [],
   })
   const agentsRef = useRef(agents)
@@ -253,16 +283,20 @@ export function useReferenceSearch({
   }, [path, enabled])
 
   useEffect(() => {
-    // Only expose files once the tree has loaded for the *current* path, so the
-    // search never joins the current workspace root onto a previous folder's
-    // relative paths during a folder switch.
+    // Only expose files once the tree has loaded for the *current* root
+    // combination, so the search never joins the current roots onto a
+    // previous folder's (or additional-path list's) relative paths during a
+    // switch. Gated on *some* root existing (primary or additional), not just
+    // `path`, so a Room can still expose files from its additional paths even
+    // when its bound folder didn't resolve.
+    const hasAnyRoot = Boolean(path) || additionalPaths.length > 0
     filesRef.current =
-      loaded && path
-        ? { root: path, files: allFiles }
-        : { root: null, files: [] }
+      loaded && hasAnyRoot
+        ? { root: path, additionalRoots: additionalPaths, files: allFiles }
+        : { root: null, additionalRoots: [], files: [] }
     agentsRef.current = agents
     labelsRef.current = labels
-  }, [allFiles, loaded, path, agents, labels])
+  }, [allFiles, loaded, path, additionalPaths, agents, labels])
 
   // Lazily-fetched network sources, key-cached so repeat searches reuse the
   // in-flight/resolved promise while a folder switch refetches.
@@ -350,6 +384,7 @@ export function useReferenceSearch({
       {
         files: fileState.files,
         workspaceRoot: fileState.root,
+        additionalRoots: fileState.additionalRoots,
         agents: agentsRef.current,
         sessions,
         commits,

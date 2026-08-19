@@ -21,9 +21,10 @@ describe("fileToSuggestion", () => {
     kind: "file",
     lowerPath: "src/app.ts",
     lowerName: "app.ts",
+    root: "/repo",
   }
   it("maps to a file reference with a joined file:// uri", () => {
-    const item = fileToSuggestion(entry, "/repo")
+    const item = fileToSuggestion(entry)
     expect(item.reference).toMatchObject({
       refType: "file",
       id: "src/app.ts",
@@ -34,9 +35,13 @@ describe("fileToSuggestion", () => {
     expect(item.detail).toBe("src/app.ts")
   })
   it("does not double a separator when the root has a trailing slash", () => {
-    expect(fileToSuggestion(entry, "/repo/").reference.uri).toBe(
+    expect(fileToSuggestion({ ...entry, root: "/repo/" }).reference.uri).toBe(
       "file:///repo/src/app.ts"
     )
+  })
+  it("builds the uri from each entry's own root, not a shared external one", () => {
+    const other = fileToSuggestion({ ...entry, root: "/elsewhere" })
+    expect(other.reference.uri).toBe("file:///elsewhere/src/app.ts")
   })
 })
 

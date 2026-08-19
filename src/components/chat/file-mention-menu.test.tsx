@@ -18,6 +18,7 @@ function file(name: string): FlatFileEntry {
     kind: "file",
     lowerPath: name.toLowerCase(),
     lowerName: name.toLowerCase(),
+    root: "/repo",
   }
 }
 
@@ -28,6 +29,7 @@ function dir(name: string): FlatFileEntry {
     kind: "dir",
     lowerPath: name.toLowerCase(),
     lowerName: name.toLowerCase(),
+    root: "/repo",
   }
 }
 

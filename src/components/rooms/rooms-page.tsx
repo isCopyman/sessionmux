@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   EllipsisVertical,
+  FolderPlus,
   MessagesSquare,
   Pencil,
   Plus,
@@ -62,12 +63,14 @@ import { toErrorMessage } from "@/lib/app-error"
 import { formatConversationTitle } from "@/lib/conversation-title"
 import {
   addCollaborationRoomMembers,
+  addCollaborationRoomPath,
   deleteCollaborationRoom,
   getCollaborationRoom,
   getCollaborationRoomTimeline,
   markCollaborationRoomSeen,
   postCollaborationRoomMessage,
   removeCollaborationRoomMember,
+  removeCollaborationRoomPath,
   renameCollaborationRoom,
 } from "@/lib/api"
 import { subscribe } from "@/lib/platform"
@@ -301,6 +304,9 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
   const [addQuery, setAddQuery] = useState("")
   const [addSelected, setAddSelected] = useState<number[]>([])
   const [adding, setAdding] = useState(false)
+  const [pathsOpen, setPathsOpen] = useState(false)
+  const [newPath, setNewPath] = useState("")
+  const [addingPath, setAddingPath] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [membersOpen, setMembersOpen] = useState(false)
@@ -442,8 +448,18 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
     if (rootFolderId == null) return null
     return allFolders.find((folder) => folder.id === rootFolderId)?.path ?? null
   }, [allFolders, detail?.rootFolderId])
+  // Manually-added extra `@`-search roots, on top of `roomFolderPath` — see
+  // the "manage paths" dialog below. Memoized so an unchanged additional-path
+  // list keeps the same array identity across renders (`useFileTree` derives
+  // its own cache key from the values, not this identity, but there is no
+  // reason to churn it either).
+  const additionalPaths = useMemo(
+    () => detail?.additionalPaths?.map((entry) => entry.path) ?? [],
+    [detail?.additionalPaths]
+  )
   const workspaceReferenceSearch = useReferenceSearch({
     defaultPath: roomFolderPath,
+    additionalPaths,
     enabled: true,
     labels: mentionGroupLabels,
   })
@@ -608,6 +624,35 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
     [roomId, t]
   )
 
+  const handleAddPath = useCallback(async () => {
+    const path = newPath.trim()
+    if (!path) return
+    setAddingPath(true)
+    try {
+      const updated = await addCollaborationRoomPath(roomId, path)
+      setDetail(updated)
+      setNewPath("")
+      toast.success(t("pathAdded"))
+    } catch (error) {
+      toast.error(toErrorMessage(error))
+    } finally {
+      setAddingPath(false)
+    }
+  }, [newPath, roomId, t])
+
+  const handleRemovePath = useCallback(
+    async (pathId: number) => {
+      try {
+        const updated = await removeCollaborationRoomPath(roomId, pathId)
+        setDetail(updated)
+        toast.success(t("pathRemoved"))
+      } catch (error) {
+        toast.error(toErrorMessage(error))
+      }
+    },
+    [roomId, t]
+  )
+
   const handleDelete = useCallback(async () => {
     setDeleting(true)
     try {
@@ -722,6 +767,10 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
               <DropdownMenuItem onSelect={() => setAddOpen(true)}>
                 <UserPlus className="h-4 w-4" />
                 {t("addMember")}
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => setPathsOpen(true)}>
+                <FolderPlus className="h-4 w-4" />
+                {t("managePaths")}
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem
@@ -1080,6 +1129,81 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
               onClick={() => void handleAddMembers()}
             >
               {t("add")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={pathsOpen}
+        onOpenChange={(open) => {
+          setPathsOpen(open)
+          if (!open) setNewPath("")
+        }}
+      >
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>{t("managePathsTitle")}</DialogTitle>
+            <DialogDescription>{t("managePathsHint")}</DialogDescription>
+          </DialogHeader>
+          <div className="flex items-center gap-2">
+            <Input
+              value={newPath}
+              onChange={(event) => setNewPath(event.target.value)}
+              placeholder={t("addPathPlaceholder")}
+              disabled={addingPath}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault()
+                  void handleAddPath()
+                }
+              }}
+            />
+            <Button
+              type="button"
+              size="sm"
+              disabled={!newPath.trim() || addingPath}
+              onClick={() => void handleAddPath()}
+            >
+              {t("addPath")}
+            </Button>
+          </div>
+          <ScrollArea className="h-56">
+            {(detail.additionalPaths?.length ?? 0) === 0 ? (
+              <p className="px-1 py-6 text-center text-xs text-muted-foreground">
+                {t("noPaths")}
+              </p>
+            ) : (
+              <ul className="flex flex-col gap-1">
+                {detail.additionalPaths?.map((item) => (
+                  <li
+                    key={item.id}
+                    className="group flex items-center gap-1 rounded-md px-1"
+                  >
+                    <span
+                      className="min-w-0 flex-1 truncate px-1 py-1.5 text-left text-xs"
+                      title={item.path}
+                    >
+                      {item.path}
+                    </span>
+                    <Button
+                      type="button"
+                      size="icon-sm"
+                      variant="ghost"
+                      className="h-6 w-6 opacity-0 group-hover:opacity-100"
+                      aria-label={t("removePath")}
+                      onClick={() => void handleRemovePath(item.id)}
+                    >
+                      <X className="h-3 w-3" />
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </ScrollArea>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPathsOpen(false)}>
+              {t("close")}
             </Button>
           </DialogFooter>
         </DialogContent>

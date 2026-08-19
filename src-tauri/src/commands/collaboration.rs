@@ -1439,6 +1439,28 @@ pub async fn collaboration_room_rename_core(
     Ok(room)
 }
 
+pub async fn collaboration_room_add_path_core(
+    conn: &sea_orm::DatabaseConnection,
+    emitter: &EventEmitter,
+    room_id: &str,
+    path: &str,
+) -> Result<CollaborationRoomDetail, AppCommandError> {
+    let room = collaboration_room_service::add_path(conn, room_id, path).await?;
+    publish_room(emitter, &room.id, room.workbench_id);
+    Ok(room)
+}
+
+pub async fn collaboration_room_remove_path_core(
+    conn: &sea_orm::DatabaseConnection,
+    emitter: &EventEmitter,
+    room_id: &str,
+    path_id: i32,
+) -> Result<CollaborationRoomDetail, AppCommandError> {
+    let room = collaboration_room_service::remove_path(conn, room_id, path_id).await?;
+    publish_room(emitter, &room.id, room.workbench_id);
+    Ok(room)
+}
+
 pub async fn collaboration_room_delete_core(
     conn: &sea_orm::DatabaseConnection,
     emitter: &EventEmitter,
@@ -1600,6 +1622,29 @@ pub async fn collaboration_room_rename(
     app: tauri::AppHandle,
 ) -> Result<CollaborationRoomDetail, AppCommandError> {
     collaboration_room_rename_core(&db.conn, &EventEmitter::Tauri(app), &room_id, &title).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn collaboration_room_add_path(
+    room_id: String,
+    path: String,
+    db: tauri::State<'_, AppDatabase>,
+    app: tauri::AppHandle,
+) -> Result<CollaborationRoomDetail, AppCommandError> {
+    collaboration_room_add_path_core(&db.conn, &EventEmitter::Tauri(app), &room_id, &path).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn collaboration_room_remove_path(
+    room_id: String,
+    path_id: i32,
+    db: tauri::State<'_, AppDatabase>,
+    app: tauri::AppHandle,
+) -> Result<CollaborationRoomDetail, AppCommandError> {
+    collaboration_room_remove_path_core(&db.conn, &EventEmitter::Tauri(app), &room_id, path_id)
+        .await
 }
 
 #[cfg(feature = "tauri-runtime")]
