@@ -973,3 +973,12 @@ T2 后置截图（CDP 9222 可用，基线在 .artifacts）+ 晨间验收报告 
   （switchTab + openRoomTab）；room-bulk-operations.ts 保留交集逻辑 + 调用侧展开。
   门禁：vitest 4598 过/2 挂→修复后全绿、build 成功、Rust 半场（fmt/clippy/server 2543）全绿。
   release #8 构建中。
+- 2026-08-20 早 **release #8 交付 + 新一批待办落交接单（HANDOFF-2026-08-20-release8）**：
+  ① release #8 构建完成（5m55s，全绿门禁后），用户日用中。② 用户新布置：IME bug
+  （issue #518，@美术 搜空，修+测试）、@ 搜索性能调研（每次全量重查不合理，研究
+  Claude Code/Codex 缓存机制，含会话中心/待回复面板）、待回复面板定位（建议撤独立行
+  改会话中心徽章）、会话中心过滤 UI 拥挤优化。③ 用户拍板补做：G5-11 徽章聚合 Room
+  欠回复（后端 unread_overview 补 room 聚合）+ visibleCollectionSessionIds 死代码删除。
+  ④ 子代理思考强度分配入 ~/.claude/CLAUDE.md（默认 high，跨模块 xhigh，max 非极少用）。
+  ⑤ 本会话雷区新增：K3 工人会 fixup+autosquash 改提交号（验收以当前分支 log 为准）、
+  工人脚本可能不写 cd 污染主仓（合并前核 git status）。
