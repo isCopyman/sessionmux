@@ -39,6 +39,8 @@ function overview(
     totalNeedsReplyCount: 0,
     totalAwaitingReplyCount: 0,
     totalFailedCount: 0,
+    totalRoomUnreadCount: 0,
+    totalRoomNeedsReplyCount: 0,
     sessions: entries.map(([conversationId, unreadCount]) => ({
       conversationId,
       revision: 1,

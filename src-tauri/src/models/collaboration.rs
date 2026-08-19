@@ -310,6 +310,13 @@ pub struct CollaborationUnreadOverview {
     pub total_needs_reply_count: u32,
     pub total_awaiting_reply_count: u32,
     pub total_failed_count: u32,
+    /// Room posts nobody has opened, summed over active Rooms. Kept out of
+    /// `total_unread_count`: that one is per-Session mailbox state and the
+    /// Session Center filters against `sessions`, which Rooms never populate.
+    pub total_room_unread_count: u32,
+    /// Outstanding reply obligations inside active Rooms. Same separation as
+    /// above — a Room debt belongs to the Room, not to one Session's mailbox.
+    pub total_room_needs_reply_count: u32,
     pub sessions: Vec<CollaborationUnreadSession>,
 }
 
@@ -558,16 +565,19 @@ pub struct CollaborationRoomSummary {
     #[serde(default)]
     pub additional_path_count: u32,
     pub unread_count: u32,
-    /// Deliveries of Room `@` this member has not consumed. Host / Workbench
-    /// lists leave this at 0; Agent `list_rooms` fills it per Session.
+    /// Agent `list_rooms`: deliveries of Room `@` this member has not consumed.
+    /// Host / Workbench lists count posts that `@`-mentioned the user instead —
+    /// the human has no Delivery row, so it reads against the Room cursor.
     #[serde(default)]
     pub mention_unread_count: u32,
-    /// Deliveries to this Session in the Room that still expect a reply.
-    /// Host lists leave this at 0.
+    /// Agent `list_rooms`: deliveries to this Session in the Room that still
+    /// expect a reply. Host / Workbench lists widen it to every member, i.e.
+    /// "somebody in this Room still owes an answer".
     #[serde(default)]
     pub needs_reply_count: u32,
-    /// Deliveries from this Session's Room posts that others have not answered.
-    /// Host lists leave this at 0.
+    /// Agent `list_rooms`: deliveries from this Session's Room posts that
+    /// others have not answered. Host / Workbench lists read the human's own
+    /// posts the same way, so it is a subset of `needs_reply_count`.
     #[serde(default)]
     pub awaiting_reply_count: u32,
     pub last_event_at: Option<DateTime<Utc>>,

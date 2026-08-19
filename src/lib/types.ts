@@ -1366,6 +1366,12 @@ export interface CollaborationUnreadOverview {
   totalNeedsReplyCount: number
   totalAwaitingReplyCount: number
   totalFailedCount: number
+  /** Unopened Room posts, summed over active Rooms. Held apart from
+   * `totalUnreadCount`, which is per-Session mailbox state that `sessions`
+   * enumerates — Rooms never appear there. */
+  totalRoomUnreadCount: number
+  /** Outstanding reply obligations inside active Rooms, same separation. */
+  totalRoomNeedsReplyCount: number
   sessions: CollaborationUnreadSession[]
 }
 

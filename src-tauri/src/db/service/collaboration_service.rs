@@ -2163,6 +2163,11 @@ pub async fn timeline_projection(
 /// Return actionable collaboration counts for every live Session. This is a
 /// dedicated projection because mailbox lifecycle belongs to collaboration,
 /// not the Harness-owned conversation index.
+///
+/// The per-Session rows and their totals stay direct-mail only. Room debt has
+/// no Session mailbox to land in, so it is summed separately into the
+/// `total_room_*` fields; a caller that wants "everything the user owes" adds
+/// the two, and one that drills into `sessions` still gets a list it can open.
 pub async fn unread_overview(
     conn: &DatabaseConnection,
 ) -> Result<CollaborationUnreadOverview, DbError> {
@@ -2241,11 +2246,14 @@ pub async fn unread_overview(
         .ok_or_else(|| validation("Could not count failed Session messages"))?
         .try_get::<i64>("", "count")?;
     let total_failed_count = u32::try_from(total_failed_count.max(0)).unwrap_or(u32::MAX);
+    let room_totals = collaboration_room_service::host_totals(conn).await?;
     Ok(CollaborationUnreadOverview {
         total_unread_count,
         total_needs_reply_count,
         total_awaiting_reply_count,
         total_failed_count,
+        total_room_unread_count: room_totals.unread_count,
+        total_room_needs_reply_count: room_totals.needs_reply_count,
         sessions,
     })
 }
@@ -4216,6 +4224,59 @@ mod tests {
                 && session.awaiting_reply_count == 0
                 && session.failed_count == 0
         }));
+    }
+
+    #[tokio::test]
+    async fn unread_overview_counts_room_debt_beside_direct_mail_not_inside_it() {
+        let (db, source, target_a, target_b) = seeded_memory().await;
+        let room = seeded_room(&db, source, target_a).await;
+        post_room(
+            &db.conn,
+            room_post(&room.id, source, vec![target_a], "overview-room-ask"),
+        )
+        .await
+        .expect("room ask");
+        let mut letter = input(source, vec![target_b], "overview-mail-ask", "please confirm");
+        letter.expects_reply = true;
+        send(&db.conn, letter).await.expect("mail ask");
+
+        let overview = unread_overview(&db.conn).await.unwrap();
+        assert_eq!(
+            overview.total_needs_reply_count, 1,
+            "the direct-mail total must stay direct-mail only"
+        );
+        assert_eq!(overview.total_room_needs_reply_count, 1);
+        assert_eq!(overview.total_room_unread_count, 1);
+        assert_eq!(
+            overview
+                .sessions
+                .iter()
+                .map(|session| session.needs_reply_count)
+                .sum::<u32>(),
+            1,
+            "a Room obligation has no Session mailbox to land in"
+        );
+        let addressee_mail_debt = overview
+            .sessions
+            .iter()
+            .find(|session| session.conversation_id == target_a)
+            .map_or(0, |session| session.needs_reply_count);
+        assert_eq!(
+            addressee_mail_debt, 0,
+            "the Room's addressee must not show mail debt it does not have"
+        );
+
+        // What the sidebar badge adds up is what the Rooms page can show the
+        // user to clear it.
+        let rooms = collaboration_room_service::list_for_workbench(&db.conn, 1)
+            .await
+            .unwrap();
+        assert_eq!(rooms.len(), 1);
+        assert_eq!(rooms[0].needs_reply_count, 1);
+        assert_eq!(
+            rooms[0].needs_reply_count,
+            overview.total_room_needs_reply_count
+        );
     }
 
     #[tokio::test]

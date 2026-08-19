@@ -41,6 +41,10 @@ const spies = vi.hoisted(() => ({
 const mockState = vi.hoisted(() => ({
   activeFolder: { id: 7, path: "/x" } as { id: number; path: string } | null,
   allFolders: [{ id: 7, path: "/x" }],
+  // Direct-mail and Room reply debt are separate totals on the projection; the
+  // sidebar badge is the sum, so tests drive both halves from here.
+  needsReplyCount: 0,
+  roomNeedsReplyCount: 0,
 }))
 
 // The conversation list is irrelevant here — stub it so the test exercises only
@@ -181,6 +185,11 @@ vi.mock("@/hooks/use-collaboration-unread-overview", () => ({
   useCollaborationUnreadOverview: () => ({
     overview: {
       totalUnreadCount: 3,
+      totalNeedsReplyCount: mockState.needsReplyCount,
+      totalAwaitingReplyCount: 0,
+      totalFailedCount: 0,
+      totalRoomUnreadCount: 0,
+      totalRoomNeedsReplyCount: mockState.roomNeedsReplyCount,
       sessions: [{ conversationId: 42, unreadCount: 3 }],
     },
     unreadByConversation: new Map([[42, 3]]),
@@ -215,6 +224,20 @@ describe("Sidebar — fixed New chat / Search region", () => {
     spies.collectionScrollToActive.mockClear()
     spies.listProps = null
     mockState.activeFolder = { id: 7, path: "/x" }
+    mockState.needsReplyCount = 0
+    mockState.roomNeedsReplyCount = 0
+  })
+
+  it("counts Room reply debt in the needs-reply badge", () => {
+    mockState.needsReplyCount = 2
+    mockState.roomNeedsReplyCount = 3
+    renderSidebar()
+    expect(screen.getByTitle("Needs reply").textContent).toBe("Needs reply5")
+  })
+
+  it("hides the needs-reply badge when nothing is owed", () => {
+    renderSidebar()
+    expect(screen.getByTitle("Needs reply").textContent).toBe("Needs reply")
   })
 
   it("Automations navigates to the automations route", () => {
