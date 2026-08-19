@@ -7,8 +7,10 @@ import { makeRoomTabId } from "@/stores/tab-store"
 /**
  * A Collection accepts every selected Room only when it sits on each Room's
  * own Path root — the single-Room move menu in the Collection tree filters
- * its targets the same way. Rooms with no root constrain nothing, so a
- * selection of only rootless Rooms keeps every Collection available.
+ * its targets the same way. That is an INTERSECTION across the selection:
+ * rooted Rooms on different Paths share no root, so no Collection fits them
+ * all. Rooms with no root constrain nothing, so a selection of only rootless
+ * Rooms keeps every Collection available.
  */
 export function collectionsAllowedForRooms<
   T extends { root_folder_id?: number | null },
@@ -16,13 +18,19 @@ export function collectionsAllowedForRooms<
   collections: readonly T[],
   rooms: readonly Pick<CollaborationRoomSummary, "rootFolderId">[]
 ): T[] {
-  const roots = new Set<number>()
+  let sharedRoot: number | null | undefined
   for (const room of rooms) {
-    if (room.rootFolderId != null) roots.add(room.rootFolderId)
+    if (room.rootFolderId == null) continue
+    if (sharedRoot === undefined) {
+      sharedRoot = room.rootFolderId
+    } else if (sharedRoot !== room.rootFolderId) {
+      // Cross-root selection: no single Collection can hold every Room.
+      return []
+    }
   }
-  if (roots.size === 0) return [...collections]
+  if (sharedRoot === undefined) return [...collections]
   return collections.filter(
-    (item) => item.root_folder_id != null && roots.has(item.root_folder_id)
+    (item) => item.root_folder_id != null && item.root_folder_id === sharedRoot
   )
 }
 

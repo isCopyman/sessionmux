@@ -21,7 +21,7 @@ export const ROOM_TAB_PLACEHOLDER_AGENT: AgentType = "claude_code"
 
 export function roomTabFolderId(
   room: Pick<OpenableRoom, "rootFolderId">,
-  folders: { id: number }[]
+  folders: readonly { id: number }[]
 ): number {
   return room.rootFolderId ?? folders[0]?.id ?? 1
 }
