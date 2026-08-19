@@ -53,6 +53,8 @@ const api = vi.hoisted(() => ({
   postCollaborationRoomMessage: vi.fn(),
   refreshCatalog: vi.fn(),
   deleteCollaborationRoom: vi.fn(),
+  addCollaborationRoomPath: vi.fn(),
+  removeCollaborationRoomPath: vi.fn(),
   closeTab: vi.fn(),
   openTab: vi.fn(),
 }))
@@ -66,6 +68,16 @@ vi.mock("@/lib/api", () => ({
   removeCollaborationRoomMember: vi.fn(),
   renameCollaborationRoom: vi.fn(),
   deleteCollaborationRoom: api.deleteCollaborationRoom,
+  addCollaborationRoomPath: api.addCollaborationRoomPath,
+  removeCollaborationRoomPath: api.removeCollaborationRoomPath,
+  // The room's `@` panel (`useReferenceSearch`/`useFileTree`) pulls these in.
+  // Every existing fixture leaves `rootFolderId` unset, so `roomFolderPath` is
+  // always null and these were never reached before — but the "manage paths"
+  // tests below give the room `additionalPaths`, which alone is now enough to
+  // make `useFileTree` resolve a root and actually call `listWorkspaceFiles`.
+  listWorkspaceFiles: vi.fn().mockResolvedValue([]),
+  gitLog: vi.fn().mockResolvedValue({ entries: [], has_upstream: false }),
+  listAllConversations: vi.fn().mockResolvedValue([]),
 }))
 
 vi.mock("@/lib/platform", () => ({
@@ -508,6 +520,75 @@ describe("RoomWorkspace", () => {
     })
     expect(api.closeTab).toHaveBeenCalledWith(`room-${roomId}`)
     expect(api.refreshCatalog).toHaveBeenCalled()
+  })
+
+  it("adds an additional path through the manage-paths dialog", async () => {
+    api.getCollaborationRoomTimeline.mockResolvedValue(timeline([event()]))
+    api.addCollaborationRoomPath.mockResolvedValue({
+      ...roomDetail(),
+      additionalPaths: [
+        { id: 1, path: "/extra/notes", createdAt: "2026-08-20T00:00:00.000Z" },
+      ],
+    })
+
+    renderRoom()
+    expect(await screen.findByText("newest post")).toBeTruthy()
+
+    const user = userEvent.setup()
+    await user.click(screen.getByRole("button", { name: "More actions" }))
+    await user.click(
+      await screen.findByRole("menuitem", { name: "Manage paths" })
+    )
+    const dialog = await screen.findByRole("dialog")
+    expect(within(dialog).getByText("No additional paths yet.")).toBeTruthy()
+
+    await user.type(
+      within(dialog).getByPlaceholderText("Absolute path to a folder"),
+      "/extra/notes"
+    )
+    fireEvent.click(within(dialog).getByRole("button", { name: "Add" }))
+
+    await waitFor(() => {
+      expect(api.addCollaborationRoomPath).toHaveBeenCalledWith(
+        roomId,
+        "/extra/notes"
+      )
+    })
+    expect(await within(dialog).findByText("/extra/notes")).toBeTruthy()
+  })
+
+  it("removes an additional path through the manage-paths dialog", async () => {
+    api.getCollaborationRoom.mockResolvedValue({
+      ...roomDetail(),
+      additionalPaths: [
+        { id: 5, path: "/extra/notes", createdAt: "2026-08-20T00:00:00.000Z" },
+      ],
+    })
+    api.getCollaborationRoomTimeline.mockResolvedValue(timeline([event()]))
+    api.removeCollaborationRoomPath.mockResolvedValue({
+      ...roomDetail(),
+      additionalPaths: [],
+    })
+
+    renderRoom()
+    expect(await screen.findByText("newest post")).toBeTruthy()
+
+    const user = userEvent.setup()
+    await user.click(screen.getByRole("button", { name: "More actions" }))
+    await user.click(
+      await screen.findByRole("menuitem", { name: "Manage paths" })
+    )
+    const dialog = await screen.findByRole("dialog")
+    expect(within(dialog).getByText("/extra/notes")).toBeTruthy()
+
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Remove path" })
+    )
+
+    await waitFor(() => {
+      expect(api.removeCollaborationRoomPath).toHaveBeenCalledWith(roomId, 5)
+    })
+    expect(within(dialog).queryByText("/extra/notes")).toBeNull()
   })
 
   it("opens a Session from the timeline name and an @ mention", async () => {
