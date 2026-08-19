@@ -126,6 +126,12 @@ vi.mock("@/components/conversations/conversation-manage-dialog", () => ({
     return open ? <div>Session Center Dialog</div> : null
   },
 }))
+// Stubbed for its import graph, not its behavior: the real dialog pulls in
+// tab-store, whose module-level getState() call explodes against the partial
+// app-workspace-store mock below.
+vi.mock("@/components/rooms/create-room-dialog", () => ({
+  CreateRoomDialog: () => <div>Create Room Dialog</div>,
+}))
 vi.mock("@/contexts/sidebar-context", () => ({
   useSidebarContext: () => ({ isOpen: true, toggle: vi.fn() }),
 }))
