@@ -741,3 +741,21 @@ T2 后置截图（CDP 9222 可用，基线在 .artifacts）+ 晨间验收报告 
   @human 消息整行高亮**（淡底色+左侧竖条，Discord 式；@human 结构化提及底座已有，
   缺的是行级视觉）；**应用内存消耗检测**并入性能轮（dev vs release 对比时一并测
   进程内存）；用户定"开始用起来"验收线=room 高亮+性能内存+上游整合完成。
+- 2026-08-19 深夜 **room @ 悬死根因定案 + 扫描护栏批合并 + 真机验收关账**：①
+  根因（代码实证）：`list_workspace_files` 在 async 运行时线程上直接跑同步
+  `ignore::WalkBuilder` 磁盘遍历且无条目上限；agent-created room 绑定 folder id=1
+  = Thesis 巨型目录（kind=regular，无 .gitignore 剪枝）→ 遍历堵死 runtime →
+  后续 invoke 全排队 → @ 弹层永久"搜索中…"，连同步 session 组都被组合搜索的
+  await 一起卡住（上一条"选项数 0 定性中"就此闭案）；git_log 无辜
+  （ensure_git_repo 快速失败）。② 修复合并（a6f968e2，工人 426b7430）：
+  spawn_blocking 挪出运行时（弃 run_file_io 以避 FILE_IO_SEMAPHORE 串扰）+
+  MAX_WORKSPACE_FILE_ENTRIES=50_000，主遍历/链接目录共享预算；get_file_tree
+  同病同治（budget:&mut usize 穿递归）；3 个上限测试。③ room UI 打磨合并
+  （39d1711f，工人 7f434623）：@全体冗余按钮+insertBadge 孤儿删除（grep 实证）、
+  wake 预览人话化 ×10 语言（已知缺口：wakeHint 在 8 个非中文语言仍英文占位，排
+  孤儿 i18n 第二轮）、头部留白。④ 真机验收（修复版 dev + CDP）：@ 弹层 ~2s 齐
+  活——会话 4/文件 50/提交 50，控制台零错，Escape 清理干净；窗口标题
+  "Codeg [DEV]" 共存标识生效。⑤ 门禁：server 测试 2467 绿/1 忽略、vitest 356
+  文件、build、eslint、clippy ×3 零警告（desktop 档曾被 dev 实例文件锁挡，停
+  dev 后补跑通过）。**用户手中 release（22:01）早于本批两合并（22:26/22:30），
+  其 room @ 仍会悬死 → 重打 release #3 交付换用。**
