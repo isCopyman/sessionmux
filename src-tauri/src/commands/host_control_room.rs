@@ -108,6 +108,10 @@ impl RoomHostControl {
         match action {
             "room.list" | "room.list_workbench" => Some(HostControlAccessLevel::Read),
             "room.create" | "room.add_member" => Some(HostControlAccessLevel::Write),
+            // room.post was removed, but the action stays addressable so the
+            // gateway routes it here and the caller gets the migration hint
+            // below instead of a bare "Unknown action".
+            "room.post" => Some(HostControlAccessLevel::Write),
             _ => None,
         }
     }
@@ -285,4 +289,104 @@ struct CreateInput {
 struct AddMemberInput {
     room_id: String,
     session_id: i32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::test_helpers::{fresh_in_memory_db, seed_conversation, seed_folder};
+    use crate::models::agent::AgentType;
+    use std::path::PathBuf;
+
+    async fn fixture() -> (RoomHostControl, i32, i32) {
+        let db = Arc::new(fresh_in_memory_db().await);
+        let folder = seed_folder(&db, "/tmp/codeg-host-control-room").await;
+        let caller = seed_conversation(&db, folder, AgentType::Codex).await;
+        let other = seed_conversation(&db, folder, AgentType::ClaudeCode).await;
+        (RoomHostControl::new(db, EventEmitter::Noop), caller, other)
+    }
+
+    fn caller(id: i32) -> HostControlCaller {
+        HostControlCaller {
+            current_session_id: id,
+            working_dir: PathBuf::from("/tmp/codeg-host-control-room"),
+            writes_allowed: true,
+        }
+    }
+
+    #[test]
+    fn access_for_maps_every_room_action() {
+        for action in ["room.list", "room.list_workbench"] {
+            assert_eq!(
+                RoomHostControl::access_for(action),
+                Some(HostControlAccessLevel::Read),
+                "{action}"
+            );
+        }
+        for action in ["room.create", "room.add_member", "room.post"] {
+            assert_eq!(
+                RoomHostControl::access_for(action),
+                Some(HostControlAccessLevel::Write),
+                "{action}"
+            );
+        }
+        assert_eq!(RoomHostControl::access_for("room.delete"), None);
+    }
+
+    #[tokio::test]
+    async fn removed_room_post_reaches_the_migration_hint() {
+        let (rooms, caller_id, _) = fixture().await;
+        let outcome = rooms
+            .use_action(
+                &caller(caller_id),
+                "req-post".into(),
+                "room.post".into(),
+                json!({}),
+            )
+            .await;
+        assert!(!outcome.accepted);
+        let note = outcome.note.unwrap();
+        assert!(note.contains("post_room"), "names the replacement: {note}");
+    }
+
+    #[tokio::test]
+    async fn create_makes_the_caller_a_member_and_lists_the_room() {
+        let (rooms, caller_id, other_id) = fixture().await;
+        let created = rooms
+            .use_action(
+                &caller(caller_id),
+                "req-create".into(),
+                "room.create".into(),
+                json!({ "title": "Plan", "member_session_ids": [other_id] }),
+            )
+            .await;
+        assert!(created.accepted);
+        assert_eq!(created.stage, "persisted");
+        let room_id = created.data["room"]["id"].as_str().unwrap().to_string();
+        let members: Vec<i64> = created.data["room"]["members"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|member| member["conversationId"].as_i64())
+            .collect();
+        assert!(members.contains(&i64::from(caller_id)));
+        assert!(members.contains(&i64::from(other_id)));
+
+        let listed = rooms
+            .use_action(
+                &caller(caller_id),
+                "req-list".into(),
+                "room.list".into(),
+                json!({}),
+            )
+            .await;
+        assert!(listed.accepted);
+        let ids: Vec<&str> = listed.data["rooms"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|room| room["id"].as_str())
+            .collect();
+        assert!(ids.contains(&room_id.as_str()));
+    }
 }

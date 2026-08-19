@@ -1240,6 +1240,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn removed_room_post_routes_to_the_migration_hint() {
+        let (host, _, caller_id, _) = fixture().await;
+        let outcome = host
+            .use_action(
+                caller(caller_id, true),
+                "req-room-post".into(),
+                "room.post".into(),
+                json!({}),
+            )
+            .await;
+        assert!(!outcome.accepted);
+        let note = outcome.note.unwrap();
+        assert!(
+            note.contains("post_room"),
+            "the gateway must reach the Room provider's migration hint: {note}"
+        );
+    }
+
+    #[tokio::test]
     async fn runtime_policy_is_rechecked_for_existing_access_object() {
         let (host, config, caller_id, target_id) = fixture().await;
         config
