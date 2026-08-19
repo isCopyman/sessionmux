@@ -689,3 +689,26 @@ T2 后置截图（CDP 9222 可用，基线在 .artifacts）+ 晨间验收报告 
   markdown 数学系列、Windows 路径修复、ACP bump（含 grok——待核是否覆盖冻结的
   1.0.5 先导）。派 w-upstream-recon（Sonnet 只读）出 A可直拿/B需适配/C设计矛盾
   三类清单，**C 类逐条交用户拍板**；正式合并仍排清理收尾之后。
+- 2026-08-19 深夜 **两报告验收入库 + room 文件@ 关账**：① 上游分析入库（c90a6f35）：
+  27 实质提交=12 直拿/10 适配/标题链待拍板；grok bump 1.0.5 命中冻结先导；ACP 绑定
+  两修复"靶子函数已不存在+DbError::Conflict 同名反语义"禁止顺手合，立独立深挖任务。
+  编排抽验三支柱属实。② 性能分析入库（57025081）：shiki 流式重分词/warm-cache=8/
+  React Compiler 未用三嫌疑+六项证伪。③ room 文件@ 合并关账（eee45d6c+修补
+  6ed6bc8f，vitest 351 文件/build/eslint 全绿）：popup tabOrder 可配、room=会话|
+  文件|提交、时间线 file/commit 徽章；门禁漏网两处编排修补（parsed.uri 可空、
+  prettier×5）。真机验收：tab 结构/默认激活/零控制台错误全对，但**弹层选项数为 0
+  （连 @all/@human 都没出）——定性中**；DB 亲查 agent-created room 的
+  root_folder_id=1 非空，排除"设计内降级"，疑组合搜索把同步 session 组 block 在
+  标准搜索 await 后，或 search 引用不稳定导致 popup 永远 stale。
+- 2026-08-19 深夜 **用户双拍板 + 三项新需求**：① **性能方向纠偏**——静态分析两嫌疑
+  被否"不是本质"；真实痛点=**打开 tab/拖拽布局/缩放卡**（布局交互路径），且用户
+  点出 dev vs release 混杂变量（体验的是 next dev 未压缩+React development 构建）。
+  行动：release 构建（--no-bundle）已在后台打，出来后同机对比复现，仍卡再对布局
+  交互路径 profile；教训入长期记忆（perf-diagnosis-discipline）。② **标题同步采
+  上游语义（DB 单一事实源）**——用户点出 overlay 双源实害：@ 面板/搜索读 DB 标题，
+  overlay 只改 parser 输出，同一会话两处名字不一致。定案：列表同步 codex index→DB、
+  用户改名锁定、频道传播异步化，在我方代码结构上重放实现，f56ec5e6 overlay 撤除或
+  收编为 DB 同步数据源，排第三批。③ 新需求（Discord 参照截图）：**room 时间线
+  @human 消息整行高亮**（淡底色+左侧竖条，Discord 式；@human 结构化提及底座已有，
+  缺的是行级视觉）；**应用内存消耗检测**并入性能轮（dev vs release 对比时一并测
+  进程内存）；用户定"开始用起来"验收线=room 高亮+性能内存+上游整合完成。
