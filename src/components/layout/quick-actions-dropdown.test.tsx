@@ -137,7 +137,7 @@ describe("QuickActionsDropdown", () => {
       "Clone Repository",
       "Project Boot",
       "Open remote workspace",
-      "Manage conversations",
+      "Session Center",
       "Import local sessions",
       "Search",
       AUTOMATIONS_ROW,
@@ -228,7 +228,7 @@ describe("QuickActionsDropdown", () => {
     activeFolder = FOLDER
     await mountAndOpen()
 
-    await clickItem("Manage conversations")
+    await clickItem("Session Center")
     expect(await screen.findByText("MANAGE-DIALOG-7")).toBeVisible()
   })
 
@@ -236,7 +236,7 @@ describe("QuickActionsDropdown", () => {
     await mountAndOpen()
 
     expect(
-      await screen.findByRole("menuitem", { name: "Manage conversations" })
+      await screen.findByRole("menuitem", { name: "Session Center" })
     ).toHaveAttribute("data-disabled")
   })
 
