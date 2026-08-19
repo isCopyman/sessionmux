@@ -32,9 +32,10 @@ pub use collaboration::{
     CollaborationRoomMember, CollaborationRoomSummary, CollaborationSendResult,
     CollaborationSessionSnapshot, CollaborationTimelineProjection, CollaborationUnreadOverview,
     CollaborationUnreadSession, CollaborationUrgency, CollaborationVisibility,
-    CreateCollaborationRoomInput, InterruptCollaborationInput, PostRoomMessageInput, RoomChanged,
-    RoomPostResult, RoomTimeline, RoomTimelineEvent, SendAndInterruptCollaborationInput,
-    SendAndInterruptCollaborationResult, SendCollaborationMessageInput,
+    CreateCollaborationRoomInput, InterruptCollaborationInput, PostRoomMessageInput,
+    RoomAdditionalPath, RoomChanged, RoomPostResult, RoomTimeline, RoomTimelineEvent,
+    SendAndInterruptCollaborationInput, SendAndInterruptCollaborationResult,
+    SendCollaborationMessageInput,
 };
 pub use conversation::{
     AgentConversationCount, AgentStats, ConversationDetail, ConversationSummary,
