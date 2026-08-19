@@ -835,3 +835,20 @@ T2 后置截图（CDP 9222 可用，基线在 .artifacts）+ 晨间验收报告 
   已可向用户澄清。指令文件 lint 扫描范围联动建议：默认工作区、用户级目录做
   显式开关（诊断是用户本机自用，语境异于 room 共享，不同结论并不矛盾），待用户
   确认。
+- 2026-08-20 凌晨 **ACP 绑定修复批关账（合并+四轮门禁修复），Tier-1 三件套完成**：
+  工人 9 提交全落——bind_external_id（抢锁→锁下读→先拒→续接豁免→拆分保留）、
+  ExternalIdTaken 新变体（事务内局部枚举防 TransactionError 拍扁）、先绑后宣+
+  取消保护+Branch B 失败软删、lifecycle/host_control/subscriber/spawn_bound_agent
+  （工人自查出的审计遗漏第五写点）全迁移、subscriber 冲突拆路由带"事件仍当前"
+  防误杀、header 落盘 2s durability；故意保留 update_external_id 唯一调用方=内建
+  agent 死 id 纠偏（过拆分逻辑会造幽灵行，注释写死理由）——编排验收批准。状态
+  映射 InProgress→Cancelled 循 handle_terminal_event 先例。**门禁四轮修复
+  （全编排出手）**：① E0382 emitter 移动后借用（.clone()，EventEmitter 移动语义
+  惯犯）；② BindOutcome 缺 Debug（expect_err 约束）；③ **真逻辑 bug**——拆分
+  路径先插保留行后改原行，撞逐语句执行的唯一索引；单事务内原子性使"先保留"的
+  崩溃安全论证失效，改为先释放 prev 再插入，**工人自写的 5 个测试逮住自己的
+  bug**（测试先行纪律样板）；④ 既有 fork stale-binding 测试期望对齐新语义
+  （setup 重绑如今合法产出保留行，断言 1 行→2 行并验 S1/S3 归属）。终局：server
+  测试 2483→2496 全绿、clippy ×3 零警告；前端未动（上批 vitest/build/eslint 绿
+  仍有效）。风险留档：_prompt_guard 未随 detached task 移交（残窗最坏=多一行
+  可见可删空行，对比修复前必然焊死错投为净改善）。
