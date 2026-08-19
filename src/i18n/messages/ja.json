@@ -657,7 +657,7 @@
       "saveCodeBuddyConfig": "CodeBuddy 設定を保存",
       "saveKimiCodeConfig": "Kimi Code の設定を保存",
       "customInstall": "カスタムインストール",
-      "saveKimiCodeRawConfig": "Save config.toml",
+      "saveKimiCodeRawConfig": "config.toml を保存",
       "diagnose": "診断",
       "saveDeepSeekConfig": "DeepSeek 設定を保存"
     },

@@ -657,7 +657,7 @@
       "saveCodeBuddyConfig": "CodeBuddy-Konfiguration speichern",
       "saveKimiCodeConfig": "Kimi-Code-Konfiguration speichern",
       "customInstall": "Benutzerdefinierte Installation",
-      "saveKimiCodeRawConfig": "Save config.toml",
+      "saveKimiCodeRawConfig": "config.toml speichern",
       "diagnose": "Diagnose",
       "saveDeepSeekConfig": "DeepSeek-Einstellungen speichern"
     },
@@ -1770,7 +1770,7 @@
       "noFolders": "Keine Ordner geöffnet",
       "newChatAction": "Neuer Chat",
       "automations": "Automatisierungen",
-      "tasks": "To-dos",
+      "tasks": "Aufgaben",
       "loadingSubsessions": "Unterkonversationen werden geladen…",
       "rooms": "Räume"
     },
@@ -2756,8 +2756,8 @@
           "connectingDescription": "Verbindung wird hergestellt",
           "loadingSelectorsTitle": "{agent}-Selektoren werden geladen",
           "loadingSelectorsDescription": "Modus- und Sitzungsoptionen werden abgerufen",
-          "initSessionTitle": "Initializing {agent} session",
-          "initSessionDescription": "Creating session and loading configuration"
+          "initSessionTitle": "{agent}-Session wird initialisiert",
+          "initSessionDescription": "Session wird erstellt und Konfiguration wird geladen"
         },
         "errors": {
           "connectionFailed": "Verbindung fehlgeschlagen",
@@ -4584,7 +4584,7 @@
     "branchNone": "Keine Branches"
   },
   "Tasks": {
-    "title": "To-dos",
+    "title": "Aufgaben",
     "new": "Neue Aufgabe",
     "empty": "Noch keine Aufgaben",
     "emptyHint": "Füge ein To-do hinzu und starte es — der Agent arbeitet in einem isolierten Worktree, du prüfst und mergst das Ergebnis.",

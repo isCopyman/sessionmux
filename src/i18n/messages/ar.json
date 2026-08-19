@@ -657,7 +657,7 @@
       "saveCodeBuddyConfig": "حفظ إعدادات CodeBuddy",
       "saveKimiCodeConfig": "حفظ إعدادات Kimi Code",
       "customInstall": "تثبيت مخصص",
-      "saveKimiCodeRawConfig": "Save config.toml",
+      "saveKimiCodeRawConfig": "حفظ config.toml",
       "diagnose": "تشخيص",
       "saveDeepSeekConfig": "حفظ إعدادات DeepSeek"
     },

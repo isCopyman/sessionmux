@@ -657,7 +657,7 @@
       "saveCodeBuddyConfig": "Salvar configuração do CodeBuddy",
       "saveKimiCodeConfig": "Salvar configuração do Kimi Code",
       "customInstall": "Instalação personalizada",
-      "saveKimiCodeRawConfig": "Save config.toml",
+      "saveKimiCodeRawConfig": "Salvar config.toml",
       "diagnose": "Diagnosticar",
       "saveDeepSeekConfig": "Salvar configurações do DeepSeek"
     },
@@ -1553,9 +1553,9 @@
       "switchFailed": "Falha ao trocar de área de trabalho: {message}",
       "deleteFailed": "Falha ao excluir a área de trabalho: {message}",
       "currentSessions": "Sessions nesta área de trabalho",
-      "sessionCount": "{count} sessions",
-      "emptySessions": "Nenhuma session aberta",
-      "draftSession": "Nova session"
+      "sessionCount": "{count} sessões",
+      "emptySessions": "Nenhuma sessão aberta",
+      "draftSession": "Nova sessão"
     },
     "statusLabels": {
       "in_progress": "Em andamento",
@@ -1603,7 +1603,7 @@
       "openFolder": "Abrir pasta",
       "searchPlaceholder": "Buscar conversas...",
       "viewOptions": "Opções de exibição",
-      "organizeBy": "Organizar sessions",
+      "organizeBy": "Organizar sessões",
       "organizeByCollections": "Por coleção",
       "organizeByLocations": "Por local de execução",
       "showCompleted": "Mostrar conversas concluídas",
@@ -1668,7 +1668,7 @@
         "openRoom": "Abrir sala",
         "newSession": "Nova sessão",
         "deleteTitle": "Excluir esta coleção?",
-        "deleteDescription": "As sessions em “{name}” ficam sem categoria e as coleções aninhadas sobem um nível. Nenhuma session ou agente em execução é excluído.",
+        "deleteDescription": "As sessões em “{name}” ficam sem categoria e as coleções aninhadas sobem um nível. Nenhuma sessão ou agente em execução é excluído.",
         "operationFailed": "Falha na operação da coleção: {message}",
         "dragSessionCount": "{count} sessões"
       },
@@ -1750,7 +1750,7 @@
         "toastStatusUpdated": "Status atualizado para {count} conversa(s)",
         "toastArchived": "{count} sessão(ões) arquivada(s)",
         "toastRestored": "{count} sessão(ões) restaurada(s)",
-        "toastCollectionMoved": "{count} session(ões) movida(s) para uma coleção",
+        "toastCollectionMoved": "{count} sessão(ões) movida(s) para uma coleção",
         "toastOpened": "{count} sessão(ões) adicionada(s) à bancada atual",
         "clearSelection": "Limpar seleção",
         "addToWorkbench": "Adicionar ao workbench",
@@ -2756,8 +2756,8 @@
           "connectingDescription": "Estabelecendo conexão",
           "loadingSelectorsTitle": "Carregando seletores de {agent}",
           "loadingSelectorsDescription": "Buscando opções de modo e configuração de sessão",
-          "initSessionTitle": "Initializing {agent} session",
-          "initSessionDescription": "Creating session and loading configuration"
+          "initSessionTitle": "Inicializando a sessão de {agent}",
+          "initSessionDescription": "Criando a sessão e carregando a configuração"
         },
         "errors": {
           "connectionFailed": "Falha na conexão",

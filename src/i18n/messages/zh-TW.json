@@ -41,7 +41,7 @@
       "appearance": "外觀",
       "agents": "智能體",
       "mcp": "MCP",
-      "skills": "Skills",
+      "skills": "技能",
       "shortcuts": "快捷鍵",
       "version_control": "版本控制",
       "system": "系統",
@@ -419,7 +419,7 @@
     }
   },
   "SkillsSettings": {
-    "title": "Skills",
+    "title": "技能",
     "description": "左側選擇 Skill，右側預設預覽 Markdown，點擊編輯後可修改並儲存。",
     "loadingAgents": "正在載入支援 Skills 的 Agent...",
     "emptyNoManageableAgents": "目前沒有可管理 Skills 的 Agent。",
@@ -575,7 +575,7 @@
       "configJson": "MCP 配置(JSON)",
       "draftTitle": "新建 MCP",
       "draftDescription": "填寫 Server ID 與設定以建立本地 MCP 伺服器。",
-      "serverIdLabel": "Server ID",
+      "serverIdLabel": "伺服器 ID",
       "serverIdPlaceholder": "Server ID（例如：my-mcp）",
       "typeHint": "支援類型：stdio、http（別名 streamable-http、streamableHttp）、sse。env 僅適用於 stdio；遠端 MCP 請透過 headers 欄位傳遞認證 token。",
       "envOnRemoteWarning": "偵測到遠端 MCP 設定中包含 env 欄位。env 僅 stdio 類型使用，遠端 MCP 應透過 headers 攜帶認證資訊，env 欄位儲存時會被忽略。"
@@ -2563,8 +2563,8 @@
         "newFile": "新建檔案",
         "newDirectory": "新建目錄",
         "description": "輸入新{kind}的名稱。",
-        "placeholderFile": "file-name.ext",
-        "placeholderDirectory": "folder-name"
+        "placeholderFile": "檔案名稱.ext",
+        "placeholderDirectory": "資料夾名稱"
       },
       "renameDialog": {
         "renameDirectory": "重新命名目錄",
@@ -3497,21 +3497,21 @@
     "conversationContextBar": {
       "folderTitle": "工作資料夾",
       "branchTitle": "工作分支",
-      "searchFolder": "Search folder...",
-      "searchBranch": "Search branch...",
-      "noFolders": "No folders",
-      "noBranches": "No branches",
-      "noBranch": "(no branch)",
+      "searchFolder": "搜尋資料夾...",
+      "searchBranch": "搜尋分支...",
+      "noFolders": "暫無資料夾",
+      "noBranches": "暫無分支",
+      "noBranch": "（無分支）",
       "chatModeLabel": "聊天模式",
-      "commit": "Commit",
-      "push": "Push",
-      "merge": "Merge",
+      "commit": "提交",
+      "push": "推送",
+      "merge": "合併",
       "toasts": {
-        "folderChanged": "Switched to {name}",
-        "openFolderFailed": "Failed to open folder",
+        "folderChanged": "已切換到 {name}",
+        "openFolderFailed": "開啟資料夾失敗",
         "switchedToChatMode": "已切換到聊天模式",
-        "openStashFailed": "Failed to open stash window",
-        "openMergeFailed": "Failed to open merge window"
+        "openStashFailed": "開啟貯藏視窗失敗",
+        "openMergeFailed": "開啟合併視窗失敗"
       }
     },
     "cloneDialog": {
@@ -5268,7 +5268,7 @@
     "pathAdded": "路徑已新增",
     "pathRemoved": "路徑已移除",
     "wakeHint": "普通訊息只記在共享時間線上。@ 某個 Session 才會喚醒它。",
-    "wakePreview": "將喚醒:{names}",
+    "wakePreview": "將喚醒：{names}",
     "wakePreviewEmpty": "普通訊息：僅記錄到時間軸，不會喚醒任何成員",
     "loadOlder": "載入更早的訊息",
     "reply": "回覆",
