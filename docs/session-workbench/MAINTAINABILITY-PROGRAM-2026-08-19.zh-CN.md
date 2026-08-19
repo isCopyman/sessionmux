@@ -710,7 +710,13 @@ T2 后置截图（CDP 9222 可用，基线在 .artifacts）+ 晨间验收报告 
   被否"不是本质"；真实痛点=**打开 tab/拖拽布局/缩放卡**（布局交互路径），且用户
   点出 dev vs release 混杂变量（体验的是 next dev 未压缩+React development 构建）。
   行动：release 构建（--no-bundle）已在后台打，出来后同机对比复现，仍卡再对布局
-  交互路径 profile；教训入长期记忆（perf-diagnosis-discipline）。② **标题同步采
+  交互路径 profile；教训入长期记忆（perf-diagnosis-discipline）。**→ 实证闭环
+  （同夜稍后）：用户亲测 release"确实相当丝滑"——dev 构建税定案为主因，静态分析
+  的代码级嫌疑（shiki 流式重分词/warm-cache=8/React Compiler）全部降级为 backlog
+  可选优化，性能主线关闭。顺带：release 首启白屏定性为 single-instance 插件互斥
+  （dev 实例活着时二实例被拦），用户关 dev 后 release 正常；dev/release 数据库
+  分文件（codeg-dev.db/codeg.db），"release 用 dev 数据"=停 release 后备份拷库，
+  等用户配合执行。**② **标题同步采
   上游语义（DB 单一事实源）**——用户点出 overlay 双源实害：@ 面板/搜索读 DB 标题，
   overlay 只改 parser 输出，同一会话两处名字不一致。定案：列表同步 codex index→DB、
   用户改名锁定、频道传播异步化，在我方代码结构上重放实现，f56ec5e6 overlay 撤除或
