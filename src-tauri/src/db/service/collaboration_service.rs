@@ -4236,7 +4236,12 @@ mod tests {
         )
         .await
         .expect("room ask");
-        let mut letter = input(source, vec![target_b], "overview-mail-ask", "please confirm");
+        let mut letter = input(
+            source,
+            vec![target_b],
+            "overview-mail-ask",
+            "please confirm",
+        );
         letter.expects_reply = true;
         send(&db.conn, letter).await.expect("mail ask");
 

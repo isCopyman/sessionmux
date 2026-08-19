@@ -2184,7 +2184,12 @@ mod tests {
         .unwrap();
         crate::db::service::collaboration_service::post_room(
             &db.conn,
-            record_post(room.id.clone(), a, "host-mention-human", "codeg://human ptal"),
+            record_post(
+                room.id.clone(),
+                a,
+                "host-mention-human",
+                "codeg://human ptal",
+            ),
         )
         .await
         .unwrap();
