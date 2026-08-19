@@ -23,7 +23,8 @@ use crate::acp::host_control::{
 use crate::acp::manager::ConnectionManager;
 use crate::chat_channel::manager::ChatChannelManager;
 use crate::commands::conversations::{
-    emit_conversation_upsert, list_all_conversations_core, sync_conversation_title_to_channels_core,
+    emit_conversation_upsert, emit_obligation_waiver, list_all_conversations_core,
+    sync_conversation_title_to_channels_core, update_conversation_archive_core,
 };
 use crate::commands::host_control_organization::OrganizationHostControl;
 use crate::commands::host_control_room::RoomHostControl;
@@ -276,7 +277,7 @@ impl DbSessionHostControl {
             for (action, description) in [
                 (
                     "session.archive",
-                    "Archive a Session in the calling Session's current project scope. An archived Session is hidden from default Session lists and refuses new collaboration mail until restored; Room @ mentions to it fail as target_archived. The Session, its transcript and its runtime are kept. Omit session_id to archive the caller.",
+                    "Archive a Session in the calling Session's current project scope. An archived Session is hidden from default Session lists and refuses new collaboration mail until restored; Room @ mentions to it fail as target_archived. Archiving waives every reply others still owe it (final — restoring does not revive them); its own debts stay frozen until restored. The Session, its transcript and its runtime are kept. Omit session_id to archive the caller.",
                 ),
                 (
                     "session.unarchive",
@@ -581,16 +582,20 @@ impl DbSessionHostControl {
             );
             return outcome;
         }
-        if let Err(error) =
-            conversation_service::update_archive(&self.db.conn, session_id, archived).await
+        let waived = match update_conversation_archive_core(&self.db.conn, session_id, archived)
+            .await
         {
-            return HostControlUseOutcome::rejected(
-                request_id,
-                action,
-                format!("Could not update the archive state of Session {session_id}: {error}"),
-            );
-        }
+            Ok(waived) => waived,
+            Err(error) => {
+                return HostControlUseOutcome::rejected(
+                    request_id,
+                    action,
+                    format!("Could not update the archive state of Session {session_id}: {error}"),
+                )
+            }
+        };
         emit_conversation_upsert(&self.emitter, &self.db.conn, session_id).await;
+        emit_obligation_waiver(&self.emitter, waived.clone());
         let outcome = HostControlUseOutcome {
             accepted: true,
             request_id: request_id.clone(),
@@ -602,7 +607,16 @@ impl DbSessionHostControl {
                 "archived": archived,
             }),
             note: Some(if archived {
-                format!("Archived Session {session_id}. It refuses new collaboration mail until restored.")
+                let mut note = format!(
+                    "Archived Session {session_id}. It refuses new collaboration mail until restored."
+                );
+                if !waived.is_empty() {
+                    note.push_str(&format!(
+                        " Waived {} open reply obligation(s) owed to it; restoring does not revive them.",
+                        waived.len()
+                    ));
+                }
+                note
             } else {
                 format!("Restored Session {session_id} from the archive. It accepts collaboration mail again.")
             }),
@@ -1237,6 +1251,73 @@ mod tests {
             )
             .await;
         assert_eq!(got.data["archived"], false);
+    }
+
+    #[tokio::test]
+    async fn archiving_waives_replies_owed_to_the_archived_session() {
+        use crate::db::service::collaboration_service;
+        use crate::models::{CollaborationObligationState, SendCollaborationMessageInput};
+
+        let (host, _, caller_id, target_id) = fixture().await;
+        let mut letter = SendCollaborationMessageInput::letter(
+            caller_id,
+            vec![target_id],
+            "owed-reply",
+            "question",
+            "answer me",
+        );
+        letter.expects_reply = true;
+        collaboration_service::send(&host.db.conn, letter)
+            .await
+            .expect("send");
+        let before = collaboration_service::feed(&host.db.conn, target_id, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            before.inbound[0].obligation_state,
+            CollaborationObligationState::AwaitingReply
+        );
+
+        // Omitting session_id archives the caller — the creditor.
+        let archived = host
+            .use_action(
+                caller(caller_id, true),
+                "req-archive-creditor".into(),
+                "session.archive".into(),
+                json!({}),
+            )
+            .await;
+        assert!(archived.accepted);
+        assert!(
+            archived.note.unwrap().contains("Waived 1"),
+            "the note reports the waiver"
+        );
+        let after = collaboration_service::feed(&host.db.conn, target_id, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            after.inbound[0].obligation_state,
+            CollaborationObligationState::Resolved,
+            "the debtor no longer owes a reply the archive would refuse"
+        );
+
+        let restored = host
+            .use_action(
+                caller(caller_id, true),
+                "req-unarchive-creditor".into(),
+                "session.unarchive".into(),
+                json!({}),
+            )
+            .await;
+        assert!(restored.accepted);
+        let after_restore = collaboration_service::feed(&host.db.conn, target_id, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            after_restore.inbound[0].obligation_state,
+            CollaborationObligationState::Resolved,
+            "unarchiving never revives a waived debt"
+        );
     }
 
     #[tokio::test]

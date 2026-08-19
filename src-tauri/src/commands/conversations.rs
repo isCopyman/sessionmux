@@ -2242,10 +2242,37 @@ pub async fn update_conversation_archive_core(
     conn: &sea_orm::DatabaseConnection,
     conversation_id: i32,
     archived: bool,
-) -> Result<(), AppCommandError> {
+) -> Result<Vec<i32>, AppCommandError> {
     conversation_service::update_archive(conn, conversation_id, archived)
         .await
-        .map_err(AppCommandError::from)
+        .map_err(AppCommandError::from)?;
+    // Archiving waives every reply others still owe this Session so their
+    // reminders stop demanding a letter the archive would refuse. The waiver
+    // is final: restoring never revives waived debts.
+    if archived {
+        return crate::db::service::collaboration_service::resolve_obligations_owed_to(
+            conn,
+            conversation_id,
+        )
+        .await
+        .map_err(AppCommandError::from);
+    }
+    Ok(vec![])
+}
+
+/// Publish the collaboration invalidation for Sessions whose reply
+/// obligations an archive just waived.
+pub fn emit_obligation_waiver(emitter: &EventEmitter, waived_debtors: Vec<i32>) {
+    if waived_debtors.is_empty() {
+        return;
+    }
+    emit_event(
+        emitter,
+        crate::web::event_bridge::COLLABORATION_CHANGED_EVENT,
+        CollaborationChanged {
+            conversation_ids: waived_debtors,
+        },
+    );
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -2256,8 +2283,9 @@ pub async fn update_conversation_archive(
     conversation_id: i32,
     archived: bool,
 ) -> Result<(), AppCommandError> {
-    update_conversation_archive_core(&db.conn, conversation_id, archived).await?;
+    let waived = update_conversation_archive_core(&db.conn, conversation_id, archived).await?;
     emit_conversation_upsert(&EventEmitter::Tauri(app), &db.conn, conversation_id).await;
+    emit_obligation_waiver(&EventEmitter::Tauri(app), waived);
     Ok(())
 }
 

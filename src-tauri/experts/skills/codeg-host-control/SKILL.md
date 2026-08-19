@@ -50,7 +50,10 @@ the idempotency key outside model-controlled arguments.
   caller's current project scope. An archived Session refuses new mail
   (the sender is told) and Room `@` mentions to it come back
   `failed (target_archived)`; the Session, transcript, and runtime are kept.
-  Omit `session_id` to archive or restore the token-derived current Session.
+  Archiving waives every reply others still owe it — final, restoring does
+  not revive them — while its own unpaid replies stay frozen (unreminded)
+  until it is restored. Omit `session_id` to archive or restore the
+  token-derived current Session.
 
 ## Available organization actions
 

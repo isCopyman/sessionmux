@@ -2260,7 +2260,9 @@ pub struct ReminderTargetSnapshot {
     pub letters: Vec<crate::acp::collaboration_reminder::ReminderLetterLine>,
 }
 
-/// Sessions whose Agent mailbox is overdue for a host reminder.
+/// Sessions whose Agent mailbox is overdue for a host reminder. Archived
+/// Sessions are skipped: their queue never runs, so a queued reminder would
+/// pile up undeliverable. Their debts stay frozen until they are restored.
 pub async fn list_overdue_reminder_targets(
     conn: &DatabaseConnection,
 ) -> Result<Vec<ReminderTargetSnapshot>, DbError> {
@@ -2297,7 +2299,7 @@ pub async fn list_overdue_reminder_targets(
                  FROM collaboration_delivery d \
                  JOIN collaboration_event e ON e.id = d.event_id \
                  JOIN conversation c ON c.id = d.target_conversation_id \
-                  AND c.deleted_at IS NULL \
+                  AND c.deleted_at IS NULL AND c.archived_at IS NULL \
                  LEFT JOIN conversation_collaboration_state s \
                    ON s.conversation_id = d.target_conversation_id \
                  GROUP BY d.target_conversation_id \
@@ -2724,6 +2726,52 @@ pub async fn mark_seen(
         feed: feed(conn, conversation_id, None).await?,
         affected_conversation_ids: affected,
     })
+}
+
+/// Archiving means the Session no longer expects replies: every open
+/// obligation owed TO it resolves so the debtors' reminders stop instead of
+/// demanding a letter the archive would refuse. The waiver is final —
+/// unarchiving never revives these debts; ask again with a new letter.
+/// Obligations the archived Session itself owes stay frozen (its queue does
+/// not run and the reminder sweep skips archived debtors). Returns the
+/// debtor Session ids whose ledgers changed.
+pub async fn resolve_obligations_owed_to(
+    conn: &DatabaseConnection,
+    source_conversation_id: i32,
+) -> Result<Vec<i32>, DbError> {
+    let txn = conn.begin().await?;
+    let rows = txn
+        .query_all(statement(
+            "SELECT DISTINCT d.target_conversation_id AS debtor \
+             FROM collaboration_delivery d \
+             JOIN collaboration_event e ON e.id = d.event_id \
+             WHERE e.source_conversation_id = ? AND d.obligation_state = 'awaiting_reply'",
+            vec![source_conversation_id.into()],
+        ))
+        .await?;
+    let mut debtors = Vec::with_capacity(rows.len());
+    for row in &rows {
+        debtors.push(row.try_get("", "debtor")?);
+    }
+    if debtors.is_empty() {
+        txn.commit().await?;
+        return Ok(debtors);
+    }
+    txn.execute(statement(
+        "UPDATE collaboration_delivery \
+         SET obligation_state = 'resolved', \
+             obligation_resolved_at = COALESCE(obligation_resolved_at, CURRENT_TIMESTAMP), \
+             updated_at = CURRENT_TIMESTAMP \
+         WHERE obligation_state = 'awaiting_reply' \
+           AND event_id IN ( \
+               SELECT id FROM collaboration_event WHERE source_conversation_id = ? \
+           )",
+        vec![source_conversation_id.into()],
+    ))
+    .await?;
+    let affected = bump_live_participants(&txn, debtors).await?;
+    txn.commit().await?;
+    Ok(affected)
 }
 
 /// Resolve an inbound reply obligation without sending a reply. The update is
@@ -3965,6 +4013,84 @@ mod tests {
         assert_eq!(
             sent.deliveries[0].state,
             CollaborationDeliveryState::Pending
+        );
+    }
+
+    #[tokio::test]
+    async fn archiving_the_creditor_waives_the_reply_owed_to_it() {
+        let (db, source, target, _) = seeded_memory().await;
+        let mut letter = input(source, vec![target], "waive-q", "answer me");
+        letter.expects_reply = true;
+        let sent = send(&db.conn, letter).await.unwrap();
+        // The digest only counts debts whose letter actually reached a turn.
+        db.conn
+            .execute(statement(
+                "UPDATE collaboration_delivery \
+                 SET state = 'embedded', embedded_turn_ref = 'turn-waive', \
+                     agent_received_at = CURRENT_TIMESTAMP \
+                 WHERE event_id = ?",
+                vec![sent.event_id.clone().into()],
+            ))
+            .await
+            .unwrap();
+        let before = open_obligation_digest(&db.conn, target).await.unwrap();
+        assert_eq!(before.letters_owed, 1, "the debtor owes the reply");
+
+        let waived = resolve_obligations_owed_to(&db.conn, source)
+            .await
+            .expect("waive");
+        assert_eq!(waived, vec![target]);
+        let after = open_obligation_digest(&db.conn, target).await.unwrap();
+        assert_eq!(after.letters_owed, 0, "the digest no longer lists the debt");
+
+        // Unarchiving never revives a waived debt.
+        crate::db::service::conversation_service::update_archive(&db.conn, source, false)
+            .await
+            .expect("restore");
+        let restored = open_obligation_digest(&db.conn, target).await.unwrap();
+        assert_eq!(restored.letters_owed, 0);
+    }
+
+    #[tokio::test]
+    async fn archived_debtor_is_skipped_by_the_reminder_sweep() {
+        let (db, source, target, _) = seeded_memory().await;
+        let sent = send(&db.conn, invoke_input(source, vec![target], "due-archived", "hello"))
+            .await
+            .unwrap();
+        db.conn
+            .execute(Statement::from_sql_and_values(
+                DbBackend::Sqlite,
+                "UPDATE collaboration_delivery \
+                 SET created_at = datetime('now', '-6 minutes') \
+                 WHERE event_id = ?",
+                vec![sent.event_id.clone().into()],
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            list_overdue_reminder_targets(&db.conn).await.unwrap().len(),
+            1,
+            "overdue unread mail is due for a reminder"
+        );
+
+        crate::db::service::conversation_service::update_archive(&db.conn, target, true)
+            .await
+            .expect("archive debtor");
+        assert!(
+            list_overdue_reminder_targets(&db.conn)
+                .await
+                .unwrap()
+                .is_empty(),
+            "an archived debtor's queue never runs, so no reminder is queued"
+        );
+
+        crate::db::service::conversation_service::update_archive(&db.conn, target, false)
+            .await
+            .expect("restore debtor");
+        assert_eq!(
+            list_overdue_reminder_targets(&db.conn).await.unwrap().len(),
+            1,
+            "the frozen debt becomes due again after restore"
         );
     }
 
