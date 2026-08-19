@@ -1864,6 +1864,113 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn high_mail_carries_the_steer_hint_and_normal_does_not() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-collaboration-steer-hint").await;
+        let source = seed_conversation(&db, folder, AgentType::Codex).await;
+        let target = seed_conversation(&db, folder, AgentType::ClaudeCode).await;
+
+        let high = collaboration_send_core(
+            &db.conn,
+            &EventEmitter::Noop,
+            &PromptQueueHandle::disconnected_for_test(),
+            None,
+            SendCollaborationMessageInput {
+                source_conversation_id: source,
+                target_conversation_ids: vec![target],
+                subject: "Test letter".into(),
+                body: "busy? slide into the running turn".to_string(),
+                client_dedupe_id: "steer-high".to_string(),
+                invocation_policy: CollaborationInvocationPolicy::InvokeWhenIdle,
+                delivery_hint: CollaborationDeliveryHint::Default,
+                expects_reply: false,
+                urgency: CollaborationUrgency::Urgent,
+                reply_to_event_id: None,
+            },
+        )
+        .await
+        .expect("high send");
+        assert_eq!(
+            high.deliveries[0].delivery_hint,
+            CollaborationDeliveryHint::SteerIfSupported,
+            "priority=high mail steers a busy supporting turn, same as a Room @"
+        );
+
+        // A legacy companion that still passes the hint explicitly keeps it.
+        let explicit = collaboration_send_core(
+            &db.conn,
+            &EventEmitter::Noop,
+            &PromptQueueHandle::disconnected_for_test(),
+            None,
+            SendCollaborationMessageInput {
+                source_conversation_id: source,
+                target_conversation_ids: vec![target],
+                subject: "Test letter".into(),
+                body: "explicit steer from an old companion".to_string(),
+                client_dedupe_id: "steer-explicit".to_string(),
+                invocation_policy: CollaborationInvocationPolicy::InvokeWhenIdle,
+                delivery_hint: CollaborationDeliveryHint::SteerIfSupported,
+                expects_reply: false,
+                urgency: CollaborationUrgency::Urgent,
+                reply_to_event_id: None,
+            },
+        )
+        .await
+        .expect("explicit hint send");
+        assert_eq!(
+            explicit.deliveries[0].delivery_hint,
+            CollaborationDeliveryHint::SteerIfSupported
+        );
+
+        let normal = collaboration_send_core(
+            &db.conn,
+            &EventEmitter::Noop,
+            &PromptQueueHandle::disconnected_for_test(),
+            None,
+            SendCollaborationMessageInput {
+                source_conversation_id: source,
+                target_conversation_ids: vec![target],
+                subject: "Test letter".into(),
+                body: "ride the next ordinary turn".to_string(),
+                client_dedupe_id: "steer-normal".to_string(),
+                invocation_policy: CollaborationInvocationPolicy::StoreOnly,
+                delivery_hint: CollaborationDeliveryHint::Default,
+                expects_reply: false,
+                urgency: CollaborationUrgency::Normal,
+                reply_to_event_id: None,
+            },
+        )
+        .await
+        .expect("normal send");
+        assert_eq!(
+            normal.deliveries[0].delivery_hint,
+            CollaborationDeliveryHint::Default
+        );
+
+        // Steer without invoke_when_idle stays invalid, legacy field or not.
+        let rejected = collaboration_send_core(
+            &db.conn,
+            &EventEmitter::Noop,
+            &PromptQueueHandle::disconnected_for_test(),
+            None,
+            SendCollaborationMessageInput {
+                source_conversation_id: source,
+                target_conversation_ids: vec![target],
+                subject: "Test letter".into(),
+                body: "steer without a turn to ride".to_string(),
+                client_dedupe_id: "steer-invalid".to_string(),
+                invocation_policy: CollaborationInvocationPolicy::StoreOnly,
+                delivery_hint: CollaborationDeliveryHint::SteerIfSupported,
+                expects_reply: false,
+                urgency: CollaborationUrgency::Normal,
+                reply_to_event_id: None,
+            },
+        )
+        .await;
+        assert!(rejected.is_err());
+    }
+
+    #[tokio::test]
     async fn atomic_stop_and_send_cancels_old_busy_turn_after_persisting() {
         let db = fresh_in_memory_db().await;
         let folder = seed_folder(&db, "/tmp/codeg-interrupt-command").await;
