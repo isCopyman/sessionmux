@@ -1112,7 +1112,7 @@ mod tests {
         assert_eq!(room.members.len(), 2);
         assert_eq!(room.created_by_conversation_id, a);
         assert!(room.members.iter().all(|m| m.role == "member"));
-        let listed = list(&db.conn, 1).await.unwrap();
+        let listed = list_for_workbench(&db.conn, 1).await.unwrap();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].id, room.id);
         assert_eq!(listed[0].member_count, 2);
@@ -1146,7 +1146,7 @@ mod tests {
         let workbench_id = delete(&db.conn, &room.id).await.expect("delete room");
         assert_eq!(workbench_id, 1);
         assert!(get(&db.conn, &room.id).await.is_err());
-        assert!(list(&db.conn, 1).await.unwrap().is_empty());
+        assert!(list_for_workbench(&db.conn, 1).await.unwrap().is_empty());
 
         let events: i64 = db
             .conn
@@ -1572,11 +1572,11 @@ mod tests {
         )
         .await
         .unwrap();
-        let listed = list(&db.conn, 1).await.unwrap();
+        let listed = list_for_workbench(&db.conn, 1).await.unwrap();
         assert_eq!(listed[0].unread_count, 1);
         let updated_before = get(&db.conn, &room.id).await.unwrap().updated_at;
         mark_seen(&db.conn, &room.id, Some(a)).await.unwrap();
-        let listed = list(&db.conn, 1).await.unwrap();
+        let listed = list_for_workbench(&db.conn, 1).await.unwrap();
         assert_eq!(listed[0].unread_count, 0);
         assert_eq!(
             get(&db.conn, &room.id).await.unwrap().updated_at,
@@ -1749,7 +1749,7 @@ mod tests {
         assert_eq!(for_b[0].needs_reply_count, 1);
         assert_eq!(for_b[0].awaiting_reply_count, 0);
 
-        let host = list(&db.conn, 1).await.unwrap();
+        let host = list_for_workbench(&db.conn, 1).await.unwrap();
         assert_eq!(host[0].needs_reply_count, 0);
         assert_eq!(host[0].awaiting_reply_count, 0);
 

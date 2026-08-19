@@ -1300,11 +1300,13 @@ pub(crate) async fn prepare_origin_retry_with_queued_confirmation(
 /// persisted, naming every archived target, so the sender learns immediately
 /// instead of the mail rotting unread. Restore the Session to accept mail.
 ///
-/// `pub(crate)`, not `pub`: the only production call site
+/// `#[cfg(test)]`: the only production call site
 /// (`commands::collaboration::persist_collaboration_message`) calls
 /// `send_with_initially_inactive_targets` directly, this wrapper's
-/// zero-inactive-targets case included. Everywhere else this is called is a
-/// `#[cfg(test)]` module using it as a convenience fixture builder.
+/// zero-inactive-targets case included. Every caller is a `#[cfg(test)]`
+/// module using it as a convenience fixture builder, so the wrapper only
+/// exists in test builds (dead code otherwise).
+#[cfg(test)]
 pub(crate) async fn send(
     conn: &DatabaseConnection,
     input: SendCollaborationMessageInput,

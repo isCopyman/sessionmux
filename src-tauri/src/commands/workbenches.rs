@@ -456,11 +456,10 @@ mod tests {
             .await
             .expect("room survives");
         assert_eq!(moved.workbench_id, 1);
-        let listed = crate::db::service::collaboration_room_service::list_for_workbench(
-            &db.conn, 1,
-        )
-        .await
-        .expect("list main");
+        let listed =
+            crate::db::service::collaboration_room_service::list_for_workbench(&db.conn, 1)
+                .await
+                .expect("list main");
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].id, room.id);
     }
