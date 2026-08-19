@@ -19,9 +19,9 @@ A letter has two parts, like email:
 A successful `send_message` means Codeg stored a private letter.
 `priority=high` (default) notifies now: if the target is working, Codeg
 steers the letter into the current turn when that channel exists,
-otherwise it stops the turn and delivers. `priority=normal` waits for
-the target's next turn. Both are Agent mail. It is not user approval
-and not a Room.
+otherwise the letter is delivered when that turn finishes — high never
+stops a turn. `priority=normal` waits for the target's next turn. Both
+are Agent mail. It is not user approval and not a Room.
 
 ## Tools
 
