@@ -273,6 +273,35 @@ impl DbSessionHostControl {
                 }),
                 result_stages: vec!["persisted".to_string()],
             });
+            for (action, description) in [
+                (
+                    "session.archive",
+                    "Archive a Session in the calling Session's current project scope. An archived Session is hidden from default Session lists and refuses new collaboration mail until restored; Room @ mentions to it fail as target_archived. The Session, its transcript and its runtime are kept. Omit session_id to archive the caller.",
+                ),
+                (
+                    "session.unarchive",
+                    "Restore an archived Session in the calling Session's current project scope so it is listed normally and accepts collaboration mail again. Omit session_id to restore the caller.",
+                ),
+            ] {
+                capabilities.push(HostControlCapability {
+                    action: action.to_string(),
+                    description: description.to_string(),
+                    access: HostControlAccessLevel::Write,
+                    input_schema: json!({
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                            "session_id": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": i32::MAX,
+                                "description": "Optional target Session id. Omit for the token-derived current Session."
+                            }
+                        }
+                    }),
+                    result_stages: vec!["persisted".to_string()],
+                });
+            }
             capabilities.extend(SessionHostControlProvider::capabilities());
         }
         capabilities.extend(OrganizationHostControl::capabilities(writes_allowed));
@@ -487,6 +516,107 @@ impl DbSessionHostControl {
         outcome
     }
 
+    async fn session_set_archived(
+        &self,
+        caller: &HostControlCaller,
+        request_id: String,
+        action: String,
+        input: Value,
+        archived: bool,
+    ) -> HostControlUseOutcome {
+        let fingerprint = write_fingerprint(&action, &input);
+        let mut writes = self.writes.lock().await;
+        if let Some(cached) = writes.entries.get(&request_id) {
+            if cached.fingerprint != fingerprint {
+                return HostControlUseOutcome::rejected(
+                    request_id,
+                    action,
+                    "request_id was already used with different action input",
+                );
+            }
+            let mut outcome = cached.outcome.clone();
+            outcome.replayed = true;
+            return outcome;
+        }
+
+        let params: SessionSetArchivedInput = match parse_input(&action, input) {
+            Ok(params) => params,
+            Err(note) => return HostControlUseOutcome::rejected(request_id, action, note),
+        };
+        let session_id = params.session_id.unwrap_or(caller.current_session_id);
+        if session_id <= 0 {
+            return HostControlUseOutcome::rejected(
+                request_id,
+                action,
+                "session_id must be a positive integer",
+            );
+        }
+        let target = match self.manageable_target(caller, session_id).await {
+            Ok(target) => target,
+            Err(note) => return HostControlUseOutcome::rejected(request_id, action, note),
+        };
+        if target.archived_at.is_some() == archived {
+            let outcome = HostControlUseOutcome {
+                accepted: true,
+                request_id: request_id.clone(),
+                action: action.clone(),
+                stage: "persisted".to_string(),
+                replayed: false,
+                data: json!({
+                    "session_id": session_id,
+                    "archived": archived,
+                }),
+                note: Some(if archived {
+                    format!("Session {session_id} was already archived.")
+                } else {
+                    format!("Session {session_id} was not archived.")
+                }),
+            };
+            writes.insert(
+                request_id,
+                CachedWrite {
+                    fingerprint,
+                    outcome: outcome.clone(),
+                },
+            );
+            return outcome;
+        }
+        if let Err(error) =
+            conversation_service::update_archive(&self.db.conn, session_id, archived).await
+        {
+            return HostControlUseOutcome::rejected(
+                request_id,
+                action,
+                format!("Could not update the archive state of Session {session_id}: {error}"),
+            );
+        }
+        emit_conversation_upsert(&self.emitter, &self.db.conn, session_id).await;
+        let outcome = HostControlUseOutcome {
+            accepted: true,
+            request_id: request_id.clone(),
+            action: action.clone(),
+            stage: "persisted".to_string(),
+            replayed: false,
+            data: json!({
+                "session_id": session_id,
+                "archived": archived,
+            }),
+            note: Some(if archived {
+                format!("Archived Session {session_id}. It refuses new collaboration mail until restored.")
+            } else {
+                format!("Restored Session {session_id} from the archive. It accepts collaboration mail again.")
+            }),
+        };
+        writes.insert(
+            request_id,
+            CachedWrite {
+                fingerprint,
+                outcome: outcome.clone(),
+            },
+        );
+        outcome
+    }
+
     async fn place_created_session_in_collection(
         &self,
         caller: &HostControlCaller,
@@ -599,6 +729,19 @@ impl HostControlAccess for DbSessionHostControl {
                         .await
                 }
             }
+            "session.archive" | "session.unarchive" => {
+                if !config.writes_enabled || !caller.writes_allowed {
+                    HostControlUseOutcome::rejected(
+                        request_id,
+                        action,
+                        "This Session's live Host policy does not allow Host Control writes.",
+                    )
+                } else {
+                    let archived = action == "session.archive";
+                    self.session_set_archived(&caller, request_id, action, input, archived)
+                        .await
+                }
+            }
             lifecycle_action if SessionHostControlProvider::handles(lifecycle_action) => {
                 if !config.writes_enabled || !caller.writes_allowed {
                     HostControlUseOutcome::rejected(
@@ -705,6 +848,13 @@ struct SessionRenameInput {
     title: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SessionSetArchivedInput {
+    #[serde(default)]
+    session_id: Option<i32>,
+}
+
 fn parse_input<T: for<'de> Deserialize<'de>>(action: &str, input: Value) -> Result<T, String> {
     serde_json::from_value(input).map_err(|error| format!("Invalid input for {action}: {error}"))
 }
@@ -800,6 +950,14 @@ mod tests {
             .capabilities
             .iter()
             .any(|capability| capability.action == "session.rename"));
+        assert!(writable
+            .capabilities
+            .iter()
+            .any(|capability| capability.action == "session.archive"));
+        assert!(writable
+            .capabilities
+            .iter()
+            .any(|capability| capability.action == "session.unarchive"));
         assert!(writable
             .capabilities
             .iter()
@@ -973,6 +1131,112 @@ mod tests {
             .await;
         assert!(!deleted.accepted);
         assert!(deleted.note.unwrap().contains("not found"));
+    }
+
+    #[tokio::test]
+    async fn archive_hides_and_unarchive_restores_a_scoped_session() {
+        let (host, _, caller_id, target_id) = fixture().await;
+
+        let denied = host
+            .use_action(
+                caller(caller_id, false),
+                "req-archive-denied".into(),
+                "session.archive".into(),
+                json!({ "session_id": target_id }),
+            )
+            .await;
+        assert!(!denied.accepted);
+        assert!(denied.note.unwrap().contains("does not allow"));
+
+        let archived = host
+            .use_action(
+                caller(caller_id, true),
+                "req-archive".into(),
+                "session.archive".into(),
+                json!({ "session_id": target_id }),
+            )
+            .await;
+        assert!(archived.accepted);
+        assert_eq!(archived.stage, "persisted");
+        assert_eq!(archived.data["archived"], true);
+
+        let got = host
+            .use_action(
+                caller(caller_id, true),
+                "req-get-archived".into(),
+                "session.get".into(),
+                json!({ "session_id": target_id }),
+            )
+            .await;
+        assert_eq!(got.data["archived"], true);
+
+        let listed = host
+            .use_action(
+                caller(caller_id, true),
+                "req-list-default".into(),
+                "session.list".into(),
+                json!({}),
+            )
+            .await;
+        assert!(
+            listed.data["sessions"].as_array().unwrap().is_empty(),
+            "the default list hides archived Sessions"
+        );
+        let listed_archived = host
+            .use_action(
+                caller(caller_id, true),
+                "req-list-archived".into(),
+                "session.list".into(),
+                json!({ "archived": true }),
+            )
+            .await;
+        assert_eq!(
+            listed_archived.data["sessions"].as_array().unwrap().len(),
+            1
+        );
+
+        let replay = host
+            .use_action(
+                caller(caller_id, true),
+                "req-archive".into(),
+                "session.archive".into(),
+                json!({ "session_id": target_id }),
+            )
+            .await;
+        assert!(replay.accepted);
+        assert!(replay.replayed);
+
+        let again = host
+            .use_action(
+                caller(caller_id, true),
+                "req-archive-again".into(),
+                "session.archive".into(),
+                json!({ "session_id": target_id }),
+            )
+            .await;
+        assert!(again.accepted);
+        assert!(!again.replayed);
+        assert!(again.note.unwrap().contains("already archived"));
+
+        let restored = host
+            .use_action(
+                caller(caller_id, true),
+                "req-unarchive".into(),
+                "session.unarchive".into(),
+                json!({ "session_id": target_id }),
+            )
+            .await;
+        assert!(restored.accepted);
+        assert_eq!(restored.data["archived"], false);
+        let got = host
+            .use_action(
+                caller(caller_id, true),
+                "req-get-restored".into(),
+                "session.get".into(),
+                json!({ "session_id": target_id }),
+            )
+            .await;
+        assert_eq!(got.data["archived"], false);
     }
 
     #[tokio::test]

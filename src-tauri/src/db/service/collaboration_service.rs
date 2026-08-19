@@ -1303,6 +1303,10 @@ pub(crate) async fn prepare_origin_retry_with_queued_confirmation(
 /// the original event and original delivery set. In particular, adding targets
 /// to a retry never silently expands fan-out. A changed body or metadata is a
 /// caller error because it would make the idempotency key ambiguous.
+///
+/// A letter addressed to an archived Session is rejected before the event is
+/// persisted, naming every archived target, so the sender learns immediately
+/// instead of the mail rotting unread. Restore the Session to accept mail.
 pub async fn send(
     conn: &DatabaseConnection,
     input: SendCollaborationMessageInput,
@@ -1359,6 +1363,28 @@ async fn send_with_initially_inactive_targets_guarded(
             affected_conversation_ids: affected.into_iter().collect(),
             deduplicated: true,
         }));
+    }
+
+    // Archived Sessions refuse new mail. Reject the whole send before the
+    // event exists so the caller learns immediately which targets are
+    // archived instead of the letter rotting in a mailbox nobody watches.
+    // Dedupe replays above still return the original fan-out.
+    let mut archived_targets: Vec<String> = Vec::new();
+    for target_id in &target_ids {
+        if let Some(target) = live_session(&txn, *target_id).await? {
+            if target.archived {
+                archived_targets.push(match target.title.as_deref() {
+                    Some(title) => format!("Session {target_id} ({title:?})"),
+                    None => format!("Session {target_id}"),
+                });
+            }
+        }
+    }
+    if !archived_targets.is_empty() {
+        return Err(validation(format!(
+            "Archived Sessions do not accept new mail: {}. Unarchive before sending.",
+            archived_targets.join(", ")
+        )));
     }
 
     let event_id = uuid::Uuid::new_v4().to_string();
@@ -1625,8 +1651,10 @@ fn validate_room_post(input: &PostRoomMessageInput) -> Result<(), DbError> {
 /// Persist a Room-visible event. Empty structured mentions is a record-only
 /// post: every member can read it, nobody is invoked. Free-text `@word` is
 /// ignored. Structured Session URIs / mention_session_ids still create
-/// deliveries. An archived member stays mentioned on the ledger, but is not
-/// enqueued and does not get an awaiting-reply obligation. Mail projections
+/// deliveries. An archived member stays mentioned on the ledger, but the
+/// Delivery is marked `failed` with reason `target_archived` so the poster
+/// sees who was skipped; the member is not enqueued and gets no
+/// awaiting-reply obligation. Mail projections
 /// never see these events.
 pub async fn post_room(
     conn: &DatabaseConnection,
@@ -1782,12 +1810,18 @@ pub async fn post_room(
     for target_id in targets {
         let target = live_session(&txn, target_id).await?;
         // Archived members stay in the Room and still get a Delivery so the
-        // public timeline can show the @. They must not be woken: skip the
-        // prompt queue and do not park an awaiting-reply obligation.
+        // public timeline can show the @. They must not be woken: the
+        // delivery fails with an explicit reason (naming the skipped member
+        // to the poster), skips the prompt queue, and parks no obligation.
         let archived = target.as_ref().is_some_and(|session| session.archived);
         let invoke = input.invocation_policy == CollaborationInvocationPolicy::InvokeWhenIdle
             && target.as_ref().is_some_and(|session| !session.archived);
         let (snapshot, state, error) = match target.as_ref() {
+            Some(target) if archived => (
+                target.snapshot(),
+                "failed",
+                Some("target_archived".to_string()),
+            ),
             Some(target) => (
                 target.snapshot(),
                 if invoke { "queued" } else { "pending" },
@@ -3851,6 +3885,86 @@ mod tests {
             missing.obligation_state,
             CollaborationObligationState::None,
             "an unreachable target cannot owe a reply"
+        );
+    }
+
+    #[tokio::test]
+    async fn archived_target_refuses_new_mail_and_the_sender_sees_why() {
+        let (db, source, target_a, target_b) = seeded_memory().await;
+        crate::db::service::conversation_service::update_archive(&db.conn, target_a, true)
+            .await
+            .expect("archive");
+
+        let err = send(
+            &db.conn,
+            input(source, vec![target_a], "archived-1", "anybody home?"),
+        )
+        .await
+        .expect_err("an archived Session refuses new mail");
+        let message = err.to_string();
+        assert!(message.contains("archived"), "names the reason: {message}");
+        assert!(
+            message.contains(&target_a.to_string()),
+            "names the archived Session: {message}"
+        );
+
+        // A mixed fan-out fails as one send rather than half-landing.
+        let err = send(
+            &db.conn,
+            input(source, vec![target_a, target_b], "archived-2", "team note"),
+        )
+        .await
+        .expect_err("one archived target refuses the whole letter");
+        assert!(err.to_string().contains("archived"));
+        assert!(
+            feed(&db.conn, target_b, None)
+                .await
+                .unwrap()
+                .inbound
+                .is_empty(),
+            "nothing was persisted for the live target either"
+        );
+
+        // An existing thread cannot be continued while the peer is archived.
+        let sent = send(
+            &db.conn,
+            input(source, vec![target_b], "thread-q", "question"),
+        )
+        .await
+        .expect("send");
+        crate::db::service::conversation_service::update_archive(&db.conn, source, true)
+            .await
+            .expect("archive source");
+        let mut reply = input(target_b, vec![source], "thread-a", "answer");
+        reply.reply_to_event_id = Some(sent.event_id.clone());
+        let err = send(&db.conn, reply)
+            .await
+            .expect_err("replies to an archived Session are refused too");
+        assert!(err.to_string().contains("archived"));
+    }
+
+    #[tokio::test]
+    async fn unarchived_target_accepts_mail_again() {
+        let (db, source, target, _) = seeded_memory().await;
+        crate::db::service::conversation_service::update_archive(&db.conn, target, true)
+            .await
+            .expect("archive");
+        send(&db.conn, input(source, vec![target], "while-archived", "held"))
+            .await
+            .expect_err("archived Sessions refuse mail");
+        crate::db::service::conversation_service::update_archive(&db.conn, target, false)
+            .await
+            .expect("restore");
+        let sent = send(
+            &db.conn,
+            input(source, vec![target], "after-restore", "back?"),
+        )
+        .await
+        .expect("mail flows again after unarchive");
+        assert_eq!(sent.deliveries.len(), 1);
+        assert_eq!(
+            sent.deliveries[0].state,
+            CollaborationDeliveryState::Pending
         );
     }
 

@@ -1849,7 +1849,13 @@ pub fn render_session_send_result(outcome: &Value) -> Value {
                 .get("state")
                 .and_then(Value::as_str)
                 .unwrap_or("unknown");
-            lines.push(format!("- {id}: {title} — {state}"));
+            // A failed delivery must name why — an archived target that was
+            // skipped (target_archived) reads the same as a missing one
+            // (target_not_found) without the reason code.
+            match delivery.get("error").and_then(Value::as_str) {
+                Some(error) => lines.push(format!("- {id}: {title} — {state} ({error})")),
+                None => lines.push(format!("- {id}: {title} — {state}")),
+            }
         }
         lines.push(
             "Delivery or queueing does not mean the target Agent has completed the request."
@@ -2712,6 +2718,23 @@ mod tests {
         assert!(text.contains("event-1"));
         assert!(text.contains("queued"));
         assert!(text.contains("does not mean"));
+
+        let skipped = render_session_send_result(&serde_json::json!({
+            "accepted": true,
+            "event_id": "event-2",
+            "room_id": "room-1",
+            "deliveries": [{
+                "target_session_id": 9,
+                "target_title": "Reviewer",
+                "state": "failed",
+                "error": "target_archived"
+            }]
+        }));
+        let skipped_text = skipped["content"][0]["text"].as_str().unwrap();
+        assert!(
+            skipped_text.contains("9: Reviewer — failed (target_archived)"),
+            "a skipped archived member is named with the reason: {skipped_text}"
+        );
 
         let inbox = render_session_inbox_result(&serde_json::json!({
             "available": true,

@@ -1381,7 +1381,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn archived_member_stays_mentioned_but_is_not_enqueued() {
+    async fn archived_member_stays_mentioned_but_the_delivery_fails_visibly() {
         let (db, a, b, c) = seeded().await;
         let room = make_room(&db, a, vec![a, b, c]).await;
         crate::db::service::conversation_service::update_archive(&db.conn, b, true)
@@ -1415,11 +1415,8 @@ mod tests {
             .iter()
             .find(|item| item.target.conversation_id == b)
             .expect("archived delivery");
-        assert_eq!(
-            archived.invocation_policy,
-            CollaborationInvocationPolicy::StoreOnly
-        );
-        assert_eq!(archived.state, CollaborationDeliveryState::Pending);
+        assert_eq!(archived.state, CollaborationDeliveryState::Failed);
+        assert_eq!(archived.error.as_deref(), Some("target_archived"));
         assert_eq!(
             archived.obligation_state,
             CollaborationObligationState::None

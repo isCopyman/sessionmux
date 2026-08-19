@@ -46,6 +46,11 @@ the idempotency key outside model-controlled arguments.
 - `session.cancel_turn`: cancel only the active Turn and keep the Session/runtime.
 - `session.stop`: stop the managed runtime while preserving Session identity and
   native history for resume.
+- `session.archive` / `session.unarchive`: hide or restore a Session in the
+  caller's current project scope. An archived Session refuses new mail
+  (the sender is told) and Room `@` mentions to it come back
+  `failed (target_archived)`; the Session, transcript, and runtime are kept.
+  Omit `session_id` to archive or restore the token-derived current Session.
 
 ## Available organization actions
 
@@ -81,7 +86,7 @@ Workbench Pane layout, window mounts and focus remain device-local.
 `workbench.place_session` exposes only the existing tab/right/down placement
 primitive; arbitrary layout save/apply is still unavailable. A persisted
 Workbench membership is not proof that a user saw it. Do not simulate layout or
-focus through UI automation. Session import/resume/fork/archive are also
+focus through UI automation. Session import/resume/fork are also
 unavailable unless `codeg_help` advertises them.
 
 Before any write, discover the exact action schema and use stable numeric IDs
