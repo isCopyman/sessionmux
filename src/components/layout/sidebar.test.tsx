@@ -148,6 +148,9 @@ vi.mock("@/components/conversations/conversation-manage-dialog", () => ({
     ) : null
   },
 }))
+vi.mock("@/components/rooms/create-room-dialog", () => ({
+  CreateRoomDialog: () => <div>Create Room Dialog</div>,
+}))
 vi.mock("@/contexts/sidebar-context", () => ({
   useSidebarContext: () => ({ isOpen: true, toggle: vi.fn() }),
 }))
