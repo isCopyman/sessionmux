@@ -936,3 +936,14 @@ T2 后置截图（CDP 9222 可用，基线在 .artifacts）+ 晨间验收报告 
   release 构建**（运行中 exe 被锁+不得偷换在用程序）；后续批次验证只走 dev 侧：门禁
   （debug 产物）照跑，真机验收用自建 dev 实例（target\debug + [DEV] 标题）。#7 及以后
   的 release 构建必须等用户明确说换版、由用户先关程序。
+- 2026-08-20 早 **w-playbook 收编合并（e0b78898）+ 用户紧急补丁派工**：① G8 协作手册
+  验收通过——16 个 MCP 工具全来自 acp/delegation/tool_schema.json 实证、22 个 Host
+  Control 动作逐 provider 源文件核对、红线四条原样、防复活零命中（工人报告附逐工具
+  行号表）；63f3bba0 先合主线进 worktree 再 --no-ff 回主仓（绕过 worktree 分支占用），
+  纯文档不跑门禁，worktree 已清。② 用户日用 release #6 发现**紧急缺口：侧栏
+  Collection 行没有「新建会话」入口**——诊断定位：Path 根行有悬停 SquarePen 按钮
+  （onNewSession prop，collection-tree.tsx:2074），但 Collection 行的右键/悬停菜单
+  只有打开/新建子分类/重命名/移动/删除五件套。裁决：菜单加项（复用 conversationCard.
+  newConversation 键，不新增 i18n）+ 新 prop onNewSessionInCollection（向 root 回溯、
+  预归档进该分类、跨 Path 默认分类不接）。派 w-collection-newsession（K3）热修。
+  ③ release #6 在构建成功后、用户宣布日用前交付——封版纪律已上一条台账记录。
