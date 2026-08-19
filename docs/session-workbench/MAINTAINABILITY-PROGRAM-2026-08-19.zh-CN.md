@@ -759,3 +759,22 @@ T2 后置截图（CDP 9222 可用，基线在 .artifacts）+ 晨间验收报告 
   文件、build、eslint、clippy ×3 零警告（desktop 档曾被 dev 实例文件锁挡，停
   dev 后补跑通过）。**用户手中 release（22:01）早于本批两合并（22:26/22:30），
   其 room @ 仍会悬死 → 重打 release #3 交付换用。**
+- 2026-08-20 凌晨 **release #3 交付 + Tier-1 撞限额重派 + 用户休前指令批**：①
+  release #3 打好（22:54，含扫描护栏+UI 打磨），已通知换用。② Tier-1 三工人
+  （卡 responding 重放/标题同步重做/ACP 绑定审计）22:50 出发即撞会话限额全灭，
+  零产出零损失；限额 00:10 重置后清掉两个空 worktree 原简报重派（-r 后缀）。
+  ③ 用户休前指令：**梯队计划全量确认**（第一梯队=在跑三工人，第二梯队 G5 四项
+  随后，第三梯队 grok token/qoder/附加路径/playbook 按排）；**扫描超时建议 10 秒**
+  （防超大路径，落进附加路径批设计）；**全局 skill/用户级目录是否入 @ 与路径范围
+  ——授权我参考 claude code/codex 源码后自定**；**换库授权自理**。④ 换库已执行：
+  release 库三件套备份至 app.codeg/backup-release-db-2026-08-20-0016/，dev 库
+  wal_checkpoint(TRUNCATE) 后整库覆盖，integrity_check=ok，会话 311/文件夹 3/
+  房间 2 与 dev 逐表一致；下次启动 release 即 dev 全量数据。⑤ 派
+  w-at-completion-recon（Sonnet 只读）：我方 @/$ 补全现状图 + CC/codex/opencode
+  对标（扫描算法/上限/超时/取消/全局目录态度/多 root 合并）+ 附加路径批设计建议
+  （数据模型/入口/10s 超时落点/值得引进的算法），报告出在
+  AT-COMPLETION-RECON-2026-08-20。⑥ 用户问"指令文件扫描范围"何意——已解释
+  （指令文件 lint 诊断只扫工作区 vs 连用户级目录，隐私预期问题）；该裁决与全局
+  目录入 @ 的研究同源，合并为一份建议随侦察报告回来再定。⑦ 用户重贴两张
+  22:08/22:11 截图均为打磨前旧 UI，所指问题已随 release #3 修复；composer 区
+  "空荡"观感留待新构建真机复查，残留并入下一轮 UI 打磨。
