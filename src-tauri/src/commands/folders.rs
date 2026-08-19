@@ -4371,6 +4371,19 @@ fn prefix_tree_paths(nodes: &mut [FileTreeNode], prefix: &str) {
     }
 }
 
+/// Hard cap on the entries a single workspace scan ([`get_file_tree`] or
+/// [`list_workspace_files`]) will return, counting every file and directory
+/// node emitted (root excluded). A directory this size is already far past
+/// what the `@`-mention picker or file panel can usefully show; the real
+/// purpose is to stop the walk on a huge, non-git directory (nothing to prune
+/// with) before it exhausts memory or occupies its worker thread indefinitely.
+const MAX_WORKSPACE_FILE_ENTRIES: usize = 50_000;
+
+/// The walk below is synchronous disk I/O (`WalkDir`), so it runs on a
+/// blocking-pool thread (`spawn_blocking`) rather than the async runtime: a
+/// huge non-git directory (nothing for `.gitignore` to prune) previously ran
+/// straight on a runtime worker and starved every other in-flight command
+/// until it finished.
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn get_file_tree(
     path: String,
@@ -4378,8 +4391,16 @@ pub async fn get_file_tree(
 ) -> Result<Vec<FileTreeNode>, AppCommandError> {
     let root = PathBuf::from(&path);
     let depth = max_depth.unwrap_or(usize::MAX);
-    let mut visited = HashSet::new();
-    build_file_tree(&root, depth, &mut visited)
+    tokio::task::spawn_blocking(move || {
+        let mut visited = HashSet::new();
+        let mut budget = MAX_WORKSPACE_FILE_ENTRIES;
+        build_file_tree(&root, depth, &mut visited, &mut budget)
+    })
+    .await
+    .map_err(|e| {
+        AppCommandError::task_execution_failed("File tree scan task failed")
+            .with_detail(e.to_string())
+    })?
 }
 
 /// Build the tree under `root`, grafting in the subtree of every directory the
@@ -4388,11 +4409,21 @@ pub async fn get_file_tree(
 /// `visited` holds the canonical roots already expanded on this path, so a
 /// workspace that links a folder which links back can't recurse forever; a link
 /// that would revisit one is left as an ordinary (unexpanded) entry.
+///
+/// `budget` is the remaining entry count shared across this whole call tree —
+/// this root's own walk plus every linked subtree it grafts in below. Each
+/// emitted `FileTreeNode` decrements it by one, and the walk stops emitting
+/// further nodes once it reaches zero. Truncation is silent: callers get a
+/// partial tree back, not an error.
 fn build_file_tree(
     root: &Path,
     depth: usize,
     visited: &mut HashSet<PathBuf>,
+    budget: &mut usize,
 ) -> Result<Vec<FileTreeNode>, AppCommandError> {
+    if *budget == 0 {
+        return Ok(Vec::new());
+    }
     if let Ok(canonical_root) = std::fs::canonicalize(root) {
         visited.insert(canonical_root);
     }
@@ -4440,6 +4471,13 @@ fn build_file_tree(
             dir_order.push(root.to_path_buf());
             continue;
         }
+
+        // The root's own bookkeeping above is free; every entry from here on
+        // draws from the shared budget, and running out stops the walk.
+        if *budget == 0 {
+            break;
+        }
+        *budget -= 1;
 
         let parent = entry_path.parent().unwrap_or(root).to_path_buf();
         let name = entry.file_name().to_string_lossy().to_string();
@@ -4586,6 +4624,12 @@ fn build_file_tree(
     let child_depth = depth.saturating_sub(1);
     let mut linked_nodes: Vec<FileTreeNode> = Vec::with_capacity(linked.len());
     for (name, _) in linked {
+        // Shares the same budget as the main walk above: once it's spent, no
+        // further linked directory is grafted in, not even as an empty stub.
+        if *budget == 0 {
+            break;
+        }
+        *budget -= 1;
         let link_path = root.join(&name);
         // The recursive call is rooted at the link, so its paths come back
         // relative to the *linked* directory. Re-anchor them to the workspace
@@ -4595,7 +4639,8 @@ fn build_file_tree(
         let children = if child_depth == 0 {
             Vec::new()
         } else {
-            let mut sub = build_file_tree(&link_path, child_depth, visited).unwrap_or_default();
+            let mut sub =
+                build_file_tree(&link_path, child_depth, visited, budget).unwrap_or_default();
             prefix_tree_paths(&mut sub, &prefix);
             sub
         };
@@ -4632,15 +4677,39 @@ fn build_file_tree(
 /// depth cap is needed: deep files stay reachable while the heavy trees are
 /// never descended and the payload stays small. Gitignore handling that used to
 /// run client-side now happens here at native speed in a single pass.
+///
+/// The walk itself is synchronous disk I/O, so it runs on a blocking-pool
+/// thread (`spawn_blocking`) rather than the async runtime: a huge non-git
+/// directory (nothing for `.gitignore` to prune) previously ran this loop
+/// straight on a runtime worker and starved every other in-flight command
+/// until it finished.
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn list_workspace_files(
     path: String,
 ) -> Result<Vec<WorkspaceFileEntry>, AppCommandError> {
     let root = PathBuf::from(&path);
+    tokio::task::spawn_blocking(move || walk_workspace_files(&root, MAX_WORKSPACE_FILE_ENTRIES))
+        .await
+        .map_err(|e| {
+            AppCommandError::task_execution_failed("File scan task failed")
+                .with_detail(e.to_string())
+        })
+}
+
+/// Synchronous core of [`list_workspace_files`], split out so it can run under
+/// `spawn_blocking` and be exercised directly in tests without creating tens
+/// of thousands of files.
+///
+/// Stops once `cap` entries have been collected. The main walk and the
+/// linked-directory pass below it share this single budget — a workspace with
+/// several huge links can't buy each one its own separate allotment.
+/// Truncation is silent: the return type carries no flag, only fewer entries
+/// than the tree actually has.
+fn walk_workspace_files(root: &Path, cap: usize) -> Vec<WorkspaceFileEntry> {
     // Linked directories are walked separately below, rooted at the link so
     // their own `.gitignore` applies. Excluded from the main pass because the
     // walker reports a symlink as a leaf file.
-    let linked = authorized_links_in(&root);
+    let linked = authorized_links_in(root);
     let linked_names: HashSet<String> = linked.iter().map(|(name, _)| name.clone()).collect();
 
     // Conservative gitignore parity with the previous client-side pass: respect
@@ -4649,7 +4718,7 @@ pub async fn list_workspace_files(
     // boundary). `require_git(false)` keeps `.gitignore` effective even outside
     // a git repo. `hidden(false)` keeps dotfiles visible. The `filter_entry`
     // mirrors `get_file_tree`'s hardcoded ignores exactly.
-    let walker = WalkBuilder::new(&root)
+    let walker = WalkBuilder::new(root)
         .hidden(false)
         .parents(false)
         .ignore(true)
@@ -4675,6 +4744,11 @@ pub async fn list_workspace_files(
 
     let mut entries: Vec<WorkspaceFileEntry> = Vec::new();
     for result in walker {
+        // Checked before consuming each entry so a directory far larger than
+        // `cap` never finishes being enumerated.
+        if entries.len() >= cap {
+            break;
+        }
         // Skip unreadable entries (permission errors, transient races) rather
         // than failing the whole search.
         let Ok(entry) = result else { continue };
@@ -4692,7 +4766,7 @@ pub async fn list_workspace_files(
             .is_some_and(|t| entry_presents_as_dir(&t, entry_path));
         let name = entry.file_name().to_string_lossy().to_string();
         let rel_path = entry_path
-            .strip_prefix(&root)
+            .strip_prefix(root)
             .unwrap_or(entry_path)
             .to_string_lossy()
             .replace('\\', "/");
@@ -4709,6 +4783,9 @@ pub async fn list_workspace_files(
     }
 
     for (link_name, target) in linked {
+        if entries.len() >= cap {
+            break;
+        }
         entries.push(WorkspaceFileEntry {
             name: link_name.clone(),
             path: link_name.clone(),
@@ -4717,16 +4794,23 @@ pub async fn list_workspace_files(
         // Rooted at the resolved target so the linked project's own ignore
         // files apply, then re-prefixed with the link name so every path stays
         // relative to the workspace root and resolves back through the link.
-        entries.extend(list_files_under(&target, &link_name));
+        // `remaining` is what's left of the *shared* budget above, not a fresh
+        // allotment for this link.
+        let remaining = cap.saturating_sub(entries.len());
+        entries.extend(list_files_under(&target, &link_name, remaining));
     }
 
-    Ok(entries)
+    entries
 }
 
 /// Flat listing of `root`, with every path prefixed by `prefix/`. Shares the
 /// ignore configuration of [`list_workspace_files`]; nested symlinks are not
 /// followed, so this cannot recurse.
-fn list_files_under(root: &Path, prefix: &str) -> Vec<WorkspaceFileEntry> {
+///
+/// `cap` bounds the number of entries returned — the same silent-truncation
+/// contract as [`walk_workspace_files`], whose remaining budget is what
+/// callers pass in here.
+fn list_files_under(root: &Path, prefix: &str, cap: usize) -> Vec<WorkspaceFileEntry> {
     let walker = WalkBuilder::new(root)
         .hidden(false)
         .parents(false)
@@ -4750,6 +4834,9 @@ fn list_files_under(root: &Path, prefix: &str) -> Vec<WorkspaceFileEntry> {
 
     let mut entries = Vec::new();
     for result in walker {
+        if entries.len() >= cap {
+            break;
+        }
         let Ok(entry) = result else { continue };
         let entry_path = entry.path();
         if entry_path == root {
@@ -6350,6 +6437,83 @@ mod tests {
                 .iter()
                 .any(|e| e.path == "a" && matches!(e.kind, WorkspaceEntryKind::Dir)),
             "directory entries must be present"
+        );
+    }
+
+    #[test]
+    fn walk_workspace_files_respects_cap() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        for i in 0..25 {
+            write_file(root, &format!("f{i:02}.txt"), "x");
+        }
+
+        let capped = walk_workspace_files(root, 10);
+        assert_eq!(
+            capped.len(),
+            10,
+            "must stop once the cap is reached, got {} entries",
+            capped.len()
+        );
+
+        let uncapped = walk_workspace_files(root, 1_000);
+        assert_eq!(
+            uncapped.len(),
+            25,
+            "a generous cap must not drop any entry, got {} entries",
+            uncapped.len()
+        );
+    }
+
+    #[test]
+    fn list_files_under_respects_cap() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        for i in 0..25 {
+            write_file(root, &format!("f{i:02}.txt"), "x");
+        }
+
+        let capped = list_files_under(root, "linked", 10);
+        assert_eq!(
+            capped.len(),
+            10,
+            "the linked-directory pass must honor its own cap argument"
+        );
+
+        let uncapped = list_files_under(root, "linked", 1_000);
+        assert_eq!(uncapped.len(), 25, "a generous cap must not drop any entry");
+    }
+
+    #[test]
+    fn build_file_tree_respects_shared_budget() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        for i in 0..25 {
+            write_file(root, &format!("f{i:02}.txt"), "x");
+        }
+
+        let mut visited = HashSet::new();
+        let mut budget = 10usize;
+        let capped =
+            build_file_tree(root, usize::MAX, &mut visited, &mut budget).expect("build tree");
+        assert_eq!(
+            capped.len(),
+            10,
+            "get_file_tree's walk must stop once the shared budget is spent"
+        );
+        assert_eq!(
+            budget, 0,
+            "the budget must be fully spent, never go negative"
+        );
+
+        let mut visited = HashSet::new();
+        let mut budget = 1_000usize;
+        let uncapped =
+            build_file_tree(root, usize::MAX, &mut visited, &mut budget).expect("build tree");
+        assert_eq!(
+            uncapped.len(),
+            25,
+            "a generous budget must not drop any entry"
         );
     }
 
