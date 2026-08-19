@@ -51,6 +51,7 @@ fn ctx_provider(agent_type: AgentType) -> Option<&'static str> {
         AgentType::Grok => Some("grok"),
         AgentType::Cursor => Some("cursor"),
         AgentType::DeepSeek => None,
+        AgentType::Qoder => None,
         AgentType::Custom(_) => None,
     }
 }

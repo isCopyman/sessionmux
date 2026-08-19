@@ -1850,6 +1850,7 @@
     "conversationCard": {
       "untitledConversation": "Conversation sans titre",
       "newConversation": "Nouvelle conversation",
+      "attachToCurrentSession": "Ajouter à la session",
       "openRight": "Ouvrir à droite",
       "openDown": "Ouvrir en dessous",
       "rename": "Renommer",
@@ -2815,6 +2816,7 @@
         "slashCommands": "Commandes slash",
         "slashSearchPlaceholder": "Rechercher des commandes...",
         "slashSearchEmpty": "Aucune commande correspondante",
+        "slashLoading": "Chargement des commandes…",
         "experts": "Experts",
         "office": "Bureautique",
         "research": "Recherche",

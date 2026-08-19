@@ -556,6 +556,14 @@ fn agent_root_slots(agent_type: AgentType) -> &'static [RootSlot] {
                 default_rel: &[".dsh", "sessions"],
             },
         ],
+        // Qoder relocates its whole home via `QODER_CONFIG_DIR` (the env form
+        // of the CLI's `--config-dir`); the sessions tree lives under
+        // `projects/` inside it.
+        AgentType::Qoder => &[RootSlot {
+            candidates: &[("QODER_CONFIG_DIR", "")],
+            trims: false,
+            default_rel: &[".qoder"],
+        }],
         // pi's agent home and its session store relocate INDEPENDENTLY, so both
         // are genuine roots rather than alternatives. The sessions slot mirrors
         // `resolve_pi_sessions_dir_from`: the session override wins, else
@@ -1872,7 +1880,7 @@ mod tests {
     fn root_slots_match_parser_resolvers() {
         use crate::parsers;
 
-        let expected: [(AgentType, PathBuf); 12] = [
+        let expected: [(AgentType, PathBuf); 13] = [
             (AgentType::Grok, parsers::grok::resolve_grok_home_dir()),
             (
                 AgentType::ClaudeCode,
@@ -1909,6 +1917,7 @@ mod tests {
                 AgentType::DeepSeek,
                 parsers::deepseek::resolve_deepseek_sessions_root(),
             ),
+            (AgentType::Qoder, parsers::qoder::resolve_qoder_config_dir()),
         ];
 
         for (agent_type, resolver_root) in expected {
@@ -1994,7 +2003,7 @@ mod tests {
         }
     }
 
-    const ALL_AGENT_TYPES: [AgentType; 13] = [
+    const ALL_AGENT_TYPES: [AgentType; 14] = [
         AgentType::ClaudeCode,
         AgentType::Codex,
         AgentType::OpenCode,
@@ -2008,6 +2017,7 @@ mod tests {
         AgentType::Grok,
         AgentType::Cursor,
         AgentType::DeepSeek,
+        AgentType::Qoder,
     ];
 
     #[test]

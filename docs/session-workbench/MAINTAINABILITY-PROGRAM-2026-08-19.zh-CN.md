@@ -908,3 +908,42 @@ T2 后置截图（CDP 9222 可用，基线在 .artifacts）+ 晨间验收报告 
   最后一个"会点到远端工作区菜单，须按几何+title 定位；bash heredoc 会吃模板串
   转义（\\n→真换行进正则），验收脚本一律用 Write 工具写。dev 实例已停、孤儿
   已清（43136）。
+- 2026-08-20 凌晨 **额度耗尽收官（用户令：停工人写交接）**：① 三小件批关账——
+  六道门禁一把全绿（server 2515/vitest 359/clippy ×3/build），grok 真实用量、
+  侧栏添加到会话、@ 面板锚定 composer 落地，工人补交三态报告（tabOrder/房间三组/
+  tiebreaker/3s 降级四项既有行为逐行号复核保留）。② qoder 批已合并（44936f7b+
+  fmt 9be2c4a0，31 文件 +2101，防复活亲验零命中，companion.rs 有 delegate_to_agent
+  防复活断言）但**门禁未跑**——接班第一件事。③ 三工人被停：i18n-sweep 留六语言
+  未提交半成品（worktree 保留待复核）、sidebar-ux/playbook 零产出（worktree 已清，
+  待重派）。④ 交接单 HANDOFF-2026-08-20-quota-close.zh-CN.md（含提速模式：并行
+  派工+攒批合并共享门禁+发版前一次总真机验证——用户嫌慢后的现行操作法）。
+- 2026-08-20 早 **接班开工：qoder 批门禁补考全绿（1 处 Windows 测试假设修复）+ 三工人
+  重派（换回 K3）**：① qoder 批（44936f7b+9be2c4a0）补跑全套门禁：vitest 359 文件
+  4582 用例、build、eslint（qoder 4 前端文件）、fmt 零残渣、clippy ×3 全绿；server
+  测试 2542 过/1 挂——唯一红测 qoder_config_dir_env_var_relocates_ahead_of_cli_home
+  定性为**测试的 Unix 假设**（temp_env 钉 HOME，但 Windows 的 dirs::home_dir() 走
+  USERPROFILE 不认 HOME），实现无 bug；修法=断言右边改 dirs::home_dir() 本身，意图
+  不变（QODER_CONFIG_DIR 搬不动共享 .agents 家目录），提交 c1b85b53（一行级领导
+  例外）。复跑 fmt/server 测试/桌面 clippy：2543 过/0 挂/1 忽略，全绿。至此上游
+  消化全部完毕。② 用户令：子代理恢复用 Kimi K3。重派三工人（worker-k3）：
+  w-sidebar-ux（G5-5 建群入口显眼化+G5-11 欠我回复全局入口+G5-12 Room 进多选，
+  worktree wt/sidebar-ux）、w-playbook（G8 协作工具手册进 codeg-multi-agent
+  references，逐工具从 codeg-mcp tool_schema 实证，wt/playbook-g8）、w-i18n-finish
+  （接手 i18n 半成品：实测 9 个语言文件未提交改动，比交接单记的 6 个多，含
+  pt/zh-CN/zh-TW——前任近完工无报告；先质检再收编提交，并主线 qoder 键后全扫补报告，
+  沿用 wt/i18n-sweep）。③ release #6（qoder+三小件首次入版）构建中。
+- 2026-08-20 早 **用户指令：release #6（04:22 构建）交付即封版使用——此后禁止再跑
+  release 构建**（运行中 exe 被锁+不得偷换在用程序）；后续批次验证只走 dev 侧：门禁
+  （debug 产物）照跑，真机验收用自建 dev 实例（target\debug + [DEV] 标题）。#7 及以后
+  的 release 构建必须等用户明确说换版、由用户先关程序。
+- 2026-08-20 早 **w-playbook 收编合并（e0b78898）+ 用户紧急补丁派工**：① G8 协作手册
+  验收通过——16 个 MCP 工具全来自 acp/delegation/tool_schema.json 实证、22 个 Host
+  Control 动作逐 provider 源文件核对、红线四条原样、防复活零命中（工人报告附逐工具
+  行号表）；63f3bba0 先合主线进 worktree 再 --no-ff 回主仓（绕过 worktree 分支占用），
+  纯文档不跑门禁，worktree 已清。② 用户日用 release #6 发现**紧急缺口：侧栏
+  Collection 行没有「新建会话」入口**——诊断定位：Path 根行有悬停 SquarePen 按钮
+  （onNewSession prop，collection-tree.tsx:2074），但 Collection 行的右键/悬停菜单
+  只有打开/新建子分类/重命名/移动/删除五件套。裁决：菜单加项（复用 conversationCard.
+  newConversation 键，不新增 i18n）+ 新 prop onNewSessionInCollection（向 root 回溯、
+  预归档进该分类、跨 Path 默认分类不接）。派 w-collection-newsession（K3）热修。
+  ③ release #6 在构建成功后、用户宣布日用前交付——封版纪律已上一条台账记录。

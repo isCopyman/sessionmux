@@ -20,6 +20,9 @@ Read a pattern file before improvising. Product patterns live in
 `.codeg/collab-patterns/`. User-global learned patterns live in the custom
 skill `codeg-collab-patterns` (see `references/persist-and-sync.md`).
 
+Tool-by-tool mechanics (parameters, returns, pitfalls, channel choice):
+`references/collaboration-tools-manual.md`.
+
 ## Default move
 
 The human talks to **one** Session (usually this one). That Session
