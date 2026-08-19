@@ -996,3 +996,13 @@ T2 后置截图（CDP 9222 可用，基线在 .artifacts）+ 晨间验收报告 
   w-roomcount（P5 后端 Room 欠回复聚合，opus）、r-atperf（P1 调研，opus 只读）、
   r-search（P2 调研，sonnet 只读）。P5 证据已现勘更正：unread_overview 在
   db/service/collaboration_service.rs（非交接单写的 services/ 路径）。
+- 2026-08-20 夜 **通宵批次中段进展**：① 两份调研落库（SEARCH-SYSTEM-SURVEY /
+  AT-PERF-SURVEY，均含领导决策段）。② 已合并+门禁：Room 欠回复聚合（e3bddaba，
+  host 视角 SQL 三常量 + host_totals + 徽章求和；server 测试 2546 过）、IME 修复
+  （c594615a，纯函数 gate + 伴生插件方案，18 条新测试）、会话中心过滤减负
+  （21673963，分段控件+筛选 Popover+chips，47 条对话框测试绿）。③ **基线水分发现**：
+  sidebar.test.tsx 在 9f4d7951 基线上就收集失败（CreateRoomDialog 未 mock →
+  真 tab-store 模块级 getState() 撞局部 mock），当时"vitest 全绿"记录不实；
+  已修（6ce04c37）。④ w-badge 一次打回：SidebarNavButton 改兄弟节点布局导致
+  Automations/Tasks 徽章区死区，要求非交互 trailing 回按钮内部。⑤ 在飞：
+  w-atperf（六项 @ 性能）、w-badge 返工、w-roomsearch（Room 进会话中心）。
