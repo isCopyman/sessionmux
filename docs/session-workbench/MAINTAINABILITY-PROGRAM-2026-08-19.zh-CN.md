@@ -593,3 +593,14 @@ T2 后置截图（CDP 9222 可用，基线在 .artifacts）+ 晨间验收报告 
   复杂"）。含 §6 建议的全部四步（底座/claude 按消息 fork/codex thread-fork/重放降级）
   ——一步都不排。调研报告留档作资产；RFC 对账修订随暂缓一并冻结。与决策④ workflow
   暂缓同列"以后再说"栏。
+- 2026-08-19 17:1x **换棒未遂 + dev 实例复活 + T2 关账 + 舰队换血**：① Fable 额度一度
+  耗尽，交接单 HANDOFF-2026-08-19-leadership-relay 写成落库（a2fef815）后额度恢复、
+  Fable 回归继续，交接未发生（单子留作快照）。② 八个 K3 工人被用户停止——活已全部
+  合并落库，零损失；K3 当日额度尽，**用户令：子代理改用 Opus 5**（settings.json 已核
+  无档位映射残留，"opus" 真解析）。③ dev 实例复活：僵尸 next dev（pid 63392，从
+  LISTENING 不响应恶化为拒连）经用户授意击杀，`pnpm dev` 重拉 4.4s 就绪，webview 经
+  CDP Page.reload 复活（codeg 进程 64608 全程未动）。④ **T2 真机验收关账**：Esc 三连
+  截亲验合格——@ 补全弹层开→Esc 后仅弹层关、输入框"@"保留、页面未动、控制台零错误；
+  加上此前 7 张场景图，T2 全部通过。⑤ 新开两个 opus 工人：w-source-filter（G13-c
+  来源筛选 UI）、w-instructions-survey（用户新需求：跨 harness 指令文件管理调研）。
+  ⑥ 全仓 eslint 后台任务在切换中丢失，结果作废，G4 批次时重跑。
