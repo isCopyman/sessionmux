@@ -1758,7 +1758,16 @@
         "toastOpFailed": "Échec de l'opération : {message}",
         "createRoom": "Créer une salle",
         "toastRoomCreated": "Salle {title} créée",
-        "toastRoomNeedTwo": "Sélectionnez au moins deux Sessions pour créer une salle"
+        "toastRoomNeedTwo": "Sélectionnez au moins deux Sessions pour créer une salle",
+        "selectRoom": "Sélectionner {title}",
+        "toastDeletedMixed": "{sessions} session(s) et {rooms} salle(s) supprimée(s)",
+        "toastRoomsDeleted": "{count} salle(s) supprimée(s)",
+        "toastMovedMixed": "{sessions} session(s) et {rooms} salle(s) déplacée(s) vers une collection",
+        "toastRoomsMoved": "{count} salle(s) déplacée(s) vers une collection",
+        "toastRoomsAlreadyInWorkbench": "Les salles sélectionnées sont déjà dans {workbench}",
+        "toastRoomsAddedToWorkbench": "{count} salle(s) ajoutée(s) à {workbench}",
+        "confirmDeleteMixedTitle": "Supprimer {sessions} session(s) et {rooms} salle(s) ?",
+        "confirmDeleteRoomsTitle": "Supprimer {count} salle(s) ?"
       },
       "sectionPinned": "Épinglées",
       "sectionFolders": "Dossiers",

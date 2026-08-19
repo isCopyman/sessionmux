@@ -1758,7 +1758,16 @@
         "toastOpFailed": "操作失败：{message}",
         "createRoom": "建群",
         "toastRoomCreated": "已创建群聊 {title}",
-        "toastRoomNeedTwo": "建群至少需要选中两个 Session"
+        "toastRoomNeedTwo": "建群至少需要选中两个 Session",
+        "selectRoom": "选择 {title}",
+        "toastDeletedMixed": "已删除 {sessions} 个会话和 {rooms} 个群聊",
+        "toastRoomsDeleted": "已删除 {count} 个群聊",
+        "toastMovedMixed": "已将 {sessions} 个会话和 {rooms} 个群聊移入分类",
+        "toastRoomsMoved": "已将 {count} 个群聊移入分类",
+        "toastRoomsAlreadyInWorkbench": "所选群聊已在 {workbench} 中",
+        "toastRoomsAddedToWorkbench": "已将 {count} 个群聊加入 {workbench}",
+        "confirmDeleteMixedTitle": "删除 {sessions} 个会话和 {rooms} 个群聊？",
+        "confirmDeleteRoomsTitle": "删除 {count} 个群聊？"
       },
       "sectionPinned": "已置顶",
       "sectionFolders": "文件夹",

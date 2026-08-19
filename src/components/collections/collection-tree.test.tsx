@@ -288,6 +288,8 @@ vi.mock("@/components/conversations/session-details-dialog", () => ({
 
 vi.mock("@/lib/open-room", () => ({
   useOpenRoom: () => h.openRoom,
+  ROOM_TAB_PLACEHOLDER_AGENT: "claude_code",
+  roomTabFolderId: () => 7,
 }))
 
 vi.mock("@/stores/room-catalog-store", () => {

@@ -1758,7 +1758,16 @@
         "toastOpFailed": "작업 실패: {message}",
         "createRoom": "룸 만들기",
         "toastRoomCreated": "룸 {title}을(를) 만들었습니다",
-        "toastRoomNeedTwo": "룸을 만들려면 Session을 두 개 이상 선택하세요"
+        "toastRoomNeedTwo": "룸을 만들려면 Session을 두 개 이상 선택하세요",
+        "selectRoom": "{title} 선택",
+        "toastDeletedMixed": "{sessions}개 세션과 {rooms}개 룸을 삭제했습니다",
+        "toastRoomsDeleted": "{count}개 룸을 삭제했습니다",
+        "toastMovedMixed": "{sessions}개 세션과 {rooms}개 룸을 컬렉션으로 이동했습니다",
+        "toastRoomsMoved": "{count}개 룸을 컬렉션으로 이동했습니다",
+        "toastRoomsAlreadyInWorkbench": "선택한 룸이 이미 {workbench}에 있습니다",
+        "toastRoomsAddedToWorkbench": "{count}개 룸을 {workbench}에 추가했습니다",
+        "confirmDeleteMixedTitle": "{sessions}개 세션과 {rooms}개 룸을 삭제하시겠습니까?",
+        "confirmDeleteRoomsTitle": "{count}개 룸을 삭제하시겠습니까?"
       },
       "sectionPinned": "고정됨",
       "sectionFolders": "폴더",

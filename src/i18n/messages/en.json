@@ -1758,7 +1758,16 @@
         "toastRoomCreated": "Created room {title}",
         "toastRoomNeedTwo": "Select at least two Sessions to create a room",
         "bulkActions": "Session actions",
-        "toastOpFailed": "Operation failed: {message}"
+        "toastOpFailed": "Operation failed: {message}",
+        "selectRoom": "Select {title}",
+        "toastDeletedMixed": "Deleted {sessions} session(s) and {rooms} room(s)",
+        "toastRoomsDeleted": "Deleted {count} room(s)",
+        "toastMovedMixed": "Moved {sessions} session(s) and {rooms} room(s) to a collection",
+        "toastRoomsMoved": "Moved {count} room(s) to a collection",
+        "toastRoomsAlreadyInWorkbench": "Selected rooms are already in {workbench}",
+        "toastRoomsAddedToWorkbench": "Added {count} room(s) to {workbench}",
+        "confirmDeleteMixedTitle": "Delete {sessions} session(s) and {rooms} room(s)?",
+        "confirmDeleteRoomsTitle": "Delete {count} room(s)?"
       },
       "sectionPinned": "Pinned",
       "sectionFolders": "Folders",

@@ -115,7 +115,7 @@ import {
 } from "@/components/collections/collection-tree-dnd"
 
 import { useImeGuard } from "@/hooks/use-ime-guard"
-import { useSessionMultiSelect } from "@/hooks/use-session-multi-select"
+import { useSidebarMultiSelect } from "@/hooks/use-sidebar-multi-select"
 import {
   assignConversationsToCollection,
   assignRoomsToCollection,
@@ -127,9 +127,15 @@ import {
   updateConversationStatus,
   updateConversationTitle,
 } from "@/lib/api"
-import { visibleCollectionSessionIds } from "@/lib/collection-session-order"
+import { visibleCollectionItemKeys } from "@/lib/collection-session-order"
 import { isSessionSourceVisible } from "@/lib/conversation-source"
 import { formatConversationTitle } from "@/lib/conversation-title"
+import {
+  collectionsAllowedForRooms,
+  deleteRooms,
+  moveRoomsToCollection,
+  openRoomsInCurrentWorkbench,
+} from "@/lib/room-bulk-operations"
 import { compareRoomsForSidebar } from "@/lib/room-sidebar-order"
 import { sessionClickIntent } from "@/lib/session-multi-select"
 import {
@@ -137,6 +143,14 @@ import {
   deleteSessions,
   moveSessionsToCollection,
 } from "@/lib/session-bulk-operations"
+import {
+  parseItemKey,
+  roomItemKey,
+  selectionRooms,
+  selectionSessions,
+  sessionItemKey,
+  type SidebarSelectionItem,
+} from "@/lib/sidebar-item-selection"
 import type {
   AgentType,
   CollaborationRoomSummary,
@@ -302,14 +316,23 @@ export const CollectionTree = forwardRef<
   )
   const activeTabId = useTabStore((state) => state.activeTabId)
   const tabs = useTabStore((state) => state.tabs)
-  const { closeConversationTab, closeTab, openTab } = useTabActions()
+  const { closeConversationTab, closeTab, openTab, openRoomTab } =
+    useTabActions()
   const { openConversations } = useWorkbenchRoute()
   const openRoom = useOpenRoom()
   const catalogRooms = useRoomCatalogStore((state) => state.rooms)
   const workbenchIdsKey = useWorkbenchStore((state) =>
     state.items.map((item) => item.id).join(",")
   )
-  const multiSelect = useSessionMultiSelect<DbConversationSummary>()
+  const multiSelect = useSidebarMultiSelect()
+  const selectedSessionList = useMemo(
+    () => selectionSessions(multiSelect.selected),
+    [multiSelect.selected]
+  )
+  const selectedRoomList = useMemo(
+    () => selectionRooms(multiSelect.selected),
+    [multiSelect.selected]
+  )
   const organizationRevision = useOrganizationRevisionStore(
     (state) => state.revision
   )
@@ -527,6 +550,10 @@ export const CollectionTree = forwardRef<
       ),
     [visibleConversations]
   )
+  const roomById = useMemo(
+    () => new Map(catalogRooms.map((room) => [room.id, room])),
+    [catalogRooms]
+  )
   const roomsByCollection = useMemo(() => {
     const grouped = new Map<number, CollaborationRoomSummary[]>()
     if (!showSessions) return grouped
@@ -565,13 +592,15 @@ export const CollectionTree = forwardRef<
     return next
   }, [folderById, visibleConversations])
 
-  const visibleSessionIds = useMemo(
+  const visibleItemKeys = useMemo(
     () =>
-      visibleCollectionSessionIds({
+      visibleCollectionItemKeys({
         pathRoots,
         childrenByParent: children,
         conversationsByCollection,
         unclassifiedByRoot,
+        roomsByCollection,
+        roomsByUnclassifiedRoot,
         expanded,
         collapsedPaths,
         collapsedUnclassified,
@@ -583,6 +612,8 @@ export const CollectionTree = forwardRef<
       conversationsByCollection,
       expanded,
       pathRoots,
+      roomsByCollection,
+      roomsByUnclassifiedRoot,
       unclassifiedByRoot,
     ]
   )
@@ -1094,7 +1125,8 @@ export const CollectionTree = forwardRef<
     }
   }
 
-  const selectedSessions = () => [...multiSelect.selected.values()]
+  const selectedSessions = () => selectionSessions(multiSelect.selected)
+  const selectedRoomsNow = () => selectionRooms(multiSelect.selected)
 
   const handleBulkArchive = async () => {
     const conversations = selectedSessions()
@@ -1110,15 +1142,32 @@ export const CollectionTree = forwardRef<
 
   const handleBulkMove = async (collectionId: number | null) => {
     const conversations = selectedSessions()
-    if (conversations.length === 0) return
+    const rooms = selectedRoomsNow()
+    if (conversations.length === 0 && rooms.length === 0) return
     try {
-      await moveSessionsToCollection(
-        conversations.map((conversation) => conversation.id),
-        collectionId
-      )
-      toast.success(
-        tManage("toastCollectionMoved", { count: conversations.length })
-      )
+      if (conversations.length > 0) {
+        await moveSessionsToCollection(
+          conversations.map((conversation) => conversation.id),
+          collectionId
+        )
+      }
+      if (rooms.length > 0) {
+        await moveRoomsToCollection(rooms, collectionId)
+      }
+      if (conversations.length > 0 && rooms.length > 0) {
+        toast.success(
+          tManage("toastMovedMixed", {
+            sessions: conversations.length,
+            rooms: rooms.length,
+          })
+        )
+      } else if (rooms.length > 0) {
+        toast.success(tManage("toastRoomsMoved", { count: rooms.length }))
+      } else {
+        toast.success(
+          tManage("toastCollectionMoved", { count: conversations.length })
+        )
+      }
       multiSelect.clear()
     } catch (error) {
       toast.error(t("operationFailed", { message: toErrorMessage(error) }))
@@ -1143,7 +1192,8 @@ export const CollectionTree = forwardRef<
 
   const handleBulkAddToCurrentWorkbench = () => {
     const conversations = selectedSessions()
-    if (conversations.length === 0) return
+    const rooms = selectedRoomsNow()
+    if (conversations.length === 0 && rooms.length === 0) return
     openConversations()
     for (const conversation of conversations) {
       openTab(
@@ -1154,16 +1204,47 @@ export const CollectionTree = forwardRef<
         formatConversationTitle(conversation.title)
       )
     }
-    toast.success(tManage("toastOpened", { count: conversations.length }))
+    if (rooms.length > 0) {
+      openRoomsInCurrentWorkbench({
+        rooms,
+        openTabRoomIds: new Set(
+          tabs.map((tab) => tab.roomId).filter((id): id is string => id != null)
+        ),
+        openRoomTab,
+        folders,
+      })
+    }
+    toast.success(
+      tManage("toastOpened", { count: conversations.length + rooms.length })
+    )
     multiSelect.clear()
   }
 
   const handleBulkDelete = async () => {
     const conversations = selectedSessions()
-    if (conversations.length === 0) return
+    const rooms = selectedRoomsNow()
+    if (conversations.length === 0 && rooms.length === 0) return
     try {
-      await deleteSessions(conversations, closeConversationTab)
-      toast.success(tManage("toastDeleted", { count: conversations.length }))
+      if (conversations.length > 0) {
+        await deleteSessions(conversations, closeConversationTab)
+      }
+      if (rooms.length > 0) {
+        await deleteRooms(rooms, closeTab)
+      }
+      if (conversations.length > 0 && rooms.length > 0) {
+        toast.success(
+          tManage("toastDeletedMixed", {
+            sessions: conversations.length,
+            rooms: rooms.length,
+          })
+        )
+      } else if (rooms.length > 0) {
+        toast.success(tManage("toastRoomsDeleted", { count: rooms.length }))
+      } else {
+        toast.success(
+          tManage("toastDeleted", { count: conversations.length })
+        )
+      }
       setBulkDeleteOpen(false)
       multiSelect.clear()
     } catch (error) {
@@ -1171,7 +1252,16 @@ export const CollectionTree = forwardRef<
     }
   }
 
-  const lookupVisibleSession = (id: number) => conversationById.get(id)
+  const lookupVisibleItem = (key: string): SidebarSelectionItem | undefined => {
+    const parsed = parseItemKey(key)
+    if (parsed == null) return undefined
+    if (parsed.kind === "session") {
+      const session = conversationById.get(parsed.id)
+      return session ? { kind: "session", session } : undefined
+    }
+    const room = roomById.get(parsed.id)
+    return room ? { kind: "room", room } : undefined
+  }
 
   const handleSessionActivate = (
     conversation: DbConversationSummary,
@@ -1180,10 +1270,10 @@ export const CollectionTree = forwardRef<
     const intent = sessionClickIntent(event)
     if (intent !== "open") {
       multiSelect.apply(
-        conversation,
+        { kind: "session", session: conversation },
         intent,
-        visibleSessionIds,
-        lookupVisibleSession
+        visibleItemKeys,
+        lookupVisibleItem
       )
       return
     }
@@ -1207,7 +1297,7 @@ export const CollectionTree = forwardRef<
       event.preventDefault()
       if (
         multiSelect.selected.size > 1 &&
-        multiSelect.selected.has(conversation.id)
+        multiSelect.selected.has(sessionItemKey(conversation.id))
       ) {
         setBulkDeleteOpen(true)
         return
@@ -1231,13 +1321,78 @@ export const CollectionTree = forwardRef<
     }
   }
 
+  // With Rooms in the selection a move target must sit on every Room's Path
+  // root — the same filter the bulk action bar applies to its move menu.
+  const bulkMoveOptions =
+    selectedRoomList.length === 0
+      ? options
+      : (() => {
+          const allowed = new Set(
+            collectionsAllowedForRooms(
+              options.map((option) => option.item),
+              selectedRoomList
+            ).map((item) => item.id)
+          )
+          return options.filter((option) => allowed.has(option.item.id))
+        })()
+
+  // Shared bulk branch of the Session/Room context menus: shown when the
+  // right-clicked row is part of a multi selection. Rooms have no archive
+  // state, so that entry greys out while any Room is selected (mirrors the
+  // bulk action bar).
+  const bulkSelectionMenuItems = (
+    <>
+      <ContextMenuItem
+        disabled={selectedRoomList.length > 0}
+        onSelect={() => void handleBulkArchive()}
+      >
+        <Archive className="h-4 w-4" />
+        {tManage("archiveSelected")}
+      </ContextMenuItem>
+      <ContextMenuSub>
+        <ContextMenuSubTrigger>
+          <FolderTree className="h-4 w-4" />
+          {tManage("moveToCollection")}
+        </ContextMenuSubTrigger>
+        <ContextMenuSubContent className="max-h-72 overflow-y-auto">
+          <ContextMenuItem onSelect={() => void handleBulkMove(null)}>
+            {tManage("collectionUnclassified")}
+          </ContextMenuItem>
+          {bulkMoveOptions.map(({ item, depth: optionDepth }) => (
+            <ContextMenuItem
+              key={item.id}
+              onSelect={() => void handleBulkMove(item.id)}
+            >
+              <span className="truncate">
+                {optionDepth > 0 ? `${"· ".repeat(optionDepth)}` : ""}
+                {item.name}
+              </span>
+            </ContextMenuItem>
+          ))}
+        </ContextMenuSubContent>
+      </ContextMenuSub>
+      <ContextMenuItem onSelect={handleBulkAddToCurrentWorkbench}>
+        <PanelsTopLeft className="h-4 w-4" />
+        {tManage("addToWorkbench")}
+      </ContextMenuItem>
+      <ContextMenuSeparator />
+      <ContextMenuItem
+        variant="destructive"
+        onSelect={() => setBulkDeleteOpen(true)}
+      >
+        <Trash2 className="h-4 w-4" />
+        {tManage("deleteSelected")}
+      </ContextMenuItem>
+    </>
+  )
+
   const renderSession = (
     conversation: DbConversationSummary,
     depth: number,
     collectionId: number | null
   ) => {
     const selected = conversation.id === activeConversationId
-    const checked = multiSelect.selected.has(conversation.id)
+    const checked = multiSelect.selected.has(sessionItemKey(conversation.id))
     const multiSelectActive = multiSelect.selected.size > 0
     const bulkMenu =
       multiSelectActive && checked && multiSelect.selected.size > 1
@@ -1254,7 +1409,10 @@ export const CollectionTree = forwardRef<
             grabbedId: conversation.id,
             grabbedRootFolderId: rootId,
             grabbedLabel: title,
-            selectedIds: [...multiSelect.selected.keys()],
+            selectedIds: [...multiSelect.selected.keys()].flatMap((key) => {
+              const parsed = parseItemKey(key)
+              return parsed?.kind === "session" ? [parsed.id] : []
+            }),
             rootFolderIdByConversation,
           })
     const dragIds = dragPayload ? sessionIdsInDrag(dragPayload) : []
@@ -1319,10 +1477,10 @@ export const CollectionTree = forwardRef<
                 event.preventDefault()
                 event.stopPropagation()
                 multiSelect.apply(
-                  conversation,
+                  { kind: "session", session: conversation },
                   "toggle",
-                  visibleSessionIds,
-                  lookupVisibleSession
+                  visibleItemKeys,
+                  lookupVisibleItem
                 )
               }}
             >
@@ -1394,46 +1552,7 @@ export const CollectionTree = forwardRef<
         </ContextMenuTrigger>
         <ContextMenuContent>
           {bulkMenu ? (
-            <>
-              <ContextMenuItem onSelect={() => void handleBulkArchive()}>
-                <Archive className="h-4 w-4" />
-                {tManage("archiveSelected")}
-              </ContextMenuItem>
-              <ContextMenuSub>
-                <ContextMenuSubTrigger>
-                  <FolderTree className="h-4 w-4" />
-                  {tManage("moveToCollection")}
-                </ContextMenuSubTrigger>
-                <ContextMenuSubContent className="max-h-72 overflow-y-auto">
-                  <ContextMenuItem onSelect={() => void handleBulkMove(null)}>
-                    {tManage("collectionUnclassified")}
-                  </ContextMenuItem>
-                  {options.map(({ item, depth: optionDepth }) => (
-                    <ContextMenuItem
-                      key={item.id}
-                      onSelect={() => void handleBulkMove(item.id)}
-                    >
-                      <span className="truncate">
-                        {optionDepth > 0 ? `${"· ".repeat(optionDepth)}` : ""}
-                        {item.name}
-                      </span>
-                    </ContextMenuItem>
-                  ))}
-                </ContextMenuSubContent>
-              </ContextMenuSub>
-              <ContextMenuItem onSelect={handleBulkAddToCurrentWorkbench}>
-                <PanelsTopLeft className="h-4 w-4" />
-                {tManage("addToWorkbench")}
-              </ContextMenuItem>
-              <ContextMenuSeparator />
-              <ContextMenuItem
-                variant="destructive"
-                onSelect={() => setBulkDeleteOpen(true)}
-              >
-                <Trash2 className="h-4 w-4" />
-                {tManage("deleteSelected")}
-              </ContextMenuItem>
-            </>
+            bulkSelectionMenuItems
           ) : (
             <>
               {onOpenSessionInSplit ? (
@@ -1536,12 +1655,34 @@ export const CollectionTree = forwardRef<
     )
   }
 
+  const handleRoomActivate = (
+    room: CollaborationRoomSummary,
+    event?: { ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean }
+  ) => {
+    const intent = sessionClickIntent(event)
+    if (intent !== "open") {
+      multiSelect.apply(
+        { kind: "room", room },
+        intent,
+        visibleItemKeys,
+        lookupVisibleItem
+      )
+      return
+    }
+    if (multiSelect.selected.size > 0) multiSelect.clear()
+    void openRoom(room)
+  }
+
   const renderRoom = (
     room: CollaborationRoomSummary,
     depth: number,
     pathRootId: number | null
   ) => {
     const selected = room.id === activeRoomId
+    const checked = multiSelect.selected.has(roomItemKey(room.id))
+    const multiSelectActive = multiSelect.selected.size > 0
+    const bulkMenu =
+      multiSelectActive && checked && multiSelect.selected.size > 1
     const moveTargets = items.filter(
       (item) =>
         item.id !== room.collectionId &&
@@ -1550,61 +1691,124 @@ export const CollectionTree = forwardRef<
     return (
       <ContextMenu key={`room:${room.id}`}>
         <ContextMenuTrigger asChild>
-          <button
-            type="button"
-            data-room-id={room.id}
-            data-focused-session={selected ? "true" : undefined}
-            title={room.title}
-            aria-current={selected ? "page" : undefined}
-            className={cn(
-              "flex h-7 w-full min-w-0 items-center gap-1.5 rounded-md pe-2 text-start text-xs",
-              "hover:bg-sidebar-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
-              selected &&
-                "bg-primary/8 text-primary ring-1 ring-inset ring-primary/30"
-            )}
-            style={{ paddingInlineStart: `${0.75 + depth * 0.75}rem` }}
-            onClick={() => void openRoom(room)}
-          >
-            <Users className="h-3 w-3 shrink-0" />
-            <span className="min-w-0 flex-1 truncate">{room.title}</span>
-            <CollaborationUnreadBadge
-              count={room.unreadCount}
-              className="ms-auto"
-            />
-          </button>
+          <div className="min-w-0">
+            <div
+              className={cn(
+                "group flex min-w-0 items-center rounded-md hover:bg-sidebar-accent",
+                selected &&
+                  "bg-primary/8 text-primary ring-1 ring-inset ring-primary/30",
+                checked &&
+                  "bg-sidebar-primary/12 ring-1 ring-inset ring-primary/25"
+              )}
+              style={{ paddingInlineStart: `${0.75 + depth * 0.75}rem` }}
+            >
+              <button
+                type="button"
+                tabIndex={-1}
+                data-room-select={room.id}
+                aria-pressed={checked}
+                aria-label={tManage("selectRoom", { title: room.title })}
+                className={cn(
+                  "flex h-4 w-0 shrink-0 items-center justify-center overflow-hidden rounded-sm text-muted-foreground hover:text-foreground",
+                  "opacity-0 pointer-events-none",
+                  "group-hover:h-4 group-hover:w-4 group-hover:opacity-100 group-hover:pointer-events-auto",
+                  (multiSelectActive || checked) &&
+                    "h-4 w-4 opacity-100 pointer-events-auto"
+                )}
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  multiSelect.apply(
+                    { kind: "room", room },
+                    "toggle",
+                    visibleItemKeys,
+                    lookupVisibleItem
+                  )
+                }}
+              >
+                {checked ? (
+                  <CheckSquare className="h-3.5 w-3.5 text-primary" />
+                ) : (
+                  <Square className="h-3.5 w-3.5" />
+                )}
+              </button>
+              <button
+                type="button"
+                data-room-id={room.id}
+                data-focused-session={selected ? "true" : undefined}
+                title={room.title}
+                aria-current={selected ? "page" : undefined}
+                className={cn(
+                  "flex h-7 min-w-0 flex-1 items-center gap-1.5 pe-2 text-start text-xs",
+                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
+                  (multiSelectActive || checked) && "ps-1",
+                  "group-hover:ps-1"
+                )}
+                onClick={(event) => handleRoomActivate(room, event)}
+                onKeyDown={(event) => {
+                  if (event.key !== "Delete") return
+                  event.preventDefault()
+                  if (
+                    multiSelect.selected.size > 1 &&
+                    multiSelect.selected.has(roomItemKey(room.id))
+                  ) {
+                    setBulkDeleteOpen(true)
+                    return
+                  }
+                  setRoomDelete(room)
+                }}
+              >
+                <Users className="h-3 w-3 shrink-0" />
+                <span className="min-w-0 flex-1 truncate">{room.title}</span>
+                <CollaborationUnreadBadge
+                  count={room.unreadCount}
+                  className="ms-auto"
+                />
+              </button>
+            </div>
+          </div>
         </ContextMenuTrigger>
         <ContextMenuContent>
-          <ContextMenuItem onSelect={() => void openRoom(room)}>
-            <Users className="h-4 w-4" />
-            {t("openRoom")}
-          </ContextMenuItem>
-          <ContextMenuSub>
-            <ContextMenuSubTrigger>
-              <FolderInput className="h-4 w-4" />
-              {tManage("moveToCollection")}
-            </ContextMenuSubTrigger>
-            <ContextMenuSubContent className="max-h-72 overflow-y-auto">
-              <ContextMenuItem onSelect={() => void handleMoveRoom(room, null)}>
-                {t("unclassified")}
+          {bulkMenu ? (
+            bulkSelectionMenuItems
+          ) : (
+            <>
+              <ContextMenuItem onSelect={() => void openRoom(room)}>
+                <Users className="h-4 w-4" />
+                {t("openRoom")}
               </ContextMenuItem>
-              {moveTargets.map((item) => (
-                <ContextMenuItem
-                  key={item.id}
-                  onSelect={() => void handleMoveRoom(room, item.id)}
-                >
-                  {item.name}
-                </ContextMenuItem>
-              ))}
-            </ContextMenuSubContent>
-          </ContextMenuSub>
-          <ContextMenuSeparator />
-          <ContextMenuItem
-            variant="destructive"
-            onSelect={() => setRoomDelete(room)}
-          >
-            <Trash2 className="h-4 w-4" />
-            {tRoom("delete")}
-          </ContextMenuItem>
+              <ContextMenuSub>
+                <ContextMenuSubTrigger>
+                  <FolderInput className="h-4 w-4" />
+                  {tManage("moveToCollection")}
+                </ContextMenuSubTrigger>
+                <ContextMenuSubContent className="max-h-72 overflow-y-auto">
+                  <ContextMenuItem
+                    onSelect={() => void handleMoveRoom(room, null)}
+                  >
+                    {t("unclassified")}
+                  </ContextMenuItem>
+                  {moveTargets.map((item) => (
+                    <ContextMenuItem
+                      key={item.id}
+                      onSelect={() => void handleMoveRoom(room, item.id)}
+                    >
+                      {item.name}
+                    </ContextMenuItem>
+                  ))}
+                </ContextMenuSubContent>
+              </ContextMenuSub>
+              <ContextMenuSeparator />
+              <ContextMenuItem
+                variant="destructive"
+                onSelect={() => setRoomDelete(room)}
+              >
+                <Trash2 className="h-4 w-4" />
+                {tRoom("delete")}
+              </ContextMenuItem>
+            </>
+          )}
         </ContextMenuContent>
       </ContextMenu>
     )
@@ -2199,7 +2403,15 @@ export const CollectionTree = forwardRef<
 
         {multiSelect.selected.size > 0 ? (
           <SessionBulkActionBar
-            selected={multiSelect.selected}
+            selected={
+              new Map(
+                selectedSessionList.map((conversation) => [
+                  conversation.id,
+                  conversation,
+                ])
+              )
+            }
+            selectedRooms={selectedRoomList}
             onClear={multiSelect.clear}
           />
         ) : null}
@@ -2244,9 +2456,18 @@ export const CollectionTree = forwardRef<
           <AlertDialogContent>
             <AlertDialogHeader>
               <AlertDialogTitle>
-                {tManage("confirmDeleteTitle", {
-                  count: multiSelect.selected.size,
-                })}
+                {selectedSessionList.length > 0 && selectedRoomList.length > 0
+                  ? tManage("confirmDeleteMixedTitle", {
+                      sessions: selectedSessionList.length,
+                      rooms: selectedRoomList.length,
+                    })
+                  : selectedRoomList.length > 0
+                    ? tManage("confirmDeleteRoomsTitle", {
+                        count: selectedRoomList.length,
+                      })
+                    : tManage("confirmDeleteTitle", {
+                        count: selectedSessionList.length,
+                      })}
               </AlertDialogTitle>
               <AlertDialogDescription>
                 {tManage("confirmDeleteDescription")}

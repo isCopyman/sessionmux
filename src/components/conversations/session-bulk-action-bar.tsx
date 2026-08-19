@@ -38,6 +38,12 @@ import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
 import { toErrorMessage } from "@/lib/app-error"
 import { formatConversationTitle } from "@/lib/conversation-title"
 import {
+  collectionsAllowedForRooms,
+  deleteRooms,
+  moveRoomsToCollection,
+  openRoomsInCurrentWorkbench,
+} from "@/lib/room-bulk-operations"
+import {
   archiveSessions,
   deleteSessions,
   moveSessionsToCollection,
@@ -48,8 +54,16 @@ import {
   listConversationCollectionRefs,
 } from "@/lib/api"
 import { useOpenRoom } from "@/lib/open-room"
-import { appendConversationsToWorkbench } from "@/lib/workbench-session-tabs"
-import type { CollectionInfo, DbConversationSummary } from "@/lib/types"
+import {
+  appendConversationsToWorkbench,
+  appendRoomsToWorkbench,
+} from "@/lib/workbench-session-tabs"
+import type {
+  CollaborationRoomSummary,
+  CollectionInfo,
+  DbConversationSummary,
+} from "@/lib/types"
+import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { useCollectionStore } from "@/stores/collection-store"
 import { useTabStore } from "@/stores/tab-store"
 import { useWorkbenchStore } from "@/stores/workbench-store"
@@ -79,12 +93,17 @@ function collectionMenuOptions(items: CollectionInfo[]) {
 
 interface SessionBulkActionBarProps {
   selected: ReadonlyMap<number, DbConversationSummary>
+  /** Rooms sharing the sidebar multi-select. Actions that make no sense for a
+   * Room (archive, create-Room) grey out while any Room is selected; the rest
+   * handle both kinds. */
+  selectedRooms?: readonly CollaborationRoomSummary[]
   onClear: () => void
   className?: string
 }
 
 export function SessionBulkActionBar({
   selected,
+  selectedRooms,
   onClear,
   className,
 }: SessionBulkActionBarProps) {
@@ -92,12 +111,17 @@ export function SessionBulkActionBar({
   const tCommon = useTranslations("Folder.common")
   const tWorkbench = useTranslations("Folder.workbench")
   const conversations = useMemo(() => [...selected.values()], [selected])
-  const selectedCount = conversations.length
-  const { closeConversationTab, openTab } = useTabActions()
+  const rooms = useMemo(() => selectedRooms ?? [], [selectedRooms])
+  const sessionCount = conversations.length
+  const roomCount = rooms.length
+  const selectedCount = sessionCount + roomCount
+  const { closeConversationTab, closeTab, openTab, openRoomTab } =
+    useTabActions()
   const { openConversations } = useWorkbenchRoute()
   const openRoom = useOpenRoom()
   const activeWorkbenchId = useTabStore((state) => state.activeWorkbenchId)
   const activeWorkbenchTabs = useTabStore((state) => state.rawTabs)
+  const folders = useAppWorkspaceStore((state) => state.folders)
   const workbenches = useWorkbenchStore((state) => state.items)
   const workbenchesHydrated = useWorkbenchStore((state) => state.hydrated)
   const hydrateWorkbenches = useWorkbenchStore((state) => state.hydrate)
@@ -128,6 +152,18 @@ export function SessionBulkActionBar({
     () => collectionMenuOptions(collections),
     [collections]
   )
+  // With Rooms in the selection a move target must sit on every Room's Path
+  // root — the same restriction the tree's single-Room move menu applies.
+  const moveTargets = useMemo(() => {
+    if (roomCount === 0) return collectionOptions
+    const allowed = new Set(
+      collectionsAllowedForRooms(
+        collectionOptions.map(({ item }) => item),
+        rooms
+      ).map((item) => item.id)
+    )
+    return collectionOptions.filter(({ item }) => allowed.has(item.id))
+  }, [collectionOptions, roomCount, rooms])
   const activeWorkbenchName =
     workbenches.find((workbench) => workbench.id === activeWorkbenchId)?.name ??
     t("currentWorkbench")
@@ -151,29 +187,64 @@ export function SessionBulkActionBar({
   const handleArchive = useCallback(() => {
     void run(async () => {
       await archiveSessions(conversations)
-      toast.success(t("toastArchived", { count: selectedCount }))
+      toast.success(t("toastArchived", { count: sessionCount }))
     })
-  }, [conversations, run, selectedCount, t])
+  }, [conversations, run, sessionCount, t])
 
   const handleDelete = useCallback(() => {
     void run(async () => {
-      await deleteSessions(conversations, closeConversationTab)
-      toast.success(t("toastDeleted", { count: selectedCount }))
+      if (conversations.length > 0) {
+        await deleteSessions(conversations, closeConversationTab)
+      }
+      if (rooms.length > 0) {
+        await deleteRooms(rooms, closeTab)
+      }
+      if (sessionCount > 0 && roomCount > 0) {
+        toast.success(
+          t("toastDeletedMixed", { sessions: sessionCount, rooms: roomCount })
+        )
+      } else if (roomCount > 0) {
+        toast.success(t("toastRoomsDeleted", { count: roomCount }))
+      } else {
+        toast.success(t("toastDeleted", { count: sessionCount }))
+      }
       setConfirmDelete(false)
     })
-  }, [closeConversationTab, conversations, run, selectedCount, t])
+  }, [
+    closeConversationTab,
+    closeTab,
+    conversations,
+    roomCount,
+    rooms,
+    run,
+    sessionCount,
+    t,
+  ])
 
   const handleMove = useCallback(
     (collectionId: number | null) => {
       void run(async () => {
-        await moveSessionsToCollection(
-          conversations.map((conversation) => conversation.id),
-          collectionId
-        )
-        toast.success(t("toastCollectionMoved", { count: selectedCount }))
+        if (conversations.length > 0) {
+          await moveSessionsToCollection(
+            conversations.map((conversation) => conversation.id),
+            collectionId
+          )
+        }
+        if (rooms.length > 0) {
+          await moveRoomsToCollection(rooms, collectionId)
+        }
+        if (sessionCount > 0 && roomCount > 0) {
+          toast.success(
+            t("toastMovedMixed", { sessions: sessionCount, rooms: roomCount })
+          )
+        } else if (roomCount > 0) {
+          toast.success(t("toastRoomsMoved", { count: roomCount }))
+        } else {
+          toast.success(t("toastCollectionMoved", { count: sessionCount }))
+        }
       })
     },
-    [conversations, run, selectedCount, t]
+    [conversations, roomCount, rooms, run, sessionCount, t]
   )
 
   const handleAddToWorkbench = useCallback(
@@ -199,66 +270,124 @@ export function SessionBulkActionBar({
         }
 
         if (workbenchId === activeWorkbenchId) {
-          const present = new Set(
-            activeWorkbenchTabs
-              .map((tab) => tab.conversationId)
-              .filter((id): id is number => id != null)
-          )
-          const toAdd = conversations.filter(
-            (conversation) => !present.has(conversation.id)
-          )
-          const skipped = conversations.length - toAdd.length
-          if (toAdd.length === 0) {
-            toast.success(
-              t("toastAlreadyInWorkbench", { workbench: workbenchName })
+          let sessionsAdded = 0
+          let sessionsSkipped = 0
+          if (conversations.length > 0) {
+            const present = new Set(
+              activeWorkbenchTabs
+                .map((tab) => tab.conversationId)
+                .filter((id): id is number => id != null)
             )
-            return
-          }
-          openConversations()
-          for (const conversation of toAdd) {
-            openTab(
-              conversation.folder_id,
-              conversation.id,
-              conversation.agent_type,
-              true,
-              formatConversationTitle(conversation.title)
+            const toAdd = conversations.filter(
+              (conversation) => !present.has(conversation.id)
             )
+            sessionsSkipped = conversations.length - toAdd.length
+            sessionsAdded = toAdd.length
+            if (toAdd.length > 0) {
+              openConversations()
+              for (const conversation of toAdd) {
+                openTab(
+                  conversation.folder_id,
+                  conversation.id,
+                  conversation.agent_type,
+                  true,
+                  formatConversationTitle(conversation.title)
+                )
+              }
+            }
+            if (sessionsAdded === 0) {
+              toast.success(
+                t("toastAlreadyInWorkbench", { workbench: workbenchName })
+              )
+            } else {
+              toast.success(
+                sessionsSkipped > 0
+                  ? t("toastAddedWithSkipped", {
+                      added: sessionsAdded,
+                      skipped: sessionsSkipped,
+                      workbench: workbenchName,
+                    })
+                  : t("toastAddedToWorkbench", {
+                      count: sessionsAdded,
+                      workbench: workbenchName,
+                    })
+              )
+            }
           }
-          toast.success(
-            skipped > 0
-              ? t("toastAddedWithSkipped", {
-                  added: toAdd.length,
-                  skipped,
+          let roomsAdded = 0
+          if (rooms.length > 0) {
+            const openRoomIds = new Set(
+              activeWorkbenchTabs
+                .map((tab) => tab.roomId)
+                .filter((id): id is string => id != null)
+            )
+            const result = openRoomsInCurrentWorkbench({
+              rooms,
+              openTabRoomIds: openRoomIds,
+              openRoomTab,
+              folders,
+            })
+            roomsAdded = result.added
+            if (roomsAdded === 0) {
+              toast.success(
+                t("toastRoomsAlreadyInWorkbench", { workbench: workbenchName })
+              )
+            } else {
+              if (sessionsAdded === 0) openConversations()
+              toast.success(
+                t("toastRoomsAddedToWorkbench", {
+                  count: roomsAdded,
                   workbench: workbenchName,
                 })
-              : t("toastAddedToWorkbench", {
-                  count: toAdd.length,
-                  workbench: workbenchName,
-                })
-          )
-          onClear()
+              )
+            }
+          }
+          // Selection stays when nothing was added anywhere (mirrors the
+          // Sessions-only "already in workbench" early exit).
+          if (sessionsAdded + roomsAdded > 0) onClear()
           return
         }
 
-        const result = await appendConversationsToWorkbench(
-          workbenchId,
-          conversations
-        )
-        toast.success(
-          result.added === 0
-            ? t("toastAlreadyInWorkbench", { workbench: workbenchName })
-            : result.skipped > 0
-              ? t("toastAddedWithSkipped", {
-                  added: result.added,
-                  skipped: result.skipped,
-                  workbench: workbenchName,
-                })
-              : t("toastAddedToWorkbench", {
+        let sessionsAdded = 0
+        if (conversations.length > 0) {
+          const result = await appendConversationsToWorkbench(
+            workbenchId,
+            conversations
+          )
+          sessionsAdded = result.added
+          toast.success(
+            result.added === 0
+              ? t("toastAlreadyInWorkbench", { workbench: workbenchName })
+              : result.skipped > 0
+                ? t("toastAddedWithSkipped", {
+                    added: result.added,
+                    skipped: result.skipped,
+                    workbench: workbenchName,
+                  })
+                : t("toastAddedToWorkbench", {
+                    count: result.added,
+                    workbench: workbenchName,
+                  })
+          )
+        }
+        let roomsAdded = 0
+        if (rooms.length > 0) {
+          const result = await appendRoomsToWorkbench(
+            workbenchId,
+            rooms,
+            folders
+          )
+          roomsAdded = result.added
+          toast.success(
+            result.added === 0
+              ? t("toastRoomsAlreadyInWorkbench", { workbench: workbenchName })
+              : t("toastRoomsAddedToWorkbench", {
                   count: result.added,
                   workbench: workbenchName,
                 })
-        )
-        if (result.added > 0) onClear()
+          )
+        }
+        if (sessionsAdded > 0 || roomsAdded > 0) onClear()
       } catch (error) {
         toast.error(t("toastOpFailed", { message: toErrorMessage(error) }))
       } finally {
@@ -271,10 +400,13 @@ export function SessionBulkActionBar({
       activeWorkbenchTabs,
       conversations,
       createOnly,
+      folders,
       onClear,
       openConversations,
+      openRoomTab,
       openTab,
       pending,
+      rooms,
       selectedCount,
       t,
       tWorkbench,
@@ -283,7 +415,9 @@ export function SessionBulkActionBar({
   )
 
   const handleCreateRoom = useCallback(() => {
-    if (selectedCount < 2) {
+    // Only Sessions can be Room members; the button greys out while any Room
+    // is selected, so this guard is reachable for Sessions-only selections.
+    if (sessionCount < 2) {
       toast.error(t("toastRoomNeedTwo"))
       return
     }
@@ -314,7 +448,7 @@ export function SessionBulkActionBar({
       toast.success(t("toastRoomCreated", { title: created.title }))
       await openRoom(created)
     })
-  }, [activeWorkbenchId, conversations, openRoom, run, selectedCount, t])
+  }, [activeWorkbenchId, conversations, openRoom, run, sessionCount, t])
 
   if (selectedCount === 0) return null
 
@@ -351,7 +485,8 @@ export function SessionBulkActionBar({
             size="sm"
             variant="outline"
             className="h-7 px-2 text-xs"
-            disabled={pending}
+            // Rooms have no archive state — greyed out while any is selected.
+            disabled={pending || roomCount > 0}
             onClick={handleArchive}
           >
             <Archive className="h-3.5 w-3.5" />
@@ -379,7 +514,7 @@ export function SessionBulkActionBar({
                 <FolderTree className="h-3.5 w-3.5 opacity-50" />
                 {t("collectionUnclassified")}
               </DropdownMenuItem>
-              {collectionOptions.map(({ item, depth }) => (
+              {moveTargets.map(({ item, depth }) => (
                 <DropdownMenuItem
                   key={item.id}
                   onSelect={() => handleMove(item.id)}
@@ -446,7 +581,8 @@ export function SessionBulkActionBar({
             size="sm"
             variant="outline"
             className="h-7 px-2 text-xs"
-            disabled={pending}
+            // Rooms cannot be Room members — greyed out while any is selected.
+            disabled={pending || roomCount > 0}
             onClick={handleCreateRoom}
           >
             <Users className="h-3.5 w-3.5" />
@@ -473,7 +609,14 @@ export function SessionBulkActionBar({
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              {t("confirmDeleteTitle", { count: selectedCount })}
+              {sessionCount > 0 && roomCount > 0
+                ? t("confirmDeleteMixedTitle", {
+                    sessions: sessionCount,
+                    rooms: roomCount,
+                  })
+                : roomCount > 0
+                  ? t("confirmDeleteRoomsTitle", { count: roomCount })
+                  : t("confirmDeleteTitle", { count: sessionCount })}
             </AlertDialogTitle>
             <AlertDialogDescription>
               {t("confirmDeleteDescription")}
