@@ -149,11 +149,12 @@ describe("GoalCard goal control (codex-acp #293)", () => {
     // Defaults to the legacy vocabulary so pre-extension expectations hold;
     // pass the advertised list to exercise per-adapter gating (claude
     // advertises ["set","clear"] — no pause).
-    actions: readonly string[] = ["pause", "clear"]
+    actions: readonly string[] = ["pause", "clear"],
+    onGoalResume: ((objective: string) => void) | null = null
   ) {
     return render(
       <NextIntlClientProvider locale="en" messages={enMessages}>
-        <GoalControlProvider value={{ onGoalControl, actions }}>
+        <GoalControlProvider value={{ onGoalControl, onGoalResume, actions }}>
           {ui}
         </GoalControlProvider>
       </NextIntlClientProvider>
@@ -188,18 +189,47 @@ describe("GoalCard goal control (codex-acp #293)", () => {
     expect(calls).toEqual(["pause", "clear"])
   })
 
-  it("offers only Clear on a paused goal (codex has no resume control)", () => {
+  it("offers Resume + Clear on a paused goal, Resume re-issues the objective", () => {
+    const resumed: string[] = []
+    renderGoal(goalWith("paused"), () => {}, ["pause", "clear"], (o) =>
+      resumed.push(o)
+    )
+    fireEvent.click(screen.getByRole("button"))
+    expect(screen.queryByText("Pause")).not.toBeInTheDocument()
+    fireEvent.click(screen.getByText("Resume"))
+    expect(resumed).toEqual(["Ship the release"])
+    expect(screen.getByText("Clear")).toBeInTheDocument()
+  })
+
+  it("offers Resume on every stopped-but-unfinished status", () => {
+    for (const status of ["blocked", "failed", "limited"]) {
+      const { unmount } = renderGoal(
+        goalWith(status),
+        () => {},
+        ["pause", "clear"],
+        () => {}
+      )
+      fireEvent.click(screen.getByRole("button"))
+      expect(screen.getByText("Resume")).toBeInTheDocument()
+      unmount()
+    }
+  })
+
+  it("hides Resume when the provider gives no resume callback (claude sessions)", () => {
+    // claude's neutral goal extension has no `/goal` prompt semantics, so the
+    // panel leaves onGoalResume null there — a paused card shows Clear alone.
     renderGoal(goalWith("paused"), () => {})
     fireEvent.click(screen.getByRole("button"))
+    expect(screen.queryByText("Resume")).not.toBeInTheDocument()
     expect(screen.getByText("Clear")).toBeInTheDocument()
-    expect(screen.queryByText("Pause")).not.toBeInTheDocument()
   })
 
   it("shows no controls on a terminal goal", () => {
-    renderGoal(goalWith("complete"), () => {})
+    renderGoal(goalWith("complete"), () => {}, ["pause", "clear"], () => {})
     fireEvent.click(screen.getByRole("button"))
     expect(screen.queryByText("Pause")).not.toBeInTheDocument()
     expect(screen.queryByText("Clear")).not.toBeInTheDocument()
+    expect(screen.queryByText("Resume")).not.toBeInTheDocument()
   })
 
   it("hides controls when the session isn't live (no provider callback)", () => {
@@ -211,7 +241,7 @@ describe("GoalCard goal control (codex-acp #293)", () => {
     expect(screen.queryByText("Clear")).not.toBeInTheDocument()
   })
 
-  it("gates each button on the adapter's advertised action vocabulary", () => {
+  it("gates each adapter-action button on the advertised action vocabulary", () => {
     // claude's neutral goal extension advertises ["set","clear"] — offering
     // Pause there would fire a request the adapter rejects.
     const calls: string[] = []
@@ -222,10 +252,13 @@ describe("GoalCard goal control (codex-acp #293)", () => {
     expect(calls).toEqual(["clear"])
   })
 
-  it("shows no controls when the adapter advertises an empty action set", () => {
-    renderGoal(goalWith("active"), () => {}, [])
+  it("keeps Resume available regardless of the advertised vocabulary", () => {
+    // Resume is a client-side `/goal` prompt re-issue, not an adapter action,
+    // so an empty/legacy vocabulary must not hide it.
+    renderGoal(goalWith("paused"), () => {}, [], () => {})
     fireEvent.click(screen.getByRole("button"))
     expect(screen.queryByText("Pause")).not.toBeInTheDocument()
     expect(screen.queryByText("Clear")).not.toBeInTheDocument()
+    expect(screen.getByText("Resume")).toBeInTheDocument()
   })
 })
