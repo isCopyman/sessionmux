@@ -5251,7 +5251,7 @@
     "cancel": "Cancel",
     "wakeHint": "Plain messages stay on the shared timeline. @ a Session to wake it.",
     "wakePreview": "Réveillera : {names}",
-    "wakePreviewEmpty": "Réveillera : personne — le message reste sur le fil",
+    "wakePreviewEmpty": "Message simple — seulement enregistré dans le fil, ne réveille personne",
     "loadOlder": "Load older posts",
     "reply": "Reply",
     "replyTo": "Replying to {name}",

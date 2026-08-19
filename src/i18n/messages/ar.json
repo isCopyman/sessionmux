@@ -5251,7 +5251,7 @@
     "cancel": "Cancel",
     "wakeHint": "Plain messages stay on the shared timeline. @ a Session to wake it.",
     "wakePreview": "سيوقظ: {names}",
-    "wakePreviewEmpty": "سيوقظ: لا أحد — سيبقى المنشور على الخط الزمني",
+    "wakePreviewEmpty": "رسالة عادية — تسجل فقط في الخط الزمني، ولا توقظ أحداً",
     "loadOlder": "Load older posts",
     "reply": "Reply",
     "replyTo": "Replying to {name}",
