@@ -599,6 +599,7 @@ pub(crate) async fn update_external_id(
 }
 
 /// Outcome of a successful [`bind_external_id`] call.
+#[derive(Debug)]
 pub struct BindOutcome {
     /// `Some(row_id)` when the row's PREVIOUS `external_id` had to be
     /// preserved onto a different (possibly pre-existing) row before this one
