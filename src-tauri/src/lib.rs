@@ -861,8 +861,19 @@ mod tauri_app {
                 // `list_opened_tabs` inside the main window.
                 if app.get_webview_window("main").is_none() {
                     let url = tauri::WebviewUrl::App("workspace".into());
+                    // Debug builds carry a `[DEV]` suffix so the taskbar
+                    // hover text and Task Manager's Apps list can tell a
+                    // `cargo tauri dev` window apart from an installed
+                    // release build running side by side (see the
+                    // single-instance plugin skip above for why they can
+                    // coexist at all).
+                    let window_title = if cfg!(debug_assertions) {
+                        "Codeg [DEV]"
+                    } else {
+                        "Codeg"
+                    };
                     let builder = tauri::WebviewWindowBuilder::new(app, "main", url)
-                        .title("Codeg")
+                        .title(window_title)
                         .inner_size(1260.0, 860.0)
                         .min_inner_size(400.0, 600.0);
                     let builder = windows::apply_platform_window_style(builder);
