@@ -1758,7 +1758,16 @@
         "toastOpFailed": "Aktion fehlgeschlagen: {message}",
         "createRoom": "Raum erstellen",
         "toastRoomCreated": "Raum {title} erstellt",
-        "toastRoomNeedTwo": "Wähle mindestens zwei Sessions, um einen Raum zu erstellen"
+        "toastRoomNeedTwo": "Wähle mindestens zwei Sessions, um einen Raum zu erstellen",
+        "selectRoom": "{title} auswählen",
+        "toastDeletedMixed": "{sessions} Sitzung(en) und {rooms} Raum/Räume gelöscht",
+        "toastRoomsDeleted": "{count} Raum/Räume gelöscht",
+        "toastMovedMixed": "{sessions} Sitzung(en) und {rooms} Raum/Räume in eine Sammlung verschoben",
+        "toastRoomsMoved": "{count} Raum/Räume in eine Sammlung verschoben",
+        "toastRoomsAlreadyInWorkbench": "Ausgewählte Räume sind bereits in {workbench}",
+        "toastRoomsAddedToWorkbench": "{count} Raum/Räume zu {workbench} hinzugefügt",
+        "confirmDeleteMixedTitle": "{sessions} Sitzung(en) und {rooms} Raum/Räume löschen?",
+        "confirmDeleteRoomsTitle": "{count} Raum/Räume löschen?"
       },
       "sectionPinned": "Angeheftet",
       "sectionFolders": "Ordner",

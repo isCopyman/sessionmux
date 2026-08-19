@@ -1758,7 +1758,16 @@
         "toastOpFailed": "操作に失敗しました: {message}",
         "createRoom": "ルームを作成",
         "toastRoomCreated": "ルーム {title} を作成しました",
-        "toastRoomNeedTwo": "ルーム作成には Session を2つ以上選択してください"
+        "toastRoomNeedTwo": "ルーム作成には Session を2つ以上選択してください",
+        "selectRoom": "{title} を選択",
+        "toastDeletedMixed": "{sessions} 件のセッションと {rooms} 件のルームを削除しました",
+        "toastRoomsDeleted": "{count} 件のルームを削除しました",
+        "toastMovedMixed": "{sessions} 件のセッションと {rooms} 件のルームをコレクションに移動しました",
+        "toastRoomsMoved": "{count} 件のルームをコレクションに移動しました",
+        "toastRoomsAlreadyInWorkbench": "選択したルームは既に {workbench} にあります",
+        "toastRoomsAddedToWorkbench": "{count} 件のルームを {workbench} に追加しました",
+        "confirmDeleteMixedTitle": "{sessions} 件のセッションと {rooms} 件のルームを削除しますか？",
+        "confirmDeleteRoomsTitle": "{count} 件のルームを削除しますか？"
       },
       "sectionPinned": "ピン留め",
       "sectionFolders": "フォルダ",

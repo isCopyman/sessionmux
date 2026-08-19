@@ -4,7 +4,12 @@ import {
   saveOpenedTabs,
   saveWorkbenchTabs,
 } from "@/lib/api"
-import type { DbConversationSummary, OpenedTab } from "@/lib/types"
+import { ROOM_TAB_PLACEHOLDER_AGENT, roomTabFolderId } from "@/lib/open-room"
+import type {
+  CollaborationRoomSummary,
+  DbConversationSummary,
+  OpenedTab,
+} from "@/lib/types"
 
 export const SIDEBAR_BULK_TAB_ORIGIN = "sidebar-bulk"
 export const SESSION_CENTER_TAB_ORIGIN = "session-center"
@@ -88,6 +93,89 @@ export async function appendConversationsToWorkbench(
   }
 
   planned = appendConversationTabs(outcome.tabs, conversations)
+  if (planned.added === 0) {
+    return { added: 0, skipped: planned.skipped }
+  }
+
+  outcome = await saveTabsForWorkbench(
+    workbenchId,
+    planned.items,
+    outcome.version,
+    origin
+  )
+  if (!outcome.accepted) {
+    throw new Error("Workbench changed concurrently; please retry")
+  }
+  return { added: planned.added, skipped: planned.skipped }
+}
+
+export function roomIdsInTabs(items: OpenedTab[]): Set<string> {
+  const ids = new Set<string>()
+  for (const item of items) {
+    if (item.room_id != null) ids.add(item.room_id)
+  }
+  return ids
+}
+
+/** Room-tab mirror of {@link appendConversationTabs}: dedupe by `room_id`,
+ * append pinned room tabs after the last saved position. */
+export function appendRoomTabs(
+  existing: OpenedTab[],
+  rooms: readonly CollaborationRoomSummary[],
+  folders: readonly { id: number }[]
+): { items: OpenedTab[]; added: number; skipped: number } {
+  const present = roomIdsInTabs(existing)
+  const toAdd = rooms.filter((room) => !present.has(room.id))
+  const skipped = rooms.length - toAdd.length
+  if (toAdd.length === 0) {
+    return { items: existing, added: 0, skipped }
+  }
+  const nextPosition =
+    existing.length === 0
+      ? 0
+      : Math.max(...existing.map((item) => item.position)) + 1
+  return {
+    items: [
+      ...existing,
+      ...toAdd.map((room, index) => ({
+        id: 0,
+        folder_id: roomTabFolderId(room, folders),
+        conversation_id: null,
+        room_id: room.id,
+        agent_type: ROOM_TAB_PLACEHOLDER_AGENT,
+        position: nextPosition + index,
+        is_active: false,
+        is_pinned: true,
+      })),
+    ],
+    added: toAdd.length,
+    skipped,
+  }
+}
+
+export async function appendRoomsToWorkbench(
+  workbenchId: number,
+  rooms: readonly CollaborationRoomSummary[],
+  folders: readonly { id: number }[],
+  origin = SIDEBAR_BULK_TAB_ORIGIN
+): Promise<{ added: number; skipped: number }> {
+  const snapshot = await listTabsForWorkbench(workbenchId)
+  let planned = appendRoomTabs(snapshot.items, rooms, folders)
+  if (planned.added === 0) {
+    return { added: 0, skipped: planned.skipped }
+  }
+
+  let outcome = await saveTabsForWorkbench(
+    workbenchId,
+    planned.items,
+    snapshot.version,
+    origin
+  )
+  if (outcome.accepted) {
+    return { added: planned.added, skipped: planned.skipped }
+  }
+
+  planned = appendRoomTabs(outcome.tabs, rooms, folders)
   if (planned.added === 0) {
     return { added: 0, skipped: planned.skipped }
   }

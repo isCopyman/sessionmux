@@ -1758,7 +1758,16 @@
         "toastOpFailed": "فشلت العملية: {message}",
         "createRoom": "إنشاء غرفة",
         "toastRoomCreated": "تم إنشاء الغرفة {title}",
-        "toastRoomNeedTwo": "اختر جلستين على الأقل لإنشاء غرفة"
+        "toastRoomNeedTwo": "اختر جلستين على الأقل لإنشاء غرفة",
+        "selectRoom": "تحديد {title}",
+        "toastDeletedMixed": "تم حذف {sessions} جلسة و{rooms} غرفة",
+        "toastRoomsDeleted": "تم حذف {count} غرفة",
+        "toastMovedMixed": "تم نقل {sessions} جلسة و{rooms} غرفة إلى مجموعة",
+        "toastRoomsMoved": "تم نقل {count} غرفة إلى مجموعة",
+        "toastRoomsAlreadyInWorkbench": "الغرف المحددة موجودة بالفعل في {workbench}",
+        "toastRoomsAddedToWorkbench": "تمت إضافة {count} غرفة إلى {workbench}",
+        "confirmDeleteMixedTitle": "حذف {sessions} جلسة و{rooms} غرفة؟",
+        "confirmDeleteRoomsTitle": "حذف {count} غرفة؟"
       },
       "sectionPinned": "مثبّتة",
       "sectionFolders": "المجلدات",

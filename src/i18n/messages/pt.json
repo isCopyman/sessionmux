@@ -1758,7 +1758,16 @@
         "toastOpFailed": "Falha na operação: {message}",
         "createRoom": "Criar sala",
         "toastRoomCreated": "Sala {title} criada",
-        "toastRoomNeedTwo": "Selecione pelo menos duas Sessions para criar uma sala"
+        "toastRoomNeedTwo": "Selecione pelo menos duas Sessions para criar uma sala",
+        "selectRoom": "Selecionar {title}",
+        "toastDeletedMixed": "{sessions} sessão(ões) e {rooms} sala(s) excluída(s)",
+        "toastRoomsDeleted": "{count} sala(s) excluída(s)",
+        "toastMovedMixed": "{sessions} sessão(ões) e {rooms} sala(s) movida(s) para uma coleção",
+        "toastRoomsMoved": "{count} sala(s) movida(s) para uma coleção",
+        "toastRoomsAlreadyInWorkbench": "As salas selecionadas já estão em {workbench}",
+        "toastRoomsAddedToWorkbench": "{count} sala(s) adicionada(s) a {workbench}",
+        "confirmDeleteMixedTitle": "Excluir {sessions} sessão(ões) e {rooms} sala(s)?",
+        "confirmDeleteRoomsTitle": "Excluir {count} sala(s)?"
       },
       "sectionPinned": "Fixadas",
       "sectionFolders": "Pastas",
