@@ -2069,9 +2069,15 @@ mod tests {
             list_for_member(&db.conn, b).await.unwrap()[0].mention_unread_count,
             1
         );
-        consume_room_window(&db.conn, &room.id, b, &[posted.event_id.clone()], false)
-            .await
-            .unwrap();
+        consume_room_window(
+            &db.conn,
+            &room.id,
+            b,
+            std::slice::from_ref(&posted.event_id),
+            false,
+        )
+        .await
+        .unwrap();
         assert_eq!(
             list_for_member(&db.conn, b).await.unwrap()[0].mention_unread_count,
             0

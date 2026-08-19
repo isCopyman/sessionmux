@@ -635,6 +635,7 @@ pub async fn list_by_folder(
 /// excluded — they belong to the loops workbench. Harness-internal subagents
 /// (`harness_internal = true`) are also excluded from this ordinary
 /// projection; `get_by_id` still returns them.
+#[allow(clippy::too_many_arguments)]
 pub async fn list_all(
     conn: &DatabaseConnection,
     folder_ids: Option<Vec<i32>>,

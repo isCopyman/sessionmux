@@ -31,6 +31,7 @@ use crate::web::event_bridge::{
     IMPORT_SCAN_PROGRESS_EVENT, TABS_CHANGED_EVENT,
 };
 
+#[allow(clippy::too_many_arguments)]
 pub async fn list_all_conversations_core(
     conn: &sea_orm::DatabaseConnection,
     folder_ids: Option<Vec<i32>>,
@@ -57,6 +58,7 @@ pub async fn list_all_conversations_core(
 
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
+#[allow(clippy::too_many_arguments)]
 pub async fn list_all_conversations(
     db: tauri::State<'_, AppDatabase>,
     folder_ids: Option<Vec<i32>>,

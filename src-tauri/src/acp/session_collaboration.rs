@@ -204,13 +204,13 @@ pub struct RoomPostSpec {
 
 impl RoomPostSpec {
     pub fn resolved_priority(&self) -> SessionMessagePriority {
-        self.priority.unwrap_or_else(|| {
+        self.priority.unwrap_or(
             if self.mention_all || !self.mention_session_ids.is_empty() || self.mention_human {
                 SessionMessagePriority::High
             } else {
                 SessionMessagePriority::Normal
-            }
-        })
+            },
+        )
     }
 }
 

@@ -834,19 +834,11 @@ async fn transition_store_only_batch(
                AND invocation_policy = 'store_only' AND state = 'embedding' \
                AND embedded_turn_ref = ?"
         };
-        let values = if clear_turn_ref {
-            vec![
-                event_id.clone().into(),
-                target_conversation_id.into(),
-                batch.turn_ref.clone().into(),
-            ]
-        } else {
-            vec![
-                event_id.clone().into(),
-                target_conversation_id.into(),
-                batch.turn_ref.clone().into(),
-            ]
-        };
+        let values = vec![
+            event_id.clone().into(),
+            target_conversation_id.into(),
+            batch.turn_ref.clone().into(),
+        ];
         let changed = txn.execute(statement(sql, values)).await?.rows_affected() == 1;
         if changed {
             changed_any = true;

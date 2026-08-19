@@ -15,19 +15,14 @@ pub struct PromptQueueDraft {
 /// class first (user > collaboration/reminder > timer), FIFO inside a class:
 /// a person's own follow-ups always run before automation, and automation
 /// can never jump a letter the user is expecting the Agent to read.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PromptQueueSource {
+    #[default]
     User,
     Collaboration,
     Reminder,
     Timer,
-}
-
-impl Default for PromptQueueSource {
-    fn default() -> Self {
-        Self::User
-    }
 }
 
 impl PromptQueueSource {

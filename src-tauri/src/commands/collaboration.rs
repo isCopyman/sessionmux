@@ -1010,13 +1010,13 @@ impl SessionCollaborationAccess for DbSessionCollaboration {
                 )
             } else if query.unread {
                 Some("More unread posts remain. Call read_room again with unread=true.".to_string())
-            } else if let Some(first) = timeline.events.first() {
-                Some(format!(
-                    "Older posts remain. Call read_room with before_event_id={}",
-                    first.id
-                ))
             } else {
-                None
+                timeline.events.first().map(|first| {
+                    format!(
+                        "Older posts remain. Call read_room with before_event_id={}",
+                        first.id
+                    )
+                })
             }
         } else {
             None

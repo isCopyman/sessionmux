@@ -11,17 +11,12 @@ use super::prompt_queue::PromptQueueItemState;
 ///   otherwise interrupt; resume a closed Session)
 /// - normal → [`Self::StoreOnly`] (attach to the next ordinary turn; resume
 ///   a closed Session so that turn can happen)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CollaborationInvocationPolicy {
+    #[default]
     StoreOnly,
     InvokeWhenIdle,
-}
-
-impl Default for CollaborationInvocationPolicy {
-    fn default() -> Self {
-        Self::StoreOnly
-    }
 }
 
 impl CollaborationInvocationPolicy {
@@ -41,17 +36,12 @@ impl CollaborationInvocationPolicy {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CollaborationDeliveryHint {
+    #[default]
     Default,
     SteerIfSupported,
-}
-
-impl Default for CollaborationDeliveryHint {
-    fn default() -> Self {
-        Self::Default
-    }
 }
 
 impl CollaborationDeliveryHint {
@@ -71,17 +61,12 @@ impl CollaborationDeliveryHint {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CollaborationUrgency {
+    #[default]
     Normal,
     Urgent,
-}
-
-impl Default for CollaborationUrgency {
-    fn default() -> Self {
-        Self::Normal
-    }
 }
 
 impl CollaborationUrgency {

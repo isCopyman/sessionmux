@@ -230,7 +230,6 @@ async fn handle_acp_envelope(
             title,
             status,
             raw_input,
-            raw_output: _,
             ..
         } => {
             let mut guard = bridge.lock().await;

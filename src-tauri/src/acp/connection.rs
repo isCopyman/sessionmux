@@ -10630,10 +10630,9 @@ async fn emit_conversation_update(
             // the call goes terminal.
             if matches!(agent_type, AgentType::Cursor)
                 && cb_state.cursor_generic_mcp_ids.contains(&tool_call_id)
+                && matches!(status.as_deref(), Some("completed") | Some("failed"))
             {
-                if matches!(status.as_deref(), Some("completed") | Some("failed")) {
-                    cb_state.cursor_generic_mcp_ids.remove(&tool_call_id);
-                }
+                cb_state.cursor_generic_mcp_ids.remove(&tool_call_id);
             }
             let title = resolve_rewritten_title(
                 agent_type,
