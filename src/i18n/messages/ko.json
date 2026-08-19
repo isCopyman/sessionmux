@@ -1781,7 +1781,8 @@
       "automations": "자동화",
       "tasks": "할 일",
       "loadingSubsessions": "하위 대화 로드 중…",
-      "rooms": "룸"
+      "rooms": "룸",
+      "newRoom": "새 룸"
     },
     "conversation": {
       "reloadFailed": "대화 다시 불러오기 실패: {message}",
@@ -5289,6 +5290,13 @@
     "delete": "방 삭제",
     "deleteTitle": "이 방을 삭제할까요?",
     "deleteConfirm": "게시글, 멤버, 이 탭이 삭제됩니다. Session 자체는 유지됩니다.",
-    "deleted": "방을 삭제했습니다"
+    "deleted": "방을 삭제했습니다",
+    "createTitle": "룸 만들기",
+    "createNamePlaceholder": "룸 제목",
+    "createHint": "Session을 두 개 이상 선택하세요.",
+    "createSubmit": "만들기",
+    "createNeedTwo": "룸을 만들려면 Session을 두 개 이상 선택하세요",
+    "createNoCandidates": "선택할 수 있는 Session이 없습니다.",
+    "createFailed": "룸을 만들 수 없습니다: {message}"
   }
 }

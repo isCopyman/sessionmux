@@ -1781,7 +1781,8 @@
       "automations": "Automatisations",
       "tasks": "Tâches à faire",
       "loadingSubsessions": "Chargement des sous-conversations…",
-      "rooms": "Salles"
+      "rooms": "Salles",
+      "newRoom": "Nouvelle salle"
     },
     "conversation": {
       "reloadFailed": "Échec du rechargement de la conversation : {message}",
@@ -5289,6 +5290,13 @@
     "delete": "Supprimer le salon",
     "deleteTitle": "Supprimer ce salon ?",
     "deleteConfirm": "Les messages, les membres et cet onglet seront supprimés. Les Sessions restent intactes.",
-    "deleted": "Salon supprimé"
+    "deleted": "Salon supprimé",
+    "createTitle": "Créer une salle",
+    "createNamePlaceholder": "Titre de la salle",
+    "createHint": "Sélectionnez au moins deux Sessions.",
+    "createSubmit": "Créer",
+    "createNeedTwo": "Sélectionnez au moins deux Sessions pour créer une salle",
+    "createNoCandidates": "Aucune Session disponible.",
+    "createFailed": "Impossible de créer la salle : {message}"
   }
 }

@@ -1781,7 +1781,8 @@
       "automations": "Automatisierungen",
       "tasks": "To-dos",
       "loadingSubsessions": "Unterkonversationen werden geladen…",
-      "rooms": "Räume"
+      "rooms": "Räume",
+      "newRoom": "Neuer Raum"
     },
     "conversation": {
       "reloadFailed": "Konversation konnte nicht neu geladen werden: {message}",
@@ -5289,6 +5290,13 @@
     "delete": "Raum löschen",
     "deleteTitle": "Diesen Raum löschen?",
     "deleteConfirm": "Beiträge, Mitglieder und dieser Tab werden gelöscht. Die Sessions bleiben erhalten.",
-    "deleted": "Raum gelöscht"
+    "deleted": "Raum gelöscht",
+    "createTitle": "Raum erstellen",
+    "createNamePlaceholder": "Raumtitel",
+    "createHint": "Wähle mindestens zwei Sessions.",
+    "createSubmit": "Erstellen",
+    "createNeedTwo": "Wähle mindestens zwei Sessions, um einen Raum zu erstellen",
+    "createNoCandidates": "Keine Sessions verfügbar.",
+    "createFailed": "Raum konnte nicht erstellt werden: {message}"
   }
 }

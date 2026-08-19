@@ -1781,7 +1781,8 @@
       "automations": "オートメーション",
       "tasks": "ToDo タスク",
       "loadingSubsessions": "サブ会話を読み込み中…",
-      "rooms": "ルーム"
+      "rooms": "ルーム",
+      "newRoom": "新しいルーム"
     },
     "conversation": {
       "reloadFailed": "会話の再読み込みに失敗しました: {message}",
@@ -5289,6 +5290,13 @@
     "delete": "ルームを削除",
     "deleteTitle": "このルームを削除しますか？",
     "deleteConfirm": "投稿、メンバー、このタブは削除されます。Session 自体は残ります。",
-    "deleted": "ルームを削除しました"
+    "deleted": "ルームを削除しました",
+    "createTitle": "ルームを作成",
+    "createNamePlaceholder": "ルーム名",
+    "createHint": "Session を2つ以上選んでください。",
+    "createSubmit": "作成",
+    "createNeedTwo": "ルームを作成するには Session を2つ以上選択してください",
+    "createNoCandidates": "選択できる Session がありません。",
+    "createFailed": "ルームを作成できませんでした: {message}"
   }
 }

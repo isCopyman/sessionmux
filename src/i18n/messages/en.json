@@ -1781,7 +1781,8 @@
       "automations": "Automations",
       "rooms": "Rooms",
       "tasks": "To-dos",
-      "loadingSubsessions": "Loading sub-conversations…"
+      "loadingSubsessions": "Loading sub-conversations…",
+      "newRoom": "New room"
     },
     "conversation": {
       "reloadFailed": "Failed to reload conversation: {message}",
@@ -5289,6 +5290,13 @@
     "delete": "Delete room",
     "deleteTitle": "Delete this room?",
     "deleteConfirm": "Posts, members, and this tab will be removed. The Sessions stay.",
-    "deleted": "Room deleted"
+    "deleted": "Room deleted",
+    "createTitle": "Create a room",
+    "createNamePlaceholder": "Room title",
+    "createHint": "Pick at least two Sessions.",
+    "createSubmit": "Create room",
+    "createNeedTwo": "Select at least two Sessions to create a room",
+    "createNoCandidates": "No Sessions available.",
+    "createFailed": "Could not create the room: {message}"
   }
 }

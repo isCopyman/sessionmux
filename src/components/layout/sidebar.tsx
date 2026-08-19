@@ -11,6 +11,7 @@ import {
   Search,
   ListTodo,
   SquarePen,
+  Users,
   Zap,
   type LucideIcon,
 } from "lucide-react"
@@ -76,6 +77,7 @@ import { SidebarSectionOrderControl } from "./sidebar-section-order-control"
 import { cn } from "@/lib/utils"
 import { WorkbenchTree } from "@/components/workbench/workbench-tree"
 import { ConversationManageDialog } from "@/components/conversations/conversation-manage-dialog"
+import { CreateRoomDialog } from "@/components/rooms/create-room-dialog"
 import {
   CollectionTree,
   type CollectionTreeHandle,
@@ -192,6 +194,7 @@ export function Sidebar() {
   )
   const [allExpanded, setAllExpanded] = useState(true)
   const [sessionCenterOpen, setSessionCenterOpen] = useState(false)
+  const [createRoomOpen, setCreateRoomOpen] = useState(false)
   const [sessionCenterCollection, setSessionCenterCollection] = useState<
     number | "unclassified" | null
   >(null)
@@ -620,6 +623,13 @@ export function Sidebar() {
             ) : null
           }
         />
+        {/* Create-room entry beside New chat: the same always-visible row form,
+            so the flow no longer hides inside the multi-select bulk bar. */}
+        <SidebarNavButton
+          icon={Users}
+          label={t("newRoom")}
+          onClick={() => setCreateRoomOpen(true)}
+        />
         <SidebarNavButton
           icon={Search}
           label={t("search")}
@@ -723,6 +733,9 @@ export function Sidebar() {
           />
         </div>
       )}
+      {createRoomOpen ? (
+        <CreateRoomDialog open onOpenChange={setCreateRoomOpen} />
+      ) : null}
       {sessionCenterOpen && (
         <ConversationManageDialog
           open
