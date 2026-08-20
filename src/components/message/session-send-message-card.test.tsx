@@ -13,6 +13,12 @@ vi.mock("@/lib/utils", async () => {
   return { ...actual, copyTextToClipboard: vi.fn().mockResolvedValue(true) }
 })
 
+// SessionRoomChip (now inside SessionMailCard) pulls open-room -> tab-store,
+// whose module init reads the real app-workspace store; this suite stubs that
+// store, so stub the chip out of the import graph.
+vi.mock("@/components/message/session-room-chip", () => ({
+  SessionRoomChip: () => null,
+}))
 vi.mock("@/contexts/tab-context", () => ({
   useTabActions: () => ({ openTab: vi.fn() }),
 }))

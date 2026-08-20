@@ -31,6 +31,12 @@ vi.mock("next-intl", () => ({
   useTranslations: () => (key: string, values?: Record<string, unknown>) =>
     values?.name ? `${key}:${values.name}` : key,
 }))
+// SessionRoomChip (now inside SessionMailCard) pulls open-room -> tab-store,
+// whose module init reads the real app-workspace store; this suite stubs that
+// store, so stub the chip out of the import graph.
+vi.mock("@/components/message/session-room-chip", () => ({
+  SessionRoomChip: () => null,
+}))
 vi.mock("@/contexts/tab-context", () => ({
   useTabActions: () => tabs,
 }))

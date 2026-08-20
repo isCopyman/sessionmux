@@ -6,6 +6,12 @@ import { describe, expect, it, vi } from "vitest"
 import enMessages from "@/i18n/messages/en.json"
 import { SessionReadMessageCard } from "./session-read-message-card"
 
+// SessionRoomChip (now inside SessionMailCard) pulls open-room -> tab-store,
+// whose module init reads the real app-workspace store; this suite stubs that
+// store, so stub the chip out of the import graph.
+vi.mock("@/components/message/session-room-chip", () => ({
+  SessionRoomChip: () => null,
+}))
 vi.mock("@/contexts/tab-context", () => ({
   useTabActions: () => ({ openTab: vi.fn() }),
 }))
