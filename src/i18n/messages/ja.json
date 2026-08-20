@@ -1569,7 +1569,10 @@
       "moveToWorkbench": "ワークベンチへ移動",
       "openInNewWorkbench": "新しいワークベンチで開く",
       "movedToWorkbench": "「{title}」を {workbench} に移動しました",
-      "openedInWorkbench": "「{title}」を {workbench} で開きました"
+      "openedInWorkbench": "「{title}」を {workbench} で開きました",
+      "sessionWorking": "作業中",
+      "sessionConnectionError": "接続エラー",
+      "busyCountBadge": "{count} 件のセッションが作業中"
     },
     "statusLabels": {
       "in_progress": "進行中",

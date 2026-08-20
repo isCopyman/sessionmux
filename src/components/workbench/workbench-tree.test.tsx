@@ -86,6 +86,7 @@ const h = vi.hoisted(() => ({
     openTab: vi.fn(),
     closeTab: vi.fn(),
   },
+  connections: new Map<string, { status: string }>(),
   conversations: [
     {
       id: 101,
@@ -204,9 +205,19 @@ vi.mock("@/contexts/workbench-route-context", () => ({
   useWorkbenchRoute: () => ({ openConversations: h.openConversations }),
 }))
 
+vi.mock("@/contexts/acp-connections-context", () => ({
+  useConnectionStore: () => ({
+    getConnection: (key: string) => h.connections.get(key),
+    getActiveKey: () => null,
+    subscribeKey: () => () => {},
+    subscribeActiveKey: () => () => {},
+  }),
+}))
+
 describe("WorkbenchTree", () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    h.connections.clear()
     h.rooms.length = 0
     h.tabState.tabs = h.tabState.tabs.filter((tab) => tab.kind !== "room")
     h.setRoomWorkbench.mockResolvedValue({ id: "rm_plan" })
@@ -597,5 +608,34 @@ describe("WorkbenchTree", () => {
         .getByRole("menuitem", { name: "Open in new workbench" })
         .getAttribute("data-disabled")
     ).toBeNull()
+  })
+
+  it("shows a pulsing Working dot on a busy Session and a workbench count", async () => {
+    h.connections.set("conversation:101", { status: "prompting" })
+    h.connections.set("conversation:103", { status: "connecting" })
+
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <WorkbenchTree />
+      </NextIntlClientProvider>
+    )
+
+    expect(await screen.findByTitle("Working")).toBeTruthy()
+    expect(screen.queryByTitle("Connection error")).toBeNull()
+    expect(screen.getByTitle("1 session working")).toHaveTextContent("1")
+  })
+
+  it("shows a Connection error dot without counting it as busy", async () => {
+    h.connections.set("conversation:101", { status: "error" })
+
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <WorkbenchTree />
+      </NextIntlClientProvider>
+    )
+
+    expect(await screen.findByTitle("Connection error")).toBeTruthy()
+    expect(screen.queryByTitle("Working")).toBeNull()
+    expect(screen.queryByTitle("1 session working")).toBeNull()
   })
 })

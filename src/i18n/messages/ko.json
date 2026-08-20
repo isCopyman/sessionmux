@@ -1569,7 +1569,10 @@
       "moveToWorkbench": "워크벤치로 이동",
       "openInNewWorkbench": "새 워크벤치에서 열기",
       "movedToWorkbench": "“{title}”을(를) {workbench}(으)로 이동했습니다",
-      "openedInWorkbench": "“{title}”을(를) {workbench}에서 열었습니다"
+      "openedInWorkbench": "“{title}”을(를) {workbench}에서 열었습니다",
+      "sessionWorking": "작업 중",
+      "sessionConnectionError": "연결 오류",
+      "busyCountBadge": "{count}개 세션 작업 중"
     },
     "statusLabels": {
       "in_progress": "진행 중",

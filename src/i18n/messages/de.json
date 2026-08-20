@@ -1569,7 +1569,10 @@
       "moveToWorkbench": "In Arbeitsbereich verschieben",
       "openInNewWorkbench": "In neuem Arbeitsbereich öffnen",
       "movedToWorkbench": "„{title}“ nach {workbench} verschoben",
-      "openedInWorkbench": "„{title}“ in {workbench} geöffnet"
+      "openedInWorkbench": "„{title}“ in {workbench} geöffnet",
+      "sessionWorking": "Arbeitet",
+      "sessionConnectionError": "Verbindungsfehler",
+      "busyCountBadge": "{count, plural, one {# Session arbeitet} other {# Sessions arbeiten}}"
     },
     "statusLabels": {
       "in_progress": "In Bearbeitung",
