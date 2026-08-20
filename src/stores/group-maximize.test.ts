@@ -93,6 +93,27 @@ describe("group maximize (pane zoom)", () => {
     expect(useTabStore.getState().maximizedGroupId).toBeNull()
   })
 
+  it("an outer divider drag does not re-anchor (nor un-zoom) a maximized pane", () => {
+    const tabA = sessionTab(1)
+    const tabB = sessionTab(2)
+    const layout = splitGroup(singleGroupLayout("a"), "a", "right", "b")
+    useTabStore.setState({
+      rawTabs: [tabA, tabB],
+      activeTabId: tabB.id,
+      groupLayout: layout,
+      groupOf: { [tabA.id]: "a", [tabB.id]: "b" },
+      groupSelection: { a: tabA.id, b: tabB.id },
+      maximizedGroupId: "b",
+    })
+
+    useTabStore.getState().reanchorGroupSplits("horizontal", "end", 300 / 240)
+
+    // A new groupLayout reference would trip shouldExitMaximizedGroup and drop
+    // the zoom mid-drag; while zoomed there are no visible panes to re-anchor.
+    expect(useTabStore.getState().groupLayout).toBe(layout)
+    expect(useTabStore.getState().maximizedGroupId).toBe("b")
+  })
+
   it("exitGroupMaximize unconditionally clears, and no-ops when already clear", () => {
     useTabStore.setState({ maximizedGroupId: "a" })
 

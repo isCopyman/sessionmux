@@ -209,6 +209,21 @@ function WorkspaceContent({ children }: { children: React.ReactNode }) {
   const fusionLayoutRef = useRef<[number, number]>(DEFAULT_FUSION_LAYOUT)
   const desiredLayoutRef = useRef<[number, number]>(DEFAULT_FUSION_LAYOUT)
   const appliedLayoutRef = useRef<[number, number] | null>(null)
+  // The files divider is an OUTER divider: it changes the conversation
+  // column's WIDTH, while the pane tree inside stores RATIOS of that column.
+  // A plain container resize therefore rescaled every pane proportionally —
+  // drag the files divider and the leftmost conversation pane crept along with
+  // it, even though it never touched the divider (the group dividers inside
+  // the column never did this, which is why the bug only showed up with the
+  // file column on the right). VS Code's SplitView moves only the panes
+  // flanking the sash, so while this handle is dragged we feed the column's
+  // own scale change back into the tree and let the pane against the column's
+  // RIGHT edge absorb all of it.
+  const fusionDraggingRef = useRef(false)
+  const reanchorGroupSplits = useTabStore((s) => s.reanchorGroupSplits)
+  const handleFusionDragging = useCallback((isDragging: boolean) => {
+    fusionDraggingRef.current = isDragging
+  }, [])
 
   const markConversationActive = useCallback(() => {
     if (mode !== "fusion" || filesMaximized) return
@@ -251,6 +266,7 @@ function WorkspaceContent({ children }: { children: React.ReactNode }) {
       if (layout.length !== 2) return
 
       const normalizedLayout: [number, number] = [layout[0], layout[1]]
+      const previousLayout = appliedLayoutRef.current
       appliedLayoutRef.current = normalizedLayout
 
       const desired = desiredLayoutRef.current
@@ -263,9 +279,23 @@ function WorkspaceContent({ children }: { children: React.ReactNode }) {
 
       const [conversationSize, fileSize] = normalizedLayout
       if (conversationSize <= 0 || fileSize <= 0) return
+      // Re-anchor ONLY for a real divider drag. A window resize leaves these
+      // percentages alone (and must keep scaling every pane together), and the
+      // programmatic setLayout calls above are mode switches, not user intent.
+      if (
+        fusionDraggingRef.current &&
+        previousLayout &&
+        previousLayout[0] > 0
+      ) {
+        reanchorGroupSplits(
+          "horizontal",
+          "end",
+          previousLayout[0] / conversationSize
+        )
+      }
       fusionLayoutRef.current = [conversationSize, fileSize]
     },
-    [applyLayout, mode]
+    [applyLayout, mode, reanchorGroupSplits]
   )
 
   const { isConversations } = useWorkbenchRoute()
@@ -395,6 +425,7 @@ function WorkspaceContent({ children }: { children: React.ReactNode }) {
             <ResizableHandle
               withHandle
               disabled={mode !== "fusion" || filesMaximized}
+              onDragging={handleFusionDragging}
               className={cn(
                 mode !== "fusion" &&
                   "pointer-events-none w-0 opacity-0 after:w-0",

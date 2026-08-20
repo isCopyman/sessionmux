@@ -324,6 +324,86 @@ export function resizeSplitAt(
   return walk(tree)
 }
 
+/** Which edge of the container the outer divider sits on. */
+export type ResizeEdge = "start" | "end"
+
+/**
+ * Re-anchor the tree after its CONTAINER's extent along `orientation` changed,
+ * so an OUTER divider obeys the same adjacent-pair rule as an inner one.
+ *
+ * The column that hosts this tree is itself one side of a coarser split (the
+ * conversation | files columns of the workspace). The tree stores RATIOS, so a
+ * naive container resize rescales every pane proportionally — drag the files
+ * divider and the leftmost conversation pane creeps along with it, even though
+ * it never touched the divider. VS Code's SplitView instead moves only the two
+ * panes flanking the sash; here the flanking pane on our side is whichever
+ * leaf/leaves sit against `edge`, so they absorb the whole delta and every
+ * other pane keeps its absolute size.
+ *
+ * `scale` is `previousExtent / nextExtent` (> 0; 1 means no change): a ratio
+ * multiplied by it keeps the pane's absolute size, and the edge child takes
+ * whatever share is left over. The edge pane is floored at `MIN_SPLIT_RATIO`
+ * (never forced to GROW — an already-tinier pane keeps its size, matching
+ * `resizeSplitAt`'s effective minimum). Once it bottoms out the container has
+ * simply run out of room and the residual is shared proportionally: unlike an
+ * inner drag we cannot refuse a container that has already shrunk, we can only
+ * stop steering the delta at the neighbour.
+ *
+ * A cross-axis node (a vertical stack while the width changes) keeps its
+ * ratios and hands the same scale to every child — all of its children span
+ * the container's full width, so all of them flank the divider.
+ */
+export function reanchorForContainerResize(
+  tree: LayoutNode,
+  orientation: SplitOrientation,
+  edge: ResizeEdge,
+  scale: number
+): LayoutNode {
+  // Degenerate drag geometry (a zero-width column) divides to NaN/Infinity;
+  // letting that reach the ratios would poison the persisted blob.
+  if (!Number.isFinite(scale) || scale <= 0) return tree
+
+  const unchanged = (value: number) => Math.abs(value - 1) < 1e-6
+
+  const walk = (node: LayoutNode, nodeScale: number): LayoutNode => {
+    if (node.type === "group" || unchanged(nodeScale)) return node
+
+    if (node.orientation !== orientation) {
+      let changed = false
+      const children = node.children.map((child) => {
+        const next = walk(child, nodeScale)
+        if (next !== child) changed = true
+        return next
+      })
+      return changed ? { ...node, children } : node
+    }
+
+    const base = normalizeRatios(
+      node.children.map((_, i) => node.ratios[i] ?? 0)
+    )
+    const edgeIndex = edge === "end" ? base.length - 1 : 0
+    // Everyone but the edge child keeps its absolute extent.
+    const kept = base.map((r, i) => (i === edgeIndex ? 0 : r * nodeScale))
+    const keptSum = kept.reduce((a, b) => a + b, 0)
+    const effMin = Math.min(MIN_SPLIT_RATIO, base[edgeIndex])
+    const edgeRatio = Math.max(1 - keptSum, effMin)
+    const remainder = 1 - edgeRatio
+    const ratios = base.map((_, i) => {
+      if (i === edgeIndex) return edgeRatio
+      if (keptSum > 0) return (kept[i] / keptSum) * remainder
+      return remainder / Math.max(base.length - 1, 1)
+    })
+    const children = node.children.map((child, i) => {
+      // Each child's own container changed by oldExtent / newExtent.
+      const childScale = ratios[i] > 0 ? (base[i] * nodeScale) / ratios[i] : 1
+      return walk(child, childScale)
+    })
+    return { ...node, children, ratios }
+  }
+
+  return walk(tree, scale)
+}
+
 export interface GroupRect {
   /** Percentages of the container, 0..100. */
   x: number
