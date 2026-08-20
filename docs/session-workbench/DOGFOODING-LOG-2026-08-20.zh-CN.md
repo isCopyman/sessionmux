@@ -21,7 +21,7 @@
 | O1 | Ctrl+O 有应用内路径输入 | 好评·保持 |
 | O2 | 两个"工作文件夹"控件同名不同性 | **已修**（重启#3 激活中） |
 | O3 | 弹层触发对自动化点击不稳 | 排队（交互清扫） |
-| O4 | worktree 分支识别延迟窗口 git_branch 疑问 | 待查 |
+| O4 | worktree 分支识别延迟窗口 git_branch 疑问 | **已修**（grok 首单：三条写空路径改现场探测 HEAD；已并入主干） |
 | O5 | 徽章/Room 搜索/Ctrl+K 批次验收 | 记录 |
 | O6 | 门禁与 dev 共用 target 打架 | 已解决（target-gate 惯例） |
 | O7 | 协调者体验观察 | 记录 |
@@ -46,7 +46,7 @@
 | O26 | Room 面板无 Ctrl+F | **已修**（真高亮，CSS Highlight API） |
 | O27 | Ctrl+K 文件搜索不自明 | **已修**（两 tab 自我说明文案） |
 | O32 | 手动打开的 worktree 不挂主仓 Path | **已修**（待重启激活） |
-| O33 | 工作台内 Room 行右键能力不及会话行 | 排队（交互原语批；缺后端换台 API） |
+| O33 | 工作台内 Room 行右键能力不及会话行 | **后端已合**（set_workbench API 在主干）；前端菜单 grok 施工中 |
 | O34 | 会话跨台不唯一、无聚焦跳转、工作状态不可见 | **部分已修**（跨台唯一+打开即聚焦已合并；工作状态可见待做） |
 | O35 | 智能体设置"原生JSON/环境变量"不自明 | **已修**（面板自明文案已合并） |
 | O36 | 分屏窗口临时最大化（herdr 式 focus） | **已修**（页签条 maximize/restore，当前分支） |
@@ -56,12 +56,13 @@
 | O40 | 「不代为文件/终端」沙箱开关不自明 | **已修**（开关说明文案已合并） |
 | O41 | 删 timer / 移群成员无确认弹窗 | **已修**（g5-quickwins 已合入） |
 | O42 | Grok token 用量恒为 0 | **已修**（报真实 usage 而非上下文占用） |
-| O43 | 会话卡「回复中」 | **已修**（stop stuck on responding）；turn 落错会话待核实 |
+| O43 | 会话卡「回复中」 | **已修·全结案**（turn 落错会话经审计五层防护无洞，仅记一处 background_watch 加固） |
 | O44 | Codex 标题不同步进侧栏 | **已修**（title-sync：list 读入 DB + locked-title CAS） |
 | O45 | 「待回复」独立面板 vs 会话中心过滤拥挤 | 文案走 O31 已改·入口形态仍排队 |
-| O46 | 任务看板：有引擎没仪表盘 | 立项·侦察中（设计先行，RFC 等用户过目） |
+| O46 | 任务看板：**前提修正**——已有四泳道看板 | 真缺口=awaiting_input 召唤/分组维度/活动指示（RFC 等用户过目） |
 | O47 | API 额度剧耗告警 | 已定性（真实工作·经济性差；防复燃已做；燃烧可见性并入 O46/O34） |
-| O47 | Opus XHigh 工具循环狂烧 Claude 额度 | **严重·未结案**（已暂停队列；根因待钉） |
+| O48 | 群消息上下文经济：read_room 列表逐帖全文无截断 | 已查明·设计项（投递/催办面已有界；见详情） |
+| O49 | D 盘耗尽事件（131G→601MB 曾致 dev 后端崩溃） | **已处置**（回收 91G+；制度见 DISK-WORKTREE-HYGIENE 文档） |
 | O28 | 群聊打开滚动条在顶部 | 排队（Room 家族） |
 | O29 | 群聊缺时间线/日期分隔 | 排队（转录面骨架） |
 | O30 | 催办静音链定性 | 已定性（短路加固排队） |
@@ -102,6 +103,13 @@
 "无分支"，数秒后变 wt/fork-rewind。
 影响：轻微；但如果用户在窗口期发消息，会话记录的 git_branch 会不会写空？待查。
 方向：确认 branch 探测的异步时序，或首次探测完成前禁用发送位的 branch 记录。
+结案（2026-08-21，grok 桥首单）：**比疑问更糟——两条路径永远写空**，不只
+是窗口期：① manager.rs Branch B（发消息时后端建行）直接传 None；
+② chat_channel `/task` 抄 `folder.git_branch` 列——该列从不落库、恒 NULL。
+③ chip 闪"无分支"是 open 路径用 null 覆盖轮询已解析的值。修复：三条写入
+路径统一走 `detect_git_branch`（resolve_git_head，linked worktree 由 git 自理），
+前端 open 路径 null-guard；带 tempdir 真 git 仓库回归测试（linked worktree
+`.git` 为文件的断言）。已并入主干（Merge wt/o4-branch-window），门禁四号批验证。
 
 ### O5. 会话中心徽章/Room 搜索/过滤重构/Ctrl+K 手递手：实测全过
 
@@ -112,7 +120,7 @@ Ctrl+K 无 agent chips、"在会话中心搜索 {query}"手递手预填成功。
 ## 待办/跟踪
 
 - [ ] 主编码会话完成第一切片 → 验收 diff → 拉 Grok 评审群
-- [ ] O4 的 git_branch 写空疑问
+- [x] O4 的 git_branch 写空疑问 → 证实且已修（见 O4 结案）
 - [x] IME #518：`c594615a` 已合入（composition 期间保住 @ 面板）；真输入法手敲仍建议抽空验一次
 - [x] 2026-08-21 审计：范围是**昨天+今天**（北京 8/20–8/21）用户亲手提问，
       不是再往 8/19 以前翻。那晚合进当前分支的见 O36–O44。仍开着的见文末。
@@ -614,6 +622,13 @@ turn 落错会话 / 新会话孤立历史（上游修过，我们状态机已重
 状态：「回复中」卡死 **已修** `2ed571e5`（2026-08-20 00:36，对照上游
 1e3e5a10）。turn 落错会话 / 孤立历史：我们状态机已重写，**未单独核对该
 洞是否还在**，保持待核实，不要当成还没排。
+结案（2026-08-21，r-turnroute 只读审计）：**五层防护、无现存洞**——
+① fork 后连接绑定切换前有 in-flight turn 排干等待；② manager.rs
+1417-1423 后端身份核对（连接声称的会话 ≠ DB 绑定则拒写）；③ 事件写入以
+DB 绑定为准而非连接自报；④ fork 交接期消息进队列不进旧会话；⑤ 有回归
+测试钉住交接窗口。仅一处非缺陷加固建议：background_watch rearm-on-fork
+会丢弃未消费的 out-of-turn 转录尾巴（只影响侧栏显示，不产生错归属），
+已记入排队项。
 
 ### O44. Codex 标题不同步进侧栏
 
@@ -656,6 +671,18 @@ openagents-inc/openteams 四家的任务模型与看板 UI，报告到后领导�
 （泳道映射、卡片信息、与待办任务面板/会话中心的信息架构关系、Room 派工
 是否落 work_task），RFC 过用户后排期施工。不挤今晚 DoD。
 状态：立项·侦察中。
+侦察回报（2026-08-21，r-taskboard）——**前提修正**：codeg 早已有四泳道
+看板！`src/components/tasks/board-columns.ts` 把 10 态粗化成 todo/
+inProgress/attention/done 四列，任务页有看板/列表双视图、拖拽、attention
+琥珀色高亮。所以①"做个看板"是伪需求。真缺口重排为：
+① **awaiting_input 无主动召唤**——任务卡等人时不发系统通知，用户不盯
+页面就永远不知道（multica 的 inbox_item 按 severity 升级通知是最好的参照）；
+② 分组维度写死（只按状态，不能按 agent/仓库分组）；③ attention 泳道语义
+混杂（awaiting_input 和 failed 挤一列，轻重不分）；④ 卡片无 agent 活动
+指示器（openagents 的 IssueAgentActivityIndicator 参照）。
+另一裁决维持：**不要把 Room 编队派工硬塞进 work_task**——两者生命周期
+语义不同，硬统一会造出第二个双时间线问题。RFC 以"增量补课"为纲：现有
+看板上加召唤层/分组/活动指示，不另起炉灶。等用户过目。
 
 ### O47.（严重）Opus XHigh 工具循环狂烧 Claude 额度
 
@@ -682,6 +709,7 @@ read 循环）；② PromptQueue/催办把同一 Session 反复 wake（O30 是�
 还在被别的路径重放。先看该会话 transcript 最后几十步是不是同一条
 工具失败，再看 `conversation_prompt_queue_item` 当时 6 条 paused 的
 source。要有回合/工具预算或失败熔断，不能只靠人手点停。
+（本节已被下一节的定性结论取代，保留作过程记录；勿按本节"未结案"行事。）
 
 ### O47.（重大·已定性）API 额度剧耗告警：不是失控 bug，是编队经济性 + 燃烧不可见
 
@@ -696,12 +724,56 @@ source。要有回合/工具预算或失败熔断，不能只靠人手点停。
   调用形状=典型 agent 工具循环（输入 2 token+全缓存续跑）。
 - 成本机理：**190K 上下文 × 每步全量缓存读 × 碎步工具循环**——单步 $0.1+，
   两会话高峰 $40-90/小时。XHigh 是我（领导）配置的，属决策失误一半。
-连带事故（另记）：02:52-53 dev 后端进程 exit 1 死亡（日志无 panic 记录，
-死因待查）；重启时调度器会自动唤醒 6 条排队编队消息——已手工置 paused
-防复燃（备份 queued-items-backup-0303.txt）。
+连带事故（另记）：02:52-53 dev 后端进程 exit 1 死亡（日志无 panic 记录）；
+死因盘查后钉为**磁盘耗尽**（同时刻 D 盘一度只剩 601MB，见 O49）；重启时
+调度器会自动唤醒 6 条排队编队消息——已手工置 paused 防复燃（备份
+queued-items-backup-0303.txt）。
 用户处置（已执行）：编队暂停施工，所有委托改走 grok build 桥（本地 grok
 CLI，便宜）；sonnet/opus 子代理停用。
 产品启示（并入 O46 看板 + O34 状态可见）：**燃烧率必须可见**——会话卡/
 看板应显示每会话调用频次与近时开销估算；"等待授权"之外还要"正在烧钱"
 这一维度。长上下文会话应主动提示/自动压缩（190K 不压缩=每步交学费）。
 状态：已定性·防复燃已做·可见性需求并入 O46/O34 批。
+
+### O48. 群消息上下文经济学：投递面有界，read_room 列表逐帖全文是唯一敞口
+
+现象（用户 2026-08-21 凌晨提问）：多 agent 群聊时，读群消息是增量还是
+一次读一大堆？会不会上下文爆炸？
+代码实证（三层盘点）：
+- **投递面全有界**：@ 唤醒的首投信封只带该帖正文前缀（≤8,000 字符，
+  `MAX_FIRST_DELIVERY_BODY_CHARS`，超长带截断标记+补读指引）+ 父帖摘录
+  ≤200 字符；催办摘要**永不带正文**、最多 8 行标题（collaboration_reminder.rs
+  "催办不含正文"）；store_only 批量信封有逐回合总字节上限。
+- **增量机制已存在**：`read_room unread=true` 从本会话 last-read 游标起
+  读、读完推进游标——这就是增量读取；且 @ 信封自带正文，单点名场景 agent
+  根本无需再调 read_room。
+- **唯一敞口**：`read_room` 默认模式（不传 unread）返回最新窗口 50 帖
+  （上限 200），`body: event.body` **逐帖全文无截断**（commands/
+  collaboration.rs:1047；合法单帖上限 1MB）。若 agent 习惯性裸调默认模式
+  而非 unread=true，N 个 agent 各自反复重读同一批全文——这是真实的
+  平方级爆炸向量。
+方向（设计项，动 MCP 工具行为，走契约流程）：① 列表模式逐帖正文加截断
+（如 2,000 字符+bodyTruncated 标记）；② read_room 增加 event_id 参数做
+单帖全文补读（否则截断会把"补读长帖"的既有指引打断——首投截断提示让
+agent 去 read_room 读全文，不能两头都截）；③ 工具描述把 unread=true 扶正
+为追赶场景的第一选择。
+状态：已查明·设计项排队（含一处待拍板：截断阈值与默认行为）。
+
+### O49. D 盘耗尽事件与磁盘卫生制度
+
+现象：用户发现 1.9T 的 D 盘只剩 131G；关联 02:52 dev 后端 exit-1 崩溃
+（当时一度只剩 601MB）。
+盘查结论：元凶是 **worktree 的 cargo target 目录**——一次完整桌面 debug
+构建 16-23G，worktree 用完即弃但 target 从不清理。当晚存量：fork-rewind
+23G + 共享 _cargo-o33 23G + fork-at-message-be 16G + 旧 sessionmux 线 32G
++ 主仓 target 36G + target-gate 22G。
+处置（2026-08-21 完成）：删 23 个已并入 worktree（树+分支）、17 个已并入
+agent 隔离树、未并入树只删 target 保留工作区；**回收 91G+（131G→222G）**。
+主仓 target（dev 在跑）与 target-gate（门禁在用）保留。
+制度：立 `DISK-WORKTREE-HYGIENE.zh-CN.md`——worktree 合并即拆（Windows
+要补 rm -rf 核实）、worktree 默认禁跑 cargo、磁盘地板 100G/警戒 150G、
+无征兆崩溃先查磁盘。
+遗留待用户定夺：`worktrees/sessionmux-session-timer`（codex/session-timer
+未并入，树保留）与 `.claude/worktrees/agent-a31e34…`（领先 41 提交的
+qoder/chat 旧功能线）是否还要。
+状态：**已处置**·制度已立。

@@ -1360,3 +1360,30 @@ w-replycopy 预警过的 Radix tooltip 悬停测试（jsdom 无布局，连续�
   +领导 CDP 逐项实测走查；争取 = O17 拖拽（移动/Shift 复制）、O20 文件
   面板缩放、O8 5xx 重试、O2/O3 清扫。schema 级手术仍等用户签字，不在
   今晚范围。
+
+### 5.19 2026-08-21 凌晨后半：磁盘事件处置 + grok 直调 shell + O4/O43/O46 三线收口
+
+- **磁盘耗尽事件（O49）**：D 盘 131G 触底盘查，元凶=worktree cargo target
+  （单个 16-23G，弃树不清产物）。清 23 个已并 worktree+分支、17 个 agent
+  隔离残留、旧 sessionmux 线 32G target，**回收 91G+（→222G）**。制度落
+  `DISK-WORKTREE-HYGIENE.zh-CN.md`：合并即拆、worktree 禁跑 cargo、地板
+  100G/警戒 150G、无征兆崩溃先查磁盘。02:52 dev 后端 exit-1 死因钉为磁盘
+  耗尽（当时仅剩 601MB）。
+- **grok 桥调用方式定案（用户问询）**：不需要 subagent——桥就是本地
+  node 脚本，`grok-bridge.mjs run --background --write --effort high "任务书"`
+  纯 shell 直调即可（O33 前端单已实证）。此后默认 shell 直调省一层子代理
+  开销；仅当需要独立核验/转述时才包 subagent。
+- **O4 结案（grok 首单）**：git_branch 比疑问更糟——manager.rs Branch B
+  传 None、chat_channel 抄恒 NULL 列，两条路径永远写空。三写入路径统一
+  detect_git_branch 现场探测 + 前端 null-guard + linked-worktree 回归测试，
+  已并主干（门禁四号批）。
+- **O43 全结案（r-turnroute 审计）**：turn 错归属五层防护无现存洞；仅记
+  background_watch rearm-on-fork 丢未消费转录尾巴一处加固（显示层，无错
+  归属），排队。
+- **O46 前提修正（r-taskboard 侦察）**：codeg 已有四泳道看板
+  （board-columns.ts），"做看板"是伪需求；真缺口=awaiting_input 主动召唤/
+  分组维度/活动指示。裁决维持：Room 派工不塞 work_task。RFC 等用户。
+- **O48 立项（用户问询"群消息会不会上下文爆炸"）**：投递/催办面全有界
+  （首投 ≤8k 字符、催办无正文、unread=true 游标增量已存在）；唯一敞口
+  是 read_room 列表模式逐帖全文无截断。设计方向三条已记台账，动 MCP 工具
+  行为，走契约流程+一处待拍板。
