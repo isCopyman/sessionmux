@@ -1116,3 +1116,20 @@ T2 后置截图（CDP 9222 可用，基线在 .artifacts）+ 晨间验收报告 
   应改走 custom 模式）。中途上游流卡死 600s 一次，SendMessage 唤醒续跑完成。
   门禁：server 测试 2577（+1）、三路 clippy 0（全走 target-gate）、vitest/build
   过。至此今晚全部在飞项收口，仅余 dev 重启窗口待用户拍板。
+- 2026-08-20 深夜 **w-roomhome + w-humanpost 双落地，UI 交互治理开题**：
+  ① w-roomhome 合并（d74d2c9a）：agent 建群侧边栏归位三层修复（service 兜底
+  打戳/存量回填 migration/树根救生组），门禁全绿：server **2582**（+5）、
+  vitest **4719**（+11）、三路 clippy 0、eslint 0 错、build 过；CDP 实测
+  HMR 已生效（兜底组渲染出协调房）。工人自行决断三处均予追认：既有断言
+  语义改写（Collection 不继承、Path 继承）、兜底条件放宽到"Path 未渲染"、
+  migration down 有意 no-op。遗留：Collection 自身隐身问题单独立项（O15 记）。
+  ② w-humanpost 合并（16c898b8）：O13 自我提及守卫改按 author_kind，读侧
+  三处同源误判连修（工人超范围主动查修，予以追认——只修投递则徽章链仍断）；
+  cargo 门禁单独跑（前端零改动，vitest/eslint/build 沿用 ①）。③ 用户新报
+  两摩擦：右键漏原生菜单（O16，w-contextmenu 已派：全局拦截+三例外）、
+  工作台树不可拖（O17，设计已定，排队）。④ 用户元问题"UI 复杂度怎么治"，
+  领导答复四件套：交互契约表（对象×手势矩阵，新组件先填表）、一句话不变量
+  进注释+测试、行为组件化（右键/拖拽公共 hook）、兜底层优先于逐点修；
+  截图回归（Playwright）暂缓。两个工人均自检出错基底并自救 reset。
+  注意：本批 Rust 侧修复（打戳/回填/O13）均需下次 dev 后端重启才活，
+  与 w-contextmenu、第三轮收口批同一个重启窗口。

@@ -161,9 +161,12 @@ source_conversation_id NOT NULL，human 没有自己的会话 id）。当被 @ �
 毫无报错——人类以为喊到了，实际喊了个寂寞。
 影响：hub-and-spoke 编队里人类给协调者下指令的主通道静默失效；恰好是最常用
 的形态（协调者建房）。O9 修好后这是 Room 唤醒链路上暴露的下一层。
-方向：已立项 w-humanpost——自我提及跳过守卫只对 author_kind='session' 生效，
-human 帖 @ 任何成员（含借 id 的房主）都必须投递；长线可考虑 human 专属 source
-语义。
+状态：**已落地**（merge 16c898b8）。守卫改为"作者身份规则而不是 id 规则"：
+只有 author_kind='session' 才跳过自我提及；human 帖 @ 房主正常投递+唤醒+
+挂义务+徽章，human @all 也覆盖房主。工人还查出并连修了读侧三处同源误判
+（都是把"借来的 id==作者"当真）：房主永远看不到 human 帖的频道未读、
+human 的提问在房主卡片上 needs_reply/awaiting_reply 双算。长线的 human
+专属 source 语义仍在待议。Rust 改动需下次后端重启生效。
 
 ### O14. dev 重启记录（2026-08-20 深夜）
 
@@ -171,3 +174,41 @@ human 帖 @ 任何成员（含借 id 的房主）都必须投递；长线可考�
 带 CDP 重启。新二进制激活：O9 幽灵修复、MCP 分阶段超时、销账回报、claude
 订阅 env 防线。重启后首次唤醒协调者：冷启动握手在新预算下一次成功
 （连接指示"已连接"）。O13 正是重启后第一次实测 Room @ 链路时抓到的。
+
+### O15. agent 建的群聊在侧边栏没有家（用户两次实测催办）
+
+现象：MCP/Host Control 建的 Room 在分类树里彻底隐身——树按 collection_id
+或 root_folder_id 归桶，agent 建群两者全 NULL（三个入口共用的
+resolve_placement 只有"成员同 collection"一条隐含推导，agent 编队成员
+必然分散）；用户两次截图问"群聊到底在哪"。
+影响：群聊只存在于数据库里，用户从树上永远点不到；叠加 O10 双实例困惑。
+状态：**已落地**（merge d74d2c9a）。三层：① service 层 resolve_placement
+第 4 级兜底——建群打戳创建者会话的 Path（worktree 折到仓库根、chat 草稿目录
+不猜）；② migration 回填存量 NULL 行（同一条推导，幂等，down 有意 no-op）；
+③ 前端树根"未分类"兜底组，救 NULL/NULL 和"Path 被关掉"两种隐身，写死不变量
+"an active Room must always be reachable from the sidebar tree"。前端已
+经 HMR 实测生效（CDP 探到兜底组含协调房）；①② 需下次后端重启生效，届时
+协调房会自动归到 codeg Path 下。已知遗留：Collection 自身 root 不在
+pathRoots 时整个 Collection 连带内容物隐身——是 Collection 可见性问题，
+单独立项。
+
+### O16. 右键漏出 WebView2 浏览器原生菜单（用户实测截图）
+
+现象：在没有组件级自定义右键菜单的地方右键（例：侧边栏"工作台"区的会话行），
+弹出的是浏览器原生菜单（返回/刷新/另存为/打印/更多工具/检查）。全仓没有任何
+全局 contextmenu 拦截（grep 只有 pet 页一处局部用法）。
+影响：桌面应用里露浏览器菜单观感突兀；"返回"可能把 SPA 整个导航走；
+"另存为/打印"全是无意义出口。
+方向：已派 w-contextmenu——document 级全局拦截 + 三个例外（可编辑元素保留
+原生复制粘贴、data-native-context-menu 逃生舱、dev 模式 Shift 右键保住
+"检查"）；不碰既有自定义菜单。工作台行的应用级右键菜单另立项（见 O17）。
+
+### O17. 工作台树不可拖拽，affordance 与分类树不一致
+
+现象：侧边栏"工作台"区的树是纯导航（workbench-tree.tsx:124 注释自认
+"navigation, not a mirror"，全文件无任何拖拽代码），但它和下面处处可拖的
+分类树长得同构；用户试图拖动时无任何反馈，点击即切换工作台，"特别怪"。
+影响：相邻两棵树一个能拖一个不能，用户无法预判手势结果；"把会话挪到另一个
+工作台"这个自然操作没有任何入口（拖不动、右键还漏原生菜单=O16）。
+方向：设计已定——工作台树行支持跨工作台拖拽移动 + 应用级右键菜单（关闭
+标签页/移动到工作台 N/在新工作台打开），排在在飞项落地后立项。
