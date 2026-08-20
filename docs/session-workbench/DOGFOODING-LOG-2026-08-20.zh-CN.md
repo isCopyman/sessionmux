@@ -149,3 +149,25 @@ Room/Collection/mail 等纯 DB 构造**不跨实例**。用户侧困惑（"看�
 复用了 `UnifiedDiffPreview` 的 `embedded` prop——全仓零调用方、注释点名就是
 给这个宿主预留的。手风琴单开、懒渲染、24rem 限高、区收起再开恢复上次
 展开的文件；`+N/-N` 统计区并入展开开关。原有按钮全保留。
+
+### O13.（严重）human 在 Room 里 @ 房主永远送不到——借来的 source 撞自我提及守卫
+
+现象（重启后人类实测，链路逐层核实）：人类在 Room 界面发帖 @ 某成员时，前端把
+**房主的会话 id** 借来当 source（rooms-page.tsx:539
+`sourceConversationId: detail.createdByConversationId`——因为 event 表的
+source_conversation_id NOT NULL，human 没有自己的会话 id）。当被 @ 的正是房主
+（agent 建的协调房必然如此），后端把它当"自我提及"跳过：event 正常入库、正文
+带结构化 `codeg://session/<id>` 链接，但**投递行为零、无唤醒、无徽章**，界面
+毫无报错——人类以为喊到了，实际喊了个寂寞。
+影响：hub-and-spoke 编队里人类给协调者下指令的主通道静默失效；恰好是最常用
+的形态（协调者建房）。O9 修好后这是 Room 唤醒链路上暴露的下一层。
+方向：已立项 w-humanpost——自我提及跳过守卫只对 author_kind='session' 生效，
+human 帖 @ 任何成员（含借 id 的房主）都必须投递；长线可考虑 human 专属 source
+语义。
+
+### O14. dev 重启记录（2026-08-20 深夜）
+
+停机窗口约 12 分钟：`cargo clean` 释放 211GB（磁盘 98%→89%）、全量重建、
+带 CDP 重启。新二进制激活：O9 幽灵修复、MCP 分阶段超时、销账回报、claude
+订阅 env 防线。重启后首次唤醒协调者：冷启动握手在新预算下一次成功
+（连接指示"已连接"）。O13 正是重启后第一次实测 Room @ 链路时抓到的。
