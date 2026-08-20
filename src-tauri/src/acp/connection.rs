@@ -14340,7 +14340,10 @@ mod tests {
         assert_ne!(cwd, canonical, "fixture must be non-canonical to be a test");
 
         let new_req = build_new_session_request(AgentType::Grok, &cwd, Vec::new());
-        assert_eq!(new_req.cwd, canonical, "session/new must send canonical cwd");
+        assert_eq!(
+            new_req.cwd, canonical,
+            "session/new must send canonical cwd"
+        );
 
         let load_req = build_load_session_request(
             AgentType::Grok,
@@ -14348,7 +14351,10 @@ mod tests {
             &cwd,
             Vec::new(),
         );
-        assert_eq!(load_req.cwd, canonical, "session/load must send canonical cwd");
+        assert_eq!(
+            load_req.cwd, canonical,
+            "session/load must send canonical cwd"
+        );
 
         let resume_req = build_resume_session_request(
             AgentType::Grok,
@@ -14356,7 +14362,10 @@ mod tests {
             &cwd,
             Vec::new(),
         );
-        assert_eq!(resume_req.cwd, canonical, "session/resume must send canonical cwd");
+        assert_eq!(
+            resume_req.cwd, canonical,
+            "session/resume must send canonical cwd"
+        );
 
         // Pin the actual on-disk key shape, not just the round-trip: a future
         // "tidy the ugly prefix" pass through `simplify_verbatim_path` here
