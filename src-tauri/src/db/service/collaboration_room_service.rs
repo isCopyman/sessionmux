@@ -853,6 +853,46 @@ pub async fn remove_path(
     get(conn, room_id).await
 }
 
+/// Reassign a Room to another Workbench. Same-workbench is a no-op (not an
+/// error). Archived / missing Rooms are rejected. Members are not rewritten:
+/// membership is Session-scoped, independent of which Workbench the Room sits
+/// on — changing that coupling is a product call, not this function's job.
+pub async fn set_workbench(
+    conn: &DatabaseConnection,
+    room_id: &str,
+    workbench_id: i32,
+) -> Result<CollaborationRoomDetail, DbError> {
+    require_workbench(conn, workbench_id).await?;
+    let row = conn
+        .query_one(statement(
+            "SELECT workbench_id, status FROM collaboration_room WHERE id = ?",
+            vec![room_id.into()],
+        ))
+        .await?
+        .ok_or_else(|| DbError::NotFound(format!("Room {room_id}")))?;
+    let status: String = row.try_get("", "status")?;
+    if status != "active" {
+        return Err(validation(format!("Room {room_id} is not active")));
+    }
+    let current: i32 = row.try_get("", "workbench_id")?;
+    if current == workbench_id {
+        return get(conn, room_id).await;
+    }
+    let changed = conn
+        .execute(statement(
+            "UPDATE collaboration_room \
+             SET workbench_id = ?, updated_at = CURRENT_TIMESTAMP \
+             WHERE id = ? AND status = 'active'",
+            vec![workbench_id.into(), room_id.into()],
+        ))
+        .await?
+        .rows_affected();
+    if changed == 0 {
+        return Err(DbError::NotFound(format!("Room {room_id}")));
+    }
+    get(conn, room_id).await
+}
+
 pub async fn rename(
     conn: &DatabaseConnection,
     room_id: &str,
@@ -3192,5 +3232,92 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["n1"]
         );
+    }
+
+    #[tokio::test]
+    async fn set_workbench_moves_an_active_room_and_leaves_members_alone() {
+        let (db, a, b, _) = seeded().await;
+        let room = make_room(&db, a, vec![a, b]).await;
+        let second = workbench_service::create(&db.conn, Some("Review".into()))
+            .await
+            .expect("second workbench");
+        let before_members: Vec<i32> = room.members.iter().map(|m| m.conversation_id).collect();
+
+        let moved = set_workbench(&db.conn, &room.id, second.id)
+            .await
+            .expect("move");
+        assert_eq!(moved.workbench_id, second.id);
+        let after_members: Vec<i32> = moved.members.iter().map(|m| m.conversation_id).collect();
+        assert_eq!(after_members, before_members);
+
+        let on_main = list_for_workbench(&db.conn, 1).await.unwrap();
+        assert!(
+            on_main.iter().all(|r| r.id != room.id),
+            "the Room must leave the source Workbench list"
+        );
+        let on_review = list_for_workbench(&db.conn, second.id).await.unwrap();
+        assert_eq!(on_review.len(), 1);
+        assert_eq!(on_review[0].id, room.id);
+        assert_eq!(on_review[0].workbench_id, second.id);
+    }
+
+    #[tokio::test]
+    async fn set_workbench_same_workbench_is_idempotent() {
+        let (db, a, b, _) = seeded().await;
+        let room = make_room(&db, a, vec![a, b]).await;
+        let again = set_workbench(&db.conn, &room.id, room.workbench_id)
+            .await
+            .expect("noop");
+        assert_eq!(again.id, room.id);
+        assert_eq!(again.workbench_id, 1);
+        assert_eq!(list_for_workbench(&db.conn, 1).await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn set_workbench_rejects_a_missing_workbench() {
+        let (db, a, b, _) = seeded().await;
+        let room = make_room(&db, a, vec![a, b]).await;
+        let err = set_workbench(&db.conn, &room.id, 9_999)
+            .await
+            .expect_err("missing workbench");
+        assert!(matches!(err, DbError::NotFound(_)), "got {err:?}");
+        assert_eq!(
+            get(&db.conn, &room.id).await.unwrap().workbench_id,
+            1,
+            "a rejected move must not rewrite the Room"
+        );
+    }
+
+    #[tokio::test]
+    async fn set_workbench_rejects_a_non_active_room() {
+        let (db, a, b, _) = seeded().await;
+        let room = make_room(&db, a, vec![a, b]).await;
+        db.conn
+            .execute(Statement::from_string(
+                DbBackend::Sqlite,
+                format!(
+                    "UPDATE collaboration_room SET status = 'archived' WHERE id = '{}'",
+                    room.id
+                ),
+            ))
+            .await
+            .unwrap();
+        let err = set_workbench(&db.conn, &room.id, 1)
+            .await
+            .expect_err("archived");
+        assert!(
+            matches!(err, DbError::Validation(_)),
+            "non-active must be an explicit reject, got {err:?}"
+        );
+        assert!(err.to_string().contains("not active"));
+    }
+
+    #[tokio::test]
+    async fn set_workbench_rejects_a_missing_room() {
+        let (db, _, _, _) = seeded().await;
+        let err = set_workbench(&db.conn, "rm_does-not-exist", 1)
+            .await
+            .expect_err("missing room");
+        assert!(matches!(err, DbError::NotFound(_)), "got {err:?}");
     }
 }
