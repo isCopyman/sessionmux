@@ -38,17 +38,51 @@ Playbooks (who to create, what to put in `initial_prompt`, when to `@`)
 belong to `codeg-multi-agent`. This skill is the Room channel only. A
 Session is not a frozen role.
 
+## What an `@` does to the target
+
+An `@` wakes **that Session itself** to read the envelope. It never
+creates a substitute, and it never starts a second Session.
+
+- Busy target: the envelope queues and is read when the current Turn
+  ends.
+- Idle target: the wake is resume-only. The Host resumes the target's own
+  runtime; when that Harness cannot resume, the connection is stopped and
+  the envelope waits in the target's own queue until it next runs a turn.
+
+Read a silent target as queued, not lost. If a mention draws no reply,
+the likely cause is a Harness that cannot resume — the letter is still
+there and will be consumed on the Session's next turn. Chase it through
+the operator (`mention_human`) rather than re-posting or creating a
+replacement Session. Behaviour as of the 2026-08-20 fix
+`fix(collaboration): stop a Room @ of an idle Session from creating a
+phantom`; before it, `@`ing an idle member spawned a throwaway Session
+that answered in the target's place, ran one turn, and was unreachable
+from Host Control `session.stop`.
+
 ## Lifecycle (Host Control)
 
 Create and membership use Host Control via `codeg_help` / `codeg_use`.
 They do not post and they do not send mail.
 
-- `room.create` — create a shared Room. Pass at least two Session ids.
-  The caller is a member like everyone else, not an owner.
+- `room.create` — create a shared Room. `member_session_ids` takes 1–32
+  ids and the caller is added automatically, so one other id already
+  makes a two-member Room. The caller is a member like everyone else,
+  not an owner.
 - `room.add_member` — add an existing Session to a Room you already
   belong to.
 - `room.list` / `room.list_workbench` — Workbench-wide list. Prefer
   `list_rooms` when you only need Rooms you already belong to.
+
+Members exist before the Room does. That ordering has a consequence
+worth stating plainly: a Session's `initial_prompt` **cannot** carry the
+`room_id`, because the Room is created from those Session ids and has no
+id until they exist. Do not plan around putting a Room id in a first
+prompt. The working order is `session.create` for each member (no
+`initial_prompt` needed when the Room will carry the task) →
+`room.create` → `room.add_member` for latecomers → post the assignment
+and `@` the Session that owns it. The Room post is the brief; unlike a
+first prompt it can name the Room, the spec path, and the stop rule.
+Observed 2026-08-20.
 
 ## Ledger tools
 
@@ -80,6 +114,15 @@ These live on the `codeg-room` MCP server, not `codeg-mcp`. Host Control
     was skipped.
   - Pass `mention_human=true` (or `codeg://human`) to tap the operator.
     That does not wake a Session.
+  - `expects_reply` defaults to `false`. Leave it there for anything that
+    only records, delivers, or acknowledges — progress notes, "landed,
+    here is the path", closing summaries. Set `true` only for a question
+    or an assignment you will wait on. The obligation is stamped per
+    mentioned Session, so one `expects_reply=true` post to five members
+    puts a "needs reply" badge on all five and arms five nag timers; a
+    run's worth of receipts sent that way turns every member's badge into
+    noise. (Mailbox is the mirror image: `send_message` defaults to
+    `true`.) Observed 2026-08-20.
   - File / path text in the body is context, not a Delivery.
   - A reply on the timeline is quoting, not waking. Set
     `reply_to_event_id` to hang on the chain. That does not notify the

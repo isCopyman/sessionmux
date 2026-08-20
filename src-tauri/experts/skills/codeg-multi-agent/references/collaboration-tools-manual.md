@@ -133,13 +133,42 @@ One post, no title; the body is the whole post.
 - `mention_human` — tap the operator. See the @human discipline below.
 - `priority` — `high` by default when anyone is mentioned; `normal` waits
   for the next ordinary turn. Ignored on record-only posts.
-- `expects_reply` — defaults to `false`; set `true` when the post assigns
-  work.
+- `expects_reply` — defaults to `false`; set `true` only when the post
+  asks a question or assigns work you will wait on. Leave it `false` for
+  the traffic that makes up most of a run: progress notes, delivery
+  hand-offs, acknowledgements, closing summaries. The obligation is
+  recorded per mentioned Session, so one `expects_reply=true` post that
+  `@`s five members lights a "needs reply" badge on all five and starts
+  five nag timers — a receipt that says "landed, nothing needed from
+  you" should never do that. This is the opposite of the mailbox
+  default: `send_message` defaults to `true` because a letter is
+  normally an assignment. Observed 2026-08-20.
 - `reply_to_event_id` — quotes the parent on the timeline. Quoting is not
   waking: reporting back to the asker means quoting AND mentioning them.
 - Free-text `@alice` in the body wakes no one. File paths in the body are
   context, not deliveries.
 - Returns the post's `event_id` and per-mention delivery states.
+
+### What a Room `@` does to the target
+
+A structured mention wakes **that Session itself** to consume the
+envelope. It never stands up a stand-in.
+
+- Busy target: the envelope queues and the target reads it when its
+  current Turn ends.
+- Idle target: the wake is resume-only. The Host resumes the target's own
+  runtime; if that Harness cannot resume, the connection is stopped and
+  the envelope simply stays in the target's queue until the target next
+  runs a turn. Nothing is lost and nothing else answers for it.
+
+So a mention that produces no visible reply is usually a Session parked
+on a Harness that cannot resume — queued, not dropped. Give it a turn, or
+reach the operator with `mention_human`, before assuming the post failed.
+Before the 2026-08-20 fix (`fix(collaboration): stop a Room @ of an idle
+Session from creating a phantom`) this path spawned a brand-new Session
+per mention, which answered the envelope in the target's place, ran one
+turn, and could not be stopped through Host Control. If you meet that
+behaviour, the Host is running older code.
 
 ### Room lifecycle (Host Control, on `codeg-mcp`)
 
@@ -152,6 +181,25 @@ One post, no title; the body is the whole post.
   joined.
 - `room.post` no longer exists; the gateway rejects it with a migration
   hint to `post_room`.
+
+**Order of operations.** A Room is built from member Session ids, so the
+Sessions must exist first — which means the `room_id` cannot be in the
+`initial_prompt` of the very Sessions you are about to put in the Room.
+Do not plan around it; there is no id to write yet. Staff first, room
+second, brief third:
+
+1. `session.create` for each member. Skip `initial_prompt` when the Room
+   will carry the task — a first prompt that cannot name the Room only
+   starts a turn the worker has to spend waiting.
+2. `room.create` with those ids (`room.add_member` for anyone added
+   later).
+3. Post the assignment in the Room and `@` the owner of each slice. That
+   post is the brief; it can name the `room_id`, the spec path, and the
+   stop rule, because all three now exist.
+
+Use `initial_prompt` when the job is genuinely mailbox-only or
+self-contained. Otherwise the Room post is the better first instruction.
+Observed 2026-08-20.
 
 ## Host Control gateway (`codeg-mcp`)
 
@@ -181,17 +229,41 @@ before repeating a create.
 - `session.list` / `session.get` — project-scoped metadata (title, agent,
   status, model, message count, archived flag). `session.list` excludes
   you. `session.get` never exposes another Session's transcript.
+  To judge whether a worker is actually running, watch `message_count`
+  across two reads. A growing count is the only cheap proof that turns
+  are being spent. `updated_at` is not: bookkeeping writes bump it
+  without the Session having done anything, so a fresh timestamp beside
+  a flat `message_count` means idle, not busy. Note that the mailbox
+  `list_sessions` returns `updated_at` but no `message_count` — go to
+  Host Control when you need the progress signal. Observed 2026-08-20.
 - `session.rename` — persist a manual title (omit `session_id` to rename
   yourself).
 - `session.create` — the only way to staff a Session. `harness` is
-  required (e.g. `codex`, `claude_code`); `folder_id`/`cwd` outside your
-  own scope are rejected. `title` + `initial_prompt` carry this-run
-  identity — the prompt is a user message, not a system prompt; there is
-  no system-prompt field. `model` and `config_values` are verified against
-  what the Harness advertises. `collection_id` files the new Session on
-  creation; a placement failure keeps the Session. Watch the result
-  `stage` — `created`, `turn_started`, and the failure stages are
-  distinct outcomes.
+  required; `folder_id`/`cwd` outside your own scope are rejected.
+  `title` + `initial_prompt` carry this-run identity — the prompt is a
+  user message, not a system prompt; there is no system-prompt field.
+  `model` and `config_values` are verified against what the Harness
+  advertises. `collection_id` files the new Session on creation; a
+  placement failure keeps the Session. Watch the result `stage` —
+  `created`, `turn_started`, and the failure stages are distinct
+  outcomes.
+
+  **`harness` takes the wire id, not the ACP-registry id.** Codeg keeps
+  two id namespaces for the same agent and `session.create` accepts only
+  the first. Wire ids: `claude_code`, `codex`, `open_code`, `gemini`,
+  `open_claw`, `cline`, `hermes`, `code_buddy`, `kimi_code`, `pi`,
+  `grok`, `cursor`, `deepseek`, `qoder`, and `custom:<id>` for a
+  user-registered ACP agent. The launch-registry ids — `claude-acp`,
+  `codex-acp`, `opencode`, `openclaw-acp`, `codebuddy-code`,
+  `kimi-code`, `pi-acp`, `grok-build`, `deepseek-acp`, `qoder-cli`, and
+  a bare `<id>` for a custom agent — name binary install metadata, not a
+  Harness here; passing one is rejected as `unknown agent type: …`. Only
+  `gemini`, `cline`, `hermes`, and `cursor` spell the same in both
+  namespaces, which is exactly why the mismatch is easy to miss.
+  Do not guess a value from an agent's display name. Read one off a real
+  Session instead: `list_sessions` and Host Control `session.list` both
+  return `agent_type` in this same wire vocabulary. Value lists verified
+  against the code 2026-08-20.
 - `session.cancel_turn` — cancel only the running Turn; the Session and
   runtime survive. Idle targets return an explicit no-op stage. This is
   the brake pedal when instructions change mid-flight — see Delivery
@@ -317,9 +389,26 @@ Settled conventions from the ledger; the pattern context is in
   `session.cancel_turn` on the worker, THEN the amended letter. A letter
   alone races a running turn that never checks its mailbox — the old
   instruction may already be executing.
-- Parallel writers never share one working tree. One worktree or folder
-  per writer; deliverables travel as paths in letters, never as code
-  blocks.
+- Parallel writers never share one working tree. Deliverables travel as
+  paths in letters, never as code blocks. The full isolation drill, one
+  line per rule (each earned from a real collision, 2026-08-20):
+  1. Every worker that will write files creates its own branch and tree
+     with `git worktree add` before touching anything. No exceptions for
+     "just one small edit".
+  2. Never run a writing command inside the coordinator's tree or any
+     other worker's tree. Read-only is fine; writes are not.
+  3. Commit with explicit paths — `git add <path> …`. Never `git add -A`
+     or `git add .`: a stray file from a neighbouring task rides along
+     and nobody notices until review.
+  4. A fresh worktree has no `node_modules`. Run
+     `pnpm install --frozen-lockfile` there before any frontend command,
+     or the failure you report is your own setup, not the code.
+  5. Spell out the absolute path in every command that changes directory.
+     A relative `cd` resolves against whatever tree the shell happens to
+     be in, which is how writes land in the wrong tree.
+  6. Assign one worker per tree in the brief itself (element 4,
+     boundaries — see `patterns-map.md`), so isolation is stated, not
+     assumed.
 - Reply chains cap at depth 4 — past the cap, `expects_reply` silently
   stops attaching. Each new round is a NEW root letter or post that quotes
   the previous round's event id or artifact path.

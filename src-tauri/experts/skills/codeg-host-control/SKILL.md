@@ -32,6 +32,11 @@ the idempotency key outside model-controlled arguments.
   `codeg_help`.
 - `session.get`: read metadata for one persistent Session in the caller's
   current project scope. It does not expose another Session's transcript.
+  Both actions return `message_count` and `updated_at`. To tell whether a
+  Session is actually working — spending turns and tokens — compare
+  `message_count` across two reads. `updated_at` moves on bookkeeping
+  writes as well, so a recent timestamp with an unchanged `message_count`
+  means the Session is idle. Observed 2026-08-20.
 - `session.rename`: persist a manual title. Omit `session_id` to rename the
   token-derived current Session; include it only when the user clearly named a
   different target Session.
@@ -43,6 +48,21 @@ the idempotency key outside model-controlled arguments.
   user message, not a harness system prompt. Do not ask Host Control for a
   system prompt field. When the user wants a team assembled, follow
   `codeg-multi-agent` for who to create and what the first prompt should say.
+  The required `harness` is the **wire id**: `claude_code`, `codex`,
+  `open_code`, `gemini`, `open_claw`, `cline`, `hermes`, `code_buddy`,
+  `kimi_code`, `pi`, `grok`, `cursor`, `deepseek`, `qoder`, or
+  `custom:<id>`. Codeg's other id namespace — the ACP launch-registry ids
+  `claude-acp`, `codex-acp`, `opencode`, `openclaw-acp`, `codebuddy-code`,
+  `kimi-code`, `pi-acp`, `grok-build`, `deepseek-acp`, `qoder-cli`, or a
+  bare custom `<id>` — describes binary installs and is rejected here with
+  `unknown agent type`. The two spell alike for only four agents
+  (`gemini`, `cline`, `hermes`, `cursor`), so never infer one from the
+  other or from a display name: read the `agent_type` of a live Session
+  via `session.list` (or mailbox `list_sessions`), which reports this same
+  wire vocabulary. Value lists verified against the code 2026-08-20.
+  A Room id can never appear in `initial_prompt` — `room.create` needs the
+  Session ids, so the Room is younger than its members. Create the
+  Sessions, create the Room, then brief the team with a Room post.
 - `session.cancel_turn`: cancel only the active Turn and keep the Session/runtime.
 - `session.stop`: stop the managed runtime while preserving Session identity and
   native history for resume.

@@ -9,8 +9,11 @@ structured `@` only.
 ## Participants
 Two or more existing Sessions plus the initiator if not already included.
 Create a Session only when no current Session has the needed harness or
-context. `initial_prompt`: you are in Room N; read before speaking; `@`
-only who must answer; you are not locked to one job.
+context. A newly created member cannot be told "you are in Room N" in its
+`initial_prompt` — the Room is created from the Session ids and has no id
+yet. Create the Sessions, `room.create`, and put the house rules in the
+first Room post instead: read before speaking; `@` only who must answer;
+you are not locked to one job.
 
 No owner. `room.create` membership is equal.
 

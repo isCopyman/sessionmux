@@ -19,8 +19,12 @@ Typical this-run labels (titles only):
 The initiating Session may **be** one of these (often planner) instead of
 creating a fourth Session.
 
-Give each created Session an `initial_prompt` with the job, the Room id
-once it exists, and the stop rule. No system prompt.
+The Room cannot be named in an `initial_prompt`: `room.create` consumes
+the Session ids, so the Room is younger than its members. Create the
+Sessions first (an `initial_prompt` is optional and often better left
+off), then `room.create`, then post the job, the Room-visible plan path
+and the stop rule as a Room post that `@`s the Session that owns it.
+No system prompt.
 
 Delegation template & effort scaling: see `patterns-map.md`.
 

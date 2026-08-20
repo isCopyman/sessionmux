@@ -9,9 +9,12 @@ each other on the ledger. Do not use this to recreate a Multica squad
 ## Participants
 - Hub: usually the Session the human is talking to. Arranges members, posts
   assignments, collects results.
-- Spokes: existing or newly created Sessions. Each `initial_prompt` names
-  **one** slice, the Room, and “reply in the Room by quoting the assignment;
-  `@` the hub when done; do not `@` other spokes unless the hub asked.”
+- Spokes: existing or newly created Sessions. A new spoke's
+  `initial_prompt` cannot name the Room — `room.create` needs the spoke
+  ids first, so the Room does not exist yet. Create the spokes, create the
+  Room, then give each spoke **one** slice in a Room post that `@`s it:
+  “reply in the Room by quoting the assignment; `@` the hub when done; do
+  not `@` other spokes unless the hub asked.”
 
 Titles are this-run labels. A spoke may be a hub in another Room.
 
