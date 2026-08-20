@@ -462,7 +462,13 @@ function containerPrefixEnd(
   }
 }
 
-const remarkPlugins = [
+// Exported as the ONE Markdown pipeline config for the app. A consumer that
+// needs a different `a` renderer cannot go through MessageResponse (which pins
+// `markdownLinkComponents` last, deliberately) — the Room timeline is one, since
+// its mention chips are clickable. Such a consumer renders its own <Streamdown>
+// with these two arrays so it inherits the same sanitize/harden/link rewriting
+// rather than growing a second pipeline.
+export const markdownRemarkPlugins = [
   ...Object.values(defaultRemarkPlugins),
   // Before remarkRewriteFileUriLinks, which reshapes a drive path's url.
   remarkRestoreWindowsPaths,
@@ -473,7 +479,8 @@ const remarkPlugins = [
 // Streamdown's default rehype pipeline strips `codeg://` reference hrefs in
 // sanitization (rendering them as "[blocked]"); re-derive it so they survive to
 // MarkdownLink → ReferenceBadge. See rehype-allow-codeg for the full rationale.
-const rehypePlugins = rehypePluginsAllowingCodeg(defaultRehypePlugins)
+export const markdownRehypePlugins =
+  rehypePluginsAllowingCodeg(defaultRehypePlugins)
 
 function MessageResponseImpl({
   className,
@@ -498,8 +505,8 @@ function MessageResponseImpl({
         className
       )}
       plugins={plugins}
-      remarkPlugins={remarkPlugins}
-      rehypePlugins={rehypePlugins}
+      remarkPlugins={markdownRemarkPlugins}
+      rehypePlugins={markdownRehypePlugins}
       {...props}
       // Merge after spreading props so a caller can still override other
       // elements, but the link icon + safety routing on `a` always wins.

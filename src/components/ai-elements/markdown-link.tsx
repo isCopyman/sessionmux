@@ -35,7 +35,7 @@ type MarkdownLinkProps = ComponentProps<"a"> & {
 }
 
 /** Flatten a markdown link's children to plain text (used as the badge label). */
-function nodeText(children: ReactNode): string {
+export function nodeText(children: ReactNode): string {
   if (typeof children === "string") return children
   if (Array.isArray(children)) {
     return children

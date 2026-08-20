@@ -53,7 +53,6 @@ import {
   RichComposer,
   type RichComposerHandle,
 } from "@/components/chat/composer/rich-composer"
-import { ReferenceBadge } from "@/components/chat/composer/badges/reference-badge"
 import { useComposerMentionLabels } from "@/components/chat/composer/use-composer-mention-labels"
 import type { ReferenceSearch } from "@/components/chat/composer/suggestion/types"
 import type { ReferenceKind } from "@/components/chat/composer/types"
@@ -82,11 +81,11 @@ import {
 } from "@/lib/collaboration-session-mentions"
 import {
   mentionAllFromText,
-  roomMessageBodyParts,
+  roomMessageMarkdown,
   sessionIdsFromAtAliases,
-  type RoomBodyPart,
 } from "@/lib/room-message-body"
 import { buildRoomMentionSearch } from "@/components/rooms/room-mention-search"
+import { RoomPostBody } from "@/components/rooms/room-post-body"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { useCollectionStore } from "@/stores/collection-store"
 import { useConversationRuntimeStore } from "@/stores/conversation-runtime-store"
@@ -193,83 +192,6 @@ function RoomSpeakerAvatar({
         />
       )}
     </span>
-  )
-}
-
-function mentionClassName() {
-  return "rounded-[3px] bg-sky-500/15 px-0.5 font-medium text-sky-800 dark:bg-sky-400/20 dark:text-sky-200"
-}
-
-function RoomMessageBody({
-  parts,
-  onOpenSession,
-}: {
-  parts: RoomBodyPart[]
-  onOpenSession?: (conversationId: number) => void
-}) {
-  return (
-    <p className="whitespace-pre-wrap text-[15px] leading-6 text-foreground">
-      {parts.map((part, index) => {
-        if (part.type === "text") return <span key={index}>{part.value}</span>
-        if (part.type === "reference") {
-          // File/commit references reuse the same inline chip the composer
-          // and the Session transcript use. No badge styling is defined for
-          // any other reference kind yet (the room composer never inserts
-          // one) — read as plain labeled text instead of a dead-end chip.
-          if (part.refType === "file" || part.refType === "commit") {
-            return (
-              <ReferenceBadge
-                key={index}
-                data={{
-                  refType: part.refType,
-                  id: part.uri,
-                  label: part.label,
-                  uri: part.uri,
-                  meta: null,
-                }}
-              />
-            )
-          }
-          return (
-            <span key={index} className={mentionClassName()}>
-              {part.label}
-            </span>
-          )
-        }
-        // Session mentions wear the same badge the Session transcript gives a
-        // `codeg://session/<id>` reference; @all/@human keep the room pill.
-        if (part.kind === "session" && part.conversationId != null) {
-          const badge = (
-            <ReferenceBadge
-              data={{
-                refType: "session",
-                id: String(part.conversationId),
-                label: part.label,
-                uri: `codeg://session/${part.conversationId}`,
-                meta: null,
-              }}
-            />
-          )
-          return onOpenSession ? (
-            <button
-              key={index}
-              type="button"
-              className="cursor-pointer"
-              onClick={() => onOpenSession(part.conversationId!)}
-            >
-              {badge}
-            </button>
-          ) : (
-            <span key={index}>{badge}</span>
-          )
-        }
-        return (
-          <span key={index} className={mentionClassName()}>
-            {part.label}
-          </span>
-        )
-      })}
-    </p>
   )
 }
 
@@ -820,7 +742,7 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
                       new Date(previous.createdAt).getTime()
                   ) < GROUP_MS
                 )
-                const parts = roomMessageBodyParts({
+                const markdown = roomMessageMarkdown({
                   body: event.body,
                   members: detail.members,
                   mentionConversationIds: event.mentionConversationIds,
@@ -913,6 +835,10 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
                             <p className="truncate text-[11px] font-medium text-muted-foreground">
                               {speakerName(quoted)}
                             </p>
+                            {/* Raw body on purpose: the quote is a two-line
+                                locator for the post it points at, not a second
+                                copy of it. Markdown here would grow headings
+                                and code blocks inside a clamped preview. */}
                             <p className="line-clamp-2 text-[12px] text-muted-foreground">
                               {quoted.body}
                             </p>
@@ -930,8 +856,8 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
                           {t("needsReplyBadge")}
                         </span>
                       ) : null}
-                      <RoomMessageBody
-                        parts={parts}
+                      <RoomPostBody
+                        source={markdown}
                         onOpenSession={openSession}
                       />
                     </div>
