@@ -119,3 +119,97 @@ pub async fn lineage_for<C: ConnectionTrait>(
     }
     Ok(lineage)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::service::conversation_service;
+    use crate::db::test_helpers::{fresh_in_memory_db, seed_conversation, seed_folder};
+    use crate::db::AppDatabase;
+    use crate::models::AgentType;
+
+    async fn seed(count: usize) -> (AppDatabase, Vec<i32>) {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/codeg-fork-lineage").await;
+        let mut ids = Vec::with_capacity(count);
+        for _ in 0..count {
+            ids.push(seed_conversation(&db, folder_id, AgentType::ClaudeCode).await);
+        }
+        (db, ids)
+    }
+
+    #[tokio::test]
+    async fn lineage_of_an_unforked_conversation_is_empty() {
+        let (db, ids) = seed(1).await;
+        let lineage = lineage_for(&db.conn, ids[0]).await.expect("lineage");
+        assert_eq!(lineage, ForkLineage::default());
+    }
+
+    #[tokio::test]
+    async fn a_source_can_have_several_forks_and_they_come_back_in_insertion_order() {
+        let (db, ids) = seed(3).await;
+        record_fork_head(&db.conn, ids[0], ids[1])
+            .await
+            .expect("first fork");
+        record_fork_head(&db.conn, ids[0], ids[2])
+            .await
+            .expect("second fork");
+
+        let lineage = lineage_for(&db.conn, ids[0]).await.expect("lineage");
+        assert!(lineage.forked_from.is_empty());
+        let targets: Vec<i32> = lineage
+            .forks
+            .iter()
+            .map(|edge| edge.target_conversation_id)
+            .collect();
+        assert_eq!(targets, vec![ids[1], ids[2]]);
+    }
+
+    #[tokio::test]
+    async fn an_edge_is_hidden_once_its_other_endpoint_is_soft_deleted() {
+        let (db, ids) = seed(2).await;
+        record_fork_head(&db.conn, ids[0], ids[1])
+            .await
+            .expect("fork");
+        conversation_service::soft_delete(&db.conn, ids[1])
+            .await
+            .expect("soft delete the fork");
+
+        // The source no longer advertises a fork that is out of the library…
+        let source = lineage_for(&db.conn, ids[0]).await.expect("source lineage");
+        assert!(
+            source.forks.is_empty(),
+            "a soft-deleted target would be a badge that jumps nowhere"
+        );
+        // …but the row itself survives, so the edge is only filtered, not gone.
+        assert_eq!(
+            fork_relation::Entity::find()
+                .all(&db.conn)
+                .await
+                .expect("read edges")
+                .len(),
+            1,
+            "soft deletion must not cascade the edge away"
+        );
+
+        // Symmetrically, a deleted SOURCE hides the "forked from" direction.
+        let (db, ids) = seed(2).await;
+        record_fork_head(&db.conn, ids[0], ids[1])
+            .await
+            .expect("fork");
+        conversation_service::soft_delete(&db.conn, ids[0])
+            .await
+            .expect("soft delete the source");
+        let target = lineage_for(&db.conn, ids[1]).await.expect("target lineage");
+        assert!(target.forked_from.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_conversation_cannot_fork_from_itself() {
+        let (db, ids) = seed(1).await;
+        let err = record_fork_head(&db.conn, ids[0], ids[0])
+            .await
+            .expect_err("self-fork must be rejected");
+        assert!(matches!(err, DbError::Validation(_)), "got {err:?}");
+    }
+}
