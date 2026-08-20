@@ -46,7 +46,7 @@ SURVEY §6 把切片 2–4 排成了"claude 按消息 fork / codex thread-fork /
 | 包 | 主题 | 负责 Session | 分支 | 交付物 | 状态 |
 |---|---|---|---|---|---|
 | A | 13 家 parser 的消息锚点清点 | 316（grok-4.6） | `wt/fork-anchor-inventory` | `FINDINGS-A-anchor-inventory.zh-CN.md` | 已派工 |
-| B | claude-agent-acp 0.69.0 fork 能力实测 | 317（grok-4.6） | `wt/fork-claude-audit` | `FINDINGS-B-claude-fork-audit.zh-CN.md` | 已派工 |
+| B | claude-agent-acp 0.69.0 fork 能力实测 | 317（grok-4.6） | `wt/fork-claude-audit` | `FINDINGS-B-claude-fork-audit.zh-CN.md` | **已交付、已复核、已合并**（`ba295542` → merge `4fda70a4`） |
 | C | codex-acp 1.4.0 + app-server thread/fork 实测 | 318（grok-4.6） | `wt/fork-codex-audit` | `FINDINGS-C-codex-fork-audit.zh-CN.md` | 已派工 |
 
 协调频道：Room `rm_3d3711fe-d8ae-4ec5-9f55-1d45aba7b2b2`（"fork-rewind 切片2-4 协调"），
@@ -72,6 +72,56 @@ Collection 5「fork-rewind 切片2-4 调研」收纳三个工人会话。
 - 结论不确定就写"未能证实"，**不要猜**。判断题往上交给协调者，不要自己拍板。
 - 同一步骤失败两次就停手，在 Room 里报事实（命令 + 报错原文）并等指令。
 - 合并由协调者串行做，工人不要动别人的分支，不要 rebase/merge 别人的活。
+
+## 包B 结论（协调者已独立复核，2026-08-20）
+
+工人 317 的 5 问全部复现，但**裁决被上调一档**：不是"需上游改动"，而是"今天就能走，
+走的是非文档化旁路"。协调者复核的完整链条（每行都自己重跑过）：
+
+| 事实 | 证据 |
+|---|---|
+| 0.69.0 **仍声明** `sessionCapabilities.fork`，形状是空对象 `{}` | `dist/acp-agent.js:715`（711-718 块内） |
+| ACP `session.fork` 路由到 `unstable_forkSession` | `:6819` → `:756` |
+| 它**不调** SDK `forkSession()`，走 `createSession(..., {resume, forkSession:true})` | `:757-765` |
+| `_meta` 被原样透传进 `createSession` | `:761` |
+| SDK **有**消息级 fork：`forkSession(_sessionId, {upToMessageId})` | `sdk.d.ts:699, 702, 709` |
+| SDK **有**截断式 resume：`resumeSessionAt`（+ 校验参数 `resumeDropsTurn`） | `sdk.d.ts:1843, 1894` |
+| adapter **从不**传这两个（`grep` 零命中） | — |
+| adapter 自己承认在建 messageId→uuid 映射但"Not read yet" | `:2982-2985, 5154` |
+
+**关键旁路（协调者静态追完，工人只标了"未验证"）**：
+
+```
+4817  const options = {
+4821      ...userProvidedOptions,   // = _meta.claudeCode.options ← resumeSessionAt 从这进
+4835-4870 cwd/mcpServers/permissionMode/extraArgs…   // ACP 强控覆盖清单
+4936      ...creationOpts,          // = {resume: 父 id, forkSession: true}
+4938  };
+4952  query({ prompt: input, options })
+```
+
+`resumeSessionAt` / `resumeDropsTurn` **不在** 4835-4870 的覆盖清单里，原样活到 `query()`。
+该通道非野路子：`:748` 显式读 `_meta.claudeCode.options.resume`，`:4942` 注释称其为
+"SDK pass-through"。
+
+**⇒ codeg 不改上游即可试 forkAtMessage**：`session/fork` 带
+`_meta.claudeCode.options.resumeSessionAt = <锚点 uuid>`。
+
+**三颗雷（`sdk.d.ts:1836-1894`），必须进 RFC**：
+
+1. **静默失效**：这对参数 **PRINT/HEADLESS LANE ONLY**。交互式 `claude --resume` 与后台
+   job **忽略它们——加载完整历史，不截断、不报错**。走错 lane = "看起来 fork 成功，实际
+   没截断"。
+2. **拒绝不可重试**：`resumeDropsTurn` 校验失败给 `Resume rejected by --resume-drops-turn:`
+   开头的错误，**确定性失败**，必须映射到 rewind-recovery，禁止退避重试。
+3. **它是 spread 的副产品不是契约**：上游给 `resume*` 加一条覆盖就静默失效。
+
+**锚点形状（改了包 A 的判据）**：`sdk.d.ts:1886-1892` 要求 fork 在
+**"被保留那一轮的最后一条 chain entry"**，不是 assistant 消息 uuid——end-turn 工具会话要取
+`structured_output` 附件，`shouldQuery:false` 的 transcript append 也算 entry，取早了校验器
+**故意拒绝**。已在 Room（`34134260`）通知 316 按此调整判据。
+
+待定（需烧 Anthropic 额度，等用户拍板）：活体验证 codeg 走的是否确为 print lane。
 
 ## Dogfooding 摩擦记录
 
