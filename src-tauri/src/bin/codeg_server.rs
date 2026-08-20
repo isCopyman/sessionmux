@@ -554,16 +554,23 @@ async fn async_main() -> ExitCode {
         tokio::spawn(codeg_lib::work_task::run_task_engine(engine));
     }
 
-    // Label worktree folders registered before aliases were seeded at creation
-    // with the branch they have checked out (mirrors lib.rs setup). Background;
-    // changed folders are broadcast, so a browser that already fetched its
-    // folder list still picks them up.
+    // File already-registered worktree folders under their repository, then
+    // label them with the branch they have checked out (mirrors lib.rs setup).
+    // Background; changed folders are broadcast, so a browser that already
+    // fetched its folder list still picks them up.
     {
         let db = codeg_lib::db::AppDatabase {
             conn: state.db.conn.clone(),
         };
         let emitter = state.emitter.clone();
         tokio::spawn(async move {
+            let placed =
+                codeg_lib::commands::folders::backfill_worktree_folder_parents(&emitter, &db).await;
+            if placed > 0 {
+                tracing::info!(
+                    "[folders] filed {placed} worktree folder(s) under their repository"
+                );
+            }
             let n =
                 codeg_lib::commands::folders::backfill_worktree_folder_aliases(&emitter, &db).await;
             if n > 0 {

@@ -502,18 +502,27 @@ mod tauri_app {
                     });
                 }
 
-                // Label worktree folders registered before aliases were seeded at
-                // creation with the branch they have checked out, so the sidebar
-                // names them by branch rather than by their (long, derived)
-                // directory. Background, non-blocking; changed folders are
-                // broadcast, so a client that already fetched its folder list
-                // still picks them up.
+                // Catch up the two facts a worktree folder registered before
+                // these features existed is missing: the repository it belongs
+                // under, and the branch it holds. Parents first, so a worktree
+                // the user opened by hand is recognised as one and gets labeled
+                // in the same launch rather than the next. Background,
+                // non-blocking; changed folders are broadcast, so a client that
+                // already fetched its folder list still picks them up.
                 {
                     let db = db::AppDatabase {
                         conn: app.state::<db::AppDatabase>().conn.clone(),
                     };
                     let emitter = web::event_bridge::EventEmitter::Tauri(app.handle().clone());
                     tauri::async_runtime::spawn(async move {
+                        let placed =
+                            crate::commands::folders::backfill_worktree_folder_parents(&emitter, &db)
+                                .await;
+                        if placed > 0 {
+                            tracing::info!(
+                                "[folders] filed {placed} worktree folder(s) under their repository"
+                            );
+                        }
                         let n =
                             crate::commands::folders::backfill_worktree_folder_aliases(&emitter, &db)
                                 .await;

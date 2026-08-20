@@ -807,6 +807,70 @@ pub async fn backfill_worktree_folder_aliases(emitter: &EventEmitter, db: &AppDa
     labeled
 }
 
+/// File every already-registered git worktree that is still sitting at top level
+/// under the repository it belongs to — the one-shot startup counterpart of the
+/// inference [`folder_service::add_folder`] now does at open time.
+///
+/// Without it the fix would only ever reach folders opened from here on, leaving
+/// every worktree already in the sidebar rendering as its own Path (and taking
+/// its Rooms and Collections with it). The derivation is the same one the open
+/// path uses, and each write goes through the same never-clobber conditional, so
+/// a folder the worktree flow already placed — or one a concurrent open places
+/// mid-walk — is left alone. A worktree whose directory is gone, or whose
+/// repository is not in the workspace, simply stays top level and is retried
+/// next launch; the retry is a `stat` per folder, not a growing cost, and a
+/// successful placement takes the row off the work list for good.
+///
+/// Folders that are in the workspace when they get placed are broadcast so an
+/// already-loaded sidebar regroups in place. A closed folder is placed just the
+/// same but deliberately NOT broadcast — `folder://changed` Upsert means
+/// "insert-or-replace in the OPEN folder list", so announcing one would put a
+/// folder the user closed back in their sidebar. Whether it is open is re-read
+/// at that moment rather than taken from the work list, since the user can close
+/// one while this walks. Returns how many were placed.
+///
+/// This is a startup task rather than a migration on purpose: no migration in
+/// this schema reads the filesystem, and the answer depends on directories that
+/// may be mounted, moved or absent at the moment the DB is upgraded — a
+/// migration would get one shot at it and bake in whatever it saw, while a
+/// startup pass simply retries.
+pub async fn backfill_worktree_folder_parents(emitter: &EventEmitter, db: &AppDatabase) -> usize {
+    let pending = match folder_service::list_rootless_folders(&db.conn).await {
+        Ok(rows) => rows,
+        Err(e) => {
+            tracing::warn!("[folders] worktree parent backfill could not list folders: {e}");
+            return 0;
+        }
+    };
+
+    let mut placed = 0;
+    for (folder_id, path) in pending {
+        let parent_id = match folder_service::infer_worktree_parent_id(&db.conn, &path).await {
+            Ok(Some(parent_id)) => parent_id,
+            Ok(None) => continue,
+            Err(e) => {
+                tracing::warn!("[folders] worktree parent backfill failed for {folder_id}: {e}");
+                continue;
+            }
+        };
+        match folder_service::seed_folder_parent(&db.conn, folder_id, parent_id).await {
+            Ok(true) => {
+                placed += 1;
+                if let Ok(Some(detail)) =
+                    folder_service::get_open_folder_by_id(&db.conn, folder_id).await
+                {
+                    emit_folder_upsert(emitter, detail);
+                }
+            }
+            Ok(false) => {}
+            Err(e) => {
+                tracing::warn!("[folders] worktree parent backfill failed for {folder_id}: {e}");
+            }
+        }
+    }
+    placed
+}
+
 /// Open a folder into the workspace and announce it so the workspace window
 /// can surface it. Used by the project launcher, which lives in its own
 /// window/tab and can't reach the workspace's React state directly. Emitting
@@ -7606,6 +7670,127 @@ mod tests {
                 .as_deref(),
             Some("Payment rewrite")
         );
+    }
+
+    /// `(tempdir, repo_path, worktree_path)` for a linked worktree that lives
+    /// OUTSIDE its repository — the layout that used to render as two unrelated
+    /// Paths. Only the `.git` pointer is real; the derivation never runs git, so
+    /// nothing has to be initialized. Synthetic rather than
+    /// [`repo_with_worktree`] so both paths are exactly what the test wrote,
+    /// with no symlink resolution between the pointer and the folder row.
+    fn detached_worktree() -> (tempfile::TempDir, String, String) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let repo = dir.path().join("repo");
+        let wt = dir.path().join("checkouts/fork-rewind");
+        std::fs::create_dir_all(repo.join(".git")).expect("mkdir repo/.git");
+        std::fs::create_dir_all(&wt).expect("mkdir worktree");
+        std::fs::write(
+            wt.join(".git"),
+            format!(
+                "gitdir: {}\n",
+                repo.join(".git/worktrees/fork-rewind").display()
+            ),
+        )
+        .expect("write .git pointer");
+        (
+            dir,
+            repo.to_str().expect("utf-8 path").to_string(),
+            wt.to_str().expect("utf-8 path").to_string(),
+        )
+    }
+
+    /// The pointer file git actually writes has to parse — the synthetic ones
+    /// above are only worth as much as this equivalence. Compared through
+    /// [`comparable_path`] because git resolves symlinks on the way in (macOS
+    /// `/var` → `/private/var`) while the tempdir handed us the unresolved form.
+    #[test]
+    fn a_real_worktree_pointer_resolves_to_its_repository() {
+        let (_dir, repo, wt_path) = repo_with_worktree();
+
+        let derived = crate::git_repo::linked_worktree_main_root(Path::new(&wt_path))
+            .expect("a real linked worktree resolves to its repository");
+
+        assert_eq!(
+            comparable_path(&derived.to_string_lossy()),
+            comparable_path(&repo)
+        );
+    }
+
+    /// Worktrees opened before the inference existed keep rendering as their own
+    /// Path forever without this — the whole reason the backfill exists. Opening
+    /// the worktree first is also the real-world order: the user had it in their
+    /// sidebar long before this build.
+    #[tokio::test]
+    async fn backfill_files_an_already_registered_worktree() {
+        let db = fresh_in_memory_db().await;
+        let (_dir, repo, wt_path) = detached_worktree();
+        let wt = open_folder_core(&db, wt_path).await.expect("worktree");
+        assert_eq!(wt.parent_id, None, "its repository was not open yet");
+        let root = open_folder_core(&db, repo).await.expect("root");
+
+        let placed = backfill_worktree_folder_parents(&test_emitter(), &db).await;
+
+        assert_eq!(placed, 1);
+        assert_eq!(
+            get_folder_core(&db, wt.id).await.expect("folder").parent_id,
+            Some(root.id)
+        );
+        assert_eq!(
+            get_folder_core(&db, root.id).await.expect("root").parent_id,
+            None,
+            "the repository itself is nobody's worktree"
+        );
+    }
+
+    /// A second launch must be a no-op, and a folder the worktree flow already
+    /// placed must not be moved onto whatever its pointer names.
+    #[tokio::test]
+    async fn backfill_skips_folders_that_already_have_a_root() {
+        let db = fresh_in_memory_db().await;
+        let (_dir, repo, wt_path) = detached_worktree();
+        open_folder_core(&db, wt_path).await.expect("worktree");
+        open_folder_core(&db, repo).await.expect("root");
+
+        assert_eq!(
+            backfill_worktree_folder_parents(&test_emitter(), &db).await,
+            1
+        );
+        assert_eq!(
+            backfill_worktree_folder_parents(&test_emitter(), &db).await,
+            0,
+            "a second launch changes nothing"
+        );
+    }
+
+    /// A placed folder that is in the workspace has to be announced, or an
+    /// already-loaded sidebar keeps it at top level until the next reload.
+    #[tokio::test]
+    async fn backfill_announces_a_placed_folder_in_the_workspace() {
+        use crate::web::event_bridge::WebEventBroadcaster;
+
+        let db = fresh_in_memory_db().await;
+        let (_dir, repo, wt_path) = detached_worktree();
+        let wt = open_folder_core(&db, wt_path).await.expect("worktree");
+        let root = open_folder_core(&db, repo).await.expect("root");
+
+        let broadcaster = std::sync::Arc::new(WebEventBroadcaster::new());
+        let emitter = EventEmitter::test_web_only(broadcaster.clone());
+        let mut rx = broadcaster.subscribe();
+        backfill_worktree_folder_parents(&emitter, &db).await;
+
+        let mut announced = Vec::new();
+        while let Ok(evt) = rx.try_recv() {
+            if evt.channel == crate::web::event_bridge::FOLDER_CHANGED_EVENT {
+                let p = &*evt.payload;
+                if p["kind"] == "upsert" {
+                    announced.push((
+                        p["folder"]["id"].as_i64().unwrap_or(-1) as i32,
+                        p["folder"]["parent_id"].as_i64().map(|v| v as i32),
+                    ));
+                }
+            }
+        }
+        assert_eq!(announced, vec![(wt.id, Some(root.id))]);
     }
 
     /// A repo with one commit on `main` plus a linked worktree at `<dir>/wt`
