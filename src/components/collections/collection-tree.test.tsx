@@ -1098,6 +1098,103 @@ describe("CollectionTree", () => {
     })
   })
 
+  it("keeps a Room with no Collection and no Path reachable in the tree", async () => {
+    // What `room.create` over MCP used to persist: no Collection, no Path, so
+    // neither the Collection buckets nor any Path's Unclassified group held it.
+    h.rooms.push({
+      id: "rm_orphan",
+      workbenchId: 1,
+      title: "Formation room",
+      createdByConversationId: 102,
+      collectionId: null,
+      rootFolderId: null,
+      memberCount: 2,
+      unreadCount: 0,
+      createdAt: "2026-06-04T00:00:00.000Z",
+      updatedAt: "2026-06-04T00:00:00.000Z",
+    })
+    renderTree(vi.fn(), { showSessions: true })
+
+    // Anchored: the multi-select checkbox is named "Select Formation room",
+    // which a bare /Formation room/ would also match.
+    const row = await screen.findByRole("button", { name: /^Formation room/ })
+    const fallback = document.querySelector("[data-orphan-rooms]")
+    expect(fallback).toBeTruthy()
+    expect(fallback?.contains(row)).toBe(true)
+
+    fireEvent.click(row)
+    await waitFor(() => {
+      expect(h.openRoom).toHaveBeenCalledWith(
+        expect.objectContaining({ id: "rm_orphan" })
+      )
+    })
+  })
+
+  it("also rescues a Room bound to a Path the tree does not render", async () => {
+    h.rooms.push({
+      id: "rm_closed_path",
+      workbenchId: 1,
+      title: "Closed path room",
+      createdByConversationId: 102,
+      collectionId: null,
+      rootFolderId: 404,
+      memberCount: 2,
+      unreadCount: 0,
+      createdAt: "2026-06-04T00:00:00.000Z",
+      updatedAt: "2026-06-04T00:00:00.000Z",
+    })
+    renderTree(vi.fn(), { showSessions: true })
+
+    const row = await screen.findByRole("button", { name: /^Closed path room/ })
+    expect(document.querySelector("[data-orphan-rooms]")?.contains(row)).toBe(
+      true
+    )
+  })
+
+  it("collapses the Path-less Room group without losing the tree", async () => {
+    h.rooms.push({
+      id: "rm_orphan",
+      workbenchId: 1,
+      title: "Formation room",
+      createdByConversationId: 102,
+      collectionId: null,
+      rootFolderId: null,
+      memberCount: 2,
+      unreadCount: 0,
+      createdAt: "2026-06-04T00:00:00.000Z",
+      updatedAt: "2026-06-04T00:00:00.000Z",
+    })
+    const { user } = renderTree(vi.fn(), { showSessions: true })
+    await screen.findByRole("button", { name: /^Formation room/ })
+
+    const header = document
+      .querySelector("[data-orphan-rooms]")
+      ?.querySelector<HTMLElement>('button[aria-label="Collapse collection"]')
+    await user.click(header!)
+
+    expect(screen.queryByRole("button", { name: /^Formation room/ })).toBeNull()
+    expect(document.querySelector("[data-orphan-rooms]")).toBeTruthy()
+  })
+
+  it("leaves a Room on a rendered Path out of the fallback group", async () => {
+    h.rooms.push({
+      id: "rm_path",
+      workbenchId: 1,
+      title: "Path room",
+      createdByConversationId: 102,
+      collectionId: null,
+      rootFolderId: 7,
+      memberCount: 2,
+      unreadCount: 0,
+      createdAt: "2026-06-04T00:00:00.000Z",
+      updatedAt: "2026-06-04T00:00:00.000Z",
+    })
+    renderTree(vi.fn(), { showSessions: true })
+
+    await screen.findByRole("button", { name: /^Path room/ })
+    expect(document.querySelector("[data-orphan-rooms]")).toBeNull()
+  })
+
   it("opens the Collection menu from the expand chevron, not the browser menu", async () => {
     renderTree()
     const expand = screen.getAllByRole("button", {

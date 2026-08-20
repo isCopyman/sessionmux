@@ -114,4 +114,25 @@ describe("visibleCollectionItemKeys", () => {
       })
     ).toEqual([])
   })
+
+  it("emits Path-less Rooms last, after every Path and legacy Collection", () => {
+    expect(
+      visibleCollectionItemKeys({
+        ...baseArgs,
+        expanded: new Set(),
+        orphanRooms: [room("rm_orphan")],
+      })
+    ).toEqual(["session:201", "room:rm_c", "room:rm_orphan"])
+  })
+
+  it("skips Path-less Rooms while their group is collapsed", () => {
+    expect(
+      visibleCollectionItemKeys({
+        ...baseArgs,
+        expanded: new Set(),
+        orphanRooms: [room("rm_orphan")],
+        orphanRoomsCollapsed: true,
+      })
+    ).toEqual(["session:201", "room:rm_c"])
+  })
 })

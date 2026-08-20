@@ -365,6 +365,7 @@ export const CollectionTree = forwardRef<
   const [collapsedUnclassified, setCollapsedUnclassified] = useState<
     Set<number>
   >(new Set())
+  const [orphanRoomsCollapsed, setOrphanRoomsCollapsed] = useState(false)
   const [membershipByConversation, setMembershipByConversation] = useState<
     Map<number, number>
   >(new Map())
@@ -639,6 +640,28 @@ export const CollectionTree = forwardRef<
     }
     return grouped
   }, [catalogRooms, showSessions, sortMode])
+  /** Invariant: an active Room must always be reachable from the sidebar tree.
+   * Every other bucket needs a Collection (`roomsByCollection`) or a canonical
+   * Path the tree actually renders (`roomsByUnclassifiedRoot`, walked once per
+   * entry in `pathRoots`). A Room that satisfies neither — created with no
+   * placement, or bound to a Path that is no longer an open workspace root —
+   * would otherwise exist only in the database. These land in a Path-less
+   * Unclassified group at the tree root, next to the legacy Collections that
+   * own no Path either, where the row's own context menu can file it. */
+  const orphanRooms = useMemo(() => {
+    const rooms: CollaborationRoomSummary[] = []
+    if (!showSessions) return rooms
+    const renderedRoots = new Set(pathRoots.map((root) => root.id))
+    for (const room of catalogRooms) {
+      if (room.collectionId != null) continue
+      if (room.rootFolderId != null && renderedRoots.has(room.rootFolderId)) {
+        continue
+      }
+      rooms.push(room)
+    }
+    rooms.sort((left, right) => compareRoomsForSidebar(left, right, sortMode))
+    return rooms
+  }, [catalogRooms, pathRoots, showSessions, sortMode])
   const rootFolderIdByConversation = useMemo(() => {
     const next = new Map<number, number>()
     for (const conversation of visibleConversations) {
@@ -658,6 +681,8 @@ export const CollectionTree = forwardRef<
         unclassifiedByRoot,
         roomsByCollection,
         roomsByUnclassifiedRoot,
+        orphanRooms,
+        orphanRoomsCollapsed,
         expanded,
         collapsedPaths,
         collapsedUnclassified,
@@ -668,6 +693,8 @@ export const CollectionTree = forwardRef<
       collapsedUnclassified,
       conversationsByCollection,
       expanded,
+      orphanRooms,
+      orphanRoomsCollapsed,
       pathRoots,
       roomsByCollection,
       roomsByUnclassifiedRoot,
@@ -766,6 +793,11 @@ export const CollectionTree = forwardRef<
           (candidate) => candidate.id === activeRoomId
         )
         if (!room) return
+        // A Room in the Path-less fallback group has no Collection and no
+        // rendered Path to expand, so open that group instead.
+        if (orphanRooms.some((candidate) => candidate.id === room.id)) {
+          setOrphanRoomsCollapsed(false)
+        }
         const collection =
           room.collectionId == null
             ? undefined
@@ -2336,6 +2368,59 @@ export const CollectionTree = forwardRef<
     )
   }
 
+  /** The tree-root Unclassified group that guarantees the invariant documented
+   * on `orphanRooms`. It is not a drop target: with no Path behind it there is
+   * nothing a dragged Session could be filed into. The Room rows themselves are
+   * the ordinary ones, and their context menu offers every Collection (no Path
+   * to restrict the list), which is how a Room leaves this group for good. */
+  const renderOrphanRooms = () => {
+    if (orphanRooms.length === 0) return null
+    const isExpanded = !orphanRoomsCollapsed
+    const toggle = () => setOrphanRoomsCollapsed((current) => !current)
+    return (
+      <div data-orphan-rooms="">
+        <div className="group flex h-7 min-w-0 items-center rounded-md pe-1 ps-1 hover:bg-sidebar-accent">
+          <button
+            type="button"
+            className="flex h-6 w-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground"
+            aria-label={isExpanded ? t("collapse") : t("expand")}
+            onClick={toggle}
+          >
+            {isExpanded ? (
+              <ChevronDown className="h-3.5 w-3.5" />
+            ) : (
+              <ChevronRight className="h-3.5 w-3.5 rtl:rotate-180" />
+            )}
+          </button>
+          <button
+            type="button"
+            className="flex h-full min-w-0 flex-1 items-center gap-1.5 text-start text-xs"
+            aria-label={t("unclassified")}
+            onClick={toggle}
+          >
+            <Inbox className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            <span className="truncate">{t("unclassified")}</span>
+            <span className="ms-auto shrink-0 text-[10px] text-muted-foreground">
+              {orphanRooms.length}
+            </span>
+          </button>
+          <Button
+            size="icon-sm"
+            variant="ghost"
+            className="h-6 w-6 shrink-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+            aria-label={t("openInSessionCenter")}
+            onClick={() => onOpenScope("unclassified")}
+          >
+            <MoreHorizontal className="h-3.5 w-3.5" />
+          </Button>
+        </div>
+        {isExpanded
+          ? orphanRooms.map((room) => renderRoom(room, 0, null))
+          : null}
+      </div>
+    )
+  }
+
   const renderPath = (root: (typeof allFolders)[number]) => {
     const isExpanded = !collapsedPaths.has(root.id)
     const sessions = unclassifiedByRoot.get(root.id) ?? []
@@ -2507,6 +2592,7 @@ export const CollectionTree = forwardRef<
               {/* Legacy Collections created before canonical Path ownership was
                 introduced stay reachable instead of silently disappearing. */}
               {renderItems(null, 0, null)}
+              {renderOrphanRooms()}
               {pathRoots.length === 0 && items.length === 0 ? (
                 <button
                   type="button"

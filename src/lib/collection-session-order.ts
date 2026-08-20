@@ -8,8 +8,9 @@ import { roomItemKey, sessionItemKey } from "@/lib/sidebar-item-selection"
 /**
  * Mixed Session/Room visibility order for the Collection tree's multi-select:
  * a top-down walk in which every bucket emits its Sessions and then its Rooms,
- * matching `renderItems` / `renderUnclassified` in collection-tree.tsx. Keys
- * are the prefixed selection keys from `sidebar-item-selection`.
+ * matching `renderItems` / `renderUnclassified` / `renderOrphanRooms` in
+ * collection-tree.tsx. Keys are the prefixed selection keys from
+ * `sidebar-item-selection`.
  */
 export function visibleCollectionItemKeys(args: {
   pathRoots: readonly { id: number }[]
@@ -18,6 +19,10 @@ export function visibleCollectionItemKeys(args: {
   unclassifiedByRoot: Map<number, readonly DbConversationSummary[]>
   roomsByCollection: Map<number, readonly CollaborationRoomSummary[]>
   roomsByUnclassifiedRoot: Map<number, readonly CollaborationRoomSummary[]>
+  /** Rooms with no Collection and no rendered Path, shown in the tree-root
+   * fallback group after every Path and every legacy Collection. */
+  orphanRooms?: readonly CollaborationRoomSummary[]
+  orphanRoomsCollapsed?: boolean
   expanded: ReadonlySet<number>
   collapsedPaths: ReadonlySet<number>
   collapsedUnclassified: ReadonlySet<number>
@@ -55,5 +60,10 @@ export function visibleCollectionItemKeys(args: {
   }
 
   walkCollections(null, null)
+  if (!args.orphanRoomsCollapsed) {
+    for (const room of args.orphanRooms ?? []) {
+      keys.push(roomItemKey(room.id))
+    }
+  }
   return keys
 }

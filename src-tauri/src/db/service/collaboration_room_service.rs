@@ -166,6 +166,31 @@ async fn collection_root_folder<C: ConnectionTrait>(
     Ok((row.try_get("", "id")?, row.try_get("", "root_folder_id")?))
 }
 
+/// Canonical execution Path of a Session: the Folder it runs in, flattened to
+/// the repository root a worktree already points at through `folder.parent_id`
+/// — the same derivation `collection_service` uses to decide which Path owns a
+/// Collection. `chat` scratch folders own no Path (the sidebar tree skips them)
+/// and a soft-deleted Folder is no longer a tree root, so both resolve to
+/// `None`.
+async fn session_root_folder<C: ConnectionTrait>(
+    conn: &C,
+    conversation_id: i32,
+) -> Result<Option<i32>, DbError> {
+    let row = conn
+        .query_one(statement(
+            "SELECT COALESCE(f.parent_id, f.id) AS root_folder_id \
+             FROM conversation c \
+             JOIN folder f ON f.id = c.folder_id \
+             WHERE c.id = ? AND f.kind <> 'chat' AND f.deleted_at IS NULL",
+            vec![conversation_id.into()],
+        ))
+        .await?;
+    match row {
+        Some(row) => Ok(Some(row.try_get::<i32>("", "root_folder_id")?)),
+        None => Ok(None),
+    }
+}
+
 async fn shared_collection_among<C: ConnectionTrait>(
     conn: &C,
     conversation_ids: &[i32],
@@ -203,7 +228,20 @@ async fn resolve_placement<C: ConnectionTrait>(
         let (_, root_folder_id) = collection_root_folder(conn, collection_id).await?;
         return Ok((Some(collection_id), root_folder_id));
     }
-    Ok((None, None))
+    // Last resort, and the reason it exists: a Room with neither a Collection
+    // nor a Path sits in no sidebar bucket at all and is unreachable from the
+    // tree. Agent-created Rooms (`room.create` over MCP / Host Control) pass no
+    // placement and their members rarely share one Collection, so before this
+    // fallback every one of them landed invisible. The Room still does NOT
+    // inherit the creator's Collection — that is a taxonomy choice only the
+    // members can imply — but it does adopt the creator's Path, which is merely
+    // where the Session that opened the Room runs. A creator with no Path
+    // (chat-mode scratch folder) still yields NULL; the sidebar's orphan bucket
+    // catches that remainder.
+    Ok((
+        None,
+        session_root_folder(conn, input.created_by_conversation_id).await?,
+    ))
 }
 
 pub(crate) async fn room_workbench_id<C: ConnectionTrait>(
@@ -2402,8 +2440,10 @@ mod tests {
             "a Room does not inherit Collection from the creator Session alone"
         );
         assert_eq!(
-            not_the_creators_slot.root_folder_id, None,
-            "a Room does not inherit the creator Session folder"
+            not_the_creators_slot.root_folder_id,
+            Some(folder_id),
+            "the Collection is not inherited, but the Path is: a Room with no \
+             Path at all is unreachable from the sidebar tree"
         );
 
         crate::db::service::collection_service::assign_conversations(
@@ -2444,6 +2484,80 @@ mod tests {
         .expect("move room");
         let moved = get(&db.conn, &independent.id).await.unwrap();
         assert_eq!(moved.collection_id, Some(collection.id));
+    }
+
+    #[tokio::test]
+    async fn agent_created_room_adopts_the_creator_path_so_the_sidebar_can_place_it() {
+        // `room.create` over MCP / Host Control passes neither Collection nor
+        // Path, and its members are typically scattered across Paths — exactly
+        // the shape that used to persist a Room no sidebar bucket could hold.
+        let db = fresh_in_memory_db().await;
+        let repo = seed_folder(&db, "/tmp/codeg-room-repo").await;
+        let elsewhere = seed_folder(&db, "/tmp/codeg-room-elsewhere").await;
+        let creator = seed_conversation(&db, repo, AgentType::ClaudeCode).await;
+        let peer = seed_conversation(&db, elsewhere, AgentType::Codex).await;
+
+        let room = make_room(&db, creator, vec![creator, peer]).await;
+
+        assert_eq!(
+            room.collection_id, None,
+            "no Collection is implied when the members share none"
+        );
+        assert_eq!(
+            room.root_folder_id,
+            Some(repo),
+            "the creator's Path is stamped so the Room has a tree bucket"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_worktree_creator_resolves_to_the_repository_root() {
+        let db = fresh_in_memory_db().await;
+        let repo = seed_folder(&db, "/tmp/codeg-room-repo").await;
+        let worktree = seed_folder(&db, "/tmp/codeg-room-repo-wt/feature").await;
+        db.conn
+            .execute(Statement::from_sql_and_values(
+                DbBackend::Sqlite,
+                "UPDATE folder SET parent_id = ? WHERE id = ?",
+                [repo.into(), worktree.into()],
+            ))
+            .await
+            .expect("point the worktree at its repository root");
+        let creator = seed_conversation(&db, worktree, AgentType::ClaudeCode).await;
+        let peer = seed_conversation(&db, repo, AgentType::Codex).await;
+
+        let room = make_room(&db, creator, vec![creator, peer]).await;
+
+        assert_eq!(
+            room.root_folder_id,
+            Some(repo),
+            "a worktree is not its own tree root — the sidebar only renders \
+             canonical Paths"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_creator_with_no_path_leaves_the_room_unplaced_for_the_ui_fallback() {
+        let db = fresh_in_memory_db().await;
+        let scratch = crate::db::service::folder_service::add_chat_folder(
+            &db.conn,
+            "/tmp/codeg-room-chat-scratch",
+        )
+        .await
+        .expect("chat scratch folder")
+        .id;
+        let repo = seed_folder(&db, "/tmp/codeg-room-repo").await;
+        let creator = seed_conversation(&db, scratch, AgentType::ClaudeCode).await;
+        let peer = seed_conversation(&db, repo, AgentType::Codex).await;
+
+        let room = make_room(&db, creator, vec![creator, peer]).await;
+
+        assert_eq!(
+            room.root_folder_id, None,
+            "a chat scratch folder owns no Path; guessing one would file the \
+             Room under a Path it has nothing to do with, so the sidebar's \
+             orphan bucket takes it instead"
+        );
     }
 
     #[tokio::test]
