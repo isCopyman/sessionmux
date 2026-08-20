@@ -93,7 +93,12 @@ export function SessionCommunicationBannerView({
             </span>
           ) : null}
           {inboxAwaiting > 0 ? (
-            <span className="rounded-full bg-amber-500/15 px-1.5 py-px text-[10px] font-semibold text-amber-800 dark:text-amber-300">
+            // Inbound only: these are letters this Session has to answer, not
+            // ones it is waiting on. The hover text says so.
+            <span
+              title={t("needsReplyHint")}
+              className="rounded-full bg-amber-500/15 px-1.5 py-px text-[10px] font-semibold text-amber-800 dark:text-amber-300"
+            >
               {t("awaitingReplyCount", { count: inboxAwaiting })}
             </span>
           ) : null}

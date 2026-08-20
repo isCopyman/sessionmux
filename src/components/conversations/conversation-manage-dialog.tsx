@@ -53,6 +53,12 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
+import {
   Command,
   CommandGroup,
   CommandInput,
@@ -1009,6 +1015,18 @@ function StatusFacetSelect({
 }
 
 /**
+ * Hover text for a reply-debt badge or segment.
+ *
+ * The label on its own ("owes a reply" / "awaiting a reply") is a coin flip:
+ * nothing in it says whether the Session is the one who has to answer or the
+ * one still waiting. The hint spells the direction out, so the pair is
+ * readable without opening the docs.
+ */
+function replyDebtTitle(label: string, hint: string) {
+  return `${label} — ${hint}`
+}
+
+/**
  * A Room among the Session rows.
  *
  * No checkbox, deliberately: every bulk action in the footer — archive, set
@@ -1063,7 +1081,10 @@ function RoomListRow({
         // Amber for "a reply is owed", the same convention the Session rows use.
         <span
           className="shrink-0 rounded-full bg-amber-500/10 px-1.5 py-0.5 text-[10px] tabular-nums text-amber-700 dark:text-amber-400"
-          title={tCollaboration("stateNeedsReply")}
+          title={replyDebtTitle(
+            tCollaboration("stateNeedsReply"),
+            tCollaboration("needsReplyHint")
+          )}
         >
           {needsReply}
         </span>
@@ -1979,6 +2000,9 @@ export function ConversationManageDialog({
       value: CollaborationFilter
       label: string
       count: number
+      // Only the two direction-sensitive segments carry one: "unread" and
+      // "failed" mean the same thing whichever way the mail was going.
+      hint?: string
     }[] = [
       {
         value: "all",
@@ -1994,11 +2018,13 @@ export function ConversationManageDialog({
         value: "needs_reply",
         label: tCollaboration("worklistNeedsReply"),
         count: collaborationOverview.totalNeedsReplyCount,
+        hint: tCollaboration("needsReplyHint"),
       },
       {
         value: "awaiting_reply",
         label: tCollaboration("worklistAwaitingReply"),
         count: collaborationOverview.totalAwaitingReplyCount,
+        hint: tCollaboration("awaitingReplyHint"),
       },
     ]
     if (
@@ -2478,32 +2504,50 @@ export function ConversationManageDialog({
                     setCollaborationFilter(value as CollaborationFilter)
                   }
                 >
-                  <TabsList aria-label={tCollaboration("worklistFilterLabel")}>
-                    {collaborationSegments.map((segment) => (
-                      <TabsTrigger
-                        key={segment.value}
-                        value={segment.value}
-                        className={cn(
-                          segment.value === "failed" &&
-                            "text-destructive data-active:text-destructive"
-                        )}
-                      >
-                        {segment.label}
-                        {segment.count > 0 ? (
-                          <Badge
-                            variant={
-                              segment.value === "failed"
-                                ? "destructive"
-                                : "secondary"
-                            }
-                            className="h-4 min-w-4 px-1 text-[0.625rem] tabular-nums"
+                  <TooltipProvider delayDuration={200}>
+                    <TabsList
+                      aria-label={tCollaboration("worklistFilterLabel")}
+                    >
+                      {collaborationSegments.map((segment) => {
+                        const trigger = (
+                          <TabsTrigger
+                            key={segment.value}
+                            value={segment.value}
+                            className={cn(
+                              segment.value === "failed" &&
+                                "text-destructive data-active:text-destructive"
+                            )}
                           >
-                            {segment.count}
-                          </Badge>
-                        ) : null}
-                      </TabsTrigger>
-                    ))}
-                  </TabsList>
+                            {segment.label}
+                            {segment.count > 0 ? (
+                              <Badge
+                                variant={
+                                  segment.value === "failed"
+                                    ? "destructive"
+                                    : "secondary"
+                                }
+                                className="h-4 min-w-4 px-1 text-[0.625rem] tabular-nums"
+                              >
+                                {segment.count}
+                              </Badge>
+                            ) : null}
+                          </TabsTrigger>
+                        )
+                        // `asChild` keeps the DOM at TabsList > button, so the
+                        // tab's roving focus and accessible name are untouched.
+                        return segment.hint ? (
+                          <Tooltip key={segment.value}>
+                            <TooltipTrigger asChild>{trigger}</TooltipTrigger>
+                            <TooltipContent side="bottom">
+                              {segment.hint}
+                            </TooltipContent>
+                          </Tooltip>
+                        ) : (
+                          trigger
+                        )
+                      })}
+                    </TabsList>
+                  </TooltipProvider>
                 </Tabs>
               </div>
               <Popover
@@ -2822,7 +2866,10 @@ export function ConversationManageDialog({
                               {collaboration.needsReplyCount > 0 ? (
                                 <span
                                   className="rounded-full bg-amber-500/10 px-1.5 py-0.5 text-amber-700 dark:text-amber-400"
-                                  title={tCollaboration("stateNeedsReply")}
+                                  title={replyDebtTitle(
+                                    tCollaboration("stateNeedsReply"),
+                                    tCollaboration("needsReplyHint")
+                                  )}
                                 >
                                   {collaboration.needsReplyCount}
                                 </span>
@@ -2833,7 +2880,10 @@ export function ConversationManageDialog({
                                 // owes it (the title names the direction).
                                 <span
                                   className="rounded-full bg-amber-500/10 px-1.5 py-0.5 text-amber-700 dark:text-amber-400"
-                                  title={tCollaboration("stateAwaitingReply")}
+                                  title={replyDebtTitle(
+                                    tCollaboration("stateAwaitingReply"),
+                                    tCollaboration("awaitingReplyHint")
+                                  )}
                                 >
                                   {collaboration.awaitingReplyCount}
                                 </span>

@@ -231,6 +231,13 @@ vi.mock("@/hooks/use-collaboration-unread-overview", () => ({
   }),
 }))
 
+// Label plus the direction hint, exactly as the badge composes them. Built
+// from the message catalog so a copy edit does not need a test edit too.
+const NEEDS_REPLY_TITLE = [
+  enMessages.Folder.sidebar.needsReply,
+  enMessages.Collaboration.needsReplyHint,
+].join(" — ")
+
 function renderSidebar() {
   return render(
     <NextIntlClientProvider locale="en" messages={enMessages}>
@@ -273,18 +280,23 @@ describe("Sidebar — fixed New chat / Search region", () => {
 
     // Direct mail + Rooms on one badge. The sr-only label rides along so the
     // count is not the badge's whole name for a screen reader.
-    const badge = screen.getByTitle("Needs reply")
-    expect(badge.textContent).toBe("Needs reply5")
+    const badge = screen.getByTitle(NEEDS_REPLY_TITLE)
+    expect(badge.textContent).toBe("Owes a reply5")
+    // The hover text adds the direction — "Owes a reply" alone never says
+    // which side of the exchange is on the hook.
+    expect(badge.getAttribute("title")).toContain(
+      "Someone messaged this session and it has not replied yet."
+    )
     // It hangs off the Session Center row rather than a row of its own.
     expect(badge.parentElement?.textContent).toContain("Session Center")
   })
 
   it("drops the badge, and the standalone row, when nothing is owed", () => {
     renderSidebar()
-    expect(screen.queryByTitle("Needs reply")).toBeNull()
-    // The retired row was a nav button named exactly "Needs reply"; only the
+    expect(screen.queryByTitle(NEEDS_REPLY_TITLE)).toBeNull()
+    // The retired row was a nav button named exactly "Owes a reply"; only the
     // badge may carry that name now, and it is gone at zero.
-    expect(screen.queryByRole("button", { name: "Needs reply" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "Owes a reply" })).toBeNull()
   })
 
   it("opens the Session Center pre-filtered from the badge", async () => {
@@ -292,7 +304,7 @@ describe("Sidebar — fixed New chat / Search region", () => {
     mockState.needsReplyCount = 1
     renderSidebar()
 
-    await user.click(screen.getByTitle("Needs reply"))
+    await user.click(screen.getByTitle(NEEDS_REPLY_TITLE))
     expect(spies.sessionCenterOpen).toBe(true)
     expect(spies.sessionCenterCollabFilter).toBe("needs_reply")
     expect(spies.sessionCenterCollection).toBeNull()
@@ -305,7 +317,7 @@ describe("Sidebar — fixed New chat / Search region", () => {
 
     // A real <button> beside the row's button, not a clickable span inside it:
     // focus + Enter has to reach it.
-    const badge = screen.getByTitle("Needs reply")
+    const badge = screen.getByTitle(NEEDS_REPLY_TITLE)
     act(() => badge.focus())
     await user.keyboard("{Enter}")
     expect(spies.sessionCenterCollabFilter).toBe("needs_reply")

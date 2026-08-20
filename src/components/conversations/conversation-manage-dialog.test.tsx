@@ -439,7 +439,7 @@ describe("ConversationManageDialog", () => {
     const user = renderDialog()
     await screen.findByText("on main")
 
-    const needsReply = screen.getByRole("tab", { name: /Needs reply/ })
+    const needsReply = screen.getByRole("tab", { name: /Owes a reply/ })
     // The count rides in a badge beside the label rather than inside it.
     expect(needsReply.textContent).toContain("1")
     // Nothing has failed, so that segment does not take up a slot at all.
@@ -449,6 +449,30 @@ describe("ConversationManageDialog", () => {
 
     expect(screen.queryByText("on main")).toBeNull()
     expect(screen.getByText("on feature")).toBeTruthy()
+  })
+
+  it("spells out the direction behind each reply-obligation segment", async () => {
+    // "Owes a reply" and "Awaiting a reply" sit side by side, and neither
+    // label says which Session is the one on the hook. Radix renders the
+    // content twice — the visible copy plus a visually-hidden one for screen
+    // readers — so match all of them, and let `findAllByText` wait out the
+    // provider's open delay.
+    const user = renderDialog()
+    await screen.findByText("on main")
+
+    await user.hover(screen.getByRole("tab", { name: /Owes a reply/ }))
+    expect(
+      await screen.findAllByText(
+        "Someone messaged this session and it has not replied yet."
+      )
+    ).not.toHaveLength(0)
+
+    await user.hover(screen.getByRole("tab", { name: /Awaiting a reply/ }))
+    expect(
+      await screen.findAllByText(
+        "This session sent a message and has not been answered yet."
+      )
+    ).not.toHaveLength(0)
   })
 
   it("keeps a segment with nothing behind it, minus the badge", async () => {
@@ -514,7 +538,7 @@ describe("ConversationManageDialog", () => {
     // ...and the segmented control opens on the matching segment, so the view
     // is never narrowed by a filter nothing on screen shows.
     expect(screen.getByRole("tab", { selected: true }).textContent).toContain(
-      "Needs reply"
+      "Owes a reply"
     )
   })
 
@@ -1544,9 +1568,12 @@ describe("ConversationManageDialog", () => {
     ])
     const user = renderDialog()
     await screen.findByText("release war room")
-    expect(screen.getByTitle("Reply required").textContent).toBe("2")
+    // Label plus the direction hint: the badge's hover text has to say which
+    // side owes, so the assertion matches its prefix rather than the whole
+    // sentence.
+    expect(screen.getByTitle(/^Owes a reply —/).textContent).toBe("2")
 
-    await user.click(screen.getByRole("tab", { name: /Needs reply/ }))
+    await user.click(screen.getByRole("tab", { name: /Owes a reply/ }))
 
     expect(screen.getByText("release war room")).toBeTruthy()
     expect(screen.queryByText("quiet room")).toBeNull()

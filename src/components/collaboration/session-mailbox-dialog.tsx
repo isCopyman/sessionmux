@@ -472,7 +472,14 @@ export function SessionMailboxDialog({
               {mailNoReplyNeeded(delivery) ? <SessionMailNoReplyChip /> : null}
               {delivery.obligationState === "awaiting_reply" &&
               status === "unread" ? (
-                <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-800 dark:text-amber-300">
+                // The hover text names the direction: the label alone does not
+                // say whether this Session owes the answer or is owed one.
+                <span
+                  className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] font-medium text-amber-800 dark:text-amber-300"
+                  title={
+                    outbound ? t("awaitingReplyHint") : t("needsReplyHint")
+                  }
+                >
                   {outbound ? t("stateAwaitingReply") : t("stateNeedsReply")}
                 </span>
               ) : null}
@@ -636,6 +643,15 @@ export function SessionMailboxDialog({
                   type="button"
                   role="radio"
                   aria-checked={filter === id}
+                  // Only the reply-obligation chips get a hint; "all" and
+                  // "unread" mean the same thing whichever way mail was going.
+                  title={
+                    id === "needs_reply"
+                      ? t("needsReplyHint")
+                      : id === "awaiting_reply"
+                        ? t("awaitingReplyHint")
+                        : undefined
+                  }
                   className={cn(
                     "rounded-full px-2 py-0.5 text-[10px] font-medium",
                     filter === id
