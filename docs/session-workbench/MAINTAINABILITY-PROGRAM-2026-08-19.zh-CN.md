@@ -1316,3 +1316,13 @@ SURVEY 第 19 行也记过 grok"原生兼容 Claude 生态（skills/plugins/hook
    结果出来后补记。O31 后半（N/M 回复进度）仍排队。
 5. **O34 立项**：会话跨台唯一性/打开即聚焦/工作状态三层可见，裁决全文见
    DOGFOODING-LOG O34；归交互原语批，与 O33 换台 API 同批设计。
+
+（5.16 补记）6. O31 门禁结果：eslint/tsc/build 绿；vitest 全跑 1 失败——
+w-replycopy 预警过的 Radix tooltip 悬停测试（jsdom 无布局，连续悬停两个
+相邻触发器时 Radix 安全区逻辑不放行第二个）。修法：拆成两个各自全新渲染的
+隔离测试（69bde351），该文件 57/57 绿，其余 369 文件本就全绿。
+7. 编队现况：协调者报 **fork/rewind 第三轮全部完工**（三包全核合并、台账
+7a6f0976、没 push 没 tauri build），三工人待命等主线验收；骨架简报已经
+人类通道送达协调者（正在响应），fork/rewind 后续候选（editAndFork 切片等）
+暂停待领导验收第三轮。领导行动队列：验收 wt/fork-rewind 第三轮 → 收编队
+骨架阶段一交付 → 交互原语批设计（O33+O34 同批）。
