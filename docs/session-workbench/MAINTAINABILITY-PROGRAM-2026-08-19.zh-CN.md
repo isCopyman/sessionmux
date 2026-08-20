@@ -1083,3 +1083,16 @@ T2 后置截图（CDP 9222 可用，基线在 .artifacts）+ 晨间验收报告 
   （同文件 connection.rs 防冲突）；codex/gemini 同款列为后续项。
   (b) 会话级切换（composer 旁）：建议只在"官方订阅 vs 已存 provider"间选，
   不开会话级明文 key；属新功能，待 (a) 与在飞项收口后立项，方案已呈用户。
+- 2026-08-20 夜 **摩擦 7/12 两修落地 + 316 误判纠正**：① w-mcptimeout 合并
+  （69e46f44）：新 spawn_budget 模块，session/new 单独预算+按 companion 数
+  伸缩（1→60s、3→100s、墙钟 115s），超时错误点名阶段与进程数。② w-replyack
+  合并（1009576a）：post_room 回报 cleared_reply_to_event_id + open_reply_debt，
+  MCP 文本直说销账结果，skill 同步。唯一门禁破口：工人测试助手与既有
+  ask_post 撞名（E0428），领导改名 debt_ask_post（3aa7e196）。门禁全绿：
+  server 测试 **2573**（+10）、桌面/server/mcp clippy 0、vitest 4708、build 过。
+  两个工人均自检出 worktree 错基底并自救 reset——简报模板生效。③ **领导
+  操作教训**：曾据 message_count/updated_at 冻结误判 316 停摆，进 UI 核实
+  才发现它在 1h39m 长回合里正常干活（协调者摩擦 14 的结论被领导自己现场
+  验证）；唤醒草稿未发出即清除，无干扰。判活只认文件系统信号。④ 重启
+  窗口计划：等包 D 交付+第二轮收口+验收合并后重启 dev，一次激活幽灵修复
+  与两个新修复；届时提前知会用户（会短暂中断其论文会话）。
