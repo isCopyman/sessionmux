@@ -22,6 +22,10 @@ const eslintConfig = defineConfig([
     // `.gitignore` — but flat config has no such default, so without this
     // `pnpm eslint .` fails the repo on files that are not in the repo.
     ".docs/**",
+    // Claude Code drops agent worktrees (full checkouts, sometimes with their
+    // own .next build output) under .claude/ — linting those multiplies the
+    // repo and once pinned `pnpm eslint .` for minutes on generated chunks.
+    ".claude/**",
   ]),
   eslintConfigPrettier,
   eslintPluginPrettierRecommended,
