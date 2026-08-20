@@ -525,7 +525,7 @@ node_modules，摩擦 4），漏了一个 prettier 空行。**这正是"必须�
 | 包 | 主题 | 负责 | 分支 | 状态 |
 |---|---|---|---|---|
 | G | 后端全部（_meta 拼装 / anchor 传透 / fork_at_message 谱系 / 非重试错误映射） | 317 | `wt/fork-at-message-be` | 已回执，进行中 |
-| H | 前端全部（api+tauri 对齐 / 能力门控 / 不重排队错误处理 / types 镜像） | 318 | `wt/fork-at-message-fe` | 已派工 |
+| H | 前端全部（api+tauri 对齐 / 能力门控 / 不重排队错误处理 / types 镜像） | 318 | `wt/fork-at-message-fe` | **已交付、已复核、已合并**（`1913b238` → merge `270b52f7`） |
 | — | 316 本轮轮休（连做两轮 + MCP 全瘫期完成包 D），仅补发包 D 交付帖验证新链路 | 316 | — | **已补发**（`571610ab`），内容与协调者复核逐点一致，新 MCP 链路工人侧实测通 |
 
 协调者保留事项：G 落地后活体验证 `--resume-session-at` 是否真截断（预算受控，工人禁止
@@ -557,3 +557,19 @@ node_modules，摩擦 4），漏了一个 prettier 空行。**这正是"必须�
 - **销账回报有效**：`post_room` 返回体新增 `open_reply_debt` 字段（摩擦 7 的修复落地）。
 - **新 bug（操作员已立项）**：human 在自己创建的 Room 里 `@` 房主会话，会被当成
   自我提及吞掉——操作员 15:06 的开工帖 `@314` 未送达，靠 `read_room` 主动翻到。
+
+
+### 包 H 结论（协调者已复核 + 合并树跑前端门禁，2026-08-20）
+
+契约四点全中：`buildAcpForkArgs` 空 anchor 不带键（head fork payload 与今天同形，注释
+标明回归线）；`tauri.ts` 对齐四参走同一 builder（**RFC §3.4 的两端漂移正式修掉**）；
+门控三条件（panel 级 `claude_code && supportsFork` + turn 级 `provider_anchor` 非空）；
+`ForkAnchorRejectedError` 独立非重试路径，标记串 + code 双识别，TurnBusy 单独提示。
+另修正包 D 的 types 镜像（`?: string | null` → `?: string`，与 `skip_serializing_if`
+线上形状一致），i18n 10 语种 toast 文案自发补齐。
+
+**协调者采纳的一个工人判断**：门控严格取 `agentType === "claude_code"`，不含 Qoder——
+spread 旁路只在 claude-agent-acp 验证过，Qoder 适配器 fork 行为未审。可日后放宽，不留债。
+
+合并树门禁：eslint 0 error / 3 既有 warning；vitest 368 files / 4721 tests 全绿
+（与工人自报一致）；build 静态导出成功；cargo 四条零 Rust diff 可证等价，未重跑。
