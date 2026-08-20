@@ -163,6 +163,18 @@ describe("ReplyArtifacts — inline diff expansion", () => {
     vi.clearAllMocks()
   })
 
+  // Paired del/add rows render intraline word-diff spans, so one diff line's
+  // text may be split across elements. Match the deepest node whose full
+  // textContent is the line.
+  const getDiffLine = (text: string) =>
+    screen.getByText(
+      (_, node) =>
+        node?.textContent === text &&
+        !Array.from(node?.children ?? []).some(
+          (child) => child.textContent === text
+        )
+    )
+
   it("renders no diff rows until the file's toggle is clicked", () => {
     renderCard([changedFile("f1", "src/a.ts", DIFF_A)])
     expandChanged()
@@ -173,8 +185,8 @@ describe("ReplyArtifacts — inline diff expansion", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "showInlineDiff" }))
 
-    expect(screen.getByText("alpha new")).toBeInTheDocument()
-    expect(screen.getByText("alpha old")).toBeInTheDocument()
+    expect(getDiffLine("alpha new")).toBeInTheDocument()
+    expect(getDiffLine("alpha old")).toBeInTheDocument()
   })
 
   it("collapses the panel when the open file's toggle is clicked again", () => {
@@ -182,7 +194,7 @@ describe("ReplyArtifacts — inline diff expansion", () => {
     expandChanged()
 
     fireEvent.click(screen.getByRole("button", { name: "showInlineDiff" }))
-    expect(screen.getByText("alpha new")).toBeInTheDocument()
+    expect(getDiffLine("alpha new")).toBeInTheDocument()
 
     fireEvent.click(screen.getByRole("button", { name: "hideInlineDiff" }))
     expect(screen.queryByText("alpha new")).not.toBeInTheDocument()
@@ -200,13 +212,13 @@ describe("ReplyArtifacts — inline diff expansion", () => {
     })
 
     fireEvent.click(toggleA)
-    expect(screen.getByText("alpha new")).toBeInTheDocument()
+    expect(getDiffLine("alpha new")).toBeInTheDocument()
     expect(screen.queryByText("bravo new")).not.toBeInTheDocument()
 
     fireEvent.click(toggleB)
     // Opening the second file closes the first — one panel at a time.
     expect(screen.queryByText("alpha new")).not.toBeInTheDocument()
-    expect(screen.getByText("bravo new")).toBeInTheDocument()
+    expect(getDiffLine("bravo new")).toBeInTheDocument()
   })
 
   it("disables the toggle when the reply captured no diff for the file", () => {
