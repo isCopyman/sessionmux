@@ -77,18 +77,10 @@ import { extractSessionFilesGrouped } from "@/lib/session-files"
 import { resolveMessageNavPreview } from "@/components/message/message-nav-label"
 import { unescapeComposerText } from "@/lib/composer-copy-text"
 import { canShowForkAtMessage, lastProviderAnchor } from "@/lib/fork-anchor"
-import { useStickToBottomContext } from "use-stick-to-bottom"
 import { ConversationFindBar } from "@/components/message/conversation-find-bar"
-import {
-  findConversationMatches,
-  nextConversationMatchIndex,
-  type ConversationFindEntry,
-} from "@/lib/conversation-find"
-import {
-  applyConversationFindHighlights,
-  revealConversationFindRange,
-  clearConversationFindHighlights,
-} from "@/lib/conversation-find-highlight"
+import { TranscriptStickToBottom } from "@/components/transcript/transcript-stick-to-bottom"
+import { useTranscriptFind } from "@/components/transcript/use-transcript-find"
+import { useTranscriptInfiniteScroll } from "@/components/transcript/use-transcript-infinite-scroll"
 import {
   CollaborationMessageCard,
   SessionMailFromBadge,
@@ -983,23 +975,7 @@ const AutoScrollOnSend = memo(function AutoScrollOnSend({
 }: {
   signal: number
 }) {
-  const { scrollToBottom } = useStickToBottomContext()
-  const lastSignalRef = useRef(signal)
-
-  useEffect(() => {
-    if (signal === lastSignalRef.current) return
-    lastSignalRef.current = signal
-
-    scrollToBottom()
-    const rafId = requestAnimationFrame(() => {
-      scrollToBottom()
-    })
-    return () => {
-      cancelAnimationFrame(rafId)
-    }
-  }, [scrollToBottom, signal])
-
-  return null
+  return <TranscriptStickToBottom autoScrollSignal={signal} />
 })
 
 export function MessageListView({
@@ -1346,14 +1322,12 @@ export function MessageListView({
     consumeLetterFocus,
     markLetterFocused,
   ])
-  const pendingFindScrollMatchIdRef = useRef<string | null>(null)
-
   // --- Find in this Session ---------------------------------------------------
   // Search semantic message text across the loaded transcript, then page older
   // history while a non-empty query is active so the final count covers the
   // complete native Session rather than only the initial tail window.
-  const findEntries = useMemo<ConversationFindEntry[]>(() => {
-    const entries: ConversationFindEntry[] = []
+  const findEntries = useMemo(() => {
+    const entries: { key: string; index: number; text: string }[] = []
     for (let threadIndex = 0; threadIndex < threadItems.length; threadIndex++) {
       const item = threadItems[threadIndex]
       if (
@@ -1366,180 +1340,33 @@ export function MessageListView({
       const text =
         item.group.role === "user" ? unescapeComposerText(rawText) : rawText
       if (!text) continue
-      entries.push({ itemKey: item.key, threadIndex, text })
+      entries.push({ key: item.key, index: threadIndex, text })
     }
     return entries
   }, [threadItems])
-  const [findOpen, setFindOpen] = useState(false)
-  const [findQuery, setFindQuery] = useState("")
-  const [findFocusToken, setFindFocusToken] = useState(0)
-  const [activeFindMatchId, setActiveFindMatchId] = useState<string | null>(
-    null
-  )
-  const findMatches = useMemo(
-    () => (findOpen ? findConversationMatches(findEntries, findQuery) : []),
-    [findEntries, findOpen, findQuery]
-  )
-  const activeFindMatchIndex = activeFindMatchId
-    ? findMatches.findIndex((match) => match.id === activeFindMatchId)
-    : -1
-  const currentFindMatchIndex =
-    activeFindMatchIndex >= 0
-      ? activeFindMatchIndex
-      : findMatches.length > 0
-        ? 0
-        : -1
-  const activeFindMatch =
-    currentFindMatchIndex >= 0
-      ? findMatches[currentFindMatchIndex]
-      : (findMatches[0] ?? null)
-  const selectedFindMatchId = activeFindMatch?.id ?? null
-  const selectedFindThreadIndex = activeFindMatch?.threadIndex ?? null
-  const searchingOlderHistory =
-    findOpen && findQuery.length > 0 && (hasOlderTurns || loadingOlderTurns)
-
-  useEffect(() => {
-    if (
-      !isActive ||
-      !findOpen ||
-      findQuery.length === 0 ||
-      !hasOlderTurns ||
-      loadingOlderTurns
-    ) {
-      return
-    }
-    loadOlderTurns(conversationId)
-  }, [
-    conversationId,
-    findOpen,
-    findQuery,
-    hasOlderTurns,
-    isActive,
-    loadOlderTurns,
-    loadingOlderTurns,
-  ])
-
-  const openFind = useCallback(() => {
-    setFindOpen(true)
-    setFindFocusToken((token) => token + 1)
-  }, [])
-  const closeFind = useCallback(() => {
-    pendingFindScrollMatchIdRef.current = null
-    setFindOpen(false)
-    setFindQuery("")
-    setActiveFindMatchId(null)
-  }, [])
-  const handleFindQueryChange = useCallback((query: string) => {
-    pendingFindScrollMatchIdRef.current = null
-    setFindQuery(query)
-    setActiveFindMatchId(null)
-  }, [])
-  const moveFindMatch = useCallback(
-    (direction: 1 | -1) => {
-      const nextIndex = nextConversationMatchIndex(
-        currentFindMatchIndex,
-        findMatches.length,
-        direction
-      )
-      if (nextIndex >= 0) setActiveFindMatchId(findMatches[nextIndex].id)
+  const handleFindScrollToIndex = useCallback(
+    (
+      index: number,
+      opts?: { align?: "start" | "center" | "end" | "nearest" }
+    ) => {
+      scrollApiRef.current?.scrollToIndex(index, opts)
     },
-    [currentFindMatchIndex, findMatches]
+    []
   )
-  const handleNextFindMatch = useCallback(
-    () => moveFindMatch(1),
-    [moveFindMatch]
-  )
-  const handlePreviousFindMatch = useCallback(
-    () => moveFindMatch(-1),
-    [moveFindMatch]
-  )
-
-  useEffect(() => {
-    if (!isActive || !showMessageNav) return
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (
-        event.altKey ||
-        (!event.ctrlKey && !event.metaKey) ||
-        event.key.toLocaleLowerCase() !== "f"
-      ) {
-        return
-      }
-      const target = event.target as HTMLElement | null
-      // Preserve native find inside an embedded code editor/browser. The
-      // composer is intentionally not excluded: Ctrl/Cmd+F there means
-      // "find in the active Session", matching chat/workbench applications.
-      if (target?.closest(".monaco-editor, iframe, [data-native-find-scope]")) {
-        return
-      }
-      event.preventDefault()
-      event.stopPropagation()
-      openFind()
-    }
-    window.addEventListener("keydown", handleKeyDown, true)
-    return () => window.removeEventListener("keydown", handleKeyDown, true)
-  }, [isActive, openFind, showMessageNav])
-
-  useEffect(() => {
-    if (
-      !findOpen ||
-      selectedFindMatchId === null ||
-      selectedFindThreadIndex === null
-    ) {
-      pendingFindScrollMatchIdRef.current = null
-      return
-    }
-    pendingFindScrollMatchIdRef.current = selectedFindMatchId
-    const targetRow = messageListRootRef.current?.querySelector(
-      `[data-virtual-item-index="${selectedFindThreadIndex}"]`
-    )
-    // Off-screen rows do not exist in the DOM yet. Mount the target row first;
-    // the highlight pass below then performs the precise text-level centering.
-    if (!targetRow) {
-      scrollApiRef.current?.scrollToIndex(selectedFindThreadIndex, {
-        align: "center",
-      })
-    }
-  }, [findOpen, selectedFindMatchId, selectedFindThreadIndex])
-
-  useEffect(() => {
-    const root = messageListRootRef.current
-    if (!root || !isActive || !findOpen || findQuery.length === 0) {
-      clearConversationFindHighlights(root)
-      return
-    }
-    let rafId = 0
-    const paint = () => {
-      rafId = 0
-      const currentRange = applyConversationFindHighlights(
-        root,
-        findQuery,
-        activeFindMatch
-      )
-      if (
-        currentRange &&
-        activeFindMatch &&
-        pendingFindScrollMatchIdRef.current === activeFindMatch.id &&
-        revealConversationFindRange(root, currentRange)
-      ) {
-        pendingFindScrollMatchIdRef.current = null
-      }
-    }
-    const schedulePaint = () => {
-      if (rafId) cancelAnimationFrame(rafId)
-      rafId = requestAnimationFrame(paint)
-    }
-    schedulePaint()
-    const observer = new MutationObserver(schedulePaint)
-    observer.observe(root, { childList: true, subtree: true })
-    const viewport = root.querySelector<HTMLElement>(".scrollbar-thin")
-    viewport?.addEventListener("scroll", schedulePaint, { passive: true })
-    return () => {
-      if (rafId) cancelAnimationFrame(rafId)
-      observer.disconnect()
-      viewport?.removeEventListener("scroll", schedulePaint)
-      clearConversationFindHighlights(root)
-    }
-  }, [activeFindMatch, findOpen, findQuery, isActive, threadItems])
+  const find = useTranscriptFind({
+    entries: findEntries,
+    isActive: isActive && showMessageNav,
+    rootRef: messageListRootRef,
+    scrollToIndex: handleFindScrollToIndex,
+  })
+  const infiniteScroll = useTranscriptInfiniteScroll({
+    hasOlder: hasOlderTurns,
+    isLoading: loadingOlderTurns,
+    onLoadOlder: handleLoadOlder,
+    isActive,
+    findOpen: find.open,
+    findQuery: find.query,
+  })
 
   // Collapse state is owned here (not in the panel) so the expensive per-file
   // `navEntries` is computed only while the panel is open.
@@ -1709,17 +1536,17 @@ export function MessageListView({
         ref={messageListRootRef}
         className="relative flex h-full min-h-0 flex-col"
       >
-        {findOpen && (
+        {find.open && (
           <ConversationFindBar
-            query={findQuery}
-            current={activeFindMatch ? currentFindMatchIndex + 1 : 0}
-            total={findMatches.length}
-            searching={searchingOlderHistory}
-            focusToken={findFocusToken}
-            onQueryChange={handleFindQueryChange}
-            onNext={handleNextFindMatch}
-            onPrevious={handlePreviousFindMatch}
-            onClose={closeFind}
+            query={find.query}
+            current={find.current}
+            total={find.total}
+            searching={infiniteScroll.searchingOlderHistory}
+            focusToken={find.focusToken}
+            onQueryChange={find.onQueryChange}
+            onNext={find.onNext}
+            onPrevious={find.onPrevious}
+            onClose={find.onClose}
           />
         )}
         <MessageThread
@@ -1734,9 +1561,9 @@ export function MessageListView({
             renderItem={renderThreadItem}
             emptyState={emptyState}
             scrollApiRef={scrollApiRef}
-            hasOlder={hasOlderTurns}
-            isLoadingOlder={loadingOlderTurns}
-            onLoadOlder={handleLoadOlder}
+            hasOlder={infiniteScroll.hasOlder}
+            isLoadingOlder={infiniteScroll.isLoading}
+            onLoadOlder={infiniteScroll.onLoadOlder}
             loadOlderLabel={t("loadEarlier")}
             loadingOlderLabel={t("loadingEarlier")}
             prependEpoch={session?.olderTurnsPrependEpoch ?? 0}
