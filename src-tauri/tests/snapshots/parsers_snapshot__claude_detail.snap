@@ -26,7 +26,8 @@ expression: detail
         }
       ],
       "timestamp": "[ts]",
-      "completed_at": "[ts]"
+      "completed_at": "[ts]",
+      "provider_anchor": "u1"
     },
     {
       "id": "turn-1",
@@ -46,7 +47,8 @@ expression: detail
       },
       "duration_ms": 2000,
       "model": "claude-sonnet-4-6",
-      "completed_at": "[ts]"
+      "completed_at": "[ts]",
+      "provider_anchor": "a1"
     }
   ],
   "session_stats": {
