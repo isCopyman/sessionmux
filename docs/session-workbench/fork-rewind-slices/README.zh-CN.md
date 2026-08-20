@@ -45,7 +45,7 @@ SURVEY §6 把切片 2–4 排成了"claude 按消息 fork / codex thread-fork /
 
 | 包 | 主题 | 负责 Session | 分支 | 交付物 | 状态 |
 |---|---|---|---|---|---|
-| A | 13 家 parser 的消息锚点清点 | 316（grok-4.6） | `wt/fork-anchor-inventory` | `FINDINGS-A-anchor-inventory.zh-CN.md` | 已派工 |
+| A | parser 消息锚点清点（**14 家**，规格误写 13） | 316（grok-4.6） | `wt/fork-anchor-inventory` | `FINDINGS-A-anchor-inventory.zh-CN.md` | **已交付、已复核、已合并**（`72f20056` + `08693dbc` → merge `e7d53095`） |
 | B | claude-agent-acp 0.69.0 fork 能力实测 | 317（grok-4.6） | `wt/fork-claude-audit` | `FINDINGS-B-claude-fork-audit.zh-CN.md` | **已交付、已复核、已合并**（`ba295542` → merge `4fda70a4`） |
 | C | codex-acp 1.4.0 + app-server thread/fork 实测 | 318（grok-4.6） | `wt/fork-codex-audit` | `FINDINGS-C-codex-fork-audit.zh-CN.md` | **已交付、已复核、已合并**（`dcc1c134` → merge `f15ce475`） |
 
@@ -149,6 +149,43 @@ Collection 5「fork-rewind 切片2-4 调研」收纳三个工人会话。
    文件）。codex 侧 rewind 搁置。
 3. `forkedFromId` 谱系记下但本轮不做——切片 1 的 `fork_relation` 表正好能装，等导入侧动。
 
+## 包A 结论（协调者已独立复核，2026-08-20）
+
+**工人挑出了规格的错，已认领**：`ALL_PARSER_AGENTS` 是 `[AgentType; 14]`
+（`import_service.rs:27-42`），规格误写"13 家"、误引行号 `:26-58`，漏的是 **Qoder**。
+
+三档（口径：原生文件有无非位置逐条锚，不论今天是否投影）：
+
+- **档1 已有稳定原生锚（9 家）**：ClaudeCode、Qoder、OpenCode、OpenClaw、Hermes、
+  Gemini、Pi、DeepSeek、Cursor
+- **档2 有 id 但不稳定/不覆盖全部消息（4 家）**：KimiCode、Grok、Codex、CodeBuddy
+- **档3 完全没有（1 家）**：Cline
+
+**核心结论（改变了工作量量级）**：问题不是"大家都没锚点"，而是
+**"有的家读了再扔、有的家文件里就有却根本不读"**。Claude/OpenCode/OpenClaw/Gemini/
+Hermes/Qoder 已把原生 id 写进 `UnifiedMessage.id`，但 `group_into_turns` **无例外**改写成
+`turn-{n}`，详情页只见得到后者。Pi 每条 JSONL 都带 `id`/`parentId`（`pi.rs:71-73` 模块
+注释自述）却只产 `turn-{n}`（`:695/707/745`）；DeepSeek 同理（`:524/722`）；Cursor 把
+turn blob id 读进 `turn_blob_ids` 又写成 `cursor-turn-{i}`（`:1080`）。
+
+⇒ SURVEY §5「codeg 没持久化任何 provider anchor」**对外部 turn 层成立，对 parser 内部
+消息层与原生文件不成立**。锚点采集从"造轮子"降级成"别扔"。
+
+**协调者复核额外确认的两处代码事实**：
+
+1. claude turn 合成不止 `:2585`，是 **2551 / 2585 / 2597** 三处（规格只引了一处）。
+2. **`acp/manager.rs:61-62` 的注释是错的**：它宣称 `turn-<digits>` 是"every parser
+   assigns via `format!(\"turn-{}\", n)`"，但 `cline.rs:285` 用
+   `{conversation_id}-{turn_counter}`，`cursor.rs:1080` 用 `cursor-turn-{i}`。
+   该注释服务于一段**安全用途**逻辑（挡客户端伪造 `message_id` 撞持久化 turn id）。
+   **注释错已确认；是否构成可利用缺口需另开评估**，本轮不下结论。
+
+**§补（工人响应协调者的轮末 chain entry 约束后追加）**：单独标出"拿得到 assistant uuid
+但不够当 `resumeSessionAt` 锚"的两家——ClaudeCode（tool_result uuid 进了消息层
+`claude.rs:1491` 但被 `group_into_turns` `:2565-2574` 吞掉；`structured_output` 类附件在
+`:1551-1590` 整行丢弃）与 Qoder（同形，走同一份 `group_into_turns`）。
+`shouldQuery:false` 裸 user append：parser 零读取该字段，真实落盘形态**未能证实**。
+
 ## 两个包合看：一个没预料到的不对称（本轮真正的产出）
 
 | | claude-agent-acp 0.69.0 | codex-acp 1.4.0 |
@@ -203,6 +240,22 @@ event `e199466b`）。摘要：
    反欠工人一笔——而协调者不回复核意见并不会阻塞任何人。needs_reply 队列混进了无人被
    阻塞的条目。不是 bug 是 playbook 缺一句：**工人交付帖应设 `expects_reply=false`**。
    下一轮规格明写。
+
+第四批（event `d8f42101`，一次真实事故）：
+
+9. **工人会话的 cwd 就是协调者的 worktree，"各用各的树"是纪律而非机制。**
+   合并包 A 时报 `CONFLICT (add/add)`——工人 316 的交付物同时落在协调者树里，被
+   `git add -A` 误扫进 `8467a2f8`。根因：`session.create` 只接受 caller 的 cwd，
+   建出的工人 cwd 全是协调者的树；它们各建了自己的 worktree，但**原始 cwd 没变**，
+   任何不带路径的写操作都会落回协调者树。放大器是协调者用了 `git add -A`。
+   **本次损失为零**（取工人分支版本，内容无损；审计 5 个 commit 只此一处漏网），
+   但两个工人同时写不同文件时 `git add -A` 会把它们搅进一个 commit。
+   建议：① `session.create` 支持 `cwd` 指向同仓 worktree（根治）；② 否则 playbook 写死
+   "工人 initial_prompt 必须含显式 `cd`，协调者禁止 `git add -A`"——现有 skill 只说
+   "别共用一棵树"，**没点破共享的其实是初始 cwd**。
+
+摩擦 7 精确化：消未读需要 `read_room` 的**窗口覆盖到那条 delivery**。首次用 `limit=3`
+没盖住，催办照来；`limit=12` 才消。即要先知道它在时间线上多深再挑窗口大小。
 
 观察但未验证：`session.create` 回显 cwd 带 `\\?\` Windows 扩展长度前缀。
 
