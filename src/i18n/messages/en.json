@@ -5351,6 +5351,8 @@
     "createSubmit": "Create room",
     "createNeedTwo": "Select at least two Sessions to create a room",
     "createNoCandidates": "No Sessions available.",
-    "createFailed": "Could not create the room: {message}"
+    "createFailed": "Could not create the room: {message}",
+    "dateToday": "Today",
+    "dateYesterday": "Yesterday"
   }
 }

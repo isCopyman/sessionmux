@@ -5351,6 +5351,8 @@
     "createSubmit": "إنشاء",
     "createNeedTwo": "اختر جلستين على الأقل لإنشاء غرفة",
     "createNoCandidates": "لا توجد جلسات متاحة.",
-    "createFailed": "تعذر إنشاء الغرفة: {message}"
+    "createFailed": "تعذر إنشاء الغرفة: {message}",
+    "dateToday": "اليوم",
+    "dateYesterday": "أمس"
   }
 }

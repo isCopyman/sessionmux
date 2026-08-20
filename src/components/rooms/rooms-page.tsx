@@ -734,10 +734,15 @@ export function RoomWorkspace({
           const ms = new Date(event.createdAt).getTime()
           return Number.isFinite(ms) ? ms : null
         },
-        (timeMs) => formatTranscriptDayLabel(timeMs, { locale }),
+        (timeMs) =>
+          formatTranscriptDayLabel(timeMs, {
+            locale,
+            todayLabel: t("dateToday"),
+            yesterdayLabel: t("dateYesterday"),
+          }),
         { timeZone: "local" }
       ),
-    [events, locale]
+    [events, locale, t]
   )
   datedEntriesRef.current = datedEntries
 

@@ -5351,6 +5351,8 @@
     "createSubmit": "Crear sala",
     "createNeedTwo": "Selecciona al menos dos Sessions para crear una sala",
     "createNoCandidates": "No hay Sessions disponibles.",
-    "createFailed": "No se pudo crear la sala: {message}"
+    "createFailed": "No se pudo crear la sala: {message}",
+    "dateToday": "Hoy",
+    "dateYesterday": "Ayer"
   }
 }

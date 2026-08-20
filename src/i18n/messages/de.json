@@ -5351,6 +5351,8 @@
     "createSubmit": "Erstellen",
     "createNeedTwo": "Wähle mindestens zwei Sessions, um einen Raum zu erstellen",
     "createNoCandidates": "Keine Sessions verfügbar.",
-    "createFailed": "Raum konnte nicht erstellt werden: {message}"
+    "createFailed": "Raum konnte nicht erstellt werden: {message}",
+    "dateToday": "Heute",
+    "dateYesterday": "Gestern"
   }
 }
