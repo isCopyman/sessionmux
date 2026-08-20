@@ -433,6 +433,17 @@ event `e199466b`）。摘要：
     结论：在 `session.create` 能把工人放进隔离 cwd 之前（摩擦 9 的根治建议），
     **显式 `git add <路径>` 是协调者唯一可靠的防线**，必须写进任何 hub-and-spoke playbook。
 
+14. **`updated_at` 判断工人活跃度，两个方向都不可靠。**
+    - 方向一（虚高）：幽灵会话 320/321/322 已停跑，`message_count` 恒为 2，
+      `updated_at` 却持续推进 —— 协调者据此误报"还在烧钱"，后经 `message_count` 更正。
+    - 方向二（虚低）：包 D 工人 316 的 `session.get` 显示 `updated_at` 停在 09:45:12
+      （派工送达那一刻）、`status: in_progress` 一小时未动，协调者据此怀疑它卡死；
+      但其 worktree 里 `claude.rs` 在**1 分钟前**、临时脚本在**15 秒前**刚被修改 ——
+      它一直在全速干活。
+    **⇒ 对协调者而言，唯一可靠的工人存活信号是文件系统（worktree 内 mtime 与
+    `git status`），不是 codeg 的会话元数据。** 差点因此错误介入一个正常工作的工人
+    （lead-executor playbook 的 take-over 协议若照 `updated_at` 触发就会误伤）。
+
 观察但未验证：`session.create` 回显 cwd 带 `\\?\` Windows 扩展长度前缀。
 
 摩擦 5/6 绕法复查：`session.rename` 锁定的标题（316）至今未被覆盖；补 pin 的三个会话
