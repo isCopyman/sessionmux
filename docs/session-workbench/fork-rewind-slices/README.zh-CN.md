@@ -88,7 +88,23 @@ event `e199466b`）。摘要：
 4. 新 worktree 没有 node_modules，前端门禁直接 `MODULE_NOT_FOUND`，需先
    `pnpm install --frozen-lockfile`。**第二轮派编码包时必须写进规格。**
 
+第二批（event `cdee7b65`，两条都已定位代码根因）：
+
+5. **`session.create` 的 `title` 不锁定，会被 harness 自动改名覆盖。**
+   根因：`host_control_session.rs:635` → `conversation_service.rs:95`
+   `title_locked: Set(false)`，而 `refresh_auto_title`（`:243`）的过滤条件正是
+   `TitleLocked.eq(false)`。天然对照：316 用 `session.rename` 起名（锁定）没被覆盖，
+   317/318 用 `session.create` 的 title 起名，90 秒内双双被 harness 改名。
+   绕法：创建后立刻补一次 `session.rename`。
+6. **`session.create` 的 `model` 只作用于当前运行时，不落 pin。**
+   `get_selectors` 显示 `current: grok-4.6` 但 `pinned: null`，运行时重启会回落到用户
+   默认值。另有读取面不一致：`session.list` / `list_sessions` 的 `model` 都是 null。
+   处置：已对 316/317/318 补 `set_selectors`，三个都 `pinned: grok-4.6`。
+
 观察但未验证：`session.create` 回显 cwd 带 `\\?\` Windows 扩展长度前缀。
+
+注：摩擦 5 的 `title_locked` 正是切片 1 里 fork 给 C2 打 `[Fork]` 前缀所依赖的字段
+（`acp/manager.rs:2221`）。fork 那条路径显式锁了标题，是对的；`session.create` 漏了。
 
 ## 时间线
 
