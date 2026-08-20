@@ -1147,3 +1147,17 @@ T2 后置截图（CDP 9222 可用，基线在 .artifacts）+ 晨间验收报告 
   **UI 交互契约清扫**（在飞项落地后）：对象×手势矩阵成文 + 按家族批量修
   （Room 归属可见性 O21/O23、手势契约 O17/O19/O22、面板布局 O20、渲染
   一致性 O18），不再逐点排队。w-roommd 在飞。
+- 2026-08-21 凌晨 **w-roommd 落地 + 竞品裁决 + 门禁工艺修正**：① w-roommd
+  合并（01744e96）：Room 帖 markdown 渲染，走会话同一条 Streamdown 管线
+  （安全插件全套），提及芯片经"掩码→重序列化为 codeg:// 链接→a 覆盖"
+  保留可点语义；工人自证既有徽章惰性、@all/@human 非 reference，方案
+  据此成立。首跑 2 个**工人自己的新测试**失败（选择器找 strong 标签，
+  Streamdown 实际渲染 span[data-streamdown=strong]），领导修正
+  （becc9518）后全绿：vitest **4733**（369 文件全过）、eslint 0 错、
+  build 过；既有 rooms-page 27 用例（工人标记的最大风险）原样通过。
+  CDP 实测 HMR 生效（36 帖/671 行内代码/27 芯片）。② **门禁工艺教训**：
+  之前 battery 用 `cmd | tail -N` 记录，exit code 被 tail 吞、失败名被
+  截——本次靠读 summary 行才抓到 2 fail。今后门禁一律全量落盘后 grep，
+  exit code 单独 echo。③ O24 竞品取证裁决入档（openagents 内联工具调用
+  是"线程即 agent 唯一界面"的被迫选择；Multica/Buzz 都把工具调用放
+  drill-in 面板、聊天流保持干净；codeg 同构后者——不内联，做成员活动桥）。
