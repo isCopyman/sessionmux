@@ -976,4 +976,91 @@ describe("RoomWorkspace", () => {
     expect(screen.getByTitle("/repo/research")).toBeTruthy()
     expect(screen.queryByText("No bound folder")).toBeNull()
   })
+
+  it("shows how many of the asked Sessions have answered", async () => {
+    api.getCollaborationRoomTimeline.mockResolvedValue(
+      timeline([
+        event({
+          body: "who is taking this?",
+          expectsReply: true,
+          expectedReplyCount: 3,
+          resolvedReplyCount: 1,
+        }),
+      ])
+    )
+    renderRoom()
+
+    expect(await screen.findByText("who is taking this?")).toBeTruthy()
+    const badge = screen.getByText("1/3 answered")
+    // The numbers are the glance; the sentence that explains them is a hover.
+    expect(badge.getAttribute("title")).toBe(
+      "Asked 3 Sessions · 1 answered · 2 still owe a reply"
+    )
+    expect(screen.queryByText("needs a reply")).toBeNull()
+  })
+
+  it("settles the badge once every asked Session has answered", async () => {
+    api.getCollaborationRoomTimeline.mockResolvedValue(
+      timeline([
+        event({
+          body: "all done here",
+          expectsReply: true,
+          expectedReplyCount: 2,
+          resolvedReplyCount: 2,
+        }),
+      ])
+    )
+    renderRoom()
+
+    expect(await screen.findByText("all done here")).toBeTruthy()
+    const badge = screen.getByText("2/2 answered")
+    expect(badge.getAttribute("title")).toBe(
+      "All 2 Sessions this post asked have answered"
+    )
+    // A paid ledger must stop reading as a warning.
+    expect(badge.className).toContain("emerald")
+    expect(badge.className).not.toContain("amber")
+  })
+
+  it("shows no reply badge at all on a post that asked nothing", async () => {
+    api.getCollaborationRoomTimeline.mockResolvedValue(timeline([event()]))
+    renderRoom()
+
+    expect(await screen.findByText("newest post")).toBeTruthy()
+    expect(screen.queryByText("needs a reply")).toBeNull()
+    expect(screen.queryByText(/answered/)).toBeNull()
+  })
+
+  it("keeps the plain wording for an ask with no delivery ledger", async () => {
+    // `@human` is a flag on the event, not a fan-out target, so this ask has
+    // no delivery rows behind it — "0/0 answered" would be nonsense. Older
+    // payloads carry no counts at all and must land on the same wording.
+    api.getCollaborationRoomTimeline.mockResolvedValue(
+      timeline([
+        event({
+          id: "evt-human-ask",
+          body: "human, thoughts?",
+          expectsReply: true,
+          mentionHuman: true,
+          expectedReplyCount: 0,
+          resolvedReplyCount: 0,
+        }),
+        event({
+          id: "evt-legacy-ask",
+          body: "older payload",
+          expectsReply: true,
+          createdAt: "2026-08-18T13:00:00.000Z",
+        }),
+      ])
+    )
+    renderRoom()
+
+    expect(await screen.findByText("human, thoughts?")).toBeTruthy()
+    const badges = screen.getAllByText("needs a reply")
+    expect(badges).toHaveLength(2)
+    for (const badge of badges) {
+      expect(badge.getAttribute("title")).toBeNull()
+    }
+    expect(screen.queryByText(/answered/)).toBeNull()
+  })
 })

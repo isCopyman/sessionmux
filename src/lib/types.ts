@@ -1560,6 +1560,16 @@ export interface RoomTimelineEvent {
   mentionConversationIds: number[]
   mentionHuman?: boolean
   authorKind?: "session" | "human"
+  /**
+   * How many Sessions this post is still waiting on, as "resolved of
+   * expected". Both are set exactly when `expectsReply` is true — a post that
+   * asked nothing has no ledger, and undefined must not render as "0/0".
+   * Dismissed and failed deliveries are not obligations, so they leave both
+   * sides of the fraction; `expectedReplyCount` can legitimately be 0 for an
+   * ask that only reached `@human` (who has no delivery row).
+   */
+  expectedReplyCount?: number | null
+  resolvedReplyCount?: number | null
   createdAt: string
 }
 

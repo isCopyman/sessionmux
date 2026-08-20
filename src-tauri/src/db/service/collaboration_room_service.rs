@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
 use chrono::{DateTime, Utc};
 use sea_orm::{
@@ -1209,11 +1209,80 @@ pub async fn timeline_with(
     for row in rows {
         events.push(timeline_event_from_row(conn, &row).await?);
     }
+    attach_reply_progress(conn, &mut events).await?;
     Ok(RoomTimeline {
         room_id: room_id.to_string(),
         events,
         truncated,
     })
+}
+
+/// Fill in the "M of N answered" ledger for every asking post in one page.
+///
+/// One `GROUP BY` for the whole window, never one query per post — a page is
+/// capped at `MAX_TIMELINE_LIMIT`, which stays well under SQLite's bound
+/// parameter limit, so the `IN` list is safe to expand in full.
+///
+/// Counting follows the obligation invariant the model audit wrote down
+/// (`MODEL-AUDIT-RFC-2026-08-21`, slice ③): `obligation_state` says whether a
+/// debt is open, but "this ask was voided" lives in `delivery.state`, so a
+/// `dismissed` or `failed` row is not an obligation and drops out of *both*
+/// the numerator and the denominator. Leaving it in the denominator would
+/// park a post at "1/2 answered" with nobody left who could ever answer.
+async fn attach_reply_progress(
+    conn: &DatabaseConnection,
+    events: &mut [RoomTimelineEvent],
+) -> Result<(), DbError> {
+    let ids: Vec<sea_orm::Value> = events
+        .iter()
+        .filter(|event| event.expects_reply)
+        .map(|event| event.id.clone().into())
+        .collect();
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let placeholders = std::iter::repeat_n("?", ids.len())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let rows = conn
+        .query_all(statement(
+            &format!(
+                "SELECT d.event_id AS event_id, \
+                        COUNT(*) AS expected_count, \
+                        SUM(CASE WHEN d.obligation_state = 'resolved' THEN 1 ELSE 0 END) \
+                          AS resolved_count \
+                   FROM collaboration_delivery d \
+                  WHERE d.event_id IN ({placeholders}) \
+                    AND d.state <> 'dismissed' AND d.state <> 'failed' \
+                  GROUP BY d.event_id"
+            ),
+            ids,
+        ))
+        .await?;
+    let mut progress: HashMap<String, (u32, u32)> = HashMap::with_capacity(rows.len());
+    for row in rows {
+        let event_id: String = row.try_get("", "event_id")?;
+        let expected: i64 = row.try_get("", "expected_count")?;
+        let resolved: i64 = row.try_get("", "resolved_count")?;
+        let expected = u32::try_from(expected.max(0)).unwrap_or(u32::MAX);
+        // `SUM` over a subset of the counted rows can never exceed `COUNT`;
+        // the cap only keeps a nonsense fraction off the screen if it did.
+        let resolved = u32::try_from(resolved.max(0))
+            .unwrap_or(u32::MAX)
+            .min(expected);
+        progress.insert(event_id, (expected, resolved));
+    }
+    for event in events.iter_mut() {
+        if !event.expects_reply {
+            continue;
+        }
+        // An ask with no surviving Delivery row still reports `Some(0)`: the
+        // post did ask, the UI just has no fraction worth drawing.
+        let (expected, resolved) = progress.get(&event.id).copied().unwrap_or((0, 0));
+        event.expected_reply_count = Some(expected);
+        event.resolved_reply_count = Some(resolved);
+    }
+    Ok(())
 }
 
 async fn newest_window(
@@ -1281,6 +1350,9 @@ async fn timeline_event_from_row(
             crate::models::CollaborationAuthorKind::parse(&raw)
                 .unwrap_or(crate::models::CollaborationAuthorKind::Session)
         },
+        // Filled in per page by `attach_reply_progress`, not per row.
+        expected_reply_count: None,
+        resolved_reply_count: None,
         created_at: parse_timestamp(row, "created_at")?,
     })
 }
@@ -3074,6 +3146,137 @@ mod tests {
             .unwrap();
         assert!(again.cleared_reply_to_event_id.is_none());
         assert_eq!(again.open_reply_debt, 0);
+    }
+
+    /// `(expected, resolved)` for one post in a fetched window.
+    fn reply_progress(events: &[RoomTimelineEvent], event_id: &str) -> (Option<u32>, Option<u32>) {
+        let event = events
+            .iter()
+            .find(|event| event.id == event_id)
+            .expect("event is in the window");
+        (event.expected_reply_count, event.resolved_reply_count)
+    }
+
+    /// A post that `@`-ed N Sessions carries its own "M of N answered" ledger,
+    /// because N asks are N independent Delivery rows. A post that asked
+    /// nothing carries none — `None` is what stops the panel drawing "0/0".
+    #[tokio::test]
+    async fn timeline_reports_reply_progress_only_for_posts_that_asked() {
+        let (db, a, b, c) = seeded().await;
+        let room = make_room(&db, a, vec![a, b, c]).await;
+        let asked = crate::db::service::collaboration_service::post_room(
+            &db.conn,
+            debt_ask_post(
+                room.id.clone(),
+                a,
+                vec![b, c],
+                "progress-ask",
+                "who is taking this?",
+            ),
+        )
+        .await
+        .unwrap();
+        crate::db::service::collaboration_service::post_room(
+            &db.conn,
+            record_post(room.id.clone(), a, "progress-chatter", "just a note"),
+        )
+        .await
+        .unwrap();
+
+        let events = timeline(&db.conn, &room.id, None).await.unwrap().events;
+        assert_eq!(
+            reply_progress(&events, &asked.event_id),
+            (Some(2), Some(0)),
+            "two Sessions were asked and neither has answered"
+        );
+        let plain = events
+            .iter()
+            .find(|event| event.body == "just a note")
+            .expect("the plain post is in the window");
+        assert_eq!(
+            (plain.expected_reply_count, plain.resolved_reply_count),
+            (None, None),
+            "a post that asked nothing has no ledger to report"
+        );
+
+        // One answer moves the numerator; the ask itself stays on the board
+        // until everyone it named has paid.
+        let mut paid = record_post(room.id.clone(), b, "progress-paid", "on it");
+        paid.reply_to_event_id = Some(asked.event_id.clone());
+        crate::db::service::collaboration_service::post_room(&db.conn, paid)
+            .await
+            .unwrap();
+        let events = timeline(&db.conn, &room.id, None).await.unwrap().events;
+        assert_eq!(
+            reply_progress(&events, &asked.event_id),
+            (Some(2), Some(1)),
+            "b answered, c has not"
+        );
+    }
+
+    /// The obligation invariant, read from the progress side: "voided" lives
+    /// in `delivery.state`, not in `obligation_state`, so a dismissed ask has
+    /// to leave *both* halves of the fraction. Keeping it in the denominator
+    /// would strand the post at "1/2 answered" with nobody left who could
+    /// ever answer it.
+    #[tokio::test]
+    async fn dismissed_asks_leave_both_sides_of_the_reply_progress() {
+        let (db, a, b, c) = seeded().await;
+        let room = make_room(&db, a, vec![a, b, c]).await;
+        let asked = crate::db::service::collaboration_service::post_room(
+            &db.conn,
+            debt_ask_post(room.id.clone(), a, vec![b, c], "dismiss-ask", "please answer"),
+        )
+        .await
+        .unwrap();
+        let mut paid = record_post(room.id.clone(), b, "dismiss-paid", "done");
+        paid.reply_to_event_id = Some(asked.event_id.clone());
+        crate::db::service::collaboration_service::post_room(&db.conn, paid)
+            .await
+            .unwrap();
+
+        let for_c = asked
+            .deliveries
+            .iter()
+            .find(|delivery| delivery.target.conversation_id == c)
+            .expect("c was asked");
+        assert_eq!(
+            for_c.state,
+            CollaborationDeliveryState::Pending,
+            "store_only asks land pending, which is what dismiss consumes"
+        );
+        crate::db::service::collaboration_service::dismiss(&db.conn, c, &for_c.id)
+            .await
+            .unwrap();
+
+        let events = timeline(&db.conn, &room.id, None).await.unwrap().events;
+        assert_eq!(
+            reply_progress(&events, &asked.event_id),
+            (Some(1), Some(1)),
+            "c's dismissed ask is not an unanswered obligation"
+        );
+    }
+
+    /// `@human` is a flag on the event, not a fan-out target, so an ask that
+    /// only reaches the operator has no Delivery row behind it. The ledger
+    /// still has to be `Some` — the post did ask — but with nothing to draw.
+    #[tokio::test]
+    async fn an_ask_with_no_delivery_row_reports_an_empty_ledger() {
+        let (db, a, b, _) = seeded().await;
+        let room = make_room(&db, a, vec![a, b]).await;
+        let asked = crate::db::service::collaboration_service::post_room(
+            &db.conn,
+            PostRoomMessageInput {
+                expects_reply: true,
+                mention_human: true,
+                ..record_post(room.id.clone(), a, "human-only-ask", "human, thoughts?")
+            },
+        )
+        .await
+        .unwrap();
+
+        let events = timeline(&db.conn, &room.id, None).await.unwrap().events;
+        assert_eq!(reply_progress(&events, &asked.event_id), (Some(0), Some(0)));
     }
 
     /// `reply_to_event_id` pointing outside the Room is rejected, and the
