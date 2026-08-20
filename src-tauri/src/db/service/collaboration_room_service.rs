@@ -1403,7 +1403,10 @@ mod tests {
             "a query nothing matches must narrow to nothing, not fall back to everything"
         );
         assert_eq!(
-            list_all_for_host(&db.conn, Some("   ")).await.unwrap().len(),
+            list_all_for_host(&db.conn, Some("   "))
+                .await
+                .unwrap()
+                .len(),
             2,
             "whitespace is not a query"
         );
