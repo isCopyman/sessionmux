@@ -5,7 +5,12 @@
 > 对账修订：2026-08-20 —— §3、§4 已按当前代码重写（原文基于 0.25.0，与 0bfb86a0
 > 之后的实现有 5 处脱节；脱节清单见
 > [能力矩阵与可行路径调研](./SESSION-FORK-REWIND-SURVEY-2026-08-19.zh-CN.md) §1）。
-> §1、§2、§5–§13 的设计结论未受影响。  
+> 第二轮更正：2026-08-20 —— 把切片 2 第一轮三份 FINDINGS
+> （[`FINDINGS-A`](./fork-rewind-slices/FINDINGS-A-anchor-inventory.zh-CN.md) /
+> [`FINDINGS-B`](./fork-rewind-slices/FINDINGS-B-claude-fork-audit.zh-CN.md) /
+> [`FINDINGS-C`](./fork-rewind-slices/FINDINGS-C-codex-fork-audit.zh-CN.md)）
+> 回灌进本文件。触及：§2 粒度、§3.6/§3.7 谱系已落地、§4 实测、§7.1/§7.2、
+> 新增 §7.6 锚点形状、§9、§11 阶段 0。SURVEY 本身不改（历史快照）。
 > 范围：Fork、历史消息分叉、编辑后重发、对话回退、文件检查点与跨 Harness 降级  
 > 上位产品需求：[产品需求与使用场景](./PRODUCT-SPEC.zh-CN.md#73-fork编辑旧消息和文件恢复)
 
@@ -48,8 +53,14 @@ Codeg 不应把 Fork、Rewind 和文件恢复实现成一个模糊的通用按�
 第一版不向普通用户提供 `truncateInPlace`。界面中的“编辑旧消息”必须解释为 `editAndFork`，
 不能静默重写事实历史。
 
-消息锚点也不能假定是 Codeg 当前消息表的自增 ID。不同 Harness 可能使用 assistant UUID、
-user message ID、turn ID 或 checkpoint ID；适配器需要保存可验证的原生锚点。
+消息锚点也不能假定是 Codeg 当前消息表的自增 ID，更不能假定是 assistant UUID。
+`forkAtMessage` 的锚点粒度因 Harness 而异（§10 要求诚实呈现能力差异，这里落到表上）：
+
+- **Claude**（claude-agent-acp 0.69.0）：产品语义是从这条消息分叉。原生锚点是被保留那一轮的最后一条 chain entry 的 uuid（`sdk.d.ts:1886-1892`），不是 assistant uuid。粒度：**消息级**。
+- **Codex**（codex-acp 1.4.0）：产品语义是从这一轮分叉。原生锚点是 app-server `thread/fork.lastTurnId`（FINDINGS-C §2.3）。粒度：**轮级**。
+- **通用 ACP**：当前协议无历史锚点，不承诺 `forkAtMessage`（§7.3）。
+
+适配器需要保存可验证的原生锚点。详情见 §7.6。
 
 ## 3. 当前 Codeg 实现事实
 
@@ -115,8 +126,10 @@ pin 继承，否则 Fork 出来的会话会静默换模型。
 
 - `conversation.parent_id` 仍专用于 delegation。Fork 显式写
   `parent_id: Set(None)`（`manager.rs:2228`，字段语义见
-  `db/entities/conversation.rs:68`），当前 Fork 没有通用谱系字段——这正是 §9 要新增独立
-  关系表的原因，也是它不能复用 `parent_id` 的原因。
+  `db/entities/conversation.rs:68`）。谱系已落在独立表 `fork_relation`
+  （migration `m20260820_000002`）：`persist_fork_outcome` 在同一事务里
+  `record_fork_head`（`manager.rs:2274`，`db/service/fork_lineage_service.rs:25-45`）。
+  `anchor` 字段对 head fork 为 NULL，留给 `fork_at_message`（§9）。
 - 支持面是**纯运行时探测**，不是按 `agent_type` 写死：`connection.rs:4264-4268` 读
   `initialize` 回复里的 `sessionCapabilities.fork`，经 `ForkSupported` 事件落到
   `session_state.rs:664`，再推前端。这与 §6“能力矩阵必须来自运行时探测”的要求一致。
@@ -125,11 +138,11 @@ pin 继承，否则 Fork 出来的会话会静默换模型。
 
 这套实现可以继续作为 `forkHead` 的 ACP provider，不应推倒重写。需要补的是：
 
-- 明确记录来源与目标的 Fork 关系；
-- 历史消息级锚点；
-- 原生 Claude/Codex provider；
+- 明确记录来源与目标的 Fork 关系 — **已落地**（`fork_relation`，见 §9）；
+- 历史消息级锚点（切片 2：先做锚点管道，见 §7.6）；
+- 原生 Claude/Codex provider（Claude 走 §7.1 旁路，不改上游；Codex 要上游，见 §7.2）；
 - 文件恢复的独立能力与安全确认；
-- UI 对能力差异的诚实呈现。
+- UI 对能力差异的诚实呈现（粒度已落在 §2）。
 
 ## 4. ACP 的真实边界
 
@@ -163,14 +176,21 @@ Codeg 现在是 0.26.1（`package.json:4`、`src-tauri/tauri.conf.json:4`），�
 2. 更要紧的是 Codeg 根本不读静态矩阵——支持面来自每条连接的 `initialize` 回复
    （§3.6，`connection.rs:4264-4268`）。静态清单只在“该不该给某家排期”时有参考价值。
 
-需要实测才能填的空（本切片未做）：claude-agent-acp 0.69.0 是否仍声明 fork（registry 注释
-未重申）；codex-acp 1.4.0 是否声明 ACP `session/fork`（注释未记录）。**注意不要把
-codex-acp 1.4.0 内部用的 app-server `thread/fork` 当成它声明了 ACP fork**——1.4.0 用
-`thread/fork` 是为了实现 AIR `agentFileChangeReport`（`registry.rs:580-592`），那是另一
-条通道；但它同时也是 §7.2 那条路线可行的正面证据：官方适配器自己就在用 app-server 的
-thread fork。
+第一轮实测已经闭合这两处空白（[`FINDINGS-B`](./fork-rewind-slices/FINDINGS-B-claude-fork-audit.zh-CN.md) §1；
+[`FINDINGS-C`](./fork-rewind-slices/FINDINGS-C-codex-fork-audit.zh-CN.md) §1）：
+
+- **claude-agent-acp 0.69.0 声明 fork**：`dist/acp-agent.js:715`，形状是空对象 `{}`
+  （非布尔），挂在 `agentCapabilities.sessionCapabilities` 下。codeg 探测
+  `.fork.is_some()`（`connection.rs:4264-4268`）会把它当成支持。
+- **codex-acp 1.4.0 不声明 fork**：`dist/index.js:29697-29703` 的
+  `sessionCapabilities` 只有 `{resume, list, close, delete, additionalDirectories}`，
+  也没有 `session/fork` handler。内部 `thread/fork` 只服务 AIR
+  `agentFileChangeReport`（FINDINGS-C §2），**不是** ACP fork 声明。
+  不要把这条内部通道当成它声明了 ACP fork。
 
 因此 Codeg 当前基于能力探测显示按钮是正确的，但 ACP provider 只能承诺 `forkHead`。
+Claude 的 `forkAtMessage` 走 §7.1 的 `_meta` 旁路，不经过协议历史锚点；Codex 的
+`forkAtMessage` 目前够不着，要等上游把 `thread/fork` 接到 ACP（§7.2）。
 
 ## 5. Zed 与 Paseo 提供的架构经验
 
@@ -250,15 +270,67 @@ adapter 或版本可能具有不同能力。
 
 ### 7.1 Claude
 
-优先使用 Anthropic Agent SDK 的 Session Fork/Resume 语义，保存 Codeg 消息与原生 UUID 的映射。
-历史分叉应创建新原生 Session，原会话只读保留。只有 provider 能证明消息锚点仍有效时才显示
-“从这里分叉”。
+**不需要上游改动。** 0.69.0 的 `session/fork` 已经是 head fork
+（`unstable_forkSession` → `query({ resume, forkSession: true })` → CLI
+`--resume` + `--fork-session`，FINDINGS-B §2）。消息级截断走同一条 ACP 方法，额外带：
+
+```json
+{ "_meta": { "claudeCode": { "options": { "resumeSessionAt": "<chain-entry-uuid>" } } } }
+```
+
+静态贯通（ROUND2-SPECS §1；活体探针的静态部分）：
+
+- `_meta` 经 zod 收下并整包交给 `createSession`（FINDINGS-B §3，`acp-agent.js:761`）；
+- `...userProvidedOptions` spread 在 `acp-agent.js:4821`，`resumeSessionAt` **不在**
+  ACP 强制覆盖清单里；
+- SDK `sdk.mjs:118` 把它编成 `--resume-session-at=` argv；
+- SDK 用 ProcessTransport + `stream-json` 起 CLI，即 `sdk.d.ts:1878-1884` 所称的
+  print/headless **武装 lane**。print lane 那颗雷已静态排除。
+
+adapter **没有**读 `_meta.messageUuid` / `upToMessage`，也 **没有**调用 SDK
+`forkSession({ upToMessageId })`。SURVEY 猜的那两个键和那条 API 在 0.69.0 都不接。
+真正能用的是 `claudeCode.options` 的 spread 副产品。
+
+**三颗雷（必须进错误模型，不能当普通网络失败）：**
+
+1. **lane 限制（已静态确认 codeg 走的是武装 lane，但仍是非文档化旁路）。**
+   `resumeSessionAt` + `resumeDropsTurn` 是 PRINT/HEADLESS LANE ONLY
+   （`sdk.d.ts:1878-1884`）。交互式 `claude --resume` 与后台 job 会忽略这对参数——
+   加载完整历史，不截断、不报错。走错 lane = 看起来 fork 成功，实际没截断。
+   codeg 经 ACP adapter 的 `query()` / ProcessTransport 起 CLI，静态上正是武装 lane；
+   是否真截断尚未活体证实（探针 turn 没跑完，见台账「活体探针结果」）。
+2. **`resumeDropsTurn` 拒绝确定性、不可重试。** 错误消息以
+   `Resume rejected by --resume-drops-turn:` 开头（`sdk.d.ts:1845-1858`）。
+   必须映射到 rewind-recovery（清掉 pending fork target，保留证据，改走普通 resume），
+   **禁止退避重试**——同一请求会永远失败。
+3. **spread 副产品不是契约。** 上游只要在 `createSession` 的覆盖清单里加一条
+   `resumeSessionAt`，旁路静默失效。没有 capability 广告、没有测试钉死。切片 2 接线时
+   必须把这条通道的探测/失败面写进错误模型，不能假装它是稳定 API。
+
+历史分叉仍应创建新原生 Session，原会话只读保留。只有 provider 能证明锚点仍有效时
+才显示「从这里分叉」。锚点的真实形状见 §7.6——**不是** assistant uuid。
 
 ### 7.2 Codex
 
-优先使用 Codex app-server 的结构化 thread fork/rollback 能力，不通过模拟 TUI 按键实现。
-Codeg 需要先验证目标 Codex 版本、事件序列和分叉后的 Session 可被原生客户端继续发现，再把
-能力标为 stable。
+原生粒度是 **turn 级（`lastTurnId`），不是 message 级**。SURVEY 的
+`thread/fork{threadId, messageId}` 说法与 1.4.0 / Codex 0.147 的 generated 类型
+对不上（FINDINGS-C §2.3：`ThreadForkParams.lastTurnId`，类型里没有 `messageId`）。
+产品语义因此是「从这一轮分叉」，不能承诺「从这条消息分叉」。
+
+当前够不着这条能力：
+
+- 1.4.0 **不声明** ACP `sessionCapabilities.fork`（`dist/index.js:29697-29703`）；
+- 没有 `session/fork` handler；
+- 内部 `thread/fork` 的唯一调用点是 AIR `agentFileChangeReport`
+  （`dist/index.js:27569`），codeg 不广告 AIR，所以这条不会跑；
+- app-server 通道在 adapter 子进程里，ACP 客户端碰不到（FINDINGS-C §4）。
+
+裁决（FINDINGS-C §6，协调者维持）：给 codex-acp 提能力，把已有的 `threadFork` 接到
+ACP `session/fork`；按 turn 截断走 `_meta`。再开第二条 app-server 是上游不接 PR 的退路，
+不是第一入口。本切片不写这条编码。
+
+`thread/rollback` 已标 DEPRECATED（will be removed soon），且只丢 turn、**不回文件**，
+适配器零调用点。**rewind 不押它。** Codex 侧 rewind 搁置。
 
 ### 7.3 ACP
 
@@ -279,6 +351,36 @@ ACP provider 只实现 Agent 实际声明的能力。当前 `session/fork` 映�
 - 用户选择的消息范围或摘要；
 - 明确附加的文件和结论；
 - 生成时间与来源 Harness。
+
+### 7.6 锚点的真实形状（切片 2 的核心约束）
+
+Claude Agent SDK 的 fork 点不是「任意一条 assistant uuid」。`sdk.d.ts:1886-1892`：
+
+> General rule subsuming all of the above: fork at the KEPT turn's last chain
+> entry, whatever it is — `resumeSessionAt` accepts any chain UUID.
+
+三种不能停在 assistant uuid 上的情况（同文件 1860-1892）：
+
+1. end-turn 工具会话：轮末是 `structured_output` **attachment**（否则是 tool_result carrier）；
+2. `shouldQuery: false` 裸 user append：fork 点若把它留在丢弃区间会拒绝；
+3. 中断回合：已完成的非错误 tool_result 在尾巴上，fork 在 assistant uuid 会被故意拒绝。
+
+codeg 今天恰恰把那类记录扔了（FINDINGS-A §补）：
+
+- `parsers/claude.rs:1551-1591` 的 `attachment` 分支只保留 `goal_status`，其余整条丢弃
+  （注释点名 agent listings / skill listings / task reminders 是「给模型的上下文，不是对话」）；
+- `group_into_turns`（`:2565-2571`）吸收 tool_result **正文**但丢弃其 uuid，turn 的 `id`
+  一律 `turn-{n}`（`:2551 / 2585 / 2597`）。Qoder 走同一份分组（`qoder.rs:828`），
+  附件 indexed but not returned（`qoder.rs:261-263`）。
+
+实测 transcript 佐证（台账「活体探针结果」）：一条 prompt 之后链尾是四条带 uuid 的
+attachment——`deferred_tools_delta` / `agent_listing_delta` / `skill_listing` /
+`total_tokens_reminder`——正是 `claude.rs:1552-1554` 注释点名并被整条丢弃的那几种。
+
+因此切片 2 的真实前置不是「把 `resumeSessionAt` 塞进 `_meta`」，而是先做**锚点管道**：
+让该轮 parentUuid 链上最后一条 chain entry 的 uuid 活到 `MessageTurn` 的可选字段
+（不改现有 `id` 的 `turn-<digits>` 语义）。没有这一步，forkAtMessage 在一整类会话上会
+确定性失败，且失败不可重试。
 
 ## 8. JSONL 兼容器的边界
 
@@ -315,22 +417,31 @@ JSONL 兼容器不能成为统一领域模型，也不能让 Codeg 复制一套�
 ## 9. 谱系与现有字段兼容
 
 不得复用 `conversation.parent_id`。它当前表示 delegation 子会话，改变语义会破坏 Codeg
-现有查询与测试。
+现有查询与测试。Fork 路径显式写 `parent_id: Set(None)`（`manager.rs:2228`）。
 
-需要谱系时新增独立关系记录，概念上至少包含：
+**已实现（切片 1）**：独立表 `fork_relation`，migration `m20260820_000002`。
+
+落地字段（`db/entities/fork_relation.rs`，`db/migration/m20260820_000002_fork_relation.rs`）：
 
 ```text
-source_conversation_id
-target_conversation_id
-relation_kind
-source_message_id / provider_anchor（可选）
-provider
+id
+source_conversation_id   -- FK to conversation, ON DELETE CASCADE
+target_conversation_id   -- FK to conversation, ON DELETE CASCADE
+relation_kind            -- CHECK: fork_head / fork_at_message / handoff; default fork_head
+anchor                   -- nullable JSON. head fork is NULL; reserved for forkAtMessage
 created_at
-metadata
 ```
 
-实现字段必须在 schema RFC 中结合现有迁移重新命名和审核。主界面默认只显示“分叉自……”徽标
-和跳转；完整关系树放在详情或命令中，避免 Session 越多侧栏越难用。
+`persist_fork_outcome` 在 INSERT C2 的同一事务里 `record_fork_head`
+（`manager.rs:2274`，`fork_lineage_service.rs:25-45`），`anchor` 写 NULL。
+查询端点 `conversation_fork_lineage` 已双模式暴露（`web/router.rs:65-66`）。
+
+`relation_kind` 的另外两个取值是预授权：历史分叉与跨 Harness handoff 不需要再改 schema。
+`anchor` **就是**留给 `forkAtMessage` 的槽——切片 2 的锚点管道产出应写进这里，而不是
+复用 `MessageTurn.id`。
+
+主界面默认只显示「分叉自……」徽标和跳转；完整关系树放在详情或命令中。UI 徽标本身尚未做
+（切片 1 只把端点就位）。
 
 ## 10. UI 与安全规则
 
@@ -350,7 +461,7 @@ metadata
 - 建立按 provider/version/session 的能力矩阵；
 - 为 Codeg 当前 ACP `forkHead` 增加回归测试和可理解的错误信息；
 - 明确 UI 文案，不再把 Head Fork 与 Historical Fork 混称；
-- 记录轻量 Fork 关系，但不复用 `conversation.parent_id`。
+- 记录轻量 Fork 关系，但不复用 `conversation.parent_id`。**已落地**（§9）。
 
 ### 阶段 1：Claude/Codex 历史分叉
 
@@ -392,6 +503,13 @@ metadata
 - [ACP Protocol Discussions（Session history、分页与 replay 提案）](https://github.com/agentclientprotocol/agent-client-protocol/discussions)
 - [Zed Agent Panel：Editing Messages 与 Checkpoints](https://zed.dev/docs/ai/agent-panel)
 - [Zed Parallel Agents](https://zed.dev/docs/ai/parallel-agents)
+- 切片 2 第一轮实测：
+  [FINDINGS-A 锚点清点](./fork-rewind-slices/FINDINGS-A-anchor-inventory.zh-CN.md)、
+  [FINDINGS-B claude fork](./fork-rewind-slices/FINDINGS-B-claude-fork-audit.zh-CN.md)、
+  [FINDINGS-C codex fork](./fork-rewind-slices/FINDINGS-C-codex-fork-audit.zh-CN.md)
+- 第二轮规格与交叉结论：[ROUND2-SPECS](./fork-rewind-slices/ROUND2-SPECS.zh-CN.md)、
+  [调度台账](./fork-rewind-slices/README.zh-CN.md)
 
-本 RFC 的 Codeg、Paseo 与 Zed 代码结论来自 2026-08-15 的本地源码审计。协议与 provider
-能力会变化，实施前必须重新核对版本和 capability，不把本次快照当成永久事实。
+本 RFC 的 Codeg、Paseo 与 Zed 代码结论来自 2026-08-15 的本地源码审计；切片 2 的协议与
+parser 事实来自 2026-08-20 的 FINDINGS A/B/C。协议与 provider 能力会变化，实施前必须
+重新核对版本和 capability，不把本次快照当成永久事实。
