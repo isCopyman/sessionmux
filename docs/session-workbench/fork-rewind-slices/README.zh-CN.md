@@ -45,9 +45,14 @@ SURVEY §6 把切片 2–4 排成了"claude 按消息 fork / codex thread-fork /
 
 | 包 | 主题 | 负责 Session | 分支 | 交付物 | 状态 |
 |---|---|---|---|---|---|
-| A | 13 家 parser 的消息锚点清点 | 待派 | `wt/fork-anchor-inventory` | `FINDINGS-A-anchor-inventory.zh-CN.md` | 未开始 |
-| B | claude-agent-acp 0.69.0 fork 能力实测 | 待派 | `wt/fork-claude-audit` | `FINDINGS-B-claude-fork-audit.zh-CN.md` | 未开始 |
-| C | codex-acp 1.4.0 + app-server thread/fork 实测 | 待派 | `wt/fork-codex-audit` | `FINDINGS-C-codex-fork-audit.zh-CN.md` | 未开始 |
+| A | 13 家 parser 的消息锚点清点 | 316（grok-4.6） | `wt/fork-anchor-inventory` | `FINDINGS-A-anchor-inventory.zh-CN.md` | 已派工 |
+| B | claude-agent-acp 0.69.0 fork 能力实测 | 317（grok-4.6） | `wt/fork-claude-audit` | `FINDINGS-B-claude-fork-audit.zh-CN.md` | 已派工 |
+| C | codex-acp 1.4.0 + app-server thread/fork 实测 | 318（grok-4.6） | `wt/fork-codex-audit` | `FINDINGS-C-codex-fork-audit.zh-CN.md` | 已派工 |
+
+协调频道：Room `rm_3d3711fe-d8ae-4ec5-9f55-1d45aba7b2b2`（"fork-rewind 切片2-4 协调"），
+成员 314（协调者）+ 316/317/318。派工帖 event id：A `d485c1c8`、B `e88aae8d`、
+C `f17f8bda`，均挂在开工帖 `37d52910` 下。
+Collection 5「fork-rewind 切片2-4 调研」收纳三个工人会话。
 
 三个包互不依赖：A 只读 codeg 自己的 parser，B 只读 claude 适配器 tarball，C 只读 codex
 适配器 tarball + codeg 的 codex parser。没有共享写入面，可以完全并行。
@@ -68,7 +73,26 @@ SURVEY §6 把切片 2–4 排成了"claude 按消息 fork / codex thread-fork /
 - 同一步骤失败两次就停手，在 Room 里报事实（命令 + 报错原文）并等指令。
 - 合并由协调者串行做，工人不要动别人的分支，不要 rebase/merge 别人的活。
 
+## Dogfooding 摩擦记录
+
+组队阶段实际踩到的 codeg 工具/流程摩擦，逐条发在 Room 里（前缀【摩擦】，
+event `e199466b`）。摘要：
+
+1. `session.create` 的 `harness` 没有可发现的取值域，且仓库里 Grok 有两套 id
+   （`registry_id_for()` 给 `grok-build`，实际接受 `grok`）——只能靠 `list_sessions`
+   旁证反推。
+2. Room 花名册把"整条首 prompt 截断"当会话标题，人类手打长 prompt 起的会话完全无法区分。
+3. "先建会话还是先建 Room"是鸡生蛋：skill 推荐 `initial_prompt` 携带 room 信息，但
+   `room.create` 需要成员 id，room_id 写不进 `initial_prompt`。绕法是无 prompt 建会话
+   → 建 Room → Room 内派工。
+4. 新 worktree 没有 node_modules，前端门禁直接 `MODULE_NOT_FOUND`，需先
+   `pnpm install --frozen-lockfile`。**第二轮派编码包时必须写进规格。**
+
+观察但未验证：`session.create` 回显 cwd 带 `\\?\` Windows 扩展长度前缀。
+
 ## 时间线
 
 - 2026-08-20 协调者：切片 1 三件事完工（`bf7554d5` / `3df83596` / `2572edf5`），门禁全绿。
-- 2026-08-20 协调者：写下本台账与 A/B/C 三份规格。
+- 2026-08-20 协调者：写下本台账与 A/B/C 三份规格（`b8512285`）。
+- 2026-08-20 协调者：建 Collection 5、会话 316/317/318（grok-4.6）、Room
+  `rm_3d3711fe`，三个包全部派工，等回报。
