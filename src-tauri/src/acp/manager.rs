@@ -27,6 +27,7 @@ use crate::acp::question::{
     SessionQuestionAccess,
 };
 use crate::acp::session_state::SessionState;
+use crate::acp::spawn_budget::{spawn_handshake_timeout_from_env, spawn_wall_clock_timeout};
 use crate::acp::terminal_runtime::TerminalShellRuntimeConfig;
 use crate::acp::types::{
     AcpEvent, AgentOptionsSnapshot, ConfigStaleKind, ConnectionInfo, ConnectionStatus,
@@ -119,23 +120,15 @@ struct SpawnDedupKey {
     session_id: String,
 }
 
-/// Default upper bound on how long `spawn_agent` will hold the per-session
-/// dedup lock waiting for `SessionStarted`. Picked to comfortably cover
-/// cold-start agents (claude-code/codex warm: <2s; npx-fetched cold: 10–30s)
-/// without deadlocking the next concurrent acp_connect when an agent is
-/// genuinely broken.
-pub(crate) const SPAWN_HANDSHAKE_TIMEOUT_SECS: u64 = 60;
-
-/// Read the spawn-handshake timeout from `CODEG_ACP_SPAWN_HANDSHAKE_TIMEOUT_SECS`,
-/// falling back to `SPAWN_HANDSHAKE_TIMEOUT_SECS`. Returns the configured
-/// `Duration`. Tests can construct the manager with a custom value via
-/// `with_spawn_handshake_timeout` instead of mutating env.
-fn spawn_handshake_timeout_from_env() -> Duration {
-    let secs = std::env::var("CODEG_ACP_SPAWN_HANDSHAKE_TIMEOUT_SECS")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(SPAWN_HANDSHAKE_TIMEOUT_SECS);
-    Duration::from_secs(secs)
+/// Upper bound on how long `spawn_agent` will hold the per-session dedup lock
+/// waiting for `SessionStarted` — the OUTER of the two spawn budgets. It has to
+/// outlive the inner `session/new` budget the connection picks (which scales
+/// with the companion MCP servers injected into that launch), or widening the
+/// inner one would simply move the failure to this layer and lose the
+/// phase-specific diagnosis. [`spawn_wall_clock_timeout`] encodes that
+/// relationship; see `crate::acp::spawn_budget` for the full picture.
+fn spawn_handshake_wall_clock() -> Duration {
+    spawn_wall_clock_timeout(spawn_handshake_timeout_from_env())
 }
 
 /// Outcome of the `spawn_agent` dedup wait. Logged so production can audit
@@ -333,8 +326,9 @@ pub struct ConnectionManager {
     spawn_locks: Arc<Mutex<HashMap<SpawnDedupKey, Arc<Mutex<()>>>>>,
     /// Bound on how long `spawn_agent` waits for the agent's handshake
     /// before releasing the dedup lock. Configurable per-instance for
-    /// tests; in production initialized from env via
-    /// `spawn_handshake_timeout_from_env`.
+    /// tests; in production initialized via `spawn_handshake_wall_clock`
+    /// (env base + the companion-scaling head-room the inner `session/new`
+    /// budget can claim).
     spawn_handshake_timeout: Duration,
     /// Shared General Settings shell used by ACP terminal fallbacks. Cloned
     /// into each connection runtime so a setting update applies to existing
@@ -400,7 +394,7 @@ impl ConnectionManager {
         Self {
             connections: Arc::new(Mutex::new(HashMap::new())),
             spawn_locks: Arc::new(Mutex::new(HashMap::new())),
-            spawn_handshake_timeout: spawn_handshake_timeout_from_env(),
+            spawn_handshake_timeout: spawn_handshake_wall_clock(),
             terminal_shell_config: TerminalShellRuntimeConfig::new(),
             codeg_mcp_injection: Arc::new(std::sync::OnceLock::new()),
             probe_locks: Arc::new(Mutex::new(HashMap::new())),
@@ -820,13 +814,21 @@ impl ConnectionManager {
                 None => None,
             };
             let _ = self.disconnect(&connection_id).await;
+            // Names the OUTER budget explicitly. The inner `session/new` step
+            // has its own, narrower timeout that reports the phase and the
+            // injected MCP companions; if this wall clock is what fired, the
+            // launch stalled somewhere the inner budget does not cover (spawn,
+            // initialize, or post-creation bookkeeping), and saying so is what
+            // keeps the two failures apart in a bug report.
             let detail = match handshake {
                 HandshakeWaitOutcome::Aborted => {
-                    "the agent exited before creating its native Session"
+                    "the agent exited before creating its native Session".to_string()
                 }
-                HandshakeWaitOutcome::TimedOut => {
-                    "the agent did not confirm native Session creation before the timeout"
-                }
+                HandshakeWaitOutcome::TimedOut => format!(
+                    "the agent did not confirm native Session creation within the \
+                     {}s spawn wall clock",
+                    self.spawn_handshake_timeout.as_secs()
+                ),
                 HandshakeWaitOutcome::Ready => unreachable!(),
             };
             return Err(BoundAgentSpawnFailure {
@@ -6344,31 +6346,11 @@ mod tests {
         );
     }
 
-    #[test]
-    fn spawn_handshake_timeout_from_env_uses_default_when_unset() {
-        // Snapshot env, mutate, restore. Single test owns this var to avoid
-        // cross-test contention.
-        let prev = std::env::var("CODEG_ACP_SPAWN_HANDSHAKE_TIMEOUT_SECS").ok();
-        std::env::remove_var("CODEG_ACP_SPAWN_HANDSHAKE_TIMEOUT_SECS");
-        let default = spawn_handshake_timeout_from_env();
-        assert_eq!(default, Duration::from_secs(SPAWN_HANDSHAKE_TIMEOUT_SECS));
-
-        std::env::set_var("CODEG_ACP_SPAWN_HANDSHAKE_TIMEOUT_SECS", "5");
-        assert_eq!(spawn_handshake_timeout_from_env(), Duration::from_secs(5));
-
-        std::env::set_var("CODEG_ACP_SPAWN_HANDSHAKE_TIMEOUT_SECS", "garbage");
-        assert_eq!(
-            spawn_handshake_timeout_from_env(),
-            Duration::from_secs(SPAWN_HANDSHAKE_TIMEOUT_SECS),
-            "invalid value falls back to default"
-        );
-
-        // Restore.
-        match prev {
-            Some(v) => std::env::set_var("CODEG_ACP_SPAWN_HANDSHAKE_TIMEOUT_SECS", v),
-            None => std::env::remove_var("CODEG_ACP_SPAWN_HANDSHAKE_TIMEOUT_SECS"),
-        }
-    }
+    // The wall clock's arithmetic (env base + companion scaling + margin) and
+    // the "wall clock outlives every inner session/new budget" invariant live
+    // with the pure functions in `acp::spawn_budget`, which also owns
+    // `CODEG_ACP_SPAWN_HANDSHAKE_TIMEOUT_SECS` exclusively — tests share one
+    // process, so a second env-mutating test here would race it.
 
     #[test]
     fn with_spawn_handshake_timeout_overrides_default_for_tests() {

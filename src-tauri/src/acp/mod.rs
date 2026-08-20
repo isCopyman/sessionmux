@@ -30,6 +30,7 @@ pub mod remote_registry;
 pub mod session_collaboration;
 pub mod session_info;
 pub mod session_state;
+pub mod spawn_budget;
 pub mod stderr_tail;
 pub mod terminal_runtime;
 pub mod types;

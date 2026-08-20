@@ -38,6 +38,9 @@ use crate::acp::file_system_runtime::{
 use crate::acp::host_tools_policy::{HostToolsPolicy, HOST_TOOLS_ENV};
 use crate::acp::registry::{self, AgentDistribution};
 use crate::acp::session_state::SessionState;
+use crate::acp::spawn_budget::{
+    session_new_budget, session_new_timeout_message, spawn_handshake_timeout_from_env,
+};
 use crate::acp::stderr_tail::{summarize_parser_error, StderrTail, TailScope};
 use crate::acp::terminal_runtime::{
     TerminalRuntime, TerminalRuntimeError, TerminalShellRuntimeConfig,
@@ -369,6 +372,14 @@ const INIT_TIMEOUT_SENTINEL: &str = "__codeg_init_timeout__";
 /// to `sacp::Error`, which has nowhere to carry a codeg error kind.
 const MCP_SUSPECT_SENTINEL: &str = "__codeg_mcp_suspect__";
 
+/// Sentinel appended to a `session/new` failure when the step blew its own
+/// budget (see [`send_new_session_within_budget`]), so the outer `.map_err(...)`
+/// can raise `AcpError::SessionNewTimeout` instead of a bare protocol error.
+/// Same trick as [`INIT_TIMEOUT_SENTINEL`]; the two must stay distinguishable
+/// because both steps run inside the manager's single spawn wall clock and
+/// "startup timed out" alone tells nobody which one stalled.
+const SESSION_NEW_TIMEOUT_SENTINEL: &str = "__codeg_session_new_timeout__";
+
 /// Mark a `session/new` failure as possibly caused by the MCP servers codeg put
 /// on the wire.
 ///
@@ -384,6 +395,13 @@ fn tag_mcp_suspect(
     mcp_servers: &[McpServer],
 ) -> sacp::Error {
     if mcp_servers.is_empty() || !matches!(agent_type, AgentType::Custom(_)) {
+        return err;
+    }
+    // A budget expiry is not a rejection: an agent that refuses `mcpServers`
+    // answers with an error, it does not go silent. The timeout error already
+    // names the injected companions as the suspected cost, so leave it alone
+    // rather than overwriting it with the `supports_mcp` hint.
+    if err.to_string().contains(SESSION_NEW_TIMEOUT_SENTINEL) {
         return err;
     }
     // Also log it. The coded error reaches the desktop webview through the
@@ -3337,6 +3355,49 @@ async fn send_new_session_capturing_models(
     Ok((resp, models))
 }
 
+/// [`send_new_session_capturing_models`] under its own timeout.
+///
+/// Until this existed, `session/new` was the one unbounded step of a launch: the
+/// `initialize` hop above it carries a 60s bound, and the manager's spawn wall
+/// clock covers both, so a slow `session/new` simply ate the wall clock and
+/// surfaced as the generic "handshake didn't finish" error — which is exactly
+/// what a multi-agent launch produces, because the agent CLI spawns and
+/// hand-shakes every injected `codeg-mcp` companion before it answers.
+///
+/// So the budget scales with `companion_servers` (see
+/// [`crate::acp::spawn_budget`] for how it relates to the outer wall clock, and
+/// for why the wall clock is sized to outlive whatever this picks), and the
+/// error names the phase, the wait and the companions that set the budget. It
+/// travels out tagged with [`SESSION_NEW_TIMEOUT_SENTINEL`] because the inner
+/// future is typed to `sacp::Error`, which has nowhere to carry a codeg error
+/// kind.
+async fn send_new_session_within_budget(
+    cx: &ConnectionTo<Agent>,
+    agent_type: AgentType,
+    req: NewSessionRequest,
+    companion_servers: &[&str],
+) -> Result<(NewSessionResponse, Option<serde_json::Value>), sacp::Error> {
+    let budget = session_new_budget(spawn_handshake_timeout_from_env(), companion_servers.len());
+    let started = std::time::Instant::now();
+    tracing::info!(
+        "[ACP][{}] Sending session/new (timeout={}s, companion_mcp_servers={})",
+        agent_type,
+        budget.as_secs(),
+        companion_servers.len(),
+    );
+    match tokio::time::timeout(budget, send_new_session_capturing_models(cx, agent_type, req)).await
+    {
+        Ok(result) => result,
+        Err(_) => {
+            let message = session_new_timeout_message(budget, started.elapsed(), companion_servers);
+            tracing::error!("[ACP][{}] {}", agent_type, message);
+            Err(sacp::util::internal_error(format!(
+                "{message}{SESSION_NEW_TIMEOUT_SENTINEL}"
+            )))
+        }
+    }
+}
+
 /// Send `session/load` UNTYPED for the same reason as
 /// [`send_new_session_capturing_models`]: the raw response must pass through
 /// [`strip_unknown_config_options`] before the typed parse. Request bytes and
@@ -3701,6 +3762,11 @@ async fn push_companion_stdio(
 struct CompanionInjection {
     token: String,
     feedback_available: bool,
+    /// Names of the companion stdio servers actually put on the wire, in
+    /// injection order. Each one is a process the agent spawns and hand-shakes
+    /// inside `session/new`, so this list both sizes that step's budget and
+    /// appears verbatim in its timeout error.
+    server_names: Vec<&'static str>,
 }
 
 async fn inject_codeg_mcp(
@@ -3754,9 +3820,25 @@ async fn inject_codeg_mcp(
             token = Some(next);
         }
     }
+    let server_names: Vec<&'static str> = specs.iter().map(|spec| spec.server_name).collect();
+    // Leave a trace of the fan-out: every name here is a separate codeg-mcp
+    // process the agent launches and hand-shakes before it can answer
+    // `session/new`, which is what makes that step slow enough to need its own
+    // budget. The same count/name list is repeated in the timeout error, so a
+    // report of "spawn timed out" can be read against what this launch actually
+    // injected.
+    tracing::info!(
+        "[host-bridge] injected {} companion MCP server(s) for connection {} [{}]; \
+         {} MCP server(s) total on the wire",
+        server_names.len(),
+        parent_connection_id,
+        server_names.join(", "),
+        servers.len(),
+    );
     Some(CompanionInjection {
         token: token.expect("specs is non-empty"),
         feedback_available: feedback_enabled,
+        server_names,
     })
 }
 
@@ -4409,6 +4491,13 @@ async fn run_connection(
             } else {
                 None
             };
+            // Companion servers this launch put on the wire. `session/new` waits
+            // on the agent spawning and hand-shaking each of them, so this list
+            // sizes that step's timeout budget and is quoted back if it expires.
+            let companion_servers: Vec<&'static str> = delegate_injection
+                .as_ref()
+                .map(|injected| injected.server_names.clone())
+                .unwrap_or_default();
             {
                 let mut s = state.write().await;
                 // Native steering is independent of the MCP companion — set it
@@ -4899,10 +4988,11 @@ async fn run_connection(
                             )
                             .await;
                         }
-                        let (new_resp, grok_models_raw) = send_new_session_capturing_models(
+                        let (new_resp, grok_models_raw) = send_new_session_within_budget(
                             &cx,
                             agent_type,
                             build_new_session_request(agent_type, &cwd, mcp_servers.clone()),
+                            &companion_servers,
                         )
                         .await
                         .map_err(|e| tag_mcp_suspect(e, agent_type, &mcp_servers))?;
@@ -4990,10 +5080,11 @@ async fn run_connection(
                 }
             } else {
                 // Create new session
-                let (new_resp, grok_models_raw) = send_new_session_capturing_models(
+                let (new_resp, grok_models_raw) = send_new_session_within_budget(
                     &cx,
                     agent_type,
                     build_new_session_request(agent_type, &cwd, mcp_servers.clone()),
+                    &companion_servers,
                 )
                 .await
                 .map_err(|e| tag_mcp_suspect(e, agent_type, &mcp_servers))?;
@@ -5073,6 +5164,12 @@ async fn run_connection(
             let raw = e.to_string();
             if raw.contains(INIT_TIMEOUT_SENTINEL) {
                 AcpError::InitializeTimeout
+            } else if raw.contains(SESSION_NEW_TIMEOUT_SENTINEL) {
+                // Checked before the MCP hint on purpose: the two steps share
+                // the launch, and the phase-specific message (which already
+                // names the injected companions) is the more actionable of the
+                // two. Strip the marker so the user reads the diagnosis alone.
+                AcpError::session_new_timeout(raw.replace(SESSION_NEW_TIMEOUT_SENTINEL, ""))
             } else if raw.contains(MCP_SUSPECT_SENTINEL) {
                 // Strip the marker so the user sees the agent's own words, then
                 // let the frontend append the `supports_mcp` suggestion.
@@ -14196,6 +14293,73 @@ mod tests {
         assert!(
             !shown.contains(MCP_SUSPECT_SENTINEL),
             "the sentinel must never reach the user: {shown}"
+        );
+    }
+
+    // A `session/new` budget expiry must reach the user as its own coded error,
+    // naming the phase and the companion fan-out — not as the Initialize
+    // timeout, and not repainted as "the agent rejected mcpServers" (a silent
+    // agent rejected nothing). Mirrors the wire round-trip
+    // `send_new_session_within_budget` + `run_connection`'s `.map_err` perform,
+    // neither of which a unit test can drive directly.
+    #[test]
+    fn session_new_timeout_survives_tagging_and_translates_to_its_own_code() {
+        let message = session_new_timeout_message(
+            std::time::Duration::from_secs(100),
+            std::time::Duration::from_secs(100),
+            &["codeg-mcp", "codeg-mailbox", "codeg-room"],
+        );
+        let wire = sacp::util::internal_error(format!("{message}{SESSION_NEW_TIMEOUT_SENTINEL}"));
+
+        // Custom agent + non-empty server list: the one shape the MCP hint
+        // normally fires on.
+        let raw = tag_mcp_suspect(wire, AgentType::Custom("my-agent"), &[stdio_server("codeg")])
+            .to_string();
+        assert!(
+            !raw.contains(MCP_SUSPECT_SENTINEL),
+            "a timeout is not a rejection and must not be re-tagged: {raw}"
+        );
+        assert!(raw.contains(SESSION_NEW_TIMEOUT_SENTINEL));
+
+        let err = AcpError::session_new_timeout(raw.replace(SESSION_NEW_TIMEOUT_SENTINEL, ""));
+        assert_eq!(err.code(), Some("session_new_timeout"));
+        assert_ne!(
+            err.code(),
+            AcpError::InitializeTimeout.code(),
+            "the two spawn-phase timeouts must stay distinguishable"
+        );
+        let shown = err.to_string();
+        assert!(shown.contains("session/new"), "{shown}");
+        assert!(shown.contains("3 codeg companion MCP server(s)"), "{shown}");
+        assert!(shown.contains("codeg-room"), "{shown}");
+        assert!(
+            !shown.contains(SESSION_NEW_TIMEOUT_SENTINEL),
+            "the sentinel must never reach the user: {shown}"
+        );
+    }
+
+    // The spawn wall clock is sized off `MAX_COMPANION_STDIO_SERVERS` because
+    // the manager cannot know the real count yet. If a fourth companion is ever
+    // added here, that constant has to grow with it or the wall clock silently
+    // starts firing before the `session/new` budget it is supposed to outlive.
+    #[test]
+    fn companion_fan_out_matches_the_budgeted_maximum() {
+        let widest = companion_stdio_specs(
+            CompanionFeatureFlags {
+                host_control: true,
+                feedback: true,
+                ask: true,
+                sessions: true,
+                tasks: true,
+                automations: true,
+                taskboard: true,
+            },
+            true,
+        );
+        assert_eq!(
+            widest.len(),
+            crate::acp::spawn_budget::MAX_COMPANION_STDIO_SERVERS,
+            "spawn_budget must budget for every companion this launch can inject"
         );
     }
 
