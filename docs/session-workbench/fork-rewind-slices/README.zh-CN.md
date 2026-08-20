@@ -233,6 +233,44 @@ assistant 的 `id` 活到 `:2574`）；`:1551-1591` 的 `attachment` 分支只�
 A 知道 parser 会扔，只有并排才看得见"我们扔掉的正好是它要求的那条"。并行三包 + 交叉复核
 的价值在此，不在三份报告本身。
 
+## 第二轮（用户已认可拆法，2026-08-20）
+
+规格：`ROUND2-SPECS.zh-CN.md`（commit `b740cfe3`）。派工帖 Room event `15d544e4`。
+
+| 包 | 主题 | Session | 分支 | 状态 |
+|---|---|---|---|---|
+| D | 锚点管道（**切片 2 硬前置**） | 316 | `wt/fork-anchor-pipeline` | 已派工 |
+| E | RFC 第二轮更正（纯文档） | 317 | `wt/fork-rfc-round2` | 已派工 |
+| F | `is_reserved_turn_id` 注释与缺口评估 | 318 | `wt/fork-reserved-id-audit` | 已派工 |
+
+forkAtMessage 本体要等 D 落地，本轮不派。codex 编码等上游，本轮只在包 E 更正文档。
+
+### 活体探针结果（用户批准的一发，已用掉）
+
+**收获大于原计划，且主要来自零成本的静态部分：**
+
+- **print lane 那颗雷静态排除。** `sdk.mjs:118` 把 `resumeSessionAt` →
+  `--resume-session-at=` argv；SDK 用 `["--output-format","stream-json","--verbose",
+  "--input-format","stream-json"]` + ProcessTransport 起 CLI，正是 SDK 文档所称
+  "print-mode CLI, Agent SDK, ProcessTransport" 的武装 lane。整条链
+  `_meta.claudeCode.options.resumeSessionAt` → `acp-agent.js:4821` spread → SDK Options
+  → `sdk.mjs:118` argv → CLI **全部静态贯通**。
+- **探针本身未中。** 隔离 scratch 目录（`%TEMP%/fork-lane-probe`）起 `claude -p "hi"`，
+  transcript 只有 user + 4 条 attachment，**无 assistant 记录**，turn 没跑完。诊断：本机
+  `ANTHROPIC_BASE_URL=http://127.0.0.1:8317` + `ANTHROPIC_AUTH_TOKEN`，spawn 的 claude
+  继承了本地代理 env。**按预算纪律未重试。** "是否真截断"留到包 D 落地后从 codeg 内部驱动。
+- **意外实测收获（比原计划要验的更重要）**：真实 transcript 一条 prompt 之后链尾是
+  **四条各带 uuid、以 parentUuid 串联的 attachment**——
+  `deferred_tools_delta` / `agent_listing_delta` / `skill_listing` /
+  `total_tokens_reminder`，正是 `claude.rs:1552-1554` 注释点名、并被整条丢弃的那几种。
+  **A×B 交叉约束由此获得真实数据佐证。**
+  另附带实锤了 `background_watch.rs:1256` 说的文件头 `queue-operation` 元数据（记录 0、1，
+  且**无 uuid**）。
+- **诚实边界**：本次无 assistant 记录，故只证明了 attachment 会挂在 user 之后，
+  **未证明**完成的 turn 末尾也是 attachment。后者仍是待验项。
+- 证据文件保留在
+  `~/.claude/projects/C--Users-63036-AppData-Local-Temp-fork-lane-probe/d71224df-….jsonl`。
+
 ## Dogfooding 摩擦记录
 
 组队阶段实际踩到的 codeg 工具/流程摩擦，逐条发在 Room 里（前缀【摩擦】，
