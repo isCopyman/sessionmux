@@ -103,30 +103,38 @@ export function clearConversationFindHighlights(root?: Element | null): void {
 }
 
 // Two row markers, one walker: the Session transcript numbers its rows for the
-// virtualizer, the Room timeline is a plain list and says so.
-const FIND_ROW_SELECTOR = "[data-virtual-item-index], [data-find-row-index]"
+// virtualizer, the Room timeline is a plain list and says so. Callers may pass
+// a tighter selector (Room uses `[data-room-post-content]`); default keeps
+// Session surfaces unchanged.
+export const FIND_ROW_SELECTOR =
+  "[data-virtual-item-index], [data-find-row-index]"
 
 /**
  * Highlight all currently mounted matches and emphasize the selected one.
  * Off-screen rows are virtualized; a MutationObserver in MessageListView calls
  * this again as navigation mounts the target row.
+ *
+ * `rowSelector` defaults to {@link FIND_ROW_SELECTOR}. Session callers omit it.
  */
 export function applyConversationFindHighlights(
   root: Element,
   query: string,
-  current: { threadIndex: number; occurrenceIndex: number } | null
+  current: { threadIndex: number; occurrenceIndex: number } | null,
+  rowSelector: string = FIND_ROW_SELECTOR
 ): Range | null {
   clearConversationFindHighlights(root)
   if (!query) return null
 
   const allRanges: Range[] = []
   let currentRange: Range | null = null
-  const rows = root.querySelectorAll<HTMLElement>(FIND_ROW_SELECTOR)
+  const rows = root.querySelectorAll<HTMLElement>(rowSelector)
   for (const row of rows) {
     const threadIndex = Number(
       row.dataset.virtualItemIndex ?? row.dataset.findRowIndex
     )
-    const content = row.querySelector("[data-conversation-search-content]")
+    const content = row.matches("[data-conversation-search-content]")
+      ? row
+      : row.querySelector("[data-conversation-search-content]")
     if (!content) continue
     const ranges = findTextRanges(content, query)
     allRanges.push(...ranges)

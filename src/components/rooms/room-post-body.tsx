@@ -135,6 +135,7 @@ export function RoomPostBody({
   return (
     <div
       data-room-markdown=""
+      data-room-post-content=""
       // What Ctrl+F searches inside a post row — the body only, never the
       // author line or the quoted-post locator above it.
       data-conversation-search-content=""

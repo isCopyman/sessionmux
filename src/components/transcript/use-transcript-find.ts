@@ -44,6 +44,13 @@ export interface UseTranscriptFindArgs {
     index: number,
     opts?: { align?: "start" | "center" | "end" | "nearest" }
   ) => void
+  /**
+   * Row selector for the highlighter. Default is FIND_ROW_SELECTOR
+   * (`[data-virtual-item-index], [data-find-row-index]`). Room passes a
+   * selector that includes `[data-room-post-content]` so date-separator
+   * virtual rows and the virtua wrapper are not painted as hits.
+   */
+  rowSelector?: string
 }
 
 export interface TranscriptFindState {
@@ -71,6 +78,7 @@ export function useTranscriptFind({
   viewportElement,
   viewportRef,
   scrollToIndex,
+  rowSelector,
 }: UseTranscriptFindArgs): TranscriptFindState {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState("")
@@ -189,7 +197,8 @@ export function useTranscriptFind({
       const currentRange = applyConversationFindHighlights(
         root,
         query,
-        activeMatch
+        activeMatch,
+        rowSelector
       )
       if (
         currentRange &&
@@ -225,6 +234,7 @@ export function useTranscriptFind({
     rootRef,
     viewportElement,
     viewportRef,
+    rowSelector,
   ])
 
   return {
