@@ -1857,6 +1857,29 @@ pub fn render_session_send_result(outcome: &Value) -> Value {
                 None => lines.push(format!("- {id}: {title} — {state}")),
             }
         }
+        // Say the ledger outcome out loud. Only a linked post clears a
+        // needs-reply debt, and an Agent that cannot see the result assumes it
+        // must read_room (which never clears debt) or that the reply failed.
+        match outcome
+            .get("cleared_reply_to_event_id")
+            .and_then(Value::as_str)
+        {
+            Some(parent) => lines.push(format!(
+                "This linked reply cleared your needs-reply debt on {parent}."
+            )),
+            None => {
+                let owed = outcome
+                    .get("open_reply_debt")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0);
+                if owed > 0 {
+                    let replies = if owed == 1 { "reply" } else { "replies" };
+                    lines.push(format!(
+                        "Note: you still owe {owed} {replies} in this Room. A post clears debt only when reply_to_event_id points at the asking event; read_room clears unread, never debt."
+                    ));
+                }
+            }
+        }
         lines.push(
             "Delivery or queueing does not mean the target Agent has completed the request."
                 .to_string(),
@@ -2685,6 +2708,54 @@ mod tests {
             mcp_call_dedupe_id("parent-2", &serde_json::json!(41))
         );
         assert!(first.starts_with("mcp:"));
+    }
+
+    /// An Agent that replies in a Room only sees this text. It must be able to
+    /// tell "debt paid" from "still owing" without a second read_room call —
+    /// the confusion that had Agents re-reading Rooms to audit their own posts.
+    #[test]
+    fn a_room_post_result_states_the_reply_ledger_outcome() {
+        let paid = render_session_send_result(&serde_json::json!({
+            "accepted": true,
+            "event_id": "event-reply",
+            "room_id": "room-1",
+            "deliveries": [],
+            "cleared_reply_to_event_id": "event-ask",
+            "open_reply_debt": 0
+        }));
+        let paid_text = paid["content"][0]["text"].as_str().unwrap();
+        assert!(
+            paid_text.contains("cleared your needs-reply debt on event-ask"),
+            "a linked reply must name the obligation it settled: {paid_text}"
+        );
+
+        let unpaid = render_session_send_result(&serde_json::json!({
+            "accepted": true,
+            "event_id": "event-chatter",
+            "room_id": "room-1",
+            "deliveries": [],
+            "open_reply_debt": 2
+        }));
+        let unpaid_text = unpaid["content"][0]["text"].as_str().unwrap();
+        assert!(
+            unpaid_text.contains("you still owe 2 replies in this Room"),
+            "an unlinked post must report what is left on the tab: {unpaid_text}"
+        );
+        assert!(
+            unpaid_text.contains("reply_to_event_id points at the asking event"),
+            "and must name the only thing that clears it: {unpaid_text}"
+        );
+
+        // Private mail carries no Room ledger; it must stay silent instead of
+        // implying a clean or a dirty Room tab.
+        let mail = render_session_send_result(&serde_json::json!({
+            "accepted": true,
+            "event_id": "event-letter",
+            "deliveries": []
+        }));
+        let mail_text = mail["content"][0]["text"].as_str().unwrap();
+        assert!(!mail_text.contains("needs-reply debt"));
+        assert!(!mail_text.contains("still owe"));
     }
 
     #[test]

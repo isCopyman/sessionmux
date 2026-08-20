@@ -1579,6 +1579,10 @@ export interface RoomPostResult {
   deliveries: CollaborationDelivery[]
   affectedConversationIds: number[]
   deduplicated: boolean
+  /** Parent event whose needs-reply debt this post cleared for its author. */
+  clearedReplyToEventId?: string | null
+  /** Obligations the author still owes in this Room after the post. */
+  openReplyDebt?: number
 }
 
 // Permission option info from agent

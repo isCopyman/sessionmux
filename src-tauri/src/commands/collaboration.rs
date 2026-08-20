@@ -701,6 +701,11 @@ impl SessionCollaborationAccess for DbSessionCollaboration {
                     .collect(),
                 deduplicated: result.deduplicated,
                 room_id: None,
+                // Room ledger fields: a private letter has no Room debt to
+                // report, and stating `false` here would read as "your reply
+                // paid nothing" on a mailbox thread that did clear one.
+                cleared_reply_to_event_id: None,
+                open_reply_debt: None,
                 note: None,
             },
             Err(err) => SessionSendOutcome::rejected(Some(source_session_id), err.to_string()),
@@ -1107,6 +1112,8 @@ impl SessionCollaborationAccess for DbSessionCollaboration {
                     .collect(),
                 deduplicated: result.deduplicated,
                 room_id: Some(result.room_id.clone()),
+                cleared_reply_to_event_id: result.cleared_reply_to_event_id,
+                open_reply_debt: Some(result.open_reply_debt),
                 note: Some(format!("Posted to Room {}", result.room_id)),
             },
             Err(err) => SessionSendOutcome::rejected(Some(source_session_id), err.to_string()),

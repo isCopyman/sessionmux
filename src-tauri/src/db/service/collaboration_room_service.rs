@@ -2547,6 +2547,23 @@ mod tests {
         }
     }
 
+    /// A post that parks a needs-reply obligation on every mentioned member.
+    /// `StoreOnly` keeps the prompt queue out of it: the ledger, not the wake,
+    /// is what these tests are about.
+    fn ask_post(
+        room_id: String,
+        source: i32,
+        targets: Vec<i32>,
+        dedupe: &str,
+        body: &str,
+    ) -> PostRoomMessageInput {
+        PostRoomMessageInput {
+            target_conversation_ids: targets,
+            expects_reply: true,
+            ..record_post(room_id, source, dedupe, body)
+        }
+    }
+
     #[tokio::test]
     async fn member_channel_unread_is_not_mailbox_and_catch_up_advances_cursor() {
         let (db, a, b, c) = seeded().await;
@@ -2705,6 +2722,137 @@ mod tests {
             closed.obligation_state,
             CollaborationObligationState::Resolved
         );
+    }
+
+    /// Posting is the only way to clear a needs-reply debt, so the post itself
+    /// has to say whether it did. Without that an Agent replies, sees nothing,
+    /// and assumes it must `read_room` to audit its own ledger.
+    #[tokio::test]
+    async fn a_room_post_reports_the_debt_it_cleared_and_what_is_left() {
+        let (db, a, b, _) = seeded().await;
+        let room = make_room(&db, a, vec![a, b]).await;
+        let asked = crate::db::service::collaboration_service::post_room(
+            &db.conn,
+            ask_post(room.id.clone(), a, vec![b], "debt-ask", "please answer"),
+        )
+        .await
+        .unwrap();
+        assert!(asked.cleared_reply_to_event_id.is_none());
+        assert_eq!(
+            asked.open_reply_debt, 0,
+            "asking parks the obligation on the target, never on the asker"
+        );
+
+        // An unlinked post pays nothing, and must say how much b still owes.
+        let chatter = crate::db::service::collaboration_service::post_room(
+            &db.conn,
+            record_post(room.id.clone(), b, "debt-chatter", "looking into it"),
+        )
+        .await
+        .unwrap();
+        assert!(chatter.cleared_reply_to_event_id.is_none());
+        assert_eq!(chatter.open_reply_debt, 1);
+
+        let mut paid_input = record_post(room.id.clone(), b, "debt-paid", "done");
+        paid_input.reply_to_event_id = Some(asked.event_id.clone());
+        let paid = crate::db::service::collaboration_service::post_room(&db.conn, paid_input)
+            .await
+            .unwrap();
+        assert_eq!(
+            paid.cleared_reply_to_event_id.as_deref(),
+            Some(asked.event_id.as_str())
+        );
+        assert_eq!(paid.open_reply_debt, 0);
+        let settled = crate::db::service::collaboration_service::get_inbound_message(
+            &db.conn,
+            b,
+            &asked.event_id,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            settled.obligation_state,
+            CollaborationObligationState::Resolved
+        );
+
+        // Paying twice is not a second payment: the ledger is already clean,
+        // so the follow-up must not claim it cleared anything.
+        let mut again_input = record_post(room.id.clone(), b, "debt-again", "and one more thing");
+        again_input.reply_to_event_id = Some(asked.event_id.clone());
+        let again = crate::db::service::collaboration_service::post_room(&db.conn, again_input)
+            .await
+            .unwrap();
+        assert!(again.cleared_reply_to_event_id.is_none());
+        assert_eq!(again.open_reply_debt, 0);
+    }
+
+    /// `reply_to_event_id` pointing outside the Room is rejected, and the
+    /// rejection must not be mistaken for payment — the obligation stays open
+    /// and the next honest reply is still able to clear it.
+    #[tokio::test]
+    async fn a_room_reply_to_a_foreign_event_is_rejected_and_keeps_the_debt() {
+        let (db, a, b, c) = seeded().await;
+        let room = make_room(&db, a, vec![a, b]).await;
+        let elsewhere = create(
+            &db.conn,
+            CreateCollaborationRoomInput {
+                workbench_id: 1,
+                title: "A and C".into(),
+                member_conversation_ids: vec![a, c],
+                created_by_conversation_id: a,
+                collection_id: None,
+                root_folder_id: None,
+            },
+        )
+        .await
+        .unwrap();
+        let asked = crate::db::service::collaboration_service::post_room(
+            &db.conn,
+            ask_post(room.id.clone(), a, vec![b], "foreign-ask", "please answer"),
+        )
+        .await
+        .unwrap();
+        let foreign = crate::db::service::collaboration_service::post_room(
+            &db.conn,
+            record_post(elsewhere.id.clone(), a, "foreign-post", "other room"),
+        )
+        .await
+        .unwrap();
+
+        let mut wrong = record_post(room.id.clone(), b, "foreign-reply", "done");
+        wrong.reply_to_event_id = Some(foreign.event_id.clone());
+        let err = crate::db::service::collaboration_service::post_room(&db.conn, wrong)
+            .await
+            .expect_err("a parent from another Room is not a reply here");
+        assert!(err.to_string().contains("same Room"), "{err}");
+
+        let still_owed = crate::db::service::collaboration_service::get_inbound_message(
+            &db.conn,
+            b,
+            &asked.event_id,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            still_owed.obligation_state,
+            CollaborationObligationState::AwaitingReply,
+            "a rejected reply clears nothing"
+        );
+        assert_eq!(
+            list_for_member(&db.conn, b).await.unwrap()[0].needs_reply_count,
+            1
+        );
+
+        let mut right = record_post(room.id.clone(), b, "foreign-reply-fixed", "done");
+        right.reply_to_event_id = Some(asked.event_id.clone());
+        let paid = crate::db::service::collaboration_service::post_room(&db.conn, right)
+            .await
+            .unwrap();
+        assert_eq!(
+            paid.cleared_reply_to_event_id.as_deref(),
+            Some(asked.event_id.as_str())
+        );
+        assert_eq!(paid.open_reply_debt, 0);
     }
 
     #[tokio::test]

@@ -241,6 +241,17 @@ pub struct SessionSendOutcome {
     pub deduplicated: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub room_id: Option<String>,
+    /// Room posts only: the parent event whose needs-reply obligation this
+    /// post just cleared for the caller. Absent when the post cleared
+    /// nothing, so an Agent never has to call `read_room` — which only
+    /// clears unread — to learn whether its debt is paid.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cleared_reply_to_event_id: Option<String>,
+    /// Room posts only: obligations the caller still owes in that Room after
+    /// the post. `Some(0)` is a clean ledger; absent means this channel does
+    /// not track a Room debt (private mail).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_reply_debt: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
 }
@@ -487,6 +498,8 @@ impl SessionSendOutcome {
             deliveries: Vec::new(),
             deduplicated: false,
             room_id: None,
+            cleared_reply_to_event_id: None,
+            open_reply_debt: None,
             note: Some(note.into()),
         }
     }
