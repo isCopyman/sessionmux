@@ -539,8 +539,12 @@ node_modules，摩擦 4），漏了一个 prettier 空行。**这正是"必须�
     同一 host、同一 Room、几分钟内：协调者 314（Claude Code harness）的 `post_room`
     返回体带 `open_reply_debt` / `cleared_reply_to_event_id`；工人 316（grok harness）
     的返回体是旧格式（仅 event id + delivery 状态 + 通用提示），无任何销账字段。
-    316 的运行时 16:43 后才唤醒，companion 应已是新二进制。猜测（未验证）：字段按
-    feature-group 或 harness 过滤，或仅在部分代码路径组装。316 将用第二发对照。
+    316 的运行时 16:43 后才唤醒，companion 应已是新二进制。
+    **已确认为稳定不对称（非冷启动）**：316 三次连续实测（`571610ab` / `6f7de228` /
+    `27276a7b`）返回体全部为旧格式，无一出现销账字段；同期协调者侧每次都有。
+    剩余猜测（未验证）：字段按 feature-group 或调用方 harness 过滤，或仅在部分代码
+    路径组装。**对编排的实际影响**：工人无法自证"我的交付帖清了债"，只能由协调者侧
+    确认——债务对账仍是 hub 单向可见。
 
 
 - **幽灵修复有效**：`@316` 后 `session.list` 无新会话（旧行为：@ 空闲会话必克隆幽灵）。
