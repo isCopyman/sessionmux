@@ -17,6 +17,7 @@ import { useSessionLetterUiStore } from "@/stores/session-letter-ui-store"
 import { SessionLetterActions } from "./session-letter-render-toggle"
 import { SessionLetterBody } from "./session-letter-body"
 import { SessionMailPeerChip } from "./session-mail-peer-chip"
+import { SessionRoomChip } from "./session-room-chip"
 import { useMailDelivery } from "./session-mail-lookup"
 
 export function SessionMailStatusChip({
@@ -129,14 +130,7 @@ export function SessionMailCard({
         <div className="min-w-0 flex-1 px-3 py-2">
           <header className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
             <DirectionIcon className="h-3 w-3 shrink-0" aria-hidden="true" />
-            {isRoom ? (
-              <span className="rounded bg-violet-500/15 px-1.5 py-0.5 text-[10px] font-medium text-violet-800 dark:text-violet-300">
-                {t("channelRoom")}
-              </span>
-            ) : null}
-            {isRoom && roomId ? (
-              <span className="truncate font-mono text-[10px]">{roomId}</span>
-            ) : null}
+            {isRoom ? <SessionRoomChip roomId={roomId} /> : null}
             {direction === "system" ? (
               <span className="font-medium text-foreground">
                 {t("fromMailSystem")}

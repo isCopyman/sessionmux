@@ -5188,6 +5188,8 @@
     "toSession": "{name}에게",
     "fromPrefix": "보낸이",
     "channelRoom": "룸",
+    "openRoomAria": "룸 열기: {title}",
+    "roomUnavailableHint": "룸을 사용할 수 없음 · {roomId}",
     "toPrefix": "받는이",
     "fromMailSystem": "메일 시스템",
     "openedLetter": "읽은 편지",

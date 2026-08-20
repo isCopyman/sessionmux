@@ -5188,6 +5188,8 @@
     "toSession": "发给 {name}",
     "fromPrefix": "来自",
     "channelRoom": "群聊",
+    "openRoomAria": "打开群聊：{title}",
+    "roomUnavailableHint": "群聊不可用 · {roomId}",
     "toPrefix": "发给",
     "fromMailSystem": "来自邮件系统",
     "openedLetter": "已打开信件",

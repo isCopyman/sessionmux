@@ -5188,6 +5188,8 @@
     "toSession": "Para {name}",
     "fromPrefix": "De",
     "channelRoom": "Sala",
+    "openRoomAria": "Abrir sala: {title}",
+    "roomUnavailableHint": "Sala indisponível · {roomId}",
     "toPrefix": "Para",
     "fromMailSystem": "Do sistema de correio",
     "openedLetter": "Carta aberta",
