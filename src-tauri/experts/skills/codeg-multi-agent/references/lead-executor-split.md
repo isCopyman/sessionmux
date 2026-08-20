@@ -19,13 +19,22 @@ guessing.
 
 ## Staffing
 
-- `session.create` one executor per independent package. Pin `model` to
-  the cheap tier in the create call; never staff an executor on the
-  lead's expensive model. The `initial_prompt` carries the four-element
-  brief (patterns-map.md) plus the path of the committed spec document —
-  on conflict, the document wins over the prompt.
+- `session.create` one executor per independent package. `harness` wants
+  the wire id (`codex`, `claude_code`, `grok`, `kimi_code`, …), never the
+  ACP-registry id (`codex-acp`, `grok-build`, …); copy `agent_type` off an
+  existing Session if unsure. Pin `model` to the cheap tier in the create
+  call; never staff an executor on the lead's expensive model. The
+  `initial_prompt` carries the four-element brief (patterns-map.md) plus
+  the path of the committed spec document — on conflict, the document
+  wins over the prompt. (This pattern briefs by letter, so the first
+  prompt works; if you add a Room, note that its id cannot go in an
+  `initial_prompt` — the Room is created after its members.)
 - Parallel WRITERS never share one working tree. One worktree or folder
-  each; deliverables travel as file paths in letters.
+  each; deliverables travel as file paths in letters. Put the tree each
+  executor owns in its brief, and follow the isolation drill in
+  `collaboration-tools-manual.md` (Delivery discipline) — own worktree
+  before the first write, explicit paths on `git add`, `pnpm install
+  --frozen-lockfile` in a fresh tree, absolute paths in every `cd`.
 
 ## Lead discipline
 
@@ -43,6 +52,10 @@ guessing.
 - Two failed retries on one step = stop. The executor reports facts and
   waits; diagnosis of open-ended failures is the lead's job, and cheap
   models burn turns iterating on problems they cannot frame.
+- To check whether an executor is still burning turns, compare
+  `message_count` between two `session.get` reads. `updated_at` alone
+  proves nothing — bookkeeping writes move it while the Session sits
+  idle, which makes a stalled executor look alive. Observed 2026-08-20.
 - Keep one progress-ledger file in the repo. Every verdict, dispatch and
   landing is written there alongside the work itself. After a context
   compaction the ledger, not anyone's memory, is the source of truth.

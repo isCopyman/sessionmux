@@ -16,10 +16,11 @@ inventing a coordination scheme — the existing base carries all of them.
 - Parallel voting: send the same question to N Sessions by BCC and compare
   the answers yourself. On disagreement, open a Room and let the dissenters
   argue where everyone can hear.
-- Orchestrator-workers: `session.create` (with `initial_prompt`) to staff,
-  mailbox to assign, a Room as the shared board. See `star.md`. When the
-  orchestrator runs on a far stronger model than the workers, follow
-  `lead-executor-split.md`.
+- Orchestrator-workers: `session.create` to staff, then mailbox to assign
+  or a Room as the shared board. Staff before you `room.create` — the Room
+  is built from the Session ids, so no `initial_prompt` can contain the
+  `room_id`. See `star.md`. When the orchestrator runs on a far stronger
+  model than the workers, follow `lead-executor-split.md`.
 - Evaluator-optimizer: drafter and reviewer as two Sessions exchanging
   rounds. Obey the chain-depth rule below.
 - Autonomous long run: one Session plus a continuation timer
@@ -70,4 +71,14 @@ a reply obligation can no longer be attached.
   worker may not check mail mid-turn.
 - Parallel coding on one shared tree is the biggest accident surface.
   Isolate each worker in its own worktree or folder; never share one dirty
-  tree. Deliver via files and paths.
+  tree. Deliver via files and paths. The step-by-step drill —
+  `git worktree add` before the first write, no writes in anyone else's
+  tree, `git add <paths>` never `-A`, `pnpm install --frozen-lockfile` in
+  a fresh tree, absolute paths in every `cd` — is in
+  `collaboration-tools-manual.md` under Delivery discipline.
+- Room posts default to `expects_reply=false` and most of them should stay
+  that way. Reserve `true` for a question you are waiting on: it stamps an
+  obligation on every Session mentioned, so routine receipts sent with
+  `true` leave the whole team wearing a "needs reply" badge. Assignment
+  LETTERS are the opposite — `send_message` defaults to `true` and should
+  keep it.
