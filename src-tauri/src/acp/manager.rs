@@ -36,7 +36,9 @@ use crate::acp::types::{
 use crate::db::entities::collection_conversation;
 use crate::db::entities::conversation::{self, ConversationKind, ConversationStatus};
 use crate::db::error::DbError;
-use crate::db::service::{collaboration_service, conversation_service, fork_lineage_service};
+use crate::db::service::{
+    collaboration_service, conversation_service, folder_service, fork_lineage_service,
+};
 use crate::db::AppDatabase;
 use crate::models::agent::AgentType;
 use crate::models::CollaborationChanged;
@@ -235,9 +237,20 @@ async fn link_and_bind_conversation(
             // silent fallback to working_dir-based find-or-create masked
             // contract violations.
             (None, Some(folder_id)) => {
-                let row = conversation_service::create(db_conn, folder_id, agent_type, None, None)
-                    .await
-                    .map_err(|e| AcpError::protocol(e.to_string()))?;
+                // Probe live HEAD. `folder.git_branch` is never persisted, so
+                // copying it (or passing None) would stamp every send-created
+                // row empty — including the first prompt after opening a
+                // linked worktree, before the UI chip's poll has a name.
+                let git_branch = match folder_service::get_folder_by_id(db_conn, folder_id).await {
+                    Ok(Some(folder)) => {
+                        crate::commands::folders::detect_git_branch(&folder.path).await
+                    }
+                    _ => None,
+                };
+                let row =
+                    conversation_service::create(db_conn, folder_id, agent_type, None, git_branch)
+                        .await
+                        .map_err(|e| AcpError::protocol(e.to_string()))?;
                 (row.id, folder_id, true)
             }
             (None, None) => {
@@ -5515,6 +5528,81 @@ mod tests {
             .await
             .to_snapshot();
         assert_eq!(snap2.conversation_id, Some(first_id));
+    }
+
+    /// O4: Branch B (send creates the row) must probe live HEAD. Copying
+    /// `folder.git_branch` (always NULL) or passing None would persist an
+    /// empty branch for the first prompt after opening a linked worktree.
+    #[tokio::test]
+    async fn send_prompt_linked_records_linked_worktree_branch_when_creating_row() {
+        use crate::db::test_helpers;
+        let db = test_helpers::fresh_in_memory_db().await;
+        let dir = tempfile::tempdir().expect("tempdir");
+        git_run_in(dir.path(), &["init", "-q", "-b", "main"]);
+        git_run_in(dir.path(), &["commit", "-q", "--allow-empty", "-m", "base"]);
+        let wt = dir.path().join("wt");
+        let wt_str = wt.to_str().expect("utf-8 path").to_string();
+        git_run_in(
+            dir.path(),
+            &["worktree", "add", "-q", "-b", "wt/o4-send", &wt_str],
+        );
+        assert!(wt.join(".git").is_file(), "linked worktree .git is a file");
+
+        let folder_id = test_helpers::seed_folder(&db, &wt_str).await;
+        let folder = folder_service::get_folder_by_id(&db.conn, folder_id)
+            .await
+            .expect("folder")
+            .expect("present");
+        assert!(
+            folder.git_branch.is_none(),
+            "folder.git_branch stays NULL; send must not copy it"
+        );
+
+        let mgr = ConnectionManager::new();
+        let conn_id = "c-o4";
+        {
+            let mut map = mgr.connections.lock().await;
+            map.insert(conn_id.into(), fake_connection(conn_id, None));
+        }
+
+        let _ = mgr
+            .send_prompt_linked(&db, conn_id, one_text_block(), Some(folder_id), None)
+            .await;
+        let snap = mgr
+            .get_state(conn_id)
+            .await
+            .unwrap()
+            .read()
+            .await
+            .to_snapshot();
+        let conv_id = snap.conversation_id.expect("Branch B created a row");
+        let summary = conversation_service::get_by_id(&db.conn, conv_id)
+            .await
+            .expect("read back");
+        assert_eq!(
+            summary.git_branch.as_deref(),
+            Some("wt/o4-send"),
+            "send-created session must record live HEAD, not the empty folder column"
+        );
+    }
+
+    fn git_run_in(dir: &std::path::Path, args: &[&str]) {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@example.com")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@example.com")
+            .output()
+            .expect("spawn git");
+        assert!(
+            out.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
     }
 
     #[tokio::test]

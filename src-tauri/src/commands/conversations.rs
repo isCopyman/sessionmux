@@ -2101,11 +2101,15 @@ pub async fn create_conversation_core_with_source(
     title: Option<String>,
     created_by: &str,
 ) -> Result<i32, AppCommandError> {
+    // Probe the working tree now. The folder row's `git_branch` column is
+    // always NULL (live HEAD is a frontend poll), so reading it here would
+    // persist an empty branch on every new Session — including the window
+    // after opening a linked worktree before the chip's first poll lands.
     let git_branch = if let Some(folder) = folder_service::get_folder_by_id(conn, folder_id)
         .await
         .map_err(AppCommandError::from)?
     {
-        detect_git_branch(&folder.path).await
+        crate::commands::folders::detect_git_branch(&folder.path).await
     } else {
         None
     };
@@ -2415,25 +2419,6 @@ pub async fn create_chat_dir(
         .unwrap_or_else(|_| std::path::PathBuf::from("."));
     let path = create_chat_dir_core(&data_dir)?;
     Ok(CreateChatDirResult { path })
-}
-
-async fn detect_git_branch(path: &str) -> Option<String> {
-    let output = crate::process::tokio_command("git")
-        .args(["rev-parse", "--abbrev-ref", "HEAD"])
-        .current_dir(path)
-        .output()
-        .await
-        .ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-
-    let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if branch.is_empty() || branch == "HEAD" {
-        return None;
-    }
-    Some(branch)
 }
 
 pub async fn update_conversation_status_core(
@@ -3426,6 +3411,69 @@ mod tests {
             summary.git_branch.is_none(),
             "non-git path should produce no branch, got: {:?}",
             summary.git_branch
+        );
+    }
+
+    /// O4: first send creates the row via this path. The folder row's
+    /// `git_branch` is always NULL (UI chip waits on a later poll), so the
+    /// create must probe live HEAD — including a linked worktree whose `.git`
+    /// is a file, not a directory.
+    #[tokio::test]
+    async fn create_conversation_core_records_linked_worktree_branch() {
+        let db = fresh_in_memory_db().await;
+        let dir = tempfile::tempdir().expect("tempdir");
+        git_run(dir.path(), &["init", "-q", "-b", "main"]);
+        git_run(dir.path(), &["commit", "-q", "--allow-empty", "-m", "base"]);
+        let wt = dir.path().join("wt");
+        let wt_str = wt.to_str().expect("utf-8 path").to_string();
+        git_run(
+            dir.path(),
+            &["worktree", "add", "-q", "-b", "wt/o4", &wt_str],
+        );
+        assert!(
+            wt.join(".git").is_file(),
+            "linked worktree .git must be a file"
+        );
+
+        let folder_id = seed_folder(&db, &wt_str).await;
+        let folder = folder_service::get_folder_by_id(&db.conn, folder_id)
+            .await
+            .expect("folder")
+            .expect("present");
+        assert!(
+            folder.git_branch.is_none(),
+            "folder.git_branch stays NULL; create must not copy it"
+        );
+
+        let id = create_conversation_core(&db.conn, folder_id, AgentType::ClaudeCode, None)
+            .await
+            .expect("create");
+        let summary = conversation_service::get_by_id(&db.conn, id)
+            .await
+            .expect("read back");
+        assert_eq!(
+            summary.git_branch.as_deref(),
+            Some("wt/o4"),
+            "session git_branch must come from live HEAD, not the UI poll / folder column"
+        );
+    }
+
+    fn git_run(dir: &std::path::Path, args: &[&str]) {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@example.com")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@example.com")
+            .output()
+            .expect("spawn git");
+        assert!(
+            out.status.success(),
+            "git {args:?} failed: {}",
+            String::from_utf8_lossy(&out.stderr)
         );
     }
 
