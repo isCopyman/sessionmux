@@ -1569,7 +1569,10 @@
       "moveToWorkbench": "النقل إلى مساحة عمل",
       "openInNewWorkbench": "فتح في مساحة عمل جديدة",
       "movedToWorkbench": "تم نقل ”{title}“ إلى {workbench}",
-      "openedInWorkbench": "تم فتح ”{title}“ في {workbench}"
+      "openedInWorkbench": "تم فتح ”{title}“ في {workbench}",
+      "sessionWorking": "يعمل الآن",
+      "sessionConnectionError": "خطأ في الاتصال",
+      "busyCountBadge": "{count} جلسة قيد العمل"
     },
     "statusLabels": {
       "in_progress": "قيد التنفيذ",

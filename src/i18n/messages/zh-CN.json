@@ -1569,7 +1569,10 @@
       "moveToWorkbench": "移动到工作台",
       "openInNewWorkbench": "在新工作台打开",
       "movedToWorkbench": "已将“{title}”移动到 {workbench}",
-      "openedInWorkbench": "已在 {workbench} 打开“{title}”"
+      "openedInWorkbench": "已在 {workbench} 打开“{title}”",
+      "sessionWorking": "正在工作",
+      "sessionConnectionError": "连接出错",
+      "busyCountBadge": "{count} 个会话正在工作"
     },
     "statusLabels": {
       "in_progress": "进行中",

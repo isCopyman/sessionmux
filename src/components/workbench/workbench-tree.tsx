@@ -1,6 +1,13 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react"
 import {
   ChevronDown,
   ChevronRight,
@@ -57,6 +64,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
+import { useConnectionStore } from "@/contexts/acp-connections-context"
 import { useTabStore } from "@/contexts/tab-context"
 import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
 import { toErrorMessage } from "@/lib/app-error"
@@ -83,6 +91,12 @@ import { cn } from "@/lib/utils"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { useWorkbenchStore } from "@/stores/workbench-store"
 import { useOrganizationRevisionStore } from "@/stores/organization-revision-store"
+import {
+  connectionKeysForSession,
+  deriveWorkbenchActivity,
+  type WorkbenchActivityTab,
+  type WorkbenchConnectionSnapshot,
+} from "./workbench-activity"
 
 type EditorState =
   | { mode: "create" }
@@ -102,6 +116,60 @@ interface TreeSession {
   liveTabId?: string
   updatedAt: string | null
   tabOrder: number
+}
+
+type ConnectionLookup = {
+  conversationId: number
+  keys: readonly string[]
+}
+
+function encodeConnectionSnapshot(
+  map: ReadonlyMap<number, WorkbenchConnectionSnapshot>
+): string {
+  return [...map.entries()]
+    .sort((left, right) => left[0] - right[0])
+    .map(([id, conn]) => `${id}:${conn.status}`)
+    .join(",")
+}
+
+function useConnectionsByConversationId(
+  lookups: readonly ConnectionLookup[]
+): ReadonlyMap<number, WorkbenchConnectionSnapshot> {
+  const store = useConnectionStore()
+  const cacheRef = useRef<{
+    encoded: string
+    map: Map<number, WorkbenchConnectionSnapshot>
+  }>({ encoded: "", map: new Map() })
+
+  const subscribe = useCallback(
+    (cb: () => void) => {
+      const unsubs = lookups.flatMap((item) =>
+        item.keys.map((key) => store.subscribeKey(key, cb))
+      )
+      return () => {
+        for (const unsub of unsubs) unsub()
+      }
+    },
+    [store, lookups]
+  )
+
+  const getSnapshot = useCallback(() => {
+    const next = new Map<number, WorkbenchConnectionSnapshot>()
+    for (const item of lookups) {
+      for (const key of item.keys) {
+        const conn = store.getConnection(key)
+        if (!conn) continue
+        next.set(item.conversationId, { status: conn.status })
+        break
+      }
+    }
+    const encoded = encodeConnectionSnapshot(next)
+    if (encoded === cacheRef.current.encoded) return cacheRef.current.map
+    cacheRef.current = { encoded, map: next }
+    return next
+  }, [store, lookups])
+
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
 }
 
 async function fetchWorkbenchTabs(workbenchId: number) {
@@ -293,69 +361,111 @@ export function WorkbenchTree() {
     [conversations]
   )
 
-  const sessionsFor = (workbenchId: number): TreeSession[] => {
-    const workbenchRooms = catalogRooms.filter(
-      (room) => room.workbenchId === workbenchId
-    )
-    if (workbenchId === activeWorkbenchId) {
-      const fromTabs = liveTabs.map((tab, tabOrder): TreeSession => {
-        if (tab.kind === "room" && tab.roomId) {
-          const room = workbenchRooms.find((item) => item.id === tab.roomId)
-          return room
-            ? roomToTreeSession(room, conversationById, tabOrder, tab.id)
-            : {
-                key: tab.id,
-                kind: "room",
-                roomId: tab.roomId,
-                conversationId: null,
-                folderId: tab.folderId,
-                agentType: tab.agentType,
-                title: tab.title,
-                liveTabId: tab.id,
-                updatedAt: null,
-                tabOrder,
-              }
-        }
-        const conversation =
-          tab.conversationId == null
-            ? undefined
-            : conversationById.get(tab.conversationId)
-        return {
-          key: tab.id,
-          kind: "conversation",
-          conversationId: tab.conversationId,
-          folderId: tab.folderId,
-          agentType: tab.agentType,
-          title: formatConversationTitle(tab.title) || t("draftSession"),
-          status: tab.status,
-          liveTabId: tab.id,
-          updatedAt: conversation?.updated_at ?? null,
-          tabOrder,
-        }
-      })
-      const seen = new Set(
-        fromTabs
-          .filter((session) => session.kind === "room")
-          .map((session) => session.roomId)
+  const sessionsFor = useCallback(
+    (workbenchId: number): TreeSession[] => {
+      const workbenchRooms = catalogRooms.filter(
+        (room) => room.workbenchId === workbenchId
       )
-      const extra = workbenchRooms
-        .filter((room) => !seen.has(room.id))
-        .map((room, index) =>
-          roomToTreeSession(room, conversationById, fromTabs.length + index)
+      if (workbenchId === activeWorkbenchId) {
+        const fromTabs = liveTabs.map((tab, tabOrder): TreeSession => {
+          if (tab.kind === "room" && tab.roomId) {
+            const room = workbenchRooms.find((item) => item.id === tab.roomId)
+            return room
+              ? roomToTreeSession(room, conversationById, tabOrder, tab.id)
+              : {
+                  key: tab.id,
+                  kind: "room",
+                  roomId: tab.roomId,
+                  conversationId: null,
+                  folderId: tab.folderId,
+                  agentType: tab.agentType,
+                  title: tab.title,
+                  liveTabId: tab.id,
+                  updatedAt: null,
+                  tabOrder,
+                }
+          }
+          const conversation =
+            tab.conversationId == null
+              ? undefined
+              : conversationById.get(tab.conversationId)
+          return {
+            key: tab.id,
+            kind: "conversation",
+            conversationId: tab.conversationId,
+            folderId: tab.folderId,
+            agentType: tab.agentType,
+            title: formatConversationTitle(tab.title) || t("draftSession"),
+            status: tab.status,
+            liveTabId: tab.id,
+            updatedAt: conversation?.updated_at ?? null,
+            tabOrder,
+          }
+        })
+        const seen = new Set(
+          fromTabs
+            .filter((session) => session.kind === "room")
+            .map((session) => session.roomId)
         )
-      return sortTreeSessions([...fromTabs, ...extra])
+        const extra = workbenchRooms
+          .filter((room) => !seen.has(room.id))
+          .map((room, index) =>
+            roomToTreeSession(room, conversationById, fromTabs.length + index)
+          )
+        return sortTreeSessions([...fromTabs, ...extra])
+      }
+      return sortTreeSessions([
+        ...persistedSessions(
+          snapshots.get(workbenchId) ?? [],
+          conversationById,
+          t("untitledSession")
+        ),
+        ...workbenchRooms.map((room, index) =>
+          roomToTreeSession(room, conversationById, 1000 + index)
+        ),
+      ])
+    },
+    [activeWorkbenchId, catalogRooms, conversationById, liveTabs, snapshots, t]
+  )
+
+  const activityInput = useMemo(() => {
+    const tabs: WorkbenchActivityTab[] = []
+    const sessionsByWorkbenchId = new Map<number, TreeSession[]>()
+    const keysByConversationId = new Map<number, string[]>()
+    for (const item of items) {
+      const sessions = sessionsFor(item.id)
+      sessionsByWorkbenchId.set(item.id, sessions)
+      for (const session of sessions) {
+        tabs.push({
+          workbenchId: item.id,
+          conversationId: session.conversationId,
+        })
+        if (session.conversationId == null) continue
+        const keys = connectionKeysForSession(session)
+        const existing = keysByConversationId.get(session.conversationId)
+        if (!existing) {
+          keysByConversationId.set(session.conversationId, keys)
+          continue
+        }
+        for (const key of keys) {
+          if (!existing.includes(key)) existing.push(key)
+        }
+      }
     }
-    return sortTreeSessions([
-      ...persistedSessions(
-        snapshots.get(workbenchId) ?? [],
-        conversationById,
-        t("untitledSession")
-      ),
-      ...workbenchRooms.map((room, index) =>
-        roomToTreeSession(room, conversationById, 1000 + index)
-      ),
-    ])
-  }
+    const lookups: ConnectionLookup[] = [...keysByConversationId.entries()].map(
+      ([conversationId, keys]) => ({ conversationId, keys })
+    )
+    return { tabs, sessionsByWorkbenchId, lookups }
+  }, [items, sessionsFor])
+
+  const connectionsByConversationId = useConnectionsByConversationId(
+    activityInput.lookups
+  )
+  const activity = useMemo(
+    () =>
+      deriveWorkbenchActivity(activityInput.tabs, connectionsByConversationId),
+    [activityInput.tabs, connectionsByConversationId]
+  )
 
   const openEditor = (next: EditorState) => {
     setEditor(next)
@@ -577,7 +687,9 @@ export function WorkbenchTree() {
           items.map((item) => {
             const active = item.id === activeWorkbenchId
             const isExpanded = expanded.has(item.id)
-            const sessions = sessionsFor(item.id)
+            const sessions =
+              activityInput.sessionsByWorkbenchId.get(item.id) ?? []
+            const busyCount = activity.busyCountByWorkbenchId.get(item.id) ?? 0
             return (
               <div key={item.id}>
                 <ContextMenu>
@@ -640,6 +752,18 @@ export function WorkbenchTree() {
                           />
                         )}
                         <span className="truncate">{item.name}</span>
+                        {busyCount > 0 ? (
+                          <span
+                            title={t("busyCountBadge", { count: busyCount })}
+                            className={cn(
+                              "inline-flex h-[0.9375rem] min-w-[1rem] shrink-0 items-center justify-center",
+                              "rounded-[0.3125rem] bg-muted px-[0.25rem]",
+                              "text-[0.625rem] font-semibold leading-none tabular-nums text-primary"
+                            )}
+                          >
+                            {busyCount}
+                          </span>
+                        ) : null}
                         {item.is_pinned ? (
                           <Pin
                             aria-hidden
@@ -762,6 +886,13 @@ export function WorkbenchTree() {
                       const moveTargets = items.filter(
                         (candidate) => candidate.id !== item.id
                       )
+                      const sessionActivity =
+                        session.kind === "conversation" &&
+                        session.conversationId != null
+                          ? (activity.byConversationId.get(
+                              session.conversationId
+                            ) ?? null)
+                          : null
                       return (
                         <ContextMenu key={session.key}>
                           <ContextMenuTrigger asChild>
@@ -800,6 +931,23 @@ export function WorkbenchTree() {
                                     className="h-3 w-3"
                                   />
                                 )}
+                                {sessionActivity === "busy" ? (
+                                  <span
+                                    title={t("sessionWorking")}
+                                    className={cn(
+                                      "absolute -top-0.5 -left-0.5 h-1.5 w-1.5 rounded-full",
+                                      "bg-primary animate-pulse ring-1 ring-sidebar"
+                                    )}
+                                  />
+                                ) : sessionActivity === "attention" ? (
+                                  <span
+                                    title={t("sessionConnectionError")}
+                                    className={cn(
+                                      "absolute -top-0.5 -left-0.5 h-1.5 w-1.5 rounded-full",
+                                      "bg-destructive ring-1 ring-sidebar"
+                                    )}
+                                  />
+                                ) : null}
                                 {session.status ? (
                                   <ConversationStatusDot
                                     status={session.status}
