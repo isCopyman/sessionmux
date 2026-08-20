@@ -1276,3 +1276,12 @@ T2 后置截图（CDP 9222 可用，基线在 .artifacts）+ 晨间验收报告 
 **其他压缩易失事实**：commit 引用 O# 惯例已生效（自 4b7c416c 后）；prompt
 审计产物在本会话 scratchpad/prompt-audit*.txt（30 条零遗漏，双通道方法已记
 上一条目）；编队第三轮运行中（协调者+三 grok 工人全活，Room 事件 47+）。
+
+**hooks 定案正式复查中（压缩前最后新增）**：用户举证三处——本机
+ 目录实存、orca 与 herdr 两仓库（都在 repo_audit/repos/ 下）
+均配 hooks 且各有多 agent 消息传递机制；我们自己的 HARNESS-INSTRUCTION-FILES-
+SURVEY 第 19 行也记过 grok"原生兼容 Claude 生态（skills/plugins/hooks）"。
+若 grok hooks 真能中途注入，8·19 定案的"跨家不通用"前提对编队主力不成立。
+**已派 r-hooks**（haiku，只读）：查 grok hooks 事件面/Claude 兼容度/能否
+中途注入 + orca/herdr 的 hooks 配置与消息传递机制 + 对 codeg 唤醒阶梯的
+补强启示。交付后领导复议定案，在此之前旧定案仍有效。
