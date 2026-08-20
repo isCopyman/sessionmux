@@ -1161,3 +1161,16 @@ T2 后置截图（CDP 9222 可用，基线在 .artifacts）+ 晨间验收报告 
   exit code 单独 echo。③ O24 竞品取证裁决入档（openagents 内联工具调用
   是"线程即 agent 唯一界面"的被迫选择；Multica/Buzz 都把工具调用放
   drill-in 面板、聊天流保持干净；codeg 同构后者——不内联，做成员活动桥）。
+- 2026-08-21 凌晨 **w-grokresume 落地 + 追踪系统裁决**：① O25 修复合并
+  （c92b44ed + fmt 整形 0f928e3d）：session_request_cwd helper 只对 Grok
+  canonicalize（new/load/resume 三请求统一，resume 是工人举证后自主扩展
+  ——三跳链第一跳，予以追认），其他 agent 字节不变；门禁绿：三路 clippy 0、
+  server 测试 **2588**（+3）。存量 `\\?\` 桶因文件未删，修复激活后可直接
+  重新接上。② 用户问"要不要改用 GitHub issues"——裁决：**现阶段不用**。
+  理由：永不 push origin 的军规使远端 issues 成为死信箱；MD 台账与修复
+  同 commit 原子落库（今晚每个合并都是"代码+台账"一体）；工人简报直接
+  引用台账 file:line 当上下文，issues 得靠网络+auth 才可读。MD 的真短板
+  是"开/关状态一眼看不清"——已补：DOGFOODING-LOG 顶部加状态板
+  （O1-O27 一行一态，改状态必须同步）。长线：若仓库开源/推远端，
+  开放项迁 issues、台账留作史料；codeg 自身待办任务功能可做集成实验
+  （dogfooding 素材），但不做记录系统的事实源。
