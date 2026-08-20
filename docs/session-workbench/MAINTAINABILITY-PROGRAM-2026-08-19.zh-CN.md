@@ -1048,3 +1048,14 @@ T2 后置截图（CDP 9222 可用，基线在 .artifacts）+ 晨间验收报告 
   拿活 companion token 手驱 codeg-mcp.exe，凭据一度落盘工人自删；显式 git add
   纪律防住了 token 进 commit）。据此立诊断项：MCP 启动超时根因 + 回复即销账
   语义（探查后我出设计再派工）。
+- 2026-08-20 晚 **O11/O12 落地 + 门禁全绿**：① O12 就地展开 diff
+  （cherry-pick 13711864，复用 UnifiedDiffPreview embedded 预留位）；工人测试
+  匹配器撞上行内词级 diff 拆分，领导修（getDiffLine textContent 匹配）。
+  ② O11 Room chip（merge f7418004，标题+useOpenRoom 直开，工人举证推翻
+  "会话中心详情"原案，采纳）；连带 stub 修 5 个测试套件 import 图断裂
+  （tab-store 模块级 getState 撞局部 mock，与 sidebar.test 同模式）。
+  ③ 门禁：vitest 4708/4708、build 过、eslint 0 error/4 既有 warning。
+  ④ 工艺事故记录：Agent worktree 隔离两次给出**非 trunk 基底**（外来血统
+  41 提交），一次工人自救 reset，一次领导 cherry-pick 绕过；已入领导侧
+  持久记忆（合并前必查 merge-base）。⑤ 用户新需求排队：claude_code
+  provider 双通道（订阅/API，x-provider 诊断在跑）。
