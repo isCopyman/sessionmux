@@ -11,9 +11,10 @@ use crate::models::{
     AgentType, ContentBlock, ConversationDetail, ConversationSummary, MessageRole, UnifiedMessage,
 };
 use crate::parsers::claude::{
-    capture_title_record, extract_assistant_content, extract_usage, extract_user_content,
-    extract_user_text, group_into_turns, is_interrupt_marker, is_meta_message,
-    is_synthetic_assistant, slash_command_display, ClaudeRecordAccumulator,
+    capture_title_record, chain_anchor_placeholder, extract_assistant_content, extract_usage,
+    extract_user_content, extract_user_text, group_into_turns, is_chain_anchor_placeholder,
+    is_interrupt_marker, is_meta_message, is_synthetic_assistant, slash_command_display,
+    ClaudeRecordAccumulator,
 };
 use crate::parsers::{
     backfill_turn_durations, compute_session_stats, folder_name_from_path,
@@ -181,7 +182,10 @@ impl Transcript {
     /// what the conversation actually renders, so rewound branches, `isMeta`
     /// injections and `<synthetic>` error placeholders are already gone.
     fn message_count(&self) -> u32 {
-        self.messages.len() as u32
+        self.messages
+            .iter()
+            .filter(|m| !is_chain_anchor_placeholder(m))
+            .count() as u32
     }
 
     fn folder_name(&self) -> Option<String> {
@@ -193,6 +197,45 @@ impl Transcript {
 /// with these and repeat at the file tail; their `timestamp` is an integer
 /// epoch (content records use ISO strings), which is why they can never move
 /// `started_at` / `ended_at`.
+fn is_attachment_record(value: &Value) -> bool {
+    value.get("type").and_then(Value::as_str) == Some("attachment")
+}
+
+fn extend_chain_with_attachments(records: &[Value], chain: &mut Vec<usize>) {
+    chain.retain(|&i| is_content_record(&records[i]) || is_attachment_record(&records[i]));
+    let mut on_chain: HashSet<usize> = chain.iter().copied().collect();
+    let mut children: HashMap<&str, Vec<usize>> = HashMap::new();
+    for (i, value) in records.iter().enumerate() {
+        if on_chain.contains(&i) || !is_attachment_record(value) || is_sidechain(value) {
+            continue;
+        }
+        if let Some(parent) = value
+            .get("parentUuid")
+            .and_then(Value::as_str)
+            .filter(|p| !p.is_empty())
+        {
+            children.entry(parent).or_default().push(i);
+        }
+    }
+    while let Some(&leaf) = chain.last() {
+        let Some(leaf_uuid) = records[leaf].get("uuid").and_then(Value::as_str) else {
+            break;
+        };
+        let Some(kids) = children.get(leaf_uuid) else {
+            break;
+        };
+        let extra: Vec<usize> = kids
+            .iter()
+            .copied()
+            .filter(|idx| on_chain.insert(*idx))
+            .collect();
+        if extra.is_empty() {
+            break;
+        }
+        chain.extend(extra);
+    }
+}
+
 fn is_content_record(value: &Value) -> bool {
     matches!(
         value.get("type").and_then(Value::as_str),
@@ -378,7 +421,7 @@ fn active_branch(records: &[Value]) -> Vec<usize> {
     }
 
     chain.reverse();
-    chain.retain(|&i| is_content_record(&records[i]));
+    extend_chain_with_attachments(records, &mut chain);
 
     if chain.is_empty() || (!chosen_by_marker && chain.len() < 2 && append_order.len() > 1) {
         return append_order;
@@ -662,6 +705,12 @@ fn parse_transcript(bytes: &[u8]) -> Transcript {
                     });
                 }
                 pending_assistant_chat_id = message_id;
+            }
+            "attachment" => {
+                if let Some(id) = uuid.filter(|u| !u.is_empty()) {
+                    messages.push(chain_anchor_placeholder(id, timestamp));
+                }
+                continue;
             }
             _ => continue,
         }

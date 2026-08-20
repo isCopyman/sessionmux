@@ -59,11 +59,16 @@ const USER_PROMPT_PREVIEW_MAX_CHARS: usize = 500;
 /// `kill_tree`.
 const DISCONNECT_ALL_GRACE: Duration = Duration::from_millis(500);
 
-/// True for ids in the parsers' turn-id namespace (`turn-<digits>`), which every
-/// parser assigns via `format!("turn-{}", n)`. A broadcast `message_id` must
-/// never land here: it would collide with a persisted transcript turn id and let
-/// id-keyed cross-client dedup suppress or hide a prompt. Used to reject an
-/// untrusted client-supplied `message_id` of that shape.
+/// True for ids matching `turn-<digits>`. Most of the 14 parsers assign that
+/// shape via `format!("turn-{}", n)` when grouping into `MessageTurn`s; three
+/// do not: Cline `{conversation_id}-{n}`, Cursor `cursor-turn-{i}`, Grok
+/// `grok-turn-{i}`. Those namespaces currently fall through this predicate.
+///
+/// A broadcast `message_id` must never land in a persisted transcript turn-id
+/// namespace: it would collide with a historical user turn and let id-keyed
+/// cross-client dedup suppress or hide a prompt. Used to reject an untrusted
+/// client-supplied `message_id` of the `turn-<digits>` shape. Widening the
+/// matcher to the other parser namespaces is a coordinator decision.
 fn is_reserved_turn_id(id: &str) -> bool {
     matches!(id.strip_prefix("turn-"), Some(rest)
         if !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()))
@@ -3691,18 +3696,27 @@ mod tests {
 
     #[test]
     fn is_reserved_turn_id_matches_only_the_parser_namespace() {
-        // Rejected: the parsers' `turn-<digits>` ids (an untrusted client id of
-        // this shape would collide with a persisted transcript turn).
+        // Rejected: the `turn-<digits>` ids used by 11 of 14 parsers (an
+        // untrusted client id of this shape would collide with a persisted
+        // transcript turn).
         assert!(is_reserved_turn_id("turn-0"));
         assert!(is_reserved_turn_id("turn-42"));
-        // Accepted: anything else, including the real UI sender id shape and the
-        // connection-scoped fallback shape.
+        // Accepted: the real UI sender id shape and the connection-scoped
+        // fallback shape.
         assert!(!is_reserved_turn_id("optimistic-9f3c1a2b"));
         assert!(!is_reserved_turn_id("user-conn-7"));
         assert!(!is_reserved_turn_id("turn-")); // no number
         assert!(!is_reserved_turn_id("turn-1a")); // not all digits
         assert!(!is_reserved_turn_id("turnabout-1"));
         assert!(!is_reserved_turn_id(""));
+        // Known coverage gap (current matcher, not the desired end state):
+        // Cline / Cursor / Grok turn ids are not `turn-<digits>`. Do not
+        // widen the predicate without coordinator sign-off.
+        assert!(!is_reserved_turn_id("cursor-turn-0"));
+        assert!(!is_reserved_turn_id("grok-turn-0"));
+        assert!(!is_reserved_turn_id("taskdir-1"));
+        assert!(!is_reserved_turn_id("host-control:req-1"));
+        assert!(!is_reserved_turn_id("acp-0"));
     }
 
     fn fake_connection(id: &str, conv_id: Option<i32>) -> AgentConnection {

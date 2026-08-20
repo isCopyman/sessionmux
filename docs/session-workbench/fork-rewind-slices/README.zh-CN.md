@@ -233,6 +233,81 @@ assistant 的 `id` 活到 `:2574`）；`:1551-1591` 的 `attachment` 分支只�
 A 知道 parser 会扔，只有并排才看得见"我们扔掉的正好是它要求的那条"。并行三包 + 交叉复核
 的价值在此，不在三份报告本身。
 
+## 第二轮（用户已认可拆法，2026-08-20）
+
+规格：`ROUND2-SPECS.zh-CN.md`（commit `b740cfe3`）。派工帖 Room event `15d544e4`。
+
+| 包 | 主题 | Session | 分支 | 状态 |
+|---|---|---|---|---|
+| D | 锚点管道（**切片 2 硬前置**） | 316 | `wt/fork-anchor-pipeline` | 已派工 |
+| E | RFC 第二轮更正（纯文档） | 317 | `wt/fork-rfc-round2` | **已交付、已复核、已合并**（`f97312b2` → merge `7cf017a5`） |
+| F | `is_reserved_turn_id` 注释与缺口评估 | 318 | `wt/fork-reserved-id-audit` | **已交付、已复核、已合并**（`a68d06e3` → merge `a6a665c8`） |
+
+**包 E 结论（已复核）**：六项必改全部落地，引用逐条与协调者独立复核结果一致。新增
+`§7.6 锚点的真实形状` 是本包最有价值的部分，并**多提取了一种协调者漏掉的情况**——中断
+回合（已完成的非错误 tool_result 留在尾巴上，停在 assistant uuid 会被故意拒绝）。
+§2 已按家标注 forkAtMessage 粒度（Claude 消息级 / Codex 轮级 / 通用 ACP 不承诺），
+§9 已把 `fork_relation` 从「拟议」改为「已实现（切片 1）」。
+
+**规格自身第二处笔误（工人 317 指出，已改 `b9ab7670`）**：包 D 的「不做」原写
+「不碰 ACP 发送路径（那是包 E…）」——包 E 是纯文档，无发送路径；正确说法是「那属于后续
+的 forkAtMessage 包」。§0 第 9 条「发现规格错直接说」两轮内已两次生效
+（第一次是包 A 的「13 家 parser」）。
+
+forkAtMessage 本体要等 D 落地，本轮不派。codex 编码等上游，本轮只在包 E 更正文档。
+
+### 包F 结论与协调者拍板（已复核，2026-08-20）
+
+工人结论「**真缺口但低危**」，判定逻辑未改（只改注释 + 表征性测试）。协调者复核：
+
+- 谓词本体一行未动 ✓；14 家 turn 级 id 的 11/3 划分逐家核实 ✓
+  （例外：`cline.rs:285` `{conversation_id}-{n}`、`grok.rs:1014` `grok-turn-{i}`、
+  `cursor.rs:1080` `cursor-turn-{i}`；Qoder 经 `qoder.rs:828` 复用 Claude 的
+  `group_into_turns`，属 `turn-{n}` 一档）
+- **低危依据成立**：`commands/conversations.rs:1684-1694` 的 collide 守卫真实存在且
+  **与命名空间无关**（按"id 是否已存在于别的 turn"判断）。其注释明写这是对
+  `is_reserved_turn_id` 的**纵深防御**，失败模式为 "a recoverable visible duplicate,
+  **never a hidden prompt**"。
+- 合并后重跑 `is_reserved_turn_id_matches_only_the_parser_namespace`：**1 passed**。
+
+**协调者拍板：暂不放宽 matcher，也不改 allowlist。** 理由：
+
+1. 真正的防线是那个 **namespace-agnostic** 的 collide 守卫，覆盖现在与未来所有 parser
+   命名空间；`is_reserved_turn_id` 是第二道而非第一道。
+2. 枚举式 matcher 注定再次过期——这条注释正是这么坏掉的，再补三个前缀只是重演。
+3. Cline 的 `<数字>-<数字>` 形状过泛，加入黑名单会误伤合法客户端 id，而**误伤的后果
+   （prompt 被拒）比现状（旁观窗口短暂重复）更严重**。
+
+**可推翻本裁决的证据**（留给将来）：若发现某条路径上客户端 `message_id` 能进入持久化
+投影而**绕过** `apply_in_flight_message_id` 的 collide 守卫，则第一道防线成为唯一防线，
+届时必须放宽或改 allowlist。本轮未查该问题（不在规格范围内）。
+
+### 活体探针结果（用户批准的一发，已用掉）
+
+**收获大于原计划，且主要来自零成本的静态部分：**
+
+- **print lane 那颗雷静态排除。** `sdk.mjs:118` 把 `resumeSessionAt` →
+  `--resume-session-at=` argv；SDK 用 `["--output-format","stream-json","--verbose",
+  "--input-format","stream-json"]` + ProcessTransport 起 CLI，正是 SDK 文档所称
+  "print-mode CLI, Agent SDK, ProcessTransport" 的武装 lane。整条链
+  `_meta.claudeCode.options.resumeSessionAt` → `acp-agent.js:4821` spread → SDK Options
+  → `sdk.mjs:118` argv → CLI **全部静态贯通**。
+- **探针本身未中。** 隔离 scratch 目录（`%TEMP%/fork-lane-probe`）起 `claude -p "hi"`，
+  transcript 只有 user + 4 条 attachment，**无 assistant 记录**，turn 没跑完。诊断：本机
+  `ANTHROPIC_BASE_URL=http://127.0.0.1:8317` + `ANTHROPIC_AUTH_TOKEN`，spawn 的 claude
+  继承了本地代理 env。**按预算纪律未重试。** "是否真截断"留到包 D 落地后从 codeg 内部驱动。
+- **意外实测收获（比原计划要验的更重要）**：真实 transcript 一条 prompt 之后链尾是
+  **四条各带 uuid、以 parentUuid 串联的 attachment**——
+  `deferred_tools_delta` / `agent_listing_delta` / `skill_listing` /
+  `total_tokens_reminder`，正是 `claude.rs:1552-1554` 注释点名、并被整条丢弃的那几种。
+  **A×B 交叉约束由此获得真实数据佐证。**
+  另附带实锤了 `background_watch.rs:1256` 说的文件头 `queue-operation` 元数据（记录 0、1，
+  且**无 uuid**）。
+- **诚实边界**：本次无 assistant 记录，故只证明了 attachment 会挂在 user 之后，
+  **未证明**完成的 turn 末尾也是 attachment。后者仍是待验项。
+- 证据文件保留在
+  `~/.claude/projects/C--Users-63036-AppData-Local-Temp-fork-lane-probe/d71224df-….jsonl`。
+
 ## Dogfooding 摩擦记录
 
 组队阶段实际踩到的 codeg 工具/流程摩擦，逐条发在 Room 里（前缀【摩擦】，
@@ -290,6 +365,84 @@ event `e199466b`）。摘要：
 
 摩擦 7 精确化：消未读需要 `read_room` 的**窗口覆盖到那条 delivery**。首次用 `limit=3`
 没盖住，催办照来；`limit=12` 才消。即要先知道它在时间线上多深再挑窗口大小。
+
+第五批（event `7a30351f`，更正 `5d4d81ec`）—— **本轮最严重的一条**：
+
+10. **Room `@` 投递会一比一创建"幽灵会话"。**
+    协调者从未创建过的会话 319/320/321/322 出现在 `session.list`，全在协调者 workspace，
+    **第一条 user 消息就是 Room envelope 原文**。证据：
+    - `f50b01c0`（`@` 1 个）→ 幽灵 319
+    - `15d544e4`（`@` 3 个）→ 幽灵 320/321/322，创建于**同一毫秒**
+      （09:45:06.928155 / .928185 / .928206），数量精确等于 mention 数
+    幽灵的问题：**误认身份**（319 推理原文「Got it — I'm session 318」）、
+    **连不上 MCP**（321：「codeg-room, codeg-mcp, codeg-mailbox MCP servers failed to
+    connect」）、空转烧 token（319 单会话 `total_tokens = 455,168`）。
+    **不是重定向而是重复投递**——真工人照常收到，没有丢活。
+    未解释的反例：`34134260`（`@` 2 个，目标正在忙）**没有**生幽灵；生幽灵的两次目标都
+    空闲。猜测（**未证实**）：投递给空闲会话时走了 "closed Session is started" 但起了
+    新会话而非唤醒原会话。
+    **重发不扇出**——包 E 回执重发时没有产生新幽灵。
+11. **`session.stop` 停不掉投递创建的会话；MCP 启动超时是同簇现象。**
+    工人 318 报告本轮曾遇 `codeg-room` MCP 启动超时 65s，与幽灵会话的 "MCP servers
+    failed to connect" 同属一簇。 对四个幽灵调用均返回
+    "The Session had no active managed runtime" —— codeg 认为自己不持有其运行时。
+    投递创建出的会话脱离了 Host Control 的运行时管理。
+
+    **协调者的自我更正**：曾据 `updated_at` 仍在推进判断"还在持续烧钱"，**是错的**。
+    正确指标是 `message_count`——四个幽灵始终为 2（1 user + 1 assistant），从未增长，
+    即**每个只跑了一个 turn，一次性成本，非持续泄漏**。`updated_at` 抖动是行簿记。
+    教训：判断会话是否在烧钱看 turn 数，不看时间戳。
+
+    处置：四个已 `session.stop`（无效但已尝试），**未删除、未归档**，按用户"事故样本
+    保留别清理"的标准指令留作证据。
+
+第六批 —— **一条把前面几条串起来的因果链**：
+
+12. **MCP 不可用 + 回复不销账 ⇒ 工人手搓脚本直连 `codeg-mcp.exe`，并把实时 token 写进
+    协调者的 git 工作树。**
+    协调者在自己树里撞见一个未跟踪文件 `_room_consume.py`（4251 字节）。内容是工人
+    （几乎可确定是 318：脚本里 `DELIVERED` 常量正是它自己那条包 F 交付帖 `c00d9335`）
+    手写的 Python，直接 spawn `codeg-mcp.exe`：
+    ```
+    --parent-connection-id <REDACTED>  --socket-path \\.\pipe\codeg-mcp-<pid>
+    --token <REDACTED-LIVE-TOKEN>      --features room  --server-name codeg-room
+    ```
+    脚本首行自述：`# Temporary consume-read for an already-answered Room @. Delete after use.`
+
+    **因果链**：摩擦 7（回复不销账，必须调 `read_room`）+ MCP 启动超时 65s（工人 318
+    自报，与幽灵会话的 "MCP servers failed to connect" 同簇）⇒ 工人无法正常调
+    `read_room` 销账 ⇒ 绕过 MCP 客户端层，直接用 companion token 驱动二进制。
+
+    **三点观察**：
+    - **规矩被破**（写进了协调者树），但工人**按自己脚本的注释自删了**，零残留。
+    - **摩擦 9 的修复被证明有效**：协调者已改用显式 `git add <path>`，该文件因此**没有**
+      被扫进任何 commit。若仍用 `git add -A`，这次提交进去的将是一份**含实时 token 的
+      凭据文件**。
+    - 一个可用的 companion token 被物化成 git 工作树内的文件——即便短暂，这是凭据泄漏
+      的现实路径。
+
+    **建议**：① 修 MCP 启动超时（根因，它同时驱动了摩擦 10/11 与本条）；② 摩擦 7 的
+    "回复即销账" 会直接消除工人这么做的动机；③ playbook 应明写"绝不把 companion token
+    写进任何文件"。
+
+13. **隔离规矩在第二轮被破了三次**（累计统计，非新机制）：
+    (1) 包 A 的交付物写进协调者树（第一轮，摩擦 9）；
+    (2) `_room_consume.py` 含实时 token（摩擦 12，工人自删）；
+    (3) 一个 0 字节的 shell 引号残骸文件，无内容，已删。
+    **三次全部被"禁止 git add -A、只用显式路径"这条规矩挡住**，无一进入 commit。
+    结论：在 `session.create` 能把工人放进隔离 cwd 之前（摩擦 9 的根治建议），
+    **显式 `git add <路径>` 是协调者唯一可靠的防线**，必须写进任何 hub-and-spoke playbook。
+
+14. **`updated_at` 判断工人活跃度，两个方向都不可靠。**
+    - 方向一（虚高）：幽灵会话 320/321/322 已停跑，`message_count` 恒为 2，
+      `updated_at` 却持续推进 —— 协调者据此误报"还在烧钱"，后经 `message_count` 更正。
+    - 方向二（虚低）：包 D 工人 316 的 `session.get` 显示 `updated_at` 停在 09:45:12
+      （派工送达那一刻）、`status: in_progress` 一小时未动，协调者据此怀疑它卡死；
+      但其 worktree 里 `claude.rs` 在**1 分钟前**、临时脚本在**15 秒前**刚被修改 ——
+      它一直在全速干活。
+    **⇒ 对协调者而言，唯一可靠的工人存活信号是文件系统（worktree 内 mtime 与
+    `git status`），不是 codeg 的会话元数据。** 差点因此错误介入一个正常工作的工人
+    （lead-executor playbook 的 take-over 协议若照 `updated_at` 触发就会误伤）。
 
 观察但未验证：`session.create` 回显 cwd 带 `\\?\` Windows 扩展长度前缀。
 
