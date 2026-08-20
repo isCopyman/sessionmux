@@ -116,3 +116,30 @@ tauri-build 复制 sidecar（binaries/codeg-mcp-*.exe）时 PermissionDenied—�
 文件被对方实例的扫描导入（形成"影子会话"，包括 O9 幽灵的尸体也被 release 扫走）；
 Room/Collection/mail 等纯 DB 构造**不跨实例**。用户侧困惑（"看不见群聊"）由此而来。
 方向：dev/release 数据边界写进文档；影子会话考虑标注来源实例。
+
+### O11. Room 消息卡片是"死"的：裸 room id、不可点、没有去群聊的路
+
+现象（用户实测提出 + 代码确认）：会话记录里的 Room 消息卡片只有一个紫色
+"Room" 标签加**裸 `rm_` UUID**（session-mail-card.tsx:137-138 直接渲染
+`roomId` 为 mono 文本），既看不出是哪个群聊，也点不动——想去群聊现场只能
+自己开会话中心翻列表。侧边栏也没有 Rooms 入口（sidebar.tsx:252-259 注释
+自认 "Until Rooms get their own entry, the badge is the honest total"），
+群聊唯一入口埋在会话中心行内。
+影响：协作消息的"上下文一跳"断裂——人看到群聊消息却到不了群聊，裸 UUID
+对人无信息量；群聊可发现性差（用户找不到群聊在哪，O10 双实例问题更放大了
+这个困惑）。
+方向：已立项 w-roomjump——卡片显示群聊标题、点击跳转会话中心该 Room 详情；
+侧边栏 Rooms 分区（每群未读/待回复）属更大改动，待用户拍板。
+
+### O12. 回复末尾的文件改动卡片不能就地展开 diff
+
+现象（用户实测提出）：助手回复末尾的"新增文件/改动文件"卡片只有
+「在编辑器打开」「工作区标签页看 diff」「在文件夹显示」几个出口，没有
+**就地临时展开** diff 的方式——想瞄一眼改了什么必须离开聊天上下文。
+组件注释里明确写了 "no inline diff"（reply-artifacts.tsx:55），是当时的
+刻意取舍；但数据层 `FileChangeStat.diff` 已经带着每个文件的 unified diff
+文本（session-files.ts:13-19），内联渲染不缺数据。
+影响：审阅代理改动的最高频动作（"它到底改了啥"）要跳出会话流，多 agent
+场景下每轮验收都在付这个切换成本。
+方向：已立项 w-inlinediff——文件卡片加就地展开（手风琴式、限高滚动、
+懒渲染），复用现有 diff 渲染组件；保留原有的工作区 diff 按钮。
