@@ -7,7 +7,6 @@
 //! Owner window label is `session-dispatcher` so closing a Workbench window
 //! does not tear down a mail-started runtime (`disconnect_by_owner_window`).
 
-use std::collections::BTreeMap;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -136,6 +135,12 @@ async fn resolve_working_dir(
 
 /// Resume the existing native Session. Never calls `session/new`: a missing
 /// `external_id` would orphan history instead of delivering mail into it.
+///
+/// Enforced on BOTH sides of the spawn. Here: no `external_id`, no launch
+/// ([`EnsureRuntimeOutcome::SkippedNoIdentity`]). Inside the connection:
+/// `resume_only`, so an agent that cannot restore the id stops the connection
+/// rather than falling back to `session/new` — that fallback is what turned an
+/// @ mention of an idle Session into a phantom Session answering in its place.
 pub async fn ensure_session_runtime(
     db: &AppDatabase,
     manager: &ConnectionManager,
@@ -184,19 +189,22 @@ pub async fn ensure_session_runtime(
             .map_err(|error| error.to_string())?;
 
     let connection_id = manager
-        .spawn_agent(
+        .resume_agent_for_conversation(
             agent_type,
             Some(working_dir),
-            Some(session_id),
+            session_id,
             runtime_env,
             SESSION_DISPATCH_OWNER.to_string(),
             emitter.clone(),
-            None,
-            BTreeMap::new(),
+            row.id,
+            row.folder_id,
         )
         .await
         .map_err(|error| error.to_string())?;
 
+    // `resume_agent_for_conversation` binds the row before the handshake, but a
+    // deduped reuse returns someone else's connection, which may predate the
+    // link. Cheap and idempotent either way.
     if let Some(state) = manager.get_state(&connection_id).await {
         let mut state = state.write().await;
         if state.conversation_id.is_none() {

@@ -2842,4 +2842,240 @@ mod tests {
             .await;
         assert!(mail.items.is_empty());
     }
+
+    async fn conversation_row_count(db: &AppDatabase) -> i64 {
+        db.conn
+            .query_one(Statement::from_string(
+                DbBackend::Sqlite,
+                "SELECT COUNT(*) AS count FROM conversation WHERE deleted_at IS NULL",
+            ))
+            .await
+            .expect("count query")
+            .expect("count row")
+            .try_get("", "count")
+            .expect("count column")
+    }
+
+    /// The prompt-queue worker runs on its own task, so a wake is observed a
+    /// beat after the post returns. Poll instead of sleeping a fixed amount:
+    /// the assertion that matters is "these ids and no others", and every extra
+    /// id would arrive within the same beat.
+    async fn wait_for_wakes(seen: &std::sync::Mutex<Vec<i32>>, expected: usize) -> Vec<i32> {
+        for _ in 0..200 {
+            {
+                let seen = seen.lock().expect("wake log");
+                if seen.len() >= expected {
+                    break;
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        // One more beat so a wake we did NOT expect still has time to show up
+        // and fail the assertion rather than pass by arriving late.
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        let mut seen = seen.lock().expect("wake log").clone();
+        seen.sort_unstable();
+        seen.dedup();
+        seen
+    }
+
+    /// O9: a Room post that @s idle members produced one brand-new "phantom"
+    /// Session per mention, each answering the envelope in the target's place.
+    /// The mention must reach the mentioned Session's OWN runtime and create
+    /// nothing.
+    #[tokio::test]
+    async fn room_mentions_of_idle_members_wake_them_without_creating_sessions() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-phantom-wake").await;
+        let source = seed_conversation(&db, folder, AgentType::Codex).await;
+        let idle_a = seed_conversation(&db, folder, AgentType::ClaudeCode).await;
+        let idle_b = seed_conversation(&db, folder, AgentType::Gemini).await;
+        let room = collaboration_room_create_core(
+            &db.conn,
+            &EventEmitter::Noop,
+            CreateCollaborationRoomInput {
+                workbench_id: 1,
+                title: "Phantom".into(),
+                member_conversation_ids: vec![source, idle_a, idle_b],
+                created_by_conversation_id: source,
+                collection_id: None,
+                root_folder_id: None,
+            },
+        )
+        .await
+        .expect("create room");
+
+        // No connections at all: every member is idle, which is the shape that
+        // produced the phantoms.
+        let manager = ConnectionManager::new();
+        let woken: Arc<std::sync::Mutex<Vec<i32>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let bus = Arc::new(InternalEventBus::new(Arc::new(EventBusMetrics::default())));
+        let (prompt_queue, task) = crate::prompt_queue::build_prompt_queue_runtime_with_ensure_hook(
+            db.conn.clone(),
+            manager.clone_ref(),
+            EventEmitter::Noop,
+            bus,
+            {
+                let woken = Arc::clone(&woken);
+                Arc::new(move |id| woken.lock().expect("wake log").push(id))
+            },
+        );
+        let worker = tokio::spawn(task);
+
+        let before = conversation_row_count(&db).await;
+        let posted = collaboration_room_post_core(
+            &db.conn,
+            &EventEmitter::Noop,
+            &prompt_queue,
+            Some(&manager),
+            PostRoomMessageInput {
+                room_id: room.id.clone(),
+                source_conversation_id: source,
+                target_conversation_ids: vec![idle_a, idle_b],
+                mention_all: false,
+                body: "@a @b status please".into(),
+                client_dedupe_id: "phantom-wake-post".into(),
+                invocation_policy: CollaborationInvocationPolicy::InvokeWhenIdle,
+                delivery_hint: CollaborationDeliveryHint::Default,
+                expects_reply: false,
+                urgency: CollaborationUrgency::Normal,
+                reply_to_event_id: None,
+                mention_human: false,
+                author_kind: crate::models::CollaborationAuthorKind::Session,
+            },
+        )
+        .await
+        .expect("post");
+        assert_eq!(posted.deliveries.len(), 2);
+
+        let woken = wait_for_wakes(&woken, 2).await;
+        worker.abort();
+
+        assert_eq!(
+            woken,
+            vec![idle_a.min(idle_b), idle_a.max(idle_b)],
+            "each mention wakes the mentioned Session's own runtime, nothing else"
+        );
+        assert_eq!(
+            conversation_row_count(&db).await,
+            before,
+            "delivering a Room @ must never create a Session"
+        );
+
+        for target in [idle_a, idle_b] {
+            let delivery = posted
+                .deliveries
+                .iter()
+                .find(|delivery| delivery.target.conversation_id == target)
+                .expect("delivery for mentioned member");
+            assert_eq!(delivery.state, CollaborationDeliveryState::Queued);
+            let queue = prompt_queue_service::snapshot(&db.conn, target)
+                .await
+                .expect("queue snapshot");
+            assert_eq!(
+                queue.items.len(),
+                1,
+                "the envelope waits in the target's own queue"
+            );
+            assert_eq!(queue.items[0].state, PromptQueueItemState::Queued);
+        }
+    }
+
+    /// The busy branch never showed the bug and must keep its behaviour: a live
+    /// turn absorbs the @ through the queue it already owns, with no start
+    /// request at all.
+    #[tokio::test]
+    async fn a_busy_mentioned_member_is_never_asked_to_start_a_runtime() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-phantom-wake-busy").await;
+        let source = seed_conversation(&db, folder, AgentType::Codex).await;
+        let busy = seed_conversation(&db, folder, AgentType::ClaudeCode).await;
+        let room = collaboration_room_create_core(
+            &db.conn,
+            &EventEmitter::Noop,
+            CreateCollaborationRoomInput {
+                workbench_id: 1,
+                title: "Phantom busy".into(),
+                member_conversation_ids: vec![source, busy],
+                created_by_conversation_id: source,
+                collection_id: None,
+                root_folder_id: None,
+            },
+        )
+        .await
+        .expect("create room");
+
+        let manager = ConnectionManager::new();
+        let _commands = manager
+            .insert_test_connection_live(
+                "busy-mentioned",
+                AgentType::ClaudeCode,
+                Some(PathBuf::from("/tmp/codeg-phantom-wake-busy")),
+                EventEmitter::Noop,
+            )
+            .await;
+        {
+            let state = manager
+                .get_state("busy-mentioned")
+                .await
+                .expect("connection state");
+            let mut state = state.write().await;
+            state.folder_id = Some(folder);
+            state.conversation_id = Some(busy);
+            state.turn_in_flight = true;
+        }
+
+        let woken: Arc<std::sync::Mutex<Vec<i32>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let bus = Arc::new(InternalEventBus::new(Arc::new(EventBusMetrics::default())));
+        let (prompt_queue, task) = crate::prompt_queue::build_prompt_queue_runtime_with_ensure_hook(
+            db.conn.clone(),
+            manager.clone_ref(),
+            EventEmitter::Noop,
+            bus,
+            {
+                let woken = Arc::clone(&woken);
+                Arc::new(move |id| woken.lock().expect("wake log").push(id))
+            },
+        );
+        let worker = tokio::spawn(task);
+
+        let before = conversation_row_count(&db).await;
+        collaboration_room_post_core(
+            &db.conn,
+            &EventEmitter::Noop,
+            &prompt_queue,
+            Some(&manager),
+            PostRoomMessageInput {
+                room_id: room.id.clone(),
+                source_conversation_id: source,
+                target_conversation_ids: vec![busy],
+                mention_all: false,
+                body: "@busy one more thing".into(),
+                client_dedupe_id: "phantom-wake-busy-post".into(),
+                invocation_policy: CollaborationInvocationPolicy::InvokeWhenIdle,
+                delivery_hint: CollaborationDeliveryHint::Default,
+                expects_reply: false,
+                urgency: CollaborationUrgency::Normal,
+                reply_to_event_id: None,
+                mention_human: false,
+                author_kind: crate::models::CollaborationAuthorKind::Session,
+            },
+        )
+        .await
+        .expect("post");
+
+        let woken = wait_for_wakes(&woken, 0).await;
+        worker.abort();
+
+        assert!(
+            woken.is_empty(),
+            "a live runtime is already there; nothing may be started for it"
+        );
+        assert_eq!(conversation_row_count(&db).await, before);
+        let queue = prompt_queue_service::snapshot(&db.conn, busy)
+            .await
+            .expect("queue snapshot");
+        assert_eq!(queue.items.len(), 1);
+        assert_eq!(queue.items[0].state, PromptQueueItemState::Queued);
+    }
 }

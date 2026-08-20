@@ -557,6 +557,78 @@ impl ConnectionManager {
         preferred_mode_id: Option<String>,
         preferred_config_values: BTreeMap<String, String>,
     ) -> Result<String, AcpError> {
+        self.spawn_agent_inner(
+            agent_type,
+            working_dir,
+            session_id,
+            false,
+            runtime_env,
+            owner_window_label,
+            emitter,
+            preferred_mode_id,
+            preferred_config_values,
+            None,
+        )
+        .await
+    }
+
+    /// Bring an existing Codeg Session's runtime back up for a Session
+    /// Dispatcher wake (queued collaboration mail, mailbox reminders).
+    ///
+    /// Two things separate it from [`Self::spawn_agent`], and both exist so a
+    /// wake can never invent a Session:
+    ///
+    /// * `resume_only` — the agent restores `session_id` or the connection
+    ///   stops. A `session/new` fallback here would create a native Session no
+    ///   Codeg row names, which the local-session importer then imports as its
+    ///   own conversation (the O9 phantom Sessions). See
+    ///   `connection::route_load_failure`.
+    /// * The conversation binding is installed BEFORE the handshake, not after
+    ///   the spawn returns, so `find_connection_by_conversation_id` — the
+    ///   lookup behind Host Control's `session.stop` / `session.cancel_turn` —
+    ///   resolves this runtime for the whole of its life rather than only after
+    ///   the caller gets its id back.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn resume_agent_for_conversation(
+        &self,
+        agent_type: AgentType,
+        working_dir: Option<String>,
+        session_id: String,
+        runtime_env: BTreeMap<String, String>,
+        owner_window_label: String,
+        emitter: EventEmitter,
+        conversation_id: i32,
+        folder_id: i32,
+    ) -> Result<String, AcpError> {
+        self.spawn_agent_inner(
+            agent_type,
+            working_dir,
+            Some(session_id),
+            true,
+            runtime_env,
+            owner_window_label,
+            emitter,
+            None,
+            BTreeMap::new(),
+            Some((conversation_id, folder_id)),
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn spawn_agent_inner(
+        &self,
+        agent_type: AgentType,
+        working_dir: Option<String>,
+        session_id: Option<String>,
+        resume_only: bool,
+        runtime_env: BTreeMap<String, String>,
+        owner_window_label: String,
+        emitter: EventEmitter,
+        preferred_mode_id: Option<String>,
+        preferred_config_values: BTreeMap<String, String>,
+        initial_conversation_binding: Option<(i32, i32)>,
+    ) -> Result<String, AcpError> {
         // Connection dedup: when resuming an agent session (session_id is
         // Some), look for a live AgentConnection that already represents
         // the same external session in the same working_dir for the same
@@ -622,6 +694,7 @@ impl ConnectionManager {
             agent_type,
             working_dir,
             session_id,
+            resume_only,
             runtime_env,
             owner_window_label,
             emitter,
@@ -630,7 +703,7 @@ impl ConnectionManager {
             preferred_config_values,
             self.codeg_mcp_snapshot(),
             self.terminal_shell_config.clone(),
-            None,
+            initial_conversation_binding,
         )
         .await?;
 
@@ -711,6 +784,7 @@ impl ConnectionManager {
             agent_type,
             Some(working_dir),
             None,
+            false,
             runtime_env,
             owner_window_label,
             emitter.clone(),
