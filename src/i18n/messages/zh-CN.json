@@ -613,11 +613,20 @@
     "emptyNoAgent": "暂无可用 Agent。",
     "configManagement": "配置管理",
     "envVars": "环境变量",
+    "envVarsScope": "只注入 codeg 拉起的这个 Agent 进程，优先级高于配置文件。",
+    "envVarsScopeHint": "这些变量存在 codeg 自己的数据库里，不会写进 Agent 的配置文件。你自己在终端里开的会话不受影响，所以可以把无头认证要用的密钥（比如 XAI_API_KEY）放在这里，而不弄脏全局配置。",
     "hostTools": {
       "label": "由 Agent 自行处理文件与命令",
-      "description": "codeg 不再代为提供文件访问和终端命令，改由 Agent 在自己的进程中执行——只有这样它自带的沙箱与权限规则才会生效。codeg 托管的协作与工具通道也会关闭，因为这些能力仍会把执行路由回 codeg。codeg 本身不提供沙箱，因此请仅在 Agent 已配置沙箱时开启。"
+      "description": "codeg 不再代为提供文件访问和终端命令，改由 Agent 在自己的进程中执行——只有这样它自带的沙箱与权限规则才会生效。codeg 托管的协作与工具通道也会关闭，因为这些能力仍会把执行路由回 codeg。codeg 本身不提供沙箱，因此请仅在 Agent 已配置沙箱时开启。",
+      "stateOff": "关（默认）：由 codeg 代为读写文件、执行终端命令，好处是文件卡片和终端面板照常能用；代价是这些操作发生在 codeg 进程里，Agent 自己的沙箱管不到。",
+      "stateOn": "开：Agent 用自己的文件系统和 shell，它自带的沙箱与权限规则才真正生效；代价是 codeg 托管的协作与工具通道会关掉，而且 codeg 不会替你加沙箱。"
     },
     "nativeJsonConfig": "原生 JSON 配置",
+    "nativeJson": {
+      "editsPath": "这里编辑的就是你 CLI 的真实配置文件（{path}）——在这里保存＝直接改它。",
+      "editsUnknownPath": "这里编辑的就是你 CLI 的真实配置文件——在这里保存＝直接改它。",
+      "hint": "codeg 不另存副本：它读这个文件，把你的改动合并后写回去。上面的 API URL / API Key / 模型 快捷字段就是同一个文件的联动视图。"
+    },
     "modelHintDefault": "留空则使用系统默认模型。",
     "generalConfigDescriptionClaude": "支持 API URL、API Key 与 Claude 模型快捷配置，并与原生 JSON 配置联动。",
     "generalConfigDescriptionDefault": "支持重要配置输入（API URL、API Key、Model）和原生 JSON 配置管理。",
@@ -3536,6 +3545,7 @@
     },
     "conversationContextBar": {
       "folderTitle": "工作文件夹",
+      "headerFolderTitle": "所在文件夹",
       "branchTitle": "工作分支",
       "searchFolder": "搜索文件夹...",
       "searchBranch": "搜索分支...",

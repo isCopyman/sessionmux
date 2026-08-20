@@ -613,11 +613,20 @@
     "emptyNoAgent": "No available agent.",
     "configManagement": "Config Management",
     "envVars": "Environment Variables",
+    "envVarsScope": "Injected only into this agent's processes launched by codeg, and they win over the config file.",
+    "envVarsScopeHint": "These variables are stored in codeg's own database, not in the agent's config file. Terminal sessions you start yourself are unaffected, so you can keep headless credentials (for example XAI_API_KEY) here without touching your global config.",
     "hostTools": {
       "label": "Let the agent handle files and commands",
-      "description": "codeg stops serving file access and terminal commands, so the agent runs them in its own process — where its own sandbox and permission rules apply. Codeg-hosted collaboration and tool channels are also disabled because they would route execution back through codeg. codeg adds no sandbox itself, so turn this on only if the agent has one configured."
+      "description": "codeg stops serving file access and terminal commands, so the agent runs them in its own process — where its own sandbox and permission rules apply. Codeg-hosted collaboration and tool channels are also disabled because they would route execution back through codeg. codeg adds no sandbox itself, so turn this on only if the agent has one configured.",
+      "stateOff": "Off (default): codeg reads files and runs terminal commands for the agent, so file cards and the terminal panel keep working — the cost is that this happens inside codeg, where the agent's own sandbox cannot reach it.",
+      "stateOn": "On: the agent uses its own file system and shell, so its sandbox and permission rules actually apply — the cost is that codeg-hosted collaboration and tool channels shut off, and codeg adds no sandbox of its own."
     },
     "nativeJsonConfig": "Native JSON Config",
+    "nativeJson": {
+      "editsPath": "Edits your CLI's real config file ({path}) — what you save here is written straight into it.",
+      "editsUnknownPath": "Edits your CLI's real config file — what you save here is written straight into it.",
+      "hint": "codeg keeps no private copy: it reads this file, merges your edits and writes it back. The API URL / API Key / Model fields above are a linked view of the same file."
+    },
     "modelHintDefault": "Leave empty to use system default model.",
     "generalConfigDescriptionClaude": "Supports quick configuration for API URL, API Key and Claude models, and syncs with native JSON config.",
     "generalConfigDescriptionDefault": "Supports important config input (API URL, API Key, Model) and native JSON config management.",
@@ -3536,6 +3545,7 @@
     },
     "conversationContextBar": {
       "folderTitle": "Working folder",
+      "headerFolderTitle": "Current folder",
       "branchTitle": "Working branch",
       "searchFolder": "Search folder...",
       "searchBranch": "Search branch...",

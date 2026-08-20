@@ -613,11 +613,20 @@
     "emptyNoAgent": "暫無可用 Agent。",
     "configManagement": "配置管理",
     "envVars": "環境變數",
+    "envVarsScope": "只注入 codeg 啟動的這個 Agent 行程，優先權高於設定檔。",
+    "envVarsScopeHint": "這些變數存在 codeg 自己的資料庫裡，不會寫進 Agent 的設定檔。你自己在終端機開的工作階段不受影響，因此可以把無頭認證要用的金鑰（例如 XAI_API_KEY）放在這裡，而不弄髒全域設定。",
     "hostTools": {
       "label": "由 Agent 自行處理檔案與指令",
-      "description": "codeg 不再代為提供檔案存取與終端指令，改由 Agent 在自己的行程中執行——只有這樣它自帶的沙箱與權限規則才會生效。codeg 託管的協作與工具通道也會關閉，因為這些能力仍會把執行路由回 codeg。codeg 本身不提供沙箱，因此請僅在 Agent 已設定沙箱時開啟。"
+      "description": "codeg 不再代為提供檔案存取與終端指令，改由 Agent 在自己的行程中執行——只有這樣它自帶的沙箱與權限規則才會生效。codeg 託管的協作與工具通道也會關閉，因為這些能力仍會把執行路由回 codeg。codeg 本身不提供沙箱，因此請僅在 Agent 已設定沙箱時開啟。",
+      "stateOff": "關（預設）：由 codeg 代為讀寫檔案、執行終端指令，好處是檔案卡片與終端機面板照常能用；代價是這些操作發生在 codeg 行程裡，Agent 自己的沙箱管不到。",
+      "stateOn": "開：Agent 用自己的檔案系統與 shell，它自帶的沙箱與權限規則才真正生效；代價是 codeg 託管的協作與工具通道會關掉，而且 codeg 不會替你加沙箱。"
     },
     "nativeJsonConfig": "原生 JSON 配置",
+    "nativeJson": {
+      "editsPath": "這裡編輯的就是你 CLI 的真實設定檔（{path}）——在這裡儲存＝直接改它。",
+      "editsUnknownPath": "這裡編輯的就是你 CLI 的真實設定檔——在這裡儲存＝直接改它。",
+      "hint": "codeg 不另存副本：它讀這個檔案，把你的變更合併後寫回去。上面的 API URL / API Key / 模型 快捷欄位就是同一個檔案的連動檢視。"
+    },
     "modelHintDefault": "留空則使用系統預設模型。",
     "generalConfigDescriptionClaude": "支援 API URL、API Key 與 Claude 模型快捷配置，並與原生 JSON 配置聯動。",
     "generalConfigDescriptionDefault": "支援重要配置輸入（API URL、API Key、Model）和原生 JSON 配置管理。",
@@ -3536,6 +3545,7 @@
     },
     "conversationContextBar": {
       "folderTitle": "工作資料夾",
+      "headerFolderTitle": "所在資料夾",
       "branchTitle": "工作分支",
       "searchFolder": "搜尋資料夾...",
       "searchBranch": "搜尋分支...",
