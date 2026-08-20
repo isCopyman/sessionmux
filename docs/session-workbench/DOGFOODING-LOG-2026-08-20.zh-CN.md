@@ -89,3 +89,14 @@ tauri-build 复制 sidecar（binaries/codeg-mcp-*.exe）时 PermissionDenied—�
 10 分钟才被哨兵发现）。
 方向：对 5xx/临时性错误加有限次自动重试（指数退避）；或至少把"上次回合因临时
 错误中断"变成显式可恢复状态（一键续跑 + 计入待回复徽章）。
+
+### O9.（严重）Room @ 投递克隆幽灵会话 + session.stop 管不到
+
+协调者第五批摩擦实锤（Room event 7a30351f，证据链完整）：@ 空闲会话时投递路径
+**创建新会话**而非唤醒目标——幽灵数量精确等于 mention 数、同毫秒诞生、首条 user
+消息=Room 信封原文；幽灵误认身份、MCP 连接失败、单个烧 455k token（一次性，
+非持续泄漏——协调者用 message_count 自纠了"持续烧钱"的误判）。@ 忙碌会话无此
+现象（猜测走了"closed Session is started"分支）。session.stop 对其返回
+"no active managed runtime"。事故样本 4 个会话按指令保留未删。
+影响：多 agent 协作核心路径的正确性 + 真金白银的 token。
+方向：已立项派修（w-phantom），根因锁定投递唤醒分支。
