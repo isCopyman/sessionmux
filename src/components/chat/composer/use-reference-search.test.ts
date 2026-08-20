@@ -459,13 +459,16 @@ describe("buildReferenceGroups prefix refinement", () => {
     const sources = emptySources({
       files: Array.from({ length: 60 }, (_, i) => makeFile(`f${i}.ts`)),
       workspaceRoot: "/repo",
-      sessions: [makeConversation(1, "Fixture"), makeConversation(2, "Folder")],
+      sessions: [
+        makeConversation(1, "F5 rollout"),
+        makeConversation(2, "Folder"),
+      ],
     })
     const first = buildReferenceGroups("f", sources)
 
     vi.mocked(fileToSuggestion).mockClear()
     vi.mocked(sessionToSuggestion).mockClear()
-    buildReferenceGroups("fi", sources, DEFAULT_GROUP_LABELS, {
+    buildReferenceGroups("f5", sources, DEFAULT_GROUP_LABELS, {
       query: "f",
       groups: first,
     })
