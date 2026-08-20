@@ -113,6 +113,7 @@ import {
   assignConversationsToCollection,
   getFolderConversationTurns,
   listAllConversations,
+  listAllRooms,
   listConversationCollectionRefs,
   listConversationWorkbenchRefs,
   searchSessionContent,
@@ -121,6 +122,7 @@ import {
 } from "@/lib/api"
 import type {
   AgentType,
+  CollaborationRoomSummary,
   CollectionInfo,
   ConversationCollectionRef,
   ConversationWorkbenchRef,
@@ -141,6 +143,7 @@ import {
   formatFolderLabelWithAlias,
 } from "@/lib/folder-display"
 import { cn } from "@/lib/utils"
+import { useOpenRoom } from "@/lib/open-room"
 import { formatConversationTitle } from "@/lib/conversation-title"
 import {
   appendConversationsToWorkbench,
@@ -1005,6 +1008,78 @@ function StatusFacetSelect({
   )
 }
 
+/**
+ * A Room among the Session rows.
+ *
+ * No checkbox, deliberately: every bulk action in the footer — archive, set
+ * status, move to Collection, delete — is a Session operation a Room does not
+ * accept, so a Room can never be part of a selection and "select all" never
+ * picks one up. That is also why a click opens it outright instead of loading
+ * the preview pane: a Room's content is its timeline, and the Room tab already
+ * renders that.
+ */
+function RoomListRow({
+  room,
+  onOpen,
+}: {
+  room: CollaborationRoomSummary
+  onOpen: () => void
+}) {
+  const t = useTranslations("Folder.sidebar.manageConversations")
+  const tCollaboration = useTranslations("Collaboration")
+  const needsReply = room.needsReplyCount ?? 0
+  return (
+    <div
+      role="option"
+      tabIndex={0}
+      aria-selected={false}
+      onClick={onOpen}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") {
+          event.preventDefault()
+          onOpen()
+        }
+      }}
+      className={cn(
+        "flex cursor-pointer items-center gap-2 rounded-md border border-transparent px-2 py-1.5",
+        "hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      )}
+    >
+      {/* Holds the column the Session rows spend on their checkbox, so every
+          title in the mixed list starts at the same x. */}
+      <span className="size-5 shrink-0" aria-hidden="true" />
+      <Users className="size-4 shrink-0 text-muted-foreground" />
+      <span className="min-w-0 flex-1 truncate text-sm">{room.title}</span>
+      <Badge
+        variant="secondary"
+        className="h-5 shrink-0 px-1.5 text-[10px] font-normal"
+      >
+        {t("roomTypeBadge")}
+      </Badge>
+      <span className="shrink-0 text-xs text-muted-foreground">
+        {t("roomMemberCount", { count: room.memberCount })}
+      </span>
+      {needsReply > 0 ? (
+        // Amber for "a reply is owed", the same convention the Session rows use.
+        <span
+          className="shrink-0 rounded-full bg-amber-500/10 px-1.5 py-0.5 text-[10px] tabular-nums text-amber-700 dark:text-amber-400"
+          title={tCollaboration("stateNeedsReply")}
+        >
+          {needsReply}
+        </span>
+      ) : null}
+      <span className="w-10 shrink-0 text-right text-xs text-muted-foreground">
+        {formatRelative(room.createdAt)}
+      </span>
+    </div>
+  )
+}
+
+/** One line of the mixed list: a Session, or a Room. */
+type SessionCenterItem =
+  | { kind: "session"; sortKey: number; conversation: DbConversationSummary }
+  | { kind: "room"; sortKey: number; room: CollaborationRoomSummary }
+
 export function ConversationManageDialog({
   open,
   onOpenChange,
@@ -1079,6 +1154,9 @@ export function ConversationManageDialog({
     [trackFacetMenuOpen]
   )
   const [rows, setRows] = useState<DbConversationSummary[]>([])
+  /** Every active Room, already narrowed by the search term server-side. The
+   *  facets below decide which of them the current view actually shows. */
+  const [rooms, setRooms] = useState<CollaborationRoomSummary[]>([])
   const [contentSnippets, setContentSnippets] = useState<Map<number, string>>(
     new Map()
   )
@@ -1190,6 +1268,7 @@ export function ConversationManageDialog({
       setSelected(new Map())
       setConfirmDelete(false)
       setError(null)
+      setRooms([])
       setContentSnippets(new Map())
       setContentSearchUnavailable(false)
       setWorkbenchRefs([])
@@ -1246,6 +1325,7 @@ export function ConversationManageDialog({
       // dialog excludes.
       if (queryFolderIds.length === 0) {
         setRows([])
+        setRooms([])
         setContentSnippets(new Map())
         setContentSearchUnavailable(false)
         setError(null)
@@ -1259,29 +1339,37 @@ export function ConversationManageDialog({
           normalizedSearch === "" || searchScope !== "content"
         const contentSearchEnabled =
           normalizedSearch.length >= 2 && searchScope !== "metadata"
-        const [metadataResult, contentResult] = await Promise.allSettled([
-          metadataSearchEnabled
-            ? listAllConversations({
-                folder_ids: queryFolderIds,
-                search: normalizedSearch || null,
-                agent_type: agentFilter === "all" ? null : agentFilter,
-                status:
-                  statusFilter === "all" || statusFilter === "archived"
-                    ? null
-                    : statusFilter,
-                archived: statusFilter === "archived",
-              })
-            : Promise.resolve([] as DbConversationSummary[]),
-          contentSearchEnabled
-            ? searchSessionContent({
-                query: normalizedSearch,
-                folder_ids: queryFolderIds,
-                agent_type: agentFilter === "all" ? null : agentFilter,
-                archived: statusFilter === "archived",
-                limit: 50,
-              })
-            : Promise.resolve(null),
-        ])
+        // Rooms ride the metadata lane's gate: a Room has no transcript to
+        // search, so a query aimed at conversation content cannot match one —
+        // but an EMPTY box under that scope isn't searching anything, and the
+        // Sessions listed then are the unfiltered set, so the Rooms are too.
+        const [metadataResult, contentResult, roomResult] =
+          await Promise.allSettled([
+            metadataSearchEnabled
+              ? listAllConversations({
+                  folder_ids: queryFolderIds,
+                  search: normalizedSearch || null,
+                  agent_type: agentFilter === "all" ? null : agentFilter,
+                  status:
+                    statusFilter === "all" || statusFilter === "archived"
+                      ? null
+                      : statusFilter,
+                  archived: statusFilter === "archived",
+                })
+              : Promise.resolve([] as DbConversationSummary[]),
+            contentSearchEnabled
+              ? searchSessionContent({
+                  query: normalizedSearch,
+                  folder_ids: queryFolderIds,
+                  agent_type: agentFilter === "all" ? null : agentFilter,
+                  archived: statusFilter === "archived",
+                  limit: 50,
+                })
+              : Promise.resolve(null),
+            metadataSearchEnabled
+              ? listAllRooms(normalizedSearch || null)
+              : Promise.resolve([] as CollaborationRoomSummary[]),
+          ])
         if (cancelled) return
         if (metadataResult.status === "rejected") {
           throw metadataResult.reason
@@ -1319,9 +1407,13 @@ export function ConversationManageDialog({
           (a, b) => parseTimestamp(b.created_at) - parseTimestamp(a.created_at)
         )
         setRows(sorted)
+        // A server too old to know the endpoint costs the Room lane, not the
+        // dialog: Sessions are what Session Center is chiefly for.
+        setRooms(roomResult.status === "fulfilled" ? roomResult.value : [])
         setError(null)
       } catch (e) {
         if (cancelled) return
+        setRooms([])
         setContentSnippets(new Map())
         setContentSearchUnavailable(false)
         setError(toErrorMessage(e))
@@ -1598,6 +1690,108 @@ export function ConversationManageDialog({
     workbenchFilter,
     workbenchRefsByConversation,
   ])
+
+  /**
+   * The Room lane of the list.
+   *
+   * Rooms answer to the facets that mean something for a group chat — the
+   * folder its Paths are rooted in, its Collection, and the worklist — and drop
+   * out entirely under the ones that don't. A Room runs no agent, sits on no
+   * branch, carries no Session status, is not "created by" anyone in the
+   * source sense and is not the kind of thing a Workbench owns; answering
+   * those facets with Rooms anyway would be a wrong answer rather than a
+   * missing one, so a narrowed view is honestly Sessions-only.
+   */
+  const visibleRooms = useMemo(() => {
+    // Also enforced by the fetch, which stops asking for Rooms under a content
+    // query — but that fetch is a debounce behind the scope flip, and the rows
+    // must leave the moment the user changes the scope, like every other facet.
+    if (searchScope === "content" && search.trim() !== "") return []
+    if (
+      workbenchFilter !== "all" ||
+      branchFilter.kind !== "all" ||
+      agentFilter !== "all" ||
+      sourceFilter !== "all" ||
+      statusFilter !== "all"
+    ) {
+      return []
+    }
+
+    let matched = rooms
+    if (scopeFolderId != null) {
+      // The same parent-plus-worktrees universe the Session query runs on, so a
+      // Room rooted in a worktree still belongs to the repo picked above it.
+      const scope = new Set(queryFolderIds)
+      matched = matched.filter(
+        (room) => room.rootFolderId != null && scope.has(room.rootFolderId)
+      )
+    }
+
+    if (collectionFilter === "unclassified") {
+      matched = matched.filter((room) => room.collectionId == null)
+    } else if (collectionScopeIds) {
+      matched = matched.filter(
+        (room) =>
+          room.collectionId != null && collectionScopeIds.has(room.collectionId)
+      )
+    }
+
+    if (collaborationFilter !== "all") {
+      matched = matched.filter((room) => {
+        switch (collaborationFilter) {
+          case "unread":
+            return room.unreadCount > 0
+          case "needs_reply":
+            return (room.needsReplyCount ?? 0) > 0
+          case "awaiting_reply":
+            return (room.awaitingReplyCount ?? 0) > 0
+          // Delivery failure is a per-Session mailbox state; the Room summary
+          // has no such count, so this segment is Sessions-only.
+          case "failed":
+            return false
+        }
+      })
+    }
+    return matched
+  }, [
+    agentFilter,
+    branchFilter,
+    collaborationFilter,
+    collectionFilter,
+    collectionScopeIds,
+    queryFolderIds,
+    rooms,
+    scopeFolderId,
+    search,
+    searchScope,
+    sourceFilter,
+    statusFilter,
+    workbenchFilter,
+  ])
+
+  /**
+   * Sessions and Rooms as one list, newest first.
+   *
+   * Both sort on creation time — the very value each row prints in its time
+   * column — so the mixed list still reads top-to-bottom as one descending
+   * clock. Rooms arrive from the backend in last-activity order; re-keying them
+   * on `createdAt` is what lets them slot between Sessions at all.
+   */
+  const listItems = useMemo<SessionCenterItem[]>(() => {
+    const items: SessionCenterItem[] = [
+      ...visibleRows.map((conversation) => ({
+        kind: "session" as const,
+        sortKey: parseTimestamp(conversation.created_at),
+        conversation,
+      })),
+      ...visibleRooms.map((room) => ({
+        kind: "room" as const,
+        sortKey: parseTimestamp(room.createdAt),
+        room,
+      })),
+    ]
+    return items.sort((a, b) => b.sortKey - a.sortKey)
+  }, [visibleRooms, visibleRows])
 
   useEffect(() => {
     if (
@@ -1909,6 +2103,22 @@ export function ConversationManageDialog({
       switchWorkbench,
       t,
     ]
+  )
+
+  // Same path the Rooms sidebar opens by: switch to the Room's Workbench if it
+  // is elsewhere, pin the tab, refresh the catalog. Closing after mirrors what
+  // opening a Session row does.
+  const openRoom = useOpenRoom()
+  const handleOpenRoom = useCallback(
+    async (room: CollaborationRoomSummary) => {
+      try {
+        await openRoom(room)
+        onOpenChange(false)
+      } catch (error) {
+        toast.error(t("toastOpFailed", { message: toErrorMessage(error) }))
+      }
+    },
+    [onOpenChange, openRoom, t]
   )
 
   const activeWorkbenchName =
@@ -2466,8 +2676,14 @@ export function ConversationManageDialog({
                     ? t("deselectAll")
                     : t("selectAllVisible")}
                 </button>
+                {/* Counted apart rather than summed: the bulk bar below acts
+                    on the Sessions, so one number covering both would promise
+                    more than "Delete" can do. */}
                 <span className="text-xs text-muted-foreground">
                   {t("matchedCount", { count: visibleRows.length })}
+                  {visibleRooms.length > 0
+                    ? ` · ${t("roomMatchedCount", { count: visibleRooms.length })}`
+                    : ""}
                 </span>
               </div>
               <ScrollArea className="min-h-0 flex-1">
@@ -2480,7 +2696,7 @@ export function ConversationManageDialog({
                     <p className="text-destructive text-sm px-3 py-6 text-center">
                       {error}
                     </p>
-                  ) : visibleRows.length === 0 ? (
+                  ) : listItems.length === 0 ? (
                     <p className="text-muted-foreground text-sm px-3 py-6 text-center">
                       {anyFacetNarrows
                         ? t("noMatchingConversations")
@@ -2489,7 +2705,17 @@ export function ConversationManageDialog({
                           : t("noConversations")}
                     </p>
                   ) : (
-                    visibleRows.map((conv) => {
+                    listItems.map((item) => {
+                      if (item.kind === "room") {
+                        return (
+                          <RoomListRow
+                            key={`room:${item.room.id}`}
+                            room={item.room}
+                            onOpen={() => void handleOpenRoom(item.room)}
+                          />
+                        )
+                      }
+                      const conv = item.conversation
                       const checked = selected.has(conv.id)
                       const focused = previewConversation?.id === conv.id
                       const folder = folderById.get(conv.folder_id)

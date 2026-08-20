@@ -5,11 +5,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { ConversationManageDialog } from "./conversation-manage-dialog"
 import enMessages from "@/i18n/messages/en.json"
-import type { DbConversationSummary, FolderDetail } from "@/lib/types"
+import type {
+  CollaborationRoomSummary,
+  DbConversationSummary,
+  FolderDetail,
+} from "@/lib/types"
 import { toast } from "sonner"
 
 const h = vi.hoisted(() => ({
   listAll: vi.fn(),
+  listAllRooms: vi.fn(),
   searchContent: vi.fn(),
   listWorkbenchRefs: vi.fn(),
   listCollectionRefs: vi.fn(),
@@ -20,6 +25,8 @@ const h = vi.hoisted(() => ({
   updateArchive: vi.fn(),
   closeConversationTab: vi.fn(),
   openTab: vi.fn(),
+  openRoomTab: vi.fn(),
+  refreshRoomCatalog: vi.fn(),
   openConversations: vi.fn(),
   switchWorkbench: vi.fn(),
   activeWorkbenchId: 1,
@@ -87,6 +94,7 @@ vi.mock("sonner", () => ({
 
 vi.mock("@/lib/api", () => ({
   listAllConversations: h.listAll,
+  listAllRooms: h.listAllRooms,
   searchSessionContent: h.searchContent,
   listConversationWorkbenchRefs: h.listWorkbenchRefs,
   listConversationCollectionRefs: h.listCollectionRefs,
@@ -101,11 +109,24 @@ vi.mock("@/lib/api", () => ({
   saveWorkbenchTabs: h.saveWorkbenchTabs,
 }))
 
+// `useOpenRoom` runs for real in the Room tests, so this mock carries what it
+// reaches for: the Room tab action, and the Workbench it would have to switch
+// to first.
 vi.mock("@/contexts/tab-context", () => ({
   useTabActions: () => ({
     closeConversationTab: h.closeConversationTab,
     openTab: h.openTab,
+    openRoomTab: h.openRoomTab,
+    switchWorkbench: h.switchWorkbench,
   }),
+  useTabStore: (selector: (s: unknown) => unknown) =>
+    selector({ activeWorkbenchId: h.activeWorkbenchId }),
+}))
+
+vi.mock("@/stores/room-catalog-store", () => ({
+  useRoomCatalogStore: {
+    getState: () => ({ refresh: h.refreshRoomCatalog }),
+  },
 }))
 
 vi.mock("@/contexts/workbench-route-context", () => ({
@@ -142,11 +163,16 @@ vi.mock("@/stores/collection-store", () => ({
 }))
 
 vi.mock("@/stores/app-workspace-store", () => ({
-  useAppWorkspaceStore: (selector: (s: unknown) => unknown) =>
-    selector({
-      allFolders: h.folders,
-      refreshConversations: h.refreshConversations,
-    }),
+  // `getState` too: `useOpenRoom` reads the folder list imperatively to pick a
+  // Room tab's folder id.
+  useAppWorkspaceStore: Object.assign(
+    (selector: (s: unknown) => unknown) =>
+      selector({
+        allFolders: h.folders,
+        refreshConversations: h.refreshConversations,
+      }),
+    { getState: () => ({ folders: h.folders }) }
+  ),
 }))
 
 vi.mock("@/hooks/use-collaboration-unread-overview", () => ({
@@ -226,6 +252,30 @@ function conversation(
     created_at: "2026-06-10T10:00:00.000Z",
     updated_at: "2026-06-10T10:00:00.000Z",
     pinned_at: null,
+    ...over,
+  }
+}
+
+/** Created an hour after every fixture Session, so a Room sorts to the top of
+ *  the mixed list and a test can read it without scrolling past three rows. */
+function room(
+  over: Partial<CollaborationRoomSummary> & { id: string }
+): CollaborationRoomSummary {
+  return {
+    workbenchId: 1,
+    title: `room ${over.id}`,
+    createdByConversationId: 1,
+    collectionId: null,
+    rootFolderId: 1,
+    memberCount: 2,
+    additionalPathCount: 0,
+    unreadCount: 0,
+    mentionUnreadCount: 0,
+    needsReplyCount: 0,
+    awaitingReplyCount: 0,
+    lastEventAt: null,
+    createdAt: "2026-06-10T11:00:00.000Z",
+    updatedAt: "2026-06-10T11:00:00.000Z",
     ...over,
   }
 }
@@ -322,6 +372,9 @@ describe("ConversationManageDialog", () => {
     vi.clearAllMocks()
     h.folders = FOLDERS
     h.listAll.mockResolvedValue(ROWS)
+    // Rooms are opt-in per test: the Session cases below count rows.
+    h.listAllRooms.mockResolvedValue([])
+    h.refreshRoomCatalog.mockResolvedValue(undefined)
     h.searchContent.mockResolvedValue({ available: true, results: [] })
     h.listWorkbenchRefs.mockResolvedValue([])
     h.listCollectionRefs.mockResolvedValue([])
@@ -1402,5 +1455,152 @@ describe("ConversationManageDialog", () => {
       "on main",
       { split: "right" }
     )
+  })
+
+  it("lists Rooms among the Sessions, badged as what they are", async () => {
+    h.listAllRooms.mockResolvedValue([
+      room({ id: "r1", title: "release war room" }),
+    ])
+    renderDialog()
+    await screen.findByText("release war room")
+
+    expect(screen.getByText("Room")).toBeTruthy()
+    expect(screen.getByText("2 members")).toBeTruthy()
+    // The Room joins the list rather than replacing it.
+    expect(screen.getByText("on main")).toBeTruthy()
+    // Counted apart, because the bulk bar below can only act on the Sessions.
+    expect(screen.getByText("3 matched · 1 room")).toBeTruthy()
+  })
+
+  it("hands the typed query to the Room lane too", async () => {
+    h.listAllRooms.mockResolvedValue([
+      room({ id: "r1", title: "release war room" }),
+      room({ id: "r2", title: "design review" }),
+    ])
+    const user = renderDialog()
+    await screen.findByText("design review")
+
+    h.listAllRooms.mockResolvedValue([
+      room({ id: "r1", title: "release war room" }),
+    ])
+    await user.type(
+      screen.getByPlaceholderText(/titles or conversation content/i),
+      "release"
+    )
+
+    await waitFor(() =>
+      expect(h.listAllRooms).toHaveBeenLastCalledWith("release")
+    )
+    expect(screen.getByText("release war room")).toBeTruthy()
+    await waitFor(() => expect(screen.queryByText("design review")).toBeNull())
+  })
+
+  it("drops Rooms from a transcript-content search", async () => {
+    h.listAllRooms.mockResolvedValue([
+      room({ id: "r1", title: "release war room" }),
+    ])
+    const user = renderDialog()
+    await screen.findByText("release war room")
+
+    await user.click(
+      screen.getByRole("combobox", { name: "Search in sessions" })
+    )
+    await user.click(
+      screen.getByRole("option", { name: "Conversation content" })
+    )
+    await user.type(
+      screen.getByPlaceholderText(/titles or conversation content/i),
+      "transcript phrase"
+    )
+
+    // A Room has no transcript, so it can never be a content hit.
+    await waitFor(() =>
+      expect(screen.queryByText("release war room")).toBeNull()
+    )
+  })
+
+  it("hides every Room once a Session-only facet narrows the list", async () => {
+    h.listAllRooms.mockResolvedValue([
+      room({ id: "r1", title: "release war room" }),
+    ])
+    const user = renderDialog()
+    await screen.findByText("release war room")
+
+    await openFilters(user)
+    await user.click(screen.getByRole("combobox", { name: "Filter by agent" }))
+    await user.click(screen.getByRole("option", { name: "Codex" }))
+
+    // A Room runs no agent: listing it under an agent filter would be a wrong
+    // answer rather than a missing one.
+    await waitFor(() =>
+      expect(screen.queryByText("release war room")).toBeNull()
+    )
+  })
+
+  it("keeps a Room in the needs-reply worklist while it owes an answer", async () => {
+    h.listAllRooms.mockResolvedValue([
+      room({ id: "r1", title: "release war room", needsReplyCount: 2 }),
+      room({ id: "r2", title: "quiet room" }),
+    ])
+    const user = renderDialog()
+    await screen.findByText("release war room")
+    expect(screen.getByTitle("Reply required").textContent).toBe("2")
+
+    await user.click(screen.getByRole("tab", { name: /Needs reply/ }))
+
+    expect(screen.getByText("release war room")).toBeTruthy()
+    expect(screen.queryByText("quiet room")).toBeNull()
+    // No Session owes anything, so the Room is all that is left.
+    expect(screen.queryByText("on main")).toBeNull()
+  })
+
+  it("opens a clicked Room where it lives and closes the dialog", async () => {
+    h.listAllRooms.mockResolvedValue([
+      room({
+        id: "r1",
+        title: "release war room",
+        workbenchId: 2,
+        rootFolderId: 2,
+      }),
+    ])
+    const onOpenChange = vi.fn()
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <ConversationManageDialog
+          open
+          onOpenChange={onOpenChange}
+          folderId={1}
+        />
+      </NextIntlClientProvider>
+    )
+    const user = userEvent.setup()
+    await screen.findByText("release war room")
+
+    await user.click(screen.getByText("release war room"))
+
+    await waitFor(() =>
+      expect(h.openRoomTab).toHaveBeenCalledWith({
+        roomId: "r1",
+        title: "release war room",
+        folderId: 2,
+        agentType: "claude_code",
+      })
+    )
+    // It sits on another Workbench, so opening switches there first.
+    expect(h.switchWorkbench).toHaveBeenCalledWith(2)
+    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false))
+  })
+
+  it("leaves Rooms out of 'select all'", async () => {
+    h.listAllRooms.mockResolvedValue([
+      room({ id: "r1", title: "release war room" }),
+    ])
+    const user = renderDialog()
+    await screen.findByText("release war room")
+
+    await user.click(screen.getByRole("button", { name: "Select all" }))
+
+    // Three Sessions, not four rows: none of the bulk actions apply to a Room.
+    expect(screen.getByText("3 selected")).toBeTruthy()
   })
 })

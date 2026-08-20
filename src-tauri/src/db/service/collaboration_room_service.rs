@@ -446,6 +446,40 @@ pub async fn list_for_workbench(
     rows.iter().map(summary_from_row).collect()
 }
 
+/// Every active Room in the install, whatever Workbench it lives on, with the
+/// same host counts and the same most-recent-activity order as
+/// `list_for_workbench`. The Session Center lists Rooms beside Sessions and has
+/// no Workbench to scope by, so it reads this instead of fanning out one
+/// `list_for_workbench` per Workbench.
+///
+/// `search` narrows by title with the same `LIKE '%q%'` shape
+/// `conversation_service::list_all` gives the Session title search, so one
+/// query typed in the Session Center means the same thing on both lanes —
+/// SQLite's ASCII-insensitive `LIKE`, and a `%` the user types is a wildcard
+/// there exactly as it is here.
+pub async fn list_all_for_host(
+    conn: &DatabaseConnection,
+    search: Option<&str>,
+) -> Result<Vec<CollaborationRoomSummary>, DbError> {
+    let mut sql = format!(
+        "{} WHERE r.status = 'active'",
+        room_summary_select(
+            HOST_CHANNEL_UNREAD_SQL,
+            HOST_MENTION_UNREAD_SQL,
+            HOST_NEEDS_REPLY_SQL,
+            HOST_AWAITING_REPLY_SQL,
+        )
+    );
+    let mut values: Vec<sea_orm::Value> = Vec::new();
+    if let Some(needle) = search.map(str::trim).filter(|s| !s.is_empty()) {
+        sql.push_str(" AND r.title LIKE ?");
+        values.push(format!("%{needle}%").into());
+    }
+    sql.push_str(" ORDER BY datetime(COALESCE(last_event_at, r.updated_at)) DESC, r.id DESC");
+    let rows = conn.query_all(statement(&sql, values)).await?;
+    rows.iter().map(summary_from_row).collect()
+}
+
 /// Room-side counters for the collaboration unread overview, summed over every
 /// active Room on every Workbench.
 #[derive(Debug, Clone, Copy)]
@@ -1242,6 +1276,7 @@ pub async fn consume_room_window(
 mod tests {
     use super::*;
     use crate::db::service::collaboration_service::{feed, list_inbox, send};
+    use crate::db::service::workbench_service;
     use crate::db::test_helpers::{fresh_in_memory_db, seed_conversation, seed_folder};
     use crate::models::AgentType;
     use crate::models::{
@@ -1305,6 +1340,126 @@ mod tests {
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].id, room.id);
         assert_eq!(listed[0].member_count, 2);
+    }
+
+    #[tokio::test]
+    async fn list_all_for_host_spans_workbenches_and_filters_by_title() {
+        let (db, a, b, c) = seeded().await;
+        let second = workbench_service::create(&db.conn, Some("Review".into()))
+            .await
+            .expect("second workbench");
+        let planning = create(
+            &db.conn,
+            CreateCollaborationRoomInput {
+                workbench_id: 1,
+                title: "Release planning".into(),
+                member_conversation_ids: vec![a, b],
+                created_by_conversation_id: a,
+                collection_id: None,
+                root_folder_id: None,
+            },
+        )
+        .await
+        .expect("room on the default workbench");
+        let triage = create(
+            &db.conn,
+            CreateCollaborationRoomInput {
+                workbench_id: second.id,
+                title: "Bug triage".into(),
+                member_conversation_ids: vec![a, b, c],
+                created_by_conversation_id: b,
+                collection_id: None,
+                root_folder_id: None,
+            },
+        )
+        .await
+        .expect("room on the second workbench");
+
+        let all = list_all_for_host(&db.conn, None).await.unwrap();
+        assert_eq!(
+            all.len(),
+            2,
+            "the Session Center has no Workbench to scope by: both must be listed"
+        );
+        let triage_summary = all
+            .iter()
+            .find(|room| room.id == triage.id)
+            .expect("the second Workbench's Room");
+        assert_eq!(triage_summary.member_count, 3);
+        assert_eq!(triage_summary.workbench_id, second.id);
+
+        // Lower-cased on purpose: SQLite's LIKE is ASCII-insensitive, which is
+        // what the Session title search relies on too.
+        let hits = list_all_for_host(&db.conn, Some("release"))
+            .await
+            .expect("title search");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].id, planning.id);
+        assert!(
+            list_all_for_host(&db.conn, Some("nothing by this name"))
+                .await
+                .unwrap()
+                .is_empty(),
+            "a query nothing matches must narrow to nothing, not fall back to everything"
+        );
+        assert_eq!(
+            list_all_for_host(&db.conn, Some("   ")).await.unwrap().len(),
+            2,
+            "whitespace is not a query"
+        );
+    }
+
+    #[tokio::test]
+    async fn list_all_for_host_carries_host_counts_and_skips_inactive_rooms() {
+        let (db, a, b, _) = seeded().await;
+        let room = make_room(&db, a, vec![a, b]).await;
+        crate::db::service::collaboration_service::post_room(
+            &db.conn,
+            PostRoomMessageInput {
+                room_id: room.id.clone(),
+                source_conversation_id: a,
+                target_conversation_ids: vec![b],
+                mention_all: false,
+                body: "please review the plan".into(),
+                client_dedupe_id: "room-list-all-1".into(),
+                invocation_policy: CollaborationInvocationPolicy::InvokeWhenIdle,
+                delivery_hint: Default::default(),
+                expects_reply: true,
+                urgency: Default::default(),
+                reply_to_event_id: None,
+                mention_human: false,
+                author_kind: Default::default(),
+            },
+        )
+        .await
+        .expect("post");
+
+        let listed = list_all_for_host(&db.conn, None).await.unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].unread_count, 1);
+        assert_eq!(
+            listed[0].needs_reply_count, 1,
+            "the same host expressions list_for_workbench shows, so the two can never disagree"
+        );
+        assert_eq!(
+            listed[0].awaiting_reply_count, 0,
+            "an Agent asked, not the user"
+        );
+
+        db.conn
+            .execute(Statement::from_string(
+                DbBackend::Sqlite,
+                format!(
+                    "UPDATE collaboration_room SET status = 'archived' WHERE id = '{}'",
+                    room.id
+                ),
+            ))
+            .await
+            .unwrap();
+        assert!(
+            list_all_for_host(&db.conn, None).await.unwrap().is_empty(),
+            "a Room parked out of 'active' leaves the Session Center with it"
+        );
     }
 
     #[tokio::test]

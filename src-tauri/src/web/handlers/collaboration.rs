@@ -237,6 +237,15 @@ pub struct RoomListParams {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct RoomListAllParams {
+    /// Absent and `null` both mean "every Room", so a client that never sends
+    /// the field gets the unfiltered list.
+    #[serde(default)]
+    pub search: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RoomIdParams {
     pub room_id: String,
 }
@@ -318,6 +327,15 @@ pub async fn room_list(
 ) -> Result<Json<Vec<CollaborationRoomSummary>>, AppCommandError> {
     Ok(Json(
         collaboration::collaboration_room_list_core(&state.db.conn, params.workbench_id).await?,
+    ))
+}
+
+pub async fn room_list_all(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<RoomListAllParams>,
+) -> Result<Json<Vec<CollaborationRoomSummary>>, AppCommandError> {
+    Ok(Json(
+        collaboration::collaboration_room_list_all_core(&state.db.conn, params.search).await?,
     ))
 }
 

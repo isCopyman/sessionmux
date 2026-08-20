@@ -2223,6 +2223,19 @@ export async function listWorkbenchRooms(
   return getTransport().call("collaboration_room_list", { workbenchId })
 }
 
+/**
+ * Every active Room in the install, host counts, most recently active first.
+ * `search` narrows by Room title the same way the Session title search does, so
+ * the Session Center can hand it the one query the user typed.
+ */
+export async function listAllRooms(
+  search?: string | null
+): Promise<CollaborationRoomSummary[]> {
+  return getTransport().call("collaboration_room_list_all", {
+    search: search ?? null,
+  })
+}
+
 /** @deprecated Use listWorkbenchRooms. This listed Workbench Rooms, not member Rooms. */
 export async function listCollaborationRooms(
   workbenchId: number

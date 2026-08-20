@@ -1398,6 +1398,18 @@ pub async fn collaboration_room_list_core(
         .map_err(AppCommandError::from)
 }
 
+/// Every active Room, whatever Workbench it lives on, optionally narrowed by
+/// title. The Session Center lists Rooms beside Sessions and has no Workbench
+/// to scope by.
+pub async fn collaboration_room_list_all_core(
+    conn: &sea_orm::DatabaseConnection,
+    search: Option<String>,
+) -> Result<Vec<CollaborationRoomSummary>, AppCommandError> {
+    collaboration_room_service::list_all_for_host(conn, search.as_deref())
+        .await
+        .map_err(AppCommandError::from)
+}
+
 pub async fn collaboration_room_get_core(
     conn: &sea_orm::DatabaseConnection,
     room_id: &str,
@@ -1575,6 +1587,15 @@ pub async fn collaboration_room_list(
     db: tauri::State<'_, AppDatabase>,
 ) -> Result<Vec<CollaborationRoomSummary>, AppCommandError> {
     collaboration_room_list_core(&db.conn, workbench_id).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn collaboration_room_list_all(
+    search: Option<String>,
+    db: tauri::State<'_, AppDatabase>,
+) -> Result<Vec<CollaborationRoomSummary>, AppCommandError> {
+    collaboration_room_list_all_core(&db.conn, search).await
 }
 
 #[cfg(feature = "tauri-runtime")]
