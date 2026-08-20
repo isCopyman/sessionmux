@@ -1555,7 +1555,12 @@
       "currentSessions": "Sessions de cet espace de travail",
       "sessionCount": "{count} sessions",
       "emptySessions": "Aucune session ouverte",
-      "draftSession": "Nouvelle session"
+      "draftSession": "Nouvelle session",
+      "closeSessionTab": "Fermer l’onglet",
+      "moveToWorkbench": "Déplacer vers l’espace de travail",
+      "openInNewWorkbench": "Ouvrir dans un nouvel espace",
+      "movedToWorkbench": "« {title} » déplacé vers {workbench}",
+      "openedInWorkbench": "« {title} » ouvert dans {workbench}"
     },
     "statusLabels": {
       "in_progress": "En cours",

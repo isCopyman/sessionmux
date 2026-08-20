@@ -10,15 +10,18 @@ const h = vi.hoisted(() => ({
   listWorkbenchTabs: vi.fn(),
   hydrate: vi.fn(),
   createAndSwitch: vi.fn(),
+  createOnly: vi.fn(),
   duplicateAndSwitch: vi.fn(),
   rename: vi.fn(),
   setPinned: vi.fn(),
   remove: vi.fn(),
+  closeView: vi.fn(),
   switchWorkbench: vi.fn(),
   switchTab: vi.fn(),
   openTab: vi.fn(),
   openConversations: vi.fn(),
   openRoom: vi.fn(),
+  appendConversationsToWorkbench: vi.fn(),
   rooms: [] as Array<{
     id: string
     workbenchId: number
@@ -77,6 +80,7 @@ const h = vi.hoisted(() => ({
     switchWorkbench: vi.fn(),
     switchTab: vi.fn(),
     openTab: vi.fn(),
+    closeTab: vi.fn(),
   },
   conversations: [
     {
@@ -148,6 +152,11 @@ vi.mock("@/lib/open-room", () => ({
   useOpenRoom: () => h.openRoom,
 }))
 
+vi.mock("@/lib/workbench-session-tabs", () => ({
+  appendConversationsToWorkbench: h.appendConversationsToWorkbench,
+  SIDEBAR_BULK_TAB_ORIGIN: "sidebar-bulk",
+}))
+
 vi.mock("@/stores/room-catalog-store", () => {
   const refresh = vi.fn()
   const state = { rooms: h.rooms, hydrated: true, refresh }
@@ -164,14 +173,17 @@ vi.mock("@/stores/workbench-store", () => ({
   useWorkbenchStore: (selector: (state: unknown) => unknown) =>
     selector({
       items: h.workbenches,
+      openIds: [1, 2],
       hydrated: true,
       loading: false,
       hydrate: h.hydrate,
       createAndSwitch: h.createAndSwitch,
+      createOnly: h.createOnly,
       duplicateAndSwitch: h.duplicateAndSwitch,
       rename: h.rename,
       setPinned: h.setPinned,
       remove: h.remove,
+      closeView: h.closeView,
     }),
 }))
 
@@ -192,6 +204,15 @@ describe("WorkbenchTree", () => {
   beforeEach(() => {
     vi.clearAllMocks()
     h.rooms.length = 0
+    h.appendConversationsToWorkbench.mockResolvedValue({ added: 1, skipped: 0 })
+    h.createOnly.mockResolvedValue({
+      id: 3,
+      name: "Workbench 3",
+      position: 2,
+      is_pinned: false,
+      created_at: "2026-08-07T00:00:00.000Z",
+      updated_at: "2026-08-07T00:00:00.000Z",
+    })
     h.listOpenedTabs.mockResolvedValue({ items: [], version: 1 })
     h.listWorkbenchTabs.mockResolvedValue({
       items: [
@@ -298,6 +319,130 @@ describe("WorkbenchTree", () => {
         expect.objectContaining({ id: "rm_plan" })
       )
     })
+  })
+
+  it("closes a Session tab from the row context menu", async () => {
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <WorkbenchTree />
+      </NextIntlClientProvider>
+    )
+
+    await waitFor(() => expect(h.listWorkbenchTabs).toHaveBeenCalledWith(2))
+    fireEvent.contextMenu(
+      await screen.findByRole("button", { name: "Evidence review" })
+    )
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Close tab" }))
+
+    expect(h.tabState.closeTab).toHaveBeenCalledWith("conversation:101")
+  })
+
+  it("moves a Session to another Workbench and drops the source tab", async () => {
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <WorkbenchTree />
+      </NextIntlClientProvider>
+    )
+
+    await waitFor(() => expect(h.listWorkbenchTabs).toHaveBeenCalledWith(2))
+    fireEvent.contextMenu(
+      await screen.findByRole("button", { name: "Evidence review" })
+    )
+    fireEvent.click(
+      await screen.findByRole("menuitem", { name: "Move to workbench" })
+    )
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Review" }))
+
+    await waitFor(() => {
+      expect(h.appendConversationsToWorkbench).toHaveBeenCalledWith(
+        2,
+        [expect.objectContaining({ id: 101 })],
+        "sidebar-bulk"
+      )
+      expect(h.tabState.closeTab).toHaveBeenCalledWith("conversation:101")
+    })
+  })
+
+  it("opens a Session in a new Workbench without switching to it", async () => {
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <WorkbenchTree />
+      </NextIntlClientProvider>
+    )
+
+    await waitFor(() => expect(h.listWorkbenchTabs).toHaveBeenCalledWith(2))
+    fireEvent.contextMenu(
+      await screen.findByRole("button", { name: "Evidence review" })
+    )
+    fireEvent.click(
+      await screen.findByRole("menuitem", { name: "Open in new workbench" })
+    )
+
+    await waitFor(() => {
+      expect(h.createOnly).toHaveBeenCalledWith("Workbench 3")
+      expect(h.appendConversationsToWorkbench).toHaveBeenCalledWith(
+        3,
+        [expect.objectContaining({ id: 101 })],
+        "sidebar-bulk"
+      )
+    })
+    expect(h.tabState.closeTab).not.toHaveBeenCalled()
+    expect(h.tabState.switchWorkbench).not.toHaveBeenCalled()
+  })
+
+  it("leaves Session actions off rows read from a saved snapshot", async () => {
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <WorkbenchTree />
+      </NextIntlClientProvider>
+    )
+
+    await waitFor(() => expect(h.listWorkbenchTabs).toHaveBeenCalledWith(2))
+    fireEvent.click(screen.getByRole("button", { name: "Expand workbench" }))
+    fireEvent.contextMenu(
+      await screen.findByRole("button", { name: "Reviewer session" })
+    )
+
+    const close = await screen.findByRole("menuitem", { name: "Close tab" })
+    expect(close.getAttribute("data-disabled")).not.toBeNull()
+    expect(
+      screen
+        .getByRole("menuitem", { name: "Move to workbench" })
+        .getAttribute("data-disabled")
+    ).not.toBeNull()
+  })
+
+  it("closes a Workbench view from its header context menu", async () => {
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <WorkbenchTree />
+      </NextIntlClientProvider>
+    )
+
+    await waitFor(() => expect(h.listWorkbenchTabs).toHaveBeenCalledWith(2))
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Main" }))
+    fireEvent.click(
+      await screen.findByRole("menuitem", { name: "Close workbench tab" })
+    )
+
+    await waitFor(() => expect(h.closeView).toHaveBeenCalledWith(1))
+  })
+
+  it("renames a Workbench through the existing editor dialog", async () => {
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <WorkbenchTree />
+      </NextIntlClientProvider>
+    )
+
+    await waitFor(() => expect(h.listWorkbenchTabs).toHaveBeenCalledWith(2))
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Review" }))
+    fireEvent.click(
+      await screen.findByRole("menuitem", { name: "Rename current workbench" })
+    )
+    fireEvent.click(await screen.findByRole("button", { name: "Save" }))
+
+    await waitFor(() => expect(h.rename).toHaveBeenCalledWith(2, "Review"))
   })
 
   it("shows channel unread on a Room row", async () => {

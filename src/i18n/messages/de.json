@@ -1555,7 +1555,12 @@
       "currentSessions": "Sessions in diesem Arbeitsbereich",
       "sessionCount": "{count} Sessions",
       "emptySessions": "Keine geöffneten Sessions",
-      "draftSession": "Neue Session"
+      "draftSession": "Neue Session",
+      "closeSessionTab": "Tab schließen",
+      "moveToWorkbench": "In Arbeitsbereich verschieben",
+      "openInNewWorkbench": "In neuem Arbeitsbereich öffnen",
+      "movedToWorkbench": "„{title}“ nach {workbench} verschoben",
+      "openedInWorkbench": "„{title}“ in {workbench} geöffnet"
     },
     "statusLabels": {
       "in_progress": "In Bearbeitung",
