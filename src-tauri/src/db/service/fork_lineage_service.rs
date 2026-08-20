@@ -45,6 +45,39 @@ pub async fn record_fork_head<C: ConnectionTrait>(
     Ok(row)
 }
 
+/// Record that `target` was produced by forking `source` at a message
+/// anchor. `anchor_json` is the JSON blob stored on the edge (see
+/// `acp::fork::fork_at_message_anchor_json`). Signature is separate from
+/// [`record_fork_head`] so existing head-fork call sites stay untouched.
+pub async fn record_fork_at_message<C: ConnectionTrait>(
+    conn: &C,
+    source_conversation_id: i32,
+    target_conversation_id: i32,
+    anchor_json: String,
+) -> Result<fork_relation::Model, DbError> {
+    if source_conversation_id == target_conversation_id {
+        return Err(DbError::Validation(format!(
+            "fork lineage: a conversation cannot fork from itself ({source_conversation_id})"
+        )));
+    }
+    if anchor_json.trim().is_empty() {
+        return Err(DbError::Validation(
+            "fork_at_message requires a non-empty anchor JSON blob".to_string(),
+        ));
+    }
+    let row = fork_relation::ActiveModel {
+        id: NotSet,
+        source_conversation_id: Set(source_conversation_id),
+        target_conversation_id: Set(target_conversation_id),
+        relation_kind: Set(ForkRelationKind::ForkAtMessage),
+        anchor: Set(Some(anchor_json)),
+        created_at: Set(Utc::now()),
+    }
+    .insert(conn)
+    .await?;
+    Ok(row)
+}
+
 /// Both directions of one conversation's lineage: what it was forked from, and
 /// what was forked out of it.
 ///
@@ -211,5 +244,25 @@ mod tests {
             .await
             .expect_err("self-fork must be rejected");
         assert!(matches!(err, DbError::Validation(_)), "got {err:?}");
+    }
+
+    #[tokio::test]
+    async fn record_fork_at_message_stores_kind_and_anchor() {
+        let (db, ids) = seed(2).await;
+        let blob = r#"{"resumeSessionAt":"uuid-kept-tail"}"#.to_string();
+        record_fork_at_message(&db.conn, ids[0], ids[1], blob.clone())
+            .await
+            .expect("fork at message");
+
+        let lineage = lineage_for(&db.conn, ids[1]).await.expect("lineage");
+        assert_eq!(lineage.forked_from.len(), 1);
+        assert_eq!(
+            lineage.forked_from[0].relation_kind,
+            ForkRelationKind::ForkAtMessage
+        );
+        assert_eq!(
+            lineage.forked_from[0].anchor.as_deref(),
+            Some(blob.as_str())
+        );
     }
 }

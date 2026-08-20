@@ -90,6 +90,10 @@ pub enum AppErrorCode {
     /// connection (a second, concurrent send). Maps to HTTP 409 — an expected,
     /// recoverable condition in multi-client co-control, not a server fault.
     TurnInProgress,
+    /// A `session/fork` at a message anchor was refused by the agent. Maps
+    /// to HTTP 422, **not** 409: this is not retryable. The same request
+    /// fails forever.
+    ForkAnchorRejected,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, thiserror::Error)]

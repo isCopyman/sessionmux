@@ -338,6 +338,10 @@ pub struct AcpForkParams {
     pub conversation_id: Option<i32>,
     #[serde(default)]
     pub folder_id: Option<i32>,
+    /// Provider-native chain-entry uuid to truncating-fork at. `null` / omitted
+    /// is a head fork (identical to today's payload).
+    #[serde(default)]
+    pub anchor: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -467,16 +471,21 @@ pub async fn acp_fork(
             &params.connection_id,
             params.conversation_id,
             params.folder_id,
+            params.anchor,
         )
         .await
         .map_err(|e| {
             let message = e.to_string();
             // A fork requested while a turn is in flight is an expected,
             // recoverable condition (409) — the frontend re-queues — not a
-            // server fault (500). Mirror `acp_prompt`. Other errors stay 500.
+            // server fault (500). Mirror `acp_prompt`.
+            // A refused message-anchor is 422 and MUST NOT be retried.
             match e {
                 AcpError::TurnInProgress => {
                     AppCommandError::new(AppErrorCode::TurnInProgress, message)
+                }
+                AcpError::ForkAnchorRejected(_) => {
+                    AppCommandError::new(AppErrorCode::ForkAnchorRejected, message)
                 }
                 _ => AppCommandError::task_execution_failed(message),
             }

@@ -5,10 +5,10 @@ use serde::{Deserialize, Serialize};
 /// constraint in migration `m20260820_000002`, and the `relationKind` of the
 /// Session History RFC's `HistoryOperationResult`.
 ///
-/// Only [`ForkRelationKind::ForkHead`] has a write path today: the ACP
-/// `session/fork` pipeline. The other two exist so the historical-fork and
-/// cross-Harness handoff slices need no migration — do not treat a row of
-/// those kinds as reachable until their producer lands.
+/// [`ForkRelationKind::ForkHead`] and [`ForkRelationKind::ForkAtMessage`]
+/// both have write paths (ACP `session/fork` with or without an anchor).
+/// [`ForkRelationKind::Handoff`] is reserved for a later slice — do not treat
+/// a handoff row as reachable until its producer lands.
 #[derive(Debug, Clone, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
 #[sea_orm(rs_type = "String", db_type = "String(StringLen::None)")]
 #[serde(rename_all = "snake_case")]
