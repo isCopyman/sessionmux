@@ -77,10 +77,15 @@ describe("RoomPostBody", () => {
     )
     const { container } = render(<RoomPostBody source={source} />)
 
+    // Streamdown renders bold as a styled span, not a <strong> tag.
     await waitFor(() =>
-      expect(container.querySelector("strong")).not.toBeNull()
+      expect(
+        container.querySelector('[data-streamdown="strong"]')
+      ).not.toBeNull()
     )
-    expect(container.querySelector("strong")?.textContent).toBe("ship")
+    expect(
+      container.querySelector('[data-streamdown="strong"]')?.textContent
+    ).toBe("ship")
     expect(container.querySelector("h2")?.textContent).toBe("Plan")
     expect(container.querySelectorAll("li")).toHaveLength(2)
     expect(container.textContent).not.toContain("**")
@@ -115,7 +120,9 @@ describe("RoomPostBody", () => {
     )
 
     await waitFor(() =>
-      expect(container.querySelector("strong")).not.toBeNull()
+      expect(
+        container.querySelector('[data-streamdown="strong"]')
+      ).not.toBeNull()
     )
     // The session chip is the same reference badge the Session transcript uses…
     expect(
