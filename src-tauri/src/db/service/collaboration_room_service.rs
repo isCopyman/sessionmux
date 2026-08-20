@@ -301,10 +301,14 @@ const HOST_CHANNEL_UNREAD_SQL: &str = "(SELECT COUNT(*) FROM collaboration_event
                       WHERE e.room_id = r.id AND COALESCE(e.visibility, 'direct') = 'room' \
                         AND (r.last_seen_at IS NULL OR datetime(e.created_at) > datetime(r.last_seen_at)))";
 /// Agent `list_rooms`: posts after this member's own cursor, including
-/// record-only posts that never created a Delivery.
+/// record-only posts that never created a Delivery. "My own post" is an
+/// authorship test, not an id test: a human post borrows the Room creator's
+/// Session id (see `collaboration_service::post_room`), and the creator has
+/// to see it as unread exactly like every other member does.
 const MEMBER_CHANNEL_UNREAD_SQL: &str = "(SELECT COUNT(*) FROM collaboration_event e \
                       WHERE e.room_id = r.id AND COALESCE(e.visibility, 'direct') = 'room' \
-                        AND e.source_conversation_id != me.conversation_id \
+                        AND NOT (e.source_conversation_id = me.conversation_id \
+                                 AND COALESCE(e.author_kind, 'session') = 'session') \
                         AND (
                           (
                             me.last_read_event_id IS NOT NULL
@@ -386,10 +390,17 @@ const MEMBER_NEEDS_REPLY_SQL: &str = "(SELECT COUNT(*) FROM collaboration_delive
                         AND COALESCE(e.visibility, 'direct') = 'room' \
                         AND d.obligation_state = 'awaiting_reply' \
                         AND d.state <> 'dismissed' AND d.state <> 'failed')";
+/// Obligations this member's own asks created. Human posts are excluded even
+/// though they carry the creator's Session id: the user asked, not the
+/// creator, and `HOST_AWAITING_REPLY_SQL` is where that ask is counted.
+/// Without the authorship test a human `@` of the creator would show up twice
+/// on the creator's own card — once as a debt owed, once as a debt awaited —
+/// off a single Delivery row.
 const MEMBER_AWAITING_REPLY_SQL: &str = "(SELECT COUNT(*) FROM collaboration_delivery d \
                       JOIN collaboration_event e ON e.id = d.event_id \
                       WHERE e.room_id = r.id \
                         AND e.source_conversation_id = me.conversation_id \
+                        AND COALESCE(e.author_kind, 'session') = 'session' \
                         AND COALESCE(e.visibility, 'direct') = 'room' \
                         AND d.obligation_state = 'awaiting_reply' \
                         AND d.state <> 'dismissed' AND d.state <> 'failed')";
@@ -1051,6 +1062,9 @@ pub async fn timeline_with(
             )
             .await?
         }
+        // The cursor half of `MEMBER_CHANNEL_UNREAD_SQL`, and it skips "my own
+        // posts" on the same authorship test: a human post carries the Room
+        // creator's borrowed Session id but is not the creator's own writing.
         RoomTimelineMode::Unread { conversation_id } => {
             require_member(conn, room_id, conversation_id).await?;
             let rows = conn
@@ -1060,7 +1074,10 @@ pub async fn timeline_with(
                      JOIN collaboration_room_member me \
                        ON me.room_id = e.room_id AND me.conversation_id = ? \
                      WHERE e.room_id = ? AND COALESCE(e.visibility, 'direct') = 'room' \
-                       AND e.source_conversation_id != me.conversation_id \
+                       AND NOT (
+                         e.source_conversation_id = me.conversation_id
+                         AND COALESCE(e.author_kind, 'session') = 'session'
+                       ) \
                        AND (
                          (
                            me.last_read_event_id IS NOT NULL
@@ -1104,6 +1121,12 @@ pub async fn timeline_with(
             };
             (rows, truncated)
         }
+        // Both sides of one obligation: posts this member owes an answer to,
+        // plus its own asks nobody has answered. The second half stays keyed
+        // to Session authorship so a human post filed under the Room
+        // creator's borrowed id is not read back as the creator's own ask —
+        // it reaches the creator through the first half instead, when the
+        // human actually `@`-ed them.
         RoomTimelineMode::NeedsReply { conversation_id } => {
             require_member(conn, room_id, conversation_id).await?;
             newest_window(
@@ -1121,6 +1144,7 @@ pub async fn timeline_with(
                          )
                          OR (
                            e.source_conversation_id = ?
+                           AND COALESCE(e.author_kind, 'session') = 'session'
                            AND EXISTS (
                              SELECT 1 FROM collaboration_delivery d
                              WHERE d.event_id = e.id
@@ -2328,6 +2352,158 @@ mod tests {
             host_totals(&db.conn).await.unwrap().needs_reply_count,
             after_delete[0].needs_reply_count
         );
+    }
+
+    /// The Room composer has no Session id of its own, so a human post is
+    /// filed under the creator's (`rooms-page.tsx` sends
+    /// `createdByConversationId`). Dropping the author from their own mention
+    /// list used to swallow a human `@` of that creator whole — no Delivery,
+    /// no wake, no badge, and no error to say why.
+    #[tokio::test]
+    async fn a_human_at_the_room_creator_is_delivered_woken_and_owed() {
+        use crate::models::CollaborationAuthorKind;
+        let (db, a, b, _) = seeded().await;
+        let room = make_room(&db, a, vec![a, b]).await;
+        let posted = crate::db::service::collaboration_service::post_room(
+            &db.conn,
+            ask_post(
+                room.id.clone(),
+                a,
+                vec![a],
+                "human-at-creator",
+                CollaborationAuthorKind::Human,
+            ),
+        )
+        .await
+        .expect("human post");
+
+        assert_eq!(
+            posted.deliveries.len(),
+            1,
+            "the creator is an ordinary target of a human post"
+        );
+        let delivery = &posted.deliveries[0];
+        assert_eq!(delivery.target.conversation_id, a);
+        assert_eq!(delivery.state, CollaborationDeliveryState::Queued);
+        assert_eq!(
+            delivery.invocation_policy,
+            CollaborationInvocationPolicy::InvokeWhenIdle
+        );
+        assert!(delivery.expects_reply);
+        assert_eq!(
+            delivery.obligation_state,
+            CollaborationObligationState::AwaitingReply
+        );
+
+        let queue = crate::db::service::prompt_queue_service::snapshot(&db.conn, a)
+            .await
+            .expect("creator queue");
+        assert_eq!(queue.items.len(), 1, "the creator is woken like any member");
+        assert_eq!(
+            queue.items[0].origin_event_id.as_deref(),
+            Some(posted.event_id.as_str())
+        );
+
+        let for_creator = list_for_member(&db.conn, a).await.unwrap();
+        assert_eq!(for_creator[0].mention_unread_count, 1);
+        assert_eq!(for_creator[0].needs_reply_count, 1);
+        assert_eq!(
+            for_creator[0].awaiting_reply_count, 0,
+            "the user asked, not the creator: one Delivery, counted on one side"
+        );
+        assert_eq!(
+            for_creator[0].unread_count, 1,
+            "a human post is not the creator's own writing, borrowed id or not"
+        );
+        assert_eq!(
+            posted.open_reply_debt, 1,
+            "the borrowed Session walks away owing this answer"
+        );
+    }
+
+    /// The other half of the rule, kept honest: a Session author is still
+    /// dropped from its own mention list and never wakes itself.
+    #[tokio::test]
+    async fn a_session_post_that_mentions_itself_still_creates_no_delivery() {
+        use crate::models::CollaborationAuthorKind;
+        let (db, a, b, _) = seeded().await;
+        let room = make_room(&db, a, vec![a, b]).await;
+        let posted = crate::db::service::collaboration_service::post_room(
+            &db.conn,
+            ask_post(
+                room.id.clone(),
+                a,
+                vec![a, b],
+                "session-at-self",
+                CollaborationAuthorKind::Session,
+            ),
+        )
+        .await
+        .expect("session post");
+
+        let targets: Vec<i32> = posted
+            .deliveries
+            .iter()
+            .map(|delivery| delivery.target.conversation_id)
+            .collect();
+        assert_eq!(targets, vec![b], "the author's own `@` is dropped");
+        assert!(
+            crate::db::service::prompt_queue_service::snapshot(&db.conn, a)
+                .await
+                .unwrap()
+                .items
+                .is_empty(),
+            "an Agent must not wake itself with its own post"
+        );
+    }
+
+    /// `@all` is the same rule from the fan-out side: the user means every
+    /// member, and the Room creator is a member.
+    #[tokio::test]
+    async fn mention_all_reaches_the_creator_for_a_human_but_not_for_a_session() {
+        use crate::models::CollaborationAuthorKind;
+        let (db, a, b, c) = seeded().await;
+        let room = make_room(&db, a, vec![a, b, c]).await;
+
+        let human = PostRoomMessageInput {
+            mention_all: true,
+            ..ask_post(
+                room.id.clone(),
+                a,
+                vec![],
+                "all-human",
+                CollaborationAuthorKind::Human,
+            )
+        };
+        let posted = crate::db::service::collaboration_service::post_room(&db.conn, human)
+            .await
+            .expect("human @all");
+        let targets: Vec<i32> = posted
+            .deliveries
+            .iter()
+            .map(|delivery| delivery.target.conversation_id)
+            .collect();
+        assert_eq!(targets, vec![a, b, c], "the user's @all leaves nobody out");
+
+        let session = PostRoomMessageInput {
+            mention_all: true,
+            ..ask_post(
+                room.id.clone(),
+                a,
+                vec![],
+                "all-session",
+                CollaborationAuthorKind::Session,
+            )
+        };
+        let posted = crate::db::service::collaboration_service::post_room(&db.conn, session)
+            .await
+            .expect("session @all");
+        let targets: Vec<i32> = posted
+            .deliveries
+            .iter()
+            .map(|delivery| delivery.target.conversation_id)
+            .collect();
+        assert_eq!(targets, vec![b, c], "an Agent's @all still excludes itself");
     }
 
     #[tokio::test]
