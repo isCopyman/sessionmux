@@ -1006,3 +1006,13 @@ T2 后置截图（CDP 9222 可用，基线在 .artifacts）+ 晨间验收报告 
   已修（6ce04c37）。④ w-badge 一次打回：SidebarNavButton 改兄弟节点布局导致
   Automations/Tasks 徽章区死区，要求非交互 trailing 回按钮内部。⑤ 在飞：
   w-atperf（六项 @ 性能）、w-badge 返工、w-roomsearch（Room 进会话中心）。
+- 2026-08-20 早 **通宵批次全部合并+门禁收官**：① 功能全落地——Room 搜索进会话中心
+  （77b6d860）、Ctrl+K 瘦身（92f499ea）、@ 性能六项（5aedc9c5）、待回复徽章折叠
+  （0186e066）、dev 图标角标（65aeec70）、prettier 扫尾（4c8947c6）。② 门禁：Rust
+  全套绿（fmt/clippy×3/server 2548 过）、vitest 4695 过（仅 1 红=既有测试选择器歧义，
+  修于 1e3d9194）、build 绿。③ **教训入库**：全量 vitest 抓出两条 sidebar-ux 时期就
+  失败的测试（sidebar.test.tsx 的 mock 图谱缺口、collection-tree 的 /Busy room/ 歧义）
+  ——此前"全绿"是针对性重跑而非完整全量；今后每批收官必须完整跑 `pnpm vitest run`
+  且只认完整运行的汇总行。④ eslint 被 .claude/worktrees 旧产物拖慢：已删三个过期
+  agent worktree（分支保留）+ eslint 配置忽略 .claude/**（0874c194）；eslint 本身
+  不在标准门禁（慢），单独跑作加验。
