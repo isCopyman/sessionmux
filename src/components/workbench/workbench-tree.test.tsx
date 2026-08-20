@@ -8,6 +8,8 @@ import enMessages from "@/i18n/messages/en.json"
 const h = vi.hoisted(() => ({
   listOpenedTabs: vi.fn(),
   listWorkbenchTabs: vi.fn(),
+  setRoomWorkbench: vi.fn(),
+  refreshRooms: vi.fn(),
   hydrate: vi.fn(),
   createAndSwitch: vi.fn(),
   createOnly: vi.fn(),
@@ -57,23 +59,25 @@ const h = vi.hoisted(() => ({
     tabs: [
       {
         id: "conversation:101",
-        kind: "conversation",
+        kind: "conversation" as "conversation" | "room",
         folderId: 7,
-        conversationId: 101,
+        conversationId: 101 as number | null,
         agentType: "codex",
         title: "Evidence review",
         isPinned: true,
-        status: "in_progress",
+        status: "in_progress" as string | undefined,
+        roomId: undefined as string | undefined,
       },
       {
         id: "conversation:103",
-        kind: "conversation",
+        kind: "conversation" as "conversation" | "room",
         folderId: 7,
-        conversationId: 103,
+        conversationId: 103 as number | null,
         agentType: "codex",
         title: "Fresh result",
         isPinned: true,
-        status: "completed",
+        status: "completed" as string | undefined,
+        roomId: undefined as string | undefined,
       },
     ],
     activeTabId: "conversation:101",
@@ -140,12 +144,13 @@ const h = vi.hoisted(() => ({
   ],
 }))
 
-vi.mock("sonner", () => ({ toast: { error: vi.fn() } }))
+vi.mock("sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }))
 
 vi.mock("@/lib/api", () => ({
   listOpenedTabs: h.listOpenedTabs,
   listWorkbenchTabs: h.listWorkbenchTabs,
   listCollaborationRooms: vi.fn().mockResolvedValue([]),
+  setRoomWorkbench: h.setRoomWorkbench,
 }))
 
 vi.mock("@/lib/open-room", () => ({
@@ -158,8 +163,7 @@ vi.mock("@/lib/workbench-session-tabs", () => ({
 }))
 
 vi.mock("@/stores/room-catalog-store", () => {
-  const refresh = vi.fn()
-  const state = { rooms: h.rooms, hydrated: true, refresh }
+  const state = { rooms: h.rooms, hydrated: true, refresh: h.refreshRooms }
   const useRoomCatalogStore = (selector: (value: typeof state) => unknown) =>
     selector(state)
   useRoomCatalogStore.getState = () => state
@@ -204,6 +208,8 @@ describe("WorkbenchTree", () => {
   beforeEach(() => {
     vi.clearAllMocks()
     h.rooms.length = 0
+    h.tabState.tabs = h.tabState.tabs.filter((tab) => tab.kind !== "room")
+    h.setRoomWorkbench.mockResolvedValue({ id: "rm_plan" })
     h.appendConversationsToWorkbench.mockResolvedValue({ added: 1, skipped: 0 })
     h.createOnly.mockResolvedValue({
       id: 3,
@@ -465,5 +471,131 @@ describe("WorkbenchTree", () => {
     )
     const row = await screen.findByRole("button", { name: /Busy room/ })
     expect(row.textContent).toContain("3")
+  })
+
+  it("moves a Room to another Workbench and drops the live tab", async () => {
+    h.rooms.push({
+      id: "rm_plan",
+      workbenchId: 1,
+      title: "Plan room",
+      createdByConversationId: 101,
+      memberCount: 2,
+      unreadCount: 0,
+      createdAt: "2026-08-06T00:00:00.000Z",
+      updatedAt: "2026-08-06T00:00:00.000Z",
+    })
+    h.tabState.tabs.push({
+      id: "room-rm_plan",
+      kind: "room",
+      roomId: "rm_plan",
+      folderId: 7,
+      conversationId: null,
+      agentType: "claude_code",
+      title: "Plan room",
+      isPinned: false,
+      status: undefined,
+    })
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <WorkbenchTree />
+      </NextIntlClientProvider>
+    )
+
+    await waitFor(() => expect(h.listWorkbenchTabs).toHaveBeenCalledWith(2))
+    h.refreshRooms.mockClear()
+    fireEvent.contextMenu(
+      await screen.findByRole("button", { name: "Plan room" })
+    )
+    fireEvent.click(
+      await screen.findByRole("menuitem", { name: "Move to workbench" })
+    )
+    fireEvent.click(await screen.findByRole("menuitem", { name: "Review" }))
+
+    await waitFor(() => {
+      expect(h.setRoomWorkbench).toHaveBeenCalledWith("rm_plan", 2)
+      expect(h.tabState.closeTab).toHaveBeenCalledWith("room-rm_plan")
+      expect(h.refreshRooms).toHaveBeenCalled()
+    })
+  })
+
+  it("opens a Room in a new Workbench without switching to it", async () => {
+    h.rooms.push({
+      id: "rm_plan",
+      workbenchId: 1,
+      title: "Plan room",
+      createdByConversationId: 101,
+      memberCount: 2,
+      unreadCount: 0,
+      createdAt: "2026-08-06T00:00:00.000Z",
+      updatedAt: "2026-08-06T00:00:00.000Z",
+    })
+    h.tabState.tabs.push({
+      id: "room-rm_plan",
+      kind: "room",
+      roomId: "rm_plan",
+      folderId: 7,
+      conversationId: null,
+      agentType: "claude_code",
+      title: "Plan room",
+      isPinned: false,
+      status: undefined,
+    })
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <WorkbenchTree />
+      </NextIntlClientProvider>
+    )
+
+    await waitFor(() => expect(h.listWorkbenchTabs).toHaveBeenCalledWith(2))
+    h.refreshRooms.mockClear()
+    fireEvent.contextMenu(
+      await screen.findByRole("button", { name: "Plan room" })
+    )
+    fireEvent.click(
+      await screen.findByRole("menuitem", { name: "Open in new workbench" })
+    )
+
+    await waitFor(() => {
+      expect(h.createOnly).toHaveBeenCalledWith("Workbench 3")
+      expect(h.setRoomWorkbench).toHaveBeenCalledWith("rm_plan", 3)
+    })
+    expect(h.tabState.closeTab).toHaveBeenCalledWith("room-rm_plan")
+    expect(h.refreshRooms).toHaveBeenCalled()
+    expect(h.tabState.switchWorkbench).not.toHaveBeenCalled()
+  })
+
+  it("keeps Room move actions enabled on inactive Workbench rows", async () => {
+    h.rooms.push({
+      id: "rm_review",
+      workbenchId: 2,
+      title: "Review room",
+      createdByConversationId: 102,
+      memberCount: 2,
+      unreadCount: 0,
+      createdAt: "2026-08-06T00:00:00.000Z",
+      updatedAt: "2026-08-06T00:00:00.000Z",
+    })
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <WorkbenchTree />
+      </NextIntlClientProvider>
+    )
+
+    await waitFor(() => expect(h.listWorkbenchTabs).toHaveBeenCalledWith(2))
+    fireEvent.click(screen.getByRole("button", { name: "Expand workbench" }))
+    fireEvent.contextMenu(
+      await screen.findByRole("button", { name: "Review room" })
+    )
+
+    expect(
+      screen
+        .getByRole("menuitem", { name: "Move to workbench" })
+        .getAttribute("data-disabled")
+    ).toBeNull()
+    expect(
+      screen
+        .getByRole("menuitem", { name: "Open in new workbench" })
+        .getAttribute("data-disabled")
+    ).toBeNull()
   })
 })

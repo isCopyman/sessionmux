@@ -60,7 +60,7 @@ import { Input } from "@/components/ui/input"
 import { useTabStore } from "@/contexts/tab-context"
 import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
 import { toErrorMessage } from "@/lib/app-error"
-import { listOpenedTabs, listWorkbenchTabs } from "@/lib/api"
+import { listOpenedTabs, listWorkbenchTabs, setRoomWorkbench } from "@/lib/api"
 import { formatConversationTitle } from "@/lib/conversation-title"
 import type {
   AgentType,
@@ -487,6 +487,46 @@ export function WorkbenchTree() {
     }
   }
 
+  const moveRoom = async (session: TreeSession, target: WorkbenchInfo) => {
+    if (!session.roomId || pending) return
+    setPending(true)
+    try {
+      await setRoomWorkbench(session.roomId, target.id)
+      if (session.liveTabId) closeTab(session.liveTabId)
+      void useRoomCatalogStore.getState().refresh()
+      toast.success(
+        t("movedToWorkbench", { title: session.title, workbench: target.name })
+      )
+    } catch (error) {
+      toast.error(t("saveFailed", { message: toErrorMessage(error) }))
+    } finally {
+      setPending(false)
+    }
+  }
+
+  const openRoomInNewWorkbench = async (session: TreeSession) => {
+    if (!session.roomId || pending) return
+    setPending(true)
+    try {
+      const created = await createOnly(
+        t("defaultName", { number: items.length + 1 })
+      )
+      await setRoomWorkbench(session.roomId, created.id)
+      if (session.liveTabId) closeTab(session.liveTabId)
+      void useRoomCatalogStore.getState().refresh()
+      toast.success(
+        t("openedInWorkbench", {
+          title: session.title,
+          workbench: created.name,
+        })
+      )
+    } catch (error) {
+      toast.error(t("saveFailed", { message: toErrorMessage(error) }))
+    } finally {
+      setPending(false)
+    }
+  }
+
   const focusSession = async (workbenchId: number, session: TreeSession) => {
     try {
       if (session.kind === "room" && session.room) {
@@ -787,49 +827,52 @@ export function WorkbenchTree() {
                               <X className="h-4 w-4" />
                               {t("closeSessionTab")}
                             </ContextMenuItem>
-                            {/* A Room belongs to the Workbench that created it
-                                and no API reassigns that, so Room rows offer
-                                only the tab-level action. */}
-                            {session.kind === "conversation" ? (
-                              <>
-                                <ContextMenuSeparator />
-                                <ContextMenuSub>
-                                  <ContextMenuSubTrigger
-                                    disabled={
-                                      !canMove || moveTargets.length === 0
+                            <ContextMenuSeparator />
+                            <ContextMenuSub>
+                              <ContextMenuSubTrigger
+                                disabled={
+                                  session.kind === "room"
+                                    ? !session.roomId ||
+                                      pending ||
+                                      moveTargets.length === 0
+                                    : !canMove || moveTargets.length === 0
+                                }
+                              >
+                                <PanelsTopLeft className="h-4 w-4" />
+                                {t("moveToWorkbench")}
+                              </ContextMenuSubTrigger>
+                              <ContextMenuSubContent className="max-h-72 overflow-y-auto">
+                                {moveTargets.map((target) => (
+                                  <ContextMenuItem
+                                    key={target.id}
+                                    onSelect={() =>
+                                      session.kind === "room"
+                                        ? void moveRoom(session, target)
+                                        : void moveSession(session, target)
                                     }
                                   >
-                                    <PanelsTopLeft className="h-4 w-4" />
-                                    {t("moveToWorkbench")}
-                                  </ContextMenuSubTrigger>
-                                  <ContextMenuSubContent className="max-h-72 overflow-y-auto">
-                                    {moveTargets.map((target) => (
-                                      <ContextMenuItem
-                                        key={target.id}
-                                        onSelect={() =>
-                                          void moveSession(session, target)
-                                        }
-                                      >
-                                        <span className="truncate">
-                                          {target.name}
-                                        </span>
-                                      </ContextMenuItem>
-                                    ))}
-                                  </ContextMenuSubContent>
-                                </ContextMenuSub>
-                                <ContextMenuItem
-                                  disabled={
-                                    pending || summaryOf(session) == null
-                                  }
-                                  onSelect={() =>
-                                    void openSessionInNewWorkbench(session)
-                                  }
-                                >
-                                  <Plus className="h-4 w-4" />
-                                  {t("openInNewWorkbench")}
-                                </ContextMenuItem>
-                              </>
-                            ) : null}
+                                    <span className="truncate">
+                                      {target.name}
+                                    </span>
+                                  </ContextMenuItem>
+                                ))}
+                              </ContextMenuSubContent>
+                            </ContextMenuSub>
+                            <ContextMenuItem
+                              disabled={
+                                session.kind === "room"
+                                  ? !session.roomId || pending
+                                  : pending || summaryOf(session) == null
+                              }
+                              onSelect={() =>
+                                session.kind === "room"
+                                  ? void openRoomInNewWorkbench(session)
+                                  : void openSessionInNewWorkbench(session)
+                              }
+                            >
+                              <Plus className="h-4 w-4" />
+                              {t("openInNewWorkbench")}
+                            </ContextMenuItem>
                           </ContextMenuContent>
                         </ContextMenu>
                       )
