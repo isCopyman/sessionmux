@@ -79,6 +79,47 @@ describe("conversation find DOM ranges", () => {
     )
   })
 
+  it("accepts a plain (non-virtualized) row marker for Room posts", () => {
+    const root = document.createElement("div")
+    root.innerHTML = `
+      <article data-find-row-index="2">
+        <div data-conversation-search-content>bound to the plan</div>
+      </article>
+    `
+
+    const range = applyConversationFindHighlights(root, "plan", {
+      threadIndex: 2,
+      occurrenceIndex: 0,
+    })
+
+    expect(range?.toString()).toBe("plan")
+    expect(root.querySelector("[data-find-row-index='2']")).toHaveAttribute(
+      "data-conversation-find-current"
+    )
+  })
+
+  it("scrolls a viewport handed in directly, with no class to find it by", () => {
+    const root = document.createElement("div")
+    const viewport = document.createElement("div")
+    viewport.scrollTop = 120
+    const scrollTo = vi.fn()
+    viewport.scrollTo = scrollTo
+    vi.spyOn(viewport, "getBoundingClientRect").mockReturnValue({
+      top: 100,
+      height: 600,
+    } as DOMRect)
+    const range = document.createRange()
+    Object.defineProperty(range, "getClientRects", {
+      configurable: true,
+      value: () => [{ top: 730, height: 20, width: 35 }],
+    })
+
+    // Nothing under `root` matches `.scrollbar-thin`, so the fallback lookup
+    // would find no scroller at all.
+    expect(revealConversationFindRange(root, range, viewport)).toBe(true)
+    expect(scrollTo).toHaveBeenCalledWith({ top: 460, behavior: "auto" })
+  })
+
   it("keeps a fully visible selected range in place", () => {
     const root = document.createElement("div")
     const viewport = document.createElement("div")

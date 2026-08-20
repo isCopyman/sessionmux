@@ -2820,7 +2820,7 @@ export function ConversationDetailPanel() {
     const folderPath = allFolders.find((f) => f.id === tab.folderId)?.path
     const view =
       tab.kind === "room" && tab.roomId ? (
-        <RoomWorkspace roomId={tab.roomId} />
+        <RoomWorkspace roomId={tab.roomId} isActive={active} />
       ) : (
         <ConversationTabView
           tabId={tab.id}

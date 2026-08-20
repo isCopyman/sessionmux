@@ -443,6 +443,24 @@ export function roomMessageMarkdown(input: RoomBodyInput): string {
   return out
 }
 
+/**
+ * The post as the reader sees it, for literal text search (Ctrl+F in a Room).
+ *
+ * Chips contribute their visible label — `@Planner`, not
+ * `[@Planner](codeg://session/7)` — which is the difference that actually
+ * matters, because a mention recovered from metadata has no text in the raw
+ * body at all. Markdown *syntax* inside the prose (`**`, backticks, heading
+ * hashes) is still counted here while the rendered DOM has dropped it, so a
+ * query aimed at those characters can report a match the highlighter cannot
+ * place; the Session transcript approximates the same way.
+ */
+export function roomMessagePlainText(input: RoomBodyInput): string {
+  const { masked, restore } = maskLiteralSpans(input.body)
+  return roomMessageBodyParts({ ...input, body: masked })
+    .map((part) => (part.type === "text" ? restore(part.value) : part.label))
+    .join("")
+}
+
 function mergeText(parts: RoomBodyPart[]): RoomBodyPart[] {
   const out: RoomBodyPart[] = []
   for (const part of parts) {

@@ -11,6 +11,9 @@ interface ConversationFindBarProps {
   total: number
   searching: boolean
   focusToken: number
+  /** Names the searched surface; defaults to the Session wording. */
+  scopeLabel?: string
+  scopePlaceholder?: string
   onQueryChange: (query: string) => void
   onNext: () => void
   onPrevious: () => void
@@ -23,6 +26,8 @@ export function ConversationFindBar({
   total,
   searching,
   focusToken,
+  scopeLabel,
+  scopePlaceholder,
   onQueryChange,
   onNext,
   onPrevious,
@@ -73,8 +78,8 @@ export function ConversationFindBar({
         value={query}
         onChange={(event) => onQueryChange(event.target.value)}
         onKeyDown={handleKeyDown}
-        aria-label={t("findInConversation")}
-        placeholder={t("findPlaceholder")}
+        aria-label={scopeLabel ?? t("findInConversation")}
+        placeholder={scopePlaceholder ?? t("findPlaceholder")}
         autoCapitalize="none"
         autoCorrect="off"
         spellCheck={false}
