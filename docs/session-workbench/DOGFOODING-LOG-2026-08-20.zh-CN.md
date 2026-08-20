@@ -62,3 +62,20 @@ Ctrl+K 无 agent chips、"在会话中心搜索 {query}"手递手预填成功。
 - [ ] O4 的 git_branch 写空疑问
 - [ ] IME #518 真实输入法验证（单测已覆盖状态机；真 IME 需要人工敲一次中文，
       留给用户早上顺手敲一次）
+
+### O6. 门禁与 dev 实例共用 target 目录会打架
+
+现象：dev 实例运行时跑 `cargo clippy --all-targets --features test-utils`，
+tauri-build 复制 sidecar（binaries/codeg-mcp-*.exe）时 PermissionDenied——
+运行中进程锁着文件。
+影响：dev 长驻 + 门禁并行的工作流（正是 dogfooding 形态）必撞。
+方向：门禁惯例改用 `CARGO_TARGET_DIR=target-gate`（已实践）；或文档里写明。
+
+### O7. 协调者体验（正面居多）
+
+- Host Control 建会话/Collection/Room 一条龙顺畅；协调者还能自查自纠
+  （标题错字、自己标题被截断）。
+- 协调者主动做了"编队卫生"（协作者进独立 Collection）和"省回合"设计
+  （建会话不带首 prompt，分派走 Room 帖）——工具面表达力够用。
+- 待观察：Room 帖能否可靠唤醒 grok-4.6 协作者干活（@ 唤醒语义）、工人完工
+  回报的闭环。

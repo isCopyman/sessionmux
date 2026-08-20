@@ -1016,3 +1016,16 @@ T2 后置截图（CDP 9222 可用，基线在 .artifacts）+ 晨间验收报告 
   且只认完整运行的汇总行。④ eslint 被 .claude/worktrees 旧产物拖慢：已删三个过期
   agent worktree（分支保留）+ eslint 配置忽略 .claude/**（0874c194）；eslint 本身
   不在标准门禁（慢），单独跑作加验。
+- 2026-08-20 下午 **P7 dogfooding 首航：fork/rewind 切片 1 完工 + codeg 内多 agent
+  编队成型**：① codeg 内 Opus 会话（claude-opus-5[1m]+Xhigh，wt/fork-rewind）
+  按仓内简报独立完成三件：RFC 对账修订（bf7554d5）、fork_relation 谱系表
+  （3df83596，独立表+CHECK+去重索引+migration 测试）、head fork 回归测试
+  （2572edf5，补继承列真空档）。已串行合并主线，集中门禁：server 2560 过、
+  build/eslint 绿；桌面 clippy 首跑被运行中 dev 实例锁 sidecar 打断
+  （tauri-build PermissionDenied），改用 CARGO_TARGET_DIR=target-gate 隔离重跑。
+  ② 用户纠偏：协调工作交给 codeg 内 Opus（不是领导外部微操）。已发角色升级指令，
+  协调者自主完成：查本机 ACP 适配器版本并预判 codex-acp 1.1.9/1.4.0 版本坑、
+  建 Collection 5 编队、创建 316/317/318 三个 grok-4.6 协作者（无首 prompt，
+  任务走 Room 帖）、开协调 Room、自纠标题错误、发 kickoff+三份分派。
+  ③ eslint 门禁两处补丁：ignore .claude/** 与 target*/**、.artifacts/**
+  （三处构建产物/探针目录曾把 lint 拖成小时级）。
