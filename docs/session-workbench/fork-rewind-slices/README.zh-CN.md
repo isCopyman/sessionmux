@@ -241,9 +241,35 @@ A 知道 parser 会扔，只有并排才看得见"我们扔掉的正好是它要
 |---|---|---|---|---|
 | D | 锚点管道（**切片 2 硬前置**） | 316 | `wt/fork-anchor-pipeline` | 已派工 |
 | E | RFC 第二轮更正（纯文档） | 317 | `wt/fork-rfc-round2` | 已派工 |
-| F | `is_reserved_turn_id` 注释与缺口评估 | 318 | `wt/fork-reserved-id-audit` | 已派工 |
+| F | `is_reserved_turn_id` 注释与缺口评估 | 318 | `wt/fork-reserved-id-audit` | **已交付、已复核、已合并**（`a68d06e3` → merge `a6a665c8`） |
 
 forkAtMessage 本体要等 D 落地，本轮不派。codex 编码等上游，本轮只在包 E 更正文档。
+
+### 包F 结论与协调者拍板（已复核，2026-08-20）
+
+工人结论「**真缺口但低危**」，判定逻辑未改（只改注释 + 表征性测试）。协调者复核：
+
+- 谓词本体一行未动 ✓；14 家 turn 级 id 的 11/3 划分逐家核实 ✓
+  （例外：`cline.rs:285` `{conversation_id}-{n}`、`grok.rs:1014` `grok-turn-{i}`、
+  `cursor.rs:1080` `cursor-turn-{i}`；Qoder 经 `qoder.rs:828` 复用 Claude 的
+  `group_into_turns`，属 `turn-{n}` 一档）
+- **低危依据成立**：`commands/conversations.rs:1684-1694` 的 collide 守卫真实存在且
+  **与命名空间无关**（按"id 是否已存在于别的 turn"判断）。其注释明写这是对
+  `is_reserved_turn_id` 的**纵深防御**，失败模式为 "a recoverable visible duplicate,
+  **never a hidden prompt**"。
+- 合并后重跑 `is_reserved_turn_id_matches_only_the_parser_namespace`：**1 passed**。
+
+**协调者拍板：暂不放宽 matcher，也不改 allowlist。** 理由：
+
+1. 真正的防线是那个 **namespace-agnostic** 的 collide 守卫，覆盖现在与未来所有 parser
+   命名空间；`is_reserved_turn_id` 是第二道而非第一道。
+2. 枚举式 matcher 注定再次过期——这条注释正是这么坏掉的，再补三个前缀只是重演。
+3. Cline 的 `<数字>-<数字>` 形状过泛，加入黑名单会误伤合法客户端 id，而**误伤的后果
+   （prompt 被拒）比现状（旁观窗口短暂重复）更严重**。
+
+**可推翻本裁决的证据**（留给将来）：若发现某条路径上客户端 `message_id` 能进入持久化
+投影而**绕过** `apply_in_flight_message_id` 的 collide 守卫，则第一道防线成为唯一防线，
+届时必须放宽或改 allowlist。本轮未查该问题（不在规格范围内）。
 
 ### 活体探针结果（用户批准的一发，已用掉）
 
@@ -345,7 +371,9 @@ event `e199466b`）。摘要：
     空闲。猜测（**未证实**）：投递给空闲会话时走了 "closed Session is started" 但起了
     新会话而非唤醒原会话。
     **重发不扇出**——包 E 回执重发时没有产生新幽灵。
-11. **`session.stop` 停不掉投递创建的会话。** 对四个幽灵调用均返回
+11. **`session.stop` 停不掉投递创建的会话；MCP 启动超时是同簇现象。**
+    工人 318 报告本轮曾遇 `codeg-room` MCP 启动超时 65s，与幽灵会话的 "MCP servers
+    failed to connect" 同属一簇。 对四个幽灵调用均返回
     "The Session had no active managed runtime" —— codeg 认为自己不持有其运行时。
     投递创建出的会话脱离了 Host Control 的运行时管理。
 
