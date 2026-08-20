@@ -1326,3 +1326,24 @@ w-replycopy 预警过的 Radix tooltip 悬停测试（jsdom 无布局，连续�
 人类通道送达协调者（正在响应），fork/rewind 后续候选（editAndFork 切片等）
 暂停待领导验收第三轮。领导行动队列：验收 wt/fork-rewind 第三轮 → 收编队
 骨架阶段一交付 → 交互原语批设计（O33+O34 同批）。
+
+### 5.17 2026-08-21：fork/rewind 第三轮验收收官 + 模型体检 RFC 落库 + O35
+
+1. **第三轮验收完成**：领导逐块审查（fork.rs 无锚字节不变+空白锚防御、
+   error.rs 锚点拒绝=不可重试专属变体、manager.rs 取消防护下的 lineage
+   记录、fork-anchor.ts 前端识别、UI 三重门控），merge 进主线后九项门禁
+   全绿（fmt/clippy×3/服务端测试/eslint/tsc/vitest 371 文件 4766 用例/
+   build，round3-gates.log）。fork/rewind 后续切片按用户指令暂停，体验
+   问题优先。
+2. **模型体检 RFC 落库**：MODEL-AUDIT-RFC-2026-08-21.zh-CN.md（六切面+
+   手术顺序+领导裁决与抽验记录）。关键结论：真正"两套底座"级分裂只有
+   Room/Session 双时间线一处，其余五个切面是同一底座内的字段/规则不一致，
+   多数只动代码。追查一条残留（human 发帖 bump_revision 是否误亮侧边栏）
+   已派 r-modelaudit 二挖。
+3. **O35 立项**：智能体设置"原生 JSON/环境变量"不自明——语义查明（原生
+   JSON=真实 CLI 配置文件本体如 ~/.claude/settings.json，acp.rs:7582；
+   环境变量=codeg DB 每智能体 env 覆盖层、仅注入 codeg 拉起的进程、
+   merge_agent_env 最高优先级），归自明性批。
+4. **并行派工**：协调者已收到"体验优先"补充指令——O33 Room 换台 API 与
+   O34 跨台唯一化与骨架阶段一并行；wt/charter1 需 rebase 到含第三轮的
+   主线最新（门禁绿后知会，本条即绿灯）。
