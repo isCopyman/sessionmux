@@ -2550,7 +2550,7 @@ mod tests {
     /// A post that parks a needs-reply obligation on every mentioned member.
     /// `StoreOnly` keeps the prompt queue out of it: the ledger, not the wake,
     /// is what these tests are about.
-    fn ask_post(
+    fn debt_ask_post(
         room_id: String,
         source: i32,
         targets: Vec<i32>,
@@ -2733,7 +2733,7 @@ mod tests {
         let room = make_room(&db, a, vec![a, b]).await;
         let asked = crate::db::service::collaboration_service::post_room(
             &db.conn,
-            ask_post(room.id.clone(), a, vec![b], "debt-ask", "please answer"),
+            debt_ask_post(room.id.clone(), a, vec![b], "debt-ask", "please answer"),
         )
         .await
         .unwrap();
@@ -2808,7 +2808,7 @@ mod tests {
         .unwrap();
         let asked = crate::db::service::collaboration_service::post_room(
             &db.conn,
-            ask_post(room.id.clone(), a, vec![b], "foreign-ask", "please answer"),
+            debt_ask_post(room.id.clone(), a, vec![b], "foreign-ask", "please answer"),
         )
         .await
         .unwrap();
