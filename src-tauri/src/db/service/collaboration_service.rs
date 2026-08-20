@@ -1679,7 +1679,9 @@ fn validate_room_post(input: &PostRoomMessageInput) -> Result<(), DbError> {
 /// deliveries. An archived member stays mentioned on the ledger, but the
 /// Delivery is marked `failed` with reason `target_archived` so the poster
 /// sees who was skipped; the member is not enqueued and gets no
-/// awaiting-reply obligation. Mail projections
+/// awaiting-reply obligation. Only a `session` author is dropped from its own
+/// mention list; a `human` author borrows the creator's id for the ledger and
+/// may `@` that creator like anybody else. Mail projections
 /// never see these events. The result reports the ledger effect of this very
 /// post — which obligation it cleared, and what the author still owes in the
 /// Room — because posting is the only thing that clears a debt and the caller
@@ -1713,14 +1715,26 @@ pub async fn post_room(
     ));
     let mention_human = input.mention_human
         || collaboration_mention::mentions_human_from_structured_uris(&input.body);
+    // Skipping the author is an authorship rule, not an id rule. A human post
+    // only borrows the creator's Session id because
+    // `collaboration_event.source_conversation_id` is NOT NULL — the person at
+    // the keyboard is not that Session. So a human `@` of the creator, and an
+    // @all from the UI, must fan out to them like any other member. A Session
+    // author still cannot wake itself.
+    let skip_author = match input.author_kind {
+        CollaborationAuthorKind::Session => Some(ledger_source_id),
+        CollaborationAuthorKind::Human => None,
+    };
     if input.mention_all {
         for id in &members {
-            if *id != ledger_source_id {
+            if Some(*id) != skip_author {
                 targets.insert(*id);
             }
         }
     }
-    targets.remove(&ledger_source_id);
+    if let Some(author_id) = skip_author {
+        targets.remove(&author_id);
+    }
     if targets.len() > MAX_TARGETS {
         return Err(validation(format!(
             "A Room mention supports at most {MAX_TARGETS} targets"
@@ -1953,9 +1967,10 @@ pub async fn post_room(
     .await?;
 
     let deliveries = deliveries_for_event(&txn, &event_id).await?;
-    // Counted after the resolve above, so it is the debt the author walks
-    // away with. Their own post never adds to it: the author is removed from
-    // the target set, so they cannot owe themselves an answer.
+    // Counted after the resolve above, so it is the debt the ledger Session
+    // walks away with. A Session author never adds to its own debt — it is
+    // removed from the target set — but a human post that `@`-ed the Room
+    // creator does park one on the borrowed Session, and the count says so.
     let open_reply_debt = open_room_reply_debt(&txn, &input.room_id, source.id).await?;
     txn.commit().await?;
     Ok(RoomPostResult {
