@@ -62,7 +62,7 @@ function toInlineCode(text: string): string {
  * code-span it when it could trigger a GFM autolink, otherwise escape the
  * inline-significant punctuation. Normal labels are unaffected.
  */
-function inlineText(text: string): string {
+export function inlineText(text: string): string {
   const flat = collapseNewlines(text)
   return AUTOLINK_TRIGGER.test(flat)
     ? toInlineCode(flat)
@@ -82,6 +82,18 @@ function escapeLinkDestination(uri: string): string {
   return /[\s()<>\\]/.test(cleaned)
     ? `<${cleaned.replace(/[\\<>]/g, "\\$&")}>`
     : cleaned
+}
+
+/**
+ * The `[label](uri)` inline link every reference with a URI serializes to, with
+ * both halves escaped. Exported for the Room timeline, which re-serializes its
+ * mention/reference chips back into Markdown before rendering
+ * (lib/room-message-body.ts) and must escape them exactly the way the composer
+ * does — a Session title is arbitrary user text and must never inject structure.
+ */
+export function referenceLinkMarkdown(label: string, uri: string): string {
+  const text = escapeMarkdownText(collapseNewlines(label))
+  return `[${text}](${escapeLinkDestination(uri)})`
 }
 
 /**
@@ -108,7 +120,7 @@ export function referenceToMarkdown(attrs: ReferenceAttrs): string {
       // rather than the whole `@…` string being treated as autolink-triggering.
       const text = collapseNewlines(attrs.label || attrs.id)
       return attrs.uri
-        ? `[@${escapeMarkdownText(text)}](${escapeLinkDestination(attrs.uri)})`
+        ? referenceLinkMarkdown(`@${text}`, attrs.uri)
         : `@${inlineText(attrs.label || attrs.id)}`
     }
     case "skill": {
@@ -129,7 +141,7 @@ export function referenceToMarkdown(attrs: ReferenceAttrs): string {
     case "commit": {
       const text = collapseNewlines(attrs.label || attrs.id)
       return attrs.uri
-        ? `[${escapeMarkdownText(text)}](${escapeLinkDestination(attrs.uri)})`
+        ? referenceLinkMarkdown(text, attrs.uri)
         : inlineText(text)
     }
     default:

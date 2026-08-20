@@ -4,7 +4,12 @@ import {
   unwrapReferenceDestination,
 } from "@/lib/reference-link"
 import { formatConversationTitle } from "@/lib/conversation-title"
+import { maskLiteralSpans } from "@/components/ai-elements/markdown-mask"
 import { parseCodegReferenceUri } from "@/components/chat/composer/reference-uri"
+import {
+  inlineText,
+  referenceLinkMarkdown,
+} from "@/components/chat/composer/reference-text"
 
 export type RoomMemberAlias = {
   conversationId: number
@@ -34,11 +39,26 @@ const HUMAN_URI = /^codeg:\/\/(?:human|user)$/i
 const ALL_URI = /^codeg:\/\/all(?![a-z0-9])/i
 const ALL_AT = /^@(?:all|everyone|全体)$/i
 
+/**
+ * Canonical destinations for the two pseudo-mentions. The composer's `@` panel
+ * already inserts these (see `ALL_URI` above); {@link roomMessageMarkdown}
+ * additionally re-emits them for every mention it recovered from bare prose or
+ * from the event's metadata, so the timeline renderer keys its chip on the uri
+ * and never on the localized label.
+ */
+const ALL_MENTION_URI = "codeg://all"
+const HUMAN_MENTION_URI = "codeg://human"
+
+/** Destination of the session chip: `codeg://session/<conversation id>`. */
+function sessionMentionUri(conversationId: number): string {
+  return `codeg://session/${conversationId}`
+}
+
 export function mentionMarkdownForSession(
   label: string,
   conversationId: number
 ): string {
-  return `[${label}](codeg://session/${conversationId})`
+  return `[${label}](${sessionMentionUri(conversationId)})`
 }
 
 export function mentionAllFromText(text: string): boolean {
@@ -247,7 +267,7 @@ export function sessionIdsFromAtAliases(
   return [...ids]
 }
 
-export function roomMessageBodyParts(input: {
+export type RoomBodyInput = {
   body: string
   members: RoomMemberAlias[]
   mentionConversationIds: number[]
@@ -255,7 +275,9 @@ export function roomMessageBodyParts(input: {
   allLabel: string
   humanLabel: string
   untitled: (id: number) => string
-}): RoomBodyPart[] {
+}
+
+export function roomMessageBodyParts(input: RoomBodyInput): RoomBodyPart[] {
   const {
     body,
     members,
@@ -357,6 +379,68 @@ export function roomMessageBodyParts(input: {
   }
   // `!last`: body empty except metadata — still show mentions, no spacer needed.
   return mergeText([...parts, ...spacer, ...extras])
+}
+
+/**
+ * Output that ends on a line holding nothing but a code fence. A chip appended
+ * to such a line (the metadata mentions land after the body) would stop that
+ * line from closing the block, and the fence would then swallow the rest of the
+ * post — so the chip starts a new block instead.
+ */
+const ENDS_ON_FENCE_LINE = /(?:^|\n)[ \t]{0,3}(?:`{3,}|~{3,})[ \t]*$/
+
+/** Destination for a chip part, or null when it has nothing to point at. */
+function partDestination(part: RoomBodyPart): string | null {
+  if (part.type === "reference") return part.uri
+  if (part.type !== "mention") return null
+  if (part.kind === "all") return ALL_MENTION_URI
+  if (part.kind === "human") return HUMAN_MENTION_URI
+  return part.conversationId != null
+    ? sessionMentionUri(part.conversationId)
+    : null
+}
+
+/**
+ * The post body as Markdown, with every chip {@link roomMessageBodyParts}
+ * recovered re-serialized as a `codeg://` reference link. This is what lets the
+ * Room timeline render posts through the SAME Streamdown pipeline the Session
+ * transcript uses (safety plugins included) without losing a single mention:
+ * the renderer's `a` override recognizes the three room destinations and hands
+ * everything else to the shared `MarkdownLink`.
+ *
+ * Round-tripping through Markdown is the point — a chip recovered from bare
+ * prose (`@Planner`, a raw `codeg://session/7`) or from the event's mention
+ * metadata has no link syntax of its own, and the pipeline only badges links.
+ *
+ * Fenced blocks and inline code are masked BEFORE the scan: inside them an
+ * `@all` or a `[x](y)` is literal text the block exists to show, and rewriting
+ * it would corrupt the code. An UNCLOSED fence is not masked (see `CODE_SPANS`),
+ * so a truncated post can still grow a chip inside one — the pre-Markdown
+ * timeline chipped inside every fence, so that is a shrinking, not a new, gap.
+ */
+export function roomMessageMarkdown(input: RoomBodyInput): string {
+  const { masked, restore } = maskLiteralSpans(input.body)
+  const parts = roomMessageBodyParts({ ...input, body: masked })
+  let out = ""
+  for (const part of parts) {
+    if (part.type === "text") {
+      // Restored per part, not once at the end, so the fence check below reads
+      // real code rather than a placeholder. A placeholder never straddles two
+      // parts: the mention scan only ever splits at an `@`/`codeg://` token.
+      out += restore(part.value)
+      continue
+    }
+    const uri = partDestination(part)
+    // A destination-less chip is unreachable from the producer above (a
+    // reference always carries a uri, a session mention always an id); its
+    // label is still escaped rather than emitted raw, so a future chip kind
+    // cannot leak Markdown structure out of a label.
+    const chip = uri
+      ? referenceLinkMarkdown(part.label, uri)
+      : inlineText(part.label)
+    out += ENDS_ON_FENCE_LINE.test(out) ? `\n\n${chip}` : chip
+  }
+  return out
 }
 
 function mergeText(parts: RoomBodyPart[]): RoomBodyPart[] {

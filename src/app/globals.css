@@ -1403,6 +1403,49 @@
   display: inline;
 }
 
+/* Room 帖正文（rooms/room-post-body.tsx 的 [data-room-markdown]）：与会话同一套 Streamdown
+   管线，但排版按「聊天气泡」而非「整页文档」收紧。Streamdown 默认标题 mt-6 mb-2 且 h1
+   text-3xl(30px)——在 15px 的帖子正文里比气泡外的说话人名（15px）还大，故标题只保留字重分层，
+   字号与正文同号。仓库没有真正的紧凑 prose 变体可复用：`prose prose-sm` 到处在用，但
+   @tailwindcss/typography 并未安装，那些类是空的。写在这里而不是 className，是因为要压的是
+   Streamdown 内部元素，只有后代选择器够得着（属性选择器 unlayered，压过 layered utilities，
+   无需 !important）。 */
+[data-room-markdown] :is(h1, h2, h3, h4, h5, h6) {
+  margin-top: 0.75rem;
+  margin-bottom: 0.25rem;
+  font-size: 0.9375rem;
+  line-height: 1.5rem;
+}
+
+[data-room-markdown] :is(ul, ol) {
+  padding-left: 0.75rem;
+}
+
+/* 嵌套列表仍要看得出层级（streamdown 自带 [li_&]:pl-6 被上面这条压掉了，补一档）。 */
+[data-room-markdown] li :is(ul, ol) {
+  padding-left: 1rem;
+}
+
+[data-room-markdown] [data-streamdown="list-item"] {
+  padding-block: 0.125rem;
+}
+
+[data-room-markdown] blockquote {
+  margin-block: 0.5rem;
+  padding-left: 0.625rem;
+}
+
+/* 长代码块在帖子里自己滚（横竖都是）：气泡所在列是 flex 子项，没有这层 overflow 就会被最长的
+   一行撑出可视区、把整条时间线顶宽。min-width:0 是 flex 子项能被压缩的前提。 */
+[data-room-markdown] [data-streamdown="code-block-body"] {
+  max-height: 20rem;
+  overflow: auto;
+}
+
+[data-room-markdown] [data-streamdown="code-block"] {
+  min-width: 0;
+}
+
 /* Streamdown table overrides */
 [data-streamdown="table-wrapper"] {
   position: relative;
