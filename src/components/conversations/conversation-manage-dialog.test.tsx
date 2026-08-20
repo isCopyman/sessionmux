@@ -451,12 +451,13 @@ describe("ConversationManageDialog", () => {
     expect(screen.getByText("on feature")).toBeTruthy()
   })
 
-  it("spells out the direction behind each reply-obligation segment", async () => {
-    // "Owes a reply" and "Awaiting a reply" sit side by side, and neither
-    // label says which Session is the one on the hook. Radix renders the
-    // content twice — the visible copy plus a visually-hidden one for screen
-    // readers — so match all of them, and let `findAllByText` wait out the
-    // provider's open delay.
+  // The two segment-hint tests stay separate on purpose: jsdom has no
+  // layout, so Radix's grace-area logic can't tell the pointer ever left the
+  // first trigger and suppresses a second tooltip in the same render.
+  // Radix renders the content twice — the visible copy plus a
+  // visually-hidden one for screen readers — so match all of them, and let
+  // `findAllByText` wait out the provider's open delay.
+  it("spells out the direction behind the owes-a-reply segment", async () => {
     const user = renderDialog()
     await screen.findByText("on main")
 
@@ -466,6 +467,11 @@ describe("ConversationManageDialog", () => {
         "Someone messaged this session and it has not replied yet."
       )
     ).not.toHaveLength(0)
+  })
+
+  it("spells out the direction behind the awaiting-a-reply segment", async () => {
+    const user = renderDialog()
+    await screen.findByText("on main")
 
     await user.hover(screen.getByRole("tab", { name: /Awaiting a reply/ }))
     expect(
