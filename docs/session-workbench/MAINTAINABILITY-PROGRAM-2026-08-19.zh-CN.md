@@ -1285,3 +1285,34 @@ SURVEY 第 19 行也记过 grok"原生兼容 Claude 生态（skills/plugins/hook
 **已派 r-hooks**（haiku，只读）：查 grok hooks 事件面/Claude 兼容度/能否
 中途注入 + orca/herdr 的 hooks 配置与消息传递机制 + 对 codeg 唤醒阶梯的
 补强启示。交付后领导复议定案，在此之前旧定案仍有效。
+
+### 5.16 2026-08-21 凌晨：hooks 复查定案、派工改道编队、O31 前半合并、O34 立项
+
+1. **hooks 复查定案：维持 8·19"不引入"**（r-hooks 报告 + 领导亲手抽验
+   ~/.grok/hooks 与 config.toml）。证据三连：grok 本机 hooks 目录仅 orca
+   运行时产物（内容 `{"hooks":{}}` 空注册表 + 7.8KB .bak），config.toml 无
+   hooks 段，调研档案"原生兼容 Claude hooks"一说本机不可证；orca 的 hooks
+   仅生命周期/状态上报（单向 agent→框架），真正的消息传递走 tokio mpsc +
+   WebSocket API；herdr 完全不用 hooks（IPC/socket + 事件系统，其 AppState
+   纯数据/事件驱动哲学与 codeg 的 AppState/EventEmitter 同构）。三家一致：
+   hooks 是上报通道不是中途注入通道。补强吸收：借鉴 orca awake-service 的
+   活体检查思路加固排队保底（并入已排队的 reminder 短路加固项）；重开条件
+   不变（某家上游正式支持注入型 hook 再按家评估）。
+2. **派工改道（用户纠正）**：开发施工回归 codeg 编队（dogfooding 本意），
+   领导只当人类用户+设计+验收；外部子代理 w-scaffold（worker-k3）死于
+   k3[1m] 故障，不再重派。**k3 故障退级规则**（用户指令）：本会话子代理可
+   退级 opus5/sonnet5，已写入 ~/.claude/CLAUDE.md，并建 worker-opus5 /
+   explore-sonnet5 两个钉完整模型 ID 的类型（档位名经 env 映射仍落 k3，
+   必须走钉 ID 类型）。**编队人员配置（用户指令）**：codeg 内 Claude Code
+   会话用 opus5（思考强度领导酌定），Grok Build 会话用 grok4.6 思考强度拉满。
+3. **转录面骨架简报落库**：`REFACTOR-1-TRANSCRIPT-SCAFFOLD-BRIEF.zh-CN.md`
+   （两阶段边界 + r-scaffold2 风险清单 + 门禁 + 人员配置），群聊 @协调者
+   派发执行；阶段二吸收 O21/O28/O29。
+4. **O31 前半合并**（merge 68094fe6）：w-replycopy 交付"收到未回/发出未回"
+   ——弃用户候选"已读未回"字面（needs_reply 计数含未读信，"已读"会说谎；
+   语义锚点 collaboration_service.rs:2247-2256 工人复核）；10 语言全改 +
+   两条新 tooltip 长解释（用户的两句长候选进 tooltip）；Room.needsReplyBadge
+   有意不动（帖级语义非会话级）。门禁四连后台跑（replycopy-gates.log），
+   结果出来后补记。O31 后半（N/M 回复进度）仍排队。
+5. **O34 立项**：会话跨台唯一性/打开即聚焦/工作状态三层可见，裁决全文见
+   DOGFOODING-LOG O34；归交互原语批，与 O33 换台 API 同批设计。
