@@ -84,8 +84,10 @@ afterEach(() => cleanup())
 
 // The conversation header renders the owning folder as a STATIC breadcrumb —
 // folder (and chat-mode) switching moved to the below-composer picker row, so
-// the header never opens a popover, even for a draft. `next-intl` is mocked to
-// echo keys, so a translated label like the chat-mode item reads back as its key.
+// the header never opens a popover, even for a draft. It is therefore a plain
+// label with no button semantics (see the assertions below). `next-intl` is
+// mocked to echo keys, so a translated label like the chat-mode item reads back
+// as its key.
 describe("ConversationHeaderFolderPicker", () => {
   it("renders a draft's folder name as a static (non-switchable) breadcrumb", async () => {
     const other = mkFolder({ id: 2, name: "other-repo", path: "/repo/other" })
@@ -98,9 +100,11 @@ describe("ConversationHeaderFolderPicker", () => {
 
     const user = userEvent.setup()
     render(<ConversationHeaderFolderPicker tabId="tab-draft" />)
-    // Even a draft is static now: clicking the label opens no folder list, so
-    // the other repo is unreachable and no switch fires.
-    await user.click(screen.getByRole("button", { name: /repo/ }))
+    // Even a draft is static now: no button semantics at all, and clicking the
+    // label opens no folder list, so the other repo is unreachable and no
+    // switch fires.
+    expect(screen.queryByRole("button")).toBeNull()
+    await user.click(screen.getByText("repo"))
     expect(screen.queryByText("other-repo")).toBeNull()
     expect(openNewConversationTab).not.toHaveBeenCalled()
   })
@@ -116,7 +120,8 @@ describe("ConversationHeaderFolderPicker", () => {
 
     const user = userEvent.setup()
     render(<ConversationHeaderFolderPicker tabId="tab-1" />)
-    await user.click(screen.getByRole("button", { name: /repo/ }))
+    expect(screen.queryByRole("button")).toBeNull()
+    await user.click(screen.getByText("repo"))
     // Non-editable: clicking opens no folder list, so the other repo is
     // unreachable and no switch fires.
     expect(screen.queryByText("other-repo")).toBeNull()
@@ -130,6 +135,7 @@ describe("ConversationHeaderFolderPicker", () => {
     activeTabId = "tab-chat"
 
     render(<ConversationHeaderFolderPicker tabId="tab-chat" />)
-    expect(screen.getByRole("button", { name: /chatModeLabel/ })).toBeTruthy()
+    expect(screen.getByText("chatModeLabel")).toBeTruthy()
+    expect(screen.queryByRole("button")).toBeNull()
   })
 })

@@ -613,11 +613,20 @@
     "emptyNoAgent": "Aucun agent disponible.",
     "configManagement": "Gestion de configuration",
     "envVars": "Variables d'environnement",
+    "envVarsScope": "Injectées uniquement dans les processus de cet agent lancés par codeg, et elles priment sur le fichier de configuration.",
+    "envVarsScopeHint": "Ces variables sont stockées dans la base de données de codeg, pas dans le fichier de configuration de l'agent. Les sessions de terminal que vous lancez vous-même ne sont pas affectées : vous pouvez donc garder ici des identifiants pour un usage sans interface (par exemple XAI_API_KEY) sans toucher à votre configuration globale.",
     "hostTools": {
       "label": "Laisser l'agent gérer les fichiers et les commandes",
-      "description": "codeg cesse d'assurer l'accès aux fichiers et les commandes de terminal : l'agent les exécute dans son propre processus, là où son bac à sable et ses règles d'autorisation s'appliquent réellement. Les canaux de collaboration et d'outils hébergés par codeg sont également désactivés, car ils feraient repasser l'exécution par codeg. codeg n'ajoute aucun bac à sable, n'activez donc ceci que si l'agent en a un configuré."
+      "description": "codeg cesse d'assurer l'accès aux fichiers et les commandes de terminal : l'agent les exécute dans son propre processus, là où son bac à sable et ses règles d'autorisation s'appliquent réellement. Les canaux de collaboration et d'outils hébergés par codeg sont également désactivés, car ils feraient repasser l'exécution par codeg. codeg n'ajoute aucun bac à sable, n'activez donc ceci que si l'agent en a un configuré.",
+      "stateOff": "Désactivé (par défaut) : codeg lit les fichiers et exécute les commandes de terminal à la place de l'agent, si bien que les cartes de fichiers et le panneau terminal continuent de fonctionner ; en contrepartie, tout cela se passe dans le processus codeg, hors de portée du bac à sable de l'agent.",
+      "stateOn": "Activé : l'agent utilise son propre système de fichiers et son propre shell, si bien que son bac à sable et ses règles d'autorisation s'appliquent vraiment ; en contrepartie, les canaux de collaboration et d'outils hébergés par codeg sont coupés, et codeg n'ajoute aucun bac à sable."
     },
     "nativeJsonConfig": "Configuration JSON native",
+    "nativeJson": {
+      "editsPath": "Vous modifiez ici le vrai fichier de configuration de votre CLI ({path}) : ce que vous enregistrez y est écrit directement.",
+      "editsUnknownPath": "Vous modifiez ici le vrai fichier de configuration de votre CLI : ce que vous enregistrez y est écrit directement.",
+      "hint": "codeg n'en conserve aucune copie privée : il lit ce fichier, y fusionne vos modifications et le réécrit. Les champs API URL / clé API / modèle ci-dessus sont une vue liée du même fichier."
+    },
     "modelHintDefault": "Laissez vide pour utiliser le modèle système par défaut.",
     "generalConfigDescriptionClaude": "Prend en charge la configuration rapide de l'API URL, API Key et des modèles Claude, et synchronise avec la configuration JSON native.",
     "generalConfigDescriptionDefault": "Prend en charge les entrées de configuration importantes (API URL, API Key, Model) et la gestion de la configuration JSON native.",
@@ -3536,6 +3545,7 @@
     },
     "conversationContextBar": {
       "folderTitle": "Dossier de travail",
+      "headerFolderTitle": "Dossier actuel",
       "branchTitle": "Branche de travail",
       "searchFolder": "Rechercher un dossier...",
       "searchBranch": "Rechercher une branche...",

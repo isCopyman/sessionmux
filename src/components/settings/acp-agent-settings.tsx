@@ -386,6 +386,42 @@ const HOST_TOOLS_ENV = "CODEG_ACP_HOST_TOOLS"
 const HOST_TOOLS_AGENT = "agent"
 const HOST_TOOLS_DEFAULT = "default"
 
+/**
+ * Which real file each "native JSON config" editor writes — the agent CLI's OWN
+ * config, never a codeg-private copy. Mirrors `agent_local_config_path` on the
+ * Rust side; hard-coded here because the backend does not hand the resolved
+ * path to the frontend, and an unmapped agent type just gets the path-less
+ * wording. Naming the file is the whole point (users could not tell whether
+ * codeg maintained its own settings).
+ */
+const NATIVE_CONFIG_PATHS: Partial<Record<string, string>> = {
+  claude_code: "~/.claude/settings.json",
+  gemini: "~/.gemini/settings.json",
+  open_code: "~/.config/opencode/opencode.json",
+  cline: "~/.cline/data/globalState.json",
+  kimi_code: "~/.kimi-code/config.toml",
+}
+
+/**
+ * Grey caption under a native-JSON editor naming the file it edits. The longer
+ * story (merge-write semantics, the shortcut fields being a view of the same
+ * file) rides along as a tooltip instead of another wall of text.
+ */
+function NativeConfigFileHint({ agentType }: { agentType: AgentType }) {
+  const t = useTranslations("AcpAgentSettings")
+  const path = NATIVE_CONFIG_PATHS[agentType]
+  return (
+    <p
+      className="text-[11px] text-muted-foreground"
+      title={t("nativeJson.hint")}
+    >
+      {path
+        ? t("nativeJson.editsPath", { path })
+        : t("nativeJson.editsUnknownPath")}
+    </p>
+  )
+}
+
 function envMapToText(env: Record<string, string>): string {
   return Object.entries(env)
     .map(([key, value]) => `${key}=${value}`)
@@ -7814,6 +7850,16 @@ export function AcpAgentSettings() {
 
                 <div className="space-y-2">
                   <label className="text-xs font-medium">{t("envVars")}</label>
+                  {/* Scope, spelled out: this is codeg's own overlay, not the
+                      agent's config file, and it outranks that file. The
+                      "where does it live / what is it for" detail is the
+                      tooltip. */}
+                  <p
+                    className="text-[11px] text-muted-foreground"
+                    title={t("envVarsScopeHint")}
+                  >
+                    {t("envVarsScope")}
+                  </p>
                   <div className="relative group">
                     <Textarea
                       value={selectedDraft.envText}
@@ -7837,11 +7883,22 @@ export function AcpAgentSettings() {
                   */}
                   <div className="flex items-start justify-between gap-3 rounded-md border bg-muted/10 p-3">
                     <div className="space-y-1">
-                      <label className="text-xs font-medium">
+                      <label
+                        className="text-xs font-medium"
+                        title={t("hostTools.description")}
+                      >
                         {t("hostTools.label")}
                       </label>
+                      {/* Both switch positions named outright, each with its
+                          cost. The copy used to describe only what turning it
+                          ON does, leaving "what am I giving up either way?"
+                          unanswered; the full paragraph is now the tooltip on
+                          the label above. */}
                       <p className="text-[11px] text-muted-foreground">
-                        {t("hostTools.description")}
+                        {t("hostTools.stateOff")}
+                      </p>
+                      <p className="text-[11px] text-muted-foreground">
+                        {t("hostTools.stateOn")}
                       </p>
                     </div>
                     <Switch
@@ -9680,6 +9737,9 @@ supports_websockets = true`}
                       <label className="text-[11px] text-muted-foreground">
                         {t("openCode.nativeJsonConfig")}
                       </label>
+                      <NativeConfigFileHint
+                        agentType={selectedAgent.agent_type}
+                      />
                       <Textarea
                         value={selectedDraft.configText}
                         onChange={(event) => {
@@ -9863,6 +9923,9 @@ supports_websockets = true`}
                       <label className="text-[11px] text-muted-foreground">
                         {t("nativeJsonConfig")} (config)
                       </label>
+                      <NativeConfigFileHint
+                        agentType={selectedAgent.agent_type}
+                      />
                       <Textarea
                         value={selectedDraft.configText}
                         onChange={(event) => {
@@ -11522,6 +11585,9 @@ supports_websockets = true`}
                       <label className="text-[11px] text-muted-foreground">
                         {t("nativeJsonConfig")}
                       </label>
+                      <NativeConfigFileHint
+                        agentType={selectedAgent.agent_type}
+                      />
                       <Textarea
                         value={selectedDraft.configText}
                         onChange={(event) => {

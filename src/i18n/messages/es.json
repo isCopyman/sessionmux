@@ -613,11 +613,20 @@
     "emptyNoAgent": "No hay agentes disponibles.",
     "configManagement": "Gestión de configuración",
     "envVars": "Variables de entorno",
+    "envVarsScope": "Solo se inyectan en los procesos de este agente que inicia codeg y tienen prioridad sobre el archivo de configuración.",
+    "envVarsScopeHint": "Estas variables se guardan en la base de datos del propio codeg, no en el archivo de configuración del agente. Las sesiones de terminal que abras tú no se ven afectadas, así que puedes guardar aquí credenciales para uso headless (por ejemplo XAI_API_KEY) sin tocar tu configuración global.",
     "hostTools": {
       "label": "Dejar que el agente gestione archivos y comandos",
-      "description": "codeg deja de atender el acceso a archivos y los comandos de terminal, de modo que el agente los ejecuta en su propio proceso, donde sí se aplican su sandbox y sus reglas de permisos. También se desactivan los canales de colaboración y herramientas alojados por codeg, porque volverían a dirigir la ejecución a través de codeg. codeg no añade ningún sandbox propio, así que actívalo solo si el agente tiene uno configurado."
+      "description": "codeg deja de atender el acceso a archivos y los comandos de terminal, de modo que el agente los ejecuta en su propio proceso, donde sí se aplican su sandbox y sus reglas de permisos. También se desactivan los canales de colaboración y herramientas alojados por codeg, porque volverían a dirigir la ejecución a través de codeg. codeg no añade ningún sandbox propio, así que actívalo solo si el agente tiene uno configurado.",
+      "stateOff": "Desactivado (predeterminado): codeg lee los archivos y ejecuta los comandos de terminal por el agente, así que las tarjetas de archivo y el panel de terminal siguen funcionando; el precio es que todo eso ocurre dentro de codeg, donde el sandbox del propio agente no llega.",
+      "stateOn": "Activado: el agente usa su propio sistema de archivos y su propia shell, de modo que su sandbox y sus reglas de permisos sí se aplican; el precio es que se apagan los canales de colaboración y herramientas alojados por codeg, y codeg no añade ningún sandbox propio."
     },
     "nativeJsonConfig": "Configuración JSON nativa",
+    "nativeJson": {
+      "editsPath": "Aquí editas el archivo de configuración real de tu CLI ({path}): lo que guardes aquí se escribe directamente en él.",
+      "editsUnknownPath": "Aquí editas el archivo de configuración real de tu CLI: lo que guardes aquí se escribe directamente en él.",
+      "hint": "codeg no guarda una copia propia: lee este archivo, fusiona tus cambios y lo vuelve a escribir. Los campos API URL / API Key / Modelo de arriba son una vista enlazada del mismo archivo."
+    },
     "modelHintDefault": "Déjalo vacío para usar el modelo predeterminado del sistema.",
     "generalConfigDescriptionClaude": "Admite configuración rápida de API URL, API Key y modelos de Claude, y sincroniza con la configuración JSON nativa.",
     "generalConfigDescriptionDefault": "Admite entrada de configuración importante (API URL, API Key, Model) y gestión de configuración JSON nativa.",
@@ -3536,6 +3545,7 @@
     },
     "conversationContextBar": {
       "folderTitle": "Carpeta de trabajo",
+      "headerFolderTitle": "Carpeta actual",
       "branchTitle": "Rama de trabajo",
       "searchFolder": "Buscar carpeta...",
       "searchBranch": "Buscar rama...",

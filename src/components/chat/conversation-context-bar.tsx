@@ -173,7 +173,9 @@ export const ConversationHeaderFolderPicker = memo(
     // The header folder is a static, un-themed breadcrumb: folder (and chat-mode)
     // switching now lives in the below-composer picker row, so even a new
     // conversation draft shows a plain label here — never a popover trigger,
-    // never the theme color.
+    // never the theme color. Its tooltip says "current folder" (not "working
+    // folder", the switcher's wording) so the two controls stop reading as the
+    // same thing.
     return (
       <FolderPicker
         variant="header"
@@ -181,7 +183,7 @@ export const ConversationHeaderFolderPicker = memo(
         currentFolderId={pickerSelectedId}
         currentFolderName={displayFolderName}
         alias={displayFolderAlias}
-        title={`${t("folderTitle")}: ${titleFolderName}`}
+        title={`${t("headerFolderTitle")}: ${titleFolderName}`}
         editable={false}
         onSelect={async (folderId) => {
           const target = folders.find((f) => f.id === folderId)
@@ -440,28 +442,38 @@ const FolderPicker = memo(function FolderPicker({
       currentFolderName
     )
 
+  const headerClassName = cn(
+    "flex shrink-0 items-center rounded-sm text-sm outline-none transition-colors",
+    editable
+      ? "cursor-pointer text-primary hover:text-primary/80 focus-visible:ring-[3px] focus-visible:ring-ring/50"
+      : "cursor-default text-muted-foreground"
+  )
+
+  // A static crumb carries no button semantics: it is a label, and clicking it
+  // does nothing. Rendering a <button> made it look and read (to a11y tooling
+  // and to automation matching on the title) exactly like the real folder
+  // switcher below the composer. The inner span keeps the full display — the
+  // crumb never truncates; the neighbouring conversation title takes the
+  // ellipsis when the header runs out of room (see conversation-detail-header).
   const trigger =
     variant === "header" ? (
-      <button
-        type="button"
-        title={title}
-        className={cn(
-          "flex shrink-0 items-center rounded-sm text-sm outline-none transition-colors",
-          editable
-            ? "cursor-pointer text-primary hover:text-primary/80 focus-visible:ring-[3px] focus-visible:ring-ring/50"
-            : "cursor-default text-muted-foreground"
-        )}
-      >
-        {/* Full display — the folder crumb never truncates; the neighbouring
-            conversation title takes the ellipsis when the header runs out of
-            room (see conversation-detail-header). */}
-        <span className="whitespace-nowrap">{headerLabel}</span>
-      </button>
+      editable ? (
+        <button type="button" title={title} className={headerClassName}>
+          <span className="whitespace-nowrap">{headerLabel}</span>
+        </button>
+      ) : (
+        <span title={title} className={headerClassName}>
+          <span className="whitespace-nowrap">{headerLabel}</span>
+        </span>
+      )
     ) : (
       <Button
         variant="ghost"
         size="xs"
         title={title}
+        // Stable hook for automation: this — not the header crumb — is the
+        // control that actually opens the folder list.
+        data-testid="composer-folder-picker"
         // `px-1.5` (rem scale, so it tracks UI zoom) matches the composer "+"
         // button's icon breathing room; paired with the row's `pl-2` it lands the
         // folder icon on the same column as the centered "+" icon.
