@@ -30,7 +30,12 @@
 - collaboration_event.source_conversation_id NOT NULL，human 借房主 id；
   O13 已把守卫与三处读侧改为 authorship test（已落地）。
 - 残留：post_room 的 bump_revision(source.id) 在 human 发帖时给房主
-  revision 空转 +1，是否误亮侧边栏圆点**追查中**（r-modelaudit 二挖）。
+  revision 空转 +1——**已排查，确认无副作用，不需要修**（r-modelaudit
+  二挖 + 领导抽验）：revision 从不参与计数（只是 SELECT 搭车字段），
+  四个计数子查询全钉 `COALESCE(e.visibility,'direct')='direct'` 把 Room
+  帖挡在外；COLLABORATION_CHANGED 的全部 4 个前端监听者逐个核过，最坏
+  只是多一次内容不变的重拉（feed/timeline/queued-mailbox 判断都走
+  direct-only 投影，不会误开页签或错亮徽标）。
 - 一等公民化 = source 可空 + 独立 author 标识列，需重审所有 JOIN
   conversation 求 source 快照的路径。
 - 级别：一等公民化动 schema。风险：现状中（靠"记得查 author_kind"约定
