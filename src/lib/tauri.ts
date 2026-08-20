@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core"
 import { getCurrentEffectiveAppLocale } from "./i18n"
+import { buildAcpForkArgs } from "./fork-anchor"
 import type {
   AgentType,
   ConversationSummary,
@@ -157,8 +158,16 @@ export interface ForkResult {
   }
 }
 
-export async function acpFork(connectionId: string): Promise<ForkResult> {
-  return invoke("acp_fork", { connectionId })
+export async function acpFork(
+  connectionId: string,
+  conversationId?: number | null,
+  folderId?: number | null,
+  anchor?: string | null
+): Promise<ForkResult> {
+  return invoke(
+    "acp_fork",
+    buildAcpForkArgs({ connectionId, conversationId, folderId, anchor })
+  )
 }
 
 export async function acpRespondPermission(

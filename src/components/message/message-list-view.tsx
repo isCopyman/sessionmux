@@ -43,6 +43,7 @@ import {
   ChevronDown,
   ChevronRight,
   CopyIcon,
+  GitFork,
   Info,
   Loader2,
   Plus,
@@ -75,6 +76,7 @@ import type { MessageScrollContextValue } from "@/components/message/message-scr
 import { extractSessionFilesGrouped } from "@/lib/session-files"
 import { resolveMessageNavPreview } from "@/components/message/message-nav-label"
 import { unescapeComposerText } from "@/lib/composer-copy-text"
+import { canShowForkAtMessage, lastProviderAnchor } from "@/lib/fork-anchor"
 import { useStickToBottomContext } from "use-stick-to-bottom"
 import { ConversationFindBar } from "@/components/message/conversation-find-bar"
 import {
@@ -140,6 +142,12 @@ interface MessageListViewProps {
   initialViewState?: VirtualizedThreadViewState | null
   /** Saves this Session surface's current reading position in the warm cache. */
   onViewStateChange?: (state: VirtualizedThreadViewState) => void
+  /**
+   * Historical "fork from here". Omit on read-only embeds. The parent
+   * should already have gated on claude + `supportsFork`; we still require
+   * a per-turn `provider_anchor` before rendering the button.
+   */
+  onForkAtMessage?: (anchor: string) => void
 }
 
 export interface SessionMailAttribution {
@@ -758,6 +766,26 @@ const UserMessageCopyButton = memo(function UserMessageCopyButton({
   )
 })
 
+const UserMessageForkButton = memo(function UserMessageForkButton({
+  anchor,
+  onFork,
+}: {
+  anchor: string
+  onFork: (anchor: string) => void
+}) {
+  const t = useTranslations("Folder.chat.messageList")
+  return (
+    <MessageAction
+      tooltip={t("forkFromHere")}
+      className="opacity-0 group-hover/user-msg:opacity-100 transition-opacity self-end"
+      onClick={() => onFork(anchor)}
+      size="icon-xs"
+    >
+      <GitFork size={12} />
+    </MessageAction>
+  )
+})
+
 const UserMessageTaskButton = memo(function UserMessageTaskButton({
   parts,
 }: {
@@ -788,6 +816,8 @@ const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
   previousUserIndex = null,
   isResponseComplete = true,
   sourceTurns,
+  agentType,
+  onForkAtMessage,
 }: {
   group: ResolvedMessageGroup
   dimmed?: boolean
@@ -795,10 +825,19 @@ const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
   previousUserIndex?: number | null
   isResponseComplete?: boolean
   sourceTurns?: MessageTurn[]
+  agentType?: AgentType
+  onForkAtMessage?: (anchor: string) => void
 }) {
   const focusedEventId = useSessionLetterUiStore(
     (state) => state.focusedEventId
   )
+  const forkAnchor = lastProviderAnchor(sourceTurns)
+  const showForkAtMessage =
+    !dimmed &&
+    group.role === "user" &&
+    !group.sessionMail &&
+    onForkAtMessage != null &&
+    canShowForkAtMessage(agentType, forkAnchor)
   const mailEventId = group.sessionMail?.eventIds[0]
   const mailText = group.parts
     .map((part) => (part.type === "text" ? part.text : ""))
@@ -883,6 +922,12 @@ const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
             <div className="group/user-msg flex w-fit max-w-full items-start gap-1">
               <UserMessageTaskButton parts={group.parts} />
               <UserMessageCopyButton parts={group.parts} />
+              {showForkAtMessage && forkAnchor && onForkAtMessage ? (
+                <UserMessageForkButton
+                  anchor={forkAnchor}
+                  onFork={onForkAtMessage}
+                />
+              ) : null}
               <MessageContent data-conversation-search-content>
                 <CollapsibleUserMessage parts={group.parts} />
               </MessageContent>
@@ -973,6 +1018,7 @@ export function MessageListView({
   userTurnHeader = null,
   initialViewState = null,
   onViewStateChange,
+  onForkAtMessage,
 }: MessageListViewProps) {
   const t = useTranslations("Folder.chat.messageList")
   const sharedT = useTranslations("Folder.chat.shared")
@@ -1217,6 +1263,8 @@ export function MessageListView({
                 previousUserIndex={item.previousUserIndex}
                 isResponseComplete={item.phase === "persisted"}
                 sourceTurns={item.sourceTurns}
+                agentType={agentType}
+                onForkAtMessage={onForkAtMessage}
               />
             </div>
           )
@@ -1236,7 +1284,7 @@ export function MessageListView({
           return null
       }
     },
-    [conversationId, userTurnHeader]
+    [agentType, onForkAtMessage, userTurnHeader]
   )
 
   const emptyState = useMemo(

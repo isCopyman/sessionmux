@@ -278,7 +278,7 @@ export interface MessageTurn {
    * `timestamp + duration_ms` — those two fields encode unrelated spans in
    * most parsers. */
   completed_at?: string | null
-  provider_anchor?: string | null
+  provider_anchor?: string
 }
 
 export interface ConversationDetail {
