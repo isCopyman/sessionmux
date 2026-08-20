@@ -2,6 +2,10 @@
 
 > 状态：Draft  
 > 调研日期：2026-08-15  
+> 对账修订：2026-08-20 —— §3、§4 已按当前代码重写（原文基于 0.25.0，与 0bfb86a0
+> 之后的实现有 5 处脱节；脱节清单见
+> [能力矩阵与可行路径调研](./SESSION-FORK-REWIND-SURVEY-2026-08-19.zh-CN.md) §1）。
+> §1、§2、§5–§13 的设计结论未受影响。  
 > 范围：Fork、历史消息分叉、编辑后重发、对话回退、文件检查点与跨 Harness 降级  
 > 上位产品需求：[产品需求与使用场景](./PRODUCT-SPEC.zh-CN.md#73-fork编辑旧消息和文件恢复)
 
@@ -49,14 +53,75 @@ user message ID、turn ID 或 checkpoint ID；适配器需要保存可验证的�
 
 ## 3. 当前 Codeg 实现事实
 
-截至 Codeg `b6e1d904`（0.25.0）：
+本节按 Codeg 0.26.1 的代码重写（原文写于 0.25.0/`b6e1d904`，次日被 0bfb86a0 反转，
+之后又被 67974819 扩充）。下面每条都可在给出的 `file:line` 上核对。
 
-- `src/lib/api.ts` 的 `acpFork` 提供前端调用；
-- `conversation-detail-panel.tsx` 的 `handleForkSend` 先 Fork，再把草稿发送到新 Session；
-- `message-input.tsx` 只在连接报告支持 Fork 时显示“分叉发送”；
-- `src-tauri/src/acp/manager.rs` 的 `fork_session` 负责协议调用、并发闸门与数据库落盘；
-- 当前会话行切换到新原生 Session，另建 sibling 行保留原 Session 历史；
-- `conversation.parent_id` 仍专用于 delegation，当前 Fork 没有通用谱系字段。
+### 3.1 调用链
+
+- `src/lib/api.ts:348` 的 `acpFork` 提供前端调用；
+- `conversation-detail-panel.tsx:1373` 的 `handleForkSend` 先 Fork，再把草稿发送到新
+  Session；门控在同文件 `:2110`（`conn.supportsFork`）；
+- `message-input.tsx:1227 / :1711` 只在连接报告支持 Fork 时显示“分叉发送”下拉项；
+- 后端入口双模式：`src-tauri/src/commands/acp.rs:9871`（Tauri）与
+  `src-tauri/src/web/handlers/acp.rs:459`（HTTP，参数结构在同文件 `:331`）；
+- `src-tauri/src/acp/manager.rs:1882` 的 `fork_session` 负责并发闸门（prompt 锁 +
+  `turn_in_flight`）、取消屏蔽与数据库落盘；
+- `src-tauri/src/acp/fork.rs:19` 用 `UntypedMessage` 发 `session/fork`（sacp 11.0.0
+  尚无 typed 封装），`connection.rs:6711` 的 `handle_fork_or_exit` 拿
+  `ForkSessionResponse` 直接 attach 新 Session，不再走一次 `session/load`。
+
+### 3.2 行布局：C1/S1 不动，INSERT C2（原文写反了）
+
+原文写的是“当前会话行切换到新原生 Session，另建 sibling 行保留原 Session 历史”。
+0bfb86a0（2026-08-16）把它反转了，现在的事实是：
+
+- 原会话行 C1 及其原生 Session S1 **整行不动**，新 Fork 是一条新 INSERT 的行 C2，绑
+  Agent 返回的新 sessionId S2（`manager.rs:2099` 的函数文档 “leave C1/S1 untouched and
+  INSERT C2”，实现在 `manager.rs:2133` 起的 `persist_fork_outcome`）；
+- C2 在同一事务内继承 C1 的 `folder_id` / `kind` / `model` / `git_branch` /
+  `origin_cwd` / `created_by`（`manager.rs:2217-2249`），以及 C1 的 Collection 成员关系
+  （`manager.rs:2252-2266`）；不继承任何活体状态（Turn、队列、mailbox）；
+- 活跃连接随后从 C1 迁到 C2，`ConversationForked` 事件推前端。
+
+因此 RFC 其它章节里出现的“sibling”一词，指向的是 **新建的 C2**，不是保留历史的旧行。
+
+### 3.3 `[Fork]` 前缀已在后端
+
+前缀不再由前端加，前端正则已删除。现在由 `persist_fork_outcome` 在 C2 上打标：容错剥
+掉源标题已有的 `[Fork]` 前缀（`manager.rs:2195`），再写 `[Fork] {title}` 并置
+`title_locked = true`（`manager.rs:2220-2221`），让原生标题回填不能抹掉这个区分。源标题
+为空时不加前缀，`title_locked` 保持 false。
+
+### 3.4 `acpFork` 签名已扩展 —— 且两端封装不一致（已知问题）
+
+`api.ts:348` 的 `acpFork` 现在是 `(connectionId, conversationId?, folderId?)`。多出的两
+个参数用于“fork 早于首条 prompt 的未链接会话”：从历史打开的会话，其连接是 resume 出来
+的，行要到首条 prompt 才与连接绑定，而分叉发送恰好发生在那之前——传这两个 id 让后端
+adopt 该行，fork 才不会以“未链接”被拒。后端两侧都已接住
+（`commands/acp.rs:9871-9874`、`web/handlers/acp.rs:331-341`）。
+
+**已知问题**：`src/lib/tauri.ts:160` 的同名封装仍然只传 `connectionId`。Rust 侧两个参数
+是 `Option`，缺省为 `None`，所以桌面端不会报错，但吃不到上面的 adopt 修复。两端封装因此
+不一致，任何后续 fork 相关的签名改动都要同时改这两处。修掉它不在本切片范围内。
+
+### 3.5 Fork 继承 pin 的 model / thinking effort（原文未记）
+
+67974819（2026-08-18）起，C2 继承 C1 的 Session 级选择器 pin：`preferred_mode_id` 与
+`preferred_config_values`（`manager.rs:2247-2248`）。语义是“Fork 是同一件工作的继续”，
+用户在 Fork 里重新选择才分岔。这条约束了后续 provider：任何新的 fork 路径都必须保持
+pin 继承，否则 Fork 出来的会话会静默换模型。
+
+### 3.6 谱系与能力探测
+
+- `conversation.parent_id` 仍专用于 delegation。Fork 显式写
+  `parent_id: Set(None)`（`manager.rs:2228`，字段语义见
+  `db/entities/conversation.rs:68`），当前 Fork 没有通用谱系字段——这正是 §9 要新增独立
+  关系表的原因，也是它不能复用 `parent_id` 的原因。
+- 支持面是**纯运行时探测**，不是按 `agent_type` 写死：`connection.rs:4264-4268` 读
+  `initialize` 回复里的 `sessionCapabilities.fork`，经 `ForkSupported` 事件落到
+  `session_state.rs:664`，再推前端。这与 §6“能力矩阵必须来自运行时探测”的要求一致。
+
+### 3.7 仍然成立的结论
 
 这套实现可以继续作为 `forkHead` 的 ACP provider，不应推倒重写。需要补的是：
 
@@ -83,12 +148,27 @@ ACP 的 Session Fork RFD 当前仍标为 Draft，部分 SDK、Agent 和 Client �
 ACP 的 Session Fork RFD 已把“未来增加可选 message ID”列为扩展方向。这说明 Historical
 Fork 目前不能通过通用 ACP 稳定实现。协议讨论中也仍在探索历史分页、重放游标等能力。
 
-2026-08-15 的 ACP registry 能力矩阵显示：
+2026-08-20 的版本快照（原文基于 0.25.0 / claude-acp 0.67.0 / codex-acp 1.2.0，已过时）。
+Codeg 现在是 0.26.1（`package.json:4`、`src-tauri/tauri.conf.json:4`），钉的适配器版本：
 
-- `claude-acp 0.67.0` 声明 Session Fork；
-- `codex-acp 1.2.0` 未声明 Session Fork；
-- `grok-build 1.0.4` 未声明 Session Fork；
-- 另有部分 Agent 已实现当前末端 Fork。
+- `@agentclientprotocol/claude-agent-acp@0.69.0`（`acp/registry.rs:459-460`）；
+- `@agentclientprotocol/codex-acp@1.4.0`（`acp/registry.rs:593-594`）；
+- `@xai-official/grok@1.0.5`（`acp/registry.rs:835-836`）：对 1.0.5 二进制重新实测，
+  `initialize` 仍只答 `sessionCapabilities: {list, resume, close}`——**无 fork**
+  （`registry.rs:829-833`）。
+
+原文那张 “谁声明 Fork” 的清单不应再当事实用，理由有两条：
+
+1. 版本已经全部走过，0.67.0 那次快照的结论不能顺延到 0.69.0；
+2. 更要紧的是 Codeg 根本不读静态矩阵——支持面来自每条连接的 `initialize` 回复
+   （§3.6，`connection.rs:4264-4268`）。静态清单只在“该不该给某家排期”时有参考价值。
+
+需要实测才能填的空（本切片未做）：claude-agent-acp 0.69.0 是否仍声明 fork（registry 注释
+未重申）；codex-acp 1.4.0 是否声明 ACP `session/fork`（注释未记录）。**注意不要把
+codex-acp 1.4.0 内部用的 app-server `thread/fork` 当成它声明了 ACP fork**——1.4.0 用
+`thread/fork` 是为了实现 AIR `agentFileChangeReport`（`registry.rs:580-592`），那是另一
+条通道；但它同时也是 §7.2 那条路线可行的正面证据：官方适配器自己就在用 app-server 的
+thread fork。
 
 因此 Codeg 当前基于能力探测显示按钮是正确的，但 ACP provider 只能承诺 `forkHead`。
 
@@ -201,6 +281,19 @@ ACP provider 只实现 Agent 实际声明的能力。当前 `session/fork` 映�
 - 生成时间与来源 Harness。
 
 ## 8. JSONL 兼容器的边界
+
+先补一条原文没有的正面证据：**Claude 的原生 fork 在文件层就是“复制 transcript”**。
+`acp/background_watch.rs:1256-1266` 记录了这个布局——fork 把父 transcript 逐条复制进新的
+session 文件，每条记录保留其**原始的、fork 之前的时间戳**，然后在**文件头**写入 fork 时
+刻的新元数据记录（`queue-operation`、`mode` 等）。Codeg 的 watcher 必须懂这个布局才能算
+对增量基线：头部元数据按字节偏移在前、按时间戳在后，所以基线只认 `user`/`assistant` 记
+录，否则会把整段复制来的历史误判成新内容重复渲染。
+
+这条事实对 §7.1 的意义是：claude 的“按消息 fork 走文件手术”并不是要发明一种新格式，而是
+在复刻 Claude 自己已经在做的事（复制 + 换 sessionId + 新文件名），只是多一步截断。它降低
+了该路线的格式风险，但**不豁免**下面任何一条军规——尤其第 4、7 条：复制来的记录仍带
+`parentUuid` 链、工具调用配对和 `isSidechain` 段，截断点之后的悬空引用只有用原生 CLI 做
+一次只读 Resume 才能证伪。
 
 直接编辑 Claude、Codex 或其他 Harness 的原生 JSONL 风险很高。文件中可能含有父子 UUID、
 sidechain、工具调用配对、compaction、checkpoint、重复事件和 provider 私有版本字段。仅删除
