@@ -426,8 +426,8 @@ export interface ConversationWorkbenchRef {
 export type ConversationCreatedBy = "user" | "agent" | "automation"
 
 /** How a target Session was derived from a source Session (`fork_relation`).
- *  Only "fork_head" has a producer today; the other two are reserved for the
- *  historical-fork and handoff slices. */
+ *  "fork_head" and "fork_at_message" both have producers (ACP `session/fork`
+ *  with or without an anchor); "handoff" is reserved for a later slice. */
 export type ForkRelationKind = "fork_head" | "fork_at_message" | "handoff"
 
 /** One directed fork-lineage edge: `targetConversationId` came from

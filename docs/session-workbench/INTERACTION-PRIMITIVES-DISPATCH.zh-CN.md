@@ -4,8 +4,13 @@
 > 裁决出处：`docs/session-workbench/DOGFOODING-LOG-2026-08-20.zh-CN.md` 的 O33 / O34 条目。
 > **本文件与任何消息冲突时以本文件为准。**
 >
-> 基线：`codex/session-message-v1` 最新（已含 fork/rewind 第三轮 `ca922f4b`）。
+> 基线：`codex/session-message-v1` 最新（**`4d1bf83a`**，已含 fork/rewind 第三轮
+> `ca922f4b` 与模型体检 RFC）。
 > **永不 push，永不动 main，不跑 `pnpm tauri build`。**
+>
+> **动手前另读**：`docs/session-workbench/MODEL-AUDIT-RFC-2026-08-21.zh-CN.md`
+> 的切面 **⑥**（就是你们这一批的立项依据）、切面 **④**、切面 **⑤**、切面 **②** 的
+> bump_revision 段。已摘出与本批相关部分见下方 §0.5。
 
 ## 0. 共同硬规矩
 
@@ -20,6 +25,46 @@
 - **本批不许碰这两处。** 你们动的是 `src-tauri/**`（K）与
   `src/lib/workbench-session-tabs.ts` + 打开路径（L）。
 - 有交叉需求先在 Room 问，别自己扩面。
+
+## 0.5 与模型体检 RFC 的交叉切面（2026-08-21 新增，**动手前读**）
+
+RFC 切面 **⑥** 就是本批的立项依据，裁决原文：「已派编队并行：先 Room 换台 API
+（纯后端）→ 跨台唯一化（tab-store + 各打开入口）→ 工作状态三层可见。」
+—— 与本文分包一致，K 在前 L 在后，第三条不做。以下是 RFC 带来的**新约束**：
+
+**给包 K：**
+
+- **切面 ④（根 folder 推导五处重复）已被排成独立小刀**，其中一处正在你的文件里：
+  `db/service/collaboration_room_service.rs:181` 的 `SELECT COALESCE(f.parent_id, f.id)`。
+  **不要顺手抽公共 resolver**——那是 ④ 的活，你改了会跟它撞。你只在自己的换台函数里
+  复用既有辅助（`require_workbench:59` / `room_workbench_id:247`）。
+- **切面 ② 的 `bump_revision` 空转已排查定案：无副作用，明确不修**
+  （在 `collaboration_service.rs:1493/1866`，不在你的文件里）。看到别动。
+- 切面 ⑤：**不要改任何序列化字段名**，新增字段照既有文件约定走
+  （`collaboration.rs` 是全 camelCase `rename_all`）。
+
+**给包 L（这条直接答了你规格里的判断题 1）：**
+
+- 你要的"全台页签"输入面**已经全栈存在，不需要开 Rust 战线**。协调者核过整条链：
+  - `db/service/workbench_service.rs:47 list_conversation_refs` —— 查 `opened_tab`
+    时**不按 workbench 过滤**，返回该会话在**所有**工作台的页签，附台名与台位置，
+    并已做 `(conversation_id, workbench_id)` 去重；
+  - Tauri 命令 `commands/workbenches.rs:18/94` + Web 端点
+    `web/handlers/workbenches.rs:66`，双模式都有；
+  - 前端 `src/lib/api.ts:1985 listConversationWorkbenchRefs(conversationIds)`，
+    类型 `src/lib/types.ts:417 ConversationWorkbenchRef`；
+  - 已有真实调用方 `components/conversations/conversation-manage-dialog.tsx:1473,2277`。
+  **裁决：走这条现成链，禁止新增 Rust。** 若你论证出它真的不够用，
+  **停手在 Room 说明缺口**，不要自己动后端。
+- **但它读的是持久化的 `opened_tab` 行**，不是客户端内存里的 tab store。
+  "刚开还没落库的页签"这类新鲜度问题**是留给你的真判断题**：本台以内存 store 为准、
+  他台以该 API 为准？还是别的口径？**给方案 + 理由写进汇报**，我来拍板。
+- 切面 ⑤ 点名 **tab 持久化属于"字段改名会破坏已存数据"的 JSON 模型**，且 ⑤ 的裁决是
+  "赶在新增字段前统一序列化"。含义：**不要改持久化 tab 结构的字段名**；
+  如果你的方案需要给持久化 tab **新增字段**，**先停手在 Room 报**——那正好踩在 ⑤
+  想抢在前面的那个点上，得由我和领导定先后。纯内存/派生状态不受此限。
+
+---
 
 ## 包 K：Room 换工作台后端 API（O33 先行件）
 
@@ -95,8 +140,9 @@ CARGO_TARGET_DIR=... cargo test --no-default-features --bin codeg-server --lib
 
 1. **跨台唯一化**：同一 `conversation_id` 全局只能存在于一个工作台的页签中。
    注意 `appendConversationTabs` 现在**只看 `existing`（本台）**，跨台唯一需要
-   更大的输入面——**如何拿到"全台页签"是设计判断，先在汇报里说明你的方案**
-   （纯前端聚合？还是需要后端支持？若需要后端，**停手先问**，别自己开 Rust 战线）。
+   更大的输入面——**这条已由 §0.5 拍板：用现成的 `listConversationWorkbenchRefs`，
+   不许新增 Rust**。留给你的是新鲜度口径（持久化行 vs 内存 tab store），
+   方案与理由写进汇报。
 2. **打开即聚焦**：梳理**所有**打开路径（侧边栏 / 会话中心 / 群聊提及跳转），
    已开 → 跨台跳转并聚焦；未开 → 当前台新开。**打开路径清单必须列进汇报**，
    漏一条就是漏一个入口。

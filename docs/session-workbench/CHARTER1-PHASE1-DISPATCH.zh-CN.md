@@ -3,8 +3,12 @@
 > 上位简报：`docs/session-workbench/REFACTOR-1-TRANSCRIPT-SCAFFOLD-BRIEF.zh-CN.md`
 > **本文件与简报冲突时，以本文件为准**（本文件已按主线实际代码核过一遍，见 §1 勘误）。
 >
-> 基线：`codex/session-message-v1` 最新（`e1c68b89`）。协调分支 `wt/charter1`。
+> 基线：`codex/session-message-v1` 最新（**`4d1bf83a`**，已含 fork/rewind 第三轮
+> `ca922f4b` 与模型体检 RFC；第三轮九项门禁已在主线全绿）。协调分支 `wt/charter1`。
 > **永不 push，永不动 main，不跑 `pnpm tauri build`。**
+>
+> **动手前另读**：`docs/session-workbench/MODEL-AUDIT-RFC-2026-08-21.zh-CN.md`
+> 的 **①** 与 **⑤** 两节（见本文 §1.5，已摘出与本批相关的部分）。
 
 ## 0. 共同硬规矩（前三轮的真实事故换来的，逐条都是）
 
@@ -62,6 +66,25 @@
   确认这个缺口（阶段二会用到）。
 - `src/components/rooms/use-room-find.ts`（183 行）阶段一**不改**，但你的
   `useTranscriptFind` API 必须能覆盖它的用例；覆盖不了的写进汇报。
+
+## 1.5 与模型体检 RFC 的交叉切面（2026-08-21 新增，**动手前读**）
+
+主线新落 `MODEL-AUDIT-RFC-2026-08-21.zh-CN.md`（六切面手术清单 + 手术顺序）。
+与本批相关的两条，**它们是约束不是建议**：
+
+- **切面 ①（Room/Session 双时间线底座）裁决原文：「最后做，先冻结范围。UI 面统一
+  由转录面骨架先行（进行中）」**——"进行中"指的就是你们这一批。含义很硬：
+  **骨架只统一 UI 面，数据面一律不碰**。不要造跨 Room/Session 的共享数据模型，
+  不要动 `models/message.rs` / `models/collaboration.rs` / `types.ts` 里的时间线类型，
+  不要给 Room 侧编造 phase/usage/model 字段。RFC 明写数据面统一要等 ②③④⑥ 之后立项，
+  你现在"顺手统一"会把后面的决定重新打包一遍。
+- **切面 ⑤（序列化双约定 camelCase/snake_case）裁决：赶在新增字段前统一，但前置是
+  盘点 JSON 持久化模型**。对你们的含义：**阶段一不要改任何序列化字段名**
+  （骨架件是纯 UI 组件/hook，本来也不该碰；这条是防"顺手规整"）。
+
+其余四切面（② human 身份、③ 回复义务、④ 根 folder 推导、⑥ 工作台归属）与本批无
+写入面交叉；⑥ 正由交互原语批（包 K/L）并行执行，边界见 §0 与
+`INTERACTION-PRIMITIVES-DISPATCH.zh-CN.md`。
 
 ## 2. 分包与理由
 
