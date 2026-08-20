@@ -3289,12 +3289,41 @@ fn build_client_capabilities(
     client_capabilities
 }
 
+/// The `cwd` a session-establishment request (`session/new`, `session/load`,
+/// `session/resume`) must carry for `agent_type`.
+///
+/// Grok keys its on-disk session store by the **canonicalized** working
+/// directory, not by the string the client sent. A session opened in
+/// `D:/code/…/fork-rewind` lands in
+/// `~/.grok/sessions/%5C%5C%3F%5CD%3A%5Ccode%5C…%5Cfork-rewind/<uuid>` — that
+/// group name percent-decodes to `\\?\D:\code\…\fork-rewind`, i.e. exactly
+/// what `std::fs::canonicalize` returns on Windows. Handing the literal cwd
+/// back on `session/load` makes grok look up a bucket that does not exist and
+/// answer `FS_NOT_FOUND` ("Path not found."), after which codeg falls back to
+/// `session/new` and the agent starts the conversation with no context.
+/// Normalizing here makes the lookup key byte-identical to the key grok wrote.
+///
+/// Every other agent gets the caller's exact bytes. The verbatim `\\?\` prefix
+/// is not universally understood (see `paths::simplify_verbatim_path`, and the
+/// frontend uri bug it exists for), so this must stay gated on the one agent
+/// whose store is known to be keyed that way.
+///
+/// Deliberately infallible: a working directory that does not exist yet (an
+/// unmaterialized worktree) or any other `canonicalize` error falls back to the
+/// original path, so request construction can never fail on it.
+fn session_request_cwd(agent_type: AgentType, cwd: &Path) -> PathBuf {
+    if agent_type != AgentType::Grok {
+        return cwd.to_path_buf();
+    }
+    std::fs::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf())
+}
+
 fn build_new_session_request(
     agent_type: AgentType,
     cwd: &Path,
     mcp_servers: Vec<McpServer>,
 ) -> NewSessionRequest {
-    let mut req = NewSessionRequest::new(cwd.to_path_buf());
+    let mut req = NewSessionRequest::new(session_request_cwd(agent_type, cwd));
     if let Some(meta) = claude_raw_sdk_session_meta(agent_type) {
         req = req.meta(meta);
     }
@@ -3310,7 +3339,7 @@ fn build_load_session_request(
     cwd: &Path,
     mcp_servers: Vec<McpServer>,
 ) -> LoadSessionRequest {
-    let mut req = LoadSessionRequest::new(session_id, cwd.to_path_buf());
+    let mut req = LoadSessionRequest::new(session_id, session_request_cwd(agent_type, cwd));
     if let Some(meta) = claude_raw_sdk_session_meta(agent_type) {
         req = req.meta(meta);
     }
@@ -3321,17 +3350,22 @@ fn build_load_session_request(
 }
 
 /// Build a `session/resume` request. Mirrors `build_load_session_request`
-/// (same fields + ClaudeCode raw-SDK meta + non-empty mcp_servers); the only
-/// wire difference is that `ResumeSessionRequest.mcp_servers` is
-/// `skip_serializing_if = Vec::is_empty`, so an empty list is omitted from the
-/// payload rather than emitted as `[]`.
+/// (same fields + ClaudeCode raw-SDK meta + non-empty mcp_servers + the
+/// per-agent `session_request_cwd` normalization); the only wire difference is
+/// that `ResumeSessionRequest.mcp_servers` is `skip_serializing_if =
+/// Vec::is_empty`, so an empty list is omitted from the payload rather than
+/// emitted as `[]`.
+///
+/// Resume shares the cwd normalization because it resolves the same session by
+/// the same key: whatever bucket `session/load` fails to find, resume would
+/// miss identically — and resume runs FIRST in the resume → load → new chain.
 fn build_resume_session_request(
     agent_type: AgentType,
     session_id: SessionId,
     cwd: &Path,
     mcp_servers: Vec<McpServer>,
 ) -> ResumeSessionRequest {
-    let mut req = ResumeSessionRequest::new(session_id, cwd.to_path_buf());
+    let mut req = ResumeSessionRequest::new(session_id, session_request_cwd(agent_type, cwd));
     if let Some(meta) = claude_raw_sdk_session_meta(agent_type) {
         req = req.meta(meta);
     }
@@ -14286,6 +14320,124 @@ mod tests {
         );
 
         assert!(req.meta.is_none());
+    }
+
+    /// Grok's session store is keyed by the CANONICAL cwd (the
+    /// `%5C%5C%3F%5CD%3A%5C…` group directories under `~/.grok/sessions/`
+    /// decode to `\\?\D:\…`), so every session-establishment request must
+    /// carry that shape or `session/load` answers `FS_NOT_FOUND` and the
+    /// conversation restarts contextless.
+    #[test]
+    fn grok_session_requests_carry_the_canonicalized_cwd() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let project = tmp.path().join("proj");
+        std::fs::create_dir(&project).expect("create project dir");
+        // Names the right directory in a shape `canonicalize` does not return.
+        // In production that shape is Windows' missing verbatim prefix; a `..`
+        // hop reproduces the same mismatch on every platform.
+        let cwd = project.join("..").join("proj");
+        let canonical = std::fs::canonicalize(&cwd).expect("canonicalize");
+        assert_ne!(cwd, canonical, "fixture must be non-canonical to be a test");
+
+        let new_req = build_new_session_request(AgentType::Grok, &cwd, Vec::new());
+        assert_eq!(new_req.cwd, canonical, "session/new must send canonical cwd");
+
+        let load_req = build_load_session_request(
+            AgentType::Grok,
+            SessionId::new("grok-session".to_string()),
+            &cwd,
+            Vec::new(),
+        );
+        assert_eq!(load_req.cwd, canonical, "session/load must send canonical cwd");
+
+        let resume_req = build_resume_session_request(
+            AgentType::Grok,
+            SessionId::new("grok-session".to_string()),
+            &cwd,
+            Vec::new(),
+        );
+        assert_eq!(resume_req.cwd, canonical, "session/resume must send canonical cwd");
+
+        // Pin the actual on-disk key shape, not just the round-trip: a future
+        // "tidy the ugly prefix" pass through `simplify_verbatim_path` here
+        // would silently reopen the bug.
+        #[cfg(windows)]
+        assert!(
+            new_req.cwd.to_string_lossy().starts_with(r"\\?\"),
+            "grok keys its buckets on the verbatim form: {:?}",
+            new_req.cwd
+        );
+    }
+
+    /// A working directory that does not exist yet (an unmaterialized worktree)
+    /// must not be rewritten or rejected — `canonicalize` failing is a fallback,
+    /// never an error.
+    #[test]
+    fn a_grok_cwd_that_cannot_be_canonicalized_stays_literal() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let missing = tmp.path().join("not-created-yet");
+
+        let new_req = build_new_session_request(AgentType::Grok, &missing, Vec::new());
+        assert_eq!(new_req.cwd, missing);
+
+        let load_req = build_load_session_request(
+            AgentType::Grok,
+            SessionId::new("grok-session".to_string()),
+            &missing,
+            Vec::new(),
+        );
+        assert_eq!(load_req.cwd, missing);
+    }
+
+    /// The normalization is grok-only on purpose: `\\?\` paths are not
+    /// universally understood, so every other agent must receive the caller's
+    /// cwd unchanged.
+    #[test]
+    fn non_grok_session_requests_keep_the_cwd_unchanged() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let project = tmp.path().join("proj");
+        std::fs::create_dir(&project).expect("create project dir");
+        let cwd = project.join("..").join("proj");
+        assert_ne!(
+            cwd,
+            std::fs::canonicalize(&cwd).expect("canonicalize"),
+            "fixture must be non-canonical to be a test"
+        );
+
+        for agent in [
+            AgentType::ClaudeCode,
+            AgentType::Codex,
+            AgentType::Gemini,
+            AgentType::Custom("my-agent"),
+        ] {
+            assert_eq!(
+                build_new_session_request(agent, &cwd, Vec::new()).cwd,
+                cwd,
+                "{agent:?} session/new cwd must be untouched"
+            );
+            assert_eq!(
+                build_load_session_request(
+                    agent,
+                    SessionId::new("s".to_string()),
+                    &cwd,
+                    Vec::new(),
+                )
+                .cwd,
+                cwd,
+                "{agent:?} session/load cwd must be untouched"
+            );
+            assert_eq!(
+                build_resume_session_request(
+                    agent,
+                    SessionId::new("s".to_string()),
+                    &cwd,
+                    Vec::new(),
+                )
+                .cwd,
+                cwd,
+                "{agent:?} session/resume cwd must be untouched"
+            );
+        }
     }
 
     // OpenClaw rejects MCP server *entries* over the ACP wire, not the
