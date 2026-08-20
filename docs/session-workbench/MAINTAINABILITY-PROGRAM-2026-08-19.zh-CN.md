@@ -1106,3 +1106,13 @@ T2 后置截图（CDP 9222 可用，基线在 .artifacts）+ 晨间验收报告 
   测试 **2576**（+3）、vitest 4708、build 过。工艺注：battery 里 server
   测试一次 101 是与 dev 实例共用 target/ 的瞬时锁（O6 同款），重跑全绿；
   **今后服务端测试门禁也走 CARGO_TARGET_DIR=target-gate**。
+- 2026-08-20 夜 **w-authpolicy 落地（provider 修复 a）**：claude_code 订阅模式
+  env 清除防线合并（542f1c5d，fast-forward）。工人抓住诊断遗漏的要害：claude
+  走 Npx 分发，诊断建议的 Binary 分支接入点是死代码——防线实际接在 Npx 分支
+  （connection.rs:974 区域），Binary 链留前向守卫；空串哨兵全链核验到
+  sacp-tokio env_remove。前端 CLAUDE_AUTH_MODE 显式落盘 + inferClaudeAuthMode
+  提名 + buildAgentDraft 写回（存量迁移：下次保存设置页即生效；"codeg 留空、
+  靠宿主 shell 导出 base_url"的旧用法会被剥离——领导裁决：语义正确，该用法
+  应改走 custom 模式）。中途上游流卡死 600s 一次，SendMessage 唤醒续跑完成。
+  门禁：server 测试 2577（+1）、三路 clippy 0（全走 target-gate）、vitest/build
+  过。至此今晚全部在飞项收口，仅余 dev 重启窗口待用户拍板。
