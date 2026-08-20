@@ -70,6 +70,7 @@ import type {
   WorktreeResolution,
   GitWorktreeRemoval,
   DbConversationSummary,
+  ForkLineage,
   SessionContentSearchResponse,
   ImportResult,
   ImportSelectedResult,
@@ -1851,6 +1852,16 @@ export async function listChildConversations(
 ): Promise<DbConversationSummary[]> {
   return getTransport().call("list_child_conversations", {
     parentConversationId,
+  })
+}
+
+/** Fork lineage for one session, both directions. Unrelated to
+ *  `listChildConversations`, which walks delegation (`parent_id`). */
+export async function conversationForkLineage(
+  conversationId: number
+): Promise<ForkLineage> {
+  return getTransport().call("conversation_fork_lineage", {
+    conversationId,
   })
 }
 

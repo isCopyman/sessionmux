@@ -13,6 +13,7 @@ pub mod custom_agent_service;
 pub mod folder_command_service;
 pub mod folder_link_service;
 pub mod folder_service;
+pub mod fork_lineage_service;
 pub mod import_service;
 pub mod model_provider_service;
 pub mod prompt_queue_service;

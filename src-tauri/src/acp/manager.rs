@@ -35,7 +35,7 @@ use crate::acp::types::{
 use crate::db::entities::collection_conversation;
 use crate::db::entities::conversation::{self, ConversationKind, ConversationStatus};
 use crate::db::error::DbError;
-use crate::db::service::{collaboration_service, conversation_service};
+use crate::db::service::{collaboration_service, conversation_service, fork_lineage_service};
 use crate::db::AppDatabase;
 use crate::models::agent::AgentType;
 use crate::models::CollaborationChanged;
@@ -2264,6 +2264,17 @@ impl ConnectionManager {
                         .insert(txn)
                         .await?;
                     }
+
+                    // Lineage in the SAME transaction as C2. A fork whose edge
+                    // failed to record would be indistinguishable from an
+                    // ordinary Session that merely happens to be titled
+                    // `[Fork] …` — a title is not a relation. Note this is
+                    // `fork_relation`, NOT `parent_id`: that column means
+                    // delegation and stays NULL above.
+                    fork_lineage_service::record_fork_head(txn, conversation_id, inserted.id)
+                        .await
+                        .map_err(|e| sea_orm::DbErr::Custom(e.to_string()))?;
+
                     Ok(inserted.id)
                 })
             })

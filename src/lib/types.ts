@@ -424,6 +424,32 @@ export interface ConversationWorkbenchRef {
  *  the column existed read as "user". */
 export type ConversationCreatedBy = "user" | "agent" | "automation"
 
+/** How a target Session was derived from a source Session (`fork_relation`).
+ *  Only "fork_head" has a producer today; the other two are reserved for the
+ *  historical-fork and handoff slices. */
+export type ForkRelationKind = "fork_head" | "fork_at_message" | "handoff"
+
+/** One directed fork-lineage edge: `targetConversationId` came from
+ *  `sourceConversationId`. Mirrors `models::ForkRelationRef`. */
+export interface ForkRelationRef {
+  id: number
+  sourceConversationId: number
+  targetConversationId: number
+  relationKind: ForkRelationKind
+  /** Provider-native message anchor as raw JSON; always null for "fork_head". */
+  anchor: string | null
+  createdAt: string
+}
+
+/** Both directions of a session's fork lineage. Edges whose other endpoint is
+ *  soft-deleted are omitted by the backend. Mirrors `models::ForkLineage`. */
+export interface ForkLineage {
+  /** Edges where this session is the target — what it was forked from. */
+  forkedFrom: ForkRelationRef[]
+  /** Edges where this session is the source — what was forked out of it. */
+  forks: ForkRelationRef[]
+}
+
 export interface DbConversationSummary {
   id: number
   folder_id: number

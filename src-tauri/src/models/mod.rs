@@ -39,10 +39,10 @@ pub use collaboration::{
 };
 pub use conversation::{
     AgentConversationCount, AgentStats, ConversationDetail, ConversationSummary,
-    ConversationTurnsPage, DbConversationDetail, DbConversationSummary, FolderInfo,
-    ImportFolderOutcome, ImportResult, ImportSelectedResult, ScanFolder, ScanResult, ScanSession,
-    ScanSessionStatus, SelectedSessionKey, SessionContentSearchHit, SessionContentSearchResponse,
-    SessionStats, SidebarData,
+    ConversationTurnsPage, DbConversationDetail, DbConversationSummary, FolderInfo, ForkLineage,
+    ForkRelationRef, ImportFolderOutcome, ImportResult, ImportSelectedResult, ScanFolder,
+    ScanResult, ScanSession, ScanSessionStatus, SelectedSessionKey, SessionContentSearchHit,
+    SessionContentSearchResponse, SessionStats, SidebarData,
 };
 pub use folder::{
     CollectionInfo, ConversationCollectionRef, ConversationWorkbenchRef, FolderCommandInfo,
