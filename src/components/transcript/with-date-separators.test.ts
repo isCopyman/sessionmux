@@ -162,4 +162,28 @@ describe("formatTranscriptDayLabel", () => {
     })
     expect(label).toMatch(/2025/)
   })
+
+  it("uses injected today/yesterday labels and falls back to English", () => {
+    const now = localMs(2026, 8, 21, 15)
+    expect(
+      formatTranscriptDayLabel(localMs(2026, 8, 21, 9), {
+        nowMs: now,
+        todayLabel: "今天",
+        yesterdayLabel: "昨天",
+      })
+    ).toBe("今天")
+    expect(
+      formatTranscriptDayLabel(localMs(2026, 8, 20, 9), {
+        nowMs: now,
+        todayLabel: "今天",
+        yesterdayLabel: "昨天",
+      })
+    ).toBe("昨天")
+    expect(
+      formatTranscriptDayLabel(localMs(2026, 8, 21, 9), { nowMs: now })
+    ).toBe("Today")
+    expect(
+      formatTranscriptDayLabel(localMs(2026, 8, 20, 9), { nowMs: now })
+    ).toBe("Yesterday")
+  })
 })

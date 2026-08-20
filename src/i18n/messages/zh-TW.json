@@ -5351,6 +5351,8 @@
     "createSubmit": "建群",
     "createNeedTwo": "至少選擇兩個 Session 才能建群",
     "createNoCandidates": "沒有可選的 Session。",
-    "createFailed": "建群失敗：{message}"
+    "createFailed": "建群失敗：{message}",
+    "dateToday": "今天",
+    "dateYesterday": "昨天"
   }
 }

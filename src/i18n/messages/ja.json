@@ -5351,6 +5351,8 @@
     "createSubmit": "作成",
     "createNeedTwo": "ルームを作成するには Session を2つ以上選択してください",
     "createNoCandidates": "選択できる Session がありません。",
-    "createFailed": "ルームを作成できませんでした: {message}"
+    "createFailed": "ルームを作成できませんでした: {message}",
+    "dateToday": "今日",
+    "dateYesterday": "昨日"
   }
 }

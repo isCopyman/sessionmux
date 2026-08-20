@@ -87,9 +87,9 @@ function pad2(value: number): string {
 
 /**
  * Minimal day label for callers that have not wired next-intl yet.
- * Uses `Intl.DateTimeFormat` so it follows the given locale without new
- * message keys. "Today" / "Yesterday" are English-only in this helper —
- * phase-2 callers should pass their own `formatLabel` from i18n.
+ * Uses `Intl.DateTimeFormat` so older dates follow the given locale without
+ * importing next-intl. "Today" / "Yesterday" stay English unless the caller
+ * injects `todayLabel` / `yesterdayLabel` (Room wires these from i18n).
  */
 export function formatTranscriptDayLabel(
   timeMs: number,
@@ -97,6 +97,8 @@ export function formatTranscriptDayLabel(
     nowMs?: number
     locale?: string
     timeZone?: TranscriptDateTimeZone
+    todayLabel?: string
+    yesterdayLabel?: string
   }
 ): string {
   const timeZone = options?.timeZone ?? "local"
@@ -104,8 +106,9 @@ export function formatTranscriptDayLabel(
   const day = calendarDayKey(timeMs, timeZone)
   const today = calendarDayKey(nowMs, timeZone)
   const yesterday = calendarDayKey(nowMs - 24 * 60 * 60 * 1000, timeZone)
-  if (day !== null && day === today) return "Today"
-  if (day !== null && day === yesterday) return "Yesterday"
+  if (day !== null && day === today) return options?.todayLabel ?? "Today"
+  if (day !== null && day === yesterday)
+    return options?.yesterdayLabel ?? "Yesterday"
   const date = new Date(timeMs)
   const locale = options?.locale ?? "en"
   return new Intl.DateTimeFormat(locale, {

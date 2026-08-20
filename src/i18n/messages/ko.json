@@ -5351,6 +5351,8 @@
     "createSubmit": "만들기",
     "createNeedTwo": "룸을 만들려면 Session을 두 개 이상 선택하세요",
     "createNoCandidates": "선택할 수 있는 Session이 없습니다.",
-    "createFailed": "룸을 만들 수 없습니다: {message}"
+    "createFailed": "룸을 만들 수 없습니다: {message}",
+    "dateToday": "오늘",
+    "dateYesterday": "어제"
   }
 }
