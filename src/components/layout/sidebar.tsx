@@ -20,6 +20,7 @@ import { useActiveFolder } from "@/contexts/active-folder-context"
 import { useSidebarContext } from "@/contexts/sidebar-context"
 import { useTabActions, useTabStore } from "@/contexts/tab-context"
 import { useSearchDialog } from "@/contexts/search-dialog-context"
+import { useCreateRoomDialog } from "@/contexts/create-room-dialog-context"
 import { useSessionCenter } from "@/contexts/session-center-context"
 import { useAutomationsView } from "@/contexts/automations-view-context"
 import { useTasksView } from "@/contexts/tasks-view-context"
@@ -77,7 +78,6 @@ import {
 import { SidebarSectionOrderControl } from "./sidebar-section-order-control"
 import { cn } from "@/lib/utils"
 import { WorkbenchTree } from "@/components/workbench/workbench-tree"
-import { CreateRoomDialog } from "@/components/rooms/create-room-dialog"
 import { useCollaborationUnreadOverview } from "@/hooks/use-collaboration-unread-overview"
 import {
   CollectionTree,
@@ -248,7 +248,9 @@ export function Sidebar() {
     DEFAULT_SECTION_ORDER
   )
   const [allExpanded, setAllExpanded] = useState(true)
-  const [createRoomOpen, setCreateRoomOpen] = useState(false)
+  // Shared with the welcome page's secondary entry; the dialog itself is
+  // mounted by WorkspaceChromeController so it survives a collapsed sidebar.
+  const { setOpen: setCreateRoomOpen } = useCreateRoomDialog()
   // Backend-authoritative outstanding-reply count. The badge adds Room debt on
   // top of direct mail; the Session Center's needs_reply filter still lists
   // only the direct-mail Sessions, so the two can differ while Rooms are owed
@@ -827,9 +829,6 @@ export function Sidebar() {
           />
         </div>
       )}
-      {createRoomOpen ? (
-        <CreateRoomDialog open onOpenChange={setCreateRoomOpen} />
-      ) : null}
     </aside>
   )
 }

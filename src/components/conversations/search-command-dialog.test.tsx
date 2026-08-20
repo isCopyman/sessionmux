@@ -183,3 +183,59 @@ describe("SearchCommandDialog", () => {
     expect(h.openSessionCenter).toHaveBeenCalledWith({ search: "" })
   })
 })
+
+// Neither tab searches what its name suggests: files matches names and paths,
+// conversations matches titles. Both must say so on screen — silence here is
+// what makes users type message text into a title search and conclude the
+// feature is broken.
+describe("SearchCommandDialog self-description", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    h.activeFolder = null
+    h.activeFolderId = null
+    h.listAll.mockResolvedValue([])
+    h.listWorkspaceFiles.mockResolvedValue([])
+  })
+
+  it("tells the conversations tab it matches titles and points at the Session Center", async () => {
+    renderPalette()
+
+    expect(
+      await screen.findByText(enMessages.Folder.search.conversationsScopeHint)
+    ).toBeTruthy()
+  })
+
+  it("names the file tab's purpose and scope in its placeholder and empty state", async () => {
+    h.activeFolder = {
+      name: "acme-web",
+      path: "/repos/acme-web",
+    } as FolderDetail
+    h.activeFolderId = 3
+    const { user } = renderPalette()
+
+    await user.click(screen.getByRole("button", { name: "Files" }))
+
+    expect(
+      screen.getByPlaceholderText("Jump to a file in acme-web")
+    ).toBeTruthy()
+    expect(
+      await screen.findByText(
+        "Matches file and folder names in acme-web — not the text inside them."
+      )
+    ).toBeTruthy()
+  })
+
+  it("keeps the scope note visible when a query returned nothing", async () => {
+    const { user } = renderPalette()
+
+    await user.type(queryInput(), "zzz")
+    await waitFor(() =>
+      expect(screen.getByText("No results found.")).toBeTruthy()
+    )
+
+    // The note is exactly what explains an empty result set here.
+    expect(
+      screen.getByText(enMessages.Folder.search.conversationsScopeHint)
+    ).toBeTruthy()
+  })
+})

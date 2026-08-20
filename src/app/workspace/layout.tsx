@@ -28,6 +28,7 @@ import { TabProvider, useTabStore, useTabActions } from "@/contexts/tab-context"
 import { selectIsSplit } from "@/stores/tab-store"
 import { SidebarProvider, useSidebarContext } from "@/contexts/sidebar-context"
 import { SearchDialogProvider } from "@/contexts/search-dialog-context"
+import { CreateRoomDialogProvider } from "@/contexts/create-room-dialog-context"
 import { SessionCenterProvider } from "@/contexts/session-center-context"
 import { AutomationsViewProvider } from "@/contexts/automations-view-context"
 import { TasksViewProvider } from "@/contexts/tasks-view-context"
@@ -1226,9 +1227,16 @@ function WorkspaceLayoutInner({ children }: { children: React.ReactNode }) {
                                           useWorkbenchRoute / useTabActions to
                                           open what you pick. */}
                                   <SessionCenterProvider>
-                                    <FolderLayoutShell>
-                                      {children}
-                                    </FolderLayoutShell>
+                                    {/* Innermost: only a boolean, but every
+                                            trigger (sidebar row, welcome page)
+                                            and the dialog owner
+                                            (WorkspaceChromeController) live
+                                            inside FolderLayoutShell. */}
+                                    <CreateRoomDialogProvider>
+                                      <FolderLayoutShell>
+                                        {children}
+                                      </FolderLayoutShell>
+                                    </CreateRoomDialogProvider>
                                   </SessionCenterProvider>
                                 </WorkbenchRouteProvider>
                               </TasksViewProvider>

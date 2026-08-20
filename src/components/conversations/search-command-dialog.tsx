@@ -173,8 +173,18 @@ export function SearchCommandDialog({
     [revealInFileTree, openFilePreview, onOpenChange]
   )
 
+  // Neither tab does what its name suggests at first glance — files matches
+  // names and paths, never file contents; conversations matches titles, never
+  // message text. Both say so in their own placeholder + empty state rather
+  // than leaving the user to discover it by getting no hits.
+  const filePlaceholder = folder
+    ? t("filePlaceholderInFolder", { name: folder.name })
+    : t("filePlaceholder")
+  const filesScopeHint = folder
+    ? t("filesScopeHint", { name: folder.name })
+    : t("filesScopeHintNoFolder")
   const placeholder =
-    activeTab === "conversations" ? t("placeholder") : t("filePlaceholder")
+    activeTab === "conversations" ? t("placeholder") : filePlaceholder
   const trimmedQuery = query.trim()
 
   return (
@@ -263,11 +273,18 @@ export function SearchCommandDialog({
         {activeTab === "conversations" && (
           <>
             <CommandEmpty>
-              {searching
-                ? t("searching")
-                : !trimmedQuery
-                  ? t("typeToSearch")
-                  : t("noResults")}
+              {searching ? (
+                t("searching")
+              ) : (
+                <span className="flex flex-col items-center gap-1">
+                  <span>
+                    {trimmedQuery ? t("noResults") : t("typeToSearch")}
+                  </span>
+                  <span className="text-xs text-muted-foreground/80">
+                    {t("conversationsScopeHint")}
+                  </span>
+                </span>
+              )}
             </CommandEmpty>
             {results.length > 0 && (
               <CommandGroup>
@@ -304,11 +321,18 @@ export function SearchCommandDialog({
         {activeTab === "files" && (
           <>
             <CommandEmpty>
-              {filesLoading
-                ? t("searching")
-                : !query.trim()
-                  ? t("typeToSearchFiles")
-                  : t("noResults")}
+              {filesLoading ? (
+                t("searching")
+              ) : (
+                <span className="flex flex-col items-center gap-1">
+                  <span>
+                    {trimmedQuery ? t("noResults") : t("typeToSearchFiles")}
+                  </span>
+                  <span className="text-xs text-muted-foreground/80">
+                    {filesScopeHint}
+                  </span>
+                </span>
+              )}
             </CommandEmpty>
             {filteredFiles.length > 0 && (
               <CommandGroup>

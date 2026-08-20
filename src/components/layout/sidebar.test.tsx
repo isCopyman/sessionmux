@@ -15,6 +15,7 @@ const spies = vi.hoisted(() => ({
   openChatModeTab: vi.fn(),
   openTab: vi.fn(),
   setSearchOpen: vi.fn(),
+  setCreateRoomOpen: vi.fn(),
   setRoute: vi.fn(),
   openConversations: vi.fn(),
   // Latest props the (stubbed) conversation list was rendered with, so tests can
@@ -149,11 +150,13 @@ vi.mock("@/components/conversations/conversation-manage-dialog", () => ({
     ) : null
   },
 }))
-// Stubbed for its import graph, not its behavior: the real dialog pulls in
-// tab-store, whose module-level getState() call explodes against the partial
-// app-workspace-store mock below.
-vi.mock("@/components/rooms/create-room-dialog", () => ({
-  CreateRoomDialog: () => <div>Create Room Dialog</div>,
+// The dialog itself moved to WorkspaceChromeController; the sidebar row now
+// only flips the shared open-state, which is what this spy records.
+vi.mock("@/contexts/create-room-dialog-context", () => ({
+  useCreateRoomDialog: () => ({
+    open: false,
+    setOpen: spies.setCreateRoomOpen,
+  }),
 }))
 vi.mock("@/contexts/sidebar-context", () => ({
   useSidebarContext: () => ({ isOpen: true, toggle: vi.fn() }),
@@ -244,6 +247,7 @@ describe("Sidebar — fixed New chat / Search region", () => {
     spies.openNewConversationTab.mockClear()
     spies.openChatModeTab.mockClear()
     spies.setSearchOpen.mockClear()
+    spies.setCreateRoomOpen.mockClear()
     spies.setRoute.mockClear()
     spies.openConversations.mockClear()
     spies.sessionCenterOpen = false
