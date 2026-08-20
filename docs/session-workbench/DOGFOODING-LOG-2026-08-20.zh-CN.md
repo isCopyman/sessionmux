@@ -108,3 +108,11 @@ tauri-build 复制 sidecar（binaries/codeg-mcp-*.exe）时 PermissionDenied—�
 影响：双实例并行（dogfooding 常态）时另一侧界面陈旧，用户以为操作没发生。
 方向：跨进程失效通知（文件 watcher 或 DB 版本号轮询兜底）；或至少文档写明
 双实例的可见性边界。
+
+### O10 更正（实证后）
+
+之前"同库不同事件"的判断**错了**：dev 用独立 `codeg-dev.db`，release 用
+`codeg.db`（%APPDATA%/app.codeg/ 下两个文件并存）。真实机制：会话因有磁盘转录
+文件被对方实例的扫描导入（形成"影子会话"，包括 O9 幽灵的尸体也被 release 扫走）；
+Room/Collection/mail 等纯 DB 构造**不跨实例**。用户侧困惑（"看不见群聊"）由此而来。
+方向：dev/release 数据边界写进文档；影子会话考虑标注来源实例。
