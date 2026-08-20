@@ -535,6 +535,14 @@ node_modules，摩擦 4），漏了一个 prettier 空行。**这正是"必须�
 
 ### 新二进制修复验证（dev 重启后，2026-08-20）
 
+16. **【摩擦】销账回报的可见性在会话之间不对称**（Room `1e906451`）。
+    同一 host、同一 Room、几分钟内：协调者 314（Claude Code harness）的 `post_room`
+    返回体带 `open_reply_debt` / `cleared_reply_to_event_id`；工人 316（grok harness）
+    的返回体是旧格式（仅 event id + delivery 状态 + 通用提示），无任何销账字段。
+    316 的运行时 16:43 后才唤醒，companion 应已是新二进制。猜测（未验证）：字段按
+    feature-group 或 harness 过滤，或仅在部分代码路径组装。316 将用第二发对照。
+
+
 - **幽灵修复有效**：`@316` 后 `session.list` 无新会话（旧行为：@ 空闲会话必克隆幽灵）。
 - **销账回报有效**：`post_room` 返回体新增 `open_reply_debt` 字段（摩擦 7 的修复落地）。
 - **新 bug（操作员已立项）**：human 在自己创建的 Room 里 `@` 房主会话，会被当成
