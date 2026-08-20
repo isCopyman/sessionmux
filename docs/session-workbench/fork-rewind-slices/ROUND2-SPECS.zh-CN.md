@@ -80,7 +80,9 @@ forkAtMessage 在一整类会话上会确定性失败**，且失败不可重试�
 4. **测试**：至少覆盖 (a) 普通一问一答轮；(b) 轮末带 attachment 的轮（用真实形态夹具：
    `deferred_tools_delta` / `skill_listing` / `total_tokens_reminder`）；
    (c) 轮末是 tool_result 的轮。断言取到的锚点是**链尾**而非 assistant uuid。
-5. **不做**：不碰 ACP 发送路径（那是包 E，且要等你落地），不碰 UI，不动 `fork_relation`。
+5. **不做**：不碰 ACP 发送路径（那属于后续的 forkAtMessage 包，要等本包落地才派；
+   包 E 是纯文档，与发送路径无关——原文此处笔误，工人 317 指出，已更正），不碰 UI，
+   不动 `fork_relation`。
 
 ### 门禁
 
