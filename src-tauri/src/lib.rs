@@ -1081,6 +1081,7 @@ mod tauri_app {
                 conversations::list_all_conversations,
                 session_search_commands::search_session_content,
                 conversations::list_child_conversations,
+                conversations::conversation_fork_lineage,
                 conversations::list_opened_tabs,
                 conversations::save_opened_tabs,
                 conversations::list_workbench_tabs,

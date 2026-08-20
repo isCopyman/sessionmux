@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use super::agent::AgentType;
 use super::message::{MessageTurn, TurnUsage};
 use crate::db::entities::conversation::ConversationKind;
+use crate::db::entities::fork_relation::ForkRelationKind;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConversationSummary {
@@ -308,6 +309,35 @@ pub struct ScanResult {
 pub struct SelectedSessionKey {
     pub agent_type: AgentType,
     pub external_id: String,
+}
+
+/// One directed fork-lineage edge, as seen from a conversation on either end.
+/// Mirrors a `fork_relation` row.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ForkRelationRef {
+    pub id: i32,
+    pub source_conversation_id: i32,
+    pub target_conversation_id: i32,
+    pub relation_kind: ForkRelationKind,
+    /// Provider-native message anchor as a raw JSON string; always `null` for
+    /// `fork_head`.
+    pub anchor: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Both directions of one conversation's fork lineage. Edges whose *other*
+/// endpoint is soft-deleted are omitted: they would render a badge that jumps
+/// nowhere.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ForkLineage {
+    /// Edges where this conversation is the TARGET — what it was forked from.
+    /// At most one per kind today, but a list keeps future many-to-one kinds
+    /// (e.g. a handoff assembled from several sources) expressible.
+    pub forked_from: Vec<ForkRelationRef>,
+    /// Edges where this conversation is the SOURCE — what was forked out of it.
+    pub forks: Vec<ForkRelationRef>,
 }
 
 /// Per-folder tally of one batch import.

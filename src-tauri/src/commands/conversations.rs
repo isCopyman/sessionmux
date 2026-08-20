@@ -3,7 +3,9 @@ use std::collections::{HashMap, HashSet};
 use crate::app_error::AppCommandError;
 use crate::db::entities::folder::FolderKind;
 use crate::db::entities::{conversation, folder};
-use crate::db::service::{conversation_service, folder_service, import_service, tab_service};
+use crate::db::service::{
+    conversation_service, folder_service, fork_lineage_service, import_service, tab_service,
+};
 #[cfg(feature = "tauri-runtime")]
 use crate::db::AppDatabase;
 use crate::models::*;
@@ -183,6 +185,26 @@ pub async fn list_child_conversations(
     parent_conversation_id: i32,
 ) -> Result<Vec<DbConversationSummary>, AppCommandError> {
     list_child_conversations_core(&db.conn, parent_conversation_id).await
+}
+
+/// Fork lineage for one conversation, both directions. Unrelated to
+/// [`list_child_conversations_core`], which walks `parent_id` (delegation).
+pub async fn conversation_fork_lineage_core(
+    conn: &sea_orm::DatabaseConnection,
+    conversation_id: i32,
+) -> Result<ForkLineage, AppCommandError> {
+    fork_lineage_service::lineage_for(conn, conversation_id)
+        .await
+        .map_err(AppCommandError::from)
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn conversation_fork_lineage(
+    db: tauri::State<'_, AppDatabase>,
+    conversation_id: i32,
+) -> Result<ForkLineage, AppCommandError> {
+    conversation_fork_lineage_core(&db.conn, conversation_id).await
 }
 
 pub async fn list_opened_tabs_core(

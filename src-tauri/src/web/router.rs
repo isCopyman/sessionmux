@@ -62,6 +62,10 @@ pub fn build_router(
             post(handlers::conversations::list_child_conversations),
         )
         .route(
+            "/conversation_fork_lineage",
+            post(handlers::conversations::conversation_fork_lineage),
+        )
+        .route(
             "/get_feedback_settings",
             post(handlers::feedback::get_feedback_settings),
         )

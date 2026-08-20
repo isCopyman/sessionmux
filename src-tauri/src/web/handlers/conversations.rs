@@ -59,6 +59,22 @@ pub async fn list_child_conversations(
     ))
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationForkLineageParams {
+    pub conversation_id: i32,
+}
+
+pub async fn conversation_fork_lineage(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<ConversationForkLineageParams>,
+) -> Result<Json<ForkLineage>, AppCommandError> {
+    Ok(Json(
+        conv_commands::conversation_fork_lineage_core(&state.db.conn, params.conversation_id)
+            .await?,
+    ))
+}
+
 pub async fn list_opened_tabs(
     Extension(state): Extension<Arc<AppState>>,
 ) -> Result<Json<OpenedTabsSnapshot>, AppCommandError> {

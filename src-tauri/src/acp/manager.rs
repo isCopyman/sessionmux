@@ -35,7 +35,7 @@ use crate::acp::types::{
 use crate::db::entities::collection_conversation;
 use crate::db::entities::conversation::{self, ConversationKind, ConversationStatus};
 use crate::db::error::DbError;
-use crate::db::service::{collaboration_service, conversation_service};
+use crate::db::service::{collaboration_service, conversation_service, fork_lineage_service};
 use crate::db::AppDatabase;
 use crate::models::agent::AgentType;
 use crate::models::CollaborationChanged;
@@ -2264,6 +2264,17 @@ impl ConnectionManager {
                         .insert(txn)
                         .await?;
                     }
+
+                    // Lineage in the SAME transaction as C2. A fork whose edge
+                    // failed to record would be indistinguishable from an
+                    // ordinary Session that merely happens to be titled
+                    // `[Fork] …` — a title is not a relation. Note this is
+                    // `fork_relation`, NOT `parent_id`: that column means
+                    // delegation and stays NULL above.
+                    fork_lineage_service::record_fork_head(txn, conversation_id, inserted.id)
+                        .await
+                        .map_err(|e| sea_orm::DbErr::Custom(e.to_string()))?;
+
                     Ok(inserted.id)
                 })
             })
@@ -6937,6 +6948,195 @@ mod tests {
             Some("session-S2")
         );
     }
+
+    /// [`seed_forkable`] with every field a fork is supposed to carry over set
+    /// to a non-default value. `seed_forkable` leaves them at their `create`
+    /// defaults, which would make "inherited" and "defaulted" indistinguishable.
+    async fn seed_forkable_with_full_metadata(
+        db: &AppDatabase,
+        folder_id: i32,
+    ) -> conversation::Model {
+        let c1 = conversation_service::create_chat(
+            &db.conn,
+            folder_id,
+            AgentType::ClaudeCode,
+            Some("Ship the parser".into()),
+            Some("feature/x".into()),
+        )
+        .await
+        .unwrap();
+        conversation_service::bind_external_id(&db.conn, c1.id, "session-S1".into())
+            .await
+            .unwrap();
+        let row = conversation::Entity::find_by_id(c1.id)
+            .one(&db.conn)
+            .await
+            .unwrap()
+            .unwrap();
+        let mut active: conversation::ActiveModel = row.into();
+        active.model = Set(Some("claude-opus-5".into()));
+        active.origin_cwd = Set(Some("/tmp/fork-origin-cwd".into()));
+        active.preferred_mode_id = Set(Some("acceptEdits".into()));
+        active.preferred_config_values = Set(Some(r#"{"thinking":"high"}"#.into()));
+        active.update(&db.conn).await.unwrap();
+        conversation::Entity::find_by_id(c1.id)
+            .one(&db.conn)
+            .await
+            .unwrap()
+            .unwrap()
+    }
+
+    /// The columns `fork_session_writes_atomic_two_row_layout` does not assert.
+    /// `preferred_*` matter most: a fork that dropped them would silently run
+    /// the new Session on a different model or thinking effort than the one the
+    /// user pinned on the source.
+    #[tokio::test]
+    async fn fork_session_inherits_kind_model_cwd_and_pinned_selectors() {
+        use crate::db::test_helpers;
+        let db = test_helpers::fresh_in_memory_db().await;
+        let folder_id = test_helpers::seed_folder(&db, "/tmp/fork-inheritance").await;
+        let c1 = seed_forkable_with_full_metadata(&db, folder_id).await;
+
+        let (mgr, join) =
+            manager_with_fake_fork("c-inherit", c1.id, "session-S2", "session-S1").await;
+        let result = mgr
+            .fork_session(&db, "c-inherit", None, None)
+            .await
+            .unwrap();
+        let _ = join.await;
+
+        let c2 = conversation::Entity::find_by_id(result.forked_conversation_id)
+            .one(&db.conn)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            c2.kind,
+            ConversationKind::Chat,
+            "a forked chat Session must stay in the Chat group"
+        );
+        assert_eq!(c2.model.as_deref(), Some("claude-opus-5"));
+        assert_eq!(c2.origin_cwd.as_deref(), Some("/tmp/fork-origin-cwd"));
+        assert_eq!(c2.created_by, c1.created_by);
+        assert_eq!(c2.agent_type, c1.agent_type);
+        assert_eq!(c2.preferred_mode_id.as_deref(), Some("acceptEdits"));
+        assert_eq!(
+            c2.preferred_config_values.as_deref(),
+            Some(r#"{"thinking":"high"}"#)
+        );
+        assert!(c2.codeg_owned);
+        assert!(!c2.harness_internal);
+        assert_eq!(c2.message_count, 0, "no live state carries over");
+
+        // The fork's lineage lives in `fork_relation`, never here: `parent_id`
+        // means delegation, and every delegation query would change meaning.
+        assert_eq!(c2.parent_id, None);
+        assert_eq!(c2.parent_tool_use_id, None);
+        assert_eq!(c2.delegation_call_id, None);
+
+        // C1 is byte-for-byte what it was, `updated_at` included: being forked
+        // is not activity on the source.
+        let after = conversation::Entity::find_by_id(c1.id)
+            .one(&db.conn)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(after, c1, "the fork must not touch the source row");
+    }
+
+    #[tokio::test]
+    async fn fork_session_records_one_fork_head_edge_readable_from_both_ends() {
+        use crate::db::entities::fork_relation::{self, ForkRelationKind};
+        use crate::db::test_helpers;
+        let db = test_helpers::fresh_in_memory_db().await;
+        let folder_id = test_helpers::seed_folder(&db, "/tmp/fork-lineage-edge").await;
+        let c1 = seed_forkable(&db, folder_id, Some("Traceable")).await;
+
+        let (mgr, join) =
+            manager_with_fake_fork("c-lineage", c1.id, "session-S2", "session-S1").await;
+        let result = mgr
+            .fork_session(&db, "c-lineage", None, None)
+            .await
+            .unwrap();
+        let _ = join.await;
+        let c2 = result.forked_conversation_id;
+
+        let edges = fork_relation::Entity::find().all(&db.conn).await.unwrap();
+        assert_eq!(edges.len(), 1, "one fork, one edge");
+        assert_eq!(edges[0].source_conversation_id, c1.id);
+        assert_eq!(edges[0].target_conversation_id, c2);
+        assert_eq!(edges[0].relation_kind, ForkRelationKind::ForkHead);
+        assert_eq!(edges[0].anchor, None, "a head fork has no message anchor");
+
+        // Both directions of the query resolve the same edge.
+        let source_side = fork_lineage_service::lineage_for(&db.conn, c1.id)
+            .await
+            .unwrap();
+        assert!(source_side.forked_from.is_empty());
+        assert_eq!(source_side.forks.len(), 1);
+        assert_eq!(source_side.forks[0].target_conversation_id, c2);
+
+        let target_side = fork_lineage_service::lineage_for(&db.conn, c2)
+            .await
+            .unwrap();
+        assert_eq!(target_side.forked_from.len(), 1);
+        assert_eq!(target_side.forked_from[0].source_conversation_id, c1.id);
+        assert!(target_side.forks.is_empty());
+    }
+
+    /// A fork of a fork: the middle row is a target on one edge and a source on
+    /// the other. Driven through `persist_fork_outcome` rather than two fake
+    /// connections — the second fork's protocol round trip is already covered
+    /// above and adds nothing to what this asserts.
+    #[tokio::test]
+    async fn fork_lineage_chains_without_ever_touching_parent_id() {
+        use crate::db::test_helpers;
+        let db = test_helpers::fresh_in_memory_db().await;
+        let folder_id = test_helpers::seed_folder(&db, "/tmp/fork-lineage-chain").await;
+        let c1 = seed_forkable(&db, folder_id, Some("Root")).await;
+
+        let c2 = ConnectionManager::persist_fork_outcome(
+            &db.conn,
+            c1.id,
+            "S2".into(),
+            "session-S1".into(),
+        )
+        .await
+        .unwrap()
+        .id;
+        let c3 = ConnectionManager::persist_fork_outcome(&db.conn, c2, "S3".into(), "S2".into())
+            .await
+            .unwrap()
+            .id;
+
+        let middle = fork_lineage_service::lineage_for(&db.conn, c2)
+            .await
+            .unwrap();
+        assert_eq!(middle.forked_from.len(), 1);
+        assert_eq!(middle.forked_from[0].source_conversation_id, c1.id);
+        assert_eq!(middle.forks.len(), 1);
+        assert_eq!(middle.forks[0].target_conversation_id, c3);
+
+        let leaf = fork_lineage_service::lineage_for(&db.conn, c3)
+            .await
+            .unwrap();
+        assert_eq!(leaf.forked_from.len(), 1);
+        assert_eq!(leaf.forked_from[0].source_conversation_id, c2);
+        assert!(leaf.forks.is_empty());
+
+        for id in [c1.id, c2, c3] {
+            let row = conversation::Entity::find_by_id(id)
+                .one(&db.conn)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                row.parent_id, None,
+                "conversation {id} must keep parent_id NULL"
+            );
+        }
+    }
+
     // --- wait_for_session_options polling ----------------------------------
     //
     // These tests exercise the probe's wait loop directly by hand-seeding
