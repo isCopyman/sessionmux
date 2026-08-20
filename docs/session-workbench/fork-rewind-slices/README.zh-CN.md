@@ -524,7 +524,7 @@ node_modules，摩擦 4），漏了一个 prettier 空行。**这正是"必须�
 
 | 包 | 主题 | 负责 | 分支 | 状态 |
 |---|---|---|---|---|
-| G | 后端全部（_meta 拼装 / anchor 传透 / fork_at_message 谱系 / 非重试错误映射） | 317 | `wt/fork-at-message-be` | 已回执，进行中 |
+| G | 后端全部（_meta 拼装 / anchor 传透 / fork_at_message 谱系 / 非重试错误映射） | 317 | `wt/fork-at-message-be` | **已交付、已复核、已合并**（`8e603cc5` → merge `98b70288`） |
 | H | 前端全部（api+tauri 对齐 / 能力门控 / 不重排队错误处理 / types 镜像） | 318 | `wt/fork-at-message-fe` | **已交付、已复核、已合并**（`1913b238` → merge `270b52f7`） |
 | — | 316 本轮轮休（连做两轮 + MCP 全瘫期完成包 D），仅补发包 D 交付帖验证新链路 | 316 | — | **已补发**（`571610ab`），内容与协调者复核逐点一致，新 MCP 链路工人侧实测通 |
 
@@ -573,3 +573,43 @@ spread 旁路只在 claude-agent-acp 验证过，Qoder 适配器 fork 行为未�
 
 合并树门禁：eslint 0 error / 3 既有 warning；vitest 368 files / 4721 tests 全绿
 （与工人自报一致）；build 静态导出成功；cargo 四条零 Rust diff 可证等价，未重跑。
+
+
+### 包 G 结论（协调者已复核 + 合并树跑全量门禁，2026-08-20）
+
+契约五点全中：`fork_request_params(anchor=None)` 直接序列化 `ForkSessionRequest`，
+**无 `_meta` 键、字节级等价**（红线 1）；非空锚点手工拼
+`_meta.claudeCode.options.resumeSessionAt`；`record_fork_head` 签名未动，另加
+`record_fork_at_message`（红线 2）；`fork_relation.rs` 仅文档注释更新；
+`ForkAnchorRejected` 识别 `Resume rejected by --resume-drops-turn:` 前缀、
+code `fork_anchor_rejected`（与包 H 前端常量精确对上）、HTTP **422** 与
+`TurnInProgress` 的 409 分开。parsers / TS 零触碰。
+
+合并树全量门禁：fmt ✓、双 clippy ✓（-D warnings 零输出）、
+`cargo test --no-default-features --bin codeg-server --lib` → **2585 passed / 0 failed**
+（与工人自报一致）；前端三条在 H 合并后已绿，G 零 TS diff 可证等价。
+
+### 活体截断验证（协调者，预算受控一发，2026-08-20）
+
+整条链最后一个未证实环节——`--resume-session-at` 是否**真的截断**——已活体证实：
+
+- 预检（零成本）：CLI 2.1.236 二进制含 `resume-session-at`（11 处）/`resume-drops-turn`
+  （10 处），`--help` 不列但接受（同 grok `--no-auto-update` 先例）；env 按 codeg 订阅
+  启动策略（`542f1c5d`）strip 全部 `ANTHROPIC_*`。
+- 源：真实两轮会话 `eccc2303`（turn-2 恰是 "Login expired" 错误——正是用户想截掉的
+  那类）。锚点按 SDK 规则取保留轮末条 chain entry：system `17cdef4c`（turn-2 user 的
+  parent）。
+- 一发：`claude -p "Reply with exactly: ack" --resume eccc2303… --fork-session
+  --session-id d4fa3750… --resume-session-at=17cdef4c… --output-format stream-json
+  --verbose`。**成功**：`result:"ack"`，$0.56（27887 tokens 系统提示词缓存创建）。
+- **产物判据全中**（`d4fa3750….jsonl`，21 条）：
+  1. 文件头 = fork 元数据（`queue-operation` 等）——`background_watch.rs:1256` 布局实锤；
+  2. 保留前缀**原 uuid 原样**（cbc50419→…→17cdef4c），**精确切在锚点（含）**；
+  3. turn-2 内容与 uuid（"Login expired" / 5e37a783 / 88686f8c）**零出现**；
+  4. 新 turn 完整（user+4 attachment+assistant "ack"）；
+  5. **原文件 20628 字节未动**——非破坏性。
+- 附带新知：CLI 层 fork 复制**保留原 uuid**（不重映射）；截断语义"至锚点为止（含）"。
+- 证据文件保留：`~/.claude/projects/C--Users-63036/d4fa3750-2294-4baf-a608-b9cd66196ab6.jsonl`。
+
+**⇒ forkAtMessage 全链路（G 后端 → adapter spread → SDK argv → CLI 真截断 → D 锚点
+生产 → H 前端门控/错误路径）每一环都有证据，切片 2 主体完工。**
