@@ -1223,6 +1223,7 @@ mod tests {
             duration_ms: Some(1200),
             model: Some("  claude-opus-5  ".into()),
             completed_at: None,
+            provider_anchor: None,
         }
     }
 

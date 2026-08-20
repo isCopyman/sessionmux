@@ -1249,6 +1249,7 @@ mod tests {
             duration_ms: None,
             model: None,
             completed_at: Some(base + chrono::Duration::seconds(end_s)),
+            provider_anchor: None,
         }
     }
 
@@ -1543,6 +1544,7 @@ mod tests {
                 duration_ms: None,
                 model: None,
                 completed_at: None,
+                provider_anchor: None,
             },
             MessageTurn {
                 id: "turn-1".to_string(),
@@ -1558,6 +1560,7 @@ mod tests {
                 duration_ms: None,
                 model: None,
                 completed_at: None,
+                provider_anchor: None,
             },
         ];
 
