@@ -10,6 +10,11 @@ import { getCodegToken } from "./transport/web-auth"
 import { notifyWebUnauthorized } from "./transport/web-connection-store"
 import { getCurrentEffectiveAppLocale } from "./i18n"
 import { TurnBusyError, isTurnInProgressRejection } from "./turn-busy"
+import {
+  ForkAnchorRejectedError,
+  buildAcpForkArgs,
+  isForkAnchorRejection,
+} from "./fork-anchor"
 import type { FolderThemeColor } from "./theme-presets"
 import type { FollowUpIntent } from "./task-follow-up"
 import type {
@@ -355,19 +360,24 @@ export async function acpFork(
   // the connection is already linked (a new-conversation-then-fork). See
   // `ConnectionManager::fork_session`.
   conversationId?: number | null,
-  folderId?: number | null
+  folderId?: number | null,
+  // forkAtMessage: the kept turn's last chain-entry uuid. Omitted / null ⇒
+  // head fork (payload has no `anchor` key). Non-empty ⇒ backend puts it in
+  // `_meta.claudeCode.options.resumeSessionAt`.
+  anchor?: string | null
 ): Promise<ForkResult> {
   try {
-    return await getTransport().call("acp_fork", {
-      connectionId,
-      conversationId: conversationId ?? null,
-      folderId: folderId ?? null,
-    })
+    return await getTransport().call(
+      "acp_fork",
+      buildAcpForkArgs({ connectionId, conversationId, folderId, anchor })
+    )
   } catch (e) {
     // A fork is serialized with prompts on the backend: it returns
     // TurnInProgress while a turn is in flight. Surface it as TurnBusyError so
     // callers can treat it as transient (re-queue) rather than a fork failure.
     if (isTurnInProgressRejection(e)) throw new TurnBusyError()
+    // Resume-drops-turn is deterministic and non-retryable — never TurnBusy.
+    if (isForkAnchorRejection(e)) throw new ForkAnchorRejectedError()
     throw e
   }
 }
