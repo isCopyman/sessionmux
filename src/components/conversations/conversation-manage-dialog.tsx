@@ -164,6 +164,11 @@ interface ConversationManageDialogProps {
   /** Optional initial collaboration facet — the sidebar needs-reply entry
    *  opens the Session Center pre-filtered to the Sessions that owe a reply. */
   initialCollaborationFilter?: CollaborationFilter
+  /** Optional free text to seed the search box with — the command palette
+   *  hands its query over here for the deep search it no longer does itself.
+   *  Seeds the state rather than controlling it: the box stays the user's to
+   *  edit from that starting point. */
+  initialSearch?: string
 }
 
 /**
@@ -1006,6 +1011,7 @@ export function ConversationManageDialog({
   folderId,
   initialCollection = null,
   initialCollaborationFilter = "all",
+  initialSearch = "",
 }: ConversationManageDialogProps) {
   const t = useTranslations("Folder.sidebar.manageConversations")
   const tCommon = useTranslations("Folder.common")
@@ -1036,7 +1042,7 @@ export function ConversationManageDialog({
     (state) => state.revision
   )
 
-  const [search, setSearch] = useState("")
+  const [search, setSearch] = useState(initialSearch)
   const [searchScope, setSearchScope] = useState<SessionSearchScope>("all")
   /** The folder facet: a folder id, or `null` for the whole workspace. */
   const [scopeFolderId, setScopeFolderId] = useState<number | null>(
@@ -1167,7 +1173,7 @@ export function ConversationManageDialog({
   // Reset state on open/close transitions
   useEffect(() => {
     if (!open) {
-      setSearch("")
+      setSearch(initialSearch)
       setSearchScope("all")
       setScopeFolderId(folderId ?? null)
       setBranchFilter(ALL_BRANCHES)
@@ -1199,7 +1205,13 @@ export function ConversationManageDialog({
       setOpeningWorkbenchId(null)
       setBulkOpening(false)
     }
-  }, [open, folderId, initialCollection, initialCollaborationFilter])
+  }, [
+    open,
+    folderId,
+    initialCollection,
+    initialCollaborationFilter,
+    initialSearch,
+  ])
 
   useEffect(() => {
     if (!open || workbenchesHydrated) return
