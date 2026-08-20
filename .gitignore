@@ -62,3 +62,6 @@ src-tauri/binaries/
 
 src-tauri/target-test-mcp/
 src-tauri/target-gate/
+
+# transient chat-history extraction scratch — never commit
+docs/session-workbench/_extract*
