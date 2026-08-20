@@ -1066,7 +1066,9 @@ describe("CollectionTree", () => {
       updatedAt: "2026-06-04T00:00:00.000Z",
     })
     renderTree(vi.fn(), { showSessions: true })
-    const row = await screen.findByRole("button", { name: /Busy room/ })
+    // Anchored: the multi-select checkbox is named "Select Busy room", which a
+    // bare /Busy room/ would also match.
+    const row = await screen.findByRole("button", { name: /^Busy room/ })
     expect(row.textContent).toContain("3")
   })
 
