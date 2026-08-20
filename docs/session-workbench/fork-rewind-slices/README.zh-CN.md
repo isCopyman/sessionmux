@@ -535,6 +535,12 @@ node_modules，摩擦 4），漏了一个 prettier 空行。**这正是"必须�
 
 ### 新二进制修复验证（dev 重启后，2026-08-20）
 
+15b. **摩擦 7 在修复潮后依然存在（精确化边界）**：今晚的修复是"债务回报"
+    （`open_reply_debt` / `cleared_reply_to_event_id`，且仅协调者侧可见，见 16），
+    **不是**"回复即销点名"。实测：协调者对 `571610ab` / `6f7de228` 均已直接从信封
+    回帖，仍收到"2 条未读群点名"催办，需 `read_room` 覆盖窗口才销。@ 点名的已读
+    状态与 expects_reply 债务是**两本账**，前者仍只认 `read_room`。
+
 16. **【摩擦】销账回报的可见性在会话之间不对称**（Room `1e906451`）。
     同一 host、同一 Room、几分钟内：协调者 314（Claude Code harness）的 `post_room`
     返回体带 `open_reply_debt` / `cleared_reply_to_event_id`；工人 316（grok harness）
