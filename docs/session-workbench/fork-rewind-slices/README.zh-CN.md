@@ -509,3 +509,33 @@ pnpm eslint .     → 初次 1 error（types.ts:282 prettier 空行）→ 修复
 **协调者补的一个提交** `aeabcb44`：工人跑不了前端门禁（MCP 坏 + 新 worktree 无
 node_modules，摩擦 4），漏了一个 prettier 空行。**这正是"必须自己跑门禁"的价值**——
 两个 clippy 面都绿，问题只在第三个面上。
+
+
+## 第三轮（forkAtMessage 实装，仅 claude）——进行中
+
+基线事件：`wt/fork-rewind` 已快进到主线 `codex/session-message-v1`（原落后 37 个提交，
+本地独有 0 个——第二轮成果已全部并入主线并经人类验收）。`provider_anchor` 在树上。
+
+规格：`ROUND3-SPECS.zh-CN.md`（`ec606e67`）。契约先钉死（§2）使 G/H 可完全并行：
+`acp_fork` 新增可选 `anchor`；缺省 ⇒ head fork 字节级不变（硬回归红线）；非空 ⇒
+`_meta.claudeCode.options.resumeSessionAt`。错误契约：锚点取错 → CLI 确定性拒绝
+（`Resume rejected by --resume-drops-turn:` 前缀）→ 必须独立**非重试**变体，
+禁止复用 `TurnInProgress` 的重排队路径。
+
+| 包 | 主题 | 负责 | 分支 | 状态 |
+|---|---|---|---|---|
+| G | 后端全部（_meta 拼装 / anchor 传透 / fork_at_message 谱系 / 非重试错误映射） | 317 | `wt/fork-at-message-be` | 已回执，进行中 |
+| H | 前端全部（api+tauri 对齐 / 能力门控 / 不重排队错误处理 / types 镜像） | 318 | `wt/fork-at-message-fe` | 已派工 |
+| — | 316 本轮轮休（连做两轮 + MCP 全瘫期完成包 D），仅补发包 D 交付帖验证新链路 | 316 | — | 待补发 |
+
+协调者保留事项：G 落地后活体验证 `--resume-session-at` 是否真截断（预算受控，工人禁止
+起 agent 进程）；串行合并 G/H 并在合并树上亲跑全部四条门禁。
+
+派工帖 `676470c3`；G 回执 `57ebd100`。
+
+### 新二进制修复验证（dev 重启后，2026-08-20）
+
+- **幽灵修复有效**：`@316` 后 `session.list` 无新会话（旧行为：@ 空闲会话必克隆幽灵）。
+- **销账回报有效**：`post_room` 返回体新增 `open_reply_debt` 字段（摩擦 7 的修复落地）。
+- **新 bug（操作员已立项）**：human 在自己创建的 Room 里 `@` 房主会话，会被当成
+  自我提及吞掉——操作员 15:06 的开工帖 `@314` 未送达，靠 `read_room` 主动翻到。
