@@ -11,6 +11,7 @@ fn status_for_app_error_code(code: AppErrorCode) -> StatusCode {
         AppErrorCode::InvalidInput => StatusCode::BAD_REQUEST,
         AppErrorCode::NotFound => StatusCode::NOT_FOUND,
         AppErrorCode::AlreadyExists | AppErrorCode::TurnInProgress => StatusCode::CONFLICT,
+        AppErrorCode::ForkAnchorRejected => StatusCode::UNPROCESSABLE_ENTITY,
         AppErrorCode::PermissionDenied => StatusCode::FORBIDDEN,
         AppErrorCode::ConfigurationMissing
         | AppErrorCode::ConfigurationInvalid
@@ -42,6 +43,18 @@ mod tests {
         assert_eq!(
             status_for_app_error_code(AppErrorCode::AuthenticationFailed),
             StatusCode::UNPROCESSABLE_ENTITY
+        );
+    }
+
+    #[test]
+    fn fork_anchor_rejected_is_not_conflict() {
+        assert_eq!(
+            status_for_app_error_code(AppErrorCode::ForkAnchorRejected),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+        assert_ne!(
+            status_for_app_error_code(AppErrorCode::ForkAnchorRejected),
+            status_for_app_error_code(AppErrorCode::TurnInProgress)
         );
     }
 }
