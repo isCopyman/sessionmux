@@ -100,8 +100,9 @@ describe("visibleCollectionItemKeys", () => {
   })
 
   it("skips Rooms inside collapsed collections, like their Sessions", () => {
-    expect(visibleCollectionItemKeys({ ...baseArgs, expanded: new Set() }))
-      .toEqual(["session:201", "room:rm_c"])
+    expect(
+      visibleCollectionItemKeys({ ...baseArgs, expanded: new Set() })
+    ).toEqual(["session:201", "room:rm_c"])
   })
 
   it("hides a collapsed path's Sessions and Rooms alike", () => {

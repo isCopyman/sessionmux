@@ -148,12 +148,12 @@ export function AgentToolsSettingsSection() {
     void (async () => {
       const [feedback, question, sessionInfo, collaboration, chat] =
         await Promise.allSettled([
-        getFeedbackSettings(),
-        getQuestionSettings(),
-        getSessionInfoSettings(),
-        getSessionCollaborationSettings(),
-        getChatAuthoringSettings(),
-      ])
+          getFeedbackSettings(),
+          getQuestionSettings(),
+          getSessionInfoSettings(),
+          getSessionCollaborationSettings(),
+          getChatAuthoringSettings(),
+        ])
       if (cancelled) return
 
       // One endpoint being down shouldn't blank the other four switches, so

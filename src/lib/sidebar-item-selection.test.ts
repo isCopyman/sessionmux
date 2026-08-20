@@ -14,7 +14,10 @@ import {
   sessionItemKey,
   type SidebarSelectionItem,
 } from "./sidebar-item-selection"
-import type { CollaborationRoomSummary, DbConversationSummary } from "@/lib/types"
+import type {
+  CollaborationRoomSummary,
+  DbConversationSummary,
+} from "@/lib/types"
 
 function session(id: number): DbConversationSummary {
   return {

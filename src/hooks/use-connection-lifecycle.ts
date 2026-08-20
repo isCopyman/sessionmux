@@ -394,10 +394,7 @@ export function useConnectionLifecycle({
           transientUnmount: isTransientUnmountRef.current?.() === true,
         })
       ) {
-        scheduleDeferredUnmountDisconnect(
-          contextKey,
-          connDisconnectRef.current
-        )
+        scheduleDeferredUnmountDisconnect(contextKey, connDisconnectRef.current)
       }
       // Task cleanup stays unconditional even on transient unmounts — the
       // remounted instance mints fresh task ids, so stale ones would orphan.

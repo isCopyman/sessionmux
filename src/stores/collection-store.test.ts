@@ -65,7 +65,8 @@ describe("collection store", () => {
     let finishFirst!: (items: CollectionInfo[]) => void
     h.list
       .mockImplementationOnce(
-        () => new Promise<CollectionInfo[]>((resolve) => (finishFirst = resolve))
+        () =>
+          new Promise<CollectionInfo[]>((resolve) => (finishFirst = resolve))
       )
       .mockResolvedValueOnce([collection(2, "Latest")])
 

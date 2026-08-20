@@ -311,9 +311,7 @@ describe("SessionBulkActionBar", () => {
     h.deleteRooms.mockResolvedValue(undefined)
     const { user } = renderBar(new Map(), undefined, [room("rm_a")])
     await user.click(screen.getByRole("button", { name: "Delete" }))
-    expect(
-      screen.getByText("Delete 1 room(s)?")
-    ).toBeInTheDocument()
+    expect(screen.getByText("Delete 1 room(s)?")).toBeInTheDocument()
     await user.click(screen.getByRole("button", { name: "Confirm" }))
     await waitFor(() =>
       expect(h.deleteRooms).toHaveBeenCalledWith(

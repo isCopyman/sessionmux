@@ -1307,9 +1307,7 @@ export const CollectionTree = forwardRef<
       } else if (rooms.length > 0) {
         toast.success(tManage("toastRoomsDeleted", { count: rooms.length }))
       } else {
-        toast.success(
-          tManage("toastDeleted", { count: conversations.length })
-        )
+        toast.success(tManage("toastDeleted", { count: conversations.length }))
       }
       setBulkDeleteOpen(false)
       multiSelect.clear()

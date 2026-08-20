@@ -9,9 +9,7 @@ export const useSessionLetterUiStore = create<{
   isMcpPreview: (key: string) => boolean
   togglePreview: (key: string) => void
   requestFocus: (conversationId: number, eventId: string) => void
-  consumeFocus: (
-    conversationId: number
-  ) => { eventId: string } | null
+  consumeFocus: (conversationId: number) => { eventId: string } | null
   markFocused: (eventId: string) => void
 }>((set, get) => ({
   mcpPreviewKeys: {},

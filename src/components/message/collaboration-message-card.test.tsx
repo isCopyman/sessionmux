@@ -33,11 +33,9 @@ vi.mock("./content-parts-renderer", () => ({
   ),
 }))
 vi.mock("./collapsible-user-message", () => ({
-  CollapsibleUserMessage: ({
-    parts,
-  }: {
-    parts: Array<{ text?: string }>
-  }) => <p>{parts.map((part) => part.text).join("")}</p>,
+  CollapsibleUserMessage: ({ parts }: { parts: Array<{ text?: string }> }) => (
+    <p>{parts.map((part) => part.text).join("")}</p>
+  ),
 }))
 
 import { CollaborationMessageCard } from "./collaboration-message-card"

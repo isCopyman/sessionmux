@@ -191,8 +191,11 @@ describe("GoalCard goal control (codex-acp #293)", () => {
 
   it("offers Resume + Clear on a paused goal, Resume re-issues the objective", () => {
     const resumed: string[] = []
-    renderGoal(goalWith("paused"), () => {}, ["pause", "clear"], (o) =>
-      resumed.push(o)
+    renderGoal(
+      goalWith("paused"),
+      () => {},
+      ["pause", "clear"],
+      (o) => resumed.push(o)
     )
     fireEvent.click(screen.getByRole("button"))
     expect(screen.queryByText("Pause")).not.toBeInTheDocument()
@@ -225,7 +228,12 @@ describe("GoalCard goal control (codex-acp #293)", () => {
   })
 
   it("shows no controls on a terminal goal", () => {
-    renderGoal(goalWith("complete"), () => {}, ["pause", "clear"], () => {})
+    renderGoal(
+      goalWith("complete"),
+      () => {},
+      ["pause", "clear"],
+      () => {}
+    )
     fireEvent.click(screen.getByRole("button"))
     expect(screen.queryByText("Pause")).not.toBeInTheDocument()
     expect(screen.queryByText("Clear")).not.toBeInTheDocument()
@@ -255,7 +263,12 @@ describe("GoalCard goal control (codex-acp #293)", () => {
   it("keeps Resume available regardless of the advertised vocabulary", () => {
     // Resume is a client-side `/goal` prompt re-issue, not an adapter action,
     // so an empty/legacy vocabulary must not hide it.
-    renderGoal(goalWith("paused"), () => {}, [], () => {})
+    renderGoal(
+      goalWith("paused"),
+      () => {},
+      [],
+      () => {}
+    )
     fireEvent.click(screen.getByRole("button"))
     expect(screen.queryByText("Pause")).not.toBeInTheDocument()
     expect(screen.queryByText("Clear")).not.toBeInTheDocument()

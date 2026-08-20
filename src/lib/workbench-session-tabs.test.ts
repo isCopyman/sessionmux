@@ -231,10 +231,7 @@ describe("appendRoomTabs", () => {
     )
     expect(result.added).toBe(1)
     expect(result.skipped).toBe(1)
-    expect(result.items.map((item) => item.room_id)).toEqual([
-      "rm_a",
-      "rm_b",
-    ])
+    expect(result.items.map((item) => item.room_id)).toEqual(["rm_a", "rm_b"])
   })
 
   it("returns the existing list untouched when every Room is already open", () => {

@@ -96,9 +96,7 @@ describe("buildMailThreadTree", () => {
       createdAt: "2026-08-18T00:04:00Z",
     })
     expect(
-      treeIds(
-        buildMailThreadTree([laterSibling, nested, root, firstReply])
-      )
+      treeIds(buildMailThreadTree([laterSibling, nested, root, firstReply]))
     ).toEqual([
       {
         id: "e1",

@@ -1,4 +1,7 @@
-import type { CollaborationRoomSummary, DbConversationSummary } from "@/lib/types"
+import type {
+  CollaborationRoomSummary,
+  DbConversationSummary,
+} from "@/lib/types"
 
 /**
  * One selectable sidebar row. Sessions and Rooms share one multi-select, but

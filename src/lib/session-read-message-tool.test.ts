@@ -7,9 +7,9 @@ import {
 describe("session read_message tool", () => {
   it("recognizes host-prefixed names", () => {
     expect(isSessionReadMessageToolName("read_message")).toBe(true)
-    expect(
-      isSessionReadMessageToolName("mcp__codeg-mcp__read_message")
-    ).toBe(true)
+    expect(isSessionReadMessageToolName("mcp__codeg-mcp__read_message")).toBe(
+      true
+    )
   })
 
   it("reads title and body from structured output", () => {

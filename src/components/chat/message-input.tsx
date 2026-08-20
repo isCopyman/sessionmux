@@ -133,7 +133,6 @@ import { ComposerImageThumbnails } from "@/components/chat/composer/composer-ima
 import { useComposerAttachments } from "@/components/chat/composer/use-composer-attachments"
 import { useComposerShortcuts } from "@/components/chat/composer/use-composer-shortcuts"
 
-
 /**
  * Payload pushed into the composer from outside (e.g. a welcome-page quick
  * action). `text` replaces the document; `skill`, when present, is prepended as

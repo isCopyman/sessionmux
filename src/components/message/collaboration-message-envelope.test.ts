@@ -36,9 +36,11 @@ function envelope(
 
 describe("parseCollaborationMessageEnvelope", () => {
   it("lists complete envelopes in document order", () => {
-    expect(extractCollaborationEnvelopes(`${envelope()}\nkeep`).map((item) => item.body)).toEqual([
-      "review this",
-    ])
+    expect(
+      extractCollaborationEnvelopes(`${envelope()}\nkeep`).map(
+        (item) => item.body
+      )
+    ).toEqual(["review this"])
   })
 
   it("extracts stable identity metadata and preserves a multiline body", () => {

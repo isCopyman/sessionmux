@@ -69,8 +69,9 @@ export function SessionMailPeerChip({
             label: name,
             uri: `codeg://session/${conversationId}`,
             meta: {
-              agentType: (peerConversation?.agent_type ??
-                agentType) as AgentType | undefined,
+              agentType: (peerConversation?.agent_type ?? agentType) as
+                | AgentType
+                | undefined,
             },
           }}
         />

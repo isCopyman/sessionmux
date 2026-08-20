@@ -646,9 +646,7 @@ describe("CollectionTree", () => {
     await user.click(
       screen.getByRole("button", { name: "Actions for Research" })
     )
-    await user.click(
-      screen.getByRole("menuitem", { name: "New Conversation" })
-    )
+    await user.click(screen.getByRole("menuitem", { name: "New Conversation" }))
 
     expect(onNewSessionInCollection).toHaveBeenCalledWith(10)
   })

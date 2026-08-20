@@ -28,9 +28,8 @@ const workspace = vi.hoisted(() => ({
 }))
 
 vi.mock("@/stores/app-workspace-store", () => ({
-  useAppWorkspaceStore: (
-    selector: (state: typeof workspace) => unknown
-  ) => selector(workspace),
+  useAppWorkspaceStore: (selector: (state: typeof workspace) => unknown) =>
+    selector(workspace),
 }))
 
 const DELETION_DIFF = "*** Delete File: old.ts\n-a\n-b\n-c\n-d"
