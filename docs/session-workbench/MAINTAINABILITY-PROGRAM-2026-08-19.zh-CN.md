@@ -1029,3 +1029,11 @@ T2 后置截图（CDP 9222 可用，基线在 .artifacts）+ 晨间验收报告 
   任务走 Room 帖）、开协调 Room、自纠标题错误、发 kickoff+三份分派。
   ③ eslint 门禁两处补丁：ignore .claude/** 与 target*/**、.artifacts/**
   （三处构建产物/探针目录曾把 lint 拖成小时级）。
+- 2026-08-20 傍晚 **P7 两轮协作收口 + O9 立项 + 压缩前落盘**：① 第一轮三审计包
+  收口合并主线（4479d3a4，纯文档 1646 行）；核心裁决 claude 按消息 fork 走 _meta
+  不需上游。② 活体探针一发已用（未中：继承本机代理 env；纪律未重试；静态收获
+  超预期）。③ 第二轮 D/E/F 派出（D 锚点管道是切片 2 硬前置）。④ 协调者实锤
+  O9 幽灵会话 bug（Room @ 空闲会话→投递克隆新会话+session.stop 管不到），
+  已派 w-phantom（opus）修复；O8 503 无自动重试、双实例事件不互通（O10）一并
+  记录。⑤ skill 教训更新排队（wt/skill-lessons 已建）。⑥ 全量状态落
+  HANDOFF-2026-08-20-p7-midflight.zh-CN.md 供压缩后续跑。
