@@ -57,6 +57,8 @@ import { useOpenRoom } from "@/lib/open-room"
 import {
   appendConversationsToWorkbench,
   appendRoomsToWorkbench,
+  conversationIdsOccupiedElsewhereFor,
+  SIDEBAR_BULK_TAB_ORIGIN,
 } from "@/lib/workbench-session-tabs"
 import type {
   CollaborationRoomSummary,
@@ -273,13 +275,18 @@ export function SessionBulkActionBar({
           let sessionsAdded = 0
           let sessionsSkipped = 0
           if (conversations.length > 0) {
+            const occupied = await conversationIdsOccupiedElsewhereFor(
+              conversations.map((conversation) => conversation.id),
+              [activeWorkbenchId]
+            )
             const present = new Set(
               activeWorkbenchTabs
                 .map((tab) => tab.conversationId)
                 .filter((id): id is number => id != null)
             )
             const toAdd = conversations.filter(
-              (conversation) => !present.has(conversation.id)
+              (conversation) =>
+                !present.has(conversation.id) && !occupied.has(conversation.id)
             )
             sessionsSkipped = conversations.length - toAdd.length
             sessionsAdded = toAdd.length
@@ -352,8 +359,20 @@ export function SessionBulkActionBar({
         if (conversations.length > 0) {
           const result = await appendConversationsToWorkbench(
             workbenchId,
-            conversations
+            conversations,
+            SIDEBAR_BULK_TAB_ORIGIN,
+            { ignoreWorkbenchIds: [activeWorkbenchId] }
           )
+          for (const id of result.addedIds) {
+            const conversation = conversations.find((item) => item.id === id)
+            if (conversation) {
+              closeConversationTab(
+                conversation.folder_id,
+                conversation.id,
+                conversation.agent_type
+              )
+            }
+          }
           sessionsAdded = result.added
           toast.success(
             result.added === 0
@@ -398,6 +417,7 @@ export function SessionBulkActionBar({
       activeWorkbenchId,
       activeWorkbenchName,
       activeWorkbenchTabs,
+      closeConversationTab,
       conversations,
       createOnly,
       folders,

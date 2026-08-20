@@ -42,6 +42,7 @@ import { useActiveFolder } from "@/contexts/active-folder-context"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { useWorkbenchStore } from "@/stores/workbench-store"
 import { useTabActions, useTabStore } from "@/contexts/tab-context"
+import { useOpenOrFocusSession } from "@/hooks/use-open-or-focus-session"
 import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
 import { useTerminalContext } from "@/contexts/terminal-context"
 import { useThemeColor, useZoomLevel } from "@/hooks/use-appearance"
@@ -802,12 +803,12 @@ export function SidebarConversationList({
   const activeTabId = useTabStore((s) => s.activeTabId)
   const tabs = useTabStore((s) => s.tabs)
   const {
-    openTab,
     closeConversationTab,
     closeTabsByFolder,
     openNewConversationTab,
     openChatModeTab,
   } = useTabActions()
+  const openOrFocusSession = useOpenOrFocusSession()
   const { openConversations } = useWorkbenchRoute()
   const openRoom = useOpenRoom()
   const catalogRooms = useRoomCatalogStore((state) => state.rooms)
@@ -1858,10 +1859,15 @@ export function SidebarConversationList({
       if (multiSelectedRef.current.size > 0) clearMultiSelect()
       // Selecting a conversation returns to the conversation workspace if a
       // workbench route (e.g. Automations) was taking over the content region.
-      openConversations()
-      openTab(folderId, id, agentType as Parameters<typeof openTab>[2], true)
+      const conversation = conversationByIdRef.current.get(id)
+      void openOrFocusSession({
+        id,
+        folder_id: folderId,
+        agent_type: agentType as AgentType,
+        title: conversation?.title ?? null,
+      })
     },
-    [applyMultiSelect, clearMultiSelect, openConversations, openTab]
+    [applyMultiSelect, clearMultiSelect, openOrFocusSession]
   )
 
   const handleToggleSelect = useCallback(
@@ -1880,10 +1886,15 @@ export function SidebarConversationList({
 
   const handleDoubleClick = useCallback(
     (id: number, agentType: string, folderId: number) => {
-      openConversations()
-      openTab(folderId, id, agentType as Parameters<typeof openTab>[2], true)
+      const conversation = conversationByIdRef.current.get(id)
+      void openOrFocusSession({
+        id,
+        folder_id: folderId,
+        agent_type: agentType as AgentType,
+        title: conversation?.title ?? null,
+      })
     },
-    [openTab, openConversations]
+    [openOrFocusSession]
   )
 
   const handleOpenInSplit = useCallback(
@@ -1893,17 +1904,18 @@ export function SidebarConversationList({
       folderId: number,
       direction: "right" | "down"
     ) => {
-      openConversations()
-      openTab(
-        folderId,
-        id,
-        agentType as Parameters<typeof openTab>[2],
-        true,
-        undefined,
+      const conversation = conversationByIdRef.current.get(id)
+      void openOrFocusSession(
+        {
+          id,
+          folder_id: folderId,
+          agent_type: agentType as AgentType,
+          title: conversation?.title ?? null,
+        },
         { split: direction }
       )
     },
-    [openTab, openConversations]
+    [openOrFocusSession]
   )
 
   const handleRename = useCallback(
@@ -1918,11 +1930,7 @@ export function SidebarConversationList({
     async (id: number, agentType: string, folderId: number) => {
       await deleteConversation(id)
       // No-op if no matching tab is open (the context guards on its tab ref).
-      closeConversationTab(
-        folderId,
-        id,
-        agentType as Parameters<typeof openTab>[2]
-      )
+      closeConversationTab(folderId, id, agentType as AgentType)
       refreshConversations()
     },
     [closeConversationTab, refreshConversations]

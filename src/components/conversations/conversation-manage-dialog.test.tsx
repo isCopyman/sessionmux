@@ -1268,23 +1268,25 @@ describe("ConversationManageDialog", () => {
       })
     )
 
-    expect(h.openConversations).toHaveBeenCalledTimes(1)
-    expect(h.openTab).toHaveBeenNthCalledWith(
-      1,
-      1,
-      1,
-      "claude_code",
-      true,
-      "on main"
-    )
-    expect(h.openTab).toHaveBeenNthCalledWith(
-      2,
-      1,
-      2,
-      "claude_code",
-      true,
-      "on feature"
-    )
+    await waitFor(() => {
+      expect(h.openConversations).toHaveBeenCalledTimes(1)
+      expect(h.openTab).toHaveBeenNthCalledWith(
+        1,
+        1,
+        1,
+        "claude_code",
+        true,
+        "on main"
+      )
+      expect(h.openTab).toHaveBeenNthCalledWith(
+        2,
+        1,
+        2,
+        "claude_code",
+        true,
+        "on feature"
+      )
+    })
     expect(h.saveWorkbenchTabs).not.toHaveBeenCalled()
     expect(h.switchWorkbench).not.toHaveBeenCalled()
   })
@@ -1302,14 +1304,16 @@ describe("ConversationManageDialog", () => {
       })
     )
 
-    expect(h.openTab).toHaveBeenCalledTimes(1)
-    expect(h.openTab).toHaveBeenCalledWith(
-      1,
-      2,
-      "claude_code",
-      true,
-      "on feature"
-    )
+    await waitFor(() => {
+      expect(h.openTab).toHaveBeenCalledTimes(1)
+      expect(h.openTab).toHaveBeenCalledWith(
+        1,
+        2,
+        "claude_code",
+        true,
+        "on feature"
+      )
+    })
     expect(toast.success).toHaveBeenCalledWith(
       "Added 1 session(s) to Main, skipped 1 already open",
       undefined
@@ -1462,8 +1466,17 @@ describe("ConversationManageDialog", () => {
 
     await user.dblClick(screen.getByText("on main"))
 
-    expect(h.openConversations).toHaveBeenCalledTimes(1)
-    expect(h.openTab).toHaveBeenCalledWith(1, 1, "claude_code", true, "on main")
+    await waitFor(() => {
+      expect(h.openConversations).toHaveBeenCalledTimes(1)
+      expect(h.openTab).toHaveBeenCalledWith(
+        1,
+        1,
+        "claude_code",
+        true,
+        "on main",
+        undefined
+      )
+    })
   })
 
   it("opens the checked session directly in a right-hand pane", async () => {
@@ -1476,15 +1489,17 @@ describe("ConversationManageDialog", () => {
       screen.getByRole("menuitem", { name: "Open to the right" })
     )
 
-    expect(h.openConversations).toHaveBeenCalledTimes(1)
-    expect(h.openTab).toHaveBeenCalledWith(
-      1,
-      1,
-      "claude_code",
-      true,
-      "on main",
-      { split: "right" }
-    )
+    await waitFor(() => {
+      expect(h.openConversations).toHaveBeenCalledTimes(1)
+      expect(h.openTab).toHaveBeenCalledWith(
+        1,
+        1,
+        "claude_code",
+        true,
+        "on main",
+        { split: "right" }
+      )
+    })
   })
 
   it("lists Rooms among the Sessions, badged as what they are", async () => {

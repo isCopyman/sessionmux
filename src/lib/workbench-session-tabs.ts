@@ -1,4 +1,5 @@
 import {
+  listConversationWorkbenchRefs,
   listOpenedTabs,
   listWorkbenchTabs,
   saveOpenedTabs,
@@ -7,6 +8,7 @@ import {
 import { ROOM_TAB_PLACEHOLDER_AGENT, roomTabFolderId } from "@/lib/open-room"
 import type {
   CollaborationRoomSummary,
+  ConversationWorkbenchRef,
   DbConversationSummary,
   OpenedTab,
 } from "@/lib/types"
@@ -22,13 +24,75 @@ export function conversationIdsInTabs(items: OpenedTab[]): Set<number> {
   return ids
 }
 
+/**
+ * Choose one workbench when a session is already open (possibly in more than
+ * one, a leftover of the old per-workbench dedupe). Prefer the current
+ * workbench; otherwise the earliest-positioned workbench. Does not drop extras.
+ */
+export function pickConversationHome(
+  refs: readonly ConversationWorkbenchRef[],
+  conversationId: number,
+  currentWorkbenchId: number
+): ConversationWorkbenchRef | null {
+  const homes = refs.filter((ref) => ref.conversation_id === conversationId)
+  if (homes.length === 0) return null
+  const here = homes.find((ref) => ref.workbench_id === currentWorkbenchId)
+  if (here) return here
+  return [...homes].sort(
+    (a, b) =>
+      a.workbench_position - b.workbench_position ||
+      a.workbench_id - b.workbench_id
+  )[0]
+}
+
+/** Conversation ids that already live on a workbench other than `ignore`. */
+export function conversationIdsOccupiedElsewhere(
+  refs: readonly ConversationWorkbenchRef[],
+  ignoreWorkbenchIds: readonly number[]
+): Set<number> {
+  const ignore = new Set(ignoreWorkbenchIds)
+  const ids = new Set<number>()
+  for (const ref of refs) {
+    if (!ignore.has(ref.workbench_id)) ids.add(ref.conversation_id)
+  }
+  return ids
+}
+
+export async function locateConversationHome(
+  conversationId: number,
+  currentWorkbenchId: number
+): Promise<ConversationWorkbenchRef | null> {
+  try {
+    const refs = await listConversationWorkbenchRefs([conversationId])
+    return pickConversationHome(refs, conversationId, currentWorkbenchId)
+  } catch {
+    // Occupancy is advisory: a failed lookup must not block opening.
+    return null
+  }
+}
+
+export async function conversationIdsOccupiedElsewhereFor(
+  conversationIds: readonly number[],
+  ignoreWorkbenchIds: readonly number[]
+): Promise<Set<number>> {
+  if (conversationIds.length === 0) return new Set()
+  try {
+    const refs = await listConversationWorkbenchRefs([...conversationIds])
+    return conversationIdsOccupiedElsewhere(refs, ignoreWorkbenchIds)
+  } catch {
+    return new Set()
+  }
+}
+
 export function appendConversationTabs(
   existing: OpenedTab[],
-  conversations: DbConversationSummary[]
+  conversations: DbConversationSummary[],
+  occupiedElsewhere: ReadonlySet<number> = new Set()
 ): { items: OpenedTab[]; added: number; skipped: number } {
   const present = conversationIdsInTabs(existing)
   const toAdd = conversations.filter(
-    (conversation) => !present.has(conversation.id)
+    (conversation) =>
+      !present.has(conversation.id) && !occupiedElsewhere.has(conversation.id)
   )
   const skipped = conversations.length - toAdd.length
   if (toAdd.length === 0) {
@@ -71,15 +135,46 @@ async function saveTabsForWorkbench(
     : saveWorkbenchTabs(workbenchId, items, expectedVersion, origin)
 }
 
+function conversationsToAppend(
+  existing: OpenedTab[],
+  conversations: DbConversationSummary[],
+  occupiedElsewhere: ReadonlySet<number>
+): DbConversationSummary[] {
+  const present = conversationIdsInTabs(existing)
+  return conversations.filter(
+    (conversation) =>
+      !present.has(conversation.id) && !occupiedElsewhere.has(conversation.id)
+  )
+}
+
 export async function appendConversationsToWorkbench(
   workbenchId: number,
   conversations: DbConversationSummary[],
-  origin = SIDEBAR_BULK_TAB_ORIGIN
-): Promise<{ added: number; skipped: number }> {
+  origin = SIDEBAR_BULK_TAB_ORIGIN,
+  options?: { ignoreWorkbenchIds?: readonly number[] }
+): Promise<{ added: number; skipped: number; addedIds: number[] }> {
+  let refs: ConversationWorkbenchRef[] = []
+  if (conversations.length > 0) {
+    try {
+      refs = await listConversationWorkbenchRefs(
+        conversations.map((conversation) => conversation.id)
+      )
+    } catch {
+      refs = []
+    }
+  }
+  const occupiedElsewhere = conversationIdsOccupiedElsewhere(refs, [
+    workbenchId,
+    ...(options?.ignoreWorkbenchIds ?? []),
+  ])
   const snapshot = await listTabsForWorkbench(workbenchId)
-  let planned = appendConversationTabs(snapshot.items, conversations)
+  let planned = appendConversationTabs(
+    snapshot.items,
+    conversations,
+    occupiedElsewhere
+  )
   if (planned.added === 0) {
-    return { added: 0, skipped: planned.skipped }
+    return { added: 0, skipped: planned.skipped, addedIds: [] }
   }
 
   let outcome = await saveTabsForWorkbench(
@@ -89,12 +184,21 @@ export async function appendConversationsToWorkbench(
     origin
   )
   if (outcome.accepted) {
-    return { added: planned.added, skipped: planned.skipped }
+    return {
+      added: planned.added,
+      skipped: planned.skipped,
+      addedIds: conversationsToAppend(
+        snapshot.items,
+        conversations,
+        occupiedElsewhere
+      ).map((conversation) => conversation.id),
+    }
   }
 
-  planned = appendConversationTabs(outcome.tabs, conversations)
+  const latest = outcome.tabs
+  planned = appendConversationTabs(latest, conversations, occupiedElsewhere)
   if (planned.added === 0) {
-    return { added: 0, skipped: planned.skipped }
+    return { added: 0, skipped: planned.skipped, addedIds: [] }
   }
 
   outcome = await saveTabsForWorkbench(
@@ -106,7 +210,15 @@ export async function appendConversationsToWorkbench(
   if (!outcome.accepted) {
     throw new Error("Workbench changed concurrently; please retry")
   }
-  return { added: planned.added, skipped: planned.skipped }
+  return {
+    added: planned.added,
+    skipped: planned.skipped,
+    addedIds: conversationsToAppend(
+      latest,
+      conversations,
+      occupiedElsewhere
+    ).map((conversation) => conversation.id),
+  }
 }
 
 export function roomIdsInTabs(items: OpenedTab[]): Set<string> {

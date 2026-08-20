@@ -21,7 +21,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { useTabActions } from "@/contexts/tab-context"
+import { useOpenOrFocusSession } from "@/hooks/use-open-or-focus-session"
 import type { UseCollaborationFeedReturn } from "@/hooks/use-collaboration-feed"
 import {
   formatConversationTitle,
@@ -120,7 +120,7 @@ export function SessionMailboxDialog({
       ),
     [conversations]
   )
-  const { openTab } = useTabActions()
+  const openOrFocusSession = useOpenOrFocusSession()
 
   const [scope, setScope] = useState<MailScope>("inbox")
   const [filter, setFilter] = useState<MailFilter>("all")
@@ -243,13 +243,10 @@ export function SessionMailboxDialog({
   const openSession = (targetConversationId: number) => {
     const conversation = conversationById.get(targetConversationId)
     if (!conversation) return
-    openTab(
-      conversation.folder_id,
-      conversation.id,
-      conversation.agent_type,
-      true,
-      formatConversationTitle(conversation.title) || undefined
-    )
+    void openOrFocusSession({
+      ...conversation,
+      title: formatConversationTitle(conversation.title) || conversation.title,
+    })
   }
 
   const invocationState = (delivery: CollaborationDelivery) => {

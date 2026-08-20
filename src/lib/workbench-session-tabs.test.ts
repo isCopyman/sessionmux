@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import type {
   CollaborationRoomSummary,
+  ConversationWorkbenchRef,
   DbConversationSummary,
   OpenedTab,
 } from "@/lib/types"
@@ -11,6 +12,7 @@ const api = vi.hoisted(() => ({
   listWorkbenchTabs: vi.fn(),
   saveOpenedTabs: vi.fn(),
   saveWorkbenchTabs: vi.fn(),
+  listConversationWorkbenchRefs: vi.fn(),
 }))
 
 vi.mock("@/lib/api", () => api)
@@ -27,6 +29,10 @@ import {
   appendConversationsToWorkbench,
   appendRoomTabs,
   conversationIdsInTabs,
+  conversationIdsOccupiedElsewhere,
+  conversationIdsOccupiedElsewhereFor,
+  locateConversationHome,
+  pickConversationHome,
   roomIdsInTabs,
   SESSION_CENTER_TAB_ORIGIN,
 } from "./workbench-session-tabs"
@@ -64,6 +70,19 @@ function tab(conversationId: number, position: number): OpenedTab {
   }
 }
 
+function ref(
+  conversationId: number,
+  workbenchId: number,
+  position = workbenchId
+): ConversationWorkbenchRef {
+  return {
+    conversation_id: conversationId,
+    workbench_id: workbenchId,
+    workbench_name: `WB ${workbenchId}`,
+    workbench_position: position,
+  }
+}
+
 describe("appendConversationTabs", () => {
   it("appends missing sessions after the last saved position", () => {
     const result = appendConversationTabs(
@@ -96,11 +115,45 @@ describe("appendConversationTabs", () => {
       ])
     ).toEqual(new Set([3]))
   })
+
+  it("skips sessions already open on another workbench", () => {
+    const result = appendConversationTabs(
+      [tab(1, 0)],
+      [conversation(2), conversation(3)],
+      new Set([2])
+    )
+    expect(result.added).toBe(1)
+    expect(result.skipped).toBe(1)
+    expect(result.items.map((item) => item.conversation_id)).toEqual([1, 3])
+  })
+})
+
+describe("pickConversationHome", () => {
+  it("prefers the current workbench when the session is already there", () => {
+    expect(
+      pickConversationHome([ref(9, 3, 0), ref(9, 1, 2)], 9, 1)?.workbench_id
+    ).toBe(1)
+  })
+
+  it("picks the earliest-positioned workbench and does not drop extras", () => {
+    const homes = [ref(9, 5, 4), ref(9, 2, 1), ref(9, 8, 1)]
+    expect(pickConversationHome(homes, 9, 3)?.workbench_id).toBe(2)
+    expect(homes).toHaveLength(3)
+  })
+})
+
+describe("conversationIdsOccupiedElsewhere", () => {
+  it("ignores occupancy on the listed workbenches", () => {
+    expect(
+      conversationIdsOccupiedElsewhere([ref(1, 1), ref(2, 3), ref(1, 2)], [1])
+    ).toEqual(new Set([2, 1]))
+  })
 })
 
 describe("appendConversationsToWorkbench", () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    api.listConversationWorkbenchRefs.mockResolvedValue([])
   })
 
   it("retries once against the latest snapshot when the first save is rejected", async () => {
@@ -126,7 +179,7 @@ describe("appendConversationsToWorkbench", () => {
       SESSION_CENTER_TAB_ORIGIN
     )
 
-    expect(result).toEqual({ added: 1, skipped: 1 })
+    expect(result).toEqual({ added: 1, skipped: 1, addedIds: [9] })
     expect(api.saveWorkbenchTabs).toHaveBeenLastCalledWith(
       2,
       expect.arrayContaining([
@@ -150,6 +203,65 @@ describe("appendConversationsToWorkbench", () => {
     expect(api.listOpenedTabs).toHaveBeenCalled()
     expect(api.saveOpenedTabs).toHaveBeenCalled()
     expect(api.listWorkbenchTabs).not.toHaveBeenCalled()
+  })
+
+  it("does not copy a session that already lives on another workbench", async () => {
+    api.listConversationWorkbenchRefs.mockResolvedValue([ref(9, 3)])
+    api.listWorkbenchTabs.mockResolvedValue({ items: [], version: 1 })
+
+    const result = await appendConversationsToWorkbench(2, [conversation(9)])
+
+    expect(result).toEqual({ added: 0, skipped: 1, addedIds: [] })
+    expect(api.saveWorkbenchTabs).not.toHaveBeenCalled()
+  })
+
+  it("still appends when the other occupancy is on an ignored (move source) workbench", async () => {
+    api.listConversationWorkbenchRefs.mockResolvedValue([ref(9, 1)])
+    api.listWorkbenchTabs.mockResolvedValue({ items: [], version: 1 })
+    api.saveWorkbenchTabs.mockResolvedValue({
+      accepted: true,
+      version: 2,
+      tabs: [],
+    })
+
+    const result = await appendConversationsToWorkbench(
+      2,
+      [conversation(9)],
+      SESSION_CENTER_TAB_ORIGIN,
+      { ignoreWorkbenchIds: [1] }
+    )
+
+    expect(result).toEqual({ added: 1, skipped: 0, addedIds: [9] })
+    expect(api.saveWorkbenchTabs).toHaveBeenCalled()
+  })
+})
+
+describe("locateConversationHome", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it("returns the home workbench for an already-open session", async () => {
+    api.listConversationWorkbenchRefs.mockResolvedValue([ref(4, 7, 2)])
+    await expect(locateConversationHome(4, 1)).resolves.toEqual(ref(4, 7, 2))
+  })
+
+  it("treats a lookup failure as no home so opening still works", async () => {
+    api.listConversationWorkbenchRefs.mockRejectedValue(new Error("offline"))
+    await expect(locateConversationHome(4, 1)).resolves.toBeNull()
+  })
+})
+
+describe("conversationIdsOccupiedElsewhereFor", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it("returns an empty set when the occupancy API fails", async () => {
+    api.listConversationWorkbenchRefs.mockRejectedValue(new Error("offline"))
+    await expect(
+      conversationIdsOccupiedElsewhereFor([9], [1])
+    ).resolves.toEqual(new Set())
   })
 })
 

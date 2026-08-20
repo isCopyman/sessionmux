@@ -37,6 +37,25 @@ vi.mock("next-intl", () => ({
 vi.mock("@/components/message/session-room-chip", () => ({
   SessionRoomChip: () => null,
 }))
+vi.mock("@/hooks/use-open-or-focus-session", () => ({
+  useOpenOrFocusSession:
+    () =>
+    (conversation: {
+      folder_id: number
+      id: number
+      agent_type: string
+      title?: string | null
+    }) => {
+      tabs.openTab(
+        conversation.folder_id,
+        conversation.id,
+        conversation.agent_type,
+        true,
+        conversation.title || undefined
+      )
+      return Promise.resolve("opened")
+    },
+}))
 vi.mock("@/contexts/tab-context", () => ({
   useTabActions: () => tabs,
 }))

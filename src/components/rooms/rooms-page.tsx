@@ -61,6 +61,7 @@ import type { ReferenceSearch } from "@/components/chat/composer/suggestion/type
 import type { ReferenceKind } from "@/components/chat/composer/types"
 import { useReferenceSearch } from "@/components/chat/composer/use-reference-search"
 import { useTabActions } from "@/contexts/tab-context"
+import { useOpenOrFocusSession } from "@/hooks/use-open-or-focus-session"
 import { toErrorMessage } from "@/lib/app-error"
 import type { ConversationFindEntry } from "@/lib/conversation-find"
 import { formatConversationTitle } from "@/lib/conversation-title"
@@ -300,7 +301,8 @@ export function RoomWorkspace({
   isActive?: boolean
 }) {
   const t = useTranslations("Room")
-  const { openTab, closeTab } = useTabActions()
+  const { closeTab } = useTabActions()
+  const openOrFocusSession = useOpenOrFocusSession()
   const conversations = useAppWorkspaceStore((state) => state.conversations)
   const allFolders = useAppWorkspaceStore((state) => state.allFolders)
   const collections = useCollectionStore((state) => state.items)
@@ -440,15 +442,12 @@ export function RoomWorkspace({
         (conversation) => conversation.id === conversationId
       )
       if (!live) return
-      openTab(
-        live.folder_id,
-        live.id,
-        live.agent_type as AgentType,
-        true,
-        formatConversationTitle(live.title) || undefined
-      )
+      void openOrFocusSession({
+        ...live,
+        title: formatConversationTitle(live.title) || live.title,
+      })
     },
-    [conversations, openTab]
+    [conversations, openOrFocusSession]
   )
   const scrollToEvent = useCallback((eventId: string) => {
     document.getElementById(`room-event-${eventId}`)?.scrollIntoView({

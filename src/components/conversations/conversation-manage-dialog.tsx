@@ -113,6 +113,7 @@ import { useWorkbenchStore } from "@/stores/workbench-store"
 import { useCollectionStore } from "@/stores/collection-store"
 import { useOrganizationRevisionStore } from "@/stores/organization-revision-store"
 import { useTabActions } from "@/contexts/tab-context"
+import { useOpenOrFocusSession } from "@/hooks/use-open-or-focus-session"
 import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
 import {
   deleteConversation,
@@ -153,6 +154,7 @@ import { useOpenRoom } from "@/lib/open-room"
 import { formatConversationTitle } from "@/lib/conversation-title"
 import {
   appendConversationsToWorkbench,
+  conversationIdsOccupiedElsewhereFor,
   SESSION_CENTER_TAB_ORIGIN,
 } from "@/lib/workbench-session-tabs"
 import { toErrorMessage } from "@/lib/app-error"
@@ -1122,6 +1124,7 @@ export function ConversationManageDialog({
   )
   const allFolders = useAppWorkspaceStore((s) => s.allFolders)
   const { closeConversationTab, openTab } = useTabActions()
+  const openOrFocusSession = useOpenOrFocusSession()
   const { openConversations } = useWorkbenchRoute()
   const activeWorkbenchId = useTabStore((s) => s.activeWorkbenchId)
   const activeWorkbenchTabs = useTabStore((s) => s.rawTabs)
@@ -2091,27 +2094,32 @@ export function ConversationManageDialog({
     ) => {
       setOpeningWorkbenchId(targetWorkbenchId)
       try {
+        const title = formatConversationTitle(conversation.title)
         if (targetWorkbenchId !== activeWorkbenchId) {
           await switchWorkbench(targetWorkbenchId)
-        }
-        openConversations()
-        const title = formatConversationTitle(conversation.title)
-        if (split) {
-          openTab(
-            conversation.folder_id,
-            conversation.id,
-            conversation.agent_type,
-            true,
-            title,
-            { split }
-          )
+          openConversations()
+          if (split) {
+            openTab(
+              conversation.folder_id,
+              conversation.id,
+              conversation.agent_type,
+              true,
+              title,
+              { split }
+            )
+          } else {
+            openTab(
+              conversation.folder_id,
+              conversation.id,
+              conversation.agent_type,
+              true,
+              title
+            )
+          }
         } else {
-          openTab(
-            conversation.folder_id,
-            conversation.id,
-            conversation.agent_type,
-            true,
-            title
+          await openOrFocusSession(
+            { ...conversation, title },
+            split ? { split } : undefined
           )
         }
         onOpenChange(false)
@@ -2125,6 +2133,7 @@ export function ConversationManageDialog({
       activeWorkbenchId,
       onOpenChange,
       openConversations,
+      openOrFocusSession,
       openTab,
       switchWorkbench,
       t,
@@ -2227,13 +2236,18 @@ export function ConversationManageDialog({
 
         const stayInDialog = workbenchId !== activeWorkbenchId
         if (!stayInDialog) {
+          const occupied = await conversationIdsOccupiedElsewhereFor(
+            selectedConversations.map((conversation) => conversation.id),
+            [activeWorkbenchId]
+          )
           const present = new Set(
             activeWorkbenchTabs
               .map((tab) => tab.conversationId)
               .filter((id): id is number => id != null)
           )
           const toAdd = selectedConversations.filter(
-            (conversation) => !present.has(conversation.id)
+            (conversation) =>
+              !present.has(conversation.id) && !occupied.has(conversation.id)
           )
           const skipped = selectedConversations.length - toAdd.length
           if (toAdd.length === 0) {
@@ -2270,8 +2284,21 @@ export function ConversationManageDialog({
         const result = await appendConversationsToWorkbench(
           workbenchId,
           selectedConversations,
-          SESSION_CENTER_TAB_ORIGIN
+          SESSION_CENTER_TAB_ORIGIN,
+          { ignoreWorkbenchIds: [activeWorkbenchId] }
         )
+        for (const id of result.addedIds) {
+          const conversation = selectedConversations.find(
+            (item) => item.id === id
+          )
+          if (conversation) {
+            closeConversationTab(
+              conversation.folder_id,
+              conversation.id,
+              conversation.agent_type
+            )
+          }
+        }
         if (result.added > 0) {
           try {
             const refs = await listConversationWorkbenchRefs(
@@ -2299,6 +2326,7 @@ export function ConversationManageDialog({
       activeWorkbenchId,
       activeWorkbenchName,
       activeWorkbenchTabs,
+      closeConversationTab,
       createOnly,
       notifyAddedToWorkbench,
       onOpenChange,

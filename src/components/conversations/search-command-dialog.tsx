@@ -8,8 +8,7 @@ import { useLocale, useTranslations } from "next-intl"
 import { useAuxPanelContext } from "@/contexts/aux-panel-context"
 import { useActiveFolder } from "@/contexts/active-folder-context"
 import { useSessionCenter } from "@/contexts/session-center-context"
-import { useTabActions } from "@/contexts/tab-context"
-import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
+import { useOpenOrFocusSession } from "@/hooks/use-open-or-focus-session"
 import { useWorkspaceActions } from "@/contexts/workspace-context"
 import { listAllConversations } from "@/lib/api"
 import type { ConversationStatus, DbConversationSummary } from "@/lib/types"
@@ -53,8 +52,7 @@ export function SearchCommandDialog({
     locale === "zh-CN" ? zhCN : locale === "zh-TW" ? zhTW : enUS
   const { activeFolder: folder, activeFolderId } = useActiveFolder()
   const folderId = activeFolderId ?? 0
-  const { openTab } = useTabActions()
-  const { openConversations } = useWorkbenchRoute()
+  const openOrFocusSession = useOpenOrFocusSession()
   const { openFilePreview } = useWorkspaceActions()
   const { revealInFileTree } = useAuxPanelContext()
   const { openSessionCenter } = useSessionCenter()
@@ -141,14 +139,10 @@ export function SearchCommandDialog({
 
   const handleSelectConversation = useCallback(
     (conv: DbConversationSummary) => {
-      // Leave any workbench route (e.g. Automations) so the picked conversation
-      // isn't stranded behind the route overlay — covers re-selecting the
-      // already-active tab, which doesn't change activeTabId.
-      openConversations()
-      openTab(conv.folder_id, conv.id, conv.agent_type, true)
+      void openOrFocusSession(conv)
       onOpenChange(false)
     },
-    [openTab, onOpenChange, openConversations]
+    [openOrFocusSession, onOpenChange]
   )
 
   const handleOpenSessionCenter = useCallback(() => {

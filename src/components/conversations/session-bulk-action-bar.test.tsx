@@ -65,6 +65,7 @@ vi.mock("@/lib/open-room", () => ({
 vi.mock("@/lib/workbench-session-tabs", () => ({
   appendConversationsToWorkbench: h.appendConversationsToWorkbench,
   appendRoomsToWorkbench: h.appendRoomsToWorkbench,
+  conversationIdsOccupiedElsewhereFor: vi.fn(async () => new Set()),
   SESSION_CENTER_TAB_ORIGIN: "session-center",
   SIDEBAR_BULK_TAB_ORIGIN: "sidebar-bulk",
 }))
@@ -197,6 +198,7 @@ describe("SessionBulkActionBar", () => {
     h.appendConversationsToWorkbench.mockResolvedValue({
       added: 2,
       skipped: 0,
+      addedIds: [1, 2],
     })
     h.createCollaborationRoom.mockResolvedValue({
       id: "rm_test",
@@ -230,10 +232,15 @@ describe("SessionBulkActionBar", () => {
     await user.click(screen.getByRole("button", { name: /Add to workbench/ }))
     await user.click(screen.getByRole("menuitem", { name: "Review" }))
     await waitFor(() =>
-      expect(h.appendConversationsToWorkbench).toHaveBeenCalledWith(2, [
-        expect.objectContaining({ id: 1 }),
-        expect.objectContaining({ id: 2 }),
-      ])
+      expect(h.appendConversationsToWorkbench).toHaveBeenCalledWith(
+        2,
+        [
+          expect.objectContaining({ id: 1 }),
+          expect.objectContaining({ id: 2 }),
+        ],
+        "sidebar-bulk",
+        { ignoreWorkbenchIds: [1] }
+      )
     )
     expect(h.openTab).not.toHaveBeenCalled()
   })

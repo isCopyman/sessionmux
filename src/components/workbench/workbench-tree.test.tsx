@@ -357,7 +357,8 @@ describe("WorkbenchTree", () => {
       expect(h.appendConversationsToWorkbench).toHaveBeenCalledWith(
         2,
         [expect.objectContaining({ id: 101 })],
-        "sidebar-bulk"
+        "sidebar-bulk",
+        { ignoreWorkbenchIds: [1] }
       )
       expect(h.tabState.closeTab).toHaveBeenCalledWith("conversation:101")
     })
@@ -383,10 +384,11 @@ describe("WorkbenchTree", () => {
       expect(h.appendConversationsToWorkbench).toHaveBeenCalledWith(
         3,
         [expect.objectContaining({ id: 101 })],
-        "sidebar-bulk"
+        "sidebar-bulk",
+        { ignoreWorkbenchIds: [1] }
       )
     })
-    expect(h.tabState.closeTab).not.toHaveBeenCalled()
+    expect(h.tabState.closeTab).toHaveBeenCalledWith("conversation:101")
     expect(h.tabState.switchWorkbench).not.toHaveBeenCalled()
   })
 

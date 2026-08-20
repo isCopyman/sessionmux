@@ -13,6 +13,19 @@ let tabs: { tabsHydrated: boolean; openTab: ReturnType<typeof vi.fn> }
 let addFolderToWorkspaceById: ReturnType<typeof vi.fn>
 let capturedHandler: ((p: unknown) => void) | null = null
 
+vi.mock("@/lib/open-or-focus-session", () => ({
+  openOrFocusSession: async (params: {
+    conversation: { folder_id: number; id: number; agent_type: string }
+    openTab: (...args: unknown[]) => void
+  }) => {
+    params.openTab(
+      params.conversation.folder_id,
+      params.conversation.id,
+      params.conversation.agent_type,
+      true
+    )
+  },
+}))
 vi.mock("@/contexts/tab-context", () => ({
   useTabStore: (selector: (s: typeof tabs) => unknown) => selector(tabs),
   useTabActions: () => tabs,

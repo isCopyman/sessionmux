@@ -206,6 +206,9 @@ vi.mock("@/contexts/active-folder-context", () => ({
   useActiveFolder: () => ({ activeFolder: null }),
 }))
 
+vi.mock("@/hooks/use-open-or-focus-session", () => ({
+  useOpenOrFocusSession: () => stableTabFns.openTab,
+}))
 vi.mock("@/contexts/tab-context", () => ({
   useTabActions: () => stableTabFns,
   useTabStore: (
