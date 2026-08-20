@@ -5,6 +5,7 @@ import { useEffect, useRef } from "react"
 import { useTabActions, useTabStore } from "@/contexts/tab-context"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { getCollaborationFeed } from "@/lib/api"
+import { locateConversationHome } from "@/lib/workbench-session-tabs"
 import { onTransportReconnect, subscribe } from "@/lib/platform"
 import { formatConversationTitle } from "@/lib/conversation-title"
 import type { CollaborationChanged, CollaborationFeed } from "@/lib/types"
@@ -45,6 +46,15 @@ export function useOpenQueuedMailboxSessions() {
       for (const conversationId of conversationIds) {
         if (openedIds.current.has(conversationId)) continue
         if (openConversationIds.has(conversationId)) {
+          openedIds.current.add(conversationId)
+          continue
+        }
+        const currentWorkbenchId = useTabStore.getState().activeWorkbenchId ?? 1
+        const home = await locateConversationHome(
+          conversationId,
+          currentWorkbenchId
+        )
+        if (home) {
           openedIds.current.add(conversationId)
           continue
         }

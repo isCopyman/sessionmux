@@ -19,6 +19,7 @@ import { useTranslations } from "next-intl"
 import { useActiveFolder } from "@/contexts/active-folder-context"
 import { useSidebarContext } from "@/contexts/sidebar-context"
 import { useTabActions, useTabStore } from "@/contexts/tab-context"
+import { useOpenOrFocusSession } from "@/hooks/use-open-or-focus-session"
 import { useSearchDialog } from "@/contexts/search-dialog-context"
 import { useCreateRoomDialog } from "@/contexts/create-room-dialog-context"
 import { useSessionCenter } from "@/contexts/session-center-context"
@@ -207,7 +208,8 @@ export function Sidebar() {
   const { isOpen, toggle } = useSidebarContext()
   const { activeFolder } = useActiveFolder()
   const allFolders = useAppWorkspaceStore((state) => state.allFolders)
-  const { openNewConversationTab, openChatModeTab, openTab } = useTabActions()
+  const { openNewConversationTab, openChatModeTab } = useTabActions()
+  const openOrFocusSession = useOpenOrFocusSession()
   const { setOpen: setSearchOpen } = useSearchDialog()
   const { openSessionCenter, closedRevision } = useSessionCenter()
   const { unseenFailures } = useAutomationsView()
@@ -411,31 +413,16 @@ export function Sidebar() {
 
   const handleOpenCollectionSession = useCallback(
     (session: DbConversationSummary) => {
-      openConversations()
-      openTab(
-        session.folder_id,
-        session.id,
-        session.agent_type,
-        true,
-        session.title ?? undefined
-      )
+      void openOrFocusSession(session)
     },
-    [openConversations, openTab]
+    [openOrFocusSession]
   )
 
   const handleOpenCollectionSessionInSplit = useCallback(
     (session: DbConversationSummary, direction: "right" | "down") => {
-      openConversations()
-      openTab(
-        session.folder_id,
-        session.id,
-        session.agent_type,
-        true,
-        session.title ?? undefined,
-        { split: direction }
-      )
+      void openOrFocusSession(session, { split: direction })
     },
-    [openConversations, openTab]
+    [openOrFocusSession]
   )
 
   const handleNewSessionAtPath = useCallback(

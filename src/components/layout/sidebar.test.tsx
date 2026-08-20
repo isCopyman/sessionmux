@@ -168,6 +168,9 @@ vi.mock("@/stores/app-workspace-store", () => ({
   useAppWorkspaceStore: (selector: (state: unknown) => unknown) =>
     selector({ allFolders: mockState.allFolders }),
 }))
+vi.mock("@/hooks/use-open-or-focus-session", () => ({
+  useOpenOrFocusSession: () => spies.openTab,
+}))
 vi.mock("@/contexts/tab-context", () => ({
   useTabActions: () => ({
     openNewConversationTab: spies.openNewConversationTab,

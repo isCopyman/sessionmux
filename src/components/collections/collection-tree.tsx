@@ -130,6 +130,7 @@ import {
 import { visibleCollectionItemKeys } from "@/lib/collection-session-order"
 import { isSessionSourceVisible } from "@/lib/conversation-source"
 import { formatConversationTitle } from "@/lib/conversation-title"
+import { conversationIdsOccupiedElsewhereFor } from "@/lib/workbench-session-tabs"
 import {
   collectionsAllowedForRooms,
   deleteRooms,
@@ -339,6 +340,7 @@ export const CollectionTree = forwardRef<
   )
   const activeTabId = useTabStore((state) => state.activeTabId)
   const tabs = useTabStore((state) => state.tabs)
+  const activeWorkbenchId = useTabStore((state) => state.activeWorkbenchId) ?? 1
   const { closeConversationTab, closeTab, openTab, openRoomTab, switchTab } =
     useTabActions()
   const { openConversations } = useWorkbenchRoute()
@@ -1288,12 +1290,19 @@ export const CollectionTree = forwardRef<
     }
   }
 
-  const handleBulkAddToCurrentWorkbench = () => {
+  const handleBulkAddToCurrentWorkbench = async () => {
     const conversations = selectedSessions()
     const rooms = selectedRoomsNow()
     if (conversations.length === 0 && rooms.length === 0) return
+    const occupied = await conversationIdsOccupiedElsewhereFor(
+      conversations.map((conversation) => conversation.id),
+      [activeWorkbenchId]
+    )
+    const toOpen = conversations.filter(
+      (conversation) => !occupied.has(conversation.id)
+    )
     openConversations()
-    for (const conversation of conversations) {
+    for (const conversation of toOpen) {
       openTab(
         conversation.folder_id,
         conversation.id,
@@ -1313,7 +1322,7 @@ export const CollectionTree = forwardRef<
       })
     }
     toast.success(
-      tManage("toastOpened", { count: conversations.length + rooms.length })
+      tManage("toastOpened", { count: toOpen.length + rooms.length })
     )
     multiSelect.clear()
   }

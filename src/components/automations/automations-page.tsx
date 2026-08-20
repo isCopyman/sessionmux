@@ -35,8 +35,7 @@ import {
   Zap,
 } from "lucide-react"
 import { useAutomationsView } from "@/contexts/automations-view-context"
-import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
-import { useTabActions } from "@/contexts/tab-context"
+import { useOpenOrFocusSession } from "@/hooks/use-open-or-focus-session"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { AutomationEditor } from "./automation-editor"
 import {
@@ -1196,8 +1195,7 @@ function RunHistory({
   onChanged: () => Promise<void>
 }) {
   const t = useTranslations("Automations")
-  const { openTab } = useTabActions()
-  const { openConversations } = useWorkbenchRoute()
+  const openOrFocusSession = useOpenOrFocusSession()
   const [runs, setRuns] = useState<AutomationRun[]>([])
   const [loading, setLoading] = useState(true)
   const reqRef = useRef(0)
@@ -1247,8 +1245,12 @@ function RunHistory({
     // already-active tab, which wouldn't change activeTabId.
     const folderId = r.worktree_folder_id ?? automation.root_folder_id
     if (r.conversation_id == null || folderId == null) return
-    openConversations()
-    openTab(folderId, r.conversation_id, automation.agent_type)
+    void openOrFocusSession({
+      id: r.conversation_id,
+      folder_id: folderId,
+      agent_type: automation.agent_type,
+      title: null,
+    })
   }
 
   const cancel = async (r: AutomationRun) => {

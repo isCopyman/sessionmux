@@ -36,7 +36,26 @@ vi.mock("@/contexts/active-folder-context", () => ({
 }))
 
 vi.mock("@/contexts/tab-context", () => ({
-  useTabActions: () => ({ openTab: h.openTab }),
+  useTabActions: () => ({
+    openTab: h.openTab,
+    switchWorkbench: vi.fn(),
+  }),
+  useTabStore: (selector: (s: { activeWorkbenchId: number }) => unknown) =>
+    selector({ activeWorkbenchId: 1 }),
+}))
+
+vi.mock("@/hooks/use-open-or-focus-session", () => ({
+  useOpenOrFocusSession:
+    () =>
+    (conversation: { folder_id: number; id: number; agent_type: string }) => {
+      h.openTab(
+        conversation.folder_id,
+        conversation.id,
+        conversation.agent_type,
+        true
+      )
+      return Promise.resolve("opened")
+    },
 }))
 
 vi.mock("@/contexts/workbench-route-context", () => ({

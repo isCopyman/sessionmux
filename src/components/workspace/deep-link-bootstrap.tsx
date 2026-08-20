@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef } from "react"
 import { toast } from "sonner"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { useTabStore, useTabActions } from "@/contexts/tab-context"
+import { openOrFocusSession } from "@/lib/open-or-focus-session"
 import type { AgentType } from "@/lib/types"
 
 /**
@@ -13,7 +14,9 @@ import type { AgentType } from "@/lib/types"
 export function DeepLinkBootstrap() {
   const foldersHydrated = useAppWorkspaceStore((s) => s.foldersHydrated)
   const tabsHydrated = useTabStore((s) => s.tabsHydrated)
-  const { openTab } = useTabActions()
+  const { openTab, switchWorkbench } = useTabActions()
+  const currentWorkbenchId =
+    useTabStore((state) => state.activeWorkbenchId) ?? 1
   const ranRef = useRef(false)
 
   useEffect(() => {
@@ -76,12 +79,28 @@ export function DeepLinkBootstrap() {
           return
         }
 
-        openTab(folderId, conversationId, rawAgent, true)
+        await openOrFocusSession({
+          conversation: {
+            id: conversationId,
+            folder_id: folderId,
+            agent_type: rawAgent,
+            title: null,
+          },
+          currentWorkbenchId,
+          switchWorkbench,
+          openTab,
+        })
       } finally {
         clearUrl()
       }
     })()
-  }, [foldersHydrated, tabsHydrated, openTab])
+  }, [
+    foldersHydrated,
+    tabsHydrated,
+    openTab,
+    switchWorkbench,
+    currentWorkbenchId,
+  ])
 
   return null
 }
@@ -105,14 +124,26 @@ type FocusRequest = {
 export function PetFocusBridge() {
   const foldersHydrated = useAppWorkspaceStore((s) => s.foldersHydrated)
   const tabsHydrated = useTabStore((s) => s.tabsHydrated)
-  const { openTab } = useTabActions()
+  const { openTab, switchWorkbench } = useTabActions()
+  const currentWorkbenchId =
+    useTabStore((state) => state.activeWorkbenchId) ?? 1
 
   // Workspace state is read via getState() at attempt time; only the tab
   // half still needs a ref mirror (it lives in a context, not a store).
-  const stateRef = useRef({ tabsHydrated, openTab })
+  const stateRef = useRef({
+    tabsHydrated,
+    openTab,
+    switchWorkbench,
+    currentWorkbenchId,
+  })
   useEffect(() => {
-    stateRef.current = { tabsHydrated, openTab }
-  }, [tabsHydrated, openTab])
+    stateRef.current = {
+      tabsHydrated,
+      openTab,
+      switchWorkbench,
+      currentWorkbenchId,
+    }
+  }, [tabsHydrated, openTab, switchWorkbench, currentWorkbenchId])
 
   // Holds the latest focus request until the workspace has hydrated. The event
   // is one-shot, so a pet-panel click during startup/reload (before folders &
@@ -141,12 +172,17 @@ export function PetFocusBridge() {
       // exists; open the tab directly and let its title/content hydrate. We do
       // NOT gate on the conversations list — it loads independently of folders,
       // and waiting on it (without a ready flag) would drop the request.
-      stateRef.current.openTab(
-        req.folderId,
-        req.conversationId,
-        req.agent,
-        true
-      )
+      await openOrFocusSession({
+        conversation: {
+          id: req.conversationId,
+          folder_id: req.folderId,
+          agent_type: req.agent,
+          title: null,
+        },
+        currentWorkbenchId: stateRef.current.currentWorkbenchId,
+        switchWorkbench: stateRef.current.switchWorkbench,
+        openTab: stateRef.current.openTab,
+      })
     })()
   }, [])
 

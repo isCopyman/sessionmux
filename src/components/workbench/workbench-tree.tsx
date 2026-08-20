@@ -445,7 +445,8 @@ export function WorkbenchTree() {
       await appendConversationsToWorkbench(
         target.id,
         [conversation],
-        SIDEBAR_BULK_TAB_ORIGIN
+        SIDEBAR_BULK_TAB_ORIGIN,
+        { ignoreWorkbenchIds: [activeWorkbenchId] }
       )
       closeTab(session.liveTabId)
       toast.success(
@@ -469,8 +470,10 @@ export function WorkbenchTree() {
       await appendConversationsToWorkbench(
         created.id,
         [conversation],
-        SIDEBAR_BULK_TAB_ORIGIN
+        SIDEBAR_BULK_TAB_ORIGIN,
+        { ignoreWorkbenchIds: [activeWorkbenchId] }
       )
+      if (session.liveTabId) closeTab(session.liveTabId)
       toast.success(
         t("openedInWorkbench", {
           title: session.title,

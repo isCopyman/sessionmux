@@ -31,7 +31,12 @@ vi.mock("@/contexts/workbench-route-context", () => ({
   useWorkbenchRoute: () => ({ openConversations: vi.fn() }),
 }))
 vi.mock("@/contexts/tab-context", () => ({
-  useTabActions: () => ({ openTab: vi.fn() }),
+  useTabActions: () => ({ openTab: vi.fn(), switchWorkbench: vi.fn() }),
+  useTabStore: (selector: (s: { activeWorkbenchId: number }) => unknown) =>
+    selector({ activeWorkbenchId: 1 }),
+}))
+vi.mock("@/hooks/use-open-or-focus-session", () => ({
+  useOpenOrFocusSession: () => vi.fn(),
 }))
 vi.mock("@/lib/platform", () => ({
   subscribe: vi.fn().mockResolvedValue(() => {}),
