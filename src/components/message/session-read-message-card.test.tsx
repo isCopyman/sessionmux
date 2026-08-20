@@ -63,7 +63,7 @@ describe("SessionReadMessageCard", () => {
     ).not.toBeNull()
     expect(screen.getByText("Need review")).toBeInTheDocument()
     expect(screen.getByText("please check claim 3")).toBeInTheDocument()
-    expect(screen.getByText("Needs reply")).toBeInTheDocument()
+    expect(screen.getByText("Owes a reply")).toBeInTheDocument()
     expect(document.querySelector("[data-session-read-message]")).not.toBeNull()
     expect(
       document.querySelector("[data-collaboration-subject]")?.textContent

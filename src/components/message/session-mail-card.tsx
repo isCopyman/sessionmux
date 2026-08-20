@@ -29,9 +29,19 @@ export function SessionMailStatusChip({
 }) {
   const t = useTranslations("Collaboration")
   const tone = mailStatusVisual(status)
+  // Only the reply-obligation chip needs the direction spelled out: "unread",
+  // "replied" and friends read the same whichever way the letter went, but
+  // "owes a reply" / "awaiting a reply" do not.
+  const hint =
+    status === "read_awaiting"
+      ? direction === "outbound"
+        ? t("awaitingReplyHint")
+        : t("needsReplyHint")
+      : undefined
   return (
     <span
       data-mail-status={status}
+      title={hint}
       className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${tone.chip}`}
     >
       {t(mailStatusLabelKey(status, direction))}

@@ -203,6 +203,7 @@ function SidebarNavButton({
 
 export function Sidebar() {
   const t = useTranslations("Folder.sidebar")
+  const tCollaboration = useTranslations("Collaboration")
   const { isOpen, toggle } = useSidebarContext()
   const { activeFolder } = useActiveFolder()
   const allFolders = useAppWorkspaceStore((state) => state.allFolders)
@@ -259,6 +260,12 @@ export function Sidebar() {
   const needsReplyBadge =
     collaborationOverview.totalNeedsReplyCount +
     collaborationOverview.totalRoomNeedsReplyCount
+  // Label plus the direction hint, the same pairing the Session Center segment
+  // this badge opens uses. "Owes a reply" alone never says which side owes.
+  const needsReplyBadgeTitle = [
+    t("needsReply"),
+    tCollaboration("needsReplyHint"),
+  ].join(" — ")
   const searchShortcutLabel = formatShortcutLabel(
     shortcuts.toggle_search,
     isMac
@@ -721,8 +728,9 @@ export function Sidebar() {
         {/* One entry, two destinations. The row opens the Session Center
             unfiltered; the amber badge — outstanding reply obligations across
             direct mail and Rooms — opens it pre-filtered to what owes a reply.
-            "Needs reply" is a facet of the Session Center, so it gets a badge
-            on this row rather than a row of its own. */}
+            "Owes a reply" is a facet of the Session Center, so it gets a badge
+            on this row rather than a row of its own. The hover text appends
+            the direction hint — the label alone never says which side owes. */}
         <SidebarNavButton
           icon={LibraryBig}
           label={t("sessionCenter")}
@@ -734,10 +742,10 @@ export function Sidebar() {
                 onClick={() =>
                   openSessionCenter({ collabFilter: "needs_reply" })
                 }
-                title={t("needsReply")}
+                title={needsReplyBadgeTitle}
                 className={NEEDS_REPLY_BADGE_CLASS}
               >
-                {/* Names the button "Needs reply <count>" for assistive tech.
+                {/* Names the button "Owes a reply <count>" for assistive tech.
                     An aria-label would REPLACE the count instead of prefixing
                     it, dropping the one thing the badge is there to say. */}
                 <span className="sr-only">{t("needsReply")}</span>
