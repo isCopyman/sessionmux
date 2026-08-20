@@ -1732,6 +1732,7 @@
         "roomTypeBadge": "群聊",
         "roomMemberCount": "{count} 位成員",
         "roomMatchedCount": "{count} 個群聊",
+        "homeWorkbench": "所在工作台：{name}",
         "untitledConversation": "未命名會話",
         "setStatus": "設為狀態…",
         "archiveSelected": "封存",

@@ -135,6 +135,7 @@ import type {
   ConversationWorkbenchRef,
   ConversationStatus,
   DbConversationSummary,
+  FolderDetail,
   MessageTurn,
   WorkbenchInfo,
 } from "@/lib/types"
@@ -1041,13 +1042,23 @@ function replyDebtTitle(label: string, hint: string) {
 function RoomListRow({
   room,
   onOpen,
+  collection,
+  workbench,
+  showFolderColumn,
+  folder,
 }: {
   room: CollaborationRoomSummary
   onOpen: () => void
+  collection?: CollectionInfo
+  workbench?: WorkbenchInfo
+  showFolderColumn: boolean
+  folder?: FolderDetail
 }) {
   const t = useTranslations("Folder.sidebar.manageConversations")
   const tCollaboration = useTranslations("Collaboration")
+  const unread = room.unreadCount
   const needsReply = room.needsReplyCount ?? 0
+  const awaitingReply = room.awaitingReplyCount ?? 0
   return (
     <div
       role="option"
@@ -1079,21 +1090,93 @@ function RoomListRow({
       <span className="shrink-0 text-xs text-muted-foreground">
         {t("roomMemberCount", { count: room.memberCount })}
       </span>
-      {needsReply > 0 ? (
-        // Amber for "a reply is owed", the same convention the Session rows use.
+      {collection ? (
         <span
-          className="shrink-0 rounded-full bg-amber-500/10 px-1.5 py-0.5 text-[10px] tabular-nums text-amber-700 dark:text-amber-400"
-          title={replyDebtTitle(
-            tCollaboration("stateNeedsReply"),
-            tCollaboration("needsReplyHint")
-          )}
+          className="flex max-w-24 shrink-0 items-center gap-1 rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground"
+          title={collection.name}
         >
-          {needsReply}
+          <FolderTree className="h-3 w-3 shrink-0" />
+          <span className="truncate">{collection.name}</span>
         </span>
       ) : null}
+      {workbench ? (
+        <span
+          className="flex max-w-24 shrink-0 items-center gap-1 rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground"
+          title={t("homeWorkbench", { name: workbench.name })}
+        >
+          <PanelsTopLeft className="h-3 w-3 shrink-0" />
+          <span className="truncate">{workbench.name}</span>
+        </span>
+      ) : null}
+      {unread > 0 || needsReply > 0 || awaitingReply > 0 ? (
+        <span className="flex shrink-0 items-center gap-1 text-[10px] tabular-nums">
+          {unread > 0 ? (
+            <span
+              className="rounded-full bg-primary/10 px-1.5 py-0.5 text-primary"
+              title={tCollaboration("unreadCount", { count: unread })}
+            >
+              {unread}
+            </span>
+          ) : null}
+          {needsReply > 0 ? (
+            // Amber for "a reply is owed", the same convention the Session rows use.
+            <span
+              className="rounded-full bg-amber-500/10 px-1.5 py-0.5 text-amber-700 dark:text-amber-400"
+              title={replyDebtTitle(
+                tCollaboration("stateNeedsReply"),
+                tCollaboration("needsReplyHint")
+              )}
+            >
+              {needsReply}
+            </span>
+          ) : null}
+          {awaitingReply > 0 ? (
+            <span
+              className="rounded-full bg-amber-500/10 px-1.5 py-0.5 text-amber-700 dark:text-amber-400"
+              title={replyDebtTitle(
+                tCollaboration("stateAwaitingReply"),
+                tCollaboration("awaitingReplyHint")
+              )}
+            >
+              {awaitingReply}
+            </span>
+          ) : null}
+        </span>
+      ) : null}
+      {showFolderColumn ? (
+        <span
+          className="max-w-28 shrink-0 truncate text-xs text-muted-foreground"
+          title={
+            folder
+              ? [formatFolderLabelWithAlias(folder), folder.path]
+                  .filter(Boolean)
+                  .join(" · ")
+              : room.rootFolderId != null
+                ? `#${room.rootFolderId}`
+                : undefined
+          }
+        >
+          {folder ? (
+            <FolderAliasLabel name={folder.name} alias={folder.alias} />
+          ) : room.rootFolderId != null ? (
+            `#${room.rootFolderId}`
+          ) : (
+            <span className="text-muted-foreground/60">—</span>
+          )}
+        </span>
+      ) : null}
+      {/* A Room has no git branch and no Session status; these two slots
+          keep the time column lined up with the Session rows. */}
+      <span
+        className="flex w-28 shrink-0 items-center justify-end gap-1 text-xs text-muted-foreground"
+        title={t("branchNone")}
+      >
+        <span className="text-muted-foreground/60">—</span>
+      </span>
       <span className="w-10 shrink-0 text-right text-xs text-muted-foreground">
         {formatRelative(room.createdAt)}
       </span>
+      <span className="inline-flex h-2 w-2 shrink-0" aria-hidden="true" />
     </div>
   )
 }
@@ -2784,6 +2867,20 @@ export function ConversationManageDialog({
                             key={`room:${item.room.id}`}
                             room={item.room}
                             onOpen={() => void handleOpenRoom(item.room)}
+                            collection={
+                              item.room.collectionId != null
+                                ? collectionById.get(item.room.collectionId)
+                                : undefined
+                            }
+                            workbench={workbenches.find(
+                              (wb) => wb.id === item.room.workbenchId
+                            )}
+                            showFolderColumn={showFolderColumn}
+                            folder={
+                              item.room.rootFolderId != null
+                                ? folderById.get(item.room.rootFolderId)
+                                : undefined
+                            }
                           />
                         )
                       }

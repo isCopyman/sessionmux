@@ -1732,6 +1732,7 @@
         "roomTypeBadge": "Raum",
         "roomMemberCount": "{count} Mitglieder",
         "roomMatchedCount": "{count} Räume",
+        "homeWorkbench": "Workbench: {name}",
         "untitledConversation": "Unbenannte Konversation",
         "setStatus": "Status setzen…",
         "archiveSelected": "Archivieren",

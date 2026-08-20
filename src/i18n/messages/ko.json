@@ -1732,6 +1732,7 @@
         "roomTypeBadge": "룸",
         "roomMemberCount": "멤버 {count}명",
         "roomMatchedCount": "룸 {count}개",
+        "homeWorkbench": "소속 워크벤치: {name}",
         "untitledConversation": "제목 없는 대화",
         "setStatus": "상태 변경…",
         "archiveSelected": "보관",

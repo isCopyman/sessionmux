@@ -1732,6 +1732,7 @@
         "roomTypeBadge": "Sala",
         "roomMemberCount": "{count} membros",
         "roomMatchedCount": "{count} sala(s)",
+        "homeWorkbench": "Bancada: {name}",
         "untitledConversation": "Conversa sem título",
         "setStatus": "Definir status…",
         "archiveSelected": "Arquivar",
