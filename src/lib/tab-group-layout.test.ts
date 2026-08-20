@@ -4,9 +4,11 @@ import {
   firstLeafId,
   isLayoutNode,
   leafIds,
+  MIN_SPLIT_RATIO,
   neighborGroupId,
   normalizeTree,
   parentSplitOf,
+  reanchorForContainerResize,
   removeGroup,
   resizeSplitAt,
   singleGroupLayout,
@@ -17,6 +19,30 @@ import {
 } from "./tab-group-layout"
 
 const leaf = (id: string): LayoutNode => ({ type: "group", id })
+
+/** Pane widths in pixels for a column of `columnPx` — ratios only become a bug
+ *  report once you read them as absolute sizes. */
+function paneWidths(
+  tree: LayoutNode,
+  columnPx: number
+): Record<string, number> {
+  const widths: Record<string, number> = {}
+  for (const [id, rect] of computeRects(tree).groups) {
+    widths[id] = (rect.w / 100) * columnPx
+  }
+  return widths
+}
+
+/** Horizontal [a | b | c], equal thirds. */
+function threeEqualPanes(): SplitNode {
+  return {
+    type: "split",
+    id: "s-root",
+    orientation: "horizontal",
+    children: [leaf("a"), leaf("b"), leaf("c")],
+    ratios: [1 / 3, 1 / 3, 1 / 3],
+  }
+}
 
 describe("splitGroup", () => {
   it("replaces a root leaf with a binary split", () => {
@@ -192,6 +218,136 @@ describe("resizeSplitAt", () => {
     const two = splitGroup(leaf("a"), "a", "right", "b")
     expect(resizeSplitAt(two, "nope", 0, 0.3)).toBe(two)
     expect(resizeSplitAt(two, "s-b", 5, 0.3)).toBe(two)
+  })
+
+  it("keeps the far pane's ABSOLUTE width on a middle-divider drag", () => {
+    // Three equal panes in a 300px column; drag the b|c boundary right.
+    const next = resizeSplitAt(threeEqualPanes(), "s-root", 1, 0.75)
+    const widths = paneWidths(next, 300)
+    expect(widths.a).toBeCloseTo(100)
+    expect(widths.b).toBeCloseTo(125)
+    expect(widths.c).toBeCloseTo(75)
+  })
+})
+
+describe("reanchorForContainerResize", () => {
+  it("gives the whole shrink to the pane against the moved edge", () => {
+    // The reported O20 repro: a file column on the right, two session panes on
+    // the left. Narrowing the conversation column from 300px to 240px must
+    // only eat into the pane that touches the files divider.
+    const next = reanchorForContainerResize(
+      threeEqualPanes(),
+      "horizontal",
+      "end",
+      300 / 240
+    )
+    const widths = paneWidths(next, 240)
+    expect(widths.a).toBeCloseTo(100)
+    expect(widths.b).toBeCloseTo(100)
+    expect(widths.c).toBeCloseTo(40)
+  })
+
+  it("gives the whole growth to the pane against the moved edge", () => {
+    const next = reanchorForContainerResize(
+      threeEqualPanes(),
+      "horizontal",
+      "end",
+      300 / 380
+    )
+    const widths = paneWidths(next, 380)
+    expect(widths.a).toBeCloseTo(100)
+    expect(widths.b).toBeCloseTo(100)
+    expect(widths.c).toBeCloseTo(180)
+  })
+
+  it("absorbs from the leading pane for a start-edge divider", () => {
+    const next = reanchorForContainerResize(
+      threeEqualPanes(),
+      "horizontal",
+      "start",
+      300 / 240
+    )
+    const widths = paneWidths(next, 240)
+    expect(widths.a).toBeCloseTo(40)
+    expect(widths.b).toBeCloseTo(100)
+    expect(widths.c).toBeCloseTo(100)
+  })
+
+  it("floors the absorbing pane at the minimum share", () => {
+    // 300px → 200px is more than pane c can give up on its own.
+    const next = reanchorForContainerResize(
+      threeEqualPanes(),
+      "horizontal",
+      "end",
+      300 / 200
+    ) as SplitNode
+    expect(next.ratios[2]).toBeCloseTo(MIN_SPLIT_RATIO)
+    // Past the floor the column has simply run out of room, so the residual is
+    // shared proportionally rather than piled onto one neighbour.
+    expect(next.ratios[0]).toBeCloseTo(next.ratios[1])
+    expect(next.ratios[0] + next.ratios[1] + next.ratios[2]).toBeCloseTo(1)
+  })
+
+  it("never forces an already-tiny absorbing pane to grow", () => {
+    const tight: SplitNode = {
+      type: "split",
+      id: "s-root",
+      orientation: "horizontal",
+      children: [leaf("a"), leaf("b")],
+      ratios: [0.95, 0.05],
+    }
+    const next = reanchorForContainerResize(
+      tight,
+      "horizontal",
+      "end",
+      300 / 200
+    ) as SplitNode
+    expect(next.ratios[1]).toBeCloseTo(0.05)
+  })
+
+  it("hands the same change to every child of a cross-axis stack", () => {
+    // Stacked panes both span the column's full width, so both flank the
+    // divider and the ratios (which run down the other axis) must not move.
+    const stacked = splitGroup(leaf("a"), "a", "down", "b")
+    expect(
+      reanchorForContainerResize(stacked, "horizontal", "end", 300 / 240)
+    ).toBe(stacked)
+  })
+
+  it("re-anchors through a nested stack on the moved edge", () => {
+    // horizontal [ a | vertical [b, c] ] — b and c both touch the right edge.
+    const nested = splitGroup(
+      splitGroup(leaf("a"), "a", "right", "b"),
+      "b",
+      "down",
+      "c"
+    )
+    const next = reanchorForContainerResize(
+      nested,
+      "horizontal",
+      "end",
+      300 / 240
+    )
+    const widths = paneWidths(next, 240)
+    expect(widths.a).toBeCloseTo(150)
+    expect(widths.b).toBeCloseTo(90)
+    expect(widths.c).toBeCloseTo(90)
+    const { groups } = computeRects(next)
+    expect(groups.get("b")?.h).toBeCloseTo(50)
+    expect(groups.get("c")?.h).toBeCloseTo(50)
+  })
+
+  it("returns the same tree for a no-op or degenerate scale", () => {
+    const three = threeEqualPanes()
+    const at = (scale: number) =>
+      reanchorForContainerResize(three, "horizontal", "end", scale)
+    expect(at(1)).toBe(three)
+    expect(at(0)).toBe(three)
+    expect(at(Number.NaN)).toBe(three)
+    const single = leaf("a")
+    expect(
+      reanchorForContainerResize(single, "horizontal", "end", 300 / 240)
+    ).toBe(single)
   })
 })
 

@@ -27,13 +27,16 @@ import {
   makeGroupId,
   neighborGroupId,
   normalizeTree,
+  reanchorForContainerResize,
   removeGroup,
   resizeSplitAt,
   singleGroupLayout,
   splitGroup,
   toggleOrientation,
   type LayoutNode,
+  type ResizeEdge,
   type SplitDirection,
+  type SplitOrientation,
 } from "@/lib/tab-group-layout"
 import type { SplitDropEdge } from "@/lib/tab-drag-drop"
 import {
@@ -276,6 +279,14 @@ export interface TabStoreState {
     splitId: string,
     handleIndex: number,
     boundaryFraction: number
+  ) => void
+  /** An OUTER divider changed the hosting column's extent: keep every pane but
+   *  the one flanking `edge` at its absolute size. `scale` is
+   *  `previousExtent / nextExtent`. */
+  reanchorGroupSplits: (
+    orientation: SplitOrientation,
+    edge: ResizeEdge,
+    scale: number
   ) => void
   openNewConversationTab: (
     folderId: number,
@@ -2549,6 +2560,24 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
     schedulePersistGroupState()
   },
 
+  reanchorGroupSplits: (orientation, edge, scale) => {
+    const st = get()
+    // While a pane is maximized the tree isn't painted (one pane covers the
+    // column) so there is nothing to re-anchor — and a new `groupLayout`
+    // reference would auto-restore the zoom (see `shouldExitMaximizedGroup`),
+    // yanking the maximized pane out from under an outer divider drag.
+    if (st.maximizedGroupId != null) return
+    const next = reanchorForContainerResize(
+      st.groupLayout,
+      orientation,
+      edge,
+      scale
+    )
+    if (next === st.groupLayout) return
+    set({ groupLayout: next })
+    schedulePersistGroupState()
+  },
+
   reorderTabs: (reorderedTabs) => {
     set({ rawTabs: reorderedTabs })
     recomputeTabs()
@@ -3689,6 +3718,7 @@ export function useTabActions() {
       unsplitAll: s.unsplitAll,
       reorderGroupTabs: s.reorderGroupTabs,
       resizeGroupSplit: s.resizeGroupSplit,
+      reanchorGroupSplits: s.reanchorGroupSplits,
       updateTabDrag: s.updateTabDrag,
       endTabDrag: s.endTabDrag,
       openNewConversationTab: s.openNewConversationTab,
