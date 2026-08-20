@@ -425,6 +425,14 @@ event `e199466b`）。摘要：
     "回复即销账" 会直接消除工人这么做的动机；③ playbook 应明写"绝不把 companion token
     写进任何文件"。
 
+13. **隔离规矩在第二轮被破了三次**（累计统计，非新机制）：
+    (1) 包 A 的交付物写进协调者树（第一轮，摩擦 9）；
+    (2) `_room_consume.py` 含实时 token（摩擦 12，工人自删）；
+    (3) 一个 0 字节的 shell 引号残骸文件，无内容，已删。
+    **三次全部被"禁止 git add -A、只用显式路径"这条规矩挡住**，无一进入 commit。
+    结论：在 `session.create` 能把工人放进隔离 cwd 之前（摩擦 9 的根治建议），
+    **显式 `git add <路径>` 是协调者唯一可靠的防线**，必须写进任何 hub-and-spoke playbook。
+
 观察但未验证：`session.create` 回显 cwd 带 `\\?\` Windows 扩展长度前缀。
 
 摩擦 5/6 绕法复查：`session.rename` 锁定的标题（316）至今未被覆盖；补 pin 的三个会话
