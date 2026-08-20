@@ -1059,3 +1059,27 @@ T2 后置截图（CDP 9222 可用，基线在 .artifacts）+ 晨间验收报告 
   41 提交），一次工人自救 reset，一次领导 cherry-pick 绕过；已入领导侧
   持久记忆（合并前必查 merge-base）。⑤ 用户新需求排队：claude_code
   provider 双通道（订阅/API，x-provider 诊断在跑）。
+- 2026-08-20 晚 **摩擦 7/12 诊断定案 + 派修两件**：x-mcpreply 只读诊断——
+  ① MCP 超时根因：外层 60s 墙钟（manager.rs:127，env 可覆盖）与 Initialize
+  自带 60s 硬编码挤同一预算，而 session/new（代理 CLI 要 spawn 1~3 个
+  codeg-mcp.exe）codeg 侧完全无超时；Room 频道把注入从 1 放大到 3。裁决：
+  小+中档修（session/new 单独超时+按注入数伸缩预算+注入留痕日志），不做
+  懒加载重构 → 派 w-mcptimeout。② 摩擦 7 反转：**"回复即销账"早已实现**
+  （post_room 带 reply_to_event_id → resolved，collaboration_service.rs:
+  1793-1804，单测双向验证）；现场症状疑为调用方漏传参数 + read_room 清
+  未读被误当销账。裁决：语义不动（保 fan-out 义务独立不变量），改结果
+  可见性——post_room 返回销账结果 + MCP 文本直说 + skill 补一句 →
+  派 w-replyack。
+- 2026-08-20 晚 **provider 双通道诊断定案（x-provider）**：① 三态切换 UI
+  **已存在**（official_subscription/custom/model_provider，acp-agent-settings.tsx
+  169-174/11040-11122），用户要的能力大半是"修"不是"建"。② 事故根因坐实：
+  claude_code 无 apply_claude_env_policy（Cursor/Grok 有，connection.rs:103-141
+  空串哨兵→env_remove），订阅模式只清 env_json、空值又被 acp.rs:8834-8839
+  跳过 → 子进程全量继承父环境，ANTHROPIC_BASE_URL 本地代理就此漏入——
+  探针事故闭环。codex(chatgpt_subscription)/gemini 同缺口。③ 凭据全程明文
+  SQLite（model_provider.api_key、env_json），keyring_store 存在但未接。
+  裁决：(a) 修 claude_code——apply_claude_env_policy + CLAUDE_AUTH_MODE
+  显式落盘 + infer 提名函数 + 双侧单测，**排队等 w-mcptimeout 落地**
+  （同文件 connection.rs 防冲突）；codex/gemini 同款列为后续项。
+  (b) 会话级切换（composer 旁）：建议只在"官方订阅 vs 已存 provider"间选，
+  不开会话级明文 key；属新功能，待 (a) 与在飞项收口后立项，方案已呈用户。
