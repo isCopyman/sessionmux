@@ -271,6 +271,13 @@ pub struct RenameRoomParams {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SetRoomWorkbenchParams {
+    pub room_id: String,
+    pub workbench_id: i32,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AddRoomPathParams {
     pub room_id: String,
     pub path: String,
@@ -387,6 +394,21 @@ pub async fn room_rename(
             &state.emitter,
             &params.room_id,
             &params.title,
+        )
+        .await?,
+    ))
+}
+
+pub async fn room_set_workbench(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<SetRoomWorkbenchParams>,
+) -> Result<Json<CollaborationRoomDetail>, AppCommandError> {
+    Ok(Json(
+        collaboration::collaboration_room_set_workbench_core(
+            &state.db.conn,
+            &state.emitter,
+            &params.room_id,
+            params.workbench_id,
         )
         .await?,
     ))
