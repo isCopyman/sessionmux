@@ -1037,3 +1037,14 @@ T2 后置截图（CDP 9222 可用，基线在 .artifacts）+ 晨间验收报告 
   已派 w-phantom（opus）修复；O8 503 无自动重试、双实例事件不互通（O10）一并
   记录。⑤ skill 教训更新排队（wt/skill-lessons 已建）。⑥ 全量状态落
   HANDOFF-2026-08-20-p7-midflight.zh-CN.md 供压缩后续跑。
+- 2026-08-20 晚 **O9 修复落地 + 用户扩权 + 新立项两件**：① w-phantom 修复合并
+  （b2dbd3cf），门禁全绿（fmt/双 clippy/server 测试 2563 过）。② w-skilldoc
+  六课教训验收合并（567f2c3f，9 个 skill 文档 +243 行）。③ 用户实测再报两条：
+  O11 Room 消息卡裸 UUID 不可跳转（侧栏也无群聊入口）、O12 回复末尾文件卡
+  不能就地展开 diff——均已记日志（694e51e0）并派工（w-roomjump / w-inlinediff，
+  opus+独立 worktree）。④ **用户扩权（常设）**：消息调度、优先级、MCP 工具、
+  交互机制都可优化；目标好用+好看+好构建，防文档代码混乱。⑤ 编队第二轮：
+  E 交付（f97312b2）；协调者记摩擦 12（MCP 启动超时 65s + 回复不销账 ⇒ 工人
+  拿活 companion token 手驱 codeg-mcp.exe，凭据一度落盘工人自删；显式 git add
+  纪律防住了 token 进 commit）。据此立诊断项：MCP 启动超时根因 + 回复即销账
+  语义（探查后我出设计再派工）。
