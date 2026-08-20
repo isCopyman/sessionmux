@@ -1359,6 +1359,15 @@ pub async fn get_git_branch(path: String) -> Result<Option<String>, AppCommandEr
     Ok(resolve_git_head(&path).await?.branch)
 }
 
+/// Live branch name at `path`, or `None` when the path is not a repo, HEAD is
+/// detached, or git cannot be invoked. Linked worktrees (`.git` is a file) are
+/// handled by git itself — same as [`resolve_git_head`]. Callers that persist
+/// `conversation.git_branch` must use this rather than `folder.git_branch`,
+/// which is never written.
+pub(crate) async fn detect_git_branch(path: &str) -> Option<String> {
+    resolve_git_head(path).await.ok().and_then(|h| h.branch)
+}
+
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn git_init(path: String) -> Result<(), AppCommandError> {
     let output = crate::process::tokio_command("git")
@@ -7007,6 +7016,21 @@ mod tests {
                 .await
                 .expect("branch"),
             None
+        );
+    }
+
+    #[tokio::test]
+    async fn detect_git_branch_reads_a_linked_worktree() {
+        let (_dir, _repo, wt_path) = repo_with_worktree();
+        let git_file = std::path::Path::new(&wt_path).join(".git");
+        assert!(
+            git_file.is_file(),
+            "linked worktree records .git as a file, not a directory"
+        );
+        assert_eq!(
+            detect_git_branch(&wt_path).await.as_deref(),
+            Some("wt"),
+            "git follows the gitdir pointer; the folder.git_branch column is not consulted"
         );
     }
 

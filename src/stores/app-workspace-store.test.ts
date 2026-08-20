@@ -17,11 +17,20 @@ vi.mock("@/lib/api", () => ({
   reorderFolders: vi.fn(),
 }))
 
-const { getFolder, listAllFolderDetails, listOpenFolderDetails } =
-  await import("@/lib/api")
+const {
+  getFolder,
+  listAllFolderDetails,
+  listOpenFolderDetails,
+  openFolder,
+  openFolderById,
+  openWorktreeFolder,
+} = await import("@/lib/api")
 const mockGetFolder = vi.mocked(getFolder)
 const mockListAllFolders = vi.mocked(listAllFolderDetails)
 const mockListOpenFolders = vi.mocked(listOpenFolderDetails)
+const mockOpenFolder = vi.mocked(openFolder)
+const mockOpenFolderById = vi.mocked(openFolderById)
+const mockOpenWorktreeFolder = vi.mocked(openWorktreeFolder)
 
 function makeSummary(
   overrides: Partial<DbConversationSummary> & { id: number }
@@ -177,6 +186,49 @@ describe("refreshFolder — branch null-guard", () => {
     await useAppWorkspaceStore.getState().refreshFolder(1)
 
     expect(useAppWorkspaceStore.getState().branches.get(1)).toBe("main")
+  })
+})
+
+describe("openFolder — branch null-guard", () => {
+  it("keeps the poll-resolved branch when the opened row's git_branch is null", async () => {
+    useAppWorkspaceStore.getState().setBranch(1, "wt/fork-rewind")
+    mockOpenFolder.mockResolvedValue(
+      makeFolder({ id: 1, git_branch: null, path: "/tmp/wt" })
+    )
+
+    await useAppWorkspaceStore.getState().openFolder("/tmp/wt")
+
+    expect(useAppWorkspaceStore.getState().branches.get(1)).toBe(
+      "wt/fork-rewind"
+    )
+  })
+
+  it("adopts the opened branch when the row actually carries one", async () => {
+    useAppWorkspaceStore.getState().setBranch(1, "old")
+    mockOpenFolder.mockResolvedValue(
+      makeFolder({ id: 1, git_branch: "feature/x" })
+    )
+
+    await useAppWorkspaceStore.getState().openFolder("/tmp/repo")
+
+    expect(useAppWorkspaceStore.getState().branches.get(1)).toBe("feature/x")
+  })
+
+  it("does the same null-guard for openWorktreeFolder and open-by-id", async () => {
+    useAppWorkspaceStore.getState().setBranch(2, "wt/o4")
+    useAppWorkspaceStore.getState().setBranch(3, "wt/o4-id")
+    mockOpenWorktreeFolder.mockResolvedValue(
+      makeFolder({ id: 2, git_branch: null, path: "/tmp/wt-2" })
+    )
+    mockOpenFolderById.mockResolvedValue(
+      makeFolder({ id: 3, git_branch: null, path: "/tmp/wt-3" })
+    )
+
+    await useAppWorkspaceStore.getState().openWorktreeFolder("/tmp/wt-2", 1)
+    await useAppWorkspaceStore.getState().addFolderToWorkspaceById(3)
+
+    expect(useAppWorkspaceStore.getState().branches.get(2)).toBe("wt/o4")
+    expect(useAppWorkspaceStore.getState().branches.get(3)).toBe("wt/o4-id")
   })
 })
 

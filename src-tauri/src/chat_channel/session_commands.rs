@@ -524,13 +524,16 @@ pub async fn handle_task(
         }
     }
 
-    // 4. Create conversation record
+    // 4. Create conversation record. Probe live HEAD — `folder.git_branch`
+    // is always NULL in the folder table, so copying it would persist an
+    // empty branch on every /task Session.
+    let git_branch = crate::commands::folders::detect_git_branch(&folder.path).await;
     let conv = match conversation_service::create(
         db,
         folder_id,
         agent_type,
         Some(truncate_title(task_description)),
-        folder.git_branch.clone(),
+        git_branch,
     )
     .await
     {

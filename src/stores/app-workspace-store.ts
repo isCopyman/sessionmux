@@ -419,7 +419,12 @@ export const useAppWorkspaceStore = create<AppWorkspaceStoreState>()(
       const detail = await apiOpenFolder(path)
       const { upsertFolder, setBranch, refreshConversations } = get()
       upsertFolder(detail)
-      setBranch(detail.id, detail.git_branch ?? null)
+      // Folder rows persist `git_branch: null`; live HEAD is polled. Writing
+      // null here clobbers a name the poll already resolved and the chip
+      // flashes "no branch" until the next tick (up to 10s).
+      if (detail.git_branch != null) {
+        setBranch(detail.id, detail.git_branch)
+      }
       void refreshConversations()
       return detail
     },
@@ -428,7 +433,9 @@ export const useAppWorkspaceStore = create<AppWorkspaceStoreState>()(
       const detail = await apiOpenWorktreeFolder(path, sourceFolderId)
       const { upsertFolder, setBranch, refreshConversations } = get()
       upsertFolder(detail)
-      setBranch(detail.id, detail.git_branch ?? null)
+      if (detail.git_branch != null) {
+        setBranch(detail.id, detail.git_branch)
+      }
       void refreshConversations()
       return detail
     },
@@ -437,7 +444,9 @@ export const useAppWorkspaceStore = create<AppWorkspaceStoreState>()(
       const detail = await apiOpenFolderById(folderId)
       const { upsertFolder, setBranch, refreshConversations } = get()
       upsertFolder(detail)
-      setBranch(detail.id, detail.git_branch ?? null)
+      if (detail.git_branch != null) {
+        setBranch(detail.id, detail.git_branch)
+      }
       void refreshConversations()
       return detail
     },

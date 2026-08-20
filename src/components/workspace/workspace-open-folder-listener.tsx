@@ -34,7 +34,11 @@ export function WorkspaceOpenFolderListener() {
         (detail) => {
           const store = useAppWorkspaceStore.getState()
           store.upsertFolder(detail)
-          store.setBranch(detail.id, detail.git_branch ?? null)
+          // Same null-guard as openFolder: the column is always null today,
+          // and writing it would blank a poll-resolved chip for up to 10s.
+          if (detail.git_branch) {
+            store.setBranch(detail.id, detail.git_branch)
+          }
           // Return to the conversation workspace if a route (e.g. Automations)
           // was covering the content region, else the new tab opens unseen.
           openConversations()
