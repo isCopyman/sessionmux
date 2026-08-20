@@ -44,7 +44,7 @@ describe("room message body", () => {
       untitled,
     })
     expect(
-      parts.map((part) => (part.type === "mention" ? part.label : part.value))
+      parts.map((part) => (part.type === "text" ? part.value : part.label))
     ).toEqual(["帮我调研一下今天的hackernews ", "@Session C"])
     expect(
       sessionIdsFromAtAliases("ping @sessionC", members, untitled)

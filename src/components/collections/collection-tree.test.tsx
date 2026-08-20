@@ -154,7 +154,8 @@ const h = vi.hoisted(() => ({
   items: [
     {
       id: 10,
-      root_folder_id: 7,
+      // Widened so tests can push legacy Collections with a null root.
+      root_folder_id: 7 as number | null,
       parent_id: null,
       name: "Research",
       position: 0,
