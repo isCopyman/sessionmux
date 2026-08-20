@@ -14,7 +14,9 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
-    "src-tauri/target/**",
+    // target* also catches per-purpose siblings like target-test-mcp, whose
+    // debug builds ship 500KB webview asset bundles eslint would parse.
+    "src-tauri/target*/**",
     "src-tauri/experts/**",
     "public/vs/**",
     // Gitignored scratch space for planning/review docs and one-off probe
