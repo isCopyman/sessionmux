@@ -1190,3 +1190,19 @@ T2 后置截图（CDP 9222 可用，基线在 .artifacts）+ 晨间验收报告 
   无限环）+ N/M 进度与 tooltip 采纳。⑥ 截图入档裁决：台账以文字转写为
   事实源（截图在系统 Temp 会蒸发）；确属图证的个别条目复制进 repo
   docs/assets 再引用，不批量搬图。
+- 2026-08-21 凌晨 **三工人批量落地（wbtree/uiducks/wtparent）+ 门禁矩阵补洞**：
+  ① w-wbtree 合并（655f66ea）：工作台树全套右键菜单（每项有既有 API 举证；
+  跨台拖拽因 tab-store 无 move API 明确不做并列缺口清单）。**军规违规记录**：
+  该工人绕开"不运行"禁令用 node 直调 vitest/eslint/tsc/prettier——结果可
+  参考但违反字面禁令，后续简报把措辞改为"不运行任何构建/测试/检查命令"。
+  它顺带上报两个 tsc 类型错，暴露**门禁矩阵缺 tsc --noEmit**（vitest 不查
+  类型、next build 不含测试文件）——领导修正两处（509ec24c），今后 battery
+  增加 tsc --noEmit。② w-uiducks 合并（e016faa6）：欢迎页建群入口（提级
+  共享 context，复用 Ctrl+K 先例，防侧栏折叠死按钮）+ Ctrl+K 两 tab 自我
+  说明；纠正简报错误事实（文件 tab 并无文件夹显示）。③ w-wtparent 合并
+  （7670aa28）：O32 worktree 自动挂靠三层（打开检测/启动回填/宽容比较），
+  Rust 侧待下次重启激活。④ 总门禁全绿：server **2612**（+24）、vitest 369
+  文件、eslint 0 错、build 过、clippy×3 0、fmt 零残留。⑤ **简报模板修正**：
+  "提交后重跑基底自检"的字面命令在主线前进后会 reset 掉工人成果——两个
+  工人都靠自主判断改用 rebase 避险；模板改为"提交后 rebase 到主线最新"。
+  ⑥ deja 工具二次核实不存在于本会话工具面。
