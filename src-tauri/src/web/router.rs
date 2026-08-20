@@ -1381,6 +1381,10 @@ pub fn build_router(
             post(handlers::collaboration::room_rename),
         )
         .route(
+            "/collaboration_room_set_workbench",
+            post(handlers::collaboration::room_set_workbench),
+        )
+        .route(
             "/collaboration_room_add_path",
             post(handlers::collaboration::room_add_path),
         )

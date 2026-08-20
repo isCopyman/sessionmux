@@ -99,6 +99,20 @@ impl RoomHostControl {
                         }
                     }),
                 ),
+                capability(
+                    "room.set_workbench",
+                    "Move a Room to another Workbench. Same-workbench is a no-op. Members are not rewritten. The caller must already belong to the Room.",
+                    HostControlAccessLevel::Write,
+                    json!({
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["room_id", "workbench_id"],
+                        "properties": {
+                            "room_id": { "type": "string", "minLength": 1 },
+                            "workbench_id": { "type": "integer", "minimum": 1 }
+                        }
+                    }),
+                ),
             ]);
         }
         capabilities
@@ -107,7 +121,9 @@ impl RoomHostControl {
     pub fn access_for(action: &str) -> Option<HostControlAccessLevel> {
         match action {
             "room.list" | "room.list_workbench" => Some(HostControlAccessLevel::Read),
-            "room.create" | "room.add_member" => Some(HostControlAccessLevel::Write),
+            "room.create" | "room.add_member" | "room.set_workbench" => {
+                Some(HostControlAccessLevel::Write)
+            }
             // room.post was removed, but the action stays addressable so the
             // gateway routes it here and the caller gets the migration hint
             // below instead of a bare "Unknown action".
@@ -186,6 +202,34 @@ impl RoomHostControl {
                         room_id: params.room_id,
                         conversation_ids: vec![params.session_id],
                     },
+                )
+                .await
+                {
+                    Ok(room) => {
+                        self.publish(&room.id, room.workbench_id);
+                        accepted(request_id, action, "persisted", json!({ "room": room }))
+                    }
+                    Err(error) => rejected(request_id, action, error),
+                }
+            }
+            "room.set_workbench" => {
+                let params = match parse_input::<SetWorkbenchInput>(&action, input) {
+                    Ok(params) => params,
+                    Err(note) => return HostControlUseOutcome::rejected(request_id, action, note),
+                };
+                if let Err(error) = collaboration_room_service::require_member(
+                    &self.db.conn,
+                    &params.room_id,
+                    caller.current_session_id,
+                )
+                .await
+                {
+                    return rejected(request_id, action, error);
+                }
+                match collaboration_room_service::set_workbench(
+                    &self.db.conn,
+                    &params.room_id,
+                    params.workbench_id,
                 )
                 .await
                 {
@@ -291,6 +335,13 @@ struct AddMemberInput {
     session_id: i32,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SetWorkbenchInput {
+    room_id: String,
+    workbench_id: i32,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -329,7 +380,12 @@ mod tests {
                 "{action}"
             );
         }
-        for action in ["room.create", "room.add_member", "room.post"] {
+        for action in [
+            "room.create",
+            "room.add_member",
+            "room.set_workbench",
+            "room.post",
+        ] {
             assert_eq!(
                 RoomHostControl::access_for(action),
                 Some(HostControlAccessLevel::Write),
@@ -405,5 +461,59 @@ mod tests {
             .filter_map(|room| room["id"].as_str())
             .collect();
         assert!(ids.contains(&room_id.as_str()));
+    }
+
+    #[tokio::test]
+    async fn set_workbench_requires_membership_and_moves_the_room() {
+        use crate::db::service::workbench_service;
+        let (rooms, _, caller_id, other_id) = fixture().await;
+        let created = rooms
+            .use_action(
+                &caller(caller_id),
+                "req-create".into(),
+                "room.create".into(),
+                json!({ "title": "Plan", "member_session_ids": [other_id] }),
+            )
+            .await;
+        assert!(created.accepted);
+        let room_id = created.data["room"]["id"].as_str().unwrap().to_string();
+        let second = workbench_service::create(&rooms.db.conn, Some("Review".into()))
+            .await
+            .expect("second workbench");
+
+        let stranger = rooms
+            .use_action(
+                &caller(other_id + 999),
+                "req-stranger".into(),
+                "room.set_workbench".into(),
+                json!({ "room_id": room_id, "workbench_id": second.id }),
+            )
+            .await;
+        assert!(!stranger.accepted, "a non-member must not move the Room");
+
+        let moved = rooms
+            .use_action(
+                &caller(caller_id),
+                "req-move".into(),
+                "room.set_workbench".into(),
+                json!({ "room_id": room_id, "workbench_id": second.id }),
+            )
+            .await;
+        assert!(moved.accepted, "{:?}", moved.note);
+        assert_eq!(moved.data["room"]["workbenchId"], second.id);
+
+        let same = rooms
+            .use_action(
+                &caller(caller_id),
+                "req-same".into(),
+                "room.set_workbench".into(),
+                json!({ "room_id": room_id, "workbench_id": second.id }),
+            )
+            .await;
+        assert!(
+            same.accepted,
+            "same-workbench must be a no-op, not an error"
+        );
+        assert_eq!(same.data["room"]["workbenchId"], second.id);
     }
 }
