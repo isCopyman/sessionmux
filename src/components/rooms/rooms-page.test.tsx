@@ -46,6 +46,63 @@ vi.mock("@/components/chat/composer/rich-composer", async (importOriginal) => {
   return { ...actual, RichComposer: Captured }
 })
 
+// virtua renders 0 rows under jsdom. Default: paint every child so existing
+// Room tests keep seeing the whole timeline. Off-screen find tests switch
+// `visibleAll` off and let scrollToIndex mount the target virtua index.
+const virtuaCtl = vi.hoisted(() => ({
+  visibleAll: true,
+  visible: new Set<number>(),
+  scrollToIndex: vi.fn(),
+  shift: false,
+  onScroll: null as ((offset: number) => void) | null,
+}))
+
+vi.mock("virtua", async () => {
+  const React = await import("react")
+  const MockVirtualizer = React.forwardRef(function MockVirtualizer(
+    {
+      children,
+      shift,
+      onScroll,
+    }: {
+      children?: React.ReactNode
+      shift?: boolean
+      onScroll?: (offset: number) => void
+    },
+    ref: React.Ref<unknown>
+  ) {
+    const [mounted, setMounted] = React.useState<number[]>([])
+    React.useEffect(() => {
+      virtuaCtl.shift = Boolean(shift)
+      virtuaCtl.onScroll = onScroll ?? null
+    })
+    React.useImperativeHandle(ref, () => ({
+      cache: { measured: true },
+      scrollOffset: 720,
+      scrollSize: 1600,
+      viewportSize: 600,
+      findItemIndex: () => 0,
+      getItemOffset: () => 0,
+      getItemSize: () => 0,
+      scrollToIndex: (index: number, opts?: unknown) => {
+        virtuaCtl.scrollToIndex(index, opts)
+        setMounted((prev) => (prev.includes(index) ? prev : [...prev, index]))
+      },
+      scrollTo: vi.fn(),
+      scrollBy: vi.fn(),
+    }))
+    const childArray = React.Children.toArray(children)
+    const rendered = virtuaCtl.visibleAll
+      ? childArray
+      : childArray.filter(
+          (_, index) => virtuaCtl.visible.has(index) || mounted.includes(index)
+        )
+    return React.createElement(React.Fragment, null, rendered)
+  })
+  MockVirtualizer.displayName = "MockVirtualizer"
+  return { Virtualizer: MockVirtualizer }
+})
+
 const api = vi.hoisted(() => ({
   getCollaborationRoom: vi.fn(),
   getCollaborationRoomTimeline: vi.fn(),
@@ -292,6 +349,11 @@ describe("RoomWorkspace", () => {
   beforeEach(() => {
     vi.clearAllMocks()
     composerHandle.current = null
+    virtuaCtl.visibleAll = true
+    virtuaCtl.visible = new Set()
+    virtuaCtl.shift = false
+    virtuaCtl.onScroll = null
+    virtuaCtl.scrollToIndex.mockClear()
     platform.roomChanged.clear()
     runtime.byConversationId.clear()
     api.getCollaborationRoom.mockResolvedValue(roomDetail())
@@ -1088,5 +1150,178 @@ describe("RoomWorkspace", () => {
       expect(badge.getAttribute("title")).toBeNull()
     }
     expect(screen.queryByText(/answered/)).toBeNull()
+  })
+
+  it("stamps find row indices after date separators", async () => {
+    api.getCollaborationRoomTimeline.mockResolvedValue(
+      timeline([
+        event({
+          id: "evt-a",
+          body: "first day",
+          createdAt: "2026-08-17T12:00:00.000Z",
+        }),
+        event({
+          id: "evt-b",
+          body: "second day",
+          createdAt: "2026-08-18T12:00:00.000Z",
+        }),
+      ])
+    )
+    renderRoom()
+    expect(await screen.findByText("second day")).toBeTruthy()
+    expect(document.getElementById("room-event-evt-a")).toHaveAttribute(
+      "data-find-row-index",
+      "1"
+    )
+    expect(document.getElementById("room-event-evt-b")).toHaveAttribute(
+      "data-find-row-index",
+      "3"
+    )
+    const separators = document.querySelectorAll(
+      "[data-transcript-date-separator]"
+    )
+    expect(separators).toHaveLength(2)
+  })
+
+  it("opens the timeline inside a stick-to-bottom scroller", async () => {
+    api.getCollaborationRoomTimeline.mockResolvedValue(timeline([event()]))
+    renderRoom()
+    expect(await screen.findByText("newest post")).toBeTruthy()
+    const scroller = screen.getByRole("log")
+    expect(scroller).toContainElement(screen.getByText("newest post"))
+  })
+
+  it("scrolls an off-screen Room find hit into view and highlights it", async () => {
+    virtuaCtl.visibleAll = false
+    // Loader absent (not truncated). Mixed stream is [sep, evt-a, evt-b];
+    // only the last virtua child (evt-b) is mounted until find locates evt-a.
+    virtuaCtl.visible = new Set([2])
+    api.getCollaborationRoomTimeline.mockResolvedValue(
+      timeline([
+        event({
+          id: "evt-a",
+          body: "hidden needle post",
+          createdAt: "2026-08-18T12:00:00.000Z",
+        }),
+        event({
+          id: "evt-b",
+          body: "visible tail",
+          createdAt: "2026-08-18T13:00:00.000Z",
+        }),
+      ])
+    )
+    const registry = { set: vi.fn(), delete: vi.fn() }
+    class TestHighlight {}
+    Object.defineProperty(globalThis.CSS, "highlights", {
+      configurable: true,
+      value: registry,
+    })
+    Object.defineProperty(globalThis, "Highlight", {
+      configurable: true,
+      value: TestHighlight,
+    })
+
+    renderRoom()
+    expect(await screen.findByText("visible tail")).toBeTruthy()
+    expect(screen.queryByText("hidden needle post")).toBeNull()
+
+    fireEvent.keyDown(document.body, { key: "f", ctrlKey: true })
+    const input = await screen.findByLabelText("Find in this room")
+    fireEvent.change(input, { target: { value: "needle" } })
+
+    await waitFor(() => {
+      expect(virtuaCtl.scrollToIndex).toHaveBeenCalled()
+    })
+    await waitFor(() => {
+      expect(screen.getByText("hidden needle post")).toBeTruthy()
+    })
+    await waitFor(() => {
+      expect(
+        document.querySelector("[data-conversation-find-current]")?.id
+      ).toBe("room-event-evt-a")
+    })
+    expect(registry.set).toHaveBeenCalled()
+    document.getElementById("codeg-conversation-find-styles")?.remove()
+  })
+
+  it("keeps the viewport anchored and date separators correct after prepend", async () => {
+    api.getCollaborationRoomTimeline.mockImplementation(
+      async (_id: string, _limit?: number, beforeEventId?: string | null) => {
+        if (beforeEventId === "evt-new") {
+          return timeline(
+            [
+              event({
+                id: "evt-old",
+                body: "older post",
+                createdAt: "2026-08-17T12:00:00.000Z",
+              }),
+            ],
+            false
+          )
+        }
+        return timeline(
+          [
+            event({
+              id: "evt-new",
+              body: "newest post",
+              createdAt: "2026-08-18T12:00:00.000Z",
+            }),
+          ],
+          true
+        )
+      }
+    )
+
+    renderRoom()
+    expect(await screen.findByText("newest post")).toBeTruthy()
+    expect(
+      document.querySelectorAll("[data-transcript-date-separator]")
+    ).toHaveLength(1)
+
+    fireEvent.click(screen.getByRole("button", { name: "Load older posts" }))
+
+    expect(await screen.findByText("older post")).toBeTruthy()
+    expect(screen.getByText("newest post")).toBeTruthy()
+    expect(virtuaCtl.shift).toBe(true)
+    const separators = document.querySelectorAll(
+      "[data-transcript-date-separator]"
+    )
+    expect(separators).toHaveLength(2)
+    expect(document.getElementById("room-event-evt-old")).toHaveAttribute(
+      "data-find-row-index",
+      "1"
+    )
+    expect(document.getElementById("room-event-evt-new")).toHaveAttribute(
+      "data-find-row-index",
+      "3"
+    )
+  })
+
+  it("stops find-driven paging when the oldest id does not move", async () => {
+    api.getCollaborationRoomTimeline.mockResolvedValue(
+      timeline(
+        [event({ id: "evt-new", body: "needle stays at the tail" })],
+        true
+      )
+    )
+    renderRoom()
+    expect(await screen.findByText("needle stays at the tail")).toBeTruthy()
+    const initialCalls = api.getCollaborationRoomTimeline.mock.calls.length
+
+    fireEvent.keyDown(document.body, { key: "f", ctrlKey: true })
+    const input = await screen.findByLabelText("Find in this room")
+    fireEvent.change(input, { target: { value: "needle" } })
+
+    await waitFor(() => {
+      expect(api.getCollaborationRoomTimeline.mock.calls.length).toBe(
+        initialCalls + 1
+      )
+    })
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 40))
+    })
+    expect(api.getCollaborationRoomTimeline.mock.calls.length).toBe(
+      initialCalls + 1
+    )
   })
 })

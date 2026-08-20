@@ -98,6 +98,31 @@ describe("conversation find DOM ranges", () => {
     )
   })
 
+  it("accepts an optional row selector so Room can target [data-room-post-content]", () => {
+    const root = document.createElement("div")
+    root.innerHTML = `
+      <div data-virtual-item-index="0"></div>
+      <article data-room-post-content data-find-row-index="1">
+        <div data-conversation-search-content>bound to the plan</div>
+      </article>
+    `
+
+    const range = applyConversationFindHighlights(
+      root,
+      "plan",
+      { threadIndex: 1, occurrenceIndex: 0 },
+      "article[data-room-post-content]"
+    )
+
+    expect(range?.toString()).toBe("plan")
+    expect(
+      root.querySelector("article[data-room-post-content]")
+    ).toHaveAttribute("data-conversation-find-current")
+    expect(
+      root.querySelector("[data-virtual-item-index='0']")
+    ).not.toHaveAttribute("data-conversation-find-current")
+  })
+
   it("scrolls a viewport handed in directly, with no class to find it by", () => {
     const root = document.createElement("div")
     const viewport = document.createElement("div")

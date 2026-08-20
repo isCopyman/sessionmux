@@ -1,6 +1,14 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react"
+import type { RefObject } from "react"
 import {
   EllipsisVertical,
   FolderOpen,
@@ -16,7 +24,7 @@ import {
   Users,
   X,
 } from "lucide-react"
-import { useTranslations } from "next-intl"
+import { useLocale, useTranslations } from "next-intl"
 import { toast } from "sonner"
 import { useShallow } from "zustand/react/shallow"
 
@@ -51,7 +59,19 @@ import {
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { DirectoryBrowser } from "@/components/shared/directory-browser"
+import { MessageThread } from "@/components/ai-elements/message-thread"
 import { ConversationFindBar } from "@/components/message/conversation-find-bar"
+import {
+  TranscriptDateSeparator,
+  TranscriptStickToBottom,
+  VirtualizedTranscript,
+  formatTranscriptDayLabel,
+  useTranscriptInfiniteScroll,
+  useTranscriptStickToBottom,
+  withDateSeparators,
+  type TranscriptDatedEntry,
+  type TranscriptScrollApi,
+} from "@/components/transcript"
 import {
   RichComposer,
   type RichComposerHandle,
@@ -142,6 +162,162 @@ function sameSpeaker(a: RoomTimelineEvent, b: RoomTimelineEvent) {
   if ((a.authorKind ?? "session") !== (b.authorKind ?? "session")) return false
   if (a.authorKind === "human") return true
   return a.source.conversationId === b.source.conversationId
+}
+
+function RoomTranscriptStick({
+  autoScrollSignal,
+  viewportRef,
+}: {
+  autoScrollSignal?: number
+  viewportRef: RefObject<HTMLElement | null>
+}) {
+  const { scrollRef } = useTranscriptStickToBottom()
+  useLayoutEffect(() => {
+    viewportRef.current = scrollRef.current ?? null
+  }, [scrollRef, viewportRef])
+  return <TranscriptStickToBottom autoScrollSignal={autoScrollSignal} />
+}
+
+function RoomTimelinePost({
+  event,
+  previous,
+  quoted,
+  displayIndex,
+  members,
+  onOpenSession,
+  speakerName,
+  onJumpToQuote,
+  onReply,
+}: {
+  event: RoomTimelineEvent
+  previous: RoomTimelineEvent | undefined
+  quoted: RoomTimelineEvent | undefined
+  displayIndex: number
+  members: CollaborationRoomMember[]
+  onOpenSession: (conversationId: number) => void
+  speakerName: (event: RoomTimelineEvent) => string
+  onJumpToQuote: (eventId: string) => void
+  onReply: (event: RoomTimelineEvent) => void
+}) {
+  const t = useTranslations("Room")
+  const fromYou = event.authorKind === "human"
+  const grouped = Boolean(
+    previous &&
+    sameSpeaker(previous, event) &&
+    Math.abs(
+      new Date(event.createdAt).getTime() -
+        new Date(previous.createdAt).getTime()
+    ) < GROUP_MS
+  )
+  const markdown = roomMessageMarkdown({
+    body: event.body,
+    members,
+    mentionConversationIds: event.mentionConversationIds,
+    mentionHuman: Boolean(event.mentionHuman),
+    allLabel: t("mentionAll"),
+    humanLabel: t("mentionHuman"),
+    untitled: (id) => t("untitled", { id }),
+  })
+  const name = fromYou
+    ? t("you")
+    : memberLabel(
+        {
+          conversationId: event.source.conversationId,
+          title: event.source.title,
+        },
+        (id) => t("untitled", { id })
+      )
+  return (
+    <article
+      id={`room-event-${event.id}`}
+      data-room-post-content=""
+      data-find-row-index={displayIndex}
+      data-mention-human={event.mentionHuman ? "true" : undefined}
+      className={cn(
+        "group flex gap-3 border-l-2 hover:bg-muted/40",
+        grouped ? "py-0.5" : "mt-2 py-1.5",
+        event.mentionHuman
+          ? "border-amber-500 bg-amber-500/10"
+          : "border-transparent"
+      )}
+    >
+      {grouped ? (
+        <span className="flex w-9 shrink-0 items-start justify-center pt-0.5">
+          <RoomReplyButton
+            label={t("reply")}
+            hint={t("replyHint")}
+            compact
+            onReply={() => onReply(event)}
+          />
+        </span>
+      ) : (
+        <RoomSpeakerAvatar human={fromYou} agentType={event.source.agentType} />
+      )}
+      <div className="min-w-0 flex-1">
+        {grouped ? null : (
+          <div className="mb-0.5 flex items-baseline gap-2">
+            {fromYou ? (
+              <span className="truncate text-[15px] font-bold leading-5">
+                {name}
+              </span>
+            ) : (
+              <button
+                type="button"
+                className="truncate text-[15px] font-bold leading-5 hover:underline"
+                title={t("openSession")}
+                onClick={() => onOpenSession(event.source.conversationId)}
+              >
+                {name}
+              </button>
+            )}
+            <time className="shrink-0 text-[11px] text-muted-foreground">
+              {formatRoomTime(event.createdAt)}
+            </time>
+            <RoomReplyProgressBadge event={event} className="shrink-0" />
+            <RoomReplyButton
+              label={t("reply")}
+              hint={t("replyHint")}
+              onReply={() => onReply(event)}
+            />
+          </div>
+        )}
+        {event.replyToEventId ? (
+          quoted ? (
+            <button
+              type="button"
+              className="mb-1 w-full border-l-2 border-primary/40 py-0.5 pl-2 text-left"
+              title={t("jumpToQuote")}
+              onClick={() => onJumpToQuote(event.replyToEventId as string)}
+            >
+              <p className="truncate text-[11px] font-medium text-muted-foreground">
+                {speakerName(quoted)}
+              </p>
+              {/* Raw body on purpose: the quote is a two-line
+                  locator for the post it points at, not a second
+                  copy of it. Markdown here would grow headings
+                  and code blocks inside a clamped preview. */}
+              <p className="line-clamp-2 text-[12px] text-muted-foreground">
+                {quoted.body}
+              </p>
+            </button>
+          ) : (
+            <div className="mb-1 border-l-2 border-primary/40 py-0.5 pl-2">
+              <p className="text-[11px] text-muted-foreground">
+                {t("quotedMissing")}
+              </p>
+            </div>
+          )
+        ) : null}
+        {grouped ? (
+          <RoomReplyProgressBadge
+            event={event}
+            className="mb-0.5 inline-block"
+          />
+        ) : null}
+        <RoomPostBody source={markdown} onOpenSession={onOpenSession} />
+      </div>
+    </article>
+  )
 }
 
 function RoomReplyButton({
@@ -301,6 +477,7 @@ export function RoomWorkspace({
   isActive?: boolean
 }) {
   const t = useTranslations("Room")
+  const locale = useLocale()
   const { closeTab } = useTabActions()
   const openOrFocusSession = useOpenOrFocusSession()
   const conversations = useAppWorkspaceStore((state) => state.conversations)
@@ -310,6 +487,8 @@ export function RoomWorkspace({
   const [events, setEvents] = useState<RoomTimelineEvent[]>([])
   const [truncated, setTruncated] = useState(false)
   const [loadingOlder, setLoadingOlder] = useState(false)
+  const [prependEpoch, setPrependEpoch] = useState(0)
+  const [stickSignal, setStickSignal] = useState(0)
   const [replyTo, setReplyTo] = useState<RoomTimelineEvent | null>(null)
   const [hydrated, setHydrated] = useState(false)
   // The composer is an uncontrolled RichComposer; `body` is its serialized
@@ -359,14 +538,17 @@ export function RoomWorkspace({
         undefined,
         firstId
       )
+      const seen = new Set(events.map((event) => event.id))
+      const extra = older.events.filter((event) => !seen.has(event.id))
       setEvents((current) => {
-        const seen = new Set(current.map((event) => event.id))
+        const seenNow = new Set(current.map((event) => event.id))
         return [
-          ...older.events.filter((event) => !seen.has(event.id)),
+          ...older.events.filter((event) => !seenNow.has(event.id)),
           ...current,
         ]
       })
       setTruncated(Boolean(older.truncated))
+      if (extra.length > 0) setPrependEpoch((epoch) => epoch + 1)
     } catch (error) {
       toast.error(toErrorMessage(error))
     } finally {
@@ -376,6 +558,7 @@ export function RoomWorkspace({
 
   useEffect(() => {
     setReplyTo(null)
+    setPrependEpoch(0)
   }, [roomId])
 
   useEffect(() => {
@@ -449,11 +632,32 @@ export function RoomWorkspace({
     },
     [conversations, openOrFocusSession]
   )
+  const scrollApiRef = useRef<TranscriptScrollApi | null>(null)
+  const datedEntriesRef = useRef<TranscriptDatedEntry<RoomTimelineEvent>[]>([])
+  const scrollToIndex = useCallback(
+    (
+      index: number,
+      opts?: { align?: "start" | "center" | "end" | "nearest" }
+    ) => {
+      scrollApiRef.current?.scrollToIndex(index, opts)
+    },
+    []
+  )
   const scrollToEvent = useCallback((eventId: string) => {
-    document.getElementById(`room-event-${eventId}`)?.scrollIntoView({
-      block: "center",
-      behavior: "smooth",
-    })
+    const mounted = document.getElementById(`room-event-${eventId}`)
+    if (mounted) {
+      mounted.scrollIntoView({
+        block: "center",
+        behavior: "smooth",
+      })
+      return
+    }
+    const displayIndex = datedEntriesRef.current.findIndex(
+      (entry) => entry.kind === "item" && entry.item.id === eventId
+    )
+    if (displayIndex >= 0) {
+      scrollApiRef.current?.scrollToIndex(displayIndex, { align: "center" })
+    }
   }, [])
   // Files/commits scoped to the room's own folder (resolved from
   // `rootFolderId`, never the currently-active folder — a room is a
@@ -520,12 +724,30 @@ export function RoomWorkspace({
     return names
   }, [body, members, t])
 
+  // Mixed stream: date separators occupy display-order slots (and virtua
+  // indices) but never become find entries.
+  const datedEntries = useMemo(
+    () =>
+      withDateSeparators(
+        events,
+        (event) => {
+          const ms = new Date(event.createdAt).getTime()
+          return Number.isFinite(ms) ? ms : null
+        },
+        (timeMs) => formatTranscriptDayLabel(timeMs, { locale }),
+        { timeZone: "local" }
+      ),
+    [events, locale]
+  )
+  datedEntriesRef.current = datedEntries
+
   // --- Find in this Room -----------------------------------------------------
-  // One entry per loaded post, in timeline order, keyed by the same index the
-  // rows carry as `data-find-row-index`.
+  // `threadIndex` is the virtualized display index (separators included).
   const findEntries = useMemo<ConversationFindEntry[]>(() => {
     const entries: ConversationFindEntry[] = []
-    events.forEach((event, index) => {
+    datedEntries.forEach((entry, displayIndex) => {
+      if (entry.kind !== "item") return
+      const event = entry.item
       const text = roomMessagePlainText({
         body: event.body,
         members,
@@ -535,46 +757,93 @@ export function RoomWorkspace({
         humanLabel: t("mentionHuman"),
         untitled: (id) => t("untitled", { id }),
       })
-      if (text) entries.push({ itemKey: event.id, threadIndex: index, text })
+      if (text)
+        entries.push({
+          itemKey: event.id,
+          threadIndex: displayIndex,
+          text,
+        })
     })
     return entries
-  }, [events, members, t])
+  }, [datedEntries, members, t])
   const timelineRootRef = useRef<HTMLDivElement>(null)
-  // OverlayScrollbars owns the real scroller; it is only handed out here.
   const timelineViewportRef = useRef<HTMLElement | null>(null)
-  const handleTimelineViewport = useCallback((element: HTMLElement | null) => {
-    timelineViewportRef.current = element
-  }, [])
   const find = useRoomFind({
     entries: findEntries,
     isActive,
     rootRef: timelineRootRef,
     viewportRef: timelineViewportRef,
+    scrollToIndex,
   })
   // Page the rest of the room in while a query is active, so the count covers
   // the whole timeline and not just the tail window. Keyed on the oldest loaded
   // post so a backend that keeps reporting `truncated` without handing back new
-  // posts stalls the walk instead of looping on it.
+  // posts stalls the walk instead of looping on it. Scaffold infinite-scroll
+  // has no such latch — keep it on the Room side.
   const findPagedFromRef = useRef<string | null>(null)
   useEffect(() => {
     if (!isActive || !find.open || find.query.length === 0) {
       findPagedFromRef.current = null
-      return
     }
-    if (!truncated || loadingOlder) return
+  }, [find.open, find.query, isActive])
+  const loadOlderForFind = useCallback(() => {
     const oldestId = events[0]?.id
     if (!oldestId || findPagedFromRef.current === oldestId) return
     findPagedFromRef.current = oldestId
     void loadOlder()
-  }, [
-    events,
-    find.open,
-    find.query,
+  }, [events, loadOlder])
+  const infiniteScroll = useTranscriptInfiniteScroll({
+    hasOlder: truncated,
+    isLoading: loadingOlder,
+    onLoadOlder: loadOlderForFind,
     isActive,
-    loadOlder,
-    loadingOlder,
-    truncated,
-  ])
+    findOpen: find.open,
+    findQuery: find.query,
+  })
+  const handleLoadOlder = useCallback(() => {
+    void loadOlder()
+  }, [loadOlder])
+  const getTimelineItemKey = useCallback(
+    (entry: TranscriptDatedEntry<RoomTimelineEvent>) =>
+      entry.kind === "separator" ? entry.key : entry.item.id,
+    []
+  )
+  const handleReply = useCallback((event: RoomTimelineEvent) => {
+    setReplyTo(event)
+  }, [])
+  const renderTimelineItem = useCallback(
+    (entry: TranscriptDatedEntry<RoomTimelineEvent>, displayIndex: number) => {
+      if (entry.kind === "separator") {
+        return <TranscriptDateSeparator label={entry.label} />
+      }
+      const event = entry.item
+      const quoted = event.replyToEventId
+        ? eventsById.get(event.replyToEventId)
+        : undefined
+      return (
+        <RoomTimelinePost
+          event={event}
+          previous={events[entry.index - 1]}
+          quoted={quoted}
+          displayIndex={displayIndex}
+          members={members}
+          onOpenSession={openSession}
+          speakerName={speakerName}
+          onJumpToQuote={scrollToEvent}
+          onReply={handleReply}
+        />
+      )
+    },
+    [
+      events,
+      eventsById,
+      handleReply,
+      members,
+      openSession,
+      scrollToEvent,
+      speakerName,
+    ]
+  )
 
   const candidates = useMemo(() => {
     const query = addQuery.trim().toLowerCase()
@@ -627,6 +896,7 @@ export function RoomWorkspace({
       setBody("")
       setReplyTo(null)
       toast.success(t("posted"))
+      setStickSignal((signal) => signal + 1)
       await reload()
       void useRoomCatalogStore.getState().refresh()
     } catch (error) {
@@ -874,7 +1144,7 @@ export function RoomWorkspace({
             query={find.query}
             current={find.current}
             total={find.total}
-            searching={truncated || loadingOlder}
+            searching={infiniteScroll.searchingOlderHistory}
             focusToken={find.focusToken}
             scopeLabel={t("findInRoom")}
             scopePlaceholder={t("findPlaceholder")}
@@ -884,172 +1154,36 @@ export function RoomWorkspace({
             onClose={find.onClose}
           />
         ) : null}
-        <ScrollArea
-          className="min-w-0 flex-1"
-          onViewportRef={handleTimelineViewport}
+        <MessageThread
+          key={roomId}
+          className="min-h-0 min-w-0 flex-1"
+          initial="instant"
         >
-          <div className="mx-auto flex w-full max-w-3xl flex-col py-2">
-            {truncated ? (
-              <div className="flex justify-center py-2">
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="ghost"
-                  className="h-7 px-2 text-xs text-muted-foreground"
-                  disabled={loadingOlder}
-                  onClick={() => void loadOlder()}
-                >
-                  {t("loadOlder")}
-                </Button>
-              </div>
-            ) : null}
-            {events.length === 0 ? (
+          <RoomTranscriptStick
+            autoScrollSignal={stickSignal}
+            viewportRef={timelineViewportRef}
+          />
+          <VirtualizedTranscript
+            items={datedEntries}
+            getItemKey={getTimelineItemKey}
+            renderItem={renderTimelineItem}
+            emptyState={
               <p className="px-4 py-8 text-sm text-muted-foreground">
                 {t("timelineEmpty")}
               </p>
-            ) : (
-              events.map((event, index) => {
-                const fromYou = event.authorKind === "human"
-                const quoted = event.replyToEventId
-                  ? eventsById.get(event.replyToEventId)
-                  : undefined
-                const previous = events[index - 1]
-                const grouped = Boolean(
-                  previous &&
-                  sameSpeaker(previous, event) &&
-                  Math.abs(
-                    new Date(event.createdAt).getTime() -
-                      new Date(previous.createdAt).getTime()
-                  ) < GROUP_MS
-                )
-                const markdown = roomMessageMarkdown({
-                  body: event.body,
-                  members: detail.members,
-                  mentionConversationIds: event.mentionConversationIds,
-                  mentionHuman: Boolean(event.mentionHuman),
-                  allLabel: t("mentionAll"),
-                  humanLabel: t("mentionHuman"),
-                  untitled: (id) => t("untitled", { id }),
-                })
-                const name = fromYou
-                  ? t("you")
-                  : memberLabel(
-                      {
-                        conversationId: event.source.conversationId,
-                        title: event.source.title,
-                      },
-                      (id) => t("untitled", { id })
-                    )
-                return (
-                  <article
-                    key={event.id}
-                    id={`room-event-${event.id}`}
-                    // Row marker the shared find highlighter walks; the index
-                    // must match the `findEntries` projection above.
-                    data-find-row-index={index}
-                    data-mention-human={event.mentionHuman ? "true" : undefined}
-                    className={cn(
-                      "group flex gap-3 border-l-2 px-4 hover:bg-muted/40",
-                      grouped ? "py-0.5" : "mt-2 py-1.5",
-                      event.mentionHuman
-                        ? "border-amber-500 bg-amber-500/10"
-                        : "border-transparent"
-                    )}
-                  >
-                    {grouped ? (
-                      <span className="flex w-9 shrink-0 items-start justify-center pt-0.5">
-                        <RoomReplyButton
-                          label={t("reply")}
-                          hint={t("replyHint")}
-                          compact
-                          onReply={() => setReplyTo(event)}
-                        />
-                      </span>
-                    ) : (
-                      <RoomSpeakerAvatar
-                        human={fromYou}
-                        agentType={event.source.agentType}
-                      />
-                    )}
-                    <div className="min-w-0 flex-1">
-                      {grouped ? null : (
-                        <div className="mb-0.5 flex items-baseline gap-2">
-                          {fromYou ? (
-                            <span className="truncate text-[15px] font-bold leading-5">
-                              {name}
-                            </span>
-                          ) : (
-                            <button
-                              type="button"
-                              className="truncate text-[15px] font-bold leading-5 hover:underline"
-                              title={t("openSession")}
-                              onClick={() =>
-                                openSession(event.source.conversationId)
-                              }
-                            >
-                              {name}
-                            </button>
-                          )}
-                          <time className="shrink-0 text-[11px] text-muted-foreground">
-                            {formatRoomTime(event.createdAt)}
-                          </time>
-                          <RoomReplyProgressBadge
-                            event={event}
-                            className="shrink-0"
-                          />
-                          <RoomReplyButton
-                            label={t("reply")}
-                            hint={t("replyHint")}
-                            onReply={() => setReplyTo(event)}
-                          />
-                        </div>
-                      )}
-                      {event.replyToEventId ? (
-                        quoted ? (
-                          <button
-                            type="button"
-                            className="mb-1 w-full border-l-2 border-primary/40 py-0.5 pl-2 text-left"
-                            title={t("jumpToQuote")}
-                            onClick={() =>
-                              scrollToEvent(event.replyToEventId as string)
-                            }
-                          >
-                            <p className="truncate text-[11px] font-medium text-muted-foreground">
-                              {speakerName(quoted)}
-                            </p>
-                            {/* Raw body on purpose: the quote is a two-line
-                                locator for the post it points at, not a second
-                                copy of it. Markdown here would grow headings
-                                and code blocks inside a clamped preview. */}
-                            <p className="line-clamp-2 text-[12px] text-muted-foreground">
-                              {quoted.body}
-                            </p>
-                          </button>
-                        ) : (
-                          <div className="mb-1 border-l-2 border-primary/40 py-0.5 pl-2">
-                            <p className="text-[11px] text-muted-foreground">
-                              {t("quotedMissing")}
-                            </p>
-                          </div>
-                        )
-                      ) : null}
-                      {grouped ? (
-                        <RoomReplyProgressBadge
-                          event={event}
-                          className="mb-0.5 inline-block"
-                        />
-                      ) : null}
-                      <RoomPostBody
-                        source={markdown}
-                        onOpenSession={openSession}
-                      />
-                    </div>
-                  </article>
-                )
-              })
-            )}
-          </div>
-        </ScrollArea>
+            }
+            scrollApiRef={scrollApiRef}
+            hasOlder={truncated}
+            isLoadingOlder={loadingOlder}
+            onLoadOlder={handleLoadOlder}
+            loadOlderLabel={t("loadOlder")}
+            loadingOlderLabel={t("loadOlder")}
+            prependEpoch={prependEpoch}
+            prependScopeKey={roomId}
+            gap={0}
+            padding={8}
+          />
+        </MessageThread>
         {membersOpen ? (
           <aside className="flex w-56 shrink-0 flex-col border-l border-border/60">
             <div className="flex items-center justify-between gap-1.5 px-3 py-2 text-xs font-medium text-muted-foreground">
