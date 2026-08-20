@@ -5185,6 +5185,8 @@
     "toSession": "إلى {name}",
     "fromPrefix": "من",
     "channelRoom": "الغرفة",
+    "openRoomAria": "فتح الغرفة: {title}",
+    "roomUnavailableHint": "الغرفة غير متاحة · {roomId}",
     "toPrefix": "إلى",
     "fromMailSystem": "من نظام البريد",
     "openedLetter": "رسالة مفتوحة",

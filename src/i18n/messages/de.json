@@ -5185,6 +5185,8 @@
     "toSession": "An {name}",
     "fromPrefix": "Von",
     "channelRoom": "Raum",
+    "openRoomAria": "Raum öffnen: {title}",
+    "roomUnavailableHint": "Raum nicht verfügbar · {roomId}",
     "toPrefix": "An",
     "fromMailSystem": "Vom Mailsystem",
     "openedLetter": "Geöffneter Brief",

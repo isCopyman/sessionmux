@@ -5185,6 +5185,8 @@
     "toSession": "{name} へ",
     "fromPrefix": "差出人",
     "channelRoom": "ルーム",
+    "openRoomAria": "ルームを開く: {title}",
+    "roomUnavailableHint": "ルームは利用できません · {roomId}",
     "toPrefix": "宛先",
     "fromMailSystem": "メールシステムより",
     "openedLetter": "開封済みの手紙",
