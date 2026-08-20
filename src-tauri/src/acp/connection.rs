@@ -1276,6 +1276,10 @@ pub async fn spawn_agent_connection(
     agent_type: AgentType,
     working_dir: Option<String>,
     session_id: Option<String>,
+    // Resume `session_id` or nothing at all: when the agent cannot restore it,
+    // stop instead of opening a different native Session. See
+    // `LoadFailureRoute::StopResumeOnly`.
+    resume_only: bool,
     runtime_env: BTreeMap<String, String>,
     owner_window_label: String,
     emitter: EventEmitter,
@@ -1469,6 +1473,7 @@ pub async fn spawn_agent_connection(
                     agent_type,
                     working_dir,
                     session_id,
+                    resume_only,
                     cmd_rx,
                     emitter_clone.clone(),
                     Arc::clone(&state_clone),
@@ -3861,6 +3866,7 @@ fn canonical_spec_to_mcp_server(name: &str, spec: &serde_json::Value) -> Result<
         agent_type = ?agent_type,
         working_dir = ?working_dir,
         session_id = ?session_id,
+        resume_only = %resume_only,
     )
 )]
 async fn run_connection(
@@ -3869,6 +3875,7 @@ async fn run_connection(
     agent_type: AgentType,
     working_dir: Option<String>,
     session_id: Option<String>,
+    resume_only: bool,
     mut cmd_rx: mpsc::Receiver<ConnectionCommand>,
     emitter: EventEmitter,
     state: Arc<RwLock<SessionState>>,
@@ -4809,29 +4816,45 @@ async fn run_connection(
                         let forgotten_session = classify_session_load_failure(e.code, &err_str);
                         let recovers_locally =
                             recovers_load_failure_locally(agent_type, forgotten_session);
-                        if let Some(code) = forgotten_session.filter(|_| !recovers_locally) {
-                            tracing::warn!(
-                                "[ACP] session/load failed ({err_str}); surfacing as session_load_failed={code}"
-                            );
-                            emit_with_state(
-                                &state,
-                                &emitter_clone,
-                                AcpEvent::SessionLoadFailed {
-                                    session_id: sid.clone(),
-                                    message: err_str,
-                                    code: code.to_string(),
-                                },
-                            )
-                            .await;
-                            emit_with_state(
-                                &state,
-                                &emitter_clone,
-                                AcpEvent::StatusChanged {
-                                    status: ConnectionStatus::Error,
-                                },
-                            )
-                            .await;
-                            return Ok(());
+                        match route_load_failure(forgotten_session, recovers_locally, resume_only) {
+                            LoadFailureRoute::SurfaceLoadFailed(code) => {
+                                tracing::warn!(
+                                    "[ACP] session/load failed ({err_str}); surfacing as session_load_failed={code}"
+                                );
+                                emit_with_state(
+                                    &state,
+                                    &emitter_clone,
+                                    AcpEvent::SessionLoadFailed {
+                                        session_id: sid.clone(),
+                                        message: err_str,
+                                        code: code.to_string(),
+                                    },
+                                )
+                                .await;
+                                emit_with_state(
+                                    &state,
+                                    &emitter_clone,
+                                    AcpEvent::StatusChanged {
+                                        status: ConnectionStatus::Error,
+                                    },
+                                )
+                                .await;
+                                return Ok(());
+                            }
+                            // Quiet on purpose: nobody asked for this launch, and
+                            // nothing was lost. The Session keeps its native id
+                            // and the queued letter keeps its place; the next
+                            // turn the Session runs for any other reason flushes
+                            // it. The following StatusChanged{Disconnected} from
+                            // the connection thread is the only visible effect.
+                            LoadFailureRoute::StopResumeOnly => {
+                                tracing::warn!(
+                                    "[ACP] resume-only connection could not restore {sid} \
+                                     ({err_str}); not opening a new native Session"
+                                );
+                                return Ok(());
+                            }
+                            LoadFailureRoute::OpenNewSession => {}
                         }
                         if attempted_load {
                             tracing::warn!(
@@ -6957,6 +6980,52 @@ fn classify_session_load_failure(
 /// emit-then-fall-back-to-`session/new` behaviour.
 fn recovers_load_failure_locally(agent_type: AgentType, classified: Option<&'static str>) -> bool {
     classified.is_some() && transcript_dir_for(agent_type).is_some()
+}
+
+/// What happens after `session/load` fails — or was never sent, because the
+/// agent did not advertise `loadSession`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LoadFailureRoute {
+    /// Stop and hand the user the Reload / New-conversation choice: the native
+    /// Session is gone and its history lives in the agent's own store.
+    SurfaceLoadFailed(&'static str),
+    /// Stop silently, leaving the Codeg row on the native Session it already
+    /// names.
+    StopResumeOnly,
+    /// Open a fresh native Session and link the transcript with
+    /// `continues_from`.
+    OpenNewSession,
+}
+
+/// Route a load failure. `classified` is [`classify_session_load_failure`]'s
+/// verdict and `recovers_locally` [`recovers_load_failure_locally`]'s; both are
+/// passed in so this stays a pure decision the unit tests can drive without a
+/// live agent.
+///
+/// `resume_only` is what a Session Dispatcher wake sets. That path exists to
+/// deliver mail into ONE named native Session, and nothing downstream of it
+/// binds a different id: `spawn_agent` returns only after `SessionStarted`, so
+/// the connection's `conversation_id` is still unset when the lifecycle
+/// subscriber sees the event, and the prompt queue's later
+/// `send_prompt_linked_with_message_id` skips the bind entirely because the
+/// dispatcher has set `conversation_id` by then (`already_linked`). A
+/// `session/new` here therefore produces a native Session no Codeg row owns —
+/// which the local-session importer then materializes as a brand-new
+/// conversation that answers the mail in the target's place (the O9 "phantom
+/// Sessions"). Waiting for the target's next real turn is the correct
+/// alternative: the letter is already durable in its prompt queue.
+fn route_load_failure(
+    classified: Option<&'static str>,
+    recovers_locally: bool,
+    resume_only: bool,
+) -> LoadFailureRoute {
+    if let Some(code) = classified.filter(|_| !recovers_locally) {
+        return LoadFailureRoute::SurfaceLoadFailed(code);
+    }
+    if resume_only {
+        return LoadFailureRoute::StopResumeOnly;
+    }
+    LoadFailureRoute::OpenNewSession
 }
 
 /// True when a `SessionUpdate` represents actual agent-produced output for
@@ -12105,6 +12174,45 @@ mod tests {
             assert!(
                 !recovers_load_failure_locally(builtin, Some("session_unavailable")),
                 "{builtin:?} has no codeg-side transcript to fall back on"
+            );
+        }
+    }
+
+    /// O9: an @ mention of an IDLE Session used to reach `session/new` through
+    /// this route, and the native Session it opened belonged to no Codeg row —
+    /// the importer then gave it one, and that phantom answered the mail in the
+    /// target's place. A dispatcher wake may only resume.
+    #[test]
+    fn a_dispatcher_wake_never_routes_a_load_failure_to_a_new_session() {
+        // The common shape: the agent never advertised `loadSession`, so no
+        // load was even attempted and nothing is classified.
+        assert_eq!(
+            route_load_failure(None, false, false),
+            LoadFailureRoute::OpenNewSession,
+            "an ordinary connect still opens a session and links the transcript"
+        );
+        assert_eq!(
+            route_load_failure(None, false, true),
+            LoadFailureRoute::StopResumeOnly
+        );
+
+        // A custom agent that forgot the session can normally absorb it
+        // locally; under resume-only it still must not create one.
+        assert_eq!(
+            route_load_failure(Some("session_unavailable"), true, false),
+            LoadFailureRoute::OpenNewSession
+        );
+        assert_eq!(
+            route_load_failure(Some("session_unavailable"), true, true),
+            LoadFailureRoute::StopResumeOnly
+        );
+
+        // A store-owning agent's forgotten session keeps its banner either way:
+        // that branch already refused to create anything.
+        for resume_only in [false, true] {
+            assert_eq!(
+                route_load_failure(Some("resource_not_found"), false, resume_only),
+                LoadFailureRoute::SurfaceLoadFailed("resource_not_found")
             );
         }
     }
