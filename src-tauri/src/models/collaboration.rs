@@ -621,6 +621,24 @@ pub struct RoomTimelineEvent {
     pub mention_human: bool,
     #[serde(default)]
     pub author_kind: CollaborationAuthorKind,
+    /// How many Sessions this post is still waiting on, as "resolved of
+    /// expected". `@`-ing N Sessions files N independent Delivery rows with
+    /// their own `obligation_state`, so the ledger is exact — these only read
+    /// it back. Both are `Some` exactly when `expects_reply` is set: a post
+    /// that asked nothing has no ledger to report, and `None` must not be
+    /// rendered as `0/0`.
+    ///
+    /// Live obligations only: a `dismissed` or `failed` Delivery is not an
+    /// obligation at all, so it leaves *both* sides of the fraction rather
+    /// than sitting in the denominator forever (the obligation invariant in
+    /// `MODEL-AUDIT-RFC-2026-08-21`, slice ③). `expected` can therefore be
+    /// `Some(0)` — an ask that only reached `@human`, who has no Delivery row
+    /// of its own, or one whose deliveries were all dismissed.
+    #[serde(default)]
+    pub expected_reply_count: Option<u32>,
+    /// Subset of `expected_reply_count` whose obligation is already paid.
+    #[serde(default)]
+    pub resolved_reply_count: Option<u32>,
     pub created_at: DateTime<Utc>,
 }
 

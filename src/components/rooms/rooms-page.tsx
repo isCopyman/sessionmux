@@ -173,6 +173,54 @@ function RoomReplyButton({
   )
 }
 
+/**
+ * The reply ledger of one post, as "M/N answered". `@`-ing N Sessions files N
+ * independent obligations, so the fraction is exact rather than estimated —
+ * this only reads back what the backend already counted. A post that asked
+ * nothing renders nothing.
+ *
+ * Without a fraction worth drawing it keeps the plain "needs a reply" wording:
+ * a payload from before the counts existed, or an ask whose only target was
+ * `@human`, who has no delivery row of their own. The sentence that explains
+ * the numbers lives in the tooltip so the badge itself stays a glance wide.
+ */
+function RoomReplyProgressBadge({
+  event,
+  className,
+}: {
+  event: RoomTimelineEvent
+  className?: string
+}) {
+  const t = useTranslations("Room")
+  if (!event.expectsReply) return null
+  const expected = Math.max(event.expectedReplyCount ?? 0, 0)
+  const resolved = Math.min(event.resolvedReplyCount ?? 0, expected)
+  const pending = expected - resolved
+  const answered = expected > 0 && pending === 0
+  let label = t("needsReplyBadge")
+  let hint: string | undefined
+  if (expected > 0) {
+    label = t("replyProgressBadge", { resolved, expected })
+    hint = answered
+      ? t("replyProgressDoneHint", { expected })
+      : t("replyProgressHint", { expected, resolved, pending })
+  }
+  return (
+    <span
+      className={cn(
+        "rounded-full px-1.5 py-px text-[10px] font-medium",
+        answered
+          ? "bg-emerald-500/15 text-emerald-800 dark:text-emerald-200"
+          : "bg-amber-500/15 text-amber-800 dark:text-amber-200",
+        className
+      )}
+      title={hint}
+    >
+      {label}
+    </span>
+  )
+}
+
 function RoomSpeakerAvatar({
   human,
   agentType,
@@ -946,11 +994,10 @@ export function RoomWorkspace({
                           <time className="shrink-0 text-[11px] text-muted-foreground">
                             {formatRoomTime(event.createdAt)}
                           </time>
-                          {event.expectsReply ? (
-                            <span className="shrink-0 rounded-full bg-amber-500/15 px-1.5 py-px text-[10px] font-medium text-amber-800 dark:text-amber-200">
-                              {t("needsReplyBadge")}
-                            </span>
-                          ) : null}
+                          <RoomReplyProgressBadge
+                            event={event}
+                            className="shrink-0"
+                          />
                           <RoomReplyButton
                             label={t("reply")}
                             hint={t("replyHint")}
@@ -987,10 +1034,11 @@ export function RoomWorkspace({
                           </div>
                         )
                       ) : null}
-                      {grouped && event.expectsReply ? (
-                        <span className="mb-0.5 inline-block rounded-full bg-amber-500/15 px-1.5 py-px text-[10px] font-medium text-amber-800 dark:text-amber-200">
-                          {t("needsReplyBadge")}
-                        </span>
+                      {grouped ? (
+                        <RoomReplyProgressBadge
+                          event={event}
+                          className="mb-0.5 inline-block"
+                        />
                       ) : null}
                       <RoomPostBody
                         source={markdown}
