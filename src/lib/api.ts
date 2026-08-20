@@ -2293,6 +2293,16 @@ export async function renameCollaborationRoom(
   return getTransport().call("collaboration_room_rename", { roomId, title })
 }
 
+export async function setRoomWorkbench(
+  roomId: string,
+  workbenchId: number
+): Promise<CollaborationRoomDetail> {
+  return getTransport().call("collaboration_room_set_workbench", {
+    roomId,
+    workbenchId,
+  })
+}
+
 export async function addCollaborationRoomPath(
   roomId: string,
   path: string
