@@ -279,7 +279,6 @@ export interface MessageTurn {
    * most parsers. */
   completed_at?: string | null
   provider_anchor?: string | null
-
 }
 
 export interface ConversationDetail {
