@@ -3385,7 +3385,11 @@ async fn send_new_session_within_budget(
         budget.as_secs(),
         companion_servers.len(),
     );
-    match tokio::time::timeout(budget, send_new_session_capturing_models(cx, agent_type, req)).await
+    match tokio::time::timeout(
+        budget,
+        send_new_session_capturing_models(cx, agent_type, req),
+    )
+    .await
     {
         Ok(result) => result,
         Err(_) => {
@@ -14313,8 +14317,12 @@ mod tests {
 
         // Custom agent + non-empty server list: the one shape the MCP hint
         // normally fires on.
-        let raw = tag_mcp_suspect(wire, AgentType::Custom("my-agent"), &[stdio_server("codeg")])
-            .to_string();
+        let raw = tag_mcp_suspect(
+            wire,
+            AgentType::Custom("my-agent"),
+            &[stdio_server("codeg")],
+        )
+        .to_string();
         assert!(
             !raw.contains(MCP_SUSPECT_SENTINEL),
             "a timeout is not a rejection and must not be re-tagged: {raw}"
