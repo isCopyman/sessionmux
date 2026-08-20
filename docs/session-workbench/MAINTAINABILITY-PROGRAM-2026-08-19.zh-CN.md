@@ -1206,3 +1206,17 @@ T2 后置截图（CDP 9222 可用，基线在 .artifacts）+ 晨间验收报告 
   "提交后重跑基底自检"的字面命令在主线前进后会 reset 掉工人成果——两个
   工人都靠自主判断改用 rebase 避险；模板改为"提交后 rebase 到主线最新"。
   ⑥ deja 工具二次核实不存在于本会话工具面。
+- 2026-08-21 凌晨 **prompt 全量审计（零遗漏）+ 三项新裁决**：① 用户要求核对
+  今日所有 prompt 是否在档。deja 不适用（活会话未入索引、单查数分钟），改为
+  直接解析 Claude Code 会话 jsonl——发现用户消息走**双通道**（正常 user 条目
+  + 干活中插队的 queue-operation 条目），只查一条必漏一半；两通道合并去重得
+  22 条真实 prompt，逐条对 O13-O32 **零遗漏**（审计产物 scratchpad/
+  prompt-audit.txt）。方法记档供复用。② GitHub 接入深化裁决：issue↔PR↔commit
+  绑定的回溯价值认可，是终态；阻塞在"永不 push origin"军规（用户自己的令）。
+  即刻折中：**commit message 引用 O# 惯例**从现在起执行（git log --grep O25
+  即可回溯）；用户拍板允许私有远端之日，开放项迁 issues、工人分支改走 PR。
+  ③ 改名征集：领导给出 shortlist（Skein/Baton/Camerata/Troupe/Ensemble/
+  Fugue/Atelier），避开 Crew/Swarm/Maestro/Loom 等已被占用心智的词；定名前
+  需查商标域名；改名执行是机械清扫（binary/bundle id/文档）单独立项，用户
+  拍板前不动。④ w-replycopy 派出：需要回复/等待回复改方向自明措辞+tooltip
+  （O31 前半），10 语言。
