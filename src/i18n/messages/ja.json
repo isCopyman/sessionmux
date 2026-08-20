@@ -3344,7 +3344,10 @@
         "openFile": "{filePath} を開く",
         "openInEditor": "エディタで開く",
         "remove": "削除",
-        "noDiffDataAvailable": "{filePath} の差分データがありません"
+        "noDiffDataAvailable": "{filePath} の差分データがありません",
+        "showInlineDiff": "インライン差分を表示",
+        "hideInlineDiff": "インライン差分を隠す",
+        "noInlineDiff": "このファイルの差分データはありません"
       },
       "askQuestion": {
         "title": "エージェントが選択を求めています",

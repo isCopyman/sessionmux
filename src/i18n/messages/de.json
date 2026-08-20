@@ -3344,7 +3344,10 @@
         "openFile": "{filePath} öffnen",
         "openInEditor": "Im Editor öffnen",
         "remove": "Entfernen",
-        "noDiffDataAvailable": "Keine Diff-Daten verfügbar für {filePath}"
+        "noDiffDataAvailable": "Keine Diff-Daten verfügbar für {filePath}",
+        "showInlineDiff": "Inline-Diff anzeigen",
+        "hideInlineDiff": "Inline-Diff ausblenden",
+        "noInlineDiff": "Für diese Datei wurden keine Diff-Daten erfasst"
       },
       "askQuestion": {
         "title": "Der Agent benötigt deine Auswahl",

@@ -3344,7 +3344,10 @@
         "openFile": "打开 {filePath}",
         "openInEditor": "在编辑器中打开",
         "remove": "移除",
-        "noDiffDataAvailable": "未找到 {filePath} 的差异数据"
+        "noDiffDataAvailable": "未找到 {filePath} 的差异数据",
+        "showInlineDiff": "展开行内差异",
+        "hideInlineDiff": "收起行内差异",
+        "noInlineDiff": "该文件没有可展示的差异数据"
       },
       "askQuestion": {
         "title": "智能体需要你的选择",

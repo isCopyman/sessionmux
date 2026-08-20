@@ -3344,7 +3344,10 @@
         "openFile": "فتح {filePath}",
         "openInEditor": "فتح في المحرر",
         "remove": "إزالة",
-        "noDiffDataAvailable": "لا توجد بيانات diff متاحة لـ {filePath}"
+        "noDiffDataAvailable": "لا توجد بيانات diff متاحة لـ {filePath}",
+        "showInlineDiff": "إظهار الفرق المضمّن",
+        "hideInlineDiff": "إخفاء الفرق المضمّن",
+        "noInlineDiff": "لم يتم التقاط بيانات diff لهذا الملف"
       },
       "askQuestion": {
         "title": "يحتاج الوكيل إلى اختيارك",

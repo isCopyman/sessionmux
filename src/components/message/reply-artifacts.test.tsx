@@ -29,6 +29,9 @@ vi.mock("@/contexts/active-folder-context", () => ({
 vi.mock("@/lib/platform", () => ({
   isLocalDesktop: () => true,
   revealItemInDir: mockReveal,
+  // Pulled in (unused here) by the real `UnifiedDiffPreview` import chain; a
+  // factory mock replaces the whole module, so the export must exist.
+  openUrl: vi.fn(),
 }))
 // Drive the card's file list directly — the extractor itself is covered by
 // session-files' own tests; here we only wire the parsed shape into the UI.
@@ -39,14 +42,32 @@ vi.mock("@/lib/session-files", () => ({
 const MODIFIED_DIFF =
   "diff --git a/src/a.ts b/src/a.ts\n@@ -1,2 +1,2 @@\n-old\n+new"
 const DELETION_DIFF = "*** Delete File: src/gone.ts\n-a\n-b"
+// `new file mode` is what routes a file into the "New files" section.
+const CREATION_DIFF =
+  "diff --git a/src/new.ts b/src/new.ts\nnew file mode 100644\n--- /dev/null\n+++ b/src/new.ts\n@@ -0,0 +1 @@\n+created line"
+const DIFF_A =
+  "diff --git a/src/a.ts b/src/a.ts\n@@ -1,2 +1,2 @@\n-alpha old\n+alpha new"
+const DIFF_B =
+  "diff --git a/src/b.ts b/src/b.ts\n@@ -1,2 +1,2 @@\n-bravo old\n+bravo new"
+
+const changedFile = (
+  id: string,
+  path: string,
+  diff: string | null
+): FileChangeStat => ({ id, path, additions: 1, deletions: 1, diff })
 
 // Only `sourceTurns[0].id` is read (it keys the diff tab); the file list comes
 // from the mocked extractor, so a bare id is all this fixture needs.
 const sourceTurns = [{ id: "reply-turn-1" }] as unknown as MessageTurn[]
 
-function renderCard(files: FileChangeStat[]) {
+function renderCard(files: FileChangeStat[], isResponseComplete = true) {
   mockExtract.mockReturnValue(files)
-  return render(<ReplyArtifacts sourceTurns={sourceTurns} isResponseComplete />)
+  return render(
+    <ReplyArtifacts
+      sourceTurns={sourceTurns}
+      isResponseComplete={isResponseComplete}
+    />
+  )
 }
 
 // The "Files changed" section is collapsed by default — expand it so the
@@ -134,5 +155,116 @@ describe("ReplyArtifacts — view diff action", () => {
     ).not.toBeInTheDocument()
     // The removed file still renders its static destructive badge.
     expect(screen.getByText("remove")).toBeInTheDocument()
+  })
+})
+
+describe("ReplyArtifacts — inline diff expansion", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it("renders no diff rows until the file's toggle is clicked", () => {
+    renderCard([changedFile("f1", "src/a.ts", DIFF_A)])
+    expandChanged()
+
+    // Lazy: nothing of the diff exists in the DOM before the first expand.
+    expect(screen.queryByText("alpha new")).not.toBeInTheDocument()
+    expect(screen.queryByText("alpha old")).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole("button", { name: "showInlineDiff" }))
+
+    expect(screen.getByText("alpha new")).toBeInTheDocument()
+    expect(screen.getByText("alpha old")).toBeInTheDocument()
+  })
+
+  it("collapses the panel when the open file's toggle is clicked again", () => {
+    renderCard([changedFile("f1", "src/a.ts", DIFF_A)])
+    expandChanged()
+
+    fireEvent.click(screen.getByRole("button", { name: "showInlineDiff" }))
+    expect(screen.getByText("alpha new")).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole("button", { name: "hideInlineDiff" }))
+    expect(screen.queryByText("alpha new")).not.toBeInTheDocument()
+  })
+
+  it("keeps at most one file expanded per section (accordion)", () => {
+    renderCard([
+      changedFile("f1", "src/a.ts", DIFF_A),
+      changedFile("f2", "src/b.ts", DIFF_B),
+    ])
+    expandChanged()
+
+    const [toggleA, toggleB] = screen.getAllByRole("button", {
+      name: "showInlineDiff",
+    })
+
+    fireEvent.click(toggleA)
+    expect(screen.getByText("alpha new")).toBeInTheDocument()
+    expect(screen.queryByText("bravo new")).not.toBeInTheDocument()
+
+    fireEvent.click(toggleB)
+    // Opening the second file closes the first — one panel at a time.
+    expect(screen.queryByText("alpha new")).not.toBeInTheDocument()
+    expect(screen.getByText("bravo new")).toBeInTheDocument()
+  })
+
+  it("disables the toggle when the reply captured no diff for the file", () => {
+    renderCard([
+      { id: "f1", path: "src/a.ts", additions: 0, deletions: 0, diff: null },
+    ])
+    expandChanged()
+
+    const toggle = screen.getByRole("button", { name: "noInlineDiff" })
+    expect(toggle).toBeDisabled()
+    // No "show/hide" affordance is offered at all for a diff-less file.
+    expect(
+      screen.queryByRole("button", { name: "showInlineDiff" })
+    ).not.toBeInTheDocument()
+  })
+
+  it("expands inline diffs in the New files section too", () => {
+    renderCard([
+      {
+        id: "n1",
+        path: "src/new.ts",
+        additions: 1,
+        deletions: 0,
+        diff: CREATION_DIFF,
+      },
+    ])
+    // "New files" is open by default, so the toggle is already mounted.
+    expect(screen.queryByText("created line")).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole("button", { name: "showInlineDiff" }))
+
+    expect(screen.getByText("created line")).toBeInTheDocument()
+  })
+
+  it("leaves the workspace view-diff button in place next to the toggle", () => {
+    renderCard([changedFile("f1", "src/a.ts", DIFF_A)])
+    expandChanged()
+
+    fireEvent.click(screen.getByRole("button", { name: "showInlineDiff" }))
+    fireEvent.click(screen.getByRole("button", { name: "viewDiff" }))
+
+    expect(mockOpenDiff).toHaveBeenCalledWith(
+      "src/a.ts",
+      DIFF_A,
+      "reply-turn-1"
+    )
+  })
+
+  it("parses nothing — and renders nothing — before the reply completes", () => {
+    const { container } = renderCard(
+      [changedFile("f1", "src/a.ts", DIFF_A)],
+      false
+    )
+
+    expect(mockExtract).not.toHaveBeenCalled()
+    expect(container).toBeEmptyDOMElement()
+    expect(
+      screen.queryByRole("button", { name: "showInlineDiff" })
+    ).not.toBeInTheDocument()
   })
 })

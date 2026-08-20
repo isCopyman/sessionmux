@@ -3344,7 +3344,10 @@
         "openFile": "{filePath} 열기",
         "openInEditor": "편집기에서 열기",
         "remove": "제거",
-        "noDiffDataAvailable": "{filePath}에 대한 diff 데이터가 없습니다"
+        "noDiffDataAvailable": "{filePath}에 대한 diff 데이터가 없습니다",
+        "showInlineDiff": "인라인 diff 표시",
+        "hideInlineDiff": "인라인 diff 숨기기",
+        "noInlineDiff": "이 파일의 diff 데이터가 없습니다"
       },
       "askQuestion": {
         "title": "에이전트가 선택을 요청합니다",

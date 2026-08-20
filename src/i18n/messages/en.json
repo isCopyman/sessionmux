@@ -3344,7 +3344,10 @@
         "openFile": "Open {filePath}",
         "openInEditor": "Open in editor",
         "remove": "Remove",
-        "noDiffDataAvailable": "No diff data available for {filePath}"
+        "noDiffDataAvailable": "No diff data available for {filePath}",
+        "showInlineDiff": "Show inline diff",
+        "hideInlineDiff": "Hide inline diff",
+        "noInlineDiff": "No diff data was captured for this file"
       },
       "askQuestion": {
         "title": "The agent needs your input",
