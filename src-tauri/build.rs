@@ -3,7 +3,29 @@ fn main() {
     {
         ensure_sidecar_placeholder();
         tauri_build::build();
+        link_common_controls_v6_for_tests();
     }
+}
+
+/// The desktop dependency graph (tauri-plugin-dialog → rfd) statically imports
+/// `comctl32.dll!TaskDialogIndirect`, which only exists in the Common-Controls
+/// **v6** side-by-side assembly. The app exe gets the required manifest from
+/// `tauri_build::build()`, but cargo's *test* executables only carry rustc's
+/// default manifest — Windows then resolves comctl32 to the v5.82 stub and the
+/// test exe dies at load time with STATUS_ENTRYPOINT_NOT_FOUND (0xc0000139)
+/// before any test runs. Merging the v6 dependency into the linker-embedded
+/// manifest fixes `cargo test --features test-utils` on Windows.
+#[cfg(feature = "tauri-runtime")]
+fn link_common_controls_v6_for_tests() {
+    let target = std::env::var("TARGET").unwrap_or_default();
+    if !target.contains("windows-msvc") {
+        return;
+    }
+    println!(
+        "cargo:rustc-link-arg-tests=/MANIFESTDEPENDENCY:type='win32' \
+         name='Microsoft.Windows.Common-Controls' version='6.0.0.0' \
+         publicKeyToken='6595b64144ccf1df' language='*' processorArchitecture='*'"
+    );
 }
 
 /// Tauri's bundler validates that every `bundle.externalBin` path resolves
