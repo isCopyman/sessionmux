@@ -57,6 +57,16 @@ pub enum AcpError {
     SdkNotInstalled(String),
     #[error("Agent did not respond to Initialize within 60 seconds. The cached binary may be outdated or incompatible. Try upgrading it from Agent Settings.")]
     InitializeTimeout,
+    /// `session/new` blew its own budget — the step AFTER `initialize`, and the
+    /// one that waits on the agent spawning and hand-shaking every MCP server
+    /// codeg injected. Deliberately separate from [`Self::InitializeTimeout`]:
+    /// both live inside the manager's single spawn wall clock, so a shared
+    /// "startup timed out" would leave nobody able to tell which step stalled.
+    /// The payload is built by `acp::spawn_budget::session_new_timeout_message`
+    /// and names the phase, the wait, and the companion servers this launch
+    /// injected.
+    #[error("{0}")]
+    SessionNewTimeout(String),
     #[error("Agent did not publish its configurable options within 60 seconds. The probe was aborted; the agent may be slow, idle, or not ACP-compliant — try again or check the agent binary.")]
     ProbeTimedOut,
     /// `session/new` failed on a **custom** agent that codeg had just handed
@@ -94,6 +104,13 @@ impl AcpError {
         Self::McpRejectedByAgent(sanitize_protocol_message(&raw.into()))
     }
 
+    /// [`Self::SessionNewTimeout`]. Sanitized like the other pass-through
+    /// payloads: the text is codeg's own, but it is assembled next to agent
+    /// output and reaches the user verbatim.
+    pub fn session_new_timeout(raw: impl Into<String>) -> Self {
+        Self::SessionNewTimeout(sanitize_protocol_message(&raw.into()))
+    }
+
     /// Stable machine-readable identifier for this error kind.
     ///
     /// Returned to the frontend alongside the human-readable message so
@@ -106,6 +123,7 @@ impl AcpError {
             Self::PiProjectTrustRequired(_) => Some("pi_project_trust_required"),
             Self::PlatformNotSupported(_) => Some("platform_not_supported"),
             Self::InitializeTimeout => Some("initialize_timeout"),
+            Self::SessionNewTimeout(_) => Some("session_new_timeout"),
             Self::ProbeTimedOut => Some("probe_timed_out"),
             Self::ProcessExited => Some("process_exited"),
             Self::DispatchUncertain => Some("dispatch_uncertain"),
