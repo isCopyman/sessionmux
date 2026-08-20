@@ -7,6 +7,7 @@ import {
   mentionMarkdownForSession,
   removeMentionToken,
   roomMessageBodyParts,
+  roomMessagePlainText,
   sessionIdsFromAtAliases,
 } from "./room-message-body"
 
@@ -176,6 +177,34 @@ describe("room message body", () => {
     expect(parts).toEqual([
       { type: "text", value: "ping [@Codex](codeg://agent/codex) now" },
     ])
+  })
+
+  it("projects a post to searchable text with chip labels, not link syntax", () => {
+    expect(
+      roomMessagePlainText({
+        body: "ask [Session D](codeg://session/4) about the plan",
+        members,
+        mentionConversationIds: [],
+        allLabel: "@all",
+        humanLabel: "@human",
+        untitled,
+      })
+    ).toBe("ask @Session D about the plan")
+  })
+
+  it("projects a mention recovered from metadata, which the raw body lacks", () => {
+    const text = roomMessagePlainText({
+      body: "please review",
+      members,
+      mentionConversationIds: [3],
+      mentionHuman: true,
+      allLabel: "@all",
+      humanLabel: "@human",
+      untitled,
+    })
+    // Appended chips run together exactly as `roomMessageMarkdown` emits them
+    // (adjacent badges, no separator of their own).
+    expect(text).toBe("please review @Session C@human")
   })
 
   it("does not let a file reference contribute a session id or affect the wake list", () => {

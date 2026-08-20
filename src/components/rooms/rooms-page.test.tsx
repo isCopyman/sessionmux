@@ -79,10 +79,29 @@ vi.mock("@/lib/api", () => ({
   listWorkspaceFiles: vi.fn().mockResolvedValue([]),
   gitLog: vi.fn().mockResolvedValue({ entries: [], has_upstream: false }),
   listAllConversations: vi.fn().mockResolvedValue([]),
+  // The manage-paths dialog now embeds the shared `DirectoryBrowser`, which
+  // browses the server's filesystem through these two.
+  getHomeDirectory: vi.fn().mockResolvedValue("/home/dev"),
+  listDirectoryEntries: vi.fn().mockResolvedValue([
+    { name: "notes", path: "/home/dev/notes", hasChildren: false },
+    { name: "extra", path: "/home/dev/extra", hasChildren: false },
+  ]),
+}))
+
+// Room detail refreshes are event-driven (`ROOM_CHANGED_EVENT`); keep the
+// handlers so a test can play the backend's broadcast.
+const platform = vi.hoisted(() => ({
+  roomChanged: new Set<(payload: unknown) => void>(),
 }))
 
 vi.mock("@/lib/platform", () => ({
-  subscribe: vi.fn().mockResolvedValue(() => {}),
+  subscribe: vi.fn(
+    async (event: string, handler: (payload: unknown) => void) => {
+      if (event !== "room://changed") return () => {}
+      platform.roomChanged.add(handler)
+      return () => platform.roomChanged.delete(handler)
+    }
+  ),
   // `useReferenceSearch` (now wired into the room's `@` panel) pulls in
   // `useAcpAgents`, which calls this unconditionally on mount — see
   // automations-page.test.tsx / task-detail-sheet.follow-up.test.tsx for the
@@ -125,10 +144,9 @@ vi.mock("@/stores/app-workspace-store", () => ({
           agent_type: "claude_code",
         },
       ],
-      // None of these fixtures set `rootFolderId` on the room detail, so
-      // `roomFolderPath` resolution never looks this up — kept here (rather
-      // than omitted) to match the real store's shape.
-      allFolders: [],
+      // Only the fixtures that set `rootFolderId` reach this list; the rest
+      // resolve to "no bound folder".
+      allFolders: [{ id: 7, path: "/repo/research" }],
     }),
 }))
 
@@ -248,6 +266,7 @@ describe("RoomWorkspace", () => {
   beforeEach(() => {
     vi.clearAllMocks()
     composerHandle.current = null
+    platform.roomChanged.clear()
     runtime.byConversationId.clear()
     api.getCollaborationRoom.mockResolvedValue(roomDetail())
     api.markCollaborationRoomSeen.mockResolvedValue(roomDetail())
@@ -546,10 +565,11 @@ describe("RoomWorkspace", () => {
     const dialog = await screen.findByRole("dialog")
     expect(within(dialog).getByText("No additional paths yet.")).toBeTruthy()
 
-    await user.type(
-      within(dialog).getByPlaceholderText("Absolute path to a folder"),
-      "/extra/notes"
-    )
+    // The path box belongs to the shared DirectoryBrowser now; it opens on the
+    // home directory, so clear that before typing an absolute path by hand.
+    const pathBox = await within(dialog).findByDisplayValue("/home/dev")
+    await user.clear(pathBox)
+    await user.type(pathBox, "/extra/notes")
     fireEvent.click(within(dialog).getByRole("button", { name: "Add" }))
 
     await waitFor(() => {
@@ -828,5 +848,132 @@ describe("RoomWorkspace", () => {
     })
     expect(api.refreshCatalog).toHaveBeenCalled()
     await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull())
+  })
+
+  it("opens a find bar on Ctrl+F and walks the matching posts", async () => {
+    api.getCollaborationRoomTimeline.mockResolvedValue(
+      timeline([
+        event({ id: "evt-a", body: "please **review** the plan" }),
+        event({ id: "evt-b", body: "second review pass" }),
+      ])
+    )
+    renderRoom()
+    expect(await screen.findByText("second review pass")).toBeTruthy()
+
+    // No bar until the shortcut asks for one.
+    expect(screen.queryByLabelText("Find in this room")).toBeNull()
+    fireEvent.keyDown(document.body, { key: "f", ctrlKey: true })
+    const input = await screen.findByLabelText("Find in this room")
+
+    fireEvent.change(input, { target: { value: "review" } })
+    const bar = input.closest("[data-conversation-find-bar]") as HTMLElement
+    expect(within(bar).getByText("1 / 2")).toBeTruthy()
+
+    // The selected match is marked on the post row, which is what the
+    // highlighter scrolls to — the emphasis itself is a CSS Custom Highlight
+    // range, and jsdom implements neither that API nor layout.
+    await waitFor(() =>
+      expect(
+        document.querySelector("[data-conversation-find-current]")?.id
+      ).toBe("room-event-evt-a")
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Next match" }))
+    expect(within(bar).getByText("2 / 2")).toBeTruthy()
+    await waitFor(() =>
+      expect(
+        document.querySelector("[data-conversation-find-current]")?.id
+      ).toBe("room-event-evt-b")
+    )
+  })
+
+  it("leaves Ctrl+F alone for a Room tab that is not the active one", async () => {
+    api.getCollaborationRoomTimeline.mockResolvedValue(timeline([event()]))
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <RoomWorkspace roomId={roomId} isActive={false} />
+      </NextIntlClientProvider>
+    )
+    expect(await screen.findByText("newest post")).toBeTruthy()
+
+    fireEvent.keyDown(document.body, { key: "f", ctrlKey: true })
+    expect(screen.queryByLabelText("Find in this room")).toBeNull()
+  })
+
+  it("names the bound folder in the header, full path in the tooltip", async () => {
+    api.getCollaborationRoom.mockResolvedValue({
+      ...roomDetail(),
+      rootFolderId: 7,
+    })
+    api.getCollaborationRoomTimeline.mockResolvedValue(timeline([event()]))
+    renderRoom()
+
+    expect(await screen.findByText("newest post")).toBeTruthy()
+    const folder = screen.getByTitle("/repo/research")
+    expect(folder.textContent).toBe("research")
+    expect(screen.queryByText("No bound folder")).toBeNull()
+  })
+
+  it("says so when the room has no bound folder", async () => {
+    api.getCollaborationRoomTimeline.mockResolvedValue(timeline([event()]))
+    renderRoom()
+
+    expect(await screen.findByText("newest post")).toBeTruthy()
+    expect(screen.getByText("No bound folder")).toBeTruthy()
+  })
+
+  it("shows the bound folder and a directory browser in the paths dialog", async () => {
+    api.getCollaborationRoom.mockResolvedValue({
+      ...roomDetail(),
+      rootFolderId: 7,
+    })
+    api.getCollaborationRoomTimeline.mockResolvedValue(timeline([event()]))
+    renderRoom()
+    expect(await screen.findByText("newest post")).toBeTruthy()
+
+    const user = userEvent.setup()
+    await user.click(screen.getByRole("button", { name: "More actions" }))
+    await user.click(
+      await screen.findByRole("menuitem", { name: "Manage paths" })
+    )
+    const dialog = await screen.findByRole("dialog")
+
+    // The dialog's own hint talks about "its own linked folder" — it now says
+    // which one, with the full path on hover.
+    expect(within(dialog).getByTitle("/repo/research")).toBeTruthy()
+    // Typed absolute paths still work, but a folder can now be browsed to.
+    expect(
+      within(dialog).getByPlaceholderText("Enter directory path...")
+    ).toBeTruthy()
+    expect(
+      await within(dialog).findByRole("button", { name: /notes/ })
+    ).toBeTruthy()
+  })
+
+  it("refreshes the header and the @ scope when the room is moved into a Collection", async () => {
+    api.getCollaborationRoomTimeline.mockResolvedValue(timeline([event()]))
+    renderRoom()
+
+    expect(await screen.findByText("newest post")).toBeTruthy()
+    expect(screen.getByText(/Uncategorized ·/)).toBeTruthy()
+    expect(screen.getByText("No bound folder")).toBeTruthy()
+
+    // What `collaboration_room_assign_collection` broadcasts once the move
+    // lands (`publish_room` → ROOM_CHANGED_EVENT).
+    api.getCollaborationRoom.mockResolvedValue({
+      ...roomDetail(),
+      collectionId: 7,
+      rootFolderId: 7,
+    })
+    await act(async () => {
+      for (const handler of platform.roomChanged) {
+        handler({ roomId, workbenchId: 1 })
+      }
+    })
+
+    expect(await screen.findByText(/Research ·/)).toBeTruthy()
+    // Same `rootFolderId` that scopes the `@` panel's file/commit search.
+    expect(screen.getByTitle("/repo/research")).toBeTruthy()
+    expect(screen.queryByText("No bound folder")).toBeNull()
   })
 })

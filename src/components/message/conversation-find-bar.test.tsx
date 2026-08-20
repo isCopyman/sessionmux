@@ -72,4 +72,14 @@ describe("ConversationFindBar", () => {
     ).toBeDisabled()
     expect(screen.getByRole("button", { name: "Next match" })).toBeDisabled()
   })
+
+  it("takes the searched surface's own wording when a host supplies it", () => {
+    renderFindBar({
+      scopeLabel: "Find in this room",
+      scopePlaceholder: "Find in room",
+    })
+
+    const input = screen.getByRole("textbox", { name: "Find in this room" })
+    expect(input).toHaveAttribute("placeholder", "Find in room")
+  })
 })

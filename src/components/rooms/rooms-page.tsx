@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   EllipsisVertical,
+  FolderOpen,
   FolderPlus,
   MessagesSquare,
   Pencil,
@@ -49,6 +50,8 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { DirectoryBrowser } from "@/components/shared/directory-browser"
+import { ConversationFindBar } from "@/components/message/conversation-find-bar"
 import {
   RichComposer,
   type RichComposerHandle,
@@ -59,7 +62,9 @@ import type { ReferenceKind } from "@/components/chat/composer/types"
 import { useReferenceSearch } from "@/components/chat/composer/use-reference-search"
 import { useTabActions } from "@/contexts/tab-context"
 import { toErrorMessage } from "@/lib/app-error"
+import type { ConversationFindEntry } from "@/lib/conversation-find"
 import { formatConversationTitle } from "@/lib/conversation-title"
+import { basenameOf } from "@/lib/folder-links"
 import {
   addCollaborationRoomMembers,
   addCollaborationRoomPath,
@@ -82,10 +87,12 @@ import {
 import {
   mentionAllFromText,
   roomMessageMarkdown,
+  roomMessagePlainText,
   sessionIdsFromAtAliases,
 } from "@/lib/room-message-body"
 import { buildRoomMentionSearch } from "@/components/rooms/room-mention-search"
 import { RoomPostBody } from "@/components/rooms/room-post-body"
+import { useRoomFind } from "@/components/rooms/use-room-find"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { useCollectionStore } from "@/stores/collection-store"
 import { useConversationRuntimeStore } from "@/stores/conversation-runtime-store"
@@ -195,6 +202,38 @@ function RoomSpeakerAvatar({
   )
 }
 
+/**
+ * A room's bound directory, resolved from `rootFolderId`. `path` is null when
+ * the Folder itself is gone (a dangling id), which is not the same thing as
+ * having no binding at all — the header says so rather than claiming unbound.
+ */
+interface RoomBoundFolder {
+  id: number
+  path: string | null
+}
+
+/** Directory name with the full path in the tooltip, or the unbound notice. */
+function RoomBoundFolderName({
+  folder,
+  className,
+}: {
+  folder: RoomBoundFolder | null
+  className?: string
+}) {
+  const t = useTranslations("Room")
+  if (!folder) {
+    return <span className={className}>{t("noBoundFolder")}</span>
+  }
+  const label = folder.path
+    ? basenameOf(folder.path)
+    : t("boundFolderUnknown", { id: folder.id })
+  return (
+    <span className={className} title={folder.path ?? undefined}>
+      {label}
+    </span>
+  )
+}
+
 // The Room `@` panel never offers an agent tab (agents have no wake semantics
 // inside a room — see `room-mention-search.ts`); session (the member roster)
 // stays first so the panel's default-active tab still lands on members.
@@ -204,7 +243,14 @@ const ROOM_MENTION_TAB_ORDER: readonly ReferenceKind[] = [
   "commit",
 ]
 
-export function RoomWorkspace({ roomId }: { roomId: string }) {
+export function RoomWorkspace({
+  roomId,
+  isActive = true,
+}: {
+  roomId: string
+  /** False for a tiled-but-unfocused Room tab; gates the Ctrl+F listener. */
+  isActive?: boolean
+}) {
   const t = useTranslations("Room")
   const { openTab, closeTab } = useTabActions()
   const conversations = useAppWorkspaceStore((state) => state.conversations)
@@ -365,11 +411,13 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
   // Files/commits scoped to the room's own folder (resolved from
   // `rootFolderId`, never the currently-active folder — a room is a
   // cross-folder concept, so guessing wrong is worse than showing nothing).
-  const roomFolderPath = useMemo(() => {
+  const boundFolder = useMemo<RoomBoundFolder | null>(() => {
     const rootFolderId = detail?.rootFolderId
     if (rootFolderId == null) return null
-    return allFolders.find((folder) => folder.id === rootFolderId)?.path ?? null
+    const match = allFolders.find((folder) => folder.id === rootFolderId)
+    return { id: rootFolderId, path: match?.path ?? null }
   }, [allFolders, detail?.rootFolderId])
+  const roomFolderPath = boundFolder?.path ?? null
   // Manually-added extra `@`-search roots, on top of `roomFolderPath` — see
   // the "manage paths" dialog below. Memoized so an unchanged additional-path
   // list keeps the same array identity across renders (`useFileTree` derives
@@ -424,6 +472,62 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
     if (mentionsHumanFromText(body)) names.push(t("mentionHuman"))
     return names
   }, [body, members, t])
+
+  // --- Find in this Room -----------------------------------------------------
+  // One entry per loaded post, in timeline order, keyed by the same index the
+  // rows carry as `data-find-row-index`.
+  const findEntries = useMemo<ConversationFindEntry[]>(() => {
+    const entries: ConversationFindEntry[] = []
+    events.forEach((event, index) => {
+      const text = roomMessagePlainText({
+        body: event.body,
+        members,
+        mentionConversationIds: event.mentionConversationIds,
+        mentionHuman: Boolean(event.mentionHuman),
+        allLabel: t("mentionAll"),
+        humanLabel: t("mentionHuman"),
+        untitled: (id) => t("untitled", { id }),
+      })
+      if (text) entries.push({ itemKey: event.id, threadIndex: index, text })
+    })
+    return entries
+  }, [events, members, t])
+  const timelineRootRef = useRef<HTMLDivElement>(null)
+  // OverlayScrollbars owns the real scroller; it is only handed out here.
+  const timelineViewportRef = useRef<HTMLElement | null>(null)
+  const handleTimelineViewport = useCallback((element: HTMLElement | null) => {
+    timelineViewportRef.current = element
+  }, [])
+  const find = useRoomFind({
+    entries: findEntries,
+    isActive,
+    rootRef: timelineRootRef,
+    viewportRef: timelineViewportRef,
+  })
+  // Page the rest of the room in while a query is active, so the count covers
+  // the whole timeline and not just the tail window. Keyed on the oldest loaded
+  // post so a backend that keeps reporting `truncated` without handing back new
+  // posts stalls the walk instead of looping on it.
+  const findPagedFromRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!isActive || !find.open || find.query.length === 0) {
+      findPagedFromRef.current = null
+      return
+    }
+    if (!truncated || loadingOlder) return
+    const oldestId = events[0]?.id
+    if (!oldestId || findPagedFromRef.current === oldestId) return
+    findPagedFromRef.current = oldestId
+    void loadOlder()
+  }, [
+    events,
+    find.open,
+    find.query,
+    isActive,
+    loadOlder,
+    loadingOlder,
+    truncated,
+  ])
 
   const candidates = useMemo(() => {
     const query = addQuery.trim().toLowerCase()
@@ -546,21 +650,26 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
     [roomId, t]
   )
 
-  const handleAddPath = useCallback(async () => {
-    const path = newPath.trim()
-    if (!path) return
-    setAddingPath(true)
-    try {
-      const updated = await addCollaborationRoomPath(roomId, path)
-      setDetail(updated)
-      setNewPath("")
-      toast.success(t("pathAdded"))
-    } catch (error) {
-      toast.error(toErrorMessage(error))
-    } finally {
-      setAddingPath(false)
-    }
-  }, [newPath, roomId, t])
+  // `explicit` is the double-clicked row in the directory browser, which
+  // commits without waiting for the path box to round-trip through state.
+  const handleAddPath = useCallback(
+    async (explicit?: string) => {
+      const path = (explicit ?? newPath).trim()
+      if (!path) return
+      setAddingPath(true)
+      try {
+        const updated = await addCollaborationRoomPath(roomId, path)
+        setDetail(updated)
+        setNewPath("")
+        toast.success(t("pathAdded"))
+      } catch (error) {
+        toast.error(toErrorMessage(error))
+      } finally {
+        setAddingPath(false)
+      }
+    },
+    [newPath, roomId, t]
+  )
 
   const handleRemovePath = useCallback(
     async (pathId: number) => {
@@ -654,6 +763,12 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
             >
               {t("memberCount", { count: detail.members.length })}
             </button>
+            {/* Nested so the separator is not a direct text child of the <p>,
+                keeping the subtitle's own text stable for its callers. */}
+            <span>
+              {" · "}
+              <RoomBoundFolderName folder={boundFolder} />
+            </span>
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-0.5">
@@ -706,8 +821,26 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
           </DropdownMenu>
         </div>
       </div>
-      <div className="flex min-h-0 flex-1">
-        <ScrollArea className="min-w-0 flex-1">
+      <div className="relative flex min-h-0 flex-1" ref={timelineRootRef}>
+        {find.open ? (
+          <ConversationFindBar
+            query={find.query}
+            current={find.current}
+            total={find.total}
+            searching={truncated || loadingOlder}
+            focusToken={find.focusToken}
+            scopeLabel={t("findInRoom")}
+            scopePlaceholder={t("findPlaceholder")}
+            onQueryChange={find.onQueryChange}
+            onNext={find.onNext}
+            onPrevious={find.onPrevious}
+            onClose={find.onClose}
+          />
+        ) : null}
+        <ScrollArea
+          className="min-w-0 flex-1"
+          onViewportRef={handleTimelineViewport}
+        >
           <div className="mx-auto flex w-full max-w-3xl flex-col py-2">
             {truncated ? (
               <div className="flex justify-center py-2">
@@ -764,6 +897,9 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
                   <article
                     key={event.id}
                     id={`room-event-${event.id}`}
+                    // Row marker the shared find highlighter walks; the index
+                    // must match the `findEntries` projection above.
+                    data-find-row-index={index}
                     data-mention-human={event.mentionHuman ? "true" : undefined}
                     className={cn(
                       "group flex gap-3 border-l-2 px-4 hover:bg-muted/40",
@@ -1067,34 +1203,29 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
           if (!open) setNewPath("")
         }}
       >
-        <DialogContent className="max-w-sm">
+        <DialogContent className="flex max-h-[85vh] flex-col sm:max-w-xl">
           <DialogHeader>
             <DialogTitle>{t("managePathsTitle")}</DialogTitle>
             <DialogDescription>{t("managePathsHint")}</DialogDescription>
           </DialogHeader>
-          <div className="flex items-center gap-2">
-            <Input
-              value={newPath}
-              onChange={(event) => setNewPath(event.target.value)}
-              placeholder={t("addPathPlaceholder")}
-              disabled={addingPath}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  event.preventDefault()
-                  void handleAddPath()
-                }
-              }}
+          {/* The hint above says "besides its own linked folder" — name it. */}
+          <div className="flex items-center gap-2 rounded-md border bg-muted/40 px-3 py-2">
+            <FolderOpen className="size-4 shrink-0 text-muted-foreground" />
+            <RoomBoundFolderName
+              folder={boundFolder}
+              className="min-w-0 flex-1 truncate font-mono text-xs"
             />
-            <Button
-              type="button"
-              size="sm"
-              disabled={!newPath.trim() || addingPath}
-              onClick={() => void handleAddPath()}
-            >
-              {t("addPath")}
-            </Button>
           </div>
-          <ScrollArea className="h-56">
+          {/* Same server-side browser the workspace folder dialog uses, path
+              box included — an absolute path can still just be typed. */}
+          <DirectoryBrowser
+            active={pathsOpen}
+            value={newPath}
+            onValueChange={setNewPath}
+            onQuickSelect={(path) => void handleAddPath(path)}
+            heightClassName="h-48"
+          />
+          <ScrollArea className="h-28">
             {(detail.additionalPaths?.length ?? 0) === 0 ? (
               <p className="px-1 py-6 text-center text-xs text-muted-foreground">
                 {t("noPaths")}
@@ -1130,6 +1261,13 @@ export function RoomWorkspace({ roomId }: { roomId: string }) {
           <DialogFooter>
             <Button variant="outline" onClick={() => setPathsOpen(false)}>
               {t("close")}
+            </Button>
+            <Button
+              type="button"
+              disabled={!newPath.trim() || addingPath}
+              onClick={() => void handleAddPath()}
+            >
+              {t("addPath")}
             </Button>
           </DialogFooter>
         </DialogContent>

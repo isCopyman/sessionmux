@@ -102,6 +102,10 @@ export function clearConversationFindHighlights(root?: Element | null): void {
     )
 }
 
+// Two row markers, one walker: the Session transcript numbers its rows for the
+// virtualizer, the Room timeline is a plain list and says so.
+const FIND_ROW_SELECTOR = "[data-virtual-item-index], [data-find-row-index]"
+
 /**
  * Highlight all currently mounted matches and emphasize the selected one.
  * Off-screen rows are virtualized; a MutationObserver in MessageListView calls
@@ -117,9 +121,11 @@ export function applyConversationFindHighlights(
 
   const allRanges: Range[] = []
   let currentRange: Range | null = null
-  const rows = root.querySelectorAll<HTMLElement>("[data-virtual-item-index]")
+  const rows = root.querySelectorAll<HTMLElement>(FIND_ROW_SELECTOR)
   for (const row of rows) {
-    const threadIndex = Number(row.dataset.virtualItemIndex)
+    const threadIndex = Number(
+      row.dataset.virtualItemIndex ?? row.dataset.findRowIndex
+    )
     const content = row.querySelector("[data-conversation-search-content]")
     if (!content) continue
     const ranges = findTextRanges(content, query)
@@ -156,12 +162,20 @@ function getRangeRect(range: Range): DOMRect | null {
   return visibleRect ?? range.getBoundingClientRect()
 }
 
-/** Keep a visible match steady; center it only after it leaves the viewport. */
+/**
+ * Keep a visible match steady; center it only after it leaves the viewport.
+ *
+ * `viewportElement` is for hosts whose scroller carries no class of its own —
+ * the Room timeline's OverlayScrollbars viewport is only reachable through the
+ * `ScrollArea` `onViewportRef` callback.
+ */
 export function revealConversationFindRange(
   root: Element,
-  range: Range
+  range: Range,
+  viewportElement?: HTMLElement | null
 ): boolean {
-  const viewport = root.querySelector<HTMLElement>(".scrollbar-thin")
+  const viewport =
+    viewportElement ?? root.querySelector<HTMLElement>(".scrollbar-thin")
   if (!viewport) return false
 
   const rangeRect = getRangeRect(range)
