@@ -1387,3 +1387,23 @@ w-replycopy 预警过的 Radix tooltip 悬停测试（jsdom 无布局，连续�
   （首投 ≤8k 字符、催办无正文、unread=true 游标增量已存在）；唯一敞口
   是 read_room 列表模式逐帖全文无截断。设计方向三条已记台账，动 MCP 工具
   行为，走契约流程+一处待拍板。
+
+### 5.20 2026-08-21 拂晓：grok 流水线四单 + 包 I 落地 + O50 测试面修复
+
+- **grok 直调流水线成型**：O33 前端（11m31s 交付，含 3 条新测试）→ 已验收
+  合并；O19 会话中心 Room 行同构（徽标全套/Collection/所在工作台芯片/folder
+  列/对齐占位 + homeWorkbench i18n ×10）→ 已验收合并；O34 第三层（忙碌点+
+  "N 个在忙"）与宪章①阶段二（O21/O28/O29 Room 迁移）在做。四单并行验证了
+  shell 直调 + 每单独立 worktree 的作业模式。
+- **包 I（转录面骨架主体）验收合并**：VirtualizedTranscript 泛型容器 +
+  TranscriptStickToBottom + useTranscriptInfiniteScroll + useTranscriptFind，
+  message-list-view 1787→1614 行，825 行既有测试零改动全绿，4831 vitest 全
+  绿，find↔分页耦合原样保住。报告（含最终 API 签名与阶段二缺口清单）落
+  `CHARTER1-PACKAGE-I-REPORT.zh-CN.md`。工人提出的 6 项待拍板全部按
+  "Session 零变化优先"原则由领导核准（scrollToIndex/viewportRef 进 find 入
+  参、chrome 与兼容 extras 暂留泛型件、scrollApiRef 挂容器、Ctrl+F Element
+  守卫）。
+- **O50**：Windows 桌面 cargo test 全体载入即死的环境级缺陷诊断到根
+  （comctl32 v6 manifest 缺失）并在 build.rs 修复——这台机器上桌面测试面
+  从此真实可用（此前测试 exe 一个测试都没跑过就死，门禁的 TEST-DESKTOP
+  面等于从未真正执行）。

@@ -36,9 +36,9 @@
 | O16 | 右键漏浏览器原生菜单 | **已修**（已激活） |
 | O17 | 工作台树不可拖拽 | **部分已修**（右键菜单全套；拖拽缺跨台 API 记缺口） |
 | O18 | 群聊面板零 markdown | **已修**（已激活） |
-| O19 | 会话中心群聊行不同构 | 排队（交互清扫） |
+| O19 | 会话中心群聊行不同构 | **已修**（Room 行补齐徽标全套/Collection/所在工作台/folder 列/对齐占位；待重启激活） |
 | O20 | 文件面板拖动连带缩放 | **已修**（外层分隔条只动相邻面板；键盘路径/其余外层把手另记） |
-| O21 | @ 弹层卡"搜索中" | 裁决已定·排队（渐进渲染）+待复现 |
+| O21 | @ 弹层卡"搜索中" | 裁决已定·骨架已合（包 I）·Room 迁移施工中（O21/O28/O29 一单） |
 | O22 | 启动器缺"新建群聊"入口 | **已修**（欢迎页页脚入口，复用共享对话框） |
 | O23 | 路径绑定全程隐形 | **已修**（页头/对话框显示+目录选择器） |
 | O24 | Room 工具调用渲染之争 | 裁决已定（不内联；活动桥排队） |
@@ -46,7 +46,7 @@
 | O26 | Room 面板无 Ctrl+F | **已修**（真高亮，CSS Highlight API） |
 | O27 | Ctrl+K 文件搜索不自明 | **已修**（两 tab 自我说明文案） |
 | O32 | 手动打开的 worktree 不挂主仓 Path | **已修**（待重启激活） |
-| O33 | 工作台内 Room 行右键能力不及会话行 | **后端已合**（set_workbench API 在主干）；前端菜单 grok 施工中 |
+| O33 | 工作台内 Room 行右键能力不及会话行 | **已修**（前后端全通：Room 行有移动/新开两项，灰显不隐藏；待重启激活） |
 | O34 | 会话跨台不唯一、无聚焦跳转、工作状态不可见 | **部分已修**（跨台唯一+打开即聚焦已合并；工作状态可见待做） |
 | O35 | 智能体设置"原生JSON/环境变量"不自明 | **已修**（面板自明文案已合并） |
 | O36 | 分屏窗口临时最大化（herdr 式 focus） | **已修**（页签条 maximize/restore，当前分支） |
@@ -63,6 +63,7 @@
 | O47 | API 额度剧耗告警 | 已定性（真实工作·经济性差；防复燃已做；燃烧可见性并入 O46/O34） |
 | O48 | 群消息上下文经济：read_room 列表逐帖全文无截断 | 已查明·设计项（投递/催办面已有界；见详情） |
 | O49 | D 盘耗尽事件（131G→601MB 曾致 dev 后端崩溃） | **已处置**（回收 91G+；制度见 DISK-WORKTREE-HYGIENE 文档） |
+| O50 | Windows 桌面 cargo test 载入即死（0xc0000139） | **已修**（build.rs 给测试 exe 嵌 common-controls v6 manifest 依赖） |
 | O28 | 群聊打开滚动条在顶部 | 排队（Room 家族） |
 | O29 | 群聊缺时间线/日期分隔 | 排队（转录面骨架） |
 | O30 | 催办静音链定性 | 已定性（短路加固排队） |
@@ -777,3 +778,19 @@ agent 隔离树、未并入树只删 target 保留工作区；**回收 91G+（13
 未并入，树保留）与 `.claude/worktrees/agent-a31e34…`（领先 41 提交的
 qoder/chat 旧功能线）是否还要。
 状态：**已处置**·制度已立。
+
+### O50. Windows 桌面 cargo test 载入即死（STATUS_ENTRYPOINT_NOT_FOUND）
+
+现象：门禁四号批 TEST-DESKTOP 红——测试 exe 一个测试都没跑就死于
+`0xc0000139`；整清 target-gate 全量重建依旧。server 面测试同代码全绿。
+诊断（PE 导入表逐 DLL 对导出表核查）：唯一缺失导入是
+`comctl32.dll!TaskDialogIndirect`（tauri-plugin-dialog→rfd 静态引入）。该
+函数只在 Common-Controls **v6** SxS 程序集里；主应用 exe 有 tauri-build
+嵌的 manifest 能解析到 v6，**cargo 测试 exe 只带 rustc 默认 manifest**，
+Windows 便解析到 System32 的 5.82 存根 → 载入即死。这意味着任何 Windows
+贡献者的 `cargo test --features test-utils` 都是坏的。
+修复：build.rs 对 windows-msvc 目标发
+`cargo:rustc-link-arg-tests=/MANIFESTDEPENDENCY:...Common-Controls 6.0.0.0`，
+把 v6 依赖并进链接器嵌入的 manifest。实证：修后测试 exe `--list` 正常载入，
+全量桌面测试恢复运行。
+状态：**已修**（60ff8b3e）。
