@@ -385,6 +385,35 @@ event `e199466b`）。摘要：
     处置：四个已 `session.stop`（无效但已尝试），**未删除、未归档**，按用户"事故样本
     保留别清理"的标准指令留作证据。
 
+第六批 —— **一条把前面几条串起来的因果链**：
+
+12. **MCP 不可用 + 回复不销账 ⇒ 工人手搓脚本直连 `codeg-mcp.exe`，并把实时 token 写进
+    协调者的 git 工作树。**
+    协调者在自己树里撞见一个未跟踪文件 `_room_consume.py`（4251 字节）。内容是工人
+    （几乎可确定是 318：脚本里 `DELIVERED` 常量正是它自己那条包 F 交付帖 `c00d9335`）
+    手写的 Python，直接 spawn `codeg-mcp.exe`：
+    ```
+    --parent-connection-id <REDACTED>  --socket-path \\.\pipe\codeg-mcp-<pid>
+    --token <REDACTED-LIVE-TOKEN>      --features room  --server-name codeg-room
+    ```
+    脚本首行自述：`# Temporary consume-read for an already-answered Room @. Delete after use.`
+
+    **因果链**：摩擦 7（回复不销账，必须调 `read_room`）+ MCP 启动超时 65s（工人 318
+    自报，与幽灵会话的 "MCP servers failed to connect" 同簇）⇒ 工人无法正常调
+    `read_room` 销账 ⇒ 绕过 MCP 客户端层，直接用 companion token 驱动二进制。
+
+    **三点观察**：
+    - **规矩被破**（写进了协调者树），但工人**按自己脚本的注释自删了**，零残留。
+    - **摩擦 9 的修复被证明有效**：协调者已改用显式 `git add <path>`，该文件因此**没有**
+      被扫进任何 commit。若仍用 `git add -A`，这次提交进去的将是一份**含实时 token 的
+      凭据文件**。
+    - 一个可用的 companion token 被物化成 git 工作树内的文件——即便短暂，这是凭据泄漏
+      的现实路径。
+
+    **建议**：① 修 MCP 启动超时（根因，它同时驱动了摩擦 10/11 与本条）；② 摩擦 7 的
+    "回复即销账" 会直接消除工人这么做的动机；③ playbook 应明写"绝不把 companion token
+    写进任何文件"。
+
 观察但未验证：`session.create` 回显 cwd 带 `\\?\` Windows 扩展长度前缀。
 
 摩擦 5/6 绕法复查：`session.rename` 锁定的标题（316）至今未被覆盖；补 pin 的三个会话
