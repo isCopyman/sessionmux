@@ -444,7 +444,17 @@ event `e199466b`）。摘要：
     `git status`），不是 codeg 的会话元数据。** 差点因此错误介入一个正常工作的工人
     （lead-executor playbook 的 take-over 协议若照 `updated_at` 触发就会误伤）。
 
-观察但未验证：`session.create` 回显 cwd 带 `\\?\` Windows 扩展长度前缀。
+15. **多 worktree 编排会撑爆磁盘：每棵树一个 `target/`。**
+    收口跑门禁时 `cargo test` 以 `failed to build archive … 磁盘空间不足 (os error 112)`
+    失败——**不是代码问题**。D: 盘 1.9T 已 100% 满、仅剩 601M；三棵树的 `target/`
+    合计约 59G（fork-anchor-pipeline 21G / fork-reserved-id-audit 18G / fork-rewind 20G）。
+    协调者删掉两个**已合并**工人的 `target/`（纯构建产物，可再生；worktree 本体保留作
+    证据）释放 39G 后门禁通过。
+    **教训**：N 个并行 Rust 工人 ≈ N × 20G。编排前要把磁盘算进预算，收口后要回收已合并
+    工人的构建产物。这条不是 codeg 的缺陷，是多 worktree 模式的固有成本，但 playbook
+    必须写明。
+
+观察但未验证：`session.create` 回显 cwd 带 `\?\` Windows 扩展长度前缀。
 
 摩擦 5/6 绕法复查：`session.rename` 锁定的标题（316）至今未被覆盖；补 pin 的三个会话
 模型仍为 grok-4.6。两条绕法都成立。
@@ -458,3 +468,44 @@ event `e199466b`）。摘要：
 - 2026-08-20 协调者：写下本台账与 A/B/C 三份规格（`b8512285`）。
 - 2026-08-20 协调者：建 Collection 5、会话 316/317/318（grok-4.6）、Room
   `rm_3d3711fe`，三个包全部派工，等回报。
+
+
+## 包D 结论（协调者已独立复核 + 亲自跑全门禁，2026-08-20）
+
+工人 316 完工提交 `5a44a8e8`（23 文件 / 259 行），但**其 codeg-room MCP 全程未起来**
+（摩擦 12 同源），交付帖发不出，由人类操作员代传。
+
+**协调者复核（硬约束逐条）**：
+
+| 约束 | 结果 |
+|---|---|
+| `MessageTurn.id` 保持 `turn-N`，不动 `is_reserved_turn_id` 与前端 | ✓ 三处合成点全在（`claude.rs:2605/2642/2655`），`manager.rs` 未被触碰 |
+| 新增字段是可选、附加、不改现有语义 | ✓ `provider_anchor: Option<String>`，`#[serde(default, skip_serializing_if)]` |
+| 锚点 = 轮末 chain entry 而非 assistant uuid | ✓ `chain_anchor_placeholder` / `absorb_anchor` 取链尾 |
+| attachment 参与计算但**不**变成可见消息 | ✓ 占位条目 + `is_chain_anchor_placeholder` 过滤，测试断言 `turns.len()==2` |
+| 其余 12 家不改行为 | ✓ 各 +3 行全是 `provider_anchor: None`，编译强制，零行为改动 |
+| 不碰 ACP 发送路径 / `fork_relation` / UI | ✓ 均未出现在 diff |
+
+**三个测试正是规格要求的三种情况**，且断言够硬
+（`assert_ne!(provider_anchor, Some("a-asst"))` 直接证否 assistant uuid）：
+`provider_anchor_is_assistant_uuid_on_a_plain_qa_turn` /
+`provider_anchor_is_last_attachment_not_assistant_uuid` /
+`provider_anchor_is_tool_result_uuid_when_that_is_the_chain_tail`。
+
+**门禁（协调者在合并后的树上亲自跑，不采信工人自述）**：
+
+```
+cargo fmt --check                                                  通过
+cargo clippy --all-targets --features test-utils -- -D warnings    通过（无输出）
+cargo clippy --no-default-features --bin codeg-server --lib -D...  通过（无输出）
+cargo test --no-default-features --bin codeg-server --lib
+    → test result: ok. 2563 passed; 0 failed; 1 ignored
+      （较第二轮前的 2560 正好 +3，即上述三个新测试）
+pnpm vitest run   → 366 files / 4695 tests passed
+pnpm build        → 静态导出成功
+pnpm eslint .     → 初次 1 error（types.ts:282 prettier 空行）→ 修复后 0 error / 4 既有 warning
+```
+
+**协调者补的一个提交** `aeabcb44`：工人跑不了前端门禁（MCP 坏 + 新 worktree 无
+node_modules，摩擦 4），漏了一个 prettier 空行。**这正是"必须自己跑门禁"的价值**——
+两个 clippy 面都绿，问题只在第三个面上。
