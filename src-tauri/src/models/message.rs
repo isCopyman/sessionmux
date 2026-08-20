@@ -222,4 +222,10 @@ pub struct MessageTurn {
     /// most parsers (event-log time vs. full turn span).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub completed_at: Option<DateTime<Utc>>,
+    /// Native chain-entry uuid of the last record in this turn
+    /// (claude family: user / assistant / tool_result / attachment).
+    /// Distinct from id, which stays turn-N so is_reserved_turn_id
+    /// and the frontend keep working. None for other parsers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_anchor: Option<String>,
 }

@@ -1588,6 +1588,21 @@ impl ClaudeRecordAccumulator {
                         }
                     }
                 }
+                if !messages.is_empty()
+                    && !value
+                        .get("isSidechain")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false)
+                {
+                    if let Some(uuid) = value
+                        .get("uuid")
+                        .and_then(|u| u.as_str())
+                        .filter(|u| !u.is_empty())
+                    {
+                        let timestamp = parse_timestamp(&value).unwrap_or_else(Utc::now);
+                        messages.push(chain_anchor_placeholder(uuid.to_string(), timestamp));
+                    }
+                }
             }
             "system" => {
                 let subtype = value.get("subtype").and_then(|s| s.as_str()).unwrap_or("");
@@ -2531,18 +2546,57 @@ fn is_tool_result_only(msg: &UnifiedMessage) -> bool {
             .all(|b| matches!(b, ContentBlock::ToolResult { .. }))
 }
 
+/// Indexed chain entry used only for provider_anchor.
+pub(crate) fn chain_anchor_placeholder(uuid: String, timestamp: DateTime<Utc>) -> UnifiedMessage {
+    UnifiedMessage {
+        id: uuid,
+        role: MessageRole::Tool,
+        content: Vec::new(),
+        timestamp,
+        usage: None,
+        duration_ms: None,
+        model: None,
+        completed_at: Some(timestamp),
+    }
+}
+
+pub(crate) fn is_chain_anchor_placeholder(msg: &UnifiedMessage) -> bool {
+    matches!(msg.role, MessageRole::Tool) && msg.content.is_empty()
+}
+
+fn nonempty_id(id: &str) -> Option<String> {
+    if id.is_empty() {
+        None
+    } else {
+        Some(id.to_string())
+    }
+}
+
+fn absorb_anchor(slot: &mut Option<String>, id: &str) {
+    if !id.is_empty() {
+        *slot = Some(id.to_string());
+    }
+}
+
 /// Group flat messages into conversation turns.
 /// Claude Code rule: assistant msg + following tool-result-only user msgs
 /// merge into one Assistant turn.
 ///
-/// `pub(crate)`: the background watcher (`crate::acp::background_watch`) runs
-/// this same Stage-B grouping over an incremental record suffix so overlay
-/// turns assemble exactly like a full detail parse would.
+/// provider_anchor is the uuid of the last chain entry in the turn.
+/// id stays turn-N.
 pub(crate) fn group_into_turns(messages: Vec<UnifiedMessage>) -> Vec<MessageTurn> {
-    let mut turns = Vec::new();
+    let mut turns: Vec<MessageTurn> = Vec::new();
     let mut i = 0;
 
     while i < messages.len() {
+        if is_chain_anchor_placeholder(&messages[i]) {
+            if let Some(last) = turns.last_mut() {
+                absorb_anchor(&mut last.provider_anchor, &messages[i].id);
+            }
+            i += 1;
+            continue;
+        }
+
         let msg = &messages[i];
 
         if matches!(msg.role, MessageRole::Assistant) {
@@ -2552,22 +2606,24 @@ pub(crate) fn group_into_turns(messages: Vec<UnifiedMessage>) -> Vec<MessageTurn
             let usage = msg.usage.clone();
             let duration_ms = msg.duration_ms;
             let turn_model = msg.model.clone();
-            // Track the latest event time across the assistant message and
-            // any tool-result-only user messages absorbed below; that's the
-            // turn's true completion moment, not `timestamp + duration_ms`
-            // (turn_duration encodes the entire turn span and adding it to
-            // the assistant event time double-counts).
             let mut completed_at = msg.completed_at;
+            let mut provider_anchor = nonempty_id(&msg.id);
             i += 1;
 
-            // Only absorb immediately following tool-result-only user msgs
-            // (stop at the next assistant message to keep turns small for virtualization)
-            while i < messages.len() && is_tool_result_only(&messages[i]) {
-                blocks.extend(messages[i].content.clone());
-                if messages[i].completed_at.is_some() {
-                    completed_at = messages[i].completed_at;
+            while i < messages.len() {
+                if is_tool_result_only(&messages[i]) {
+                    blocks.extend(messages[i].content.clone());
+                    if messages[i].completed_at.is_some() {
+                        completed_at = messages[i].completed_at;
+                    }
+                    absorb_anchor(&mut provider_anchor, &messages[i].id);
+                    i += 1;
+                } else if is_chain_anchor_placeholder(&messages[i]) {
+                    absorb_anchor(&mut provider_anchor, &messages[i].id);
+                    i += 1;
+                } else {
+                    break;
                 }
-                i += 1;
             }
 
             turns.push(MessageTurn {
@@ -2579,6 +2635,7 @@ pub(crate) fn group_into_turns(messages: Vec<UnifiedMessage>) -> Vec<MessageTurn
                 duration_ms,
                 model: turn_model,
                 completed_at,
+                provider_anchor,
             });
         } else if matches!(msg.role, MessageRole::System) {
             turns.push(MessageTurn {
@@ -2590,6 +2647,7 @@ pub(crate) fn group_into_turns(messages: Vec<UnifiedMessage>) -> Vec<MessageTurn
                 duration_ms: None,
                 model: None,
                 completed_at: msg.completed_at,
+                provider_anchor: nonempty_id(&msg.id),
             });
             i += 1;
         } else {
@@ -2602,6 +2660,7 @@ pub(crate) fn group_into_turns(messages: Vec<UnifiedMessage>) -> Vec<MessageTurn
                 duration_ms: None,
                 model: None,
                 completed_at: msg.completed_at,
+                provider_anchor: nonempty_id(&msg.id),
             });
             i += 1;
         }
@@ -2887,6 +2946,7 @@ mod tests {
                 duration_ms: None,
                 model: None,
                 completed_at: None,
+                provider_anchor: None,
             },
             MessageTurn {
                 id: "turn-1".to_string(),
@@ -2902,6 +2962,7 @@ mod tests {
                 duration_ms: None,
                 model: None,
                 completed_at: None,
+                provider_anchor: None,
             },
         ];
 
@@ -5103,5 +5164,74 @@ mod tests {
             }
             other => panic!("expected ToolResult, got {other:?}"),
         }
+    }
+
+    fn turns_from(records: &[serde_json::Value]) -> Vec<MessageTurn> {
+        let mut acc = ClaudeRecordAccumulator::new(PathBuf::from("/nonexistent.jsonl"));
+        for record in records {
+            acc.feed_line(&record.to_string());
+        }
+        acc.finalize_background_lifecycle();
+        group_into_turns(acc.messages)
+    }
+
+    #[test]
+    fn provider_anchor_is_assistant_uuid_on_a_plain_qa_turn() {
+        let turns = turns_from(&[
+            json!({
+                "type": "user",
+                "timestamp": "2026-08-15T23:43:00.000Z",
+                "uuid": "u-user",
+                "message": { "role": "user", "content": [{ "type": "text", "text": "hi" }] }
+            }),
+            json!({
+                "type": "assistant",
+                "timestamp": "2026-08-15T23:43:01.000Z",
+                "uuid": "a-asst",
+                "message": { "role": "assistant", "model": "claude-sonnet-5", "content": [{ "type": "text", "text": "hello" }] }
+            }),
+        ]);
+        assert_eq!(turns.len(), 2);
+        assert_eq!(turns[0].id, "turn-0");
+        assert_eq!(turns[0].provider_anchor.as_deref(), Some("u-user"));
+        assert_eq!(turns[1].id, "turn-1");
+        assert_eq!(turns[1].provider_anchor.as_deref(), Some("a-asst"));
+    }
+
+    fn att(uuid: &str, kind: &str, parent: &str) -> serde_json::Value {
+        json!({
+            "type": "attachment",
+            "uuid": uuid,
+            "parentUuid": parent,
+            "timestamp": "2026-08-15T23:43:02.000Z",
+            "attachment": { "type": kind }
+        })
+    }
+
+    #[test]
+    fn provider_anchor_is_last_attachment_not_assistant_uuid() {
+        let turns = turns_from(&[
+            json!({ "type": "user", "timestamp": "2026-08-15T23:43:00.000Z", "uuid": "u-user", "message": { "role": "user", "content": [{ "type": "text", "text": "hi" }] } }),
+            json!({ "type": "assistant", "timestamp": "2026-08-15T23:43:01.000Z", "uuid": "a-asst", "message": { "role": "assistant", "model": "claude-sonnet-5", "content": [{ "type": "text", "text": "hello" }] } }),
+            att("att-deferred", "deferred_tools_delta", "a-asst"),
+            att("att-skill", "skill_listing", "att-deferred"),
+            att("att-tokens", "total_tokens_reminder", "att-skill"),
+        ]);
+        assert_eq!(turns.len(), 2, "attachments must not become turns");
+        assert_eq!(turns[1].id, "turn-1");
+        assert_eq!(turns[1].provider_anchor.as_deref(), Some("att-tokens"));
+        assert_ne!(turns[1].provider_anchor.as_deref(), Some("a-asst"));
+    }
+
+    #[test]
+    fn provider_anchor_is_tool_result_uuid_when_that_is_the_chain_tail() {
+        let turns = turns_from(&[
+            json!({ "type": "user", "timestamp": "2026-08-15T23:43:00.000Z", "uuid": "u-user", "message": { "role": "user", "content": [{ "type": "text", "text": "run" }] } }),
+            json!({ "type": "assistant", "timestamp": "2026-08-15T23:43:01.000Z", "uuid": "a-asst", "message": { "role": "assistant", "content": [{ "type": "tool_use", "id": "call_1", "name": "Bash", "input": {}}] } }),
+            json!({ "type": "user", "timestamp": "2026-08-15T23:43:02.000Z", "uuid": "tr-1", "message": { "role": "user", "content": [{ "type": "tool_result", "tool_use_id": "call_1", "content": "ok" }] } }),
+        ]);
+        assert_eq!(turns.len(), 2);
+        assert_eq!(turns[1].provider_anchor.as_deref(), Some("tr-1"));
+        assert_ne!(turns[1].provider_anchor.as_deref(), Some("a-asst"));
     }
 }
