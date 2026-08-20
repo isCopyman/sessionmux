@@ -14,13 +14,19 @@ parser 往里塞什么。`UnifiedMessage` **不进 DB、不进详情 API**（`db
 详情页只读 `ConversationDetail.turns: Vec<MessageTurn>`
 （`models/conversation.rs:127-129`）。
 
+**补约束（314 复核包 B，非返工）**：Claude Agent SDK 的 `resumeSessionAt` 要的是
+**被保留那一轮的最后一条 chain entry**，不是「任意一条 assistant uuid」。
+主表「截断后仍可定位」原口径仍是「该 id 在文件截断后能否找回同一条记录」。
+Claude / Qoder 在那一列加了不够当 `resumeSessionAt` 锚的标注，细则见
+[§补：轮末 chain entry](#补轮末-chain-entryresumesessionat-约束)。
+
 ---
 
 ## 主表
 
 | parser | 原生文件里的逐条 id 字段 | 消息级投影 `UnifiedMessage.id` 塞的是什么 | turn 级投影 `MessageTurn.id` 塞的是什么 | 跨会话稳定？ | 截断后仍可定位？ |
 |---|---|---|---|---|---|
-| ClaudeCode | JSONL 行顶层 **`uuid`**（`parsers/claude.rs:1332-1336, 1392-1396, 1509-1513`）。另有嵌套 `message.id`（API call 分组，只给 usage 去重，`1529-1535`），不当消息锚。无 typed struct。 | 主路径 **拷贝 `uuid`**，缺则 `""`（`1339, 1491, 1541`）。旁路合成：`goal-{len}`（`498`，原生 uuid 只进 `tool_use_id`）、`synth-assistant-{len}`（`1633`）、`synth-result-{len}`（`1753`）。 | **丢掉 uuid**，三角色一律 `turn-{n}`（assistant `2551` / system `2585` / user `2597`）。 | uuid 再 import 同文件不变。空串会撞。`goal-{n}` / `synth-*-{n}` / `turn-{n}` 是位置。 | **uuid：该行还在就能定位**（删前面的行不改后面 uuid）。`turn-{n}` 左移。 |
+| ClaudeCode | JSONL 行顶层 **`uuid`**（`parsers/claude.rs:1332-1336, 1392-1396, 1509-1513`）。另有嵌套 `message.id`（API call 分组，只给 usage 去重，`1529-1535`），不当消息锚。无 typed struct。 | 主路径 **拷贝 `uuid`**，缺则 `""`（`1339, 1491, 1541`）。旁路合成：`goal-{len}`（`498`，原生 uuid 只进 `tool_use_id`）、`synth-assistant-{len}`（`1633`）、`synth-result-{len}`（`1753`）。 | **丢掉 uuid**，三角色一律 `turn-{n}`（assistant `2551` / system `2585` / user `2597`）。 | uuid 再 import 同文件不变。空串会撞。`goal-{n}` / `synth-*-{n}` / `turn-{n}` 是位置。 | **单行 uuid：该行还在就能定位。不够当 `resumeSessionAt` 锚**（拿得到 assistant uuid，拿不到轮末 chain entry：attachment 丢、tool_result uuid 在分组时被吞）。见 §补。`turn-{n}` 左移。 |
 | Codex | **用户/助手事件无逐条 id**。夹具 `event_msg.user_message` 只有 `message` 文本（`parsers/codex.rs:4335`；`tests/parsers_snapshot.rs` 同形）。有、但不进消息 id：`payload.call_id`/`tool_call_id`/`id` → `tool_use_id`（`2801-2806, 1935-1939`）；`turn_context.payload.turn_id` **不读**；`response_item.reasoning.id` **不读**。无 `item_id`/`uuid` 命中。 | **全位置合成**，17 处 `format!(... messages.len())`：`user-{n}`（`2400, 3385`）、`assistant-{n}`（`2429`）、`tool-{n}`（`2489, 2892, 2950, 3027, 3210`）、`tool-result-{n}`（`3142, 3162, 3226, 3344`）、`thinking-{n}`（`2783, 3931`）、`assistant-imagegen-{n}`（`2584, 3431`）。唯一常量：`"codex-goal-user"`（`3552`）。 | 一律 `turn-{n}`（`4185, 4197, 4237`）。不读 `msg.id`。 | 否。确定性再解析同一未改文件会得到相同 `user-0`，但那是位置，不是 provider id。 | **否。** 删更早的 user/agent/tool 事件，后续 `messages.len()` 变小，全部漂。 |
 | OpenCode | SQLite `message.id` **TEXT PRIMARY KEY**（DDL：`tests/parsers_snapshot.rs:388-391`）。`SELECT id, time_created, data FROM message`（`parsers/opencode.rs:247-265`）。`data` JSON 不读 `$.id`。`part.id` / `callID` 不是消息锚。 | **拷贝表列** `id: msg_id`（`332-333`）。唯一构造点。 | `turn-{n}`（`1135, 1147, 1186`）。丢掉 TEXT PK。 | 消息级：TEXT PK，非下标；跨不同 `opencode.db` 是否全局唯一 **未能证实**（仓内夹具是 `m-user` 这类短串）。turn 级：否。 | 消息级：行还在就能按 PK 找。turn 级：否。parser 无 rewind/compact 语义。 |
 | Gemini | 消息对象 **`id`**。JSON `session-*.json` 的 `messages[]`（`parsers/gemini.rs:627-631`）与 JSONL `session-*.jsonl` 同字段；JSONL 按 `id` merge（`141-150`）。无 typed struct。 | 有 `id` 则拷贝，否则 `msg-{n}`（`627-631` 算一次，user/assistant/system 三处 `647, 663, 681` 共用）。 | `turn-{n}`（`803, 818, 861`）。丢掉 `msg_id`。 | 有原生 `id`：同文件再 import 稳定。夹具是 `u1`/`a1`，**不校验全局唯一**。无 `id`：位置。 | 原生 `id`：对象还在就能对上。`msg-{n}` / `turn-{n}` 漂。 |
@@ -33,7 +39,7 @@ parser 往里塞什么。`UnifiedMessage` **不进 DB、不进详情 API**（`db
 | Grok | **无 `UnifiedMessage`。** ACP `updates.jsonl`。已读未投影：`update._meta.promptIndex`（`parsers/grok.rs:730, 767`，只用来合并同 prompt 的 chunk）。真捕获有 `turn_completed.prompt_id`，**零读取**。`toolCallId` → 块级。无逐条消息 uuid。 | **absent**（不 import / 不构造 `UnifiedMessage`）。 | 先 `String::new()`（`769, 1643`），最后 `grok-turn-{i}`（`1013-1015`）。注释写「append-only 所以位置 id 再解析稳定」——那是再 parse，不是截断。 | 否。`grok-turn-0` 每会话重复。`promptIndex` 是 0-based 用户轮次，跨会话必撞。 | `grok-turn-{i}`：否。`auto_compact_completed` 会多插一轮 assistant（`884-916`），后续 i 右移。 |
 | Cursor | **无 `UnifiedMessage`。** SQLite blob DAG：`DecodedState.turn_blob_ids`（`parsers/cursor.rs:752-753`），从 protobuf field 8 抽出（`788-792`）。内容寻址的 turn blob id。`build_turns` 按这些 id 读 blob（`925`），然后丢掉。 | **absent**。 | 先 `String::new()`（`985, 1001, 1033, 1050`），最后 `cursor-turn-{i}`（`1079-1080`）。 | `cursor-turn-{i}`：否。原生 blob id 是内容哈希，同内容跨会话会撞、改内容则变；**未投影**。 | 投影：否。原生 blob id：删前面的 turn 不改后面 blob id（未投影）。 |
 | DeepSeek | **无 `UnifiedMessage`。** 事件 `data.id` / `data.message.id` 夹具明确存在（`parsers/deepseek.rs:918, 969, 995, 1010`：`u-1`/`a-1`/`t-1`/`a-2`）。parser **不读** 这些字段。只读 tool-call 块的 `block.id` → `tool_use_id`（`627`）。另有事件 `seq`，不当消息 id。 | **absent**。 | 直接 `turn-{n}`：user（`524`）、assistant 开张（`722`）。 | `turn-{n}`：否。原生 `data.id` 未投影；夹具短串。 | 投影：否。原生 `data.id`（未投影）：记录还在理论上能找。 |
-| Qoder | 与 Claude 同形 JSONL：**行 `uuid`** + `parentUuid`（`parsers/qoder.rs:272-284, 546`）。`message.id` 只给 usage 合并（`608-640`），不当 `UnifiedMessage.id`。 | 有 uuid 则拷贝，否则 `q-user-{n}` / `q-assistant-{n}`（`581, 654`）。 | **调用 Claude 的** `group_into_turns`（import `13-16`，调用 `828`）→ 一律 `turn-{n}`（`parsers/claude.rs:2551, 2585, 2597`）。 | uuid 同 Claude。fallback `q-*-{n}` 是位置。 | uuid：该行还在就能定位。`turn-{n}` 左移。 |
+| Qoder | 与 Claude 同形 JSONL：**行 `uuid`** + `parentUuid`（`parsers/qoder.rs:272-284, 546`）。`message.id` 只给 usage 合并（`608-640`），不当 `UnifiedMessage.id`。 | 有 uuid 则拷贝，否则 `q-user-{n}` / `q-assistant-{n}`（`581, 654`）。 | **调用 Claude 的** `group_into_turns`（import `13-16`，调用 `828`）→ 一律 `turn-{n}`（`parsers/claude.rs:2551, 2585, 2597`）。 | uuid 同 Claude。fallback `q-*-{n}` 是位置。 | **user/assistant uuid：该行还在就能定位。不够当轮末锚**（附件不投影，tool_result uuid 同样被 Claude 分组吞掉）。见 §补。 |
 
 ---
 
@@ -73,6 +79,70 @@ parser 往里塞什么。`UnifiedMessage` **不进 DB、不进详情 API**（`db
 | **Cline** | `ApiMessage` 无 id 字段；直接合成 `{taskId}-{n}`。 |
 
 Codex / CodeBuddy 若把「工具 call_id」也算消息锚，它们定位的是 tool 块，不是 user/assistant 消息。本表按「从这里分叉」的消息粒度，把它们放在档 2。
+
+---
+
+## 补：轮末 chain entry（`resumeSessionAt` 约束）
+
+> 314 复核包 B 追加的约束，**不是返工主表**。SDK 原文在
+> `@anthropic-ai/claude-agent-sdk@0.3.232` `sdk.d.ts:1836-1894`
+> （嵌在全局 `claude-agent-acp@0.69.0` 里，不是空的全局 `@anthropic-ai` 目录）。
+
+`resumeSessionAt` 接受 **任意 chain-entry UUID**，但必须是 **被保留那一轮的最后一条**。
+取早了（典型：只拿到 assistant uuid），校验器会给
+`Resume rejected by --resume-drops-turn:` 且确定性失败。
+
+`sdk.d.ts:1886-1892`：
+
+> General rule subsuming all of the above: fork at the KEPT turn's last chain
+> entry, whatever it is — `resumeSessionAt` accepts any chain UUID.
+
+三种不能停在 assistant uuid 的情况（同文件）：
+
+1. **end-turn 工具会话**（`1860-1871`）：轮末是 `structured_output` **attachment**，
+   否则是 tool_result carrier。「Fork at the LAST entry … not the last assistant UUID」。
+2. **`shouldQuery: false` 裸 user append**（`1873-1876`）：以普通 user 行落盘，
+   fork 点若把它留在丢弃区间会拒绝。
+3. **中断回合**（`1888-1892`）：已完成的非错误 tool_result 在尾巴上，fork 在
+   assistant uuid 会被故意拒绝；其后的 interrupt marker / cancel-batch **可跳过**。
+
+下面只钉 codeg parser **今天能不能把这条轮末 uuid 投影出来**。
+
+### 单独标出：拿得到 assistant uuid，拿不到轮末 entry
+
+**ClaudeCode — 对外锚点不够用。**
+
+| 轮末实际是什么 | parser 今天怎么处理 | 投影里有没有这条 uuid |
+|---|---|---|
+| 最后一条 assistant 行 | 拷贝 `uuid` → `UnifiedMessage.id`（`parsers/claude.rs:1509-1541`） | 消息级有；turn 级变成 `turn-{n}`（`2551`） |
+| 最后一条 tool_result（user 行） | 拷贝 `uuid` → `UnifiedMessage.id`（`1491`）；`group_into_turns` 把它 **吸收进前一条 assistant turn 并丢掉该 uuid**（`2565-2574`，判定 `is_tool_result_only` `2525-2531`） | 消息级短暂有；**对外 turn 层没有** |
+| `structured_output` attachment | `attachment` 臂只认 `goal_status`（`1551-1590`，`goal_status_transition` 过滤 `409-410`）。其它附件 **整行丢弃**，uuid 不进任何投影 | **无** |
+| interrupt 标记 `[Request interrupted by user]` | `is_interrupt_marker` 整行丢弃（`1294-1296`, `606-609`）。SDK 说这些 marker 可跳过 | 标记本身不需要；前面的 tool_result uuid 仍在 turn 层被吞 |
+| `isMeta` 行 | `is_meta_message` 整行丢弃（`581-586, 1294`） | **无** |
+| `shouldQuery: false` 裸 user append | parser **零读取** `shouldQuery`（`src-tauri/` 无命中）。若它是普通非空 user 行会走 `1491`；若是 isMeta / 剥标签后空（`1386-1388`）被丢。真实落盘形态 **未能证实** | 未能证实 |
+
+Goal 附件的原生 uuid 只进 `tool_use_id`（`claude-goal-{uuid}`，`493-498`），
+`UnifiedMessage.id` 仍是位置合成 `goal-{n}`。
+
+**Qoder — 同样不够用。** 同形 JSONL，缺口对齐：
+
+- 内容记录只认 `user|assistant`（`is_content_record`，`parsers/qoder.rs:196-200`）
+- `attachment` / `system`「indexed but not returned」（`261-263`）：walk 能跨过，
+  **投影没有附件 uuid**
+- `is_meta_message` / interrupt 同样丢掉（`535`）
+- user/assistant uuid 进 `UnifiedMessage`（`546, 581, 654`），再走 Claude 的
+  `group_into_turns`（`828`）→ tool_result uuid 同样被吞
+
+### 其余家和这条约束的关系
+
+这条是 **Claude Agent SDK 的 chain UUID 语义**。其它 parser 的原生 id 不是
+`resumeSessionAt` 的输入。它们主表「截断后」列仍按「能否找回同一条原生记录」，
+**不能**拿那些 id 去填 `resumeSessionAt`。
+
+| parser | 和这条约束 |
+|---|---|
+| Codex / CodeBuddy / Cline / Grok / Cursor / DeepSeek / KimiCode / Pi | 投影层没有 Claude chain uuid |
+| OpenCode / OpenClaw / Gemini / Hermes | 消息级有自己的稳定 id，**不是** Claude JSONL `uuid` |
 
 ---
 
@@ -213,6 +283,8 @@ fn is_reserved_turn_id(id: &str) -> bool {
    Claude turn 合成不止 `:2585`（那是 System；assistant 在 `2551`，user 在 `2597`）；
    Codex 构造点共 17 处，另有常量 `"codex-goal-user"`（`3552`）。
 5. 最反直觉的事实见下节。
+6. 314 复核包 B 之后：Claude / Qoder 的「截断后仍可定位」从「单行 uuid 还在就能找」
+   收紧为「不够当 `resumeSessionAt` 锚」——见 §补。不改其它家主表口径。
 
 ---
 
