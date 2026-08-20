@@ -100,3 +100,11 @@ tauri-build 复制 sidecar（binaries/codeg-mcp-*.exe）时 PermissionDenied—�
 "no active managed runtime"。事故样本 4 个会话按指令保留未删。
 影响：多 agent 协作核心路径的正确性 + 真金白银的 token。
 方向：已立项派修（w-phantom），根因锁定投递唤醒分支。
+
+### O10. dev 与 release 双实例同库但事件不互通
+
+现象：dev 实例（我）建的 Room/会话写进共享 SQLite，但用户 release 实例的界面
+收不到事件推送，侧栏停留在旧快照，重启或切工作台才刷新（用户实测"没看见群聊"）。
+影响：双实例并行（dogfooding 常态）时另一侧界面陈旧，用户以为操作没发生。
+方向：跨进程失效通知（文件 watcher 或 DB 版本号轮询兜底）；或至少文档写明
+双实例的可见性边界。
