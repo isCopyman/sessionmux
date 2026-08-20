@@ -298,12 +298,18 @@ mod tests {
     use crate::models::agent::AgentType;
     use std::path::PathBuf;
 
-    async fn fixture() -> (RoomHostControl, i32, i32) {
+    /// Returns the gateway plus `(folder, caller Session, other Session)`.
+    async fn fixture() -> (RoomHostControl, i32, i32, i32) {
         let db = Arc::new(fresh_in_memory_db().await);
         let folder = seed_folder(&db, "/tmp/codeg-host-control-room").await;
         let caller = seed_conversation(&db, folder, AgentType::Codex).await;
         let other = seed_conversation(&db, folder, AgentType::ClaudeCode).await;
-        (RoomHostControl::new(db, EventEmitter::Noop), caller, other)
+        (
+            RoomHostControl::new(db, EventEmitter::Noop),
+            folder,
+            caller,
+            other,
+        )
     }
 
     fn caller(id: i32) -> HostControlCaller {
@@ -335,7 +341,7 @@ mod tests {
 
     #[tokio::test]
     async fn removed_room_post_reaches_the_migration_hint() {
-        let (rooms, caller_id, _) = fixture().await;
+        let (rooms, _, caller_id, _) = fixture().await;
         let outcome = rooms
             .use_action(
                 &caller(caller_id),
@@ -351,7 +357,7 @@ mod tests {
 
     #[tokio::test]
     async fn create_makes_the_caller_a_member_and_lists_the_room() {
-        let (rooms, caller_id, other_id) = fixture().await;
+        let (rooms, folder_id, caller_id, other_id) = fixture().await;
         let created = rooms
             .use_action(
                 &caller(caller_id),
@@ -371,6 +377,17 @@ mod tests {
             .collect();
         assert!(members.contains(&i64::from(caller_id)));
         assert!(members.contains(&i64::from(other_id)));
+
+        // room.create carries no placement of its own. Without the service-side
+        // fallback the Room lands with neither a Collection nor a Path, and the
+        // sidebar Collection tree — which files Rooms by one or the other — has
+        // nowhere to draw it.
+        assert_eq!(
+            created.data["room"]["rootFolderId"].as_i64(),
+            Some(i64::from(folder_id)),
+            "the Room must adopt the calling Session's Path: {}",
+            created.data["room"]
+        );
 
         let listed = rooms
             .use_action(
