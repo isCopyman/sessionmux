@@ -102,7 +102,8 @@ These live on the `codeg-room` MCP server, not `codeg-mcp`. Host Control
     (you owe, or someone owes you). Does not mark posts read.
   - `before_event_id`: page older.
   - Opening consumes `@` deliveries in the returned window (marks them
-    read) unless `needs_reply=true`. It does not clear a reply obligation.
+    read) unless `needs_reply=true`. It clears unread only, never a reply
+    obligation.
   A Room mention envelope already includes that post's body. If the
   mention quotes another post, the envelope also embeds the parent
   author and a short snippet. Quoting still does not wake that author.
@@ -129,6 +130,12 @@ These live on the `codeg-room` MCP server, not `codeg-mcp`. Host Control
     parent author. Wake someone only with a structured mention
     (`mention_session_ids` / `mention_all` / `mention_human`). Reporting
     back to whoever asked you means quoting **and** mentioning them.
+  - A linked reply, and only a linked reply, clears your needs-reply
+    debt: `reply_to_event_id` must point at the post that asked. Do not
+    call `read_room` to settle or to check a debt — it clears unread,
+    never debt. The `post_room` result already tells you which happened:
+    it names the parent it just cleared, or says how many replies you
+    still owe in this Room.
 
 ## Workflow
 

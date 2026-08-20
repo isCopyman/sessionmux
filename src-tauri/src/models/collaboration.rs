@@ -648,4 +648,16 @@ pub struct RoomPostResult {
     pub deliveries: Vec<CollaborationDeliveryView>,
     pub affected_conversation_ids: Vec<i32>,
     pub deduplicated: bool,
+    /// The parent event whose `awaiting_reply` obligation *this* post just
+    /// settled for its author, or `None` when it settled nothing: no
+    /// `reply_to_event_id`, nothing was owed on that parent, or a dedupe
+    /// retry that only re-read an already committed event. Posting is the
+    /// only way to clear a debt, so the poster must be able to read the
+    /// ledger answer off the post instead of re-reading the Room.
+    #[serde(default)]
+    pub cleared_reply_to_event_id: Option<String>,
+    /// Obligations the author still owes inside this Room once the post
+    /// landed. `0` means their ledger here is clean.
+    #[serde(default)]
+    pub open_reply_debt: u32,
 }

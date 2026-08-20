@@ -1627,6 +1627,31 @@ async fn validate_room_reply<C: ConnectionTrait>(
     Ok(())
 }
 
+/// Obligations `conversation_id` still owes inside one Room. Same shape as
+/// `collaboration_room_service::MEMBER_NEEDS_REPLY_SQL`, narrowed to a single
+/// Room: `post_room` reports it back so a poster who cleared nothing learns
+/// what is still on their tab without a second `read_room` round trip.
+async fn open_room_reply_debt<C: ConnectionTrait>(
+    conn: &C,
+    room_id: &str,
+    conversation_id: i32,
+) -> Result<u32, DbError> {
+    let row = conn
+        .query_one(statement(
+            "SELECT COUNT(*) AS count FROM collaboration_delivery d \
+             JOIN collaboration_event e ON e.id = d.event_id \
+             WHERE d.target_conversation_id = ? AND e.room_id = ? \
+               AND COALESCE(e.visibility, 'direct') = 'room' \
+               AND d.obligation_state = 'awaiting_reply' \
+               AND d.state <> 'dismissed' AND d.state <> 'failed'",
+            vec![conversation_id.into(), room_id.into()],
+        ))
+        .await?
+        .expect("COUNT always returns a row");
+    let count: i64 = row.try_get("", "count")?;
+    Ok(count.max(0) as u32)
+}
+
 fn validate_room_post(input: &PostRoomMessageInput) -> Result<(), DbError> {
     if input.body.trim().is_empty() {
         return Err(validation("A Room message body cannot be empty"));
@@ -1655,7 +1680,10 @@ fn validate_room_post(input: &PostRoomMessageInput) -> Result<(), DbError> {
 /// Delivery is marked `failed` with reason `target_archived` so the poster
 /// sees who was skipped; the member is not enqueued and gets no
 /// awaiting-reply obligation. Mail projections
-/// never see these events.
+/// never see these events. The result reports the ledger effect of this very
+/// post — which obligation it cleared, and what the author still owes in the
+/// Room — because posting is the only thing that clears a debt and the caller
+/// should not have to re-read the Room to find out whether it worked.
 pub async fn post_room(
     conn: &DatabaseConnection,
     input: PostRoomMessageInput,
@@ -1722,6 +1750,9 @@ pub async fn post_room(
         let deliveries = deliveries_for_event(&txn, &event_id).await?;
         let mut affected = BTreeSet::from([ledger_source_id]);
         affected.extend(deliveries.iter().map(|item| item.target.conversation_id));
+        // A retry settles nothing of its own — the first call already ran the
+        // resolve — but the live debt count still has to be truthful.
+        let open_reply_debt = open_room_reply_debt(&txn, &input.room_id, source.id).await?;
         txn.commit().await?;
         return Ok(RoomPostResult {
             event_id,
@@ -1729,6 +1760,8 @@ pub async fn post_room(
             deliveries,
             affected_conversation_ids: affected.into_iter().collect(),
             deduplicated: true,
+            cleared_reply_to_event_id: None,
+            open_reply_debt,
         });
     }
 
@@ -1776,6 +1809,7 @@ pub async fn post_room(
             let deliveries = deliveries_for_event(&txn, &existing_id).await?;
             let mut affected = BTreeSet::from([input.source_conversation_id]);
             affected.extend(deliveries.iter().map(|item| item.target.conversation_id));
+            let open_reply_debt = open_room_reply_debt(&txn, &input.room_id, source.id).await?;
             txn.commit().await?;
             return Ok(RoomPostResult {
                 event_id: existing_id,
@@ -1783,6 +1817,8 @@ pub async fn post_room(
                 deliveries,
                 affected_conversation_ids: affected.into_iter().collect(),
                 deduplicated: true,
+                cleared_reply_to_event_id: None,
+                open_reply_debt,
             });
         }
         return Err(validation(
@@ -1790,17 +1826,25 @@ pub async fn post_room(
         ));
     }
 
+    // `rows_affected` is the ledger's own answer to "did I just pay a debt?".
+    // Reporting it back is what keeps a replying Agent from having to call
+    // read_room (which never clears debt) to find out.
+    let mut cleared_reply_to_event_id = None;
     if let Some(reply_to_event_id) = input.reply_to_event_id.as_deref() {
-        txn.execute(statement(
-            "UPDATE collaboration_delivery \
-             SET obligation_state = 'resolved', \
-                 obligation_resolved_at = COALESCE(obligation_resolved_at, CURRENT_TIMESTAMP), \
-                 updated_at = CURRENT_TIMESTAMP \
-             WHERE event_id = ? AND target_conversation_id = ? \
-               AND obligation_state = 'awaiting_reply'",
-            vec![reply_to_event_id.into(), source.id.into()],
-        ))
-        .await?;
+        let resolved = txn
+            .execute(statement(
+                "UPDATE collaboration_delivery \
+                 SET obligation_state = 'resolved', \
+                     obligation_resolved_at = COALESCE(obligation_resolved_at, CURRENT_TIMESTAMP), \
+                     updated_at = CURRENT_TIMESTAMP \
+                 WHERE event_id = ? AND target_conversation_id = ? \
+                   AND obligation_state = 'awaiting_reply'",
+                vec![reply_to_event_id.into(), source.id.into()],
+            ))
+            .await?;
+        if resolved.rows_affected() > 0 {
+            cleared_reply_to_event_id = Some(reply_to_event_id.to_string());
+        }
     }
 
     let mut affected = BTreeSet::from([source.id]);
@@ -1909,6 +1953,10 @@ pub async fn post_room(
     .await?;
 
     let deliveries = deliveries_for_event(&txn, &event_id).await?;
+    // Counted after the resolve above, so it is the debt the author walks
+    // away with. Their own post never adds to it: the author is removed from
+    // the target set, so they cannot owe themselves an answer.
+    let open_reply_debt = open_room_reply_debt(&txn, &input.room_id, source.id).await?;
     txn.commit().await?;
     Ok(RoomPostResult {
         event_id,
@@ -1916,6 +1964,8 @@ pub async fn post_room(
         deliveries,
         affected_conversation_ids: affected.into_iter().collect(),
         deduplicated: false,
+        cleared_reply_to_event_id,
+        open_reply_debt,
     })
 }
 
