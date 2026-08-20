@@ -886,6 +886,13 @@ mod tauri_app {
                     );
                     if let Ok(w) = builder.build() {
                         windows::post_window_setup(&w);
+                        // Same job as the `[DEV]` title suffix, for the half of
+                        // the taskbar that shows only the icon: a dev window
+                        // wears a badged icon so it can't be mistaken for the
+                        // release build pinned next to it.
+                        if cfg!(debug_assertions) {
+                            let _ = w.set_icon(tauri::include_image!("icons/icon-dev.png"));
+                        }
                     }
                 }
 
