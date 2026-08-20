@@ -105,6 +105,7 @@ import {
   shouldRejectDuplicateCreate,
 } from "@/lib/queue-flush"
 import { TurnBusyError } from "@/lib/turn-busy"
+import { ForkAnchorRejectedError } from "@/lib/fork-anchor"
 import {
   getConversationIdByExternalIdFromStore,
   getRuntimeSession,
@@ -707,6 +708,7 @@ const ConversationTabView = memo(function ConversationTabView({
   useEffect(() => {
     isViewerRef.current = conn.isViewer
   }, [conn.isViewer])
+  const forkAtMessageInFlightRef = useRef(false)
   const forkConnectionId = conn.connectionId
   const reconnectForkViewer = conn.connect
   const disconnectForkViewer = conn.disconnect
@@ -1480,6 +1482,57 @@ const ConversationTabView = memo(function ConversationTabView({
     ]
   )
 
+  const handleForkAtMessage = useCallback(
+    async (anchor: string) => {
+      const connectionId = conn.connectionId
+      if (!connectionId || connStatus !== "connected") {
+        toast.error(t("forkNeedConnection"))
+        return
+      }
+      if (forkAtMessageInFlightRef.current) return
+      forkAtMessageInFlightRef.current = true
+      try {
+        const result = await acpFork(
+          connectionId,
+          dbConvIdRef.current,
+          folderId,
+          anchor
+        )
+        handoffForkView({
+          originalConversationId: result.originalConversationId,
+          forkedConversationId: result.forkedConversationId,
+          forkedSessionId: result.forkedSessionId,
+          folderId: result.forkedConversation.folder_id,
+          summary: result.forkedConversation,
+        })
+      } catch (err) {
+        // Anchor rejection is deterministic: the same uuid will never work.
+        // Do NOT re-queue. Keep the original session as the active view.
+        if (err instanceof ForkAnchorRejectedError) {
+          toast.error(t("forkAnchorRejected"))
+          return
+        }
+        if (err instanceof TurnBusyError) {
+          toast.error(t("forkTurnBusy"))
+          return
+        }
+        toast.error(
+          t("forkSessionFailed", {
+            error:
+              err instanceof Error
+                ? err.message
+                : typeof err === "object" && err !== null
+                  ? JSON.stringify(err)
+                  : String(err),
+          })
+        )
+      } finally {
+        forkAtMessageInFlightRef.current = false
+      }
+    },
+    [conn.connectionId, connStatus, folderId, handoffForkView, t]
+  )
+
   // Sending immediately from handleForkSend would reuse the callback closure
   // that still targets C1. Wait for React to render the C2 handoff, then use the
   // newly-bound queue/send functions. A failed activation still preserves C2;
@@ -1982,6 +2035,11 @@ const ConversationTabView = memo(function ConversationTabView({
         }
         initialViewState={initialMessageViewState}
         onViewStateChange={handleMessageViewStateChange}
+        onForkAtMessage={
+          selectedAgent === "claude_code" && conn.supportsFork
+            ? handleForkAtMessage
+            : undefined
+        }
       />
     </GoalControlProvider>
   )

@@ -365,6 +365,9 @@ pub enum ConnectionCommand {
         reply:
             tokio::sync::oneshot::Sender<Result<crate::acp::types::ForkProtocolResult, AcpError>>,
         activation: tokio::sync::oneshot::Receiver<ForkActivation>,
+        /// Provider-native chain-entry uuid for a truncating fork. `None` is
+        /// a whole-session head fork (no `_meta` on the wire).
+        anchor: Option<String>,
     },
     /// Inject a live-feedback note into the RUNNING turn over the ACP
     /// `_session/steering` extension (native push channel — see
@@ -8595,7 +8598,11 @@ async fn run_conversation_loop<'a>(
                 // backgrounds the slow child teardown): see inner Cancel
                 // handler above for rationale.
             }
-            Some(ConnectionCommand::Fork { reply, activation }) => {
+            Some(ConnectionCommand::Fork {
+                reply,
+                activation,
+                anchor,
+            }) => {
                 if !supports_fork {
                     let _ = reply.send(Err(AcpError::protocol(
                         "This agent does not support session/fork".to_string(),
@@ -8605,11 +8612,13 @@ async fn run_conversation_loop<'a>(
                 let cx = session.connection();
                 let sid = session.session_id().clone();
                 tracing::info!(
-                    "[ACP] Sending session/fork for session_id={} cwd={}",
+                    "[ACP] Sending session/fork for session_id={} cwd={} anchored={}",
                     sid.0,
-                    cwd
+                    cwd,
+                    anchor.is_some()
                 );
-                let result = crate::acp::fork::fork_session(&cx, &sid, cwd).await;
+                let result =
+                    crate::acp::fork::fork_session(&cx, &sid, cwd, anchor.as_deref()).await;
                 match result {
                     Ok((fork_response, fork_models_raw)) => {
                         tracing::info!(

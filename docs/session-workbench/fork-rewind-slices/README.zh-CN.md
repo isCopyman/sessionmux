@@ -509,3 +509,107 @@ pnpm eslint .     → 初次 1 error（types.ts:282 prettier 空行）→ 修复
 **协调者补的一个提交** `aeabcb44`：工人跑不了前端门禁（MCP 坏 + 新 worktree 无
 node_modules，摩擦 4），漏了一个 prettier 空行。**这正是"必须自己跑门禁"的价值**——
 两个 clippy 面都绿，问题只在第三个面上。
+
+
+## 第三轮（forkAtMessage 实装，仅 claude）——进行中
+
+基线事件：`wt/fork-rewind` 已快进到主线 `codex/session-message-v1`（原落后 37 个提交，
+本地独有 0 个——第二轮成果已全部并入主线并经人类验收）。`provider_anchor` 在树上。
+
+规格：`ROUND3-SPECS.zh-CN.md`（`ec606e67`）。契约先钉死（§2）使 G/H 可完全并行：
+`acp_fork` 新增可选 `anchor`；缺省 ⇒ head fork 字节级不变（硬回归红线）；非空 ⇒
+`_meta.claudeCode.options.resumeSessionAt`。错误契约：锚点取错 → CLI 确定性拒绝
+（`Resume rejected by --resume-drops-turn:` 前缀）→ 必须独立**非重试**变体，
+禁止复用 `TurnInProgress` 的重排队路径。
+
+| 包 | 主题 | 负责 | 分支 | 状态 |
+|---|---|---|---|---|
+| G | 后端全部（_meta 拼装 / anchor 传透 / fork_at_message 谱系 / 非重试错误映射） | 317 | `wt/fork-at-message-be` | **已交付、已复核、已合并**（`8e603cc5` → merge `98b70288`） |
+| H | 前端全部（api+tauri 对齐 / 能力门控 / 不重排队错误处理 / types 镜像） | 318 | `wt/fork-at-message-fe` | **已交付、已复核、已合并**（`1913b238` → merge `270b52f7`） |
+| — | 316 本轮轮休（连做两轮 + MCP 全瘫期完成包 D），仅补发包 D 交付帖验证新链路 | 316 | — | **已补发**（`571610ab`），内容与协调者复核逐点一致，新 MCP 链路工人侧实测通 |
+
+协调者保留事项：G 落地后活体验证 `--resume-session-at` 是否真截断（预算受控，工人禁止
+起 agent 进程）；串行合并 G/H 并在合并树上亲跑全部四条门禁。
+
+派工帖 `676470c3`；G 回执 `57ebd100`。
+
+### 新二进制修复验证（dev 重启后，2026-08-20）
+
+15b. **摩擦 7 在修复潮后依然存在（精确化边界）**：今晚的修复是"债务回报"
+    （`open_reply_debt` / `cleared_reply_to_event_id`，且仅协调者侧可见，见 16），
+    **不是**"回复即销点名"。实测：协调者对 `571610ab` / `6f7de228` 均已直接从信封
+    回帖，仍收到"2 条未读群点名"催办，需 `read_room` 覆盖窗口才销。@ 点名的已读
+    状态与 expects_reply 债务是**两本账**，前者仍只认 `read_room`。
+
+16. **【摩擦】销账回报的可见性在会话之间不对称**（Room `1e906451`）。
+    同一 host、同一 Room、几分钟内：协调者 314（Claude Code harness）的 `post_room`
+    返回体带 `open_reply_debt` / `cleared_reply_to_event_id`；工人 316（grok harness）
+    的返回体是旧格式（仅 event id + delivery 状态 + 通用提示），无任何销账字段。
+    316 的运行时 16:43 后才唤醒，companion 应已是新二进制。
+    **已确认为稳定不对称（非冷启动）**：316 三次连续实测（`571610ab` / `6f7de228` /
+    `27276a7b`）返回体全部为旧格式，无一出现销账字段；同期协调者侧每次都有。
+    剩余猜测（未验证）：字段按 feature-group 或调用方 harness 过滤，或仅在部分代码
+    路径组装。**对编排的实际影响**：工人无法自证"我的交付帖清了债"，只能由协调者侧
+    确认——债务对账仍是 hub 单向可见。
+
+
+- **幽灵修复有效**：`@316` 后 `session.list` 无新会话（旧行为：@ 空闲会话必克隆幽灵）。
+- **销账回报有效**：`post_room` 返回体新增 `open_reply_debt` 字段（摩擦 7 的修复落地）。
+- **新 bug（操作员已立项）**：human 在自己创建的 Room 里 `@` 房主会话，会被当成
+  自我提及吞掉——操作员 15:06 的开工帖 `@314` 未送达，靠 `read_room` 主动翻到。
+
+
+### 包 H 结论（协调者已复核 + 合并树跑前端门禁，2026-08-20）
+
+契约四点全中：`buildAcpForkArgs` 空 anchor 不带键（head fork payload 与今天同形，注释
+标明回归线）；`tauri.ts` 对齐四参走同一 builder（**RFC §3.4 的两端漂移正式修掉**）；
+门控三条件（panel 级 `claude_code && supportsFork` + turn 级 `provider_anchor` 非空）；
+`ForkAnchorRejectedError` 独立非重试路径，标记串 + code 双识别，TurnBusy 单独提示。
+另修正包 D 的 types 镜像（`?: string | null` → `?: string`，与 `skip_serializing_if`
+线上形状一致），i18n 10 语种 toast 文案自发补齐。
+
+**协调者采纳的一个工人判断**：门控严格取 `agentType === "claude_code"`，不含 Qoder——
+spread 旁路只在 claude-agent-acp 验证过，Qoder 适配器 fork 行为未审。可日后放宽，不留债。
+
+合并树门禁：eslint 0 error / 3 既有 warning；vitest 368 files / 4721 tests 全绿
+（与工人自报一致）；build 静态导出成功；cargo 四条零 Rust diff 可证等价，未重跑。
+
+
+### 包 G 结论（协调者已复核 + 合并树跑全量门禁，2026-08-20）
+
+契约五点全中：`fork_request_params(anchor=None)` 直接序列化 `ForkSessionRequest`，
+**无 `_meta` 键、字节级等价**（红线 1）；非空锚点手工拼
+`_meta.claudeCode.options.resumeSessionAt`；`record_fork_head` 签名未动，另加
+`record_fork_at_message`（红线 2）；`fork_relation.rs` 仅文档注释更新；
+`ForkAnchorRejected` 识别 `Resume rejected by --resume-drops-turn:` 前缀、
+code `fork_anchor_rejected`（与包 H 前端常量精确对上）、HTTP **422** 与
+`TurnInProgress` 的 409 分开。parsers / TS 零触碰。
+
+合并树全量门禁：fmt ✓、双 clippy ✓（-D warnings 零输出）、
+`cargo test --no-default-features --bin codeg-server --lib` → **2585 passed / 0 failed**
+（与工人自报一致）；前端三条在 H 合并后已绿，G 零 TS diff 可证等价。
+
+### 活体截断验证（协调者，预算受控一发，2026-08-20）
+
+整条链最后一个未证实环节——`--resume-session-at` 是否**真的截断**——已活体证实：
+
+- 预检（零成本）：CLI 2.1.236 二进制含 `resume-session-at`（11 处）/`resume-drops-turn`
+  （10 处），`--help` 不列但接受（同 grok `--no-auto-update` 先例）；env 按 codeg 订阅
+  启动策略（`542f1c5d`）strip 全部 `ANTHROPIC_*`。
+- 源：真实两轮会话 `eccc2303`（turn-2 恰是 "Login expired" 错误——正是用户想截掉的
+  那类）。锚点按 SDK 规则取保留轮末条 chain entry：system `17cdef4c`（turn-2 user 的
+  parent）。
+- 一发：`claude -p "Reply with exactly: ack" --resume eccc2303… --fork-session
+  --session-id d4fa3750… --resume-session-at=17cdef4c… --output-format stream-json
+  --verbose`。**成功**：`result:"ack"`，$0.56（27887 tokens 系统提示词缓存创建）。
+- **产物判据全中**（`d4fa3750….jsonl`，21 条）：
+  1. 文件头 = fork 元数据（`queue-operation` 等）——`background_watch.rs:1256` 布局实锤；
+  2. 保留前缀**原 uuid 原样**（cbc50419→…→17cdef4c），**精确切在锚点（含）**；
+  3. turn-2 内容与 uuid（"Login expired" / 5e37a783 / 88686f8c）**零出现**；
+  4. 新 turn 完整（user+4 attachment+assistant "ack"）；
+  5. **原文件 20628 字节未动**——非破坏性。
+- 附带新知：CLI 层 fork 复制**保留原 uuid**（不重映射）；截断语义"至锚点为止（含）"。
+- 证据文件保留：`~/.claude/projects/C--Users-63036/d4fa3750-2294-4baf-a608-b9cd66196ab6.jsonl`。
+
+**⇒ forkAtMessage 全链路（G 后端 → adapter spread → SDK argv → CLI 真截断 → D 锚点
+生产 → H 前端门控/错误路径）每一环都有证据，切片 2 主体完工。**

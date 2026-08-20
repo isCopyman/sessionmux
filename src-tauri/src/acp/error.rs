@@ -1,5 +1,10 @@
 use serde::Serialize;
 
+/// Prefix the Claude Agent SDK emits when `--resume-drops-turn` rejects a
+/// truncating fork. Lives here (not in `fork.rs`) to avoid a module cycle
+/// with [`AcpError::from_session_fork_failure`].
+pub const FORK_ANCHOR_REJECTED_PREFIX: &str = "Resume rejected by --resume-drops-turn:";
+
 #[derive(Debug, thiserror::Error)]
 pub enum AcpError {
     #[error("agent process failed to spawn: {0}")]
@@ -80,6 +85,13 @@ pub enum AcpError {
     /// message and the frontend renders the suggestion alongside it.
     #[error("{0}")]
     McpRejectedByAgent(String),
+    /// The agent refused to fork at the supplied message anchor. The Claude
+    /// Agent SDK documents this as a deterministic refusal whose message
+    /// starts with `Resume rejected by --resume-drops-turn:` — the same
+    /// request will fail forever. Callers MUST NOT retry or re-queue; the
+    /// original session is still usable.
+    #[error("{0}")]
+    ForkAnchorRejected(String),
 }
 
 impl AcpError {
@@ -135,7 +147,20 @@ impl AcpError {
             Self::DownloadFailed(_) => Some("download_failed"),
             Self::ConnectionNotFound(_) => Some("connection_not_found"),
             Self::McpRejectedByAgent(_) => Some("mcp_rejected_by_agent"),
+            Self::ForkAnchorRejected(_) => Some("fork_anchor_rejected"),
             Self::Protocol(_) => None,
+        }
+    }
+
+    /// Map a failed `session/fork` transport/RPC error. The Claude Agent
+    /// SDK's truncating-fork refusal is deterministic and must not become a
+    /// generic [`Self::Protocol`] that the frontend might retry.
+    pub fn from_session_fork_failure(raw: impl std::fmt::Display) -> Self {
+        let text = raw.to_string();
+        if text.contains(FORK_ANCHOR_REJECTED_PREFIX) {
+            Self::ForkAnchorRejected(sanitize_protocol_message(&text))
+        } else {
+            Self::protocol(format!("session/fork failed: {text}"))
         }
     }
 }
@@ -176,4 +201,30 @@ fn is_executable_format_error(message: &str) -> bool {
         || lowered.contains("bad cpu type in executable")
         || lowered.contains("not a valid win32 application")
         || lowered.contains("is not a valid application for this os platform")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resume_drops_turn_prefix_maps_to_non_retry_variant() {
+        let raw = format!(
+            "session/fork failed: {FORK_ANCHOR_REJECTED_PREFIX} discarded range contains a queued user message"
+        );
+        let err = AcpError::from_session_fork_failure(raw);
+        assert!(
+            matches!(err, AcpError::ForkAnchorRejected(_)),
+            "got {err:?}"
+        );
+        assert_eq!(err.code(), Some("fork_anchor_rejected"));
+        assert!(err.to_string().contains(FORK_ANCHOR_REJECTED_PREFIX));
+    }
+
+    #[test]
+    fn other_fork_failures_stay_protocol() {
+        let err = AcpError::from_session_fork_failure("This agent does not support session/fork");
+        assert!(matches!(err, AcpError::Protocol(_)), "got {err:?}");
+        assert_eq!(err.code(), None);
+    }
 }

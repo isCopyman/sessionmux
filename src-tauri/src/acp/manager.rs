@@ -1976,6 +1976,10 @@ impl ConnectionManager {
         // `send_prompt_linked`'s Branch A contract).
         link_conversation_id: Option<i32>,
         link_folder_id: Option<i32>,
+        // Provider-native chain-entry uuid for a truncating fork. `None`
+        // (or blank) is a whole-session head fork: the wire payload stays
+        // byte-identical to today's request (no `_meta`).
+        anchor: Option<String>,
     ) -> Result<ForkResultInfo, AcpError> {
         let (state_arc, cmd_tx, emitter) = {
             let connections = self.connections.lock().await;
@@ -2062,6 +2066,10 @@ impl ConnectionManager {
         // caller; the result is harmlessly discarded if the caller is gone.
         let db_conn = db.conn.clone();
         let conn_id_for_task = conn_id.to_string();
+        let fork_anchor = anchor
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        let persist_anchor = fork_anchor.clone();
         let handle = tokio::spawn(async move {
             // Holding the owned guard for the whole task is what shields the
             // persistence from caller cancellation.
@@ -2074,6 +2082,7 @@ impl ConnectionManager {
                     .send(ConnectionCommand::Fork {
                         reply: reply_tx,
                         activation: activation_rx,
+                        anchor: fork_anchor,
                     })
                     .await
                     .map_err(|_| AcpError::ProcessExited)?;
@@ -2089,6 +2098,7 @@ impl ConnectionManager {
                     conversation_id,
                     forked_session_id.clone(),
                     original_session_id.clone(),
+                    persist_anchor,
                 )
                 .await
                 {
@@ -2216,6 +2226,7 @@ impl ConnectionManager {
         conversation_id: i32,
         forked_session_id: String,
         original_session_id: String,
+        anchor: Option<String>,
     ) -> Result<crate::models::DbConversationSummary, AcpError> {
         use sea_orm::sea_query::Expr;
         use sea_orm::{ColumnTrait, QueryFilter};
@@ -2352,9 +2363,20 @@ impl ConnectionManager {
                     // `[Fork] …` — a title is not a relation. Note this is
                     // `fork_relation`, NOT `parent_id`: that column means
                     // delegation and stays NULL above.
-                    fork_lineage_service::record_fork_head(txn, conversation_id, inserted.id)
+                    if let Some(uuid) = anchor {
+                        fork_lineage_service::record_fork_at_message(
+                            txn,
+                            conversation_id,
+                            inserted.id,
+                            crate::acp::fork::fork_at_message_anchor_json(&uuid),
+                        )
                         .await
                         .map_err(|e| sea_orm::DbErr::Custom(e.to_string()))?;
+                    } else {
+                        fork_lineage_service::record_fork_head(txn, conversation_id, inserted.id)
+                            .await
+                            .map_err(|e| sea_orm::DbErr::Custom(e.to_string()))?;
+                    }
 
                     Ok(inserted.id)
                 })
@@ -4655,7 +4677,7 @@ mod tests {
             s.turn_in_flight = true; // a turn is already running
         }
 
-        let res = mgr.fork_session(&db, conn_id, None, None).await;
+        let res = mgr.fork_session(&db, conn_id, None, None, None).await;
         assert!(
             matches!(res, Err(AcpError::TurnInProgress)),
             "fork must reject with TurnInProgress while a turn is in flight, got {res:?}"
@@ -4694,7 +4716,7 @@ mod tests {
             .await
             .conversation_id = Some(9);
 
-        let res = mgr.fork_session(&db, conn_id, None, None).await;
+        let res = mgr.fork_session(&db, conn_id, None, None, None).await;
         assert!(res.is_err(), "fork with a dead receiver must fail");
         assert!(
             !mgr.get_state(conn_id)
@@ -4773,7 +4795,10 @@ mod tests {
 
         let (go_tx, go_rx) = tokio::sync::oneshot::channel::<()>();
         let fake_loop = tokio::spawn(async move {
-            if let Some(ConnectionCommand::Fork { reply, activation }) = rx.recv().await {
+            if let Some(ConnectionCommand::Fork {
+                reply, activation, ..
+            }) = rx.recv().await
+            {
                 go_rx.await.ok(); // withhold the reply until the test releases it
                 let _ = reply.send(Ok(crate::acp::types::ForkProtocolResult {
                     forked_session_id: "session-S2".into(),
@@ -4791,7 +4816,7 @@ mod tests {
         // DROPS this caller future. The detached persistence task must survive.
         let timed = tokio::time::timeout(
             std::time::Duration::from_millis(100),
-            mgr.fork_session(&db, "c-shield", None, None),
+            mgr.fork_session(&db, "c-shield", None, None, None),
         )
         .await;
         assert!(
@@ -6521,7 +6546,10 @@ mod tests {
         let original = original_session_id.to_string();
         let join = tokio::spawn(async move {
             while let Some(cmd) = rx.recv().await {
-                if let ConnectionCommand::Fork { reply, activation } = cmd {
+                if let ConnectionCommand::Fork {
+                    reply, activation, ..
+                } = cmd
+                {
                     let _ = reply.send(Ok(crate::acp::types::ForkProtocolResult {
                         forked_session_id: forked.clone(),
                         original_session_id: original.clone(),
@@ -6585,7 +6613,10 @@ mod tests {
         let c1 = seed_forkable(&db, folder_id, Some("Original Topic")).await;
 
         let (mgr, join) = manager_with_fake_fork("c-fork", c1.id, "session-S2", "session-S1").await;
-        let result = mgr.fork_session(&db, "c-fork", None, None).await.unwrap();
+        let result = mgr
+            .fork_session(&db, "c-fork", None, None, None)
+            .await
+            .unwrap();
         let _ = join.await;
 
         assert_eq!(result.original_conversation_id, c1.id);
@@ -6679,7 +6710,7 @@ mod tests {
         let (mgr, join) =
             manager_with_fake_fork("c-owned-facts", c1.id, "session-S2", "session-S1").await;
         let result = mgr
-            .fork_session(&db, "c-owned-facts", None, None)
+            .fork_session(&db, "c-owned-facts", None, None, None)
             .await
             .unwrap();
         let _ = join.await;
@@ -6729,7 +6760,10 @@ mod tests {
 
         let (mgr, join) =
             manager_with_fake_fork("c-title", c1.id, "session-S2", "session-S1").await;
-        let result = mgr.fork_session(&db, "c-title", None, None).await.unwrap();
+        let result = mgr
+            .fork_session(&db, "c-title", None, None, None)
+            .await
+            .unwrap();
         let _ = join.await;
 
         let retained = conversation_service::get_by_id(&db.conn, c1.id)
@@ -6755,7 +6789,10 @@ mod tests {
 
         let (mgr, join) =
             manager_with_fake_fork("c-latest", c1.id, "session-S2", "session-S1").await;
-        let result = mgr.fork_session(&db, "c-latest", None, None).await.unwrap();
+        let result = mgr
+            .fork_session(&db, "c-latest", None, None, None)
+            .await
+            .unwrap();
         let _ = join.await;
 
         assert_eq!(
@@ -6783,7 +6820,7 @@ mod tests {
         let (mgr, join) =
             manager_with_fake_fork("c-untitled", c1.id, "session-S2", "session-S1").await;
         let result = mgr
-            .fork_session(&db, "c-untitled", None, None)
+            .fork_session(&db, "c-untitled", None, None, None)
             .await
             .unwrap();
         let _ = join.await;
@@ -6809,7 +6846,7 @@ mod tests {
         let (mgr, join) =
             manager_with_fake_fork("c-missing", 99_999, "session-S2", "session-S1").await;
         assert!(mgr
-            .fork_session(&db, "c-missing", None, None)
+            .fork_session(&db, "c-missing", None, None, None)
             .await
             .is_err());
         let _ = join.await;
@@ -6826,7 +6863,7 @@ mod tests {
         let (mgr, join) =
             manager_with_fake_fork("c-deleted", c1.id, "session-S2", "session-S1").await;
         assert!(mgr
-            .fork_session(&db, "c-deleted", None, None)
+            .fork_session(&db, "c-deleted", None, None, None)
             .await
             .is_err());
         let _ = join.await;
@@ -6850,7 +6887,7 @@ mod tests {
         let (mgr, join) =
             manager_with_fake_fork("c-stale-binding", c1.id, "session-S2", "session-S1").await;
         let error = mgr
-            .fork_session(&db, "c-stale-binding", None, None)
+            .fork_session(&db, "c-stale-binding", None, None, None)
             .await
             .unwrap_err();
         let _ = join.await;
@@ -6876,7 +6913,7 @@ mod tests {
             .await
             .insert("c-unbound".into(), fake_connection("c-unbound", None));
         let error = mgr
-            .fork_session(&db, "c-unbound", None, None)
+            .fork_session(&db, "c-unbound", None, None, None)
             .await
             .unwrap_err();
         assert!(error.to_string().contains("linked conversation row"));
@@ -6908,7 +6945,7 @@ mod tests {
         });
 
         let error = mgr
-            .fork_session(&db, "c-unsupported", None, None)
+            .fork_session(&db, "c-unsupported", None, None, None)
             .await
             .unwrap_err();
         let _ = provider.await;
@@ -6958,7 +6995,10 @@ mod tests {
             .insert("c-relink".to_string(), conn);
 
         let join = tokio::spawn(async move {
-            if let Some(ConnectionCommand::Fork { reply, activation }) = rx.recv().await {
+            if let Some(ConnectionCommand::Fork {
+                reply, activation, ..
+            }) = rx.recv().await
+            {
                 let _ = reply.send(Ok(crate::acp::types::ForkProtocolResult {
                     forked_session_id: "session-S2".into(),
                     original_session_id: "session-S1".into(),
@@ -6987,7 +7027,7 @@ mod tests {
         });
 
         let result = mgr
-            .fork_session(&db, "c-relink", Some(c1.id), Some(folder_id))
+            .fork_session(&db, "c-relink", Some(c1.id), Some(folder_id), None)
             .await
             .unwrap();
         let _ = join.await;
@@ -7070,7 +7110,7 @@ mod tests {
         let (mgr, join) =
             manager_with_fake_fork("c-inherit", c1.id, "session-S2", "session-S1").await;
         let result = mgr
-            .fork_session(&db, "c-inherit", None, None)
+            .fork_session(&db, "c-inherit", None, None, None)
             .await
             .unwrap();
         let _ = join.await;
@@ -7125,7 +7165,7 @@ mod tests {
         let (mgr, join) =
             manager_with_fake_fork("c-lineage", c1.id, "session-S2", "session-S1").await;
         let result = mgr
-            .fork_session(&db, "c-lineage", None, None)
+            .fork_session(&db, "c-lineage", None, None, None)
             .await
             .unwrap();
         let _ = join.await;
@@ -7154,6 +7194,36 @@ mod tests {
         assert!(target_side.forks.is_empty());
     }
 
+    #[tokio::test]
+    async fn persist_fork_outcome_with_anchor_writes_fork_at_message() {
+        use crate::db::entities::fork_relation::{self, ForkRelationKind};
+        use crate::db::test_helpers;
+        let db = test_helpers::fresh_in_memory_db().await;
+        let folder_id = test_helpers::seed_folder(&db, "/tmp/fork-at-message-edge").await;
+        let c1 = seed_forkable(&db, folder_id, Some("Anchored")).await;
+
+        let c2 = ConnectionManager::persist_fork_outcome(
+            &db.conn,
+            c1.id,
+            "S2".into(),
+            "session-S1".into(),
+            Some("uuid-kept-tail".into()),
+        )
+        .await
+        .unwrap()
+        .id;
+
+        let edges = fork_relation::Entity::find().all(&db.conn).await.unwrap();
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0].relation_kind, ForkRelationKind::ForkAtMessage);
+        assert_eq!(
+            edges[0].anchor.as_deref(),
+            Some(r#"{"resumeSessionAt":"uuid-kept-tail"}"#)
+        );
+        assert_eq!(edges[0].source_conversation_id, c1.id);
+        assert_eq!(edges[0].target_conversation_id, c2);
+    }
+
     /// A fork of a fork: the middle row is a target on one edge and a source on
     /// the other. Driven through `persist_fork_outcome` rather than two fake
     /// connections — the second fork's protocol round trip is already covered
@@ -7170,14 +7240,16 @@ mod tests {
             c1.id,
             "S2".into(),
             "session-S1".into(),
+            None,
         )
         .await
         .unwrap()
         .id;
-        let c3 = ConnectionManager::persist_fork_outcome(&db.conn, c2, "S3".into(), "S2".into())
-            .await
-            .unwrap()
-            .id;
+        let c3 =
+            ConnectionManager::persist_fork_outcome(&db.conn, c2, "S3".into(), "S2".into(), None)
+                .await
+                .unwrap()
+                .id;
 
         let middle = fork_lineage_service::lineage_for(&db.conn, c2)
             .await

@@ -9872,11 +9872,12 @@ pub async fn acp_fork(
     connection_id: String,
     conversation_id: Option<i32>,
     folder_id: Option<i32>,
+    anchor: Option<String>,
     db: State<'_, AppDatabase>,
     manager: State<'_, ConnectionManager>,
 ) -> Result<ForkResultInfo, AcpError> {
     manager
-        .fork_session(&db, &connection_id, conversation_id, folder_id)
+        .fork_session(&db, &connection_id, conversation_id, folder_id, anchor)
         .await
 }
 
