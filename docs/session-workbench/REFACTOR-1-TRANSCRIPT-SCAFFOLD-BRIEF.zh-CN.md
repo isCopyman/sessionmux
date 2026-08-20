@@ -7,7 +7,7 @@
 
 ## 目标
 
-把会话转录面（`src/components/conversations/message-list-view.tsx`）里的通用能力沉淀成可复用的**转录面骨架**，然后把 Room 时间线迁上骨架。最终一并解决：
+把会话转录面（`src/components/message/message-list-view.tsx`）里的通用能力沉淀成可复用的**转录面骨架**，然后把 Room 时间线迁上骨架。最终一并解决：
 
 - **O21**：Room 时间线全量渲染无虚拟化（渐进渲染缺失）
 - **O28**：Room 面板每次打开滚动条在最上方，无滚动锚定/跟随最新
