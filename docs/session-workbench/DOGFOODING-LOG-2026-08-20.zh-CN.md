@@ -1,0 +1,64 @@
+# Dogfooding 日志：用 codeg 开发 codeg（2026-08-20 起）
+
+> P7 阶段的活文档。领导以人类身份通过 CDP 操作 dev 实例，用 codeg 自身的持久化
+> 多 agent 协作开发 fork/rewind。**每条不便之处都记在这里**，按"现象 → 影响 →
+> 改进方向"三段式，攒够一批评审后立项。
+
+## 环境
+
+- dev 实例：tauri dev + CDP 9222，主线 @ 今晚批次收官后（含 Room 搜索/过滤重构/
+  IME 修复/@ 性能包）。复用了已在跑的 next dev（3000）。
+- 首个课题：fork/rewind 第一切片（简报 `FORK-REWIND-TASK1-BRIEF.zh-CN.md`，
+  在 wt/fork-rewind worktree）。
+- 主编码会话：Claude Code + claude-opus-5[1m] + Xhigh + Bypass Permissions，
+  工作目录 fork-rewind（分支 wt/fork-rewind）。
+- 协作模型（用户指定）：Grok Build + Grok 4.6 —— 作评审位，等主编码者出活后拉群。
+
+## 观察记录
+
+### O1. 好评：打开文件夹有应用内路径输入（Ctrl+O）
+
+现象：`Ctrl+O` 文件夹对话框自带"输入目录路径..."文本框 + 目录浏览，原生选择器
+只是快捷方式（workspace-folder-dialog.tsx:93 注释明说）。
+影响：无头/自动化/远程场景全可用；这是 server 模式兼容性带来的正外部性。
+方向：保持。
+
+### O2. 两个"工作文件夹"控件同名不同性
+
+现象：会话头部的文件夹面包屑和 composer 下方的文件夹切换器，title 都是
+"工作文件夹: X"。头部那个是静态标签（代码注释："never a popover trigger"），
+底部才是真选择器（aria-haspopup=dialog）。
+影响：肉眼难分；自动化按 title 找控件必踩坑（本次踩了 3 轮）。对用户来说，
+点头部面包屑无反馈也算轻微困惑。
+方向：头部面包屑去掉按钮语义（改 span）或 title 改成"所在文件夹"；给底部
+选择器加稳定 data-testid。
+
+### O3. 弹层触发在自动化点击下时灵时不灵
+
+现象：composer 下方文件夹选择器，同一坐标的 CDP 真实鼠标点击第一次无反应
+（aria-expanded 保持 false），键盘 focus+Enter 也无反应，改成"先点面板任意处
+激活 → 再点触发器（带 100ms 间隔的 move/press/release）"才打开。
+影响：普通用户大概率无感（真实鼠标有自然间隔），但说明触发器对事件序列敏感，
+可能与面板激活状态有关；自动化测试会 flaky。
+方向：排查 pane 激活逻辑是否吞第一次点击（focus-within 切换时）；给 E2E 留
+"点击两次"惯例或修根因。
+
+### O4. worktree 分支识别有延迟窗口
+
+现象：切到 fork-rewind（git worktree，.git 是文件）后分支 chip 短暂显示
+"无分支"，数秒后变 wt/fork-rewind。
+影响：轻微；但如果用户在窗口期发消息，会话记录的 git_branch 会不会写空？待查。
+方向：确认 branch 探测的异步时序，或首次探测完成前禁用发送位的 branch 记录。
+
+### O5. 会话中心徽章/Room 搜索/过滤重构/Ctrl+K 手递手：实测全过
+
+（属于今晚批次验收而非摩擦，记录在案：徽章=私信+Room 之和、点徽章直达
+needs_reply 分段、筛选弹层 7 facet+Escape 逐层退、列表混排 Room 带"群聊"徽标、
+Ctrl+K 无 agent chips、"在会话中心搜索 {query}"手递手预填成功。）
+
+## 待办/跟踪
+
+- [ ] 主编码会话完成第一切片 → 验收 diff → 拉 Grok 评审群
+- [ ] O4 的 git_branch 写空疑问
+- [ ] IME #518 真实输入法验证（单测已覆盖状态机；真 IME 需要人工敲一次中文，
+      留给用户早上顺手敲一次）

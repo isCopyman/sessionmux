@@ -28,6 +28,9 @@ const eslintConfig = defineConfig([
     // own .next build output) under .claude/ — linting those multiplies the
     // repo and once pinned `pnpm eslint .` for minutes on generated chunks.
     ".claude/**",
+    // One-off validation tooling (CDP probes, session scratch): committed for
+    // provenance, never part of the product build, not held to repo lint.
+    ".artifacts/**",
   ]),
   eslintConfigPrettier,
   eslintPluginPrettierRecommended,
