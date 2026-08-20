@@ -15,18 +15,21 @@ import {
 } from "@/contexts/workspace-context"
 import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
 import { useSearchDialog } from "@/contexts/search-dialog-context"
+import { useCreateRoomDialog } from "@/contexts/create-room-dialog-context"
 import { useShortcutSettings } from "@/hooks/use-shortcut-settings"
 import { matchShortcutEvent } from "@/lib/keyboard-shortcuts"
 import { SearchCommandDialog } from "@/components/conversations/search-command-dialog"
+import { CreateRoomDialog } from "@/components/rooms/create-room-dialog"
 import { WorkspaceFolderDialog } from "@/components/layout/workspace-folder-dialog"
 
 /**
- * Headless owner of the workspace's global keyboard shortcuts and the two
- * dialogs the shortcuts summon (search, remote directory browser). These used
- * to live in the full-width `FolderTitleBar`; with the desktop title bar removed
- * (its buttons relocated into per-column edge clusters), this component keeps
- * the shortcuts + dialogs alive on BOTH desktop and mobile, independent of any
- * visible bar. Renders no visible chrome — only the dialogs.
+ * Headless owner of the workspace's global keyboard shortcuts and the dialogs
+ * summoned from more than one place (search, remote directory browser, create
+ * room). These used to live in the full-width `FolderTitleBar`; with the
+ * desktop title bar removed (its buttons relocated into per-column edge
+ * clusters), this component keeps the shortcuts + dialogs alive on BOTH desktop
+ * and mobile, independent of any visible bar. Renders no visible chrome — only
+ * the dialogs.
  */
 export function WorkspaceChromeController() {
   const { activeFolder } = useActiveFolder()
@@ -49,6 +52,11 @@ export function WorkspaceChromeController() {
   // in the sidebar, but this always-mounted controller owns the dialog and the
   // ⌘K shortcut so search works even when the sidebar is collapsed.
   const { open: searchOpen, setOpen: setSearchOpen } = useSearchDialog()
+  // Same arrangement as search: the sidebar row and the new-conversation
+  // welcome page both trigger it, so the open-state is shared and the dialog
+  // is mounted here rather than inside either trigger.
+  const { open: createRoomOpen, setOpen: setCreateRoomOpen } =
+    useCreateRoomDialog()
   const [browserOpen, setBrowserOpen] = useState(false)
 
   // One dialog on every platform: it owns directory selection *and* the
@@ -180,6 +188,11 @@ export function WorkspaceChromeController() {
   return (
     <>
       <SearchCommandDialog open={searchOpen} onOpenChange={setSearchOpen} />
+      {/* Mounted only while open: the dialog subscribes to the whole live
+          Session list to build its member picker. */}
+      {createRoomOpen ? (
+        <CreateRoomDialog open onOpenChange={setCreateRoomOpen} />
+      ) : null}
       <WorkspaceFolderDialog open={browserOpen} onOpenChange={setBrowserOpen} />
     </>
   )

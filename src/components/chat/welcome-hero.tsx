@@ -2,7 +2,8 @@
 
 import { useState, type ReactNode } from "react"
 import { useTranslations } from "next-intl"
-import { Lightbulb } from "lucide-react"
+import { Lightbulb, Users } from "lucide-react"
+import { useCreateRoomDialog } from "@/contexts/create-room-dialog-context"
 import { useShortcutSettings } from "@/hooks/use-shortcut-settings"
 import { useIsMac } from "@/hooks/use-is-mac"
 import {
@@ -119,6 +120,31 @@ export function WelcomeHero() {
     <h1 className="text-center text-3xl font-semibold tracking-tight text-foreground sm:text-4xl">
       {t.rich("greeting", { highlight: highlightTitle })}
     </h1>
+  )
+}
+
+/**
+ * Secondary way out of the welcome page: start a Room instead of a single
+ * Session. Deliberately a plain muted text button parked in the page footer —
+ * the primary flow (pick an agent, type, send) must keep every bit of its
+ * visual weight. Reuses the sidebar's own label and its shared open-state, so
+ * this is a second trigger for one dialog, not a second dialog.
+ */
+export function WelcomeNewRoomLink() {
+  const t = useTranslations("Folder.sidebar")
+  const { setOpen } = useCreateRoomDialog()
+
+  return (
+    <div className="flex justify-center">
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="flex items-center gap-1.5 rounded-full px-2 py-1 text-xs text-muted-foreground/80 transition-colors hover:text-foreground"
+      >
+        <Users aria-hidden className="h-3.5 w-3.5" />
+        {t("newRoom")}
+      </button>
+    </div>
   )
 }
 
