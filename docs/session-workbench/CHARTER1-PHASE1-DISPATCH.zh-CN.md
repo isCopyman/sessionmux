@@ -34,25 +34,55 @@
 | 简报写的 | 实际（协调者用 `git ls-tree` / `grep` 核过） |
 |---|---|
 | `src/components/**conversations**/message-list-view.tsx` | **`src/components/message/message-list-view.tsx`**（简报路径错） |
-| （未提规模） | 该文件 **1739 行**；配套测试 `message-list-view.test.tsx` **583 行** |
+| （未提规模） | 该文件在基线 `4d1bf83a` 上是 **1787 行**（第三轮 fork 按钮 +48）；配套测试 `message-list-view.test.tsx` **583 行** |
 | "既有测试约 200+ 行" | 实际 **583 + 242 = 825 行**（另含 `virtualized-message-thread.test.tsx`） |
 
-行号锚点**基本准确**，已复核：
-`mergeConsecutiveAssistantTurns` **:562**、`applyCollaborationTimelineProjection` **:258**、
-`loadOlderTurns` **:1000-1003**、`AutoScrollOnSend` **:936**、
-`useStickToBottomContext` 导入 **:78** / 使用 **:941**、find 状态机 **:1303 起**
-（`findEntries` :1307、`findOpen/findQuery` :1325-1326、`ConversationFindEntry` 来自
-`@/lib/conversation-find`）、`ConversationMessageNav` 使用 **:1719**。
+**行号锚点已在基线 `4d1bf83a` 上重新核过一遍**（第三轮的 fork 按钮 +49 行落在
+`:769` 一带，把它后面的所有锚点整体推后约 48 行；本表是**当前**值，旧值仅供对照）：
 
-**协调者发现的一处简报未提的耦合（重要）**：find 与分页**不独立**。`message-list-view.tsx:1303-1306`
+| 锚点 | **当前（`4d1bf83a`）** | 旧值（第三轮前） |
+|---|---|---|
+| 文件总行数 | **1787** | 1739 |
+| `applyCollaborationTimelineProjection` | **:266** | :258 |
+| `mergeConsecutiveAssistantTurns` | **:570** | :562 |
+| `UserMessageForkButton`（第三轮新增） | **:769**（props/门控 :820-840、渲染 :925-928） | 无 |
+| `AutoScrollOnSend` | **:981** | :936 |
+| `useStickToBottomContext` 导入 / 使用 | **:80 / :986** | :78 / :941 |
+| `loadOlderTurns` | **:1046-1049** | :1000-1003 |
+| find 状态机起点（那段注释） | **:1351-1354** | :1303-1306 |
+| `findEntries` | **:1355** | :1307 |
+| `findOpen` / `findQuery` | **:1373 / :1374** | :1325-1326 |
+| `ConversationMessageNav` 使用 | **:1767** | :1719 |
+
+`ConversationFindEntry` 仍来自 `@/lib/conversation-find`。
+
+**协调者发现的一处简报未提的耦合（重要）**：find 与分页**不独立**。`message-list-view.tsx:1351-1354`
 的注释原文：
 
 > Search semantic message text across the loaded transcript, **then page older
 > history while a non-empty query is active** so the final count covers the
 > complete native Session rather than only the initial tail window.
 
-即 **find 激活时会驱动分页继续加载更早历史**。所以骨架件 #4（infinite scroll）与 #5（find）
-**必须由同一个人做**，而且重接后要保证这条"查找时自动翻页直到覆盖全会话"的行为不丢。
+**落实这条的代码在 `:1398-1420`**（协调者已定位到具体实现，不要只照注释猜）：
+
+```ts
+const searchingOlderHistory =
+  findOpen && findQuery.length > 0 && (hasOlderTurns || loadingOlderTurns)   // :1398-1399
+
+useEffect(() => {                                                            // :1401-1420
+  if (!isActive || !findOpen || findQuery.length === 0 ||
+      !hasOlderTurns || loadingOlderTurns) return
+  loadOlderTurns(conversationId)
+}, [conversationId, findOpen, findQuery, hasOlderTurns, isActive,
+    loadOlderTurns, loadingOlderTurns])
+```
+
+即 **find 激活时会驱动分页继续加载更早历史**：这个 effect 每次分页完成后
+`hasOlderTurns`/`loadingOlderTurns` 变化又会重新触发，形成"查找期间自动一路翻到底"的循环。
+所以骨架件 #4（infinite scroll）与 #5（find）**必须由同一个人做**——它们之间是
+**双向**依赖（find 读分页状态、find 又驱动分页动作），拆到两个 hook 里也必须显式接线，
+重接后这条"查找时自动翻页直到覆盖全会话"的行为不能丢，`searchingOlderHistory`
+这个派生量（用于 UI 提示"仍在搜索更早历史"）也不能丢。
 **这是包 I 不再往下拆的根本原因。**
 
 其它已核事实：
