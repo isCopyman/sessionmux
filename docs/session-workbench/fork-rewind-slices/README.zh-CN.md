@@ -47,7 +47,7 @@ SURVEY §6 把切片 2–4 排成了"claude 按消息 fork / codex thread-fork /
 |---|---|---|---|---|---|
 | A | 13 家 parser 的消息锚点清点 | 316（grok-4.6） | `wt/fork-anchor-inventory` | `FINDINGS-A-anchor-inventory.zh-CN.md` | 已派工 |
 | B | claude-agent-acp 0.69.0 fork 能力实测 | 317（grok-4.6） | `wt/fork-claude-audit` | `FINDINGS-B-claude-fork-audit.zh-CN.md` | **已交付、已复核、已合并**（`ba295542` → merge `4fda70a4`） |
-| C | codex-acp 1.4.0 + app-server thread/fork 实测 | 318（grok-4.6） | `wt/fork-codex-audit` | `FINDINGS-C-codex-fork-audit.zh-CN.md` | 已派工 |
+| C | codex-acp 1.4.0 + app-server thread/fork 实测 | 318（grok-4.6） | `wt/fork-codex-audit` | `FINDINGS-C-codex-fork-audit.zh-CN.md` | **已交付、已复核、已合并**（`dcc1c134` → merge `f15ce475`） |
 
 协调频道：Room `rm_3d3711fe-d8ae-4ec5-9f55-1d45aba7b2b2`（"fork-rewind 切片2-4 协调"），
 成员 314（协调者）+ 316/317/318。派工帖 event id：A `d485c1c8`、B `e88aae8d`、
@@ -123,6 +123,45 @@ Collection 5「fork-rewind 切片2-4 调研」收纳三个工人会话。
 
 待定（需烧 Anthropic 额度，等用户拍板）：活体验证 codeg 走的是否确为 print lane。
 
+## 包C 结论（协调者已独立复核，2026-08-20）
+
+工人 318 守住了版本纪律（这是本包最担心的失败模式）：`npm pack` 取 1.4.0 到临时目录、
+没装全局、没起进程。协调者复核：`package.json` version = 1.4.0 ✓；tgz shasum
+`f7c4364a9c5a6e2836e847cd9ac474b807c2e8ca` 与 npm `dist.shasum` 逐字符相同 ✓。
+（工人把该 shasum 标成了 `dist/index.js` 的，实为 tarball 的——数字对，对象标错。）
+
+| 事实 | 证据（1.4.0 tarball 内 `dist/index.js`） |
+|---|---|
+| **不声明 ACP fork**：广告面只有 `{resume, list, close, delete, additionalDirectories}` | `:29697-29703` |
+| `:3710` 的 `session_fork: "session/fork"` 只是方法名常量表，不是声明 | `:3710` |
+| `thread/fork` 唯一 caller 在 AIR 报告路径 `runAgentFileChangeReport` | `:27569` → `:27579` |
+| 参数含 **`lastTurnId: params.turnId`**（registry 注释漏了它和 `developerInstructions`） | `:27579-27587` |
+| `thread/rollback` **零调用点**，只有 `threadRollbackFailed` 错误码 | grep |
+| codeg parser：`fork_turns` 只在注释与夹具中，**代码从不读** | `parsers/codex.rs:1826, 6753` |
+| codeg parser：`forked_from_id` 只在单测中，断言恰是"**不是** harness_internal" | `parsers/codex.rs:4310-4316` |
+| codeg parser：`parent_thread_id` 被读来做 harness_internal 分类 | `parsers/codex.rs:348` |
+
+**裁决维持「给 codex-acp 提能力」。** 三个上交的判断题裁决：
+
+1. **`lastTurnId` 而非 `messageId` —— SURVEY 错了，工人对。** codex 原生 fork 粒度是
+   **turn 级**。这改变产品语义：codex 只能"从这一轮分叉"，不能"从这条消息分叉"。**进 RFC。**
+2. **rewind 不押 DEPRECATED 的 `thread/rollback`**（标了 "will be removed soon" 且不回
+   文件）。codex 侧 rewind 搁置。
+3. `forkedFromId` 谱系记下但本轮不做——切片 1 的 `fork_relation` 表正好能装，等导入侧动。
+
+## 两个包合看：一个没预料到的不对称（本轮真正的产出）
+
+| | claude-agent-acp 0.69.0 | codex-acp 1.4.0 |
+|---|---|---|
+| ACP 声明 fork | **是**（`fork: {}`） | **否** |
+| 按位置分叉的原生能力 | **有**，`resumeSessionAt` 收任意 chain-entry uuid | **有，但只到 turn 级**（`lastTurnId`） |
+| codeg 今天够得着吗 | **够**（`_meta.claudeCode.options` spread 直通） | **够不着**（适配器没接 fork） |
+| rewind 原语 | `resumeSessionAt` 截断式 resume | `thread/rollback` **已 DEPRECATED** |
+| 要不要动上游 | **不要** | **要** |
+
+SURVEY §6 把 claude 排 2、codex 排 3 的**顺序对，但代价差被严重低估**：claude 是"codeg
+侧就能做"，codex 是"提 PR + 等 maintainer + 语义只到 turn 级"。下一轮按此重排编码包。
+
 ## Dogfooding 摩擦记录
 
 组队阶段实际踩到的 codeg 工具/流程摩擦，逐条发在 Room 里（前缀【摩擦】，
@@ -151,7 +190,24 @@ event `e199466b`）。摘要：
    默认值。另有读取面不一致：`session.list` / `list_sessions` 的 `model` 都是 null。
    处置：已对 316/317/318 补 `set_selectors`，三个都 `pinned: grok-4.6`。
 
+第三批（event `26b2ed97`，协作跑起来后才暴露）：
+
+7. **回复了 Room 点名仍被判"未读"并触发催办。** envelope 已把正文注入我的上下文，我复核
+   完并用 `post_room` + `reply_to_event_id` 回了帖，系统仍催"未读，请用 read_room 确认"。
+   根因：只有 `read_room` 会 consume delivery。编排场景下我没有任何功能理由去调
+   `read_room`（不需要周边帖子），纯仪式性开销，忘了就被催办打断一个 turn。
+   建议：带 `reply_to_event_id` 的 `post_room` 应顺带 consume 所引用的 delivery——回复
+   是比"打开"更强的已读证据。
+8. **`expects_reply` 债务方向在星型编排里是反的。** hub→spoke 的派工债很有用
+   （`awaiting_reply_count` 省掉轮询）；但工人交付帖也设 `expects_reply=true`，于是 hub
+   反欠工人一笔——而协调者不回复核意见并不会阻塞任何人。needs_reply 队列混进了无人被
+   阻塞的条目。不是 bug 是 playbook 缺一句：**工人交付帖应设 `expects_reply=false`**。
+   下一轮规格明写。
+
 观察但未验证：`session.create` 回显 cwd 带 `\\?\` Windows 扩展长度前缀。
+
+摩擦 5/6 绕法复查：`session.rename` 锁定的标题（316）至今未被覆盖；补 pin 的三个会话
+模型仍为 grok-4.6。两条绕法都成立。
 
 注：摩擦 5 的 `title_locked` 正是切片 1 里 fork 给 C2 打 `[Fork]` 前缀所依赖的字段
 （`acp/manager.rs:2221`）。fork 那条路径显式锁了标题，是对的；`session.create` 漏了。
