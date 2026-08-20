@@ -10,9 +10,11 @@ import {
   buildMergeConfigPayload,
   buildAcpAdapterCheck,
   buildVersionCheck,
+  claudeAuthModeEnvPatch,
   configTextForClaudeSave,
   getAgentChecks,
   hostToolsAgentModeEnabled,
+  inferClaudeAuthMode,
   inferGrokMode,
   materializeClaudeHardeningFlags,
   patchCodexConfigTomlText,
@@ -537,6 +539,80 @@ describe("inferGrokMode — Grok auth-method recognition", () => {
     expect(inferGrokMode({ XAI_API_KEY: "xai-1" }, true)).toBe("custom")
     // An explicit knob still wins over the custom-model flag.
     expect(inferGrokMode({ GROK_AUTH_MODE: "api_key" }, true)).toBe("api_key")
+  })
+})
+
+describe("inferClaudeAuthMode — Claude auth-method recognition", () => {
+  const knob = (mode: string) => ({ CLAUDE_AUTH_MODE: mode })
+
+  // An explicit knob always wins: it is the only signal the launch policy
+  // (`apply_claude_env_policy`) acts on, so the UI must agree with it.
+  it("honors an explicit CLAUDE_AUTH_MODE knob", () => {
+    expect(inferClaudeAuthMode(knob("custom"), null, false)).toBe("custom")
+    expect(inferClaudeAuthMode(knob("model_provider"), null, false)).toBe(
+      "model_provider"
+    )
+    // Subscription wins even against a stale credential and a bound provider,
+    // both of which the legacy inference would have read as something else.
+    expect(inferClaudeAuthMode(knob("official_subscription"), 7, true)).toBe(
+      "official_subscription"
+    )
+  })
+
+  // Legacy rows (no knob) keep their old reading, so nothing needs migrating.
+  it("falls back to the legacy inference for rows without the knob", () => {
+    expect(inferClaudeAuthMode({}, 7, false)).toBe("model_provider")
+    // A bound provider outranks the credential it wrote into env.
+    expect(inferClaudeAuthMode({}, 7, true)).toBe("model_provider")
+    expect(inferClaudeAuthMode({}, null, true)).toBe("custom")
+    expect(inferClaudeAuthMode({}, null, false)).toBe("official_subscription")
+  })
+
+  // An unrecognized or blank knob value is ignored, falling through to the
+  // legacy inference rather than pinning a mode the UI cannot render.
+  it("ignores an unknown or blank knob value", () => {
+    expect(inferClaudeAuthMode(knob("bogus"), null, true)).toBe("custom")
+    expect(inferClaudeAuthMode(knob("   "), null, false)).toBe(
+      "official_subscription"
+    )
+  })
+})
+
+describe("claudeAuthModeEnvPatch", () => {
+  const MODES = ["official_subscription", "custom", "model_provider"] as const
+
+  // Every mode records the knob: without it the launch path cannot tell an
+  // official-subscription row from a legacy one, and leaves the inherited
+  // ANTHROPIC_* vars in place — the proxy leak this guards against.
+  it("always writes the explicit knob", () => {
+    for (const mode of MODES) {
+      expect(claudeAuthModeEnvPatch(mode).CLAUDE_AUTH_MODE).toBe(mode)
+    }
+  })
+
+  // Official subscription also clears every credential key the panel knows
+  // about (an empty value deletes the line in patchEnvText).
+  it("clears the credential keys only in official subscription", () => {
+    const patch = claudeAuthModeEnvPatch("official_subscription")
+    for (const key of [
+      "ANTHROPIC_BASE_URL",
+      "ANTHROPIC_AUTH_TOKEN",
+      "ANTHROPIC_API_KEY",
+      "OPENAI_BASE_URL",
+      "OPENAI_API_KEY",
+      "API_BASE_URL",
+    ]) {
+      expect(patch[key]).toBe("")
+    }
+    // Model keys are not credentials and must survive the switch.
+    expect(patch).not.toHaveProperty("ANTHROPIC_MODEL")
+
+    // The other two modes record the knob and nothing else.
+    for (const mode of ["custom", "model_provider"] as const) {
+      expect(Object.keys(claudeAuthModeEnvPatch(mode))).toEqual([
+        "CLAUDE_AUTH_MODE",
+      ])
+    }
   })
 })
 

@@ -171,7 +171,7 @@ const CLAUDE_AUTH_MODES = [
   "custom",
   "model_provider",
 ] as const
-type ClaudeAuthMode = (typeof CLAUDE_AUTH_MODES)[number]
+export type ClaudeAuthMode = (typeof CLAUDE_AUTH_MODES)[number]
 
 interface AgentDraft {
   enabled: boolean
@@ -779,6 +779,49 @@ function importantEnvKeysByAgent(agentType: AgentType): ImportantEnvKeys {
     apiKey: ["OPENAI_API_KEY", "API_KEY"],
     model: ["OPENAI_MODEL", "MODEL"],
   }
+}
+
+/** codeg-side knob recording Claude Code's chosen authentication method. Read by
+ * the launch path (`apply_claude_env_policy`): in `official_subscription` mode it
+ * clears any inherited ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN /
+ * ANTHROPIC_API_KEY, so a host export (a dev-shell proxy, a container default)
+ * cannot reroute a subscription session. The Claude CLI itself ignores this var.
+ * Mirrors CURSOR_AUTH_MODE / GROK_AUTH_MODE. */
+const CLAUDE_AUTH_MODE_ENV = "CLAUDE_AUTH_MODE"
+
+/** Resolve the persisted Claude authentication method, tolerant of legacy rows
+ * written before the knob existed: an explicit `CLAUDE_AUTH_MODE` wins, otherwise
+ * a bound model provider implies `model_provider` and a saved endpoint/key
+ * implies `custom`. Mirrors `inferCursorMode` / `inferGrokMode`, so rows that
+ * predate the knob keep reading back the same way — no migration needed. */
+export function inferClaudeAuthMode(
+  env: Record<string, string>,
+  modelProviderId: number | null,
+  hasCustomCredential: boolean
+): ClaudeAuthMode {
+  const explicit = (env[CLAUDE_AUTH_MODE_ENV] ?? "").trim()
+  if ((CLAUDE_AUTH_MODES as readonly string[]).includes(explicit)) {
+    return explicit as ClaudeAuthMode
+  }
+  if (modelProviderId != null) return "model_provider"
+  return hasCustomCredential ? "custom" : "official_subscription"
+}
+
+/** The env patch that records a Claude auth-method choice. The knob is written
+ * for EVERY mode: the launch policy only fires on an explicit
+ * `official_subscription`, so a mode the user actually picked must not stay
+ * implicit. Official subscription additionally clears every credential key (an
+ * empty value deletes the line) so the saved env can't shadow the browser-login
+ * credential. Mirrors handleGrokAuthModeChange's GROK_AUTH_MODE patch. */
+export function claudeAuthModeEnvPatch(
+  mode: ClaudeAuthMode
+): Record<string, string> {
+  const patch: Record<string, string> = { [CLAUDE_AUTH_MODE_ENV]: mode }
+  if (mode === "official_subscription") {
+    const keys = importantEnvKeysByAgent("claude_code")
+    for (const key of [...keys.apiBaseUrl, ...keys.apiKey]) patch[key] = ""
+  }
+  return patch
 }
 
 function parseConfigJsonText(configText: string): ConfigParseResult {
@@ -3452,11 +3495,22 @@ function buildAgentDraft(agent: AcpAgentInfo): AgentDraft {
           Boolean(agent.grok_settings?.custom_model_id?.trim())
         )
       : "api_key"
+  const claudeAuthMode: ClaudeAuthMode =
+    agent.agent_type === "claude_code"
+      ? inferClaudeAuthMode(
+          agent.env,
+          agent.model_provider_id ?? null,
+          Boolean(important.apiBaseUrl || important.apiKey)
+        )
+      : "official_subscription"
   const rawEnvText = envMapToText(agent.env)
   // When codex is in official subscription mode, clean up API keys/URLs from env.
   // Grok mirrors this: record the auth-method knob, and in subscription mode
   // strip XAI_API_KEY so the editable env can't override the `grok login`
   // credential (the launch path enforces the same — see apply_grok_env_policy).
+  // Claude does the same for its own knob: writing the inferred mode back is what
+  // upgrades a legacy row into one apply_claude_env_policy can act on, so an
+  // inherited ANTHROPIC_BASE_URL stops reaching the subscription launch.
   const envText =
     agent.agent_type === "codex" && codexAuthMode === "chatgpt_subscription"
       ? patchEnvText(rawEnvText, {
@@ -3468,7 +3522,9 @@ function buildAgentDraft(agent: AcpAgentInfo): AgentDraft {
             GROK_AUTH_MODE: grokAuthMode,
             ...(grokAuthMode === "subscription" ? { XAI_API_KEY: "" } : {}),
           })
-        : rawEnvText
+        : agent.agent_type === "claude_code"
+          ? patchEnvText(rawEnvText, claudeAuthModeEnvPatch(claudeAuthMode))
+          : rawEnvText
   return {
     enabled: agent.enabled,
     envText,
@@ -3499,13 +3555,7 @@ function buildAgentDraft(agent: AcpAgentInfo): AgentDraft {
             : agent.agent_type === "open_code"
               ? openCodeImportant.model
               : important.model,
-    claudeAuthMode:
-      agent.agent_type === "claude_code" && agent.model_provider_id != null
-        ? "model_provider"
-        : agent.agent_type === "claude_code" &&
-            (important.apiBaseUrl || important.apiKey)
-          ? "custom"
-          : "official_subscription",
+    claudeAuthMode,
     modelProviderId: agent.model_provider_id ?? null,
     geminiAuthMode:
       agent.agent_type === "gemini" && agent.model_provider_id != null
@@ -5668,9 +5718,11 @@ export function AcpAgentSettings() {
       const allEnvKeys = [...keys.apiBaseUrl, ...keys.apiKey]
 
       if (nextMode === "official_subscription") {
-        // Clear API URL/API Key from env and config
-        const envPatch: Record<string, string> = {}
-        for (const k of allEnvKeys) envPatch[k] = ""
+        // Clear API URL/API Key from env and config, and record the knob so the
+        // launch path can strip the inherited credentials too (the saved env
+        // being empty is not enough — the child inherits codeg's own
+        // environment; see apply_claude_env_policy).
+        const envPatch = claudeAuthModeEnvPatch(nextMode)
         // Build clean display config (remove null keys)
         const parsed = parseConfigJsonText(selectedDraft.configText)
         const config: Record<string, unknown> = parsed.error
@@ -5705,12 +5757,17 @@ export function AcpAgentSettings() {
         return
       }
 
-      // "custom" or "model_provider" — keep existing values, just switch mode
+      // "custom" or "model_provider" — keep existing values, just switch mode.
+      // The knob is still written: an absent one falls back to inference, and a
+      // row whose credentials are only reachable through a bound provider would
+      // otherwise read back as official subscription and get them stripped.
+      const modeEnvPatch = claudeAuthModeEnvPatch(nextMode)
       updateSelectedDraft((current) => ({
         ...current,
         claudeAuthMode: nextMode,
         modelProviderId:
           nextMode === "model_provider" ? current.modelProviderId : null,
+        envText: patchEnvText(current.envText, modeEnvPatch),
       }))
     },
     [selectedAgent, selectedDraft, updateSelectedDraft]

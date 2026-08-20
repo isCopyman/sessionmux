@@ -143,6 +143,41 @@ fn apply_grok_env_policy(
     }
 }
 
+/// Claude Code's launch-time credential policy, mirroring
+/// [`apply_cursor_env_policy`]. When the user picked the official Anthropic
+/// subscription (recorded as `CLAUDE_AUTH_MODE=official_subscription` by the
+/// Claude auth-mode selector), scrub every Anthropic endpoint/credential var the
+/// child would otherwise INHERIT from this process — a dev shell or container
+/// that exports `ANTHROPIC_BASE_URL` at a local proxy silently reroutes the whole
+/// session (and the model probes, which then spin against a dead endpoint) off
+/// the subscription. `ANTHROPIC_API_KEY` is cleared alongside the two keys codeg
+/// itself writes because the CLI reads it too, so a leaked one would authenticate
+/// that redirected traffic.
+///
+/// An empty value tells the spawn layer (vendored sacp-tokio) to `env_remove` the
+/// inherited var. A value codeg did configure is left alone (explicit wins), and
+/// `custom` / `model_provider` rows — plus legacy rows with no knob at all — are
+/// untouched, so operator-provided container env keeps working.
+fn apply_claude_env_policy(
+    merged: &mut Vec<(String, String)>,
+    runtime_env: &BTreeMap<String, String>,
+) {
+    if runtime_env.get("CLAUDE_AUTH_MODE").map(String::as_str) != Some("official_subscription") {
+        return;
+    }
+    for key in [
+        "ANTHROPIC_BASE_URL",
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_API_KEY",
+    ] {
+        let already_set = merged.iter().any(|(k, v)| k == key && !v.trim().is_empty());
+        if !already_set {
+            merged.retain(|(k, _)| k != key);
+            merged.push((key.to_string(), String::new()));
+        }
+    }
+}
+
 /// Codex-only launch policy: force codex-acp's MCP name-conflict de-duplication
 /// OFF. codeg injects its companion server (`codeg-mcp`) over ACP
 /// `session/new.mcpServers`; codex-acp otherwise drops any ACP-passed server
@@ -929,6 +964,15 @@ async fn build_agent(
                 }
             }
             let mut merged_env = merge_agent_env(env, runtime_env);
+            // Claude ships as an Npx distribution, so unlike Cursor/Grok its
+            // credential policy hooks THIS branch — the Binary one below never
+            // runs for it. The empty sentinel survives the round trip: each pair
+            // is serialized into `parts` as `KEY=` and `AcpAgent::from_args`
+            // parses a leading `KEY=` back into an empty-valued EnvVariable,
+            // which the spawn layer turns into `env_remove`.
+            if agent_type == AgentType::ClaudeCode {
+                apply_claude_env_policy(&mut merged_env, runtime_env);
+            }
             // Resolve the config-derived preset HERE (like Grok's
             // `grok_launch_permission_mode` below) so the policy helper stays a
             // pure function over the env list.
@@ -1135,6 +1179,11 @@ async fn build_agent(
                 apply_cursor_env_policy(&mut merged_env, runtime_env);
             } else if agent_type == AgentType::Grok {
                 apply_grok_env_policy(&mut merged_env, runtime_env);
+            } else if agent_type == AgentType::ClaudeCode {
+                // Forward guard only: Claude is an Npx distribution today (its
+                // live call site is in that branch). Kept here so moving it to a
+                // managed binary can never silently drop the policy.
+                apply_claude_env_policy(&mut merged_env, runtime_env);
             }
             let env_key_list: Vec<&str> = merged_env.iter().map(|(k, _)| k.as_str()).collect();
             if !merged_env.is_empty() {
@@ -12383,6 +12432,61 @@ mod tests {
             let mut env = vec![("PATH".to_string(), "/usr/bin".to_string())];
             apply_grok_env_policy(&mut env, &rt);
             assert!(!env.iter().any(|(k, _)| k == "XAI_API_KEY"));
+        }
+    }
+
+    #[test]
+    fn claude_env_policy_clears_inherited_creds_only_in_subscription() {
+        const CRED_KEYS: [&str; 3] = [
+            "ANTHROPIC_BASE_URL",
+            "ANTHROPIC_AUTH_TOKEN",
+            "ANTHROPIC_API_KEY",
+        ];
+        fn auth_mode(mode: &str) -> BTreeMap<String, String> {
+            [("CLAUDE_AUTH_MODE".to_string(), mode.to_string())].into()
+        }
+        let sub = auth_mode("official_subscription");
+
+        // Official subscription with nothing configured → all three injected
+        // empty, so the spawn layer strips whatever the host exported — the
+        // inherited ANTHROPIC_BASE_URL proxy this policy exists for.
+        let mut merged = vec![("PATH".to_string(), "/usr/bin".to_string())];
+        apply_claude_env_policy(&mut merged, &sub);
+        for key in CRED_KEYS {
+            assert!(
+                merged.iter().any(|(k, v)| k == key && v.is_empty()),
+                "{key} should be cleared in official subscription mode"
+            );
+        }
+        // Unrelated vars survive untouched.
+        assert!(merged.iter().any(|(k, v)| k == "PATH" && v == "/usr/bin"));
+
+        // A configured value wins (explicit beats the policy); only its absent
+        // siblings are cleared.
+        let mut with_url = vec![("ANTHROPIC_BASE_URL".to_string(), "http://x".to_string())];
+        apply_claude_env_policy(&mut with_url, &sub);
+        assert!(with_url
+            .iter()
+            .any(|(k, v)| k == "ANTHROPIC_BASE_URL" && v == "http://x"));
+        assert!(with_url
+            .iter()
+            .any(|(k, v)| k == "ANTHROPIC_AUTH_TOKEN" && v.is_empty()));
+        assert!(with_url
+            .iter()
+            .any(|(k, v)| k == "ANTHROPIC_API_KEY" && v.is_empty()));
+
+        // custom / model_provider rows and legacy rows with no knob keep the
+        // inherited environment — operator-provided container env still works.
+        for mode in [Some("custom"), Some("model_provider"), None] {
+            let rt = mode.map(auth_mode).unwrap_or_default();
+            let mut env = vec![("PATH".to_string(), "/usr/bin".to_string())];
+            apply_claude_env_policy(&mut env, &rt);
+            for key in CRED_KEYS {
+                assert!(
+                    !env.iter().any(|(k, _)| k == key),
+                    "{key} must not be touched for mode {mode:?}"
+                );
+            }
         }
     }
 
