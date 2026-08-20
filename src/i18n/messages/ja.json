@@ -1732,6 +1732,7 @@
         "roomTypeBadge": "ルーム",
         "roomMemberCount": "メンバー {count} 人",
         "roomMatchedCount": "ルーム {count} 件",
+        "homeWorkbench": "所属ワークベンチ：{name}",
         "untitledConversation": "無題の会話",
         "setStatus": "ステータスを変更…",
         "archiveSelected": "アーカイブ",

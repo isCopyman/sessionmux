@@ -1732,6 +1732,7 @@
         "roomTypeBadge": "غرفة",
         "roomMemberCount": "{count} أعضاء",
         "roomMatchedCount": "{count} غرف",
+        "homeWorkbench": "مساحة العمل: {name}",
         "untitledConversation": "محادثة بدون عنوان",
         "setStatus": "تعيين الحالة…",
         "archiveSelected": "أرشفة",

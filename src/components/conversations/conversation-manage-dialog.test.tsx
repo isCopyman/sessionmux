@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react"
+import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { NextIntlClientProvider } from "next-intl"
 import { beforeEach, describe, expect, it, vi } from "vitest"
@@ -1650,5 +1650,59 @@ describe("ConversationManageDialog", () => {
 
     // Three Sessions, not four rows: none of the bulk actions apply to a Room.
     expect(screen.getByText("3 selected")).toBeTruthy()
+  })
+
+  describe("Room row mixed-list parity", () => {
+    it("renders unread and awaiting-reply badges plus branch and status placeholders", async () => {
+      h.listAllRooms.mockResolvedValue([
+        room({
+          id: "r1",
+          title: "release war room",
+          unreadCount: 4,
+          needsReplyCount: 2,
+          awaitingReplyCount: 3,
+          collectionId: 10,
+          workbenchId: 2,
+        }),
+      ])
+      renderDialog()
+      const title = await screen.findByText("release war room")
+      const row = title.closest("[role=option]")
+      expect(row).toBeTruthy()
+      const scoped = within(row as HTMLElement)
+
+      expect(scoped.getByTitle("4 unread").textContent).toBe("4")
+      expect(scoped.getByTitle(/^Owes a reply —/).textContent).toBe("2")
+      expect(scoped.getByTitle(/^Awaiting a reply —/).textContent).toBe("3")
+      expect(scoped.getByTitle("Research").textContent).toContain("Research")
+      expect(scoped.getByTitle("Home workbench: Review").textContent).toContain(
+        "Review"
+      )
+
+      const branchCol = scoped.getByTitle("No branch")
+      expect(branchCol.className).toContain("w-28")
+      expect(branchCol.textContent).toBe("—")
+
+      const statusSlot = row!.querySelector(
+        ":scope > [aria-hidden=true].h-2.w-2"
+      )
+      expect(statusSlot).toBeTruthy()
+      expect(statusSlot?.textContent).toBe("")
+    })
+
+    it("names the Room's folder in the workspace-wide column", async () => {
+      h.listAllRooms.mockResolvedValue([
+        room({
+          id: "r1",
+          title: "release war room",
+          rootFolderId: 3,
+        }),
+      ])
+      renderGlobalDialog()
+      const title = await screen.findByText("release war room")
+      const row = title.closest("[role=option]")
+      expect(row).toBeTruthy()
+      expect(within(row as HTMLElement).getByText("beta")).toBeTruthy()
+    })
   })
 })
