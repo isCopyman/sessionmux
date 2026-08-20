@@ -3265,7 +3265,13 @@ mod tests {
         let room = make_room(&db, a, vec![a, b, c]).await;
         let asked = crate::db::service::collaboration_service::post_room(
             &db.conn,
-            debt_ask_post(room.id.clone(), a, vec![b, c], "dismiss-ask", "please answer"),
+            debt_ask_post(
+                room.id.clone(),
+                a,
+                vec![b, c],
+                "dismiss-ask",
+                "please answer",
+            ),
         )
         .await
         .unwrap();
