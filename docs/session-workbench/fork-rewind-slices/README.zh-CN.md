@@ -444,7 +444,17 @@ event `e199466b`）。摘要：
     `git status`），不是 codeg 的会话元数据。** 差点因此错误介入一个正常工作的工人
     （lead-executor playbook 的 take-over 协议若照 `updated_at` 触发就会误伤）。
 
-观察但未验证：`session.create` 回显 cwd 带 `\\?\` Windows 扩展长度前缀。
+15. **多 worktree 编排会撑爆磁盘：每棵树一个 `target/`。**
+    收口跑门禁时 `cargo test` 以 `failed to build archive … 磁盘空间不足 (os error 112)`
+    失败——**不是代码问题**。D: 盘 1.9T 已 100% 满、仅剩 601M；三棵树的 `target/`
+    合计约 59G（fork-anchor-pipeline 21G / fork-reserved-id-audit 18G / fork-rewind 20G）。
+    协调者删掉两个**已合并**工人的 `target/`（纯构建产物，可再生；worktree 本体保留作
+    证据）释放 39G 后门禁通过。
+    **教训**：N 个并行 Rust 工人 ≈ N × 20G。编排前要把磁盘算进预算，收口后要回收已合并
+    工人的构建产物。这条不是 codeg 的缺陷，是多 worktree 模式的固有成本，但 playbook
+    必须写明。
+
+观察但未验证：`session.create` 回显 cwd 带 `\?\` Windows 扩展长度前缀。
 
 摩擦 5/6 绕法复查：`session.rename` 锁定的标题（316）至今未被覆盖；补 pin 的三个会话
 模型仍为 grok-4.6。两条绕法都成立。
