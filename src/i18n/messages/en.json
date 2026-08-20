@@ -1555,7 +1555,12 @@
       "currentSessions": "Sessions in this workbench",
       "sessionCount": "{count, plural, one {# session} other {# sessions}}",
       "emptySessions": "No open sessions",
-      "draftSession": "New session"
+      "draftSession": "New session",
+      "closeSessionTab": "Close tab",
+      "moveToWorkbench": "Move to workbench",
+      "openInNewWorkbench": "Open in new workbench",
+      "movedToWorkbench": "Moved “{title}” to {workbench}",
+      "openedInWorkbench": "Opened “{title}” in {workbench}"
     },
     "statusLabels": {
       "in_progress": "In Progress",

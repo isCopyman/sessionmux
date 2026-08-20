@@ -1555,7 +1555,12 @@
       "currentSessions": "이 워크벤치의 Session",
       "sessionCount": "Session {count}개",
       "emptySessions": "열려 있는 Session이 없습니다",
-      "draftSession": "새 Session"
+      "draftSession": "새 Session",
+      "closeSessionTab": "탭 닫기",
+      "moveToWorkbench": "워크벤치로 이동",
+      "openInNewWorkbench": "새 워크벤치에서 열기",
+      "movedToWorkbench": "“{title}”을(를) {workbench}(으)로 이동했습니다",
+      "openedInWorkbench": "“{title}”을(를) {workbench}에서 열었습니다"
     },
     "statusLabels": {
       "in_progress": "진행 중",

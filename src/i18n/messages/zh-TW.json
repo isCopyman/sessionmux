@@ -1555,7 +1555,12 @@
       "currentSessions": "目前工作台中的工作階段",
       "sessionCount": "{count} 個工作階段",
       "emptySessions": "尚未開啟工作階段",
-      "draftSession": "新工作階段"
+      "draftSession": "新工作階段",
+      "closeSessionTab": "關閉分頁",
+      "moveToWorkbench": "移動到工作台",
+      "openInNewWorkbench": "在新工作台開啟",
+      "movedToWorkbench": "已將「{title}」移動到 {workbench}",
+      "openedInWorkbench": "已在 {workbench} 開啟「{title}」"
     },
     "statusLabels": {
       "in_progress": "進行中",

@@ -14,6 +14,7 @@ import {
   Plus,
   Trash2,
   Users,
+  X,
 } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
@@ -40,6 +41,16 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu"
+import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -60,6 +71,10 @@ import type {
   WorkbenchInfo,
 } from "@/lib/types"
 import { useOpenRoom } from "@/lib/open-room"
+import {
+  appendConversationsToWorkbench,
+  SIDEBAR_BULK_TAB_ORIGIN,
+} from "@/lib/workbench-session-tabs"
 import {
   ensureRoomCatalogSubscription,
   useRoomCatalogStore,
@@ -176,12 +191,15 @@ export function WorkbenchTree() {
   const loading = useWorkbenchStore((state) => state.loading)
   const hydrate = useWorkbenchStore((state) => state.hydrate)
   const createAndSwitch = useWorkbenchStore((state) => state.createAndSwitch)
+  const createOnly = useWorkbenchStore((state) => state.createOnly)
   const duplicateAndSwitch = useWorkbenchStore(
     (state) => state.duplicateAndSwitch
   )
   const rename = useWorkbenchStore((state) => state.rename)
   const setPinned = useWorkbenchStore((state) => state.setPinned)
   const remove = useWorkbenchStore((state) => state.remove)
+  const closeView = useWorkbenchStore((state) => state.closeView)
+  const openIds = useWorkbenchStore((state) => state.openIds)
 
   const activeWorkbenchId = useTabStore((state) => state.activeWorkbenchId)
   const switching = useTabStore((state) => state.switchingWorkbench)
@@ -191,6 +209,7 @@ export function WorkbenchTree() {
   const switchWorkbench = useTabStore((state) => state.switchWorkbench)
   const switchTab = useTabStore((state) => state.switchTab)
   const openTab = useTabStore((state) => state.openTab)
+  const closeTab = useTabStore((state) => state.closeTab)
   const conversations = useAppWorkspaceStore((state) => state.conversations)
   const { openConversations } = useWorkbenchRoute()
   const openRoom = useOpenRoom()
@@ -390,6 +409,81 @@ export function WorkbenchTree() {
     }
   }
 
+  const closeWorkbenchView = async (item: WorkbenchInfo) => {
+    if (pending) return
+    setPending(true)
+    try {
+      await closeView(item.id)
+    } catch (error) {
+      toast.error(t("closeFailed", { message: toErrorMessage(error) }))
+    } finally {
+      setPending(false)
+    }
+  }
+
+  const summaryOf = (session: TreeSession) =>
+    session.conversationId == null
+      ? undefined
+      : conversationById.get(session.conversationId)
+
+  const closeSessionTab = (session: TreeSession) => {
+    if (!session.liveTabId) return
+    closeTab(session.liveTabId)
+  }
+
+  /**
+   * Membership is a saved tab list, so a move is an append to the target plus a
+   * close here. Only the mounted Workbench can drop its copy — no API removes a
+   * tab from a Workbench this window is not showing — so callers gate this on
+   * the row belonging to the active Workbench.
+   */
+  const moveSession = async (session: TreeSession, target: WorkbenchInfo) => {
+    const conversation = summaryOf(session)
+    if (!conversation || !session.liveTabId || pending) return
+    setPending(true)
+    try {
+      await appendConversationsToWorkbench(
+        target.id,
+        [conversation],
+        SIDEBAR_BULK_TAB_ORIGIN
+      )
+      closeTab(session.liveTabId)
+      toast.success(
+        t("movedToWorkbench", { title: session.title, workbench: target.name })
+      )
+    } catch (error) {
+      toast.error(t("saveFailed", { message: toErrorMessage(error) }))
+    } finally {
+      setPending(false)
+    }
+  }
+
+  const openSessionInNewWorkbench = async (session: TreeSession) => {
+    const conversation = summaryOf(session)
+    if (!conversation || pending) return
+    setPending(true)
+    try {
+      const created = await createOnly(
+        t("defaultName", { number: items.length + 1 })
+      )
+      await appendConversationsToWorkbench(
+        created.id,
+        [conversation],
+        SIDEBAR_BULK_TAB_ORIGIN
+      )
+      toast.success(
+        t("openedInWorkbench", {
+          title: session.title,
+          workbench: created.name,
+        })
+      )
+    } catch (error) {
+      toast.error(t("saveFailed", { message: toErrorMessage(error) }))
+    } finally {
+      setPending(false)
+    }
+  }
+
   const focusSession = async (workbenchId: number, session: TreeSession) => {
     try {
       if (session.kind === "room" && session.room) {
@@ -443,176 +537,298 @@ export function WorkbenchTree() {
             const sessions = sessionsFor(item.id)
             return (
               <div key={item.id}>
-                <div
-                  className={cn(
-                    "group flex h-7 min-w-0 items-center rounded-md pe-1 hover:bg-sidebar-accent",
-                    active && "bg-sidebar-primary/8"
-                  )}
-                >
-                  <button
-                    type="button"
-                    className="flex h-6 w-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground"
-                    aria-label={isExpanded ? t("collapse") : t("expand")}
-                    onClick={() =>
-                      setExpanded((current) => {
-                        const next = new Set(current)
-                        if (next.has(item.id)) next.delete(item.id)
-                        else next.add(item.id)
-                        return next
-                      })
-                    }
-                  >
-                    {isExpanded ? (
-                      <ChevronDown className="h-3.5 w-3.5" />
-                    ) : (
-                      <ChevronRight className="h-3.5 w-3.5 rtl:rotate-180" />
-                    )}
-                  </button>
-                  <button
-                    type="button"
-                    className="flex h-full min-w-0 flex-1 items-center gap-1.5 text-start text-xs"
-                    aria-current={active ? "page" : undefined}
-                    aria-label={item.name}
-                    title={item.name}
-                    disabled={switching}
-                    onClick={() => {
-                      setExpanded((current) => new Set(current).add(item.id))
-                      if (!active) {
-                        void switchWorkbench(item.id).catch((error) =>
-                          toast.error(
-                            t("switchFailed", {
-                              message: toErrorMessage(error),
-                            })
-                          )
-                        )
-                      }
-                    }}
-                  >
-                    {active && switching ? (
-                      <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-primary" />
-                    ) : (
-                      <PanelsTopLeft
-                        className={cn(
-                          "h-3.5 w-3.5 shrink-0 text-muted-foreground",
-                          active && "text-primary"
-                        )}
-                      />
-                    )}
-                    <span className="truncate">{item.name}</span>
-                    {item.is_pinned ? (
-                      <Pin
-                        aria-hidden
-                        className="h-3 w-3 shrink-0 text-primary/75"
-                      />
-                    ) : null}
-                    <span className="ms-auto shrink-0 text-[10px] text-muted-foreground">
-                      {sessions.length}
-                    </span>
-                  </button>
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button
-                        size="icon-sm"
-                        variant="ghost"
-                        className="h-6 w-6 shrink-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100"
-                        aria-label={t("actions", { name: item.name })}
+                <ContextMenu>
+                  <ContextMenuTrigger asChild>
+                    <div
+                      className={cn(
+                        "group flex h-7 min-w-0 items-center rounded-md pe-1 hover:bg-sidebar-accent",
+                        active && "bg-sidebar-primary/8"
+                      )}
+                    >
+                      <button
+                        type="button"
+                        className="flex h-6 w-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground"
+                        aria-label={isExpanded ? t("collapse") : t("expand")}
+                        onClick={() =>
+                          setExpanded((current) => {
+                            const next = new Set(current)
+                            if (next.has(item.id)) next.delete(item.id)
+                            else next.add(item.id)
+                            return next
+                          })
+                        }
                       >
-                        <MoreHorizontal className="h-3.5 w-3.5" />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
-                      <DropdownMenuItem
-                        onSelect={() => void togglePinned(item)}
-                      >
-                        {item.is_pinned ? (
-                          <PinOff className="h-4 w-4" />
+                        {isExpanded ? (
+                          <ChevronDown className="h-3.5 w-3.5" />
                         ) : (
-                          <Pin className="h-4 w-4" />
+                          <ChevronRight className="h-3.5 w-3.5 rtl:rotate-180" />
                         )}
-                        {item.is_pinned
-                          ? tConversation("unpin")
-                          : tConversation("pin")}
-                      </DropdownMenuItem>
-                      <DropdownMenuItem
-                        onSelect={() => openEditor({ mode: "duplicate", item })}
+                      </button>
+                      <button
+                        type="button"
+                        className="flex h-full min-w-0 flex-1 items-center gap-1.5 text-start text-xs"
+                        aria-current={active ? "page" : undefined}
+                        aria-label={item.name}
+                        title={item.name}
+                        disabled={switching}
+                        onClick={() => {
+                          setExpanded((current) =>
+                            new Set(current).add(item.id)
+                          )
+                          if (!active) {
+                            void switchWorkbench(item.id).catch((error) =>
+                              toast.error(
+                                t("switchFailed", {
+                                  message: toErrorMessage(error),
+                                })
+                              )
+                            )
+                          }
+                        }}
                       >
-                        <Copy className="h-4 w-4" />
-                        {t("duplicate")}
-                      </DropdownMenuItem>
-                      <DropdownMenuItem
-                        onSelect={() => openEditor({ mode: "rename", item })}
-                      >
-                        <Pencil className="h-4 w-4" />
-                        {t("rename")}
-                      </DropdownMenuItem>
-                      <DropdownMenuItem
-                        disabled={items.length <= 1}
-                        variant="destructive"
-                        onSelect={() => setDeleteTarget(item)}
-                      >
-                        <Trash2 className="h-4 w-4" />
-                        {t("delete")}
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </div>
+                        {active && switching ? (
+                          <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-primary" />
+                        ) : (
+                          <PanelsTopLeft
+                            className={cn(
+                              "h-3.5 w-3.5 shrink-0 text-muted-foreground",
+                              active && "text-primary"
+                            )}
+                          />
+                        )}
+                        <span className="truncate">{item.name}</span>
+                        {item.is_pinned ? (
+                          <Pin
+                            aria-hidden
+                            className="h-3 w-3 shrink-0 text-primary/75"
+                          />
+                        ) : null}
+                        <span className="ms-auto shrink-0 text-[10px] text-muted-foreground">
+                          {sessions.length}
+                        </span>
+                      </button>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            size="icon-sm"
+                            variant="ghost"
+                            className="h-6 w-6 shrink-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100"
+                            aria-label={t("actions", { name: item.name })}
+                          >
+                            <MoreHorizontal className="h-3.5 w-3.5" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem
+                            onSelect={() => void togglePinned(item)}
+                          >
+                            {item.is_pinned ? (
+                              <PinOff className="h-4 w-4" />
+                            ) : (
+                              <Pin className="h-4 w-4" />
+                            )}
+                            {item.is_pinned
+                              ? tConversation("unpin")
+                              : tConversation("pin")}
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            onSelect={() =>
+                              openEditor({ mode: "duplicate", item })
+                            }
+                          >
+                            <Copy className="h-4 w-4" />
+                            {t("duplicate")}
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            onSelect={() =>
+                              openEditor({ mode: "rename", item })
+                            }
+                          >
+                            <Pencil className="h-4 w-4" />
+                            {t("rename")}
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            disabled={items.length <= 1}
+                            variant="destructive"
+                            onSelect={() => setDeleteTarget(item)}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                            {t("delete")}
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </div>
+                  </ContextMenuTrigger>
+                  <ContextMenuContent>
+                    <ContextMenuItem onSelect={() => void togglePinned(item)}>
+                      {item.is_pinned ? (
+                        <PinOff className="h-4 w-4" />
+                      ) : (
+                        <Pin className="h-4 w-4" />
+                      )}
+                      {item.is_pinned
+                        ? tConversation("unpin")
+                        : tConversation("pin")}
+                    </ContextMenuItem>
+                    <ContextMenuItem
+                      onSelect={() => openEditor({ mode: "duplicate", item })}
+                    >
+                      <Copy className="h-4 w-4" />
+                      {t("duplicate")}
+                    </ContextMenuItem>
+                    <ContextMenuItem
+                      onSelect={() => openEditor({ mode: "rename", item })}
+                    >
+                      <Pencil className="h-4 w-4" />
+                      {t("rename")}
+                    </ContextMenuItem>
+                    <ContextMenuSeparator />
+                    <ContextMenuItem
+                      disabled={
+                        pending ||
+                        !openIds.includes(item.id) ||
+                        openIds.length <= 1
+                      }
+                      onSelect={() => void closeWorkbenchView(item)}
+                    >
+                      <X className="h-4 w-4" />
+                      {t("close")}
+                    </ContextMenuItem>
+                    <ContextMenuItem
+                      disabled={items.length <= 1}
+                      variant="destructive"
+                      onSelect={() => setDeleteTarget(item)}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                      {t("delete")}
+                    </ContextMenuItem>
+                  </ContextMenuContent>
+                </ContextMenu>
 
                 {isExpanded ? (
                   sessions.length > 0 ? (
                     sessions.map((session) => {
                       const selected =
                         active && session.liveTabId === activeTabId
+                      // Rows read from a saved snapshot name no mounted tab, and
+                      // nothing removes a tab from a Workbench this window is
+                      // not showing — so closing and moving need the live id.
+                      const canCloseTab =
+                        active && session.liveTabId != null && !pending
+                      const canMove = canCloseTab && summaryOf(session) != null
+                      const moveTargets = items.filter(
+                        (candidate) => candidate.id !== item.id
+                      )
                       return (
-                        <button
-                          key={session.key}
-                          type="button"
-                          data-workbench-id={item.id}
-                          data-workbench-session
-                          data-focused-session={selected ? "true" : undefined}
-                          data-conversation-id={
-                            session.conversationId ?? undefined
-                          }
-                          data-room-id={session.roomId}
-                          title={session.title}
-                          aria-current={selected ? "page" : undefined}
-                          className={cn(
-                            "flex h-7 w-full min-w-0 items-center gap-1.5 rounded-md pe-2 ps-8 text-start text-xs",
-                            "hover:bg-sidebar-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
-                            selected &&
-                              "bg-primary/8 text-primary ring-1 ring-inset ring-primary/30"
-                          )}
-                          onClick={() => void focusSession(item.id, session)}
-                        >
-                          <span
-                            aria-hidden
-                            className="relative flex h-3.5 w-3.5 shrink-0 items-center justify-center"
-                          >
-                            {session.kind === "room" ? (
-                              <Users className="h-3 w-3" />
-                            ) : (
-                              <AgentIcon
-                                agentType={session.agentType}
-                                className="h-3 w-3"
-                              />
-                            )}
-                            {session.status ? (
-                              <ConversationStatusDot
-                                status={session.status}
-                                size="sm"
-                                className="absolute -bottom-0.5 -right-0.5 ring-1 ring-sidebar"
-                              />
+                        <ContextMenu key={session.key}>
+                          <ContextMenuTrigger asChild>
+                            <button
+                              type="button"
+                              data-workbench-id={item.id}
+                              data-workbench-session
+                              data-focused-session={
+                                selected ? "true" : undefined
+                              }
+                              data-conversation-id={
+                                session.conversationId ?? undefined
+                              }
+                              data-room-id={session.roomId}
+                              title={session.title}
+                              aria-current={selected ? "page" : undefined}
+                              className={cn(
+                                "flex h-7 w-full min-w-0 items-center gap-1.5 rounded-md pe-2 ps-8 text-start text-xs",
+                                "hover:bg-sidebar-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
+                                selected &&
+                                  "bg-primary/8 text-primary ring-1 ring-inset ring-primary/30"
+                              )}
+                              onClick={() =>
+                                void focusSession(item.id, session)
+                              }
+                            >
+                              <span
+                                aria-hidden
+                                className="relative flex h-3.5 w-3.5 shrink-0 items-center justify-center"
+                              >
+                                {session.kind === "room" ? (
+                                  <Users className="h-3 w-3" />
+                                ) : (
+                                  <AgentIcon
+                                    agentType={session.agentType}
+                                    className="h-3 w-3"
+                                  />
+                                )}
+                                {session.status ? (
+                                  <ConversationStatusDot
+                                    status={session.status}
+                                    size="sm"
+                                    className="absolute -bottom-0.5 -right-0.5 ring-1 ring-sidebar"
+                                  />
+                                ) : null}
+                              </span>
+                              <span className="min-w-0 flex-1 truncate">
+                                {session.title}
+                              </span>
+                              {session.kind === "room" ? (
+                                <CollaborationUnreadBadge
+                                  count={session.room?.unreadCount ?? 0}
+                                  className="ms-auto"
+                                />
+                              ) : null}
+                            </button>
+                          </ContextMenuTrigger>
+                          <ContextMenuContent>
+                            <ContextMenuItem
+                              disabled={!canCloseTab}
+                              onSelect={() => closeSessionTab(session)}
+                            >
+                              <X className="h-4 w-4" />
+                              {t("closeSessionTab")}
+                            </ContextMenuItem>
+                            {/* A Room belongs to the Workbench that created it
+                                and no API reassigns that, so Room rows offer
+                                only the tab-level action. */}
+                            {session.kind === "conversation" ? (
+                              <>
+                                <ContextMenuSeparator />
+                                <ContextMenuSub>
+                                  <ContextMenuSubTrigger
+                                    disabled={
+                                      !canMove || moveTargets.length === 0
+                                    }
+                                  >
+                                    <PanelsTopLeft className="h-4 w-4" />
+                                    {t("moveToWorkbench")}
+                                  </ContextMenuSubTrigger>
+                                  <ContextMenuSubContent className="max-h-72 overflow-y-auto">
+                                    {moveTargets.map((target) => (
+                                      <ContextMenuItem
+                                        key={target.id}
+                                        onSelect={() =>
+                                          void moveSession(session, target)
+                                        }
+                                      >
+                                        <span className="truncate">
+                                          {target.name}
+                                        </span>
+                                      </ContextMenuItem>
+                                    ))}
+                                  </ContextMenuSubContent>
+                                </ContextMenuSub>
+                                <ContextMenuItem
+                                  disabled={
+                                    pending || summaryOf(session) == null
+                                  }
+                                  onSelect={() =>
+                                    void openSessionInNewWorkbench(session)
+                                  }
+                                >
+                                  <Plus className="h-4 w-4" />
+                                  {t("openInNewWorkbench")}
+                                </ContextMenuItem>
+                              </>
                             ) : null}
-                          </span>
-                          <span className="min-w-0 flex-1 truncate">
-                            {session.title}
-                          </span>
-                          {session.kind === "room" ? (
-                            <CollaborationUnreadBadge
-                              count={session.room?.unreadCount ?? 0}
-                              className="ms-auto"
-                            />
-                          ) : null}
-                        </button>
+                          </ContextMenuContent>
+                        </ContextMenu>
                       )
                     })
                   ) : (

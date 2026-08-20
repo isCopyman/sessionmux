@@ -1555,7 +1555,12 @@
       "currentSessions": "このワークベンチ内の Session",
       "sessionCount": "{count} 件の Session",
       "emptySessions": "開いている Session はありません",
-      "draftSession": "新しい Session"
+      "draftSession": "新しい Session",
+      "closeSessionTab": "タブを閉じる",
+      "moveToWorkbench": "ワークベンチへ移動",
+      "openInNewWorkbench": "新しいワークベンチで開く",
+      "movedToWorkbench": "「{title}」を {workbench} に移動しました",
+      "openedInWorkbench": "「{title}」を {workbench} で開きました"
     },
     "statusLabels": {
       "in_progress": "進行中",

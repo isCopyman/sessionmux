@@ -1555,7 +1555,12 @@
       "currentSessions": "الجلسات في مساحة العمل هذه",
       "sessionCount": "{count} جلسة",
       "emptySessions": "لا توجد جلسات مفتوحة",
-      "draftSession": "جلسة جديدة"
+      "draftSession": "جلسة جديدة",
+      "closeSessionTab": "إغلاق علامة التبويب",
+      "moveToWorkbench": "النقل إلى مساحة عمل",
+      "openInNewWorkbench": "فتح في مساحة عمل جديدة",
+      "movedToWorkbench": "تم نقل ”{title}“ إلى {workbench}",
+      "openedInWorkbench": "تم فتح ”{title}“ في {workbench}"
     },
     "statusLabels": {
       "in_progress": "قيد التنفيذ",
