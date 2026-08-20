@@ -199,6 +199,40 @@ turn blob id 读进 `turn_blob_ids` 又写成 `cursor-turn-{i}`（`:1080`）。
 SURVEY §6 把 claude 排 2、codex 排 3 的**顺序对，但代价差被严重低估**：claude 是"codeg
 侧就能做"，codex 是"提 PR + 等 maintainer + 语义只到 turn 级"。下一轮按此重排编码包。
 
+## 交叉结论：A × B 对撞出的硬约束（没有任何单个包能得出）
+
+协调者已逐条复核 §补：`claude.rs:1491/1541` 确为 `id: uuid`；`:2565-2571` 的
+`while is_tool_result_only(…) { blocks.extend(…); i += 1 }` **吸收正文、丢弃 id**（只有
+assistant 的 `id` 活到 `:2574`）；`:1551-1591` 的 `attachment` 分支只认
+`goal_status_transition`，注释明写其余附件"是给模型的上下文，不是对话"，**整条丢弃**；
+`qoder.rs:261-263` 写着附件 "**indexed but not returned**"。
+
+三段事实并排：
+
+1. **包B**：`_meta` 旁路能把 `resumeSessionAt` 送到 CLI，但校验器对错误 fork 点
+   **确定性拒绝且不可重试**。
+2. **包B/SDK**（`sdk.d.ts:1860-1871`）：end-turn 工具会话一轮结束在 tool_result carrier 上、
+   **无尾随 assistant 消息**，其后跟一条 `structured_output` 附件装着该轮真正输出。
+   **唯一合法 fork 点就是那条附件**；在 assistant uuid 上分叉会把它留在丢弃区间，
+   校验器**故意拒绝**。
+3. **包A/§补**：codeg 的 claude parser **恰好把附件整条丢弃**，tool_result 的 uuid 也在
+   `group_into_turns` 里被吞掉。
+
+⇒ **对这一类会话，codeg 根本看不到那个唯一能用的 uuid。**
+
+**切片 2 的真实形态因此不是"把 `resumeSessionAt` 塞进 `_meta`"**，而是：
+
+- **必须先做锚点管道**（让附件 / 轮末 entry 的 uuid 活到投影层）；否则
+- forkAtMessage 在这类会话上**确定性失败**（且是不可重试的那种），或
+- 必须先识别并禁用入口——而识别本身同样需要读到那些被丢弃的记录。
+
+便宜之处：`qoder.rs:261-263` 表明链遍历**本来就步进过附件**（只是不返回），所以"别扔"
+远比"重新解析"便宜——与包 A 的核心结论是同一件事的两面。
+
+**方法论备注**：这是本轮唯一一个**没有任何单个包能得出**的结论。B 知道校验器会拒，
+A 知道 parser 会扔，只有并排才看得见"我们扔掉的正好是它要求的那条"。并行三包 + 交叉复核
+的价值在此，不在三份报告本身。
+
 ## Dogfooding 摩擦记录
 
 组队阶段实际踩到的 codeg 工具/流程摩擦，逐条发在 Room 里（前缀【摩擦】，
