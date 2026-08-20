@@ -1357,6 +1357,10 @@ pub fn build_router(
             post(handlers::collaboration::room_list),
         )
         .route(
+            "/collaboration_room_list_all",
+            post(handlers::collaboration::room_list_all),
+        )
+        .route(
             "/collaboration_room_get",
             post(handlers::collaboration::room_get),
         )

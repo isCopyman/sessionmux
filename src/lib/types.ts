@@ -1496,6 +1496,12 @@ export interface CollaborationRoomSummary {
   additionalPathCount?: number
   unreadCount: number
   mentionUnreadCount?: number
+  /** Host lists: every reply the Room still owes, whoever owes it. Member
+   *  lists: only what this Session owes. */
+  needsReplyCount?: number
+  /** Obligations the viewer's own posts created — a subset of
+   *  `needsReplyCount`, not a second count of the same rows. */
+  awaitingReplyCount?: number
   lastEventAt?: string | null
   createdAt: string
   updatedAt: string

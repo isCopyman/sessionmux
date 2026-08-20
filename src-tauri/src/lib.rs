@@ -1446,6 +1446,7 @@ mod tauri_app {
                 collaboration_commands::collaboration_restore,
                 collaboration_commands::collaboration_room_create,
                 collaboration_commands::collaboration_room_list,
+                collaboration_commands::collaboration_room_list_all,
                 collaboration_commands::collaboration_room_get,
                 collaboration_commands::collaboration_room_add_members,
                 collaboration_commands::collaboration_room_remove_member,
