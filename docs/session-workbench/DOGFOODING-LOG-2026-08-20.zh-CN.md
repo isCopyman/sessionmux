@@ -291,3 +291,24 @@ collection_id=5、root_folder_id=4=fork-rewind worktree 目录，@ 的
 作用域立即生效；③ 附加路径对话框的手填绝对路径改为复用现成的目录
 选择对话框（O1 记过：workspace-folder-dialog 自带路径输入+目录浏览，
 直接复用）。与 O21 渐进渲染同批立项。
+
+### O24. 竞品对照：Room 里要不要渲染工具调用（裁决：不内联，做活动桥）
+
+背景（用户问 openagents 机制 + 是否该学它渲染工具调用）。取证结论：
+- **OpenAgents**：workspace="agent 版 Slack"，agent 是**常连客户端**
+  （agn launcher 守护进程 + workspace token + WebSocket），线程就是
+  agent 的唯一界面——适配器把 CLI 的结构化事件流（stream-json 等）
+  逐条翻成聊天消息，所以工具调用天然出现在聊天里。@ 两人配合没有
+  显式时序机制：都收到消息，评审者盯着频道等干活的发完工帖（涌现式）。
+- **Multica**：issue 制。工具调用渲染在 **issue 的执行日志时间线**
+  （可回放、带时间戳、计 token），聊天/评论流保持干净。
+- **Buzz**：agent 是频道成员、@ 才动。工具调用在 **"View activity"
+  审计面板**（每步可查、双签名审计），频道消息流干净。
+裁决：codeg 与 Multica/Buzz 同构——每个 agent 有自己的完整会话页，
+工具调用在那里已全保真渲染，Room 是协调层。**不把工具调用流内联进
+Room**（会把信号密度打没，且与 O18"重资产留在会话里"一致）；补的是
+**活动可见性桥**：Room 成员卡显示实时状态（空闲/生成中+当前回合摘要），
+点击直达会话——把 openagents"看得见 agent 在干活"的好处拿到，不付
+刷屏代价。openagents 真正值得学的差异点另记：常连模式让 agent 可以
+"自己捡活"（我们是 @ 唤醒制，更省但无环境感知）、共享浏览器/共享
+文件面板（我们用共享仓库/worktree 覆盖大部分场景）。
