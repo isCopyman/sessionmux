@@ -220,3 +220,44 @@ impl InteractiveMessage {
         msg
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `TelegramConfig` is Deserialize-only (written as `serde_json::Value`).
+    /// Pin the snake sample; reject camel so `rename_all = "camelCase"` fails.
+    #[test]
+    fn telegram_config_legacy_sample_still_parses() {
+        let legacy = r#"{"chat_id":"-100123","topic_mode":true}"#;
+        let cfg: TelegramConfig =
+            serde_json::from_str(legacy).expect("legacy telegram config_json decodes");
+        assert_eq!(cfg.chat_id, "-100123");
+        assert!(cfg.topic_mode);
+        assert!(serde_json::from_str::<TelegramConfig>(r#"{"chatId":"-100123"}"#).is_err());
+    }
+
+    #[test]
+    fn lark_config_legacy_sample_still_parses() {
+        let legacy = r#"{"app_id":"cli_abc","chat_id":"oc_xyz"}"#;
+        let cfg: LarkConfig =
+            serde_json::from_str(legacy).expect("legacy lark config_json decodes");
+        assert_eq!(cfg.app_id, "cli_abc");
+        assert_eq!(cfg.chat_id, "oc_xyz");
+        assert!(
+            serde_json::from_str::<LarkConfig>(r#"{"appId":"cli_abc","chatId":"oc_xyz"}"#).is_err()
+        );
+    }
+
+    #[test]
+    fn weixin_config_legacy_sample_still_parses() {
+        let legacy = r#"{"base_url":"https://qyapi.weixin.qq.com"}"#;
+        let cfg: WeixinConfig =
+            serde_json::from_str(legacy).expect("legacy weixin config_json decodes");
+        assert_eq!(cfg.base_url, "https://qyapi.weixin.qq.com");
+        assert!(serde_json::from_str::<WeixinConfig>(
+            r#"{"baseUrl":"https://qyapi.weixin.qq.com"}"#
+        )
+        .is_err());
+    }
+}

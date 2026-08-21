@@ -108,3 +108,60 @@ pub struct AutomationConfig {
     #[serde(default)]
     pub target_conversation_id: Option<i32>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Frozen on-disk casing for `automation.config`. Adding
+    /// `rename_all = "camelCase"` (or renaming action variants) would orphan
+    /// existing rows.
+    #[test]
+    fn automation_config_persisted_json_shape_is_pinned() {
+        let legacy = r#"{
+            "action": "queue_prompt",
+            "prompt_blocks": [{"type":"text","text":"hi"}],
+            "display_text": "hi",
+            "mode_id": "default",
+            "config_values": {"k": "v"},
+            "label_snapshot": {"n": 1},
+            "target_conversation_id": 7
+        }"#;
+        let cfg: AutomationConfig =
+            serde_json::from_str(legacy).expect("legacy automation.config decodes");
+        assert_eq!(cfg.action, AutomationAction::QueuePrompt);
+        assert_eq!(cfg.display_text, "hi");
+        assert_eq!(cfg.mode_id.as_deref(), Some("default"));
+        assert_eq!(cfg.target_conversation_id, Some(7));
+        assert_eq!(cfg.prompt_blocks.len(), 1);
+
+        let v = serde_json::to_value(&cfg).unwrap();
+        assert_eq!(v["action"], "queue_prompt");
+        assert!(v.get("prompt_blocks").is_some());
+        assert!(v.get("promptBlocks").is_none());
+        assert!(v.get("display_text").is_some());
+        assert!(v.get("displayText").is_none());
+        assert!(v.get("mode_id").is_some());
+        assert!(v.get("modeId").is_none());
+        assert!(v.get("config_values").is_some());
+        assert!(v.get("configValues").is_none());
+        assert!(v.get("label_snapshot").is_some());
+        assert!(v.get("labelSnapshot").is_none());
+        assert!(v.get("target_conversation_id").is_some());
+        assert!(v.get("targetConversationId").is_none());
+
+        for (action, wire) in [
+            (AutomationAction::LaunchSession, "launch_session"),
+            (AutomationAction::EnqueueTask, "enqueue_task"),
+            (AutomationAction::QueuePrompt, "queue_prompt"),
+        ] {
+            assert_eq!(serde_json::to_value(action).unwrap(), wire);
+            assert_eq!(
+                serde_json::from_str::<AutomationAction>(&format!("\"{wire}\"")).unwrap(),
+                action
+            );
+        }
+        assert!(serde_json::from_str::<AutomationAction>("\"launchSession\"").is_err());
+        assert!(serde_json::from_str::<AutomationAction>("\"LaunchSession\"").is_err());
+    }
+}

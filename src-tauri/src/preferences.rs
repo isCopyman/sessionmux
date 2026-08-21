@@ -51,3 +51,20 @@ pub fn save(prefs: &AppPreferences) -> io::Result<()> {
         .map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err.to_string()))?;
     fs::write(&path, serialized)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn app_preferences_persisted_json_shape_is_pinned() {
+        let legacy = r#"{"disable_hardware_acceleration": true}"#;
+        let p: AppPreferences =
+            serde_json::from_str(legacy).expect("legacy preferences.json decodes");
+        assert!(p.disable_hardware_acceleration);
+
+        let v = serde_json::to_value(&p).unwrap();
+        assert!(v.get("disable_hardware_acceleration").is_some());
+        assert!(v.get("disableHardwareAcceleration").is_none());
+    }
+}

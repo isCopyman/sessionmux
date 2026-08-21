@@ -126,3 +126,96 @@ pub struct GitHubTokenValidation {
     pub avatar_url: Option<String>,
     pub message: Option<String>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn system_proxy_settings_persisted_json_shape_is_pinned() {
+        let legacy = r#"{"enabled": true, "proxy_url": "http://127.0.0.1:7890"}"#;
+        let s: SystemProxySettings =
+            serde_json::from_str(legacy).expect("legacy system_proxy_settings decodes");
+        assert!(s.enabled);
+        assert_eq!(s.proxy_url.as_deref(), Some("http://127.0.0.1:7890"));
+
+        let v = serde_json::to_value(&s).unwrap();
+        assert!(v.get("proxy_url").is_some());
+        assert!(v.get("proxyUrl").is_none());
+    }
+
+    #[test]
+    fn system_language_settings_persisted_json_shape_is_pinned() {
+        let legacy = r#"{"mode": "manual", "language": "zh_cn"}"#;
+        let s: SystemLanguageSettings =
+            serde_json::from_str(legacy).expect("legacy system_language_settings decodes");
+        assert_eq!(s.mode, LanguageMode::Manual);
+        assert_eq!(s.language, AppLocale::ZhCn);
+
+        let v = serde_json::to_value(&s).unwrap();
+        assert_eq!(v["mode"], "manual");
+        assert_eq!(v["language"], "zh_cn");
+        assert_eq!(serde_json::to_value(AppLocale::ZhTw).unwrap(), "zh_tw");
+        assert_eq!(
+            serde_json::to_value(LanguageMode::System).unwrap(),
+            "system"
+        );
+        assert!(serde_json::from_str::<AppLocale>("\"zhCn\"").is_err());
+        assert!(serde_json::from_str::<LanguageMode>("\"System\"").is_err());
+    }
+
+    #[test]
+    fn system_terminal_settings_persisted_json_shape_is_pinned() {
+        let legacy = r#"{"default_shell": "pwsh"}"#;
+        let s: SystemTerminalSettings =
+            serde_json::from_str(legacy).expect("legacy system_terminal_settings decodes");
+        assert_eq!(s.default_shell.as_deref(), Some("pwsh"));
+
+        let v = serde_json::to_value(&s).unwrap();
+        assert!(v.get("default_shell").is_some());
+        assert!(v.get("defaultShell").is_none());
+    }
+
+    #[test]
+    fn git_settings_persisted_json_shape_is_pinned() {
+        let legacy = r#"{"custom_path": "/usr/bin/git"}"#;
+        let s: GitSettings = serde_json::from_str(legacy).expect("legacy git_settings decodes");
+        assert_eq!(s.custom_path.as_deref(), Some("/usr/bin/git"));
+
+        let v = serde_json::to_value(&s).unwrap();
+        assert!(v.get("custom_path").is_some());
+        assert!(v.get("customPath").is_none());
+    }
+
+    #[test]
+    fn github_account_persisted_json_shape_is_pinned() {
+        let legacy = r#"{
+            "id": "acc-1",
+            "server_url": "https://github.com",
+            "username": "octocat",
+            "scopes": ["repo"],
+            "avatar_url": "https://example.com/a.png",
+            "is_default": true,
+            "created_at": "2026-01-02T03:04:05Z"
+        }"#;
+        let a: GitHubAccount =
+            serde_json::from_str(legacy).expect("legacy github_accounts row decodes");
+        assert_eq!(a.id, "acc-1");
+        assert_eq!(a.server_url, "https://github.com");
+        assert_eq!(a.username, "octocat");
+        assert_eq!(a.scopes, vec!["repo"]);
+        assert_eq!(a.avatar_url.as_deref(), Some("https://example.com/a.png"));
+        assert!(a.is_default);
+        assert_eq!(a.created_at, "2026-01-02T03:04:05Z");
+
+        let v = serde_json::to_value(&a).unwrap();
+        assert!(v.get("server_url").is_some());
+        assert!(v.get("serverUrl").is_none());
+        assert!(v.get("avatar_url").is_some());
+        assert!(v.get("avatarUrl").is_none());
+        assert!(v.get("is_default").is_some());
+        assert!(v.get("isDefault").is_none());
+        assert!(v.get("created_at").is_some());
+        assert!(v.get("createdAt").is_none());
+    }
+}

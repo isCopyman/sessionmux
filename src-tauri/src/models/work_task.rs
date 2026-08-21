@@ -380,4 +380,170 @@ mod tests {
         assert!(!settings.delete_worktree_default);
         assert_eq!(settings.init_command.as_deref(), Some("pnpm install"));
     }
+
+    /// Frozen on-disk casing for `work_task.config` / template config.
+    /// Adding `rename_all = "camelCase"` would orphan existing rows.
+    #[test]
+    fn work_task_config_persisted_json_shape_is_pinned() {
+        let legacy = r#"{
+            "prompt_blocks": [{"type":"text","text":"hi"}],
+            "display_text": "hi",
+            "agent_type": "claude_code",
+            "mode_id": "default",
+            "config_values": {"k": "v"},
+            "label_snapshot": {"n": 1}
+        }"#;
+        let cfg: WorkTaskConfig =
+            serde_json::from_str(legacy).expect("legacy work_task.config decodes");
+        assert_eq!(cfg.display_text, "hi");
+        assert_eq!(cfg.agent_type.as_deref(), Some("claude_code"));
+        assert_eq!(cfg.mode_id.as_deref(), Some("default"));
+        assert_eq!(cfg.config_values.get("k").map(String::as_str), Some("v"));
+        assert_eq!(cfg.prompt_blocks.len(), 1);
+
+        let v = serde_json::to_value(&cfg).unwrap();
+        assert!(v.get("prompt_blocks").is_some());
+        assert!(v.get("promptBlocks").is_none());
+        assert!(v.get("display_text").is_some());
+        assert!(v.get("displayText").is_none());
+        assert!(v.get("agent_type").is_some());
+        assert!(v.get("agentType").is_none());
+        assert!(v.get("mode_id").is_some());
+        assert!(v.get("modeId").is_none());
+        assert!(v.get("config_values").is_some());
+        assert!(v.get("configValues").is_none());
+        assert!(v.get("label_snapshot").is_some());
+        assert!(v.get("labelSnapshot").is_none());
+    }
+
+    /// Complements `legacy_settings_json_decodes_without_stage_prompts` by
+    /// pinning serialize field names as well as a fuller snake sample.
+    #[test]
+    fn work_task_folder_settings_persisted_json_shape_is_pinned() {
+        let legacy = r#"{
+            "default_agent_type": "claude_code",
+            "mode_id": "default",
+            "config_values": {"k": "v"},
+            "auto_process": true,
+            "max_concurrent": 3,
+            "merge_strategy": "merge",
+            "auto_merge": true,
+            "delete_worktree_default": false,
+            "worktree_root": "~/wt",
+            "preflight_command_id": 9,
+            "preflight_command": "pnpm test",
+            "init_command": "pnpm install",
+            "stage_prompts": {"all": "be careful"}
+        }"#;
+        let settings: WorkTaskFolderSettings =
+            serde_json::from_str(legacy).expect("legacy work_task_settings.config decodes");
+        assert_eq!(settings.default_agent_type.as_deref(), Some("claude_code"));
+        assert!(settings.auto_process);
+        assert_eq!(settings.max_concurrent, 3);
+        assert_eq!(settings.merge_strategy, "merge");
+        assert!(settings.auto_merge);
+        assert!(!settings.delete_worktree_default);
+        assert_eq!(settings.worktree_root.as_deref(), Some("~/wt"));
+        assert_eq!(settings.preflight_command_id, Some(9));
+        assert_eq!(
+            settings.stage_prompts.get("all").map(String::as_str),
+            Some("be careful")
+        );
+
+        let v = serde_json::to_value(&settings).unwrap();
+        assert!(v.get("default_agent_type").is_some());
+        assert!(v.get("defaultAgentType").is_none());
+        assert!(v.get("mode_id").is_some());
+        assert!(v.get("modeId").is_none());
+        assert!(v.get("config_values").is_some());
+        assert!(v.get("configValues").is_none());
+        assert!(v.get("auto_process").is_some());
+        assert!(v.get("autoProcess").is_none());
+        assert!(v.get("max_concurrent").is_some());
+        assert!(v.get("maxConcurrent").is_none());
+        assert!(v.get("merge_strategy").is_some());
+        assert!(v.get("mergeStrategy").is_none());
+        assert!(v.get("auto_merge").is_some());
+        assert!(v.get("autoMerge").is_none());
+        assert!(v.get("delete_worktree_default").is_some());
+        assert!(v.get("deleteWorktreeDefault").is_none());
+        assert!(v.get("worktree_root").is_some());
+        assert!(v.get("worktreeRoot").is_none());
+        assert!(v.get("preflight_command_id").is_some());
+        assert!(v.get("preflightCommandId").is_none());
+        assert!(v.get("preflight_command").is_some());
+        assert!(v.get("preflightCommand").is_none());
+        assert!(v.get("init_command").is_some());
+        assert!(v.get("initCommand").is_none());
+        assert!(v.get("stage_prompts").is_some());
+        assert!(v.get("stagePrompts").is_none());
+    }
+
+    #[test]
+    fn work_task_merge_state_persisted_json_shape_is_pinned() {
+        let legacy = r#"{
+            "pre_merge_head": "abc123",
+            "message": "land it",
+            "strategy": "squash",
+            "delete_worktree": true,
+            "auto_message": false
+        }"#;
+        let state: WorkTaskMergeState =
+            serde_json::from_str(legacy).expect("legacy merge_state decodes");
+        assert_eq!(state.pre_merge_head, "abc123");
+        assert_eq!(state.message, "land it");
+        assert_eq!(state.strategy, "squash");
+        assert!(state.delete_worktree);
+        assert!(!state.auto_message);
+
+        let v = serde_json::to_value(&state).unwrap();
+        assert!(v.get("pre_merge_head").is_some());
+        assert!(v.get("preMergeHead").is_none());
+        assert!(v.get("delete_worktree").is_some());
+        assert!(v.get("deleteWorktree").is_none());
+        assert!(v.get("auto_message").is_some());
+        assert!(v.get("autoMessage").is_none());
+    }
+
+    #[test]
+    fn work_task_queued_merge_persisted_json_shape_is_pinned() {
+        let legacy = r#"{
+            "message": "queued",
+            "delete_worktree": true,
+            "queued_at": "2026-01-02T03:04:05Z"
+        }"#;
+        let queued: WorkTaskQueuedMerge =
+            serde_json::from_str(legacy).expect("legacy pending_merge decodes");
+        assert_eq!(queued.message.as_deref(), Some("queued"));
+        assert!(queued.delete_worktree);
+        assert_eq!(queued.queued_at.to_rfc3339(), "2026-01-02T03:04:05+00:00");
+
+        let v = serde_json::to_value(&queued).unwrap();
+        assert!(v.get("delete_worktree").is_some());
+        assert!(v.get("deleteWorktree").is_none());
+        assert!(v.get("queued_at").is_some());
+        assert!(v.get("queuedAt").is_none());
+    }
+
+    #[test]
+    fn work_task_preflight_persisted_json_shape_is_pinned() {
+        let legacy = r#"{
+            "status": "failed",
+            "command": "pnpm test",
+            "exit_code": 1,
+            "output_tail": "boom"
+        }"#;
+        let preflight: WorkTaskPreflight =
+            serde_json::from_str(legacy).expect("legacy preflight decodes");
+        assert_eq!(preflight.status, "failed");
+        assert_eq!(preflight.command, "pnpm test");
+        assert_eq!(preflight.exit_code, Some(1));
+        assert_eq!(preflight.output_tail.as_deref(), Some("boom"));
+
+        let v = serde_json::to_value(&preflight).unwrap();
+        assert!(v.get("exit_code").is_some());
+        assert!(v.get("exitCode").is_none());
+        assert!(v.get("output_tail").is_some());
+        assert!(v.get("outputTail").is_none());
+    }
 }

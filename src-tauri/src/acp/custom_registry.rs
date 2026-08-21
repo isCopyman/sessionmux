@@ -1311,6 +1311,75 @@ mod tests {
         assert_eq!(aliased.binary["linux-x86_64"].archive, "https://e/x.tgz");
     }
 
+    /// Frozen `spec_json` casing (ACP registry `distribution` verbatim) plus
+    /// the snake_case enum values stored beside it.
+    #[test]
+    fn custom_agent_spec_persisted_json_shape_is_pinned() {
+        let legacy = r#"{
+            "npx": {
+                "package": "kilo@7.4.16",
+                "args": ["--acp"],
+                "env": {"FOO": "bar"},
+                "cmd": "kilo",
+                "node_required": "20.0.0"
+            },
+            "uvx": {
+                "package": "fast-agent-acp==0.9.24",
+                "args": ["--acp"],
+                "cmd": "fast-agent",
+                "uv_required": "0.4",
+                "python": "3.12"
+            },
+            "binary": {
+                "linux-x86_64": {
+                    "archive": "https://e/x.tgz",
+                    "cmd": "./x",
+                    "sha256": "abc"
+                }
+            }
+        }"#;
+        let spec: CustomAgentSpec = serde_json::from_str(legacy).expect("legacy spec_json decodes");
+        assert_eq!(
+            spec.npx.as_ref().unwrap().node_required.as_deref(),
+            Some("20.0.0")
+        );
+        assert_eq!(
+            spec.uvx.as_ref().unwrap().uv_required.as_deref(),
+            Some("0.4")
+        );
+        assert_eq!(spec.binary["linux-x86_64"].archive, "https://e/x.tgz");
+
+        let v = serde_json::to_value(&spec).unwrap();
+        assert!(v["npx"].get("node_required").is_some());
+        assert!(v["npx"].get("nodeRequired").is_none());
+        assert!(v["uvx"].get("uv_required").is_some());
+        assert!(v["uvx"].get("uvRequired").is_none());
+        assert!(v["binary"]["linux-x86_64"].get("archive").is_some());
+
+        assert_eq!(
+            serde_json::to_value(CustomDistributionKind::Npx).unwrap(),
+            "npx"
+        );
+        assert_eq!(
+            serde_json::to_value(CustomDistributionKind::Uvx).unwrap(),
+            "uvx"
+        );
+        assert_eq!(
+            serde_json::to_value(CustomDistributionKind::Binary).unwrap(),
+            "binary"
+        );
+        assert_eq!(
+            serde_json::to_value(CustomAgentSource::Registry).unwrap(),
+            "registry"
+        );
+        assert_eq!(
+            serde_json::to_value(CustomAgentSource::Manual).unwrap(),
+            "manual"
+        );
+        assert!(serde_json::from_str::<CustomDistributionKind>("\"Npx\"").is_err());
+        assert!(serde_json::from_str::<CustomAgentSource>("\"Manual\"").is_err());
+    }
+
     #[test]
     fn hydrate_publishes_and_reuses_unchanged_metadata() {
         let _guard = hydrate_guard();

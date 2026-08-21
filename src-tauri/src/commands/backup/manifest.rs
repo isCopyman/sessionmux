@@ -134,3 +134,46 @@ pub struct BackupPreview {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reject_reason: Option<String>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Frozen camelCase for the in-archive `manifest.json`. Old `.codegbak`
+    /// files must still preview/restore.
+    #[test]
+    fn backup_manifest_persisted_json_shape_is_pinned() {
+        let legacy = r#"{
+            "formatVersion": 1,
+            "kind": "codeg-backup",
+            "createdAt": "2026-01-02T03:04:05Z",
+            "appVersion": "0.26.1",
+            "latestMigration": "m20260816",
+            "runtime": "desktop",
+            "includesExternalTranscripts": false,
+            "includesSecrets": true,
+            "entries": [{"path": "db.sqlite", "size": 12, "sha256": "ab"}]
+        }"#;
+        let m: BackupManifest = serde_json::from_str(legacy).expect("legacy manifest.json decodes");
+        assert_eq!(m.format_version, 1);
+        assert_eq!(m.kind, BACKUP_KIND);
+        assert_eq!(m.app_version, "0.26.1");
+        assert!(!m.includes_external_transcripts);
+        assert!(m.includes_secrets);
+        assert_eq!(m.entries.len(), 1);
+
+        let v = serde_json::to_value(&m).unwrap();
+        assert!(v.get("formatVersion").is_some());
+        assert!(v.get("format_version").is_none());
+        assert!(v.get("createdAt").is_some());
+        assert!(v.get("created_at").is_none());
+        assert!(v.get("appVersion").is_some());
+        assert!(v.get("app_version").is_none());
+        assert!(v.get("latestMigration").is_some());
+        assert!(v.get("latest_migration").is_none());
+        assert!(v.get("includesExternalTranscripts").is_some());
+        assert!(v.get("includes_external_transcripts").is_none());
+        assert!(v.get("includesSecrets").is_some());
+        assert!(v.get("includes_secrets").is_none());
+    }
+}

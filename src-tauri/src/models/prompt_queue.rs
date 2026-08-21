@@ -169,3 +169,41 @@ impl ClaimedPromptQueueItem {
         ids
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::acp::types::PromptInputBlock;
+
+    /// Frozen sandwich: outer `PromptQueueDraft` is camelCase (`displayText`),
+    /// inner `PromptInputBlock` is snake_case (`type`/`mime_type`).
+    #[test]
+    fn prompt_queue_draft_persisted_json_shape_is_pinned() {
+        let legacy = r#"{
+            "blocks": [
+                {"type":"text","text":"hello"},
+                {"type":"image","data":"QUJD","mime_type":"image/png"}
+            ],
+            "displayText": "hello"
+        }"#;
+        let draft: PromptQueueDraft =
+            serde_json::from_str(legacy).expect("legacy draft_json decodes");
+        assert_eq!(draft.display_text, "hello");
+        assert_eq!(draft.blocks.len(), 2);
+        match &draft.blocks[1] {
+            PromptInputBlock::Image { mime_type, .. } => {
+                assert_eq!(mime_type, "image/png");
+            }
+            other => panic!("expected image block, got {other:?}"),
+        }
+
+        let v = serde_json::to_value(&draft).unwrap();
+        assert!(v.get("displayText").is_some());
+        assert!(v.get("display_text").is_none());
+        assert!(v.get("blocks").is_some());
+        let image = &v["blocks"][1];
+        assert_eq!(image["type"], "image");
+        assert!(image.get("mime_type").is_some());
+        assert!(image.get("mimeType").is_none());
+    }
+}
