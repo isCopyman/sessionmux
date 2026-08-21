@@ -42,16 +42,17 @@ use crate::acp::delegation::transport::{
     client_ask_round_trip, client_commit_feedback, client_create_automation_round_trip,
     client_create_work_task_round_trip, client_feedback_round_trip,
     client_host_control_help_round_trip, client_host_control_use_round_trip,
-    client_list_inbox_round_trip, client_list_rooms_round_trip, client_list_sessions_round_trip,
-    client_post_room_round_trip, client_read_message_round_trip, client_read_room_post_round_trip,
-    client_read_room_round_trip, client_send_message_round_trip, client_session_round_trip,
-    client_task_complete_round_trip, client_task_progress_round_trip, BrokerAskRequest,
-    BrokerCommitFeedbackRequest, BrokerCreateAutomationRequest, BrokerCreateWorkTaskRequest,
-    BrokerFeedbackRequest, BrokerHostControlHelpRequest, BrokerHostControlUseRequest,
-    BrokerListInboxRequest, BrokerListRoomsRequest, BrokerListSessionsRequest,
-    BrokerPostRoomRequest, BrokerReadMessageRequest, BrokerReadRoomPostRequest,
-    BrokerReadRoomRequest, BrokerResponse, BrokerSendMessageRequest, BrokerSessionRequest,
-    BrokerTaskCompleteRequest, BrokerTaskProgressRequest,
+    client_list_inbox_round_trip, client_list_profiles_round_trip, client_list_rooms_round_trip,
+    client_list_sessions_round_trip, client_post_room_round_trip, client_read_message_round_trip,
+    client_read_room_post_round_trip, client_read_room_round_trip, client_send_message_round_trip,
+    client_session_round_trip, client_task_complete_round_trip, client_task_progress_round_trip,
+    BrokerAskRequest, BrokerCommitFeedbackRequest, BrokerCreateAutomationRequest,
+    BrokerCreateWorkTaskRequest, BrokerFeedbackRequest, BrokerHostControlHelpRequest,
+    BrokerHostControlUseRequest, BrokerListInboxRequest, BrokerListProfilesRequest,
+    BrokerListRoomsRequest, BrokerListSessionsRequest, BrokerPostRoomRequest,
+    BrokerReadMessageRequest, BrokerReadRoomPostRequest, BrokerReadRoomRequest, BrokerResponse,
+    BrokerSendMessageRequest, BrokerSessionRequest, BrokerTaskCompleteRequest,
+    BrokerTaskProgressRequest,
 };
 use crate::acp::question::parse_questions;
 use crate::acp::session_collaboration::{
@@ -145,6 +146,7 @@ pub struct CompanionFeatures {
     /// `create_automation` — save a scheduled/manual automation from chat.
     pub automations: bool,
     /// `create_work_task` — queue a card on the work-task board from chat.
+    /// `list_profiles` is exposed when either authoring group is on.
     pub taskboard: bool,
 }
 
@@ -193,6 +195,7 @@ impl CompanionFeatures {
             "task_progress" | "task_complete" => self.tasks,
             "create_automation" => self.automations,
             "create_work_task" => self.taskboard,
+            "list_profiles" => self.automations || self.taskboard,
             _ => false,
         }
     }
@@ -946,6 +949,15 @@ async fn build_tools_call_spawn(
                 Box::pin(async move { client_create_work_task_round_trip(&socket, &req).await });
             register_and_spawn(inflight, id, round_trip, render_authoring_result).await
         }
+        "list_profiles" => {
+            let req = BrokerListProfilesRequest {
+                token: ctx.token.clone(),
+                agent_type: optional_string(&arguments, "agent_type"),
+            };
+            let round_trip =
+                Box::pin(async move { client_list_profiles_round_trip(&socket, &req).await });
+            register_and_spawn(inflight, id, round_trip, render_profile_list_result).await
+        }
         other => LineAction::Respond(err(id, -32602, format!("unknown tool: {other}"))),
     }
 }
@@ -1448,6 +1460,8 @@ fn parse_automation_spec(arguments: &Value) -> Result<NewAutomationSpec, String>
         action,
         agent_type: optional_string(arguments, "agent_type"),
         folder_path: optional_string(arguments, "folder_path"),
+        profile: optional_string(arguments, "profile"),
+        model: optional_string(arguments, "model"),
         // Absent means "live now" (the common ask); an explicit non-bool is
         // treated as absent rather than failing the whole call.
         enabled: arguments
@@ -1466,6 +1480,8 @@ fn parse_work_task_spec(arguments: &Value) -> Result<NewWorkTaskSpec, String> {
         prompt: truncate_chars(&prompt, MAX_PROMPT_CHARS),
         agent_type: optional_string(arguments, "agent_type"),
         folder_path: optional_string(arguments, "folder_path"),
+        profile: optional_string(arguments, "profile"),
+        model: optional_string(arguments, "model"),
     })
 }
 
@@ -2261,6 +2277,49 @@ pub fn render_authoring_result(outcome: &Value) -> Value {
     })
 }
 
+/// Map a `list_profiles` round-trip into an MCP `tools/call` result. Tokens
+/// never appear in the host outcome; this renderer also does not invent them.
+pub fn render_profile_list_result(outcome: &Value) -> Value {
+    let mut lines: Vec<String> = Vec::new();
+    if let Some(note) = outcome.get("note").and_then(Value::as_str) {
+        lines.push(note.to_string());
+    }
+    match outcome.get("profiles").and_then(Value::as_array) {
+        Some(items) if items.is_empty() => {
+            if lines.is_empty() {
+                lines.push("No Claude launch profiles.".to_string());
+            }
+        }
+        Some(items) => {
+            lines.push(
+                "Claude launch profiles — a profile decides which Claude configuration \
+                 (subscription login vs API endpoint) a session launches with:"
+                    .to_string(),
+            );
+            for item in items {
+                let id = item.get("id").and_then(Value::as_str).unwrap_or("?");
+                let label = item.get("label").and_then(Value::as_str).unwrap_or("");
+                let kind = item.get("kind").and_then(Value::as_str).unwrap_or("");
+                let dest = item
+                    .get("destination")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                lines.push(format!("- {id} ({kind}) {label}: {dest}"));
+            }
+        }
+        None => {
+            if lines.is_empty() {
+                lines.push("No Claude launch profiles.".to_string());
+            }
+        }
+    }
+    json!({
+        "content": [{ "type": "text", "text": lines.join("\n") }],
+        "isError": false,
+        "structuredContent": outcome.clone(),
+    })
+}
+
 /// Build the human-readable summary block for a found session: a metadata header
 /// plus, when present, a "Recent messages" section.
 fn render_session_summary_text(o: &Value) -> String {
@@ -2471,6 +2530,7 @@ mod tests {
                 "read_room",
                 "read_room_post",
                 "post_room",
+                "list_profiles",
                 "create_automation",
                 "create_work_task",
                 "task_progress",
@@ -3006,6 +3066,7 @@ mod tests {
         assert!(parsed.tasks);
         assert!(parsed.automations);
         assert!(parsed.taskboard);
+        assert!(parsed.allows_tool("list_profiles"));
         let mailbox = CompanionFeatures::parse(Some("mailbox"));
         assert!(mailbox.allows_tool("send_message"));
         assert!(!mailbox.allows_tool("post_room"));
@@ -3085,5 +3146,94 @@ mod tests {
             "message": "queued"
         }));
         assert_eq!(authoring["structuredContent"]["created"], true);
+    }
+
+    #[test]
+    fn parse_work_task_omits_profile_and_model_by_default() {
+        let spec = parse_work_task_spec(&json!({
+            "title": "Fix the flake",
+            "prompt": "the retry test is flaky"
+        }))
+        .unwrap();
+        assert!(spec.profile.is_none());
+        assert!(spec.model.is_none());
+        assert!(spec.agent_type.is_none());
+        assert!(spec.folder_path.is_none());
+    }
+
+    #[test]
+    fn parse_work_task_reads_optional_profile_and_model() {
+        let spec = parse_work_task_spec(&json!({
+            "title": "Fix the flake",
+            "prompt": "the retry test is flaky",
+            "profile": "api",
+            "model": "claude-opus-4"
+        }))
+        .unwrap();
+        assert_eq!(spec.profile.as_deref(), Some("api"));
+        assert_eq!(spec.model.as_deref(), Some("claude-opus-4"));
+    }
+
+    #[test]
+    fn parse_automation_reads_optional_profile_and_model() {
+        let spec = parse_automation_spec(&json!({
+            "name": "Nightly",
+            "prompt": "audit",
+            "profile": "api",
+            "model": "claude-sonnet-4"
+        }))
+        .unwrap();
+        assert_eq!(spec.profile.as_deref(), Some("api"));
+        assert_eq!(spec.model.as_deref(), Some("claude-sonnet-4"));
+        let omitted = parse_automation_spec(&json!({
+            "name": "Nightly",
+            "prompt": "audit"
+        }))
+        .unwrap();
+        assert!(omitted.profile.is_none());
+        assert!(omitted.model.is_none());
+    }
+
+    #[test]
+    fn list_profiles_schema_describes_subscription_vs_api() {
+        assert!(TOOL_SCHEMA_JSON.contains("\"name\": \"list_profiles\""));
+        assert!(TOOL_SCHEMA_JSON.contains(
+            "A profile decides which Claude configuration (subscription login vs API endpoint) a session launches with"
+        ));
+    }
+
+    #[test]
+    fn list_profiles_is_gated_by_either_authoring_feature() {
+        let none = CompanionFeatures::default();
+        assert!(!none.allows_tool("list_profiles"));
+        let autos = CompanionFeatures::parse(Some("automations"));
+        assert!(autos.allows_tool("list_profiles"));
+        assert!(autos.allows_tool("create_automation"));
+        assert!(!autos.allows_tool("create_work_task"));
+        let board = CompanionFeatures::parse(Some("taskboard"));
+        assert!(board.allows_tool("list_profiles"));
+        assert!(board.allows_tool("create_work_task"));
+        assert!(!board.allows_tool("create_automation"));
+    }
+
+    #[test]
+    fn render_profile_list_omits_tokens() {
+        let secret = "sk-super-secret-token-xyz-do-not-leak";
+        let rendered = render_profile_list_result(&json!({
+            "profiles": [{
+                "id": "api",
+                "label": "Relay",
+                "kind": "managed",
+                "destination": "managed: https://relay.example/v1"
+            }]
+        }));
+        let dumped = rendered.to_string();
+        assert!(!dumped.contains(secret), "{dumped}");
+        assert!(!dumped.contains("authToken"), "{dumped}");
+        assert!(!dumped.contains("auth_token"), "{dumped}");
+        let text = rendered["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("subscription login vs API endpoint"));
+        assert!(text.contains("api"));
+        assert!(text.contains("https://relay.example/v1"));
     }
 }

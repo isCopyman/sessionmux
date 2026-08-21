@@ -289,6 +289,13 @@ impl ChatAuthoringAccess for NoAuthoring {
     ) -> AuthoringOutcome {
         AuthoringOutcome::default()
     }
+
+    async fn list_profiles(
+        &self,
+        _agent_type: Option<String>,
+    ) -> codeg_lib::acp::chat_authoring::ProfileListOutcome {
+        codeg_lib::acp::chat_authoring::ProfileListOutcome::default()
+    }
 }
 
 fn listener(

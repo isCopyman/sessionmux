@@ -355,6 +355,20 @@
     }
   },
   {
+    "name": "list_profiles",
+    "description": "List Claude launch profiles available in this codeg instance. A profile decides which Claude configuration (subscription login vs API endpoint) a session launches with. Call this before create_work_task or create_automation when the user names a login, a relay, an API endpoint, or a CLAUDE_CONFIG_DIR. Returns each profile's id, label, kind, and a one-line destination (directory path for configDir, base URL for managed, or an explanation for follow-default). Never returns credentials. Optional agent_type defaults to claude_code; other agents currently have no profiles.",
+    "inputSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "agent_type": {
+          "type": "string",
+          "description": "Which agent's profiles to list. Defaults to claude_code. Other agents currently have no launch profiles."
+        }
+      }
+    }
+  },
+  {
     "name": "create_automation",
     "description": "Save a codeg Automation: a reusable job — a prompt plus a target project — that codeg runs on a cron schedule (or on demand) without anyone present. Use it when the user asks for work that should REPEAT or happen at a TIME rather than right now: 'every morning', 'each Monday', 'nightly', 'every 30 minutes', 'before standup', 'set up a recurring …'. Do NOT use it for work the user wants done in this conversation — just do that work. Each run starts a fresh headless session in its own worktree with no memory of this chat, so `prompt` must be completely self-contained: state the goal, the relevant paths, and what a finished run looks like. Creating an automation does not run it now; the tool returns the id and the next fire time so you can tell the user when it will first go off. The user can edit, disable, run, or delete it on the Automations page.",
     "inputSchema": {
@@ -390,6 +404,14 @@
           "type": "string",
           "description": "Absolute path of the target project. Defaults to the project this conversation is in; pass it only to target a different project already open in codeg."
         },
+        "profile": {
+          "type": "string",
+          "description": "Claude launch profile id from list_profiles (e.g. 'follow-default' or 'api'). A profile decides which Claude configuration (subscription login vs API endpoint) the launched session uses. Omit to keep today's default. Unknown ids are rejected with the list of valid ids — they do not silently fall back. Currently Claude Code only."
+        },
+        "model": {
+          "type": "string",
+          "description": "Model id to pin on the launched session (the existing config_values 'model' key). Omit to inherit the agent's default."
+        },
         "enabled": {
           "type": "boolean",
           "description": "Whether the schedule is live right away. Defaults to true; pass false to save it switched off."
@@ -419,6 +441,14 @@
         "folder_path": {
           "type": "string",
           "description": "Absolute path of the target project. Defaults to the project this conversation is in; pass it only to target a different project already open in codeg."
+        },
+        "profile": {
+          "type": "string",
+          "description": "Claude launch profile id from list_profiles (e.g. 'follow-default' or 'api'). A profile decides which Claude configuration (subscription login vs API endpoint) the executing session launches with. Omit to keep today's default. Unknown ids are rejected with the list of valid ids — they do not silently fall back. Currently Claude Code only."
+        },
+        "model": {
+          "type": "string",
+          "description": "Model id to pin on the executing session (the existing config_values 'model' key). Omit to inherit the agent's default."
         }
       }
     }

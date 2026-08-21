@@ -753,6 +753,7 @@ mod tauri_app {
                                     app.handle().clone(),
                                 ),
                                 chat_authoring_config.clone(),
+                                effective_data_dir.clone(),
                             ),
                         ),
                     );

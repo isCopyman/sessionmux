@@ -14,8 +14,7 @@
 //!     `--features`, and AGAIN at write time by [`DbChatAuthoring`] so turning
 //!     the switch off takes effect on sessions that are already running.
 
-use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -24,10 +23,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::acp::chat_authoring::{
     local_timezone, AuthoringContext, AuthoringOutcome, ChatAuthoringAccess, ChatAuthoringConfig,
-    ChatAuthoringRuntimeConfig, NewAutomationSpec, NewWorkTaskSpec,
+    ChatAuthoringRuntimeConfig, NewAutomationSpec, NewWorkTaskSpec, ProfileListEntry,
+    ProfileListOutcome,
 };
 use crate::acp::types::PromptInputBlock;
 use crate::app_error::AppCommandError;
+use crate::commands::claude_profile::{
+    claude_profile_list_core, launch_config_values, profile_destination_summary,
+};
 use crate::db::entities::automation::{IsolationMode, TriggerKind};
 use crate::db::entities::folder::FolderKind;
 use crate::db::service::{app_metadata_service, conversation_service, folder_service};
@@ -48,6 +51,9 @@ pub struct DbChatAuthoring {
     pub db: Arc<AppDatabase>,
     pub emitter: EventEmitter,
     pub config: ChatAuthoringRuntimeConfig,
+    /// Data dir for Claude launch profiles (`claude-profiles/`). Same path
+    /// `claude_profile_list_core` already uses.
+    pub data_dir: PathBuf,
 }
 
 impl DbChatAuthoring {
@@ -55,11 +61,13 @@ impl DbChatAuthoring {
         db: Arc<AppDatabase>,
         emitter: EventEmitter,
         config: ChatAuthoringRuntimeConfig,
+        data_dir: PathBuf,
     ) -> Self {
         Self {
             db,
             emitter,
             config,
+            data_dir,
         }
     }
 
@@ -165,6 +173,28 @@ fn parse_agent_slug(raw: Option<&str>) -> Result<Option<AgentType>, String> {
     }
 }
 
+/// Profiles currently exist only for Claude Code. `agent` is the resolved
+/// launch agent when we have one (automations always do). `None` means the
+/// work-task inherit-from-board case — we cannot know the final agent at
+/// create time without duplicating `effective_agent_config`, so only an
+/// *explicit* non-Claude `agent_type` is rejected.
+fn reject_profile_unless_claude(
+    profile: Option<&str>,
+    agent: Option<&AgentType>,
+) -> Result<(), String> {
+    let Some(profile) = profile else {
+        return Ok(());
+    };
+    match agent {
+        None | Some(AgentType::ClaudeCode) => Ok(()),
+        Some(other) => Err(format!(
+            "launch profile '{profile}' is only supported for Claude Code \
+             (got agent_type '{}'). Omit `profile`, or pass agent_type=claude_code.",
+            other.as_wire()
+        )),
+    }
+}
+
 /// Wrap a plain prompt string as the single text block both editors produce for
 /// a text-only prompt.
 fn text_prompt_blocks(prompt: &str) -> Result<Vec<serde_json::Value>, String> {
@@ -230,12 +260,23 @@ impl ChatAuthoringAccess for DbChatAuthoring {
             Ok(b) => b,
             Err(note) => return AuthoringOutcome::rejected(KIND_AUTOMATION, note),
         };
+        if let Err(note) = reject_profile_unless_claude(spec.profile.as_deref(), Some(&agent)) {
+            return AuthoringOutcome::rejected(KIND_AUTOMATION, note);
+        }
+        let config_values = match launch_config_values(
+            &self.data_dir,
+            spec.profile.as_deref(),
+            spec.model.as_deref(),
+        ) {
+            Ok(v) => v,
+            Err(note) => return AuthoringOutcome::rejected(KIND_AUTOMATION, note),
+        };
         let config = AutomationConfig {
             action: spec.action,
             prompt_blocks,
             display_text: spec.prompt.clone(),
             mode_id: None,
-            config_values: BTreeMap::new(),
+            config_values,
             label_snapshot: None,
             // The authoring tool's action allowlist (companion.rs) only admits
             // launch_session / enqueue_task, so no target session exists here.
@@ -322,14 +363,34 @@ impl ChatAuthoringAccess for DbChatAuthoring {
             Ok(b) => b,
             Err(note) => return AuthoringOutcome::rejected(KIND_WORK_TASK, note),
         };
-        // `agent_type: None` deliberately stays None — that is "inherit the
-        // board's settings", which is what the user configured for this project.
+        if let Err(note) = reject_profile_unless_claude(spec.profile.as_deref(), agent.as_ref()) {
+            return AuthoringOutcome::rejected(KIND_WORK_TASK, note);
+        }
+        let config_values = match launch_config_values(
+            &self.data_dir,
+            spec.profile.as_deref(),
+            spec.model.as_deref(),
+        ) {
+            Ok(v) => v,
+            Err(note) => return AuthoringOutcome::rejected(KIND_WORK_TASK, note),
+        };
+        // `effective_agent_config` uses the task's config_values only when the
+        // task has an agent override (otherwise the folder settings map wins
+        // wholesale). A profile without agent_type would then be stored and
+        // silently ignored at launch — the failure mode this tool must not
+        // have. Pin Claude Code so the stored `__codeg_profile__` is applied.
+        // `agent_type: None` without a profile still means inherit-the-board.
+        let agent_for_store = if spec.profile.is_some() && agent.is_none() {
+            Some(AgentType::ClaudeCode)
+        } else {
+            agent
+        };
         let config = WorkTaskConfig {
             prompt_blocks,
             display_text: spec.prompt.clone(),
-            agent_type: agent.map(|a| a.as_wire().into_owned()),
+            agent_type: agent_for_store.map(|a| a.as_wire().into_owned()),
             mode_id: None,
-            config_values: BTreeMap::new(),
+            config_values,
             label_snapshot: None,
         };
         let config = match serde_json::to_value(&config) {
@@ -365,6 +426,44 @@ impl ChatAuthoringAccess for DbChatAuthoring {
                 ..Default::default()
             },
             Err(e) => AuthoringOutcome::rejected(KIND_WORK_TASK, e.to_string()),
+        }
+    }
+
+    async fn list_profiles(&self, agent_type: Option<String>) -> ProfileListOutcome {
+        let wire = agent_type
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("claude_code");
+        match AgentType::from_wire(wire) {
+            Some(AgentType::ClaudeCode) => match claude_profile_list_core(&self.data_dir) {
+                Ok(list) => ProfileListOutcome {
+                    profiles: list
+                        .into_iter()
+                        .map(|info| ProfileListEntry {
+                            id: info.id.clone(),
+                            label: info.label.clone(),
+                            kind: info.kind,
+                            destination: profile_destination_summary(&info),
+                        })
+                        .collect(),
+                    note: None,
+                },
+                Err(e) => ProfileListOutcome {
+                    profiles: Vec::new(),
+                    note: Some(format!("could not list Claude launch profiles: {e}")),
+                },
+            },
+            Some(_) => ProfileListOutcome {
+                profiles: Vec::new(),
+                note: Some(format!(
+                    "Launch profiles currently exist only for Claude Code, not '{wire}'."
+                )),
+            },
+            None => ProfileListOutcome {
+                profiles: Vec::new(),
+                note: Some(format!("unknown agent_type '{wire}'")),
+            },
         }
     }
 }
@@ -565,6 +664,8 @@ mod tests {
     use crate::db::test_helpers::fresh_in_memory_db;
 
     /// Wire a `DbChatAuthoring` over a fresh DB with both flags set as given.
+    /// The `TempDir` must stay alive for the length of the test — it is the
+    /// Claude profiles data dir.
     async fn harness(
         automations: bool,
         work_tasks: bool,
@@ -572,6 +673,7 @@ mod tests {
         Arc<AppDatabase>,
         DbChatAuthoring,
         ChatAuthoringRuntimeConfig,
+        tempfile::TempDir,
     ) {
         let db = Arc::new(fresh_in_memory_db().await);
         let config = ChatAuthoringRuntimeConfig::new();
@@ -581,8 +683,14 @@ mod tests {
                 work_tasks_enabled: work_tasks,
             })
             .await;
-        let access = DbChatAuthoring::new(db.clone(), EventEmitter::Noop, config.clone());
-        (db, access, config)
+        let data = tempfile::tempdir().unwrap();
+        let access = DbChatAuthoring::new(
+            db.clone(),
+            EventEmitter::Noop,
+            config.clone(),
+            data.path().to_path_buf(),
+        );
+        (db, access, config, data)
     }
 
     fn ctx_at(dir: &str) -> AuthoringContext {
@@ -601,6 +709,8 @@ mod tests {
             action: Default::default(),
             agent_type: Some("claude_code".into()),
             folder_path: None,
+            profile: None,
+            model: None,
             enabled: true,
         }
     }
@@ -611,6 +721,8 @@ mod tests {
             prompt: "the retry test is flaky".into(),
             agent_type: None,
             folder_path: None,
+            profile: None,
+            model: None,
         }
     }
 
@@ -619,7 +731,7 @@ mod tests {
     /// the switch was on). The injection-time check alone would let this through.
     #[tokio::test]
     async fn create_automation_refuses_and_writes_nothing_when_disabled() {
-        let (db, access, _cfg) = harness(false, true).await;
+        let (db, access, _cfg, _data) = harness(false, true).await;
         folder_service::add_folder(&db.conn, "/repo/app")
             .await
             .unwrap();
@@ -638,7 +750,7 @@ mod tests {
     /// board tool.
     #[tokio::test]
     async fn create_work_task_refuses_when_only_automations_enabled() {
-        let (db, access, _cfg) = harness(true, false).await;
+        let (db, access, _cfg, _data) = harness(true, false).await;
         folder_service::add_folder(&db.conn, "/repo/app")
             .await
             .unwrap();
@@ -660,7 +772,7 @@ mod tests {
     /// check meaningful for an already-running session.
     #[tokio::test]
     async fn flipping_the_flag_takes_effect_on_the_next_call() {
-        let (db, access, cfg) = harness(false, false).await;
+        let (db, access, cfg, _data) = harness(false, false).await;
         folder_service::add_folder(&db.conn, "/repo/app")
             .await
             .unwrap();
@@ -687,7 +799,7 @@ mod tests {
     /// and reports back the schedule the scheduler actually computed.
     #[tokio::test]
     async fn create_automation_persists_a_fireable_row() {
-        let (db, access, _cfg) = harness(true, false).await;
+        let (db, access, _cfg, _data) = harness(true, false).await;
         let folder = folder_service::add_folder(&db.conn, "/repo/app")
             .await
             .unwrap();
@@ -715,13 +827,19 @@ mod tests {
         assert_eq!(cfg.prompt_blocks.len(), 1);
         assert_eq!(cfg.prompt_blocks[0]["text"], "audit the dependencies");
         assert_eq!(cfg.display_text, "audit the dependencies");
+        // Omitted profile/model must keep today's empty map, byte-for-byte.
+        assert!(cfg.config_values.is_empty());
+        assert_eq!(
+            serde_json::to_value(&cfg.config_values).unwrap(),
+            serde_json::json!({})
+        );
     }
 
     /// A chat running inside a worktree targets the PROJECT, not the worktree —
     /// the board and the automations list are both project-scoped.
     #[tokio::test]
     async fn create_work_task_resolves_a_worktree_to_its_project() {
-        let (db, access, _cfg) = harness(false, true).await;
+        let (db, access, _cfg, _data) = harness(false, true).await;
         let root = folder_service::add_folder(&db.conn, "/repo/app")
             .await
             .unwrap();
@@ -743,13 +861,18 @@ mod tests {
         let cfg: WorkTaskConfig = serde_json::from_value(row.config).unwrap();
         assert!(cfg.agent_type.is_none());
         assert_eq!(cfg.prompt_blocks.len(), 1);
+        assert!(cfg.config_values.is_empty());
+        assert_eq!(
+            serde_json::to_value(&cfg.config_values).unwrap(),
+            serde_json::json!({})
+        );
     }
 
     /// An unresolvable target is a soft refusal telling the LLM what to pass —
     /// never a silent write to some arbitrary folder.
     #[tokio::test]
     async fn unresolvable_folder_is_a_soft_refusal() {
-        let (db, access, _cfg) = harness(true, true).await;
+        let (db, access, _cfg, _data) = harness(true, true).await;
         folder_service::add_folder(&db.conn, "/repo/app")
             .await
             .unwrap();
@@ -806,5 +929,202 @@ mod tests {
         apply_persisted_chat_authoring_config(&db.conn, &fresh).await;
         assert!(fresh.automations_enabled().await);
         assert!(!fresh.work_tasks_enabled().await);
+    }
+
+    use crate::acp::connection::PREFERRED_PROFILE_CONFIG_KEY;
+    use crate::commands::claude_profile::{claude_profile_upsert_core, LAUNCH_MODEL_CONFIG_KEY};
+    use crate::models::claude_profile::{ClaudeProfileKind, ClaudeProfileUpsert};
+
+    fn seed_managed_profile(data_dir: &Path, id: &str, token: &str) {
+        claude_profile_upsert_core(
+            data_dir,
+            ClaudeProfileUpsert {
+                id: id.to_string(),
+                label: format!("Managed {id}"),
+                kind: ClaudeProfileKind::Managed,
+                config_dir: None,
+                base_url: Some("https://relay.example/v1".into()),
+                auth_token: Some(token.to_string()),
+                model: None,
+            },
+        )
+        .expect("upsert managed profile");
+    }
+
+    #[tokio::test]
+    async fn work_task_profile_without_agent_type_pins_claude_code() {
+        let (db, access, _cfg, data) = harness(false, true).await;
+        folder_service::add_folder(&db.conn, "/repo/app")
+            .await
+            .unwrap();
+        seed_managed_profile(data.path(), "api", "sk-super-secret-token-xyz");
+
+        let mut spec = work_task_spec();
+        spec.profile = Some("api".into());
+        let out = access.create_work_task(ctx_at("/repo/app"), spec).await;
+        assert!(out.created, "note: {:?}", out.note);
+
+        let row = work_task_service::get(&db.conn, out.id.unwrap())
+            .await
+            .unwrap();
+        let cfg: WorkTaskConfig = serde_json::from_value(row.config).unwrap();
+        assert_eq!(cfg.agent_type.as_deref(), Some("claude_code"));
+        assert_eq!(
+            cfg.config_values
+                .get(PREFERRED_PROFILE_CONFIG_KEY)
+                .map(String::as_str),
+            Some("api")
+        );
+    }
+
+    #[tokio::test]
+    async fn work_task_profile_and_model_land_in_config_values() {
+        let (db, access, _cfg, data) = harness(false, true).await;
+        folder_service::add_folder(&db.conn, "/repo/app")
+            .await
+            .unwrap();
+        seed_managed_profile(data.path(), "api", "sk-super-secret-token-xyz");
+
+        let mut spec = work_task_spec();
+        spec.profile = Some("api".into());
+        spec.model = Some("claude-opus-4".into());
+        spec.agent_type = Some("claude_code".into());
+        let out = access.create_work_task(ctx_at("/repo/app"), spec).await;
+        assert!(out.created, "note: {:?}", out.note);
+
+        let row = work_task_service::get(&db.conn, out.id.unwrap())
+            .await
+            .unwrap();
+        let cfg: WorkTaskConfig = serde_json::from_value(row.config).unwrap();
+        assert_eq!(
+            cfg.config_values
+                .get(PREFERRED_PROFILE_CONFIG_KEY)
+                .map(String::as_str),
+            Some("api")
+        );
+        assert_eq!(
+            cfg.config_values
+                .get(LAUNCH_MODEL_CONFIG_KEY)
+                .map(String::as_str),
+            Some("claude-opus-4")
+        );
+    }
+
+    #[tokio::test]
+    async fn unknown_work_task_profile_is_rejected_and_writes_nothing() {
+        let (db, access, _cfg, data) = harness(false, true).await;
+        folder_service::add_folder(&db.conn, "/repo/app")
+            .await
+            .unwrap();
+        seed_managed_profile(data.path(), "api", "sk-super-secret-token-xyz");
+
+        let mut spec = work_task_spec();
+        spec.profile = Some("does-not-exist".into());
+        spec.model = Some("claude-opus-4".into());
+        let out = access.create_work_task(ctx_at("/repo/app"), spec).await;
+        assert!(!out.created);
+        let note = out.note.unwrap();
+        assert!(note.contains("does-not-exist"), "{note}");
+        assert!(note.contains("follow-default"), "{note}");
+        assert!(note.contains("api"), "{note}");
+        assert!(work_task_service::list(&db.conn, None)
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn work_task_profile_rejected_for_explicit_non_claude_agent() {
+        let (db, access, _cfg, data) = harness(false, true).await;
+        folder_service::add_folder(&db.conn, "/repo/app")
+            .await
+            .unwrap();
+        seed_managed_profile(data.path(), "api", "sk-super-secret-token-xyz");
+
+        let mut spec = work_task_spec();
+        spec.profile = Some("api".into());
+        spec.agent_type = Some("codex".into());
+        let out = access.create_work_task(ctx_at("/repo/app"), spec).await;
+        assert!(!out.created);
+        let note = out.note.unwrap();
+        assert!(note.contains("Claude Code"), "{note}");
+        assert!(note.contains("codex"), "{note}");
+        assert!(work_task_service::list(&db.conn, None)
+            .await
+            .unwrap()
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn automation_launch_session_profile_lands_in_config_values() {
+        let (db, access, _cfg, data) = harness(true, false).await;
+        folder_service::add_folder(&db.conn, "/repo/app")
+            .await
+            .unwrap();
+        seed_managed_profile(data.path(), "api", "sk-super-secret-token-xyz");
+
+        let mut spec = automation_spec();
+        spec.profile = Some("api".into());
+        spec.model = Some("claude-sonnet-4".into());
+        let out = access.create_automation(ctx_at("/repo/app"), spec).await;
+        assert!(out.created, "note: {:?}", out.note);
+
+        let row = automation_service::get(&db.conn, out.id.unwrap())
+            .await
+            .unwrap();
+        let cfg: AutomationConfig = serde_json::from_value(row.config).unwrap();
+        assert_eq!(cfg.action, crate::models::AutomationAction::LaunchSession);
+        assert_eq!(
+            cfg.config_values
+                .get(PREFERRED_PROFILE_CONFIG_KEY)
+                .map(String::as_str),
+            Some("api")
+        );
+        assert_eq!(
+            cfg.config_values
+                .get(LAUNCH_MODEL_CONFIG_KEY)
+                .map(String::as_str),
+            Some("claude-sonnet-4")
+        );
+    }
+
+    #[tokio::test]
+    async fn unknown_automation_profile_is_rejected_and_writes_nothing() {
+        let (db, access, _cfg, _data) = harness(true, false).await;
+        folder_service::add_folder(&db.conn, "/repo/app")
+            .await
+            .unwrap();
+
+        let mut spec = automation_spec();
+        spec.profile = Some("ghost".into());
+        let out = access.create_automation(ctx_at("/repo/app"), spec).await;
+        assert!(!out.created);
+        let note = out.note.unwrap();
+        assert!(note.contains("ghost"), "{note}");
+        assert!(note.contains("follow-default"), "{note}");
+        assert!(automation_service::list(&db.conn).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_profiles_returns_ids_without_tokens() {
+        let (_db, access, _cfg, data) = harness(true, true).await;
+        let secret = "sk-super-secret-token-xyz-do-not-leak";
+        seed_managed_profile(data.path(), "api", secret);
+
+        let out = access.list_profiles(None).await;
+        assert!(out.note.is_none(), "note: {:?}", out.note);
+        let dumped = serde_json::to_string(&out).unwrap();
+        assert!(!dumped.contains(secret), "{dumped}");
+        assert!(!dumped.contains("authToken"), "{dumped}");
+        assert!(!dumped.contains("auth_token"), "{dumped}");
+        assert!(!dumped.contains("authTokenMasked"), "{dumped}");
+        assert!(out.profiles.iter().any(|p| p.id == "follow-default"));
+        let api = out.profiles.iter().find(|p| p.id == "api").unwrap();
+        assert!(api.destination.contains("https://relay.example/v1"));
+        assert!(!api.destination.contains(secret));
+
+        let other = access.list_profiles(Some("codex".into())).await;
+        assert!(other.profiles.is_empty());
+        assert!(other.note.unwrap().contains("Claude Code"));
     }
 }
