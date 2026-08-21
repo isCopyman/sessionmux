@@ -176,3 +176,30 @@ kind 与解析语义保留，已绑定的会话不会炸。
 顺带记一条：同一份 `initialize` 结果里还宣告了
 `sessionCapabilities: { close, delete, fork, list, resume }` —— **`fork` 是适配器原生的**，
 跟 P7 的 rewind/fork 课题直接相关，动工前先读这里。
+
+## 7. 完整层级（2026-08-21 晚补，用户发现面板在这点上撒谎）
+
+用户问：「跟随默认」显示的是全局 settings.json，会不会被项目设置覆盖？**会。**
+
+适配器 `dist/acp-agent.js` 里 `settingSources: ["user", "project", "local"]` 是**写死的**
+（实测 grep，全文件仅此一处），三层全加载。配合 Claude 文档的同键优先级，
+一个 codeg Claude 会话的实际层级是：
+
+```
+1. Managed（企业策略）                        最高
+2. --settings              ← codeg 档在这一层
+3. .claude/settings.local.json（项目本地）
+4. .claude/settings.json（项目，进仓库那份）
+5. ~/.claude/settings.json（用户全局）         ← 「跟随默认」页签显示/编辑的就是这层，最低
+```
+
+**两个后果：**
+
+- **「跟随默认」显示的是最底层。** 同一份全局设置在不同 cwd 下效果可能不同——
+  仓库里 committed 了 `.claude/settings.json` 的项目会盖掉它。面板原文案
+  「对所有『跟随默认』的会话生效」把人误导成"这就是会生效的东西"，已改（十语）。
+- **codeg 档压过项目设置。** 这是档的一个好性质：仓库里 committed 的 settings
+  盖不掉用户选的档。原来也没说，一并写进文案。
+
+**还没做**：面板只显示单层，不显示合并后的实际生效值。要做「有效配置」视图的话，
+需要后端按会话 cwd 去读项目层再合并——记为待办，不在本批。
