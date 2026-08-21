@@ -12,7 +12,7 @@ import { createPortal } from "react-dom"
 import { Reorder, type PanInfo } from "motion/react"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
-import { Funnel, Play, Plus, ListTodo, Tag } from "lucide-react"
+import { Funnel, Layers, Play, Plus, ListTodo, Tag } from "lucide-react"
 import { useTasksView } from "@/contexts/tasks-view-context"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import {
@@ -29,12 +29,17 @@ import {
   CREATE_TASK_FROM_TEXT_EVENT,
   type CreateTaskFromTextDetail,
 } from "@/lib/task-compose-events"
+import { getAgentLabel } from "@/lib/custom-agents"
 import {
   DEFAULT_TASKS_BOARD_FILTER,
   loadTasksBoardFilter,
+  loadTasksBoardGrouping,
   loadTasksStatusFilter,
   saveTasksBoardFilter,
+  saveTasksBoardGrouping,
   saveTasksStatusFilter,
+  TASKS_BOARD_GROUPINGS,
+  type TasksBoardGrouping,
 } from "@/lib/tasks-board-filter-storage"
 import { WorkbenchPageTitle } from "@/components/workbench/workbench-page-title"
 import { FolderSelect } from "@/components/shared/folder-select"
@@ -60,6 +65,15 @@ import {
   groupTasksByColumn,
   type BoardColumnId,
 } from "./board-columns"
+import { groupingShowsHeaders, segmentTasksForGrouping } from "./board-grouping"
+import {
+  connectionKeysForTask,
+  taskActivityDot,
+  useTaskConnectionsByConversationId,
+  type TaskActivityDot,
+  type TaskConnectionLookup,
+} from "./task-activity"
+import { TaskGroupHeader } from "./task-group-header"
 import {
   isFolderMerging,
   isMergeQueued,
@@ -98,6 +112,12 @@ const EMPTY_LABEL_KEYS = {
 /** The status select's "no filter" option — a sentinel, because Radix reserves
  *  the empty string for "no value chosen". */
 const ALL_STATUSES = "__all__"
+
+const GROUPING_LABEL_KEYS = {
+  none: "groupByNone",
+  folder: "groupByFolder",
+  agent: "groupByAgent",
+} as const satisfies Record<TasksBoardGrouping, string>
 
 /** The cards inside a column. gap-4 — the same gutter the columns keep from
  *  each other and from the window edge — so a card is inset by 1rem on all
@@ -168,6 +188,15 @@ export function TasksPage() {
   useEffect(() => {
     saveTasksStatusFilter(statusFilter)
   }, [statusFilter])
+  // Column-internal grouping (none / by project / by agent). Same restore
+  // pattern as viewMode: this page never SSR-paints, so a synchronous
+  // localStorage read is safe and the board opens already grouped.
+  const [grouping, setGrouping] = useState<TasksBoardGrouping>(
+    loadTasksBoardGrouping
+  )
+  useEffect(() => {
+    saveTasksBoardGrouping(grouping)
+  }, [grouping])
   // Dragging a pending card is always available: dropping it on In-progress
   // starts the task and needs no order at all. Only the REORDER half waits on
   // a folder — sort_order is per folder, so a mixed-folder列 has nothing it
@@ -304,6 +333,55 @@ export function TasksPage() {
     }
     return ordered
   }, [columns.todo, dragEnabled, dragOrder])
+  const showGroupHeaders = groupingShowsHeaders(grouping, folderFilter)
+  const groupingOpts = useMemo(
+    () => ({ folderNames, folderFilter, agentLabel: getAgentLabel }),
+    [folderNames, folderFilter]
+  )
+  const columnSegments = useMemo(
+    () => ({
+      todo: segmentTasksForGrouping(todoTasks, grouping, groupingOpts),
+      inProgress: segmentTasksForGrouping(
+        columns.inProgress,
+        grouping,
+        groupingOpts
+      ),
+      attention: segmentTasksForGrouping(
+        columns.attention,
+        grouping,
+        groupingOpts
+      ),
+      done: segmentTasksForGrouping(columns.done, grouping, groupingOpts),
+    }),
+    [todoTasks, columns, grouping, groupingOpts]
+  )
+  const listSegments = useMemo(
+    () => segmentTasksForGrouping(listTasks, grouping, groupingOpts),
+    [listTasks, grouping, groupingOpts]
+  )
+  const connectionLookups = useMemo(() => {
+    const seen = new Set<number>()
+    const lookups: TaskConnectionLookup[] = []
+    for (const task of visibleTasks) {
+      if (task.status !== "running" || task.conversation_id == null) continue
+      if (seen.has(task.conversation_id)) continue
+      seen.add(task.conversation_id)
+      const keys = connectionKeysForTask(task)
+      if (keys.length === 0) continue
+      lookups.push({ conversationId: task.conversation_id, keys })
+    }
+    return lookups
+  }, [visibleTasks])
+  const connectionsByConversationId =
+    useTaskConnectionsByConversationId(connectionLookups)
+  const activityFor = useCallback(
+    (task: WorkTask): TaskActivityDot | null =>
+      taskActivityDot(
+        task,
+        connectionsByConversationId.get(task.conversation_id ?? -1)?.status
+      ),
+    [connectionsByConversationId]
+  )
   // Place in line for every task waiting on its project's merge slot. Computed
   // over ALL tasks, not the visible ones: the queue is the project's, and a
   // filtered board must not renumber it.
@@ -680,6 +758,33 @@ export function TasksPage() {
             </PopoverContent>
           </Popover>
 
+          {/* Grouping — column-internal segments. Collection / Room are not
+              options: work_task has no collection_id, and Collection cannot
+              cross a folder. Same pill as the status filter. */}
+          <Select
+            value={grouping}
+            onValueChange={(v) => setGrouping(v as TasksBoardGrouping)}
+          >
+            <SelectTrigger
+              size="sm"
+              aria-label={`${t("groupBy")}: ${t(GROUPING_LABEL_KEYS[grouping])}`}
+              className="h-8 w-auto min-w-0 gap-1.5 rounded-full border-transparent bg-muted/70 px-3 text-[0.8125rem] font-medium shadow-none ws-msg-chip hover:bg-muted"
+            >
+              <Layers
+                className="size-3.5 text-muted-foreground"
+                aria-hidden="true"
+              />
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {TASKS_BOARD_GROUPINGS.map((g) => (
+                <SelectItem key={g} value={g}>
+                  {t(GROUPING_LABEL_KEYS[g])}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
           {/* Status filter — list-only: the board already sorts by status into
               its four columns, so there is nothing there for it to narrow.
               One choice out of five, so a select rather than a checkbox menu;
@@ -775,6 +880,10 @@ export function TasksPage() {
           onClearFilter={() => setStatusFilter(null)}
           onOpen={setDetailTaskId}
           handlersFor={handlersFor}
+          segments={listSegments}
+          showGroupHeaders={showGroupHeaders}
+          ungroupedLabel={t("groupUngrouped")}
+          activityFor={activityFor}
         />
       ) : (
         <div className="min-h-0 flex-1 overflow-x-auto">
@@ -785,6 +894,7 @@ export function TasksPage() {
           <div className="grid h-full min-w-[56rem] grid-cols-4 gap-4 px-4 pb-4 pt-2">
             {BOARD_COLUMN_IDS.map((col) => {
               const colTasks = col === "todo" ? todoTasks : columns[col]
+              const segments = columnSegments[col]
               const cardFor = (task: WorkTask) => (
                 <TaskCard
                   key={task.id}
@@ -792,6 +902,7 @@ export function TasksPage() {
                   folderName={folderNames.get(task.folder_id) ?? null}
                   now={now}
                   mergeQueueRank={queueRanks.get(task.id)}
+                  activity={activityFor(task)}
                   onOpen={() => {
                     // Swallow the click that closes a drag.
                     if (draggedRef.current) return
@@ -892,44 +1003,60 @@ export function TasksPage() {
                             : "ring-1 ring-primary/25")
                       )}
                     >
-                      {col === "todo" ? (
-                        <Reorder.Group
-                          as="div"
-                          axis="y"
-                          values={todoTasks.map((task) => task.id)}
-                          // Without a folder there is no order to save, so the
-                          // cards stay put and the drag exists only to start.
-                          onReorder={(ids: number[]) => {
-                            if (dragEnabled) setDragOrder(ids)
-                          }}
-                          className={CARD_LIST_CLASS}
-                        >
-                          {todoTasks.map((task) => (
-                            <Reorder.Item
-                              key={task.id}
-                              value={task.id}
-                              as="div"
-                              onPointerDown={handleTodoPointerDown}
-                              onDragStart={(_e: unknown, info: PanInfo) =>
-                                handleTodoDragStart(task, info)
-                              }
-                              onDrag={(_e: unknown, info: PanInfo) =>
-                                handleTodoDrag(info)
-                              }
-                              onDragEnd={(e: unknown, info: PanInfo) =>
-                                handleTodoDragEnd(task, e, info)
-                              }
-                              className={cn(
-                                "cursor-grab active:cursor-grabbing",
-                                // The preview is the card now; what stays in
-                                // the list is the slot it came from.
-                                drag?.task.id === task.id && "opacity-40"
+                      {showGroupHeaders ? (
+                        <div className={CARD_LIST_CLASS}>
+                          {segments.map((seg) => (
+                            <div key={seg.key} className="flex flex-col gap-2">
+                              <TaskGroupHeader
+                                label={
+                                  seg.ungrouped || !seg.label
+                                    ? t("groupUngrouped")
+                                    : seg.label
+                                }
+                                count={seg.tasks.length}
+                              />
+                              {col === "todo" ? (
+                                <TodoReorderList
+                                  tasks={seg.tasks}
+                                  dragId={drag?.task.id}
+                                  dragEnabled={dragEnabled}
+                                  onReorder={(ids) =>
+                                    setDragOrder(
+                                      segments.flatMap((s) =>
+                                        s.key === seg.key
+                                          ? ids
+                                          : s.tasks.map((task) => task.id)
+                                      )
+                                    )
+                                  }
+                                  onPointerDown={handleTodoPointerDown}
+                                  onDragStart={handleTodoDragStart}
+                                  onDrag={handleTodoDrag}
+                                  onDragEnd={handleTodoDragEnd}
+                                  renderCard={cardFor}
+                                  className="flex flex-col gap-4"
+                                />
+                              ) : (
+                                <div className="flex flex-col gap-4">
+                                  {seg.tasks.map(cardFor)}
+                                </div>
                               )}
-                            >
-                              {cardFor(task)}
-                            </Reorder.Item>
+                            </div>
                           ))}
-                        </Reorder.Group>
+                        </div>
+                      ) : col === "todo" ? (
+                        <TodoReorderList
+                          tasks={todoTasks}
+                          dragId={drag?.task.id}
+                          dragEnabled={dragEnabled}
+                          onReorder={setDragOrder}
+                          onPointerDown={handleTodoPointerDown}
+                          onDragStart={handleTodoDragStart}
+                          onDrag={handleTodoDrag}
+                          onDragEnd={handleTodoDragEnd}
+                          renderCard={cardFor}
+                          className={CARD_LIST_CLASS}
+                        />
                       ) : (
                         <div className={CARD_LIST_CLASS}>
                           {colTasks.map(cardFor)}
@@ -1060,5 +1187,67 @@ export function TasksPage() {
           )
         : null}
     </div>
+  )
+}
+
+/** The To-do column's drag list. Extracted so grouping=none keeps one
+ *  Reorder.Group wrapping the whole column (today's DOM), while grouped
+ *  view can mount one group per segment without duplicating the item
+ *  handlers. Drop-to-start still rides the same pointer handlers. */
+function TodoReorderList({
+  tasks,
+  dragId,
+  dragEnabled,
+  onReorder,
+  onPointerDown,
+  onDragStart,
+  onDrag,
+  onDragEnd,
+  renderCard,
+  className,
+}: {
+  tasks: WorkTask[]
+  dragId: number | undefined
+  dragEnabled: boolean
+  onReorder: (ids: number[]) => void
+  onPointerDown: (e: React.PointerEvent<HTMLDivElement>) => void
+  onDragStart: (task: WorkTask, info: PanInfo) => void
+  onDrag: (info: PanInfo) => void
+  onDragEnd: (task: WorkTask, event: unknown, info: PanInfo) => void
+  renderCard: (task: WorkTask) => React.ReactNode
+  className?: string
+}) {
+  return (
+    <Reorder.Group
+      as="div"
+      axis="y"
+      values={tasks.map((task) => task.id)}
+      // Without a folder there is no order to save, so the cards stay put
+      // and the drag exists only to start.
+      onReorder={(ids: number[]) => {
+        if (dragEnabled) onReorder(ids)
+      }}
+      className={className}
+    >
+      {tasks.map((task) => (
+        <Reorder.Item
+          key={task.id}
+          value={task.id}
+          as="div"
+          onPointerDown={onPointerDown}
+          onDragStart={(_e: unknown, info: PanInfo) => onDragStart(task, info)}
+          onDrag={(_e: unknown, info: PanInfo) => onDrag(info)}
+          onDragEnd={(e: unknown, info: PanInfo) => onDragEnd(task, e, info)}
+          className={cn(
+            "cursor-grab active:cursor-grabbing",
+            // The preview is the card now; what stays in the list is the
+            // slot it came from.
+            dragId === task.id && "opacity-40"
+          )}
+        >
+          {renderCard(task)}
+        </Reorder.Item>
+      ))}
+    </Reorder.Group>
   )
 }

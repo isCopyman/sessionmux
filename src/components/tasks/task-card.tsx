@@ -20,6 +20,7 @@ import { cn } from "@/lib/utils"
 import { isMergeQueued, worktreeWasRemoved } from "./task-acceptance"
 import { buildTaskActions, type TaskActionItem } from "./task-actions"
 import type { TaskActionHandlers } from "./task-actions"
+import type { TaskActivityDot } from "./task-activity"
 import type { WorkTask } from "@/lib/types"
 
 type StatusLabelKey =
@@ -212,6 +213,9 @@ interface TaskCardProps extends TaskActionHandlers {
   /** Place in line when this task is waiting to merge (see `mergeQueueRanks`);
    *  the page computes it, because a card cannot see its siblings. */
   mergeQueueRank?: number
+  /** Live-session activity: running+Prompting pulses, running otherwise
+   *  is still. Absent / null draws nothing (not running, or no session). */
+  activity?: TaskActivityDot | null
   onOpen: () => void
 }
 
@@ -325,6 +329,44 @@ export function WorktreeRemovedChip({ task }: { task: WorkTask }) {
  * engine refuses to launch): both views align their titles on it, and a
  * placeholder is worth more than a column that shifts row to row.
  */
+/** Agent mark with the optional live-session activity dot overlaid the same
+ *  way the workbench tree (O34) overlays a Session. The wrap is skipped when
+ *  there is no dot, so a card that isn't running keeps today's DOM. */
+export function TaskAgentMarkWithActivity({
+  task,
+  activity,
+  className,
+}: {
+  task: WorkTask
+  activity?: TaskActivityDot | null
+  className?: string
+}) {
+  if (!activity) {
+    return <TaskAgentMark task={task} className={className} />
+  }
+  return (
+    <span className={cn("relative shrink-0", className)}>
+      <TaskAgentMark task={task} />
+      <TaskActivityDotMark kind={activity} />
+    </span>
+  )
+}
+
+/** Green pulse (Prompting) or still dot (running, waiting on a tool). */
+export function TaskActivityDotMark({ kind }: { kind: TaskActivityDot }) {
+  return (
+    <span
+      data-testid="task-activity-dot"
+      data-pulse={kind === "pulse" ? "true" : "false"}
+      className={cn(
+        "absolute -top-0.5 -left-0.5 size-1.5 rounded-full bg-emerald-500",
+        kind === "pulse" && "animate-pulse"
+      )}
+      aria-hidden="true"
+    />
+  )
+}
+
 export function TaskAgentMark({
   task,
   className,
@@ -377,6 +419,7 @@ export function TaskCard({
   folderName,
   now,
   mergeQueueRank,
+  activity,
   onOpen,
   ...handlers
 }: TaskCardProps) {
@@ -436,7 +479,11 @@ export function TaskCard({
         {/* mt-[0.125rem] rides the mark on the FIRST line of a title that
             wraps — items-start would otherwise hang it off the block's top
             edge, half a line above the text it belongs to. */}
-        <TaskAgentMark task={task} className="mt-[0.125rem]" />
+        <TaskAgentMarkWithActivity
+          task={task}
+          activity={activity}
+          className="mt-[0.125rem]"
+        />
         <span className="min-w-0 flex-1 break-words text-[0.8125rem] font-medium leading-snug">
           {task.title}
         </span>

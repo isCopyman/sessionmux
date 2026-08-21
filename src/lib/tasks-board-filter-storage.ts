@@ -3,6 +3,7 @@
 const BOARD_FILTER_KEY = "workspace:tasks-board-filter"
 const VIEW_MODE_KEY = "workspace:tasks-view-mode"
 const STATUS_FILTER_KEY = "workspace:tasks-status-filter"
+const GROUPING_KEY = "workspace:tasks-board-grouping"
 
 /** Visibility toggles of the tasks board's filter popover. */
 export interface TasksBoardFilter {
@@ -32,6 +33,14 @@ export const TASKS_STATUS_GROUPS = [
 ] as const
 
 export type TasksStatusGroup = (typeof TASKS_STATUS_GROUPS)[number]
+
+/** Column-internal grouping of the board and list. Default is none — the four
+ *  columns (and the list's freshest-first sequence) stay unsegmented. */
+export const TASKS_BOARD_GROUPINGS = ["none", "folder", "agent"] as const
+
+export type TasksBoardGrouping = (typeof TASKS_BOARD_GROUPINGS)[number]
+
+export const DEFAULT_TASKS_BOARD_GROUPING: TasksBoardGrouping = "none"
 
 export function loadTasksBoardFilter(): TasksBoardFilter {
   if (typeof window === "undefined") return DEFAULT_TASKS_BOARD_FILTER
@@ -108,6 +117,28 @@ export function saveTasksStatusFilter(group: TasksStatusGroup | null): void {
   try {
     if (group == null) localStorage.removeItem(STATUS_FILTER_KEY)
     else localStorage.setItem(STATUS_FILTER_KEY, group)
+  } catch {
+    /* ignore */
+  }
+}
+
+export function loadTasksBoardGrouping(): TasksBoardGrouping {
+  if (typeof window === "undefined") return DEFAULT_TASKS_BOARD_GROUPING
+  try {
+    const raw = localStorage.getItem(GROUPING_KEY)
+    return (
+      TASKS_BOARD_GROUPINGS.find((g) => g === raw) ??
+      DEFAULT_TASKS_BOARD_GROUPING
+    )
+  } catch {
+    return DEFAULT_TASKS_BOARD_GROUPING
+  }
+}
+
+export function saveTasksBoardGrouping(grouping: TasksBoardGrouping): void {
+  if (typeof window === "undefined") return
+  try {
+    localStorage.setItem(GROUPING_KEY, grouping)
   } catch {
     /* ignore */
   }
