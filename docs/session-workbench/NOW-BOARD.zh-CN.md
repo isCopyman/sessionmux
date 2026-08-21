@@ -252,7 +252,15 @@ NOW-BOARD 与它重复；MAINTAINABILITY 同时兼计划 / 决策 / 执行日志
   `configText`→`~/.claude/settings.json`（用户层，**最低**）和
   `envText`→进程环境（输给 settings 文件）。都够不着项目级之上。
   可能的修法：给它也发一份只含三个空连接键的 `--settings` 叠加
-- **虚拟档 `OfficialDirect` 同上**：只塞进程环境，被项目配置击穿
+- ~~**虚拟档 `OfficialDirect` 同上**~~ **已修**（`7ccc44a4`，合入 `2fccb802`）。
+  原来只塞进程环境，被项目配置击穿：用户选了「官方直连」，在一个 `.claude/settings.json`
+  指着付费网关的仓库里跑，照样走网关计费,界面还说走的官方。
+  改法：像 managed 档那样物化一份只含三个键的 `settings.json`
+  （官方 URL + 两个空串凭据），走 `--settings` 层——那层压得过项目层。
+  进程环境那套原样保留（没项目配置时仍有用，删它是没给的范围）。
+  `+67/−2` 一个文件。**注意 codex 报告说它跑不了那条测试**
+  （worktree 本地 target 目录 `0xc0000139`），它没谎称通过；
+  我用共用 target 目录重跑：两条测试都过，clippy 也是真 0
 - ~~**session-sync 空转**~~ **误报，已撤销**（2026-08-21 夜复核）。那条
   `reconciliation complete updated=1~2` 不是定时空转：`run_local_session_sync`
   是 **fs-watch 驱动**的（`local_session_sync.rs:162`），而
