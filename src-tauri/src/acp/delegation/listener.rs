@@ -11,15 +11,17 @@ use async_trait::async_trait;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::RwLock;
 
-use crate::acp::chat_authoring::{AuthoringContext, AuthoringOutcome, ChatAuthoringAccess};
+use crate::acp::chat_authoring::{
+    AuthoringContext, AuthoringOutcome, ChatAuthoringAccess, ProfileListOutcome,
+};
 use crate::acp::delegation::transport::{
     read_frame, write_frame, BrokerAskRequest, BrokerCommitFeedbackRequest,
     BrokerCreateAutomationRequest, BrokerCreateWorkTaskRequest, BrokerFeedbackRequest,
     BrokerHostControlHelpRequest, BrokerHostControlUseRequest, BrokerListInboxRequest,
-    BrokerListRoomsRequest, BrokerListSessionsRequest, BrokerMessage, BrokerPostRoomRequest,
-    BrokerReadMessageRequest, BrokerReadRoomPostRequest, BrokerReadRoomRequest, BrokerResponse,
-    BrokerSendMessageRequest, BrokerSessionRequest, BrokerTaskCompleteRequest,
-    BrokerTaskProgressRequest,
+    BrokerListProfilesRequest, BrokerListRoomsRequest, BrokerListSessionsRequest, BrokerMessage,
+    BrokerPostRoomRequest, BrokerReadMessageRequest, BrokerReadRoomPostRequest,
+    BrokerReadRoomRequest, BrokerResponse, BrokerSendMessageRequest, BrokerSessionRequest,
+    BrokerTaskCompleteRequest, BrokerTaskProgressRequest,
 };
 use crate::acp::feedback::{PendingFeedback, SessionFeedbackAccess};
 use crate::acp::host_control::{
@@ -358,6 +360,9 @@ impl HostBridgeListener {
             }
             BrokerMessage::CreateWorkTask(req) => {
                 authoring_response(self.process_create_work_task(req).await)?
+            }
+            BrokerMessage::ListProfiles(req) => {
+                profile_list_response(self.process_list_profiles(req).await)?
             }
         };
         write_frame(conn, &resp).await?;
@@ -747,6 +752,18 @@ impl HostBridgeListener {
         };
         self.authoring.create_work_task(ctx, req.spec).await
     }
+
+    /// Validate the token and list Claude launch profiles. Profiles are
+    /// app-level (not session-scoped), so a valid token is enough.
+    async fn process_list_profiles(&self, req: BrokerListProfilesRequest) -> ProfileListOutcome {
+        if self.tokens.lookup(&req.token).await.is_none() {
+            return ProfileListOutcome {
+                profiles: Vec::new(),
+                note: Some("invalid token".to_string()),
+            };
+        }
+        self.authoring.list_profiles(req.agent_type).await
+    }
 }
 
 /// Serialize the pending feedback notes into a
@@ -880,6 +897,14 @@ fn task_ack_response(ack: TaskReportAck) -> std::io::Result<BrokerResponse> {
 /// `CreateAutomation` / `CreateWorkTask` arms — the companion renders it into
 /// the tool result.
 fn authoring_response(outcome: AuthoringOutcome) -> std::io::Result<BrokerResponse> {
+    Ok(BrokerResponse {
+        outcome: serde_json::to_value(&outcome).map_err(|e| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, format!("encode: {e}"))
+        })?,
+    })
+}
+
+fn profile_list_response(outcome: ProfileListOutcome) -> std::io::Result<BrokerResponse> {
     Ok(BrokerResponse {
         outcome: serde_json::to_value(&outcome).map_err(|e| {
             std::io::Error::new(std::io::ErrorKind::InvalidData, format!("encode: {e}"))
@@ -1189,6 +1214,13 @@ mod tests {
             _spec: crate::acp::chat_authoring::NewWorkTaskSpec,
         ) -> AuthoringOutcome {
             AuthoringOutcome::default()
+        }
+
+        async fn list_profiles(
+            &self,
+            _agent_type: Option<String>,
+        ) -> crate::acp::chat_authoring::ProfileListOutcome {
+            crate::acp::chat_authoring::ProfileListOutcome::default()
         }
     }
 

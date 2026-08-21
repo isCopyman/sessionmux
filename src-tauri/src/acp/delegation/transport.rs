@@ -234,6 +234,15 @@ pub struct BrokerCreateWorkTaskRequest {
     pub spec: NewWorkTaskSpec,
 }
 
+/// List Claude launch profiles for the `list_profiles` MCP tool. Authenticated
+/// by the per-launch `token`. Optional `agent_type` defaults to Claude Code.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokerListProfilesRequest {
+    pub token: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_type: Option<String>,
+}
+
 /// Tagged top-level message dispatched by the listener. Adding new variants
 /// is the wire-stable way to grow the broker protocol without touching the
 /// frame layer.
@@ -258,6 +267,7 @@ pub enum BrokerMessage {
     TaskComplete(BrokerTaskCompleteRequest),
     CreateAutomation(BrokerCreateAutomationRequest),
     CreateWorkTask(BrokerCreateWorkTaskRequest),
+    ListProfiles(BrokerListProfilesRequest),
 }
 
 /// The wrapped outcome the main process returns over the same socket.
@@ -477,6 +487,15 @@ pub async fn client_create_work_task_round_trip(
     req: &BrokerCreateWorkTaskRequest,
 ) -> io::Result<BrokerResponse> {
     message_round_trip(socket_path, &BrokerMessage::CreateWorkTask(req.clone())).await
+}
+
+/// Dispatch a `list_profiles` request and read back the serialized
+/// [`crate::acp::chat_authoring::ProfileListOutcome`].
+pub async fn client_list_profiles_round_trip(
+    socket_path: &str,
+    req: &BrokerListProfilesRequest,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::ListProfiles(req.clone())).await
 }
 
 /// Total budget for `open()` retries on Windows named pipes.

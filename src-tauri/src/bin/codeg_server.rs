@@ -422,6 +422,7 @@ async fn async_main() -> ExitCode {
                 }),
                 state.emitter.clone(),
                 chat_authoring_config.clone(),
+                state.data_dir.clone(),
             )),
         );
         let socket = codeg_mcp_socket_path.clone();

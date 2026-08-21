@@ -29,6 +29,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
+use crate::models::claude_profile::ClaudeProfileKind;
 use crate::models::AutomationAction;
 
 /// Cap on an automation name / task title. Long enough for a descriptive
@@ -78,6 +79,14 @@ pub struct NewAutomationSpec {
     /// Absolute path of the target project. `None` → the caller's own folder.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub folder_path: Option<String>,
+    /// Claude launch profile id. Written into `config_values["__codeg_profile__"]`
+    /// so a `launch_session` fire (and `enqueue_task`) reuse the existing
+    /// preferred-config path. `None` keeps today's empty `config_values`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+    /// Model id. Written into the existing `config_values["model"]` key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
     pub enabled: bool,
 }
 
@@ -92,6 +101,13 @@ pub struct NewWorkTaskSpec {
     /// Absolute path of the target project. `None` → the caller's own folder.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub folder_path: Option<String>,
+    /// Claude launch profile id. Written into `config_values["__codeg_profile__"]`.
+    /// `None` keeps today's empty `config_values`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+    /// Model id. Written into the existing `config_values["model"]` key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }
 
 /// The outcome handed back to the tool. A refusal (`created: false`) is a SOFT
@@ -122,6 +138,26 @@ pub struct AuthoringOutcome {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_run_at: Option<DateTime<Utc>>,
     /// Why it was refused, or an advisory on a successful create.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+/// One Claude launch profile as shown to an LLM. Tokens (plain or masked) are
+/// never included — a profile decides which Claude configuration a session
+/// launches with, not which credential to copy.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProfileListEntry {
+    pub id: String,
+    pub label: String,
+    pub kind: ClaudeProfileKind,
+    pub destination: String,
+}
+
+/// Outcome of `list_profiles`. An empty `profiles` plus a `note` is how a
+/// non-Claude `agent_type` or a disk error is reported — never a token leak.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ProfileListOutcome {
+    pub profiles: Vec<ProfileListEntry>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
 }
@@ -159,6 +195,10 @@ pub trait ChatAuthoringAccess: Send + Sync {
         ctx: AuthoringContext,
         spec: NewWorkTaskSpec,
     ) -> AuthoringOutcome;
+
+    /// List Claude launch profiles for `list_profiles`. `agent_type` defaults
+    /// to Claude Code; other agents currently have no profiles.
+    async fn list_profiles(&self, agent_type: Option<String>) -> ProfileListOutcome;
 }
 
 /// The two independently-toggled feature flags. Both default OFF: unlike the

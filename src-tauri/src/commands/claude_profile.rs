@@ -393,6 +393,65 @@ pub fn claude_profile_list_core(
     Ok(out)
 }
 
+/// Existing work-task / automation `config_values` key for the model pin.
+/// Consumed by `work_task::engine` (`config_values.get("model")`) and applied
+/// as `preferred_config_values["model"]` on spawn. Do not invent a second key.
+pub const LAUNCH_MODEL_CONFIG_KEY: &str = "model";
+
+/// One-line destination for an LLM. Never includes tokens (plain or masked).
+pub fn profile_destination_summary(info: &ClaudeProfileInfo) -> String {
+    match info.kind {
+        ClaudeProfileKind::FollowDefault => {
+            "follow-default: the host's default Claude configuration \
+             (subscription login); CLAUDE_CONFIG_DIR is not set"
+                .to_string()
+        }
+        ClaudeProfileKind::ConfigDir => match info.config_dir.as_deref() {
+            Some(path) => format!("configDir: {path}"),
+            None => "configDir: (unset)".to_string(),
+        },
+        ClaudeProfileKind::Managed => match info.base_url.as_deref() {
+            Some(url) => format!("managed: {url}"),
+            None => "managed: (no baseUrl)".to_string(),
+        },
+    }
+}
+
+/// Reject unknown ids. Error text lists every currently valid id so the LLM
+/// can retry; never silently fall back to follow-default.
+pub fn require_known_claude_profile(data_dir: &Path, id: &str) -> Result<(), String> {
+    let list = claude_profile_list_core(data_dir).map_err(|e| e.to_string())?;
+    if list.iter().any(|p| p.id == id) {
+        return Ok(());
+    }
+    let ids: Vec<&str> = list.iter().map(|p| p.id.as_str()).collect();
+    Err(format!(
+        "unknown Claude launch profile '{id}'. Valid ids: {}. \
+         Use list_profiles to inspect them; omitting `profile` uses the default. \
+         Invalid ids are rejected — they do not silently fall back.",
+        ids.join(", ")
+    ))
+}
+
+/// Build the `config_values` map that becomes the new session's
+/// `preferred_config_values`. Both omitted → empty map (today's bytes).
+/// Unknown `profile` → error, nothing inserted.
+pub fn launch_config_values(
+    data_dir: &Path,
+    profile: Option<&str>,
+    model: Option<&str>,
+) -> Result<BTreeMap<String, String>, String> {
+    let mut values = BTreeMap::new();
+    if let Some(id) = profile {
+        require_known_claude_profile(data_dir, id)?;
+        values.insert(PREFERRED_PROFILE_CONFIG_KEY.to_string(), id.to_string());
+    }
+    if let Some(model) = model {
+        values.insert(LAUNCH_MODEL_CONFIG_KEY.to_string(), model.to_string());
+    }
+    Ok(values)
+}
+
 fn validate_upsert(input: &ClaudeProfileUpsert) -> Result<(), AppCommandError> {
     if !is_valid_profile_id(&input.id) {
         return Err(AppCommandError::invalid_input(
@@ -1073,5 +1132,121 @@ mod tests {
             .await
             .unwrap();
         assert!(!values.contains_key(PREFERRED_PROFILE_CONFIG_KEY));
+    }
+
+    #[test]
+    fn omitted_profile_and_model_yield_empty_config_values() {
+        let data = tempfile::tempdir().unwrap();
+        let values = launch_config_values(data.path(), None, None).unwrap();
+        assert_eq!(values, BTreeMap::new());
+        assert_eq!(
+            serde_json::to_value(&values).unwrap(),
+            serde_json::json!({})
+        );
+    }
+
+    #[test]
+    fn valid_profile_writes_preferred_profile_key() {
+        let data = tempfile::tempdir().unwrap();
+        upsert_managed(
+            data.path(),
+            "api",
+            Some("https://example.test/v1"),
+            None,
+            None,
+        );
+        let values = launch_config_values(data.path(), Some("api"), None).unwrap();
+        assert_eq!(
+            values.get(PREFERRED_PROFILE_CONFIG_KEY).map(String::as_str),
+            Some("api")
+        );
+        assert!(!values.contains_key(LAUNCH_MODEL_CONFIG_KEY));
+    }
+
+    #[test]
+    fn unknown_profile_errors_with_valid_ids_and_writes_nothing() {
+        let data = tempfile::tempdir().unwrap();
+        upsert_managed(
+            data.path(),
+            "api",
+            Some("https://example.test/v1"),
+            None,
+            None,
+        );
+        let err = launch_config_values(data.path(), Some("nope"), Some("opus")).unwrap_err();
+        assert!(err.contains("nope"), "{err}");
+        assert!(err.contains("follow-default"), "{err}");
+        assert!(err.contains("api"), "{err}");
+        // Nothing to persist: the map is never returned.
+        let values = launch_config_values(data.path(), None, None).unwrap();
+        assert!(values.is_empty());
+    }
+
+    #[test]
+    fn model_writes_the_existing_model_key() {
+        let data = tempfile::tempdir().unwrap();
+        let values = launch_config_values(data.path(), None, Some("claude-opus-4")).unwrap();
+        assert_eq!(
+            values.get(LAUNCH_MODEL_CONFIG_KEY).map(String::as_str),
+            Some("claude-opus-4")
+        );
+        assert!(!values.contains_key(PREFERRED_PROFILE_CONFIG_KEY));
+    }
+
+    #[test]
+    fn mcp_profile_list_omits_plain_and_masked_tokens() {
+        let data = tempfile::tempdir().unwrap();
+        let secret = "sk-super-secret-token-xyz-do-not-leak";
+        upsert_managed(
+            data.path(),
+            "gw",
+            Some("https://relay.example/v1"),
+            Some(secret),
+            Some("claude-sonnet-4"),
+        );
+        let user_dir = data.path().join("user-claude");
+        fs::create_dir_all(&user_dir).unwrap();
+        upsert_config_dir(data.path(), "user", &user_dir);
+
+        let list = claude_profile_list_core(data.path()).unwrap();
+        let entries: Vec<serde_json::Value> = list
+            .iter()
+            .map(|info| {
+                serde_json::json!({
+                    "id": info.id,
+                    "label": info.label,
+                    "kind": info.kind,
+                    "destination": profile_destination_summary(info),
+                })
+            })
+            .collect();
+        let dumped = serde_json::to_string(&entries).unwrap();
+        assert!(!dumped.contains(secret), "{dumped}");
+        assert!(!dumped.contains("authToken"), "{dumped}");
+        assert!(!dumped.contains("auth_token"), "{dumped}");
+        assert!(!dumped.contains("authTokenMasked"), "{dumped}");
+
+        let follow = list
+            .iter()
+            .find(|p| p.id == FOLLOW_DEFAULT_PROFILE_ID)
+            .unwrap();
+        let follow_dest = profile_destination_summary(follow);
+        assert!(follow_dest.contains("follow-default"), "{follow_dest}");
+        assert!(follow_dest.contains("default"), "{follow_dest}");
+
+        let managed = list.iter().find(|p| p.id == "gw").unwrap();
+        let managed_dest = profile_destination_summary(managed);
+        assert!(
+            managed_dest.contains("https://relay.example/v1"),
+            "{managed_dest}"
+        );
+        assert!(!managed_dest.contains(secret), "{managed_dest}");
+
+        let config_dir = list.iter().find(|p| p.id == "user").unwrap();
+        let dir_dest = profile_destination_summary(config_dir);
+        assert!(
+            dir_dest.contains(&user_dir.to_string_lossy().into_owned()),
+            "{dir_dest}"
+        );
     }
 }
