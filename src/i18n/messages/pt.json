@@ -4687,7 +4687,7 @@
     "title": "Tarefas a fazer",
     "new": "Nova tarefa",
     "empty": "Ainda não há tarefas",
-    "emptyHint": "Adicione uma pendência e execute — o agente trabalha num worktree isolado e você revisa e faz merge do resultado.",
+    "emptyHint": "Uma nova tarefa aguarda em A fazer até você iniciá-la. Depois um agente trabalha no próprio worktree e você revisa e mescla o resultado.",
     "emptyColTodo": "Ainda não há tarefas a fazer",
     "emptyColInProgress": "Nada em andamento",
     "emptyColAttention": "Nada aguardando você",

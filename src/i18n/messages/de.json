@@ -4687,7 +4687,7 @@
     "title": "Aufgaben",
     "new": "Neue Aufgabe",
     "empty": "Noch keine Aufgaben",
-    "emptyHint": "Füge ein To-do hinzu und starte es — der Agent arbeitet in einem isolierten Worktree, du prüfst und mergst das Ergebnis.",
+    "emptyHint": "Eine neue Aufgabe wartet unter „Offen“, bis du sie startest. Dann arbeitet ein Agent in einem eigenen Worktree und du prüfst und mergst das Ergebnis.",
     "emptyColTodo": "Noch keine To-dos",
     "emptyColInProgress": "Nichts in Arbeit",
     "emptyColAttention": "Nichts wartet auf dich",

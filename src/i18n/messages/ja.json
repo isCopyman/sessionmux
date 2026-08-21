@@ -4687,7 +4687,7 @@
     "title": "ToDo タスク",
     "new": "新規タスク",
     "empty": "タスクはまだありません",
-    "emptyHint": "ToDo を追加して実行すると、エージェントが独立した worktree で作業し、結果をレビューしてマージできます。",
+    "emptyHint": "新しいタスクは「未着手」で待機し、開始するとエージェントが専用の worktree で作業します。結果はあなたが確認してマージします。",
     "emptyColTodo": "ToDoはまだありません",
     "emptyColInProgress": "進行中のタスクはありません",
     "emptyColAttention": "対応が必要なタスクはありません",

@@ -4687,7 +4687,7 @@
     "title": "Tâches à faire",
     "new": "Nouvelle tâche",
     "empty": "Aucune tâche pour l’instant",
-    "emptyHint": "Ajoutez une tâche puis lancez-la : l’agent travaille dans un worktree isolé, vous relisez et fusionnez le résultat.",
+    "emptyHint": "Une nouvelle tâche attend dans À faire jusqu'à ce que vous la lanciez. Un agent travaille alors dans son propre worktree et vous relisez puis fusionnez le résultat.",
     "emptyColTodo": "Aucune tâche à faire pour l’instant",
     "emptyColInProgress": "Rien en cours",
     "emptyColAttention": "Rien à traiter",

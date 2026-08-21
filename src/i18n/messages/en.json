@@ -4687,7 +4687,7 @@
     "title": "To-dos",
     "new": "New task",
     "empty": "No tasks yet",
-    "emptyHint": "Add a to-do, then run it — the agent works in an isolated worktree and you review and merge the result.",
+    "emptyHint": "A new task waits in To-do until you start it. Then an agent works in its own worktree and you review and merge the result.",
     "emptyColTodo": "No to-dos yet",
     "emptyColInProgress": "Nothing in progress",
     "emptyColAttention": "Nothing needs you right now",

@@ -4687,7 +4687,7 @@
     "title": "待辦任務",
     "new": "新增任務",
     "empty": "還沒有任務",
-    "emptyHint": "新增待辦後即可處理——agent 在獨立 worktree 中工作，你驗收並合併結果。",
+    "emptyHint": "新任務會先停在「待辦」，你按開始才會執行：agent 在獨立 worktree 中工作，你驗收並合併結果。",
     "emptyColTodo": "還沒有待辦任務",
     "emptyColInProgress": "暫無進行中的任務",
     "emptyColAttention": "暫無等你處理的任務",

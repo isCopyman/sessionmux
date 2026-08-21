@@ -4687,7 +4687,7 @@
     "title": "Tareas pendientes",
     "new": "Nueva tarea",
     "empty": "Aún no hay tareas",
-    "emptyHint": "Añade un pendiente y ejecútalo: el agente trabaja en un worktree aislado y tú revisas y fusionas el resultado.",
+    "emptyHint": "Una tarea nueva espera en Pendientes hasta que la inicies. Luego un agente trabaja en su propio worktree y tú revisas y fusionas el resultado.",
     "emptyColTodo": "Aún no hay pendientes",
     "emptyColInProgress": "Nada en curso",
     "emptyColAttention": "Nada requiere tu acción",

@@ -4687,7 +4687,7 @@
     "title": "할 일",
     "new": "새 작업",
     "empty": "아직 작업이 없습니다",
-    "emptyHint": "할 일을 추가하고 실행하세요. 에이전트가 독립된 worktree에서 작업하고, 결과를 검토한 뒤 병합합니다.",
+    "emptyHint": "새 작업은 '할 일'에서 대기하며, 시작하면 에이전트가 전용 worktree에서 작업합니다. 결과는 직접 확인하고 병합합니다.",
     "emptyColTodo": "아직 할 일이 없습니다",
     "emptyColInProgress": "진행 중인 작업이 없습니다",
     "emptyColAttention": "처리할 작업이 없습니다",
