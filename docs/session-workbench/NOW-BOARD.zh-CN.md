@@ -43,13 +43,19 @@
       16 文件 −182/+4，门全绿（tsc/eslint 0，vitest 394 文件 4970 测试）。
       工人核实后只删了 2 个 Claude 独有的 i18n 键，另外 4 个是顶层共享、
       codex/gemini/grok/cursor 还在用——**它没照我的任务书删，是对的**
-- [~] **chippin** —— chip 说谎 + conversation pin 缺口（三部分：render 派生显示值 /
-      建行时写 pin / 关掉 profile 被删的绕过路径）。派给 grok，
-      worktree `.cli-delegate/worktrees/chippin`，结果 JSON `%TEMP%/grok-chippin.json`。
+- [ ] **chippin —— 死了，14 个文件未提交躺在 worktree 里**。作业 `run-mt391s2t-sdhzuw`
+      `partial` / `exitCode 124`（我传了 25 分钟超时，太短），`resume` 收尾也失败（EXIT=1），
+      孤儿 grok 进程已清。分支 `cli-delegate-chippin` tip 停在文档提交 `f4b15d56`，
+      **它一次都没 commit，也没跑过任何门**。
+      工作区 `.cli-delegate/worktrees/chippin`，14 文件 +651/−56。
+      三部分：render 派生显示值 / 建行时写 pin / 关掉 profile 被删的绕过路径。
+      **第一部分对症，值得留**（见 HANDOFF §1.2）；后两部分是搭车。
+      ⚠️ **先定「profile 显式启动参数」那摊的去留，再处理 chippin**——
+      那摊做完会让第二部分的必要性下降，顺序反了会白干。
       事实源 `CHIP-PROFILE-PIN-ANALYSIS-2026-08-22.zh-CN.md`
-- [~] **kanban1** —— 看板多回合任务阶段一。派给 grok，
-      worktree `.cli-delegate/worktrees/kanban1`，
-      结果 JSON `%TEMP%\grok-kanban1.json`，
+- [x] **kanban1** —— 已合 `c8700a57`，31 文件 +925/−49，七个验收场景都点过。
+      合并后组合门主会话亲自跑：cargo test 2787 通过 / clippy 0 / server clippy 0 /
+      vitest 395 文件 4977 测试通过（第一次挂 1 个，干净重跑全绿，是 CPU 争抢抖动）。
       设计事实源 `KANBAN-MULTITURN-DESIGN-2026-08-22.zh-CN.md`
 - [x] **后台任务唤醒缺口调研** —— 已交，见
       `BACKGROUND-WAKE-RECON-2026-08-21.zh-CN.md`。**结论跟原假设相反**
@@ -86,6 +92,17 @@
 修复：`ConnectionManager::bind_conversation`，在两条 connect 路径
 （`commands/acp.rs` 与 `web/handlers/acp.rs`，两者本来就手握 `conversation_id`）
 spawn 成功后调用。
+
+## ⚠️ 主工作树是脏的（接手第 0 件事）
+
+- [ ] **8 个 Rust 文件未提交，没验证过能不能编译**。内容：让 Claude profile 变成
+      **连接时显式带上的参数**，而不是让后端从数据库行反查
+      （`resolve_claude_profile` 加一层最优先的 `explicit_profile_id`，
+      `build_session_runtime_env` 往下透，两条 connect 路径从
+      `preferred_config_values` 里读）。这是「新标签页切 profile 无效」的后端一半。
+      **前端一半还没动**（`handleSelect` 要标记连接过期 + 重连时带上 profile）。
+      做完可以整段删掉 `applyPendingClaudeProfile` 的绕路——**机制净减少，不是打补丁**。
+      细节和「留还是扔」的选择见 `HANDOFF-2026-08-22.zh-CN.md` §3.1。
 
 ## 未派工的 P0（接手第一件事）
 
