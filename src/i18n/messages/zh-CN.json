@@ -4758,6 +4758,7 @@
     "actionStart": "开始",
     "actionSchedule": "定时运行",
     "actionCancel": "取消",
+    "actionSubmitReview": "提交验收",
     "actionRetry": "重试",
     "actionRequeue": "重新排队",
     "actionViewSession": "查看会话",

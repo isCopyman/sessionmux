@@ -54,6 +54,7 @@ function renderCard(
     onOpen: noop,
     onStart: noop,
     onCancel: noop,
+    onSubmitReview: noop,
     onRetry: noop,
     onRequeue: noop,
     onViewSession: noop,
@@ -143,6 +144,39 @@ describe("TaskCard review primary", () => {
 
     renderCard(queued, undefined, 2)
     expect(screen.getByText("Queued to merge · #2")).toBeInTheDocument()
+  })
+})
+
+describe("TaskCard running submit-for-review", () => {
+  it("offers submit-for-review on a running card with a live connection", async () => {
+    const onSubmitReview = vi.fn()
+    renderCard(
+      task({
+        status: "running",
+        connection_id: "conn-7",
+        conversation_id: 3,
+        files_changed: null,
+      }),
+      { onSubmitReview }
+    )
+    await userEvent.click(
+      screen.getByRole("button", { name: "Submit for review" })
+    )
+    expect(onSubmitReview).toHaveBeenCalledTimes(1)
+  })
+
+  it("does not offer submit-for-review while awaiting input", () => {
+    renderCard(
+      task({
+        status: "awaiting_input",
+        connection_id: "conn-7",
+        conversation_id: 3,
+        files_changed: null,
+      })
+    )
+    expect(
+      screen.queryByRole("button", { name: "Submit for review" })
+    ).toBeNull()
   })
 })
 

@@ -533,6 +533,15 @@ pub async fn work_task_cancel_core(id: i32, reason: Option<String>) -> Result<()
         .map_err(DbError::Validation)
 }
 
+/// Submit a running, idle task for review (the human counterpart of
+/// `task_complete`). Refused while a turn is in flight.
+pub async fn work_task_request_review_core(id: i32) -> Result<(), DbError> {
+    engine()?
+        .request_review(id)
+        .await
+        .map_err(DbError::Validation)
+}
+
 /// Dispatch the merge generation: the agent lands the task in its session and
 /// the outcome rides the `task://changed` events (merging → done, or back to
 /// review with a readable error). This awaits only the dispatch (validation +
@@ -897,6 +906,12 @@ pub async fn work_task_return(
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn work_task_cancel(id: i32, reason: Option<String>) -> Result<(), DbError> {
     work_task_cancel_core(id, reason).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn work_task_request_review(id: i32) -> Result<(), DbError> {
+    work_task_request_review_core(id).await
 }
 
 #[cfg(feature = "tauri-runtime")]

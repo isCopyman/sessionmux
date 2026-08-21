@@ -1555,6 +1555,10 @@ pub fn build_router(
             post(handlers::work_task::work_task_cancel),
         )
         .route(
+            "/work_task_request_review",
+            post(handlers::work_task::work_task_request_review),
+        )
+        .route(
             "/work_task_merge",
             post(handlers::work_task::work_task_merge),
         )

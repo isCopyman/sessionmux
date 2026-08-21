@@ -508,7 +508,7 @@
   },
   {
     "name": "task_complete",
-    "description": "Report the final outcome of the work task you are executing. Call it once, just before you end your reply. Pass verdict 'success' when the change is done and ready to review, 'needs_review' when it works but a human should double-check something specific (say what in the summary), or 'blocked' when you could not complete the task (the summary must say why). The task settles when your turn ends: success and needs_review send it to review, blocked marks it failed. If you never call this tool the task still settles normally from your turn's end.",
+    "description": "Report the final outcome of the work task you are executing. Call it only when the whole task is done or blocked, not after an ordinary turn. Pass verdict 'success' when the change is done and ready to review, 'needs_review' when it works but a human should double-check something specific (say what in the summary), or 'blocked' when you could not complete the task (the summary must say why). The task settles when your turn ends AFTER this call: success and needs_review send it to review, blocked marks it failed. Ending a reply without this tool only finishes the turn — the task stays in progress for more turns.",
     "inputSchema": {
       "type": "object",
       "required": ["verdict"],

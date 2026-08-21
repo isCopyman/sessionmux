@@ -1,12 +1,19 @@
 //! Work-task execution engine: drives the manual pipeline
-//! `todo → queued → running ⇄ awaiting_input → review → merging → done`.
+//! `todo → queued → preparing → running ⇄ awaiting_input → review → merging →
+//! done`.
+//!
+//! `running` is the card's execution period, not a single ACP turn: a plain
+//! `end_turn` with no verdict leaves the card running and keeps the connection
+//! and its concurrency slot. Only `task_complete` (then the following
+//! `end_turn`) or a human submit-for-review settles into `review`.
 //!
 //! Structure mirrors `automation::engine` (single per-process engine elected by
 //! an exclusive data-dir file lock; a `tokio::select!` loop over the internal
 //! event bus + a reconcile tick), with three task-specific additions:
-//! - **run_seq generations**: every launch claims a new `run_seq`; events are
-//!   matched on `(connection_id, run_seq)` and settle through CAS updates, so a
-//!   cancel racing a late `TurnComplete` is a zero-side-effect no-op.
+//! - **run_seq generations**: every launch claims a new `run_seq`; several
+//!   ordinary turns on the same connection share it. Events are matched on
+//!   `(connection_id, run_seq)` and settle through CAS updates, so a cancel
+//!   racing a late `TurnComplete` is a zero-side-effect no-op.
 //! - **backend-driven awaiting_input**: the engine subscribes to
 //!   Question/Permission/PlanApproval request+resolve events (the frontend has
 //!   no global pending-question channel for unopened conversations) and flips
@@ -77,8 +84,9 @@ pub struct TaskEngine {
     bus: Arc<InternalEventBus>,
     data_dir: PathBuf,
     /// Live runs: `connection_id -> (task_id, run_seq)` — the only way events
-    /// keyed by connection_id map back to a task generation. Lost on restart
-    /// (boot reconcile covers that).
+    /// keyed by connection_id map back to a task generation. Kept across
+    /// ordinary turns of the same generation; lost on restart (boot reconcile
+    /// covers that).
     index: Arc<Mutex<HashMap<String, (i32, i32)>>>,
     /// Outstanding blocking requests per task (`"q:<id>"`, `"p:<id>"`,
     /// `"a:<id>"` — namespaced so the three id spaces cannot collide).
@@ -632,6 +640,47 @@ impl TaskEngine {
         if let Some(folder_id) = task.map(|t| t.folder_id) {
             self.pump_folder(folder_id).await;
         }
+        Ok(())
+    }
+
+    /// Human "submit for review": running + live connection + no turn in
+    /// flight → the same settle a `task_complete` + `end_turn` would take.
+    /// Rejected while a turn is in flight, or when the card is not idle
+    /// `running`. Agents without MCP still need this exit.
+    pub async fn request_review(self: &Arc<Self>, task_id: i32) -> Result<(), String> {
+        let task = work_task_service::get_model(&self.db.conn, task_id)
+            .await
+            .map_err(|e| e.to_string())?;
+        if task.status != WorkTaskStatus::Running {
+            return Err("task is not running".to_string());
+        }
+        let Some(conn_id) = task.connection_id.clone() else {
+            return Err("task has no live connection".to_string());
+        };
+        let Some((state, _)) = self.manager.get_state_and_emitter(&conn_id).await else {
+            return Err("task has no live connection".to_string());
+        };
+        if state.read().await.turn_in_flight {
+            return Err("a turn is in flight".to_string());
+        }
+
+        let run_seq = task.run_seq;
+        let summary = self.capture_summary(&conn_id).await;
+        self.index.lock().await.remove(&conn_id);
+        self.awaiting.lock().await.remove(&task_id);
+        let _ = self.manager.disconnect(&conn_id).await;
+
+        let stats = self.snapshot_diff_stats(task_id).await;
+        let settled =
+            work_task_service::settle_review(&self.db.conn, task_id, run_seq, summary, stats)
+                .await
+                .unwrap_or(false);
+        if !settled {
+            return Err("task left running before it could be submitted".to_string());
+        }
+        self.spawn_post_review(task_id, run_seq);
+        self.emit_upsert(task_id);
+        self.pump_folder(task.folder_id).await;
         Ok(())
     }
 
@@ -1602,11 +1651,6 @@ impl TaskEngine {
             return; // not a task run
         };
 
-        let summary = self.capture_summary(conn_id).await;
-        self.index.lock().await.remove(conn_id);
-        self.awaiting.lock().await.remove(&task_id);
-        let _ = self.manager.disconnect(conn_id).await;
-
         let task = work_task_service::get_model(&self.db.conn, task_id)
             .await
             .ok();
@@ -1617,6 +1661,10 @@ impl TaskEngine {
             .as_ref()
             .filter(|t| t.status == WorkTaskStatus::Merging && t.run_seq == run_seq)
         {
+            let summary = self.capture_summary(conn_id).await;
+            self.index.lock().await.remove(conn_id);
+            self.awaiting.lock().await.remove(&task_id);
+            let _ = self.manager.disconnect(conn_id).await;
             self.settle_merge_generation(t, stop_reason, summary.as_deref())
                 .await;
             self.pump_folder(t.folder_id).await;
@@ -1626,6 +1674,36 @@ impl TaskEngine {
             return;
         }
 
+        // A plain end_turn with no verdict is only the turn boundary: the card
+        // stays running, the index and connection stay, and the slot stays
+        // occupied. `task_complete` writes the verdict this generation reads.
+        if stop_reason == "end_turn"
+            && task.as_ref().is_some_and(|t| {
+                t.run_seq == run_seq
+                    && t.verdict.is_none()
+                    && matches!(
+                        t.status,
+                        WorkTaskStatus::Running | WorkTaskStatus::AwaitingInput
+                    )
+            })
+        {
+            self.awaiting.lock().await.remove(&task_id);
+            // The turn is over, so a leftover awaiting_input would strand the
+            // card in "needs you" while the agent is idle.
+            if work_task_service::flip_awaiting(&self.db.conn, task_id, run_seq, false)
+                .await
+                .unwrap_or(false)
+            {
+                self.emit_upsert(task_id);
+            }
+            return;
+        }
+
+        let summary = self.capture_summary(conn_id).await;
+        self.index.lock().await.remove(conn_id);
+        self.awaiting.lock().await.remove(&task_id);
+        let _ = self.manager.disconnect(conn_id).await;
+
         let changed = match stop_reason {
             "end_turn" => {
                 // A `task_complete` report from this generation decides the
@@ -1633,7 +1711,8 @@ impl TaskEngine {
                 // needs_review → review. The verdict column is cleared on every
                 // claim, so a present verdict is always this generation's — and
                 // its summary (written with it) outranks the captured
-                // last-assistant text.
+                // last-assistant text. Reaching here means a verdict is set
+                // (the no-verdict branch returned above).
                 let verdict = task
                     .as_ref()
                     .filter(|t| t.run_seq == run_seq)
@@ -1771,7 +1850,8 @@ impl TaskEngine {
     }
 
     /// `task_complete`: stash the verdict + summary on the current generation;
-    /// the TurnComplete settle reads them to decide review vs failed.
+    /// the following TurnComplete settle reads them to decide review vs failed.
+    /// A TurnComplete with no verdict does not settle.
     pub async fn record_complete(
         &self,
         conn_id: &str,
@@ -2944,23 +3024,53 @@ impl TaskEngine {
             };
             let changed = match conv_status {
                 Some(ConversationStatus::PendingReview) | Some(ConversationStatus::Completed) => {
-                    let stats = self.snapshot_diff_stats(task.id).await;
-                    let settled = work_task_service::settle_review(
-                        &self.db.conn,
-                        task.id,
-                        task.run_seq,
-                        None,
-                        stats,
-                    )
-                    .await
-                    .unwrap_or(false);
-                    if settled {
-                        // The dropped TurnComplete owed review its preflight
-                        // and its auto-merge chance — same hook as the live
-                        // settle path.
-                        self.spawn_post_review(task.id, task.run_seq);
+                    // Conversation Completed is also how a normal end_turn
+                    // looks. Without a verdict that is only a turn boundary,
+                    // not a request to review — same rule as on_turn_complete.
+                    if task.verdict.as_deref() == Some("blocked") {
+                        let error = task.result_summary.clone().unwrap_or_else(|| {
+                            "agent reported the task as blocked".to_string()
+                        });
+                        work_task_service::fail(
+                            &self.db.conn,
+                            task.id,
+                            &[WorkTaskStatus::Running, WorkTaskStatus::AwaitingInput],
+                            Some(task.run_seq),
+                            "verdict_blocked",
+                            Some(error),
+                        )
+                        .await
+                        .unwrap_or(false)
+                    } else if task.verdict.is_some() {
+                        let stats = self.snapshot_diff_stats(task.id).await;
+                        let settled = work_task_service::settle_review(
+                            &self.db.conn,
+                            task.id,
+                            task.run_seq,
+                            None,
+                            stats,
+                        )
+                        .await
+                        .unwrap_or(false);
+                        if settled {
+                            // The dropped TurnComplete owed review its preflight
+                            // and its auto-merge chance — same hook as the live
+                            // settle path.
+                            self.spawn_post_review(task.id, task.run_seq);
+                        }
+                        settled
+                    } else {
+                        work_task_service::fail(
+                            &self.db.conn,
+                            task.id,
+                            &[WorkTaskStatus::Running, WorkTaskStatus::AwaitingInput],
+                            Some(task.run_seq),
+                            "interrupted",
+                            Some("task lost its worker".to_string()),
+                        )
+                        .await
+                        .unwrap_or(false)
                     }
-                    settled
                 }
                 Some(ConversationStatus::Cancelled) => {
                     work_task_service::cancel(&self.db.conn, task.id, None)
@@ -3529,9 +3639,11 @@ async fn compose_prompt(
             text: format!(
                 "—— Work task context ——\nYou are working inside a dedicated git worktree for \
                  this task{branch}. {licence}\nIf the `task_progress` and `task_complete` tools \
-                 are available to you, report milestones with `task_progress` as you go, and \
-                 call `task_complete` once right before you finish (verdict `success`, \
-                 `needs_review`, or `blocked`, plus a short summary).",
+                 are available to you, report milestones with `task_progress` as you go. Ending \
+                 a reply only finishes this turn — the task stays open for more turns. Call \
+                 `task_complete` only when the whole task is done or blocked (verdict \
+                 `success`, `needs_review`, or `blocked`, plus a short summary), not after an \
+                 ordinary turn.",
             ),
         });
     }
@@ -4634,6 +4746,39 @@ mod tests {
             .any(|t| t.contains("Commit to the current branch as you like")));
     }
 
+    /// A normal reply is not task completion — the agent must not call
+    /// `task_complete` just because this turn is over.
+    #[tokio::test]
+    async fn the_standing_prompt_distinguishes_a_turn_from_task_complete() {
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let blocks = compose_prompt(
+            &task_config(),
+            &task_row(),
+            &LaunchMode::Fresh,
+            &WorkTaskFolderSettings::default(),
+            false,
+            &db.conn,
+        )
+        .await
+        .expect("compose");
+        let guard = texts(&blocks)
+            .into_iter()
+            .find(|t| t.starts_with("—— Work task context ——"))
+            .expect("guard block");
+        assert!(
+            guard.contains("Ending a reply only finishes this turn"),
+            "turn vs task must be explicit, got {guard}"
+        );
+        assert!(
+            guard.contains("not after an ordinary turn"),
+            "task_complete must be reserved for the whole task, got {guard}"
+        );
+        assert!(
+            !guard.contains("right before you finish"),
+            "the old wording equated turn-end with task-end"
+        );
+    }
+
     /// The one scenario that stands alone without user text.
     #[tokio::test]
     async fn a_self_check_composes_without_any_user_text() {
@@ -5299,5 +5444,483 @@ mod tests {
             .join(format!("{}.lock", crate::db::database_file_name()));
         assert!(!automation_lock.exists());
         drop(guard);
+    }
+
+    /// A TaskEngine that never takes the process-global lock — same shape as
+    /// the automation engine's test helper.
+    fn test_engine(db: &crate::db::AppDatabase) -> Arc<TaskEngine> {
+        Arc::new(TaskEngine {
+            db: crate::db::AppDatabase {
+                conn: db.conn.clone(),
+            },
+            manager: ConnectionManager::new(),
+            emitter: EventEmitter::Noop,
+            bus: Arc::new(crate::acp::InternalEventBus::new(Arc::new(
+                crate::acp::EventBusMetrics::default(),
+            ))),
+            data_dir: PathBuf::from("/tmp/codeg-task-engine-test"),
+            index: Arc::new(Mutex::new(HashMap::new())),
+            awaiting: Arc::new(Mutex::new(HashMap::new())),
+            launching: Arc::new(Mutex::new(HashMap::new())),
+            launch_token: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            setup_children: Arc::new(Mutex::new(HashMap::new())),
+            merging: Arc::new(Mutex::new(HashSet::new())),
+            task_locks: Arc::new(Mutex::new(HashMap::new())),
+            folder_locks: Arc::new(Mutex::new(HashMap::new())),
+            pump_locks: Arc::new(Mutex::new(HashMap::new())),
+            _engine_lock: tempfile::NamedTempFile::new()
+                .expect("lock file")
+                .into_file(),
+        })
+    }
+
+    fn task_draft(folder_id: i32, title: &str) -> crate::models::WorkTaskDraft {
+        crate::models::WorkTaskDraft {
+            folder_id,
+            title: title.to_string(),
+            config: serde_json::json!({
+                "display_text": title,
+                "prompt_blocks": [{ "type": "text", "text": title }],
+            }),
+        }
+    }
+
+    /// Claim + setup + mark_running, then bind the live connection in the
+    /// engine index. Keeps the command receiver so a later prompt can land.
+    async fn start_running_on(
+        engine: &TaskEngine,
+        folder_id: i32,
+        title: &str,
+        conn_id: &str,
+    ) -> (
+        i32,
+        i32,
+        i32,
+        tokio::sync::mpsc::Receiver<crate::acp::connection::ConnectionCommand>,
+    ) {
+        use crate::db::test_helpers::seed_conversation;
+        let created = work_task_service::create(&engine.db.conn, task_draft(folder_id, title))
+            .await
+            .expect("create task");
+        let run_seq = work_task_service::claim_for_run(
+            &engine.db.conn,
+            created.id,
+            WorkTaskStatus::Todo,
+            "user",
+        )
+        .await
+        .expect("claim")
+        .expect("claimed");
+        assert!(
+            work_task_service::begin_setup(&engine.db.conn, created.id, run_seq)
+                .await
+                .expect("setup")
+        );
+        let conv_id = seed_conversation(&engine.db, folder_id, AgentType::ClaudeCode).await;
+        assert!(
+            work_task_service::mark_running(
+                &engine.db.conn,
+                created.id,
+                run_seq,
+                conv_id,
+                conn_id,
+            )
+            .await
+            .expect("mark running")
+        );
+        let rx = engine
+            .manager
+            .insert_test_connection_live(
+                conn_id,
+                AgentType::ClaudeCode,
+                Some(PathBuf::from(format!("/tmp/{title}"))),
+                EventEmitter::Noop,
+            )
+            .await;
+        engine
+            .index
+            .lock()
+            .await
+            .insert(conn_id.to_string(), (created.id, run_seq));
+        (created.id, run_seq, conv_id, rx)
+    }
+
+    fn settled_to_review(events: &[crate::models::WorkTaskEventInfo]) -> bool {
+        events.iter().any(|e| {
+            e.kind == "status_changed"
+                && e.payload
+                    .as_ref()
+                    .and_then(|p| p.get("to"))
+                    .and_then(|v| v.as_str())
+                    == Some("review")
+        })
+    }
+
+    /// Acceptance 1: first turn without `task_complete` keeps running + Connected.
+    #[tokio::test]
+    async fn a_plain_end_turn_keeps_the_card_running_and_the_connection() {
+        use crate::acp::types::ConnectionStatus;
+        use crate::db::test_helpers::{fresh_in_memory_db, seed_folder};
+
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-multiturn-1").await;
+        let engine = test_engine(&db);
+        let conn_id = "conn-idle-1";
+        let (task_id, run_seq, _, _rx) =
+            start_running_on(&engine, folder_id, "keep-running", conn_id).await;
+
+        engine.on_turn_complete(conn_id, "end_turn").await;
+
+        let row = work_task_service::get_model(&db.conn, task_id)
+            .await
+            .expect("row");
+        assert_eq!(row.status, WorkTaskStatus::Running);
+        assert_eq!(row.run_seq, run_seq);
+        assert_eq!(row.connection_id.as_deref(), Some(conn_id));
+        assert_eq!(
+            engine.index.lock().await.get(conn_id).copied(),
+            Some((task_id, run_seq))
+        );
+        let state = engine
+            .manager
+            .get_state(conn_id)
+            .await
+            .expect("connection kept");
+        assert_eq!(state.read().await.status, ConnectionStatus::Connected);
+        let events = work_task_service::list_events(&db.conn, task_id, 50)
+            .await
+            .expect("events");
+        assert!(!settled_to_review(&events));
+    }
+
+    /// Acceptance 2: the same connection accepts a second turn; run_seq is unchanged.
+    #[tokio::test]
+    async fn a_second_turn_reuses_the_same_connection_and_run_seq() {
+        use crate::db::test_helpers::{fresh_in_memory_db, seed_folder};
+
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-multiturn-2").await;
+        let engine = test_engine(&db);
+        let conn_id = "conn-idle-2";
+        let (task_id, run_seq, conv_id, _rx) =
+            start_running_on(&engine, folder_id, "second-turn", conn_id).await;
+
+        engine.on_turn_complete(conn_id, "end_turn").await;
+
+        let sent = engine
+            .manager
+            .send_prompt_linked(
+                &db,
+                conn_id,
+                vec![PromptInputBlock::Text {
+                    text: "continue".into(),
+                }],
+                Some(folder_id),
+                Some(conv_id),
+            )
+            .await;
+        assert!(sent.is_ok(), "second turn must be accepted, got {sent:?}");
+
+        let row = work_task_service::get_model(&db.conn, task_id)
+            .await
+            .expect("row");
+        assert_eq!(row.status, WorkTaskStatus::Running);
+        assert_eq!(row.run_seq, run_seq);
+        assert_eq!(row.connection_id.as_deref(), Some(conn_id));
+    }
+
+    /// Acceptance 3: only the end_turn that follows `task_complete(success)`
+    /// enters review.
+    #[tokio::test]
+    async fn task_complete_then_end_turn_enters_review() {
+        use crate::db::test_helpers::{fresh_in_memory_db, seed_folder};
+
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-multiturn-3").await;
+        let engine = test_engine(&db);
+        let conn_id = "conn-complete-3";
+        let (task_id, run_seq, _, _rx) =
+            start_running_on(&engine, folder_id, "explicit-complete", conn_id).await;
+
+        engine.on_turn_complete(conn_id, "end_turn").await;
+        let mid = work_task_service::get_model(&db.conn, task_id)
+            .await
+            .expect("row");
+        assert_eq!(mid.status, WorkTaskStatus::Running);
+
+        let ack = engine
+            .record_complete(conn_id, "success", Some("all done"))
+            .await;
+        assert!(ack.recorded, "verdict should land on the live generation");
+        engine.on_turn_complete(conn_id, "end_turn").await;
+
+        let row = work_task_service::get_model(&db.conn, task_id)
+            .await
+            .expect("row");
+        assert_eq!(row.status, WorkTaskStatus::Review);
+        assert_eq!(row.run_seq, run_seq);
+        assert!(row.connection_id.is_none());
+        assert!(engine.index.lock().await.get(conn_id).is_none());
+        assert!(engine.manager.get_state(conn_id).await.is_none());
+    }
+
+    /// Acceptance 4: human submit-for-review works while idle and is rejected
+    /// mid-turn.
+    #[tokio::test]
+    async fn human_submit_for_review_is_idle_only() {
+        use crate::db::test_helpers::{fresh_in_memory_db, seed_folder};
+
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-multiturn-4").await;
+        let engine = test_engine(&db);
+        let conn_id = "conn-review-4";
+        let (task_id, _, _, _rx) =
+            start_running_on(&engine, folder_id, "human-submit", conn_id).await;
+
+        engine
+            .manager
+            .get_state(conn_id)
+            .await
+            .unwrap()
+            .write()
+            .await
+            .turn_in_flight = true;
+        let err = engine
+            .request_review(task_id)
+            .await
+            .expect_err("mid-turn submit must be rejected");
+        assert!(
+            err.contains("turn is in flight"),
+            "unexpected refusal: {err}"
+        );
+        let still = work_task_service::get_model(&db.conn, task_id)
+            .await
+            .expect("row");
+        assert_eq!(still.status, WorkTaskStatus::Running);
+        assert_eq!(still.connection_id.as_deref(), Some(conn_id));
+
+        engine
+            .manager
+            .get_state(conn_id)
+            .await
+            .unwrap()
+            .write()
+            .await
+            .turn_in_flight = false;
+        engine
+            .request_review(task_id)
+            .await
+            .expect("idle submit must succeed");
+        let row = work_task_service::get_model(&db.conn, task_id)
+            .await
+            .expect("row");
+        assert_eq!(row.status, WorkTaskStatus::Review);
+        assert!(row.connection_id.is_none());
+        assert!(engine.index.lock().await.get(conn_id).is_none());
+        assert!(engine.manager.get_state(conn_id).await.is_none());
+    }
+
+    /// Acceptance 5: the idle running card still occupies max_concurrent, so a
+    /// later queued card does not launch.
+    #[tokio::test]
+    async fn an_idle_running_card_keeps_its_concurrency_slot() {
+        use crate::db::test_helpers::{fresh_in_memory_db, seed_folder};
+
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-multiturn-5").await;
+        let settings = WorkTaskFolderSettings {
+            max_concurrent: 1,
+            ..Default::default()
+        };
+        work_task_service::settings_set(&db.conn, folder_id, &settings)
+            .await
+            .expect("settings");
+
+        let engine = test_engine(&db);
+        let conn_id = "conn-slot-5";
+        let (running_id, _, _, _rx) =
+            start_running_on(&engine, folder_id, "holds-slot", conn_id).await;
+        engine.on_turn_complete(conn_id, "end_turn").await;
+
+        let queued = work_task_service::create(&db.conn, task_draft(folder_id, "waiting"))
+            .await
+            .expect("queued");
+        work_task_service::claim_for_run(&db.conn, queued.id, WorkTaskStatus::Todo, "user")
+            .await
+            .expect("claim")
+            .expect("claimed");
+
+        assert_eq!(
+            work_task_service::active_launched_count(&db.conn, folder_id)
+                .await
+                .expect("count"),
+            1
+        );
+        engine.pump_folder(folder_id).await;
+        assert!(
+            engine.launching.lock().await.is_empty(),
+            "pump must not claim a launch slot while the idle card is running"
+        );
+        assert_eq!(
+            work_task_service::get_model(&db.conn, queued.id)
+                .await
+                .expect("queued")
+                .status,
+            WorkTaskStatus::Queued
+        );
+        assert_eq!(
+            work_task_service::get_model(&db.conn, running_id)
+                .await
+                .expect("running")
+                .status,
+            WorkTaskStatus::Running
+        );
+    }
+
+    /// Acceptance 6: connection loss / restart must not send a verdict-less
+    /// card to review just because the conversation reads Completed.
+    #[tokio::test]
+    async fn connection_loss_without_a_verdict_does_not_auto_review() {
+        use crate::db::test_helpers::{fresh_in_memory_db, seed_folder};
+        use crate::db::service::conversation_service;
+
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-multiturn-6").await;
+        let engine = test_engine(&db);
+        let conn_id = "conn-lost-6";
+        let (task_id, run_seq, conv_id, rx) =
+            start_running_on(&engine, folder_id, "lost-worker", conn_id).await;
+        drop(rx);
+        engine.index.lock().await.remove(conn_id);
+        let _ = engine.manager.disconnect(conn_id).await;
+        conversation_service::update_status(&db.conn, conv_id, ConversationStatus::Completed)
+            .await
+            .expect("mark completed");
+
+        engine.reconcile_once().await;
+
+        let row = work_task_service::get_model(&db.conn, task_id)
+            .await
+            .expect("row");
+        assert_eq!(row.status, WorkTaskStatus::Failed);
+        assert_eq!(row.failure_reason.as_deref(), Some("interrupted"));
+        assert_eq!(row.run_seq, run_seq);
+        assert!(!settled_to_review(
+            &work_task_service::list_events(&db.conn, task_id, 50)
+                .await
+                .expect("events")
+        ));
+
+        // Restart: the same verdict-less running row with a Completed
+        // conversation still interrupts, never reviews.
+        let db2 = fresh_in_memory_db().await;
+        let folder2 = seed_folder(&db2, "/tmp/wt-multiturn-6b").await;
+        let created = work_task_service::create(&db2.conn, task_draft(folder2, "boot"))
+            .await
+            .expect("create");
+        let seq = work_task_service::claim_for_run(
+            &db2.conn,
+            created.id,
+            WorkTaskStatus::Todo,
+            "user",
+        )
+        .await
+        .expect("claim")
+        .expect("claimed");
+        assert!(
+            work_task_service::begin_setup(&db2.conn, created.id, seq)
+                .await
+                .expect("setup")
+        );
+        let conv2 = crate::db::test_helpers::seed_conversation(
+            &db2,
+            folder2,
+            AgentType::ClaudeCode,
+        )
+        .await;
+        assert!(
+            work_task_service::mark_running(&db2.conn, created.id, seq, conv2, "gone")
+                .await
+                .expect("running")
+        );
+        conversation_service::update_status(&db2.conn, conv2, ConversationStatus::Completed)
+            .await
+            .expect("completed");
+        assert_eq!(
+            work_task_service::boot_reconcile_interrupted(&db2.conn)
+                .await
+                .expect("boot"),
+            1
+        );
+        let boot = work_task_service::get_model(&db2.conn, created.id)
+            .await
+            .expect("boot row");
+        assert_eq!(boot.status, WorkTaskStatus::Failed);
+        assert_eq!(boot.failure_reason.as_deref(), Some("interrupted"));
+    }
+
+    /// Acceptance 6 inverse: a dropped TurnComplete that already had a verdict
+    /// still settles to review — we only stopped the no-verdict auto-review.
+    #[tokio::test]
+    async fn connection_loss_with_a_verdict_still_settles_review() {
+        use crate::db::test_helpers::{fresh_in_memory_db, seed_folder};
+        use crate::db::service::conversation_service;
+
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-multiturn-6c").await;
+        let engine = test_engine(&db);
+        let conn_id = "conn-verdict-6";
+        let (task_id, run_seq, conv_id, rx) =
+            start_running_on(&engine, folder_id, "had-verdict", conn_id).await;
+        let ack = engine
+            .record_complete(conn_id, "success", Some("ship it"))
+            .await;
+        assert!(ack.recorded);
+        drop(rx);
+        engine.index.lock().await.remove(conn_id);
+        let _ = engine.manager.disconnect(conn_id).await;
+        conversation_service::update_status(&db.conn, conv_id, ConversationStatus::Completed)
+            .await
+            .expect("completed");
+
+        engine.reconcile_once().await;
+
+        let row = work_task_service::get_model(&db.conn, task_id)
+            .await
+            .expect("row");
+        assert_eq!(row.status, WorkTaskStatus::Review);
+        assert_eq!(row.run_seq, run_seq);
+    }
+
+    /// Acceptance 7: cancel after an idle turn converges index, connection,
+    /// conversation and task status the existing task-owned way.
+    #[tokio::test]
+    async fn cancel_after_an_idle_turn_converges_task_owned_state() {
+        use crate::db::test_helpers::{fresh_in_memory_db, seed_folder};
+
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-multiturn-7").await;
+        let engine = test_engine(&db);
+        let conn_id = "conn-cancel-7";
+        let (task_id, _, conv_id, _rx) =
+            start_running_on(&engine, folder_id, "cancel-idle", conn_id).await;
+        engine.on_turn_complete(conn_id, "end_turn").await;
+
+        engine
+            .cancel(task_id, Some("stop here".into()))
+            .await
+            .expect("cancel");
+
+        let row = work_task_service::get_model(&db.conn, task_id)
+            .await
+            .expect("row");
+        assert_eq!(row.status, WorkTaskStatus::Canceled);
+        assert!(row.connection_id.is_none());
+        assert!(engine.index.lock().await.get(conn_id).is_none());
+        assert!(engine.manager.get_state(conn_id).await.is_none());
+        assert_eq!(
+            engine.conversation_status(conv_id).await,
+            Some(ConversationStatus::Cancelled)
+        );
     }
 }

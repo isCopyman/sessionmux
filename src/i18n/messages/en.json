@@ -4758,6 +4758,7 @@
     "actionStart": "Start",
     "actionSchedule": "Schedule",
     "actionCancel": "Cancel",
+    "actionSubmitReview": "Submit for review",
     "actionRetry": "Retry",
     "actionRequeue": "Requeue",
     "actionViewSession": "View session",

@@ -20,6 +20,7 @@ import {
   CircleAlert,
   CircleCheck,
   CircleX,
+  ClipboardCheck,
   Clock,
   Coins,
   FileDiff,
@@ -47,6 +48,7 @@ import {
   workTaskEvents,
   workTaskMergeUnqueue,
   workTaskRequeue,
+  workTaskRequestReview,
   workTaskRetry,
   workTaskReturn,
   workTaskStart,
@@ -474,7 +476,6 @@ export function TaskDetailSheet({
           break
         case "queued":
         case "preparing":
-        case "running":
         case "awaiting_input":
           zoneActions.push({
             icon: Ban,
@@ -482,6 +483,21 @@ export function TaskDetailSheet({
             filled: true,
             onClick: () => onCancel(task),
           })
+          break
+        case "running":
+          zoneActions.push({
+            icon: Ban,
+            label: t("actionCancel"),
+            filled: true,
+            onClick: () => onCancel(task),
+          })
+          if (task.connection_id != null) {
+            zoneActions.push({
+              icon: ClipboardCheck,
+              label: t("actionSubmitReview"),
+              onClick: () => run(() => workTaskRequestReview(task.id)),
+            })
+          }
           break
         case "merging":
           break

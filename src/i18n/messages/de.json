@@ -4758,6 +4758,7 @@
     "actionStart": "Starten",
     "actionSchedule": "Planen",
     "actionCancel": "Abbrechen",
+    "actionSubmitReview": "Zur Prüfung einreichen",
     "actionRetry": "Erneut versuchen",
     "actionRequeue": "Erneut einreihen",
     "actionViewSession": "Konversation anzeigen",

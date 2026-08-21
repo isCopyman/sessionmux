@@ -4,6 +4,7 @@ import {
   Ban,
   CalendarClock,
   CircleCheck,
+  ClipboardCheck,
   GitMerge,
   ListX,
   MessageSquareText,
@@ -25,6 +26,8 @@ export interface TaskActionItem {
 export interface TaskActionHandlers {
   onStart: () => void
   onCancel: () => void
+  /** Submit a running, idle card for review. The engine rejects it mid-turn. */
+  onSubmitReview: () => void
   onRetry: () => void
   onRequeue: () => void
   /** Opens the read-only live session viewer (TaskTranscriptDialog). */
@@ -47,6 +50,7 @@ export interface TaskActionHandlers {
 type ActionLabelKey =
   | "actionStart"
   | "actionCancel"
+  | "actionSubmitReview"
   | "actionRetry"
   | "actionRequeue"
   | "actionViewSession"
@@ -103,12 +107,27 @@ export function buildTaskActions(
         break
       case "queued":
       case "preparing":
-      case "running":
       case "awaiting_input":
         primary = {
           icon: Ban,
           label: t("actionCancel"),
           onClick: handlers.onCancel,
+        }
+        break
+      case "running":
+        primary = {
+          icon: Ban,
+          label: t("actionCancel"),
+          onClick: handlers.onCancel,
+        }
+        // Idle between turns: the human counterpart of `task_complete`.
+        // Hidden without a live connection — the engine would refuse it.
+        if (task.connection_id != null) {
+          secondaries.push({
+            icon: ClipboardCheck,
+            label: t("actionSubmitReview"),
+            onClick: handlers.onSubmitReview,
+          })
         }
         break
       case "review":

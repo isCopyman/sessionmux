@@ -3,7 +3,9 @@ use serde::{Deserialize, Serialize};
 
 /// Lifecycle of a work task. The pipeline is
 /// `todo → queued → preparing → running ⇄ awaiting_input → review → merging →
-/// done`, with `failed` / `canceled` as side paths. Two hard invariants:
+/// done`, with `failed` / `canceled` as side paths. `running` spans the whole
+/// execution period, including idle gaps between turns; a plain `end_turn`
+/// does not settle it. Two hard invariants:
 /// - `done` ⟺ merged: only the merge landing (or its crash recovery) writes
 ///   `done`, and `done` never rolls back.
 /// - Every transition is a conditional UPDATE (CAS) guarded by the expected
@@ -23,12 +25,16 @@ pub enum WorkTaskStatus {
     /// interrupted exactly like `queued`.
     #[sea_orm(string_value = "preparing")]
     Preparing,
+    /// Execution period of the card: a turn may be in flight, or the
+    /// connection may be idle between turns. Occupies a concurrency slot
+    /// until the agent calls `task_complete` or the user submits for review.
     #[sea_orm(string_value = "running")]
     Running,
     /// The agent is blocked on a question / permission / plan approval.
     #[sea_orm(string_value = "awaiting_input")]
     AwaitingInput,
-    /// Agent finished; waiting for the user to accept (merge), return, or drop.
+    /// Agent or user explicitly ended the work stage; waiting for the user
+    /// to accept (merge), return, or drop.
     #[sea_orm(string_value = "review")]
     Review,
     /// Merge in flight — the only state the user cannot cancel.
@@ -61,14 +67,16 @@ pub struct Model {
     pub failure_reason: Option<String>,
     pub last_error: Option<String>,
     /// Execution generation: bumped whenever a new run is claimed
-    /// (start / retry / return). Events match on (connection_id, run_seq);
+    /// (start / retry / return). Several ordinary turns on the same
+    /// connection share one `run_seq`. Events match on (connection_id, run_seq);
     /// anything stale is dropped.
     pub run_seq: i32,
     pub sort_order: i32,
     pub worktree_folder_id: Option<i32>,
     pub conversation_id: Option<i32>,
     /// Live ACP connection of the current generation. Not durable across
-    /// restart (a fresh process has no live connections).
+    /// restart (a fresh process has no live connections). Held between
+    /// ordinary turns until the generation settles.
     pub connection_id: Option<String>,
     pub base_branch: Option<String>,
     /// The exact commit the worktree branched from — recorded BEFORE the

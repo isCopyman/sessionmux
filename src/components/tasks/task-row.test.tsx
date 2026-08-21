@@ -52,6 +52,7 @@ function renderRow(
     onOpen: noop,
     onStart: noop,
     onCancel: noop,
+    onSubmitReview: noop,
     onRetry: noop,
     onRequeue: noop,
     onViewSession: noop,

@@ -329,6 +329,15 @@ pub async fn work_task_cancel(
     Ok(Json(()))
 }
 
+pub async fn work_task_request_review(
+    Json(params): Json<IdParams>,
+) -> Result<Json<()>, AppCommandError> {
+    core::work_task_request_review_core(params.id)
+        .await
+        .map_err(AppCommandError::from)?;
+    Ok(Json(()))
+}
+
 /// `true` = the merge was queued behind another landing of the same project
 /// rather than started now.
 pub async fn work_task_merge(

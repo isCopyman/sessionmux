@@ -197,7 +197,8 @@ function TaskTranscriptBody({
   //   - `begin_merge` clears `connection_id` in the same update that sets
   //     `merging`, so opening in that interval latched null;
   //   - a dialog held open across a generation boundary kept the previous
-  //     connection, which `on_turn_complete` has already disconnected.
+  //     connection, which `on_turn_complete` has already disconnected once
+  //     the generation settled (a plain end_turn no longer disconnects).
   //
   // Plain re-derivation is NOT the fix either — that was the reason for the
   // latch: the moment the provider flips the task to review we would detach and

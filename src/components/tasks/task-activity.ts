@@ -38,9 +38,9 @@ export function connectionKeysForTask(task: WorkTask): string[] {
 
 /**
  * running + Prompting → green pulse; running but not Prompting → a still
- * dot (waiting on a tool / child process). Anything else, including a
- * missing `conversation_id`, draws nothing. Pure: the page supplies the
- * connection snapshot.
+ * dot (idle between turns, or waiting on a tool / child process). Anything
+ * else, including a missing `conversation_id`, draws nothing. Pure: the page
+ * supplies the connection snapshot.
  */
 export function taskActivityDot(
   task: Pick<WorkTask, "status" | "conversation_id">,

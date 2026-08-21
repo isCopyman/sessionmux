@@ -4758,6 +4758,7 @@
     "actionStart": "開始",
     "actionSchedule": "予約実行",
     "actionCancel": "キャンセル",
+    "actionSubmitReview": "レビューに提出",
     "actionRetry": "再試行",
     "actionRequeue": "再キュー",
     "actionViewSession": "会話を表示",
