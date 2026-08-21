@@ -3,7 +3,6 @@ import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import {
-  configChipLabel,
   InlineSessionConfigSelector,
   InlineSessionConfigToggle,
 } from "./session-config-selector"
@@ -48,40 +47,28 @@ function namedOption(
   }
 }
 
-describe("configChipLabel", () => {
-  it("prefixes the option name when the value says nothing on its own", () => {
-    // The composer bar used to read "… Xhigh Off Default" — three mystery
-    // words. Fast mode / Agent must name themselves.
-    expect(configChipLabel("Fast mode", "Off")).toBe("Fast mode: Off")
-    expect(configChipLabel("Agent", "Default")).toBe("Agent: Default")
-    expect(configChipLabel("Thinking", "auto")).toBe("Thinking: auto")
-    expect(configChipLabel("快速模式", "关")).toBe("快速模式: 关")
-  })
-
-  it("leaves self-naming values bare so short labels stay short", () => {
-    expect(configChipLabel("Model", "claude-opus-5[1m]")).toBe(
-      "claude-opus-5[1m]"
-    )
-    expect(configChipLabel("Mode", "Bypass Permissions")).toBe(
-      "Bypass Permissions"
-    )
-    expect(configChipLabel("Effort", "Xhigh")).toBe("Xhigh")
-  })
-})
-
-describe("InlineSessionConfigSelector — ambiguous values", () => {
+describe("InlineSessionConfigSelector — what a chip is for", () => {
   afterEach(() => cleanup())
 
-  it("shows the option name on the trigger for a generic current value", () => {
+  // The composer bar is the narrowest strip in the app, so the chip prints the
+  // value alone; the control's name lives in the menu it opens.
+  it("keeps the chip bare and names the control inside the dropdown", async () => {
+    const user = userEvent.setup()
     render(
       <InlineSessionConfigSelector
         option={namedOption("fast_mode", "Fast mode", ["On", "Off"], "Off")}
         onSelect={vi.fn()}
       />
     )
-    expect(
-      screen.getByRole("button", { name: "Fast mode: Off" })
-    ).toHaveTextContent("Fast mode: Off")
+
+    const trigger = screen.getByRole("button", { name: "Fast mode: Off" })
+    expect(trigger).toHaveTextContent("Off")
+    expect(trigger).not.toHaveTextContent("Fast mode:")
+
+    await user.click(trigger)
+    // First row of the menu says which control this is.
+    const menu = await screen.findByRole("menu")
+    expect(within(menu).getByText("Fast mode")).toBeInTheDocument()
   })
 })
 
