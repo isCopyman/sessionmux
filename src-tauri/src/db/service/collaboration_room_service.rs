@@ -1397,6 +1397,26 @@ async fn timeline_event_from_row(
     })
 }
 
+/// Load one Room-visibility event by id. Does not check membership and does
+/// not consume a read cursor — callers that expose this to an Agent must
+/// `require_member` themselves.
+pub async fn get_room_event(
+    conn: &DatabaseConnection,
+    event_id: &str,
+) -> Result<RoomTimelineEvent, DbError> {
+    let row = conn
+        .query_one(statement(
+            &format!(
+                "{EVENT_SELECT} \
+                 WHERE e.id = ? AND COALESCE(e.visibility, 'direct') = 'room'"
+            ),
+            vec![event_id.into()],
+        ))
+        .await?
+        .ok_or_else(|| DbError::NotFound(format!("Room post {event_id}")))?;
+    timeline_event_from_row(conn, &row).await
+}
+
 /// Mark Room `@` deliveries in this window as consumed, and optionally move
 /// the member channel cursor to the last returned post. Does not clear
 /// `expects_reply`; that still needs `post_room` with `reply_to_event_id`.

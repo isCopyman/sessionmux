@@ -170,6 +170,19 @@ impl SessionCollaborationAccess for RecordingCollaboration {
         )
     }
 
+    async fn read_room_post(
+        &self,
+        caller_session_id: i32,
+        _event_id: String,
+        _offset: u32,
+        _max_chars: u32,
+    ) -> codeg_lib::acp::session_collaboration::SessionRoomPostReadOutcome {
+        codeg_lib::acp::session_collaboration::SessionRoomPostReadOutcome::unavailable(
+            Some(caller_session_id),
+            "not used",
+        )
+    }
+
     async fn post_room(
         &self,
         source_session_id: i32,
