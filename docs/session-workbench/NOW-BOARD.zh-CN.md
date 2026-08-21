@@ -226,6 +226,35 @@ NOW-BOARD 与它重复；MAINTAINABILITY 同时兼计划 / 决策 / 执行日志
       新增 Rust 回归测试 `folded_legacy_env_round_trip_preserves_secret_and_ordinary_values`
       逐条核过（不是看退出码——那次退出码取的是 `tail` 的，无效）
 
+### 用户拍板的设计规则：只有两种模式，没有第三种（2026-08-21 夜）
+
+用户原话：「要么就随 cli，即 cli 怎么设置的我们就跟着 cli 走，settings 我们不做设置；
+要么就是 codeg 内置了设置做 `--settings` 覆盖」。
+
+| 模式 | codeg 做什么 | 落在哪层 |
+| --- | --- | --- |
+| **跟随 CLI** | 什么都不设，**也不改 CLI 自己的文件** | CLI 自己那套（用户层 / 项目层） |
+| **codeg 管** | 物化一份 settings 走 `--settings` | flag 层，压过项目 |
+
+**后端本来就是对的**：`claude_profile.rs:770` 对 `follow-default` 是一行不注入直接
+`return`；managed 档在 `:803` 拿 `--settings` overlay。歪的一直是**界面**——
+「用户级设置」页嘴上说不覆盖，手里递一个编辑 `~/.claude/settings.json` 的框，
+于是 codeg 伸手改了 CLI 的家当**却还是最弱那层**，项目里任何一个
+`.claude/settings.json` 都能压过它。两头不靠。
+
+**落地规则：虚拟页签只解释，档才编辑。**「官方直连」本来就是纯文字，
+「跟随默认」也照此办理，删掉它的编辑器。
+
+其他 agent（gemini / opencode / cline / kimi_code，见 `acp.rs:7579`
+`agent_local_config_path`）的原生配置编辑器**保留**——它们没有档系统，
+那个编辑器就是它们唯一的"模式 2"。只有 `claude_code` 例外，因为只有它有档。
+
+推论，都还没做：
+- **「不编辑」不等于「不给看」**。board 上那条「只读的有效配置视图」仍然成立且更该做了
+- `CODEG_CASCADE_CLAUDE_SETTINGS`（`acp.rs:9008`）打开后 codeg 会把 `ANTHROPIC_*`
+  写进用户的 `~/.claude/settings.json`。默认关，但按这条规则它也该没。单独决定
+- 「用户级设置」这个名字在删掉编辑器后要再想：它已经不编辑任何东西了
+
 ### 今晚实测钉死的事实（都进了 CONFIG-MODEL §11，动工前先读）
 
 - **空串能压掉下层，且被 CLI 读成"未设置"**：项目层指向本地 4711，叠加层不碰
