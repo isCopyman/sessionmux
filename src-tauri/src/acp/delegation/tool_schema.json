@@ -454,6 +454,45 @@
     }
   },
   {
+    "name": "list_tasks",
+    "description": "Read-only: list cards on codeg's task board. Does not create, claim, or change any task. Defaults to the project this conversation is in (a worktree working directory is resolved to that project). Pass folder_path=\"all\" to list every live project, newest updated_at first. Optional status accepts a board column (todo, in_progress, attention, done) or a raw status such as awaiting_input. Returns compact rows (id, title, status, agent, updated_at) — never the prompt body. total is the filtered count; truncated is true when limit hid the rest (default 30, hard cap 100).",
+    "inputSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "folder_path": {
+          "type": "string",
+          "description": "Absolute path of the project to list, or \"all\" for every live project. Omit to use the project this conversation is in."
+        },
+        "status": {
+          "type": "string",
+          "description": "Optional filter. Board columns: todo, in_progress, attention, done. Raw statuses also work (queued, preparing, running, awaiting_input, review, merging, failed, canceled)."
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Maximum rows to return. Defaults to 30; values above 100 are clamped to 100."
+        }
+      }
+    }
+  },
+  {
+    "name": "get_task",
+    "description": "Read-only: load one task-board card by id. Does not change status or claim the task. Returns title, status, agent, optional model/profile ids, a prompt excerpt (at most 1000 characters), branch/worktree pointers, the 10 most recent timeline events, and a truncated last_error. Never returns credentials or a profile token/baseUrl. Use list_tasks to discover ids.",
+    "inputSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["task_id"],
+      "properties": {
+        "task_id": {
+          "type": "integer",
+          "description": "The task id returned by list_tasks or create_work_task."
+        }
+      }
+    }
+  },
+  {
     "name": "task_progress",
     "description": "Report a short progress milestone for the work task you are executing. It shows up on the task's board card and timeline in real time, so the user can follow along without opening the session. Call it at meaningful checkpoints — finished exploring, tests passing, starting the refactor — not for every small step. Fire-and-forget: it never blocks your work and returns immediately.",
     "inputSchema": {

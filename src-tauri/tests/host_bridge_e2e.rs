@@ -296,6 +296,18 @@ impl ChatAuthoringAccess for NoAuthoring {
     ) -> codeg_lib::acp::chat_authoring::ProfileListOutcome {
         codeg_lib::acp::chat_authoring::ProfileListOutcome::default()
     }
+
+    async fn list_tasks(
+        &self,
+        _ctx: AuthoringContext,
+        _query: codeg_lib::acp::chat_authoring::ListTasksQuery,
+    ) -> codeg_lib::acp::chat_authoring::TaskListOutcome {
+        codeg_lib::acp::chat_authoring::TaskListOutcome::default()
+    }
+
+    async fn get_task(&self, _task_id: i32) -> codeg_lib::acp::chat_authoring::TaskDetailOutcome {
+        codeg_lib::acp::chat_authoring::TaskDetailOutcome::default()
+    }
 }
 
 fn listener(

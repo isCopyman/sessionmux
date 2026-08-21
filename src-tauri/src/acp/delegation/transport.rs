@@ -243,6 +243,28 @@ pub struct BrokerListProfilesRequest {
     pub agent_type: Option<String>,
 }
 
+/// Read-only board listing for `list_tasks`. Authenticated by the per-launch
+/// `token`; the listener resolves the caller's project from it when
+/// `folder_path` is omitted.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokerListTasksRequest {
+    pub token: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+}
+
+/// Read-only card detail for `get_task`. Authenticated by the per-launch
+/// `token`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokerGetTaskRequest {
+    pub token: String,
+    pub task_id: i32,
+}
+
 /// Tagged top-level message dispatched by the listener. Adding new variants
 /// is the wire-stable way to grow the broker protocol without touching the
 /// frame layer.
@@ -268,6 +290,8 @@ pub enum BrokerMessage {
     CreateAutomation(BrokerCreateAutomationRequest),
     CreateWorkTask(BrokerCreateWorkTaskRequest),
     ListProfiles(BrokerListProfilesRequest),
+    ListTasks(BrokerListTasksRequest),
+    GetTask(BrokerGetTaskRequest),
 }
 
 /// The wrapped outcome the main process returns over the same socket.
@@ -496,6 +520,24 @@ pub async fn client_list_profiles_round_trip(
     req: &BrokerListProfilesRequest,
 ) -> io::Result<BrokerResponse> {
     message_round_trip(socket_path, &BrokerMessage::ListProfiles(req.clone())).await
+}
+
+/// Dispatch a `list_tasks` request and read back the serialized
+/// [`crate::acp::chat_authoring::TaskListOutcome`].
+pub async fn client_list_tasks_round_trip(
+    socket_path: &str,
+    req: &BrokerListTasksRequest,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::ListTasks(req.clone())).await
+}
+
+/// Dispatch a `get_task` request and read back the serialized
+/// [`crate::acp::chat_authoring::TaskDetailOutcome`].
+pub async fn client_get_task_round_trip(
+    socket_path: &str,
+    req: &BrokerGetTaskRequest,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::GetTask(req.clone())).await
 }
 
 /// Total budget for `open()` retries on Windows named pipes.
