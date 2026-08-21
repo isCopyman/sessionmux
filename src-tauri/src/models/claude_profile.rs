@@ -98,6 +98,10 @@ pub struct ClaudeProfileUpsert {
     pub settings_json: Option<String>,
     #[serde(default)]
     pub env: Option<BTreeMap<String, String>>,
+    /// Create-only: reject if this id already has a file. Omitted / false is
+    /// the historical upsert, so editing an existing profile still saves.
+    #[serde(default)]
+    pub expect_new: bool,
 }
 
 /// Read-only import preview for a Claude `settings.json` file.

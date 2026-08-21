@@ -1787,6 +1787,11 @@ export interface ClaudeProfileUpsert {
   settingsJson?: string | null
   /** Whole-table replace. Omit to keep stored; `{}` clears. */
   env?: Record<string, string>
+  /**
+   * Create-only: reject if this id already has a file. Omitted / false is
+   * the historical upsert, so editing an existing profile still saves.
+   */
+  expectNew?: boolean
 }
 
 /** `claude_settings_read`: one-way import of an existing settings.json. */

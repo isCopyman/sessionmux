@@ -218,6 +218,7 @@ describe("ClaudeProfileCatalog", () => {
       expect(api.claudeProfileUpsert.mock.calls[0][0]).toMatchObject({
         env: {},
       })
+      expect(api.claudeProfileUpsert.mock.calls[0][0].expectNew).toBeUndefined()
     })
 
     // The mask travels back untouched and the backend maps it to the secret,
@@ -291,6 +292,9 @@ describe("ClaudeProfileCatalog", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save" }))
 
     await waitFor(() => expect(api.claudeProfileUpsert).toHaveBeenCalled())
+    expect(api.claudeProfileUpsert.mock.calls[0][0]).toMatchObject({
+      expectNew: true,
+    })
     expect(await screen.findByRole("tab", { name: "中转" })).toBeInTheDocument()
     expect(api.claudeProfileList).toHaveBeenCalledTimes(1)
   })
