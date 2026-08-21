@@ -19,16 +19,22 @@
 ## 专题文档（按主题）
 
 - **任务看板**：`TASKBOARD-RFC-2026-08-21.zh-CN.md`（设计 RFC，待用户过目）；
-  `TASKBOARD-P1-REPORT.zh-CN.md`（第一期施工报告）
+  `TASKBOARD-P1-REPORT.zh-CN.md`（第一期施工报告）；
+  `O46-TASKBOARD-RESEARCH.zh-CN.md`（**组织维度调研**：一级容器＝项目 Folder，
+  含容器关系图与两套 status 的区别；内有一条已标注的过时结论）
 - **回合失败重试（O8）**：`O8-TRANSIENT-RETRY-AUDIT.zh-CN.md`（审计）；
   `O8-RETRY-REPORT.zh-CN.md`（施工报告）
 - **群聊/协作**：`ROOM-READ-REPORT.zh-CN.md`（逐步披露接口）；
   `ROOM-CREATE-REPORT.zh-CN.md`（先建群后拉人）；
+  `O54-FOLDER-ROOM-REPORT.zh-CN.md`（分类树右键新建群聊，带文件夹作用域）；
   `AT-COMPLETION-RECON-2026-08-20.zh-CN.md`（@ 补全与多路径）
 - **序列化/持久化**：`SERDE-PERSISTENCE-INVENTORY.zh-CN.md`（红黄绿盘点）；
   `SERDE-PINS-REPORT.zh-CN.md`（24 条钉死测试）
 - **Provider 切换（O39）**：`O39-PROVIDER-SWITCH-RECON.zh-CN.md`（paseo/monet 调研）；
-  `CLAUDE-PROFILE-RFC-2026-08-21.zh-CN.md`（**启动配置档设计，待拍板**：CLAUDE_CONFIG_DIR 机制）
+  `CLAUDE-PROFILE-RFC-2026-08-21.zh-CN.md`（**启动配置档设计**：CLAUDE_CONFIG_DIR 机制、
+  认证优先级、MCP 暴露与泛化到其它 harness 的成本）；
+  `O59A-CLAUDE-PROFILE-BACKEND-REPORT.zh-CN.md`（**后端已落地**：磁盘布局、解析顺序、
+  第 7 节是给前端的 API 契约）
 - **fork/rewind**：`fork-rewind-slices/`（切片调查）；
   `FORK-REWIND-RECON-GROK-CURSOR-2026-08-19.zh-CN.md`
 - **转录面骨架**：`CHARTER1-PACKAGE-I-REPORT.zh-CN.md`、`CHARTER1-PHASE2-REPORT.zh-CN.md`
