@@ -319,3 +319,47 @@ SDK 文档里 `settingSources: []` 会连项目 `CLAUDE.md` 一起不加载。**
 临时目录放 `CLAUDE.md`（"问 codeword 就回 MANGO"），`claude -p "codeword?"` 与
 `claude --setting-sources user -p "codeword?"` **都回 MANGO**。
 所以关掉项目 settings **不会**顺手砍掉项目指令。
+
+
+## 10. 撤回 §9.3：折叠方案不做（2026-08-21 用户拍板）
+
+### 10.1 §9 漏掉的关键事实
+
+`--settings` 是**逐键叠加**，不是整份替换。官方文档原话：它填充的是
+"flag-settings layer"，**全局和项目 settings 仍然加载**，只是被这一层压过冲突的键。
+官方优先级：
+
+    Managed（企业） > --settings / SDK options.settings > local > project > user
+
+§9 只测了"两边都设 `ANTHROPIC_BASE_URL` 时谁赢"，就推出"项目层被整体压过"。
+**这个推论过头了**：档没设的键，项目照样生效、照样压过用户全局。
+
+### 10.2 因此当前行为已经是对的
+
+档设了的键 → 档赢（这正是用户在 UI 里做的显式选择）；
+档没设的键（permissions / hooks / statusLine / …）→ 项目赢过用户全局。
+
+用户原话：「直接用 `--settings` 管理即可，即就是用 codeg 里的设置，codeg 里设置了
+什么就用什么」。**主仓不用改。**
+
+### 10.3 折叠方案作废
+
+lane `cli-delegate-settings-overlay` 的 `e8bdbd38`（深合并 + spawn 折叠 +
+`settingSources` 恒 `["user"]`）**不合并**。理由三条：
+
+1. **多余** —— 见 10.2，`--settings` 本身就给了想要的语义。
+2. **有并发缺陷** —— 它原地回写 `claude_profiles_dir/<档id>/settings.json`，
+   那是**按档共享**的文件。两个会话用同一个档、在不同仓库并发启动会互相串配置。
+   （对照：Monet 的做法是每次 spawn 合成 `~/.monet/runtime/<sessionId>-<nanos>.json`、
+   用完即删——per-spawn 文件才是对的形状。）
+3. **会砍掉项目的 skills / hooks** —— `settingSources` 的 `project` 源管的不只是
+   settings.json，还有 `.claude/` 下的 skills 和 hooks。折叠只搬得动 settings.json 的
+   键，搬不动 skills/hooks。开关明明是「开」，却把项目的 skills/hooks 静默关掉，
+   是比原问题更糟的 bug。
+
+### 10.4 `.claude/CLAUDE.md` 到底受不受 settingSources 管——**未能证实**
+
+两次探针（项目根 `CLAUDE.md`、`.claude/CLAUDE.md`）在 `--setting-sources user` 下
+都仍然生效。但 auto memory 无论 settingSources 如何**始终加载**，两个机制混在一起，
+探针分不开。**结论：未能分离，不要引用 §9.4 那条"已排掉的坑"。**
+（§9.4 的原始表述过于自信，此处更正。）
