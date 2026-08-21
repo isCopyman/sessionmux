@@ -34,7 +34,10 @@
   `CLAUDE-PROFILE-RFC-2026-08-21.zh-CN.md`（**启动配置档设计**：CLAUDE_CONFIG_DIR 机制、
   认证优先级、MCP 暴露与泛化到其它 harness 的成本）；
   `O59A-CLAUDE-PROFILE-BACKEND-REPORT.zh-CN.md`（**后端已落地**：磁盘布局、解析顺序、
-  第 7 节是给前端的 API 契约）
+  第 7 节是给前端的 API 契约）；
+  `O59B-CLAUDE-PROFILE-UI-REPORT.zh-CN.md`（组合框 chip + 设置页目录）；
+  `O59C-PROFILE-MCP-REPORT.zh-CN.md`（**档对 agent 可见**：`list_profiles` 工具、
+  建任务/自动化的 `profile` / `model` 参数、inherit 路径会丢档的陷阱）
 - **fork/rewind**：`fork-rewind-slices/`（切片调查）；
   `FORK-REWIND-RECON-GROK-CURSOR-2026-08-19.zh-CN.md`
 - **转录面骨架**：`CHARTER1-PACKAGE-I-REPORT.zh-CN.md`、`CHARTER1-PHASE2-REPORT.zh-CN.md`
