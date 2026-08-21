@@ -51,6 +51,18 @@ vi.mock("@/stores/conversation-runtime-store", () => ({
 vi.mock("./session-details-dialog", () => ({
   SessionDetailsDialog: () => null,
 }))
+vi.mock("@/components/rooms/join-room-dialog", () => ({
+  JoinRoomDialog: ({
+    open,
+    conversationId,
+  }: {
+    open: boolean
+    conversationId: number
+  }) =>
+    open ? (
+      <div data-testid="join-room-dialog">join:{conversationId}</div>
+    ) : null,
+}))
 
 // The header now embeds the folder picker (self-contained, store-driven); stub
 // it so these tests exercise only the header's own menu/dialog logic.
@@ -144,5 +156,53 @@ describe("ConversationDetailHeader dialog target snapshot", () => {
 
     expect(queryByLabelText("Send to another session")).toBeNull()
     expect(queryByTestId("session-message-composer")).toBeNull()
+  })
+})
+
+describe("ConversationDetailHeader join-room entry", () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it("offers Join room in the overflow menu and opens the dialog", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 })
+    const { getByLabelText, getByRole, getByTestId, queryByTestId } = render(
+      withIntl(<ConversationDetailHeader {...A} />)
+    )
+
+    expect(queryByTestId("join-room-dialog")).toBeNull()
+    await user.click(getByLabelText("More actions"))
+    await user.click(getByRole("menuitem", { name: "Join room" }))
+
+    expect(getByTestId("join-room-dialog")).toHaveTextContent("join:1")
+  })
+
+  it("keeps the join target when the active tab switches mid-dialog", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 })
+    const { rerender, getByLabelText, getByRole, getByTestId } = render(
+      withIntl(<ConversationDetailHeader {...A} />)
+    )
+
+    await user.click(getByLabelText("More actions"))
+    await user.click(getByRole("menuitem", { name: "Join room" }))
+
+    rerender(withIntl(<ConversationDetailHeader {...B} />))
+
+    expect(getByTestId("join-room-dialog")).toHaveTextContent("join:1")
+    expect(getByTestId("join-room-dialog")).not.toHaveTextContent("join:2")
+  })
+
+  it("disables Join room until the Session is persisted", async () => {
+    const user = userEvent.setup({ pointerEventsCheck: 0 })
+    const draft: Props = { ...A, conversationId: null }
+    const { getByLabelText, getByRole, queryByTestId } = render(
+      withIntl(<ConversationDetailHeader {...draft} />)
+    )
+
+    await user.click(getByLabelText("More actions"))
+    const item = getByRole("menuitem", { name: "Join room" })
+    expect(item).toHaveAttribute("data-disabled")
+    await user.click(item)
+    expect(queryByTestId("join-room-dialog")).toBeNull()
   })
 })

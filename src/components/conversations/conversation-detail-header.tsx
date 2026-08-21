@@ -6,6 +6,7 @@ import {
   Circle,
   EllipsisVertical,
   Info,
+  MessagesSquare,
   Pencil,
   Pin,
   PinOff,
@@ -30,6 +31,7 @@ import { getRuntimeSession } from "@/stores/conversation-runtime-store"
 import type { ConversationStatus } from "@/lib/types"
 import { STATUS_ORDER } from "@/lib/types"
 import { ConversationStatusDot } from "@/components/conversations/conversation-status-dot"
+import { JoinRoomDialog } from "@/components/rooms/join-room-dialog"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -107,6 +109,7 @@ export const ConversationDetailHeader = memo(function ConversationDetailHeader({
   const tConv = useTranslations("Folder.conversation")
   const tStatus = useTranslations("Folder.statusLabels")
   const tDetails = useTranslations("Folder.sessionDetails")
+  const tRoom = useTranslations("Room")
   const { closeTab, openNewConversationTab } = useTabActions()
   const updateConversationLocal = useAppWorkspaceStore(
     (s) => s.updateConversationLocal
@@ -145,6 +148,9 @@ export const ConversationDetailHeader = memo(function ConversationDetailHeader({
     tabId: string
     title: string
   } | null>(null)
+  // Snapshot the Session id when Join-room opens, same reason as rename/delete:
+  // this header instance is reused across tabs while a dialog stays open.
+  const [joinTarget, setJoinTarget] = useState<number | null>(null)
 
   const persisted = conversationId != null
   const displayTitle =
@@ -239,6 +245,11 @@ export const ConversationDetailHeader = memo(function ConversationDetailHeader({
     setDeleteTarget(null)
   }, [deleteTarget, closeTab, refreshConversations])
 
+  const handleJoinRoomOpen = useCallback(() => {
+    if (conversationId == null) return
+    setJoinTarget(conversationId)
+  }, [conversationId])
+
   const handleOpenDetails = useCallback(() => {
     // Resolve on demand (no reactive whole-session subscription) via the same
     // helper the panel uses; `runtimeId` covers the virtual-key case.
@@ -323,6 +334,13 @@ export const ConversationDetailHeader = memo(function ConversationDetailHeader({
             >
               <Info className="h-4 w-4" />
               {tDetails("menuLabel")}
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              disabled={!persisted}
+              onSelect={handleJoinRoomOpen}
+            >
+              <MessagesSquare className="h-4 w-4" />
+              {tRoom("joinRoomAction")}
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuSub>
@@ -417,6 +435,16 @@ export const ConversationDetailHeader = memo(function ConversationDetailHeader({
           summary={details.summary}
           stats={details.stats}
           model={details.model}
+        />
+      )}
+
+      {joinTarget != null && (
+        <JoinRoomDialog
+          open
+          onOpenChange={(o) => {
+            if (!o) setJoinTarget(null)
+          }}
+          conversationId={joinTarget}
         />
       )}
     </div>

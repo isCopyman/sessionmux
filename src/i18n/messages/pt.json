@@ -5357,6 +5357,11 @@
     "emptyInviteHint": "Convide outra Session para começar a colaborar.",
     "emptyInviteAction": "Convidar uma Session",
     "createFailed": "Não foi possível criar a sala: {message}",
+    "joinRoomTitle": "Entrar em uma sala",
+    "joinRoomAction": "Entrar na sala",
+    "joinRoomSearch": "Buscar salas",
+    "joinRoomEmpty": "Não há salas para entrar.",
+    "joinedToast": "Entrou em {title}",
     "dateToday": "Hoje",
     "dateYesterday": "Ontem"
   }

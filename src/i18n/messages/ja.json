@@ -5357,6 +5357,11 @@
     "emptyInviteHint": "ほかの Session を招待すると、共同作業を始められます。",
     "emptyInviteAction": "Session を招待",
     "createFailed": "ルームを作成できませんでした: {message}",
+    "joinRoomTitle": "ルームに参加",
+    "joinRoomAction": "ルームに参加",
+    "joinRoomSearch": "ルームを検索",
+    "joinRoomEmpty": "参加できるルームがありません。",
+    "joinedToast": "{title} に参加しました",
     "dateToday": "今日",
     "dateYesterday": "昨日"
   }

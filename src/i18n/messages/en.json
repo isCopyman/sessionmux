@@ -5357,6 +5357,11 @@
     "emptyInviteHint": "Invite another Session to start collaborating.",
     "emptyInviteAction": "Invite a Session",
     "createFailed": "Could not create the room: {message}",
+    "joinRoomTitle": "Join a room",
+    "joinRoomAction": "Join room",
+    "joinRoomSearch": "Search rooms",
+    "joinRoomEmpty": "No rooms to join.",
+    "joinedToast": "Joined {title}",
     "dateToday": "Today",
     "dateYesterday": "Yesterday"
   }
