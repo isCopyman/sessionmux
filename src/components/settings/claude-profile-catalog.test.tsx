@@ -75,7 +75,9 @@ function addProfileButton() {
 /** `+` opens a menu (duplicate / blank); every add goes through it. */
 async function addBlankProfile(user: ReturnType<typeof userEvent.setup>) {
   await user.click(await addProfileButton())
-  await user.click(await screen.findByRole("menuitem", { name: "Blank profile" }))
+  await user.click(
+    await screen.findByRole("menuitem", { name: "Blank profile" })
+  )
 }
 
 describe("isValidClaudeProfileId", () => {
@@ -193,9 +195,7 @@ describe("ClaudeProfileCatalog", () => {
 
     await user.click(await screen.findByRole("tab", { name: "中转" }))
     await user.click(screen.getByRole("button", { name: "Add profile" }))
-    await user.click(
-      await screen.findByRole("menuitem", { name: /Duplicate/ })
-    )
+    await user.click(await screen.findByRole("menuitem", { name: /Duplicate/ }))
 
     expect(screen.getByLabelText("Base URL")).toHaveValue(
       "https://example.test/v1"
