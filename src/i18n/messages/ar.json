@@ -5357,6 +5357,11 @@
     "emptyInviteHint": "ادعُ جلسة أخرى لبدء التعاون.",
     "emptyInviteAction": "دعوة جلسة",
     "createFailed": "تعذر إنشاء الغرفة: {message}",
+    "joinRoomTitle": "الانضمام إلى غرفة",
+    "joinRoomAction": "انضم إلى الغرفة",
+    "joinRoomSearch": "البحث في الغرف",
+    "joinRoomEmpty": "لا توجد غرف للانضمام إليها.",
+    "joinedToast": "انضممت إلى {title}",
     "dateToday": "اليوم",
     "dateYesterday": "أمس"
   }

@@ -5357,6 +5357,11 @@
     "emptyInviteHint": "Lade eine weitere Session ein, um zusammenzuarbeiten.",
     "emptyInviteAction": "Session einladen",
     "createFailed": "Raum konnte nicht erstellt werden: {message}",
+    "joinRoomTitle": "Raum beitreten",
+    "joinRoomAction": "Raum beitreten",
+    "joinRoomSearch": "Räume suchen",
+    "joinRoomEmpty": "Keine Räume zum Beitreten.",
+    "joinedToast": "{title} beigetreten",
     "dateToday": "Heute",
     "dateYesterday": "Gestern"
   }

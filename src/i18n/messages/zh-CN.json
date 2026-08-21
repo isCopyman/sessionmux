@@ -5357,6 +5357,11 @@
     "emptyInviteHint": "邀请其他 Session 加入后就可以开始协作。",
     "emptyInviteAction": "邀请 Session",
     "createFailed": "建群失败：{message}",
+    "joinRoomTitle": "加入群聊",
+    "joinRoomAction": "加入群聊",
+    "joinRoomSearch": "搜索群聊",
+    "joinRoomEmpty": "没有可加入的群聊。",
+    "joinedToast": "已加入 {title}",
     "dateToday": "今天",
     "dateYesterday": "昨天"
   }
