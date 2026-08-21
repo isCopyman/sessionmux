@@ -183,6 +183,38 @@ cargo check --no-default-features --bin codeg-mcp
 - 不为追求“测试很多”反复运行没有新增信息的全量测试；
 - Windows 上若测试二进制在启动时报告 `STATUS_ENTRYPOINT_NOT_FOUND`，要记录为本机 DLL/
   运行环境阻塞；不能谎称测试通过，也不能把它误写成某个测试断言失败。
+  **常见根因见下面 4.4.2。**
+
+#### 4.4.1 ⚠️ 退出码会骗人（2026-08-21 实际翻车）
+
+```bash
+cargo test ... | tail -5; echo $?      # ← 报的是 tail 的状态，永远是 0
+```
+
+管道的 `$?` 是**最后一个命令**的退出码，不是工具的。一批门就是这么"通过"的，
+重跑才发现是红的。
+
+正确写法：
+
+```bash
+cargo test --features test-utils --lib 2>&1 | tail -6; echo "RSTEST=${PIPESTATUS[0]}"
+# 或者先跑再看
+npx tsc --noEmit; echo "TSC=$?"
+```
+
+**派工任务书里必须明写这一条**，并且验收时自己重跑，不要只信工人报告的绿。
+
+#### 4.4.2 ⚠️ worktree 里跑 Rust 门要用共享的热 target 目录
+
+隔离 worktree 默认使用它自己的 `src-tauri/target`，**冷启动**，而且在 Windows 上
+反复制造过 `0xc0000139` / `STATUS_ENTRYPOINT_NOT_FOUND`——那不是代码问题，
+是半新半旧的构建产物拼在一起。
+
+```bash
+export CARGO_TARGET_DIR=D:/code/revisiting/work/repo_audit/repos/codeg/src-tauri/target-gate
+```
+
+派工任务书里把这一行直接给工人，省掉一次冷编译，也躲掉这个假故障。
 
 ### 4.5 启动真实 Desktop，并打开可重复调试通道
 

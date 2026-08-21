@@ -51,9 +51,10 @@ CDP 实机验证的可行路径与三个前提、以及我今晚犯过的判断�
 - [ ] **模型下拉不显示 profile 的槽位重映射** —— 已查清（见交接文档 P0 第二条）。
       CPA 把「Sonnet」重定向到 `k3[1m]`，下拉却显示官方名字和官方定价，主动误导。
       codeg 自己写的 settings.json，知道这个映射，应该在行上标注。纯增量 UI。
-- [ ] **CDP 实机验证** —— 用户明确要求过，今晚没做成。路径已验证可行：
-      `pnpm build` + `codeg-server --no-default-features` 带 `CODEG_STATIC_DIR`。
-      三个前提见交接文档第 5 节（连不上 Tauri webview / 必须同源 / 别用真实数据目录）。
+- [ ] **CDP 实机验证** —— 用户明确要求过（原话：不只是只跑 test，要实际 CDP 进 dev 试），
+      今晚没做成。**照 `DESKTOP-DEVELOPMENT-AND-VALIDATION-GUIDE` §4.5/§4.6 做**，
+      那里有直连真实 Tauri WebView2 的完整流程和可跑的探针，不要自己发明。
+      该点什么见交接文档第 5 节末尾的五条。
 
 ## 待办（用户已拍板，不需要再问）
 
