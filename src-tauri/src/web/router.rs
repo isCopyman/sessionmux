@@ -1205,6 +1205,10 @@ pub fn build_router(
             post(handlers::claude_profile::claude_profile_list),
         )
         .route(
+            "/claude_settings_read",
+            post(handlers::claude_profile::claude_settings_read),
+        )
+        .route(
             "/claude_profile_upsert",
             post(handlers::claude_profile::claude_profile_upsert),
         )

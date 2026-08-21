@@ -21,12 +21,12 @@ use crate::acp::error::AcpError;
 use crate::acp::manager::ConnectionManager;
 use crate::acp::types::ConfigStaleKind;
 use crate::app_error::AppCommandError;
-use crate::db::service::conversation_service;
+use crate::db::service::{agent_setting_service, conversation_service};
 use crate::db::AppDatabase;
 use crate::models::agent::AgentType;
 use crate::models::claude_profile::{
     ClaudeProfileInfo, ClaudeProfileKind, ClaudeProfileRecord, ClaudeProfileUpsert,
-    ConversationClaudeProfileResult,
+    ClaudeSettingsReadResult, ConversationClaudeProfileResult,
 };
 use crate::models::model_provider::mask_api_key;
 
@@ -45,6 +45,10 @@ pub const OFFICIAL_ANTHROPIC_BASE_URL: &str = "https://api.anthropic.com";
 /// Agent-setting `env_json` key for the default Claude profile (no extra DB
 /// column). Same store as `CLAUDE_AUTH_MODE`.
 pub const CODEG_CLAUDE_PROFILE_ENV_KEY: &str = "CODEG_CLAUDE_PROFILE";
+
+/// One-shot marker stored beside `CODEG_CLAUDE_PROFILE` in Claude's existing
+/// `agent_setting.env_json`. It deliberately needs no schema column.
+pub const CODEG_CLAUDE_PROFILE_MIGRATED_ENV_KEY: &str = "CODEG_CLAUDE_PROFILE_MIGRATED";
 
 const PROFILES_DIR_NAME: &str = "claude-profiles";
 const VIRTUAL_CREATED_AT: &str = "1970-01-01T00:00:00Z";
@@ -163,6 +167,117 @@ fn mask_env_map(env: &BTreeMap<String, String>) -> BTreeMap<String, String> {
         .collect()
 }
 
+fn secret_value_text(value: &serde_json::Value) -> String {
+    value
+        .as_str()
+        .map(str::to_string)
+        .unwrap_or_else(|| value.to_string())
+}
+
+fn mask_settings_object(root: &mut serde_json::Value) -> Vec<String> {
+    let Some(env) = root
+        .get_mut("env")
+        .and_then(serde_json::Value::as_object_mut)
+    else {
+        return Vec::new();
+    };
+    let mut masked_keys = Vec::new();
+    for (key, value) in env {
+        if !is_secret_env_key(key) {
+            continue;
+        }
+        let raw = secret_value_text(value);
+        if !raw.is_empty() {
+            masked_keys.push(key.clone());
+        }
+        *value = serde_json::Value::String(mask_api_key(&raw));
+    }
+    masked_keys.sort();
+    masked_keys
+}
+
+fn parse_settings_object(text: &str, context: &str) -> Result<serde_json::Value, AppCommandError> {
+    let value = serde_json::from_str::<serde_json::Value>(text).map_err(|e| {
+        AppCommandError::invalid_input(format!("{context} must be valid JSON: {e}"))
+    })?;
+    if !value.is_object() {
+        return Err(AppCommandError::invalid_input(format!(
+            "{context} must have a JSON object at the top level"
+        )));
+    }
+    Ok(value)
+}
+
+fn pretty_settings_object(value: &serde_json::Value) -> Result<String, AppCommandError> {
+    serde_json::to_string_pretty(value)
+        .map_err(|e| AppCommandError::configuration_invalid(e.to_string()))
+}
+
+fn masked_settings_json(text: Option<&str>) -> Result<Option<String>, AppCommandError> {
+    let Some(text) = text else {
+        return Ok(None);
+    };
+    let mut value = parse_settings_object(text, "stored settingsJson")?;
+    mask_settings_object(&mut value);
+    pretty_settings_object(&value).map(Some)
+}
+
+/// Recognize exactly the shapes emitted by `mask_api_key`: either 1-8 bullets,
+/// or four visible edge characters around 1-12 bullets (maximum output length
+/// 20 even when the original secret was longer).
+fn is_mask_api_key_shape(value: &str) -> bool {
+    let chars: Vec<char> = value.chars().collect();
+    if chars.is_empty() || chars.len() > 20 {
+        return false;
+    }
+    if chars.len() <= 8 {
+        return chars.iter().all(|ch| *ch == '\u{2022}');
+    }
+    chars[4..chars.len() - 4].iter().all(|ch| *ch == '\u{2022}')
+}
+
+fn sanitized_settings_json(
+    incoming: &str,
+    existing: Option<&ClaudeProfileRecord>,
+) -> Result<Option<String>, AppCommandError> {
+    if incoming.trim().is_empty() {
+        return Ok(None);
+    }
+
+    let mut value = parse_settings_object(incoming, "settingsJson")?;
+    let existing_value = existing
+        .and_then(|record| record.settings_json.as_deref())
+        .map(|text| parse_settings_object(text, "stored settingsJson"))
+        .transpose()?;
+    let existing_env = existing_value
+        .as_ref()
+        .and_then(|root| root.get("env"))
+        .and_then(serde_json::Value::as_object);
+
+    if let Some(env) = value
+        .get_mut("env")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        env.retain(|key, incoming_value| {
+            if !is_secret_env_key(key) {
+                return true;
+            }
+            let Some(incoming_text) = incoming_value.as_str() else {
+                return true;
+            };
+            if let Some(stored_value) = existing_env.and_then(|stored| stored.get(key)) {
+                if incoming_text == mask_api_key(&secret_value_text(stored_value)) {
+                    *incoming_value = stored_value.clone();
+                    return true;
+                }
+            }
+            !is_mask_api_key_shape(incoming_text)
+        });
+    }
+
+    pretty_settings_object(&value).map(Some)
+}
+
 pub fn claude_profiles_dir(data_dir: &Path) -> PathBuf {
     data_dir.join(PROFILES_DIR_NAME)
 }
@@ -194,6 +309,7 @@ fn virtual_info(id: &str, label: &str, kind: ClaudeProfileKind) -> ClaudeProfile
         base_url: None,
         auth_token_masked: String::new(),
         model: None,
+        settings_json: None,
         env: BTreeMap::new(),
         is_virtual: true,
         created_at: VIRTUAL_CREATED_AT.to_string(),
@@ -209,16 +325,8 @@ fn follow_default_info() -> ClaudeProfileInfo {
     )
 }
 
-fn official_direct_info() -> ClaudeProfileInfo {
-    virtual_info(
-        OFFICIAL_DIRECT_PROFILE_ID,
-        "Official direct",
-        ClaudeProfileKind::OfficialDirect,
-    )
-}
-
-fn record_to_info(record: &ClaudeProfileRecord) -> ClaudeProfileInfo {
-    ClaudeProfileInfo {
+fn record_to_info(record: &ClaudeProfileRecord) -> Result<ClaudeProfileInfo, AppCommandError> {
+    Ok(ClaudeProfileInfo {
         id: record.id.clone(),
         label: record.label.clone(),
         kind: record.kind,
@@ -231,11 +339,12 @@ fn record_to_info(record: &ClaudeProfileRecord) -> ClaudeProfileInfo {
             .map(mask_api_key)
             .unwrap_or_default(),
         model: record.model.clone(),
+        settings_json: masked_settings_json(record.settings_json.as_deref())?,
         env: mask_env_map(&record.env),
         is_virtual: false,
         created_at: record.created_at.clone(),
         updated_at: record.updated_at.clone(),
-    }
+    })
 }
 
 fn write_owner_only_file(path: &Path, contents: &str) -> Result<(), AppCommandError> {
@@ -313,14 +422,13 @@ fn trim_non_empty(value: Option<&str>) -> Option<String> {
 }
 
 /// Write `claude-profiles/<id>/settings.json` for a managed profile.
-/// Only env keys with a non-empty value are included. Replace semantics
-/// (idempotent): the file is rewritten from the record, not merged with
-/// whatever was on disk.
+/// `settingsJson` is the base object. Replace semantics (idempotent): the file
+/// is rewritten from the record, not merged with whatever was on disk.
 ///
-/// Merge order: `record.env` first, then dedicated `baseUrl` / `authToken` /
-/// `model` overlay those three keys when set. Dedicated fields win on
-/// conflict so a leftover `ANTHROPIC_AUTH_TOKEN` in `env` cannot hide the
-/// token the user just typed into the form.
+/// Merge order: the raw settings object, then the O66 structured `record.env`
+/// compatibility overlay, then dedicated `baseUrl` / `authToken` / `model`.
+/// Dedicated fields win on conflict. An empty / absent dedicated field neither
+/// writes nor removes its same-named key from the raw settings base.
 pub fn materialize_managed_profile(
     data_dir: &Path,
     record: &ClaudeProfileRecord,
@@ -328,31 +436,48 @@ pub fn materialize_managed_profile(
     let dir = managed_config_dir(data_dir, &record.id);
     fs::create_dir_all(&dir).map_err(AppCommandError::io)?;
 
-    let mut env = serde_json::Map::new();
-    for (key, value) in &record.env {
-        if let Some(trimmed) = trim_non_empty(Some(value)) {
-            env.insert(key.clone(), serde_json::Value::String(trimmed));
+    let mut settings = match record.settings_json.as_deref() {
+        Some(text) => parse_settings_object(text, "stored settingsJson")?,
+        None => serde_json::json!({}),
+    };
+    let root = settings.as_object_mut().ok_or_else(|| {
+        AppCommandError::configuration_invalid("stored settingsJson must be a JSON object")
+    })?;
+    let needs_env_object = !record.env.is_empty()
+        || trim_non_empty(record.base_url.as_deref()).is_some()
+        || trim_non_empty(record.auth_token.as_deref()).is_some()
+        || trim_non_empty(record.model.as_deref()).is_some();
+    if needs_env_object && !root.get("env").is_some_and(serde_json::Value::is_object) {
+        root.insert("env".to_string(), serde_json::json!({}));
+    }
+    if let Some(env) = root
+        .get_mut("env")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        for (key, value) in &record.env {
+            if let Some(trimmed) = trim_non_empty(Some(value)) {
+                env.insert(key.clone(), serde_json::Value::String(trimmed));
+            }
+        }
+        if let Some(url) = trim_non_empty(record.base_url.as_deref()) {
+            env.insert(
+                "ANTHROPIC_BASE_URL".to_string(),
+                serde_json::Value::String(url),
+            );
+        }
+        if let Some(token) = trim_non_empty(record.auth_token.as_deref()) {
+            env.insert(
+                "ANTHROPIC_AUTH_TOKEN".to_string(),
+                serde_json::Value::String(token),
+            );
+        }
+        if let Some(model) = trim_non_empty(record.model.as_deref()) {
+            env.insert(
+                "ANTHROPIC_MODEL".to_string(),
+                serde_json::Value::String(model),
+            );
         }
     }
-    if let Some(url) = trim_non_empty(record.base_url.as_deref()) {
-        env.insert(
-            "ANTHROPIC_BASE_URL".to_string(),
-            serde_json::Value::String(url),
-        );
-    }
-    if let Some(token) = trim_non_empty(record.auth_token.as_deref()) {
-        env.insert(
-            "ANTHROPIC_AUTH_TOKEN".to_string(),
-            serde_json::Value::String(token),
-        );
-    }
-    if let Some(model) = trim_non_empty(record.model.as_deref()) {
-        env.insert(
-            "ANTHROPIC_MODEL".to_string(),
-            serde_json::Value::String(model),
-        );
-    }
-    let settings = serde_json::json!({ "env": env });
     let body = serde_json::to_string_pretty(&settings)
         .map_err(|e| AppCommandError::configuration_invalid(e.to_string()))?;
     write_owner_only_file(&dir.join("settings.json"), &format!("{body}\n"))?;
@@ -524,6 +649,20 @@ pub async fn apply_claude_profile_env(
     }
 
     strip_profile_owned_agent_env(runtime_env);
+    // A selected profile is the authentication-mode boundary. Empty values are
+    // not injected into the child: sacp-tokio translates them to `env_remove`,
+    // preventing credentials exported by codeg's parent shell/container from
+    // overriding the selected config directory. Dedicated fields (or the
+    // retained O66 `record.env` compatibility map) overlay these sentinels
+    // below. This replaces the old CLAUDE_AUTH_MODE=official_subscription
+    // launch policy without carrying that codeg-only selector into the profile.
+    for key in [
+        "ANTHROPIC_BASE_URL",
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_API_KEY",
+    ] {
+        runtime_env.insert(key.to_string(), String::new());
+    }
     apply_profile_connection_env(&resolved, runtime_env);
 
     let Some(dir) = resolved.config_dir else {
@@ -551,7 +690,7 @@ pub async fn apply_claude_profile_env(
 pub fn claude_profile_list_core(
     data_dir: &Path,
 ) -> Result<Vec<ClaudeProfileInfo>, AppCommandError> {
-    let mut out = vec![follow_default_info(), official_direct_info()];
+    let mut out = vec![follow_default_info()];
     let dir = claude_profiles_dir(data_dir);
     if !dir.exists() {
         return Ok(out);
@@ -575,7 +714,15 @@ pub fn claude_profile_list_core(
                 if is_virtual_profile_id(&record.id) {
                     continue;
                 }
-                out.push(record_to_info(&record));
+                match record_to_info(&record) {
+                    Ok(info) => out.push(info),
+                    Err(e) => {
+                        tracing::warn!(
+                            "[claude-profile] skip invalid settingsJson in {}: {e}",
+                            path.display()
+                        );
+                    }
+                }
             }
             Err(e) => {
                 tracing::warn!("[claude-profile] skip invalid {}: {e}", path.display());
@@ -583,6 +730,164 @@ pub fn claude_profile_list_core(
         }
     }
     Ok(out)
+}
+
+fn default_claude_settings_path() -> PathBuf {
+    crate::parsers::claude::resolve_claude_config_dir().join("settings.json")
+}
+
+/// Read a Claude settings file without ever writing it. Invalid JSON is
+/// returned verbatim so the frontend can show the user what needs repair.
+pub fn claude_settings_read_core(
+    path: Option<String>,
+) -> Result<ClaudeSettingsReadResult, AppCommandError> {
+    let path = path
+        .map(PathBuf::from)
+        .unwrap_or_else(default_claude_settings_path);
+    let rendered_path = path.to_string_lossy().into_owned();
+    let raw = match fs::read_to_string(&path) {
+        Ok(raw) => raw,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(ClaudeSettingsReadResult {
+                path: rendered_path,
+                text: String::new(),
+                exists: false,
+                dropped_secret_keys: Vec::new(),
+            });
+        }
+        Err(error) => return Err(AppCommandError::io(error)),
+    };
+
+    let (text, dropped_secret_keys) = match serde_json::from_str::<serde_json::Value>(&raw) {
+        Ok(mut value) if value.is_object() => {
+            let dropped = mask_settings_object(&mut value);
+            if dropped.is_empty() {
+                (raw, dropped)
+            } else {
+                (pretty_settings_object(&value)?, dropped)
+            }
+        }
+        // A malformed file (or a valid non-object JSON value) is a read-only
+        // preview: preserve its exact bytes for diagnosis.
+        _ => (raw, Vec::new()),
+    };
+
+    Ok(ClaudeSettingsReadResult {
+        path: rendered_path,
+        text,
+        exists: true,
+        dropped_secret_keys,
+    })
+}
+
+fn next_imported_profile_id(data_dir: &Path) -> String {
+    for suffix in 1usize.. {
+        let id = if suffix == 1 {
+            "imported".to_string()
+        } else {
+            format!("imported-{suffix}")
+        };
+        if !profile_record_path(data_dir, &id).exists()
+            && !managed_config_dir(data_dir, &id).exists()
+        {
+            return id;
+        }
+    }
+    unreachable!("usize profile suffix space is finite but cannot be exhausted in practice")
+}
+
+fn imported_profile_label(base_url: Option<&str>) -> String {
+    base_url
+        .and_then(|raw| reqwest::Url::parse(raw).ok())
+        .and_then(|url| url.host_str().map(str::to_string))
+        .filter(|host| !host.trim().is_empty())
+        .unwrap_or_else(|| "Imported".to_string())
+}
+
+/// Move Claude's legacy agent-global connection env into one managed profile.
+/// The profile file is durably written before the single DB-row update removes
+/// anything, so a write failure cannot destroy the user's connection settings.
+/// Returns the created profile id, or `None` when no migration was needed.
+pub async fn migrate_claude_profile_owned_env(
+    db: &AppDatabase,
+    data_dir: &Path,
+) -> Result<Option<String>, AppCommandError> {
+    let Some(setting) = agent_setting_service::get_by_agent_type(&db.conn, AgentType::ClaudeCode)
+        .await
+        .map_err(AppCommandError::from)?
+    else {
+        return Ok(None);
+    };
+    let mut env: BTreeMap<String, String> = match setting.env_json.as_deref() {
+        Some(raw) if !raw.trim().is_empty() => serde_json::from_str(raw).map_err(|error| {
+            AppCommandError::configuration_invalid(format!(
+                "cannot migrate Claude agent env_json because it is invalid: {error}"
+            ))
+        })?,
+        _ => BTreeMap::new(),
+    };
+    if env
+        .get(CODEG_CLAUDE_PROFILE_MIGRATED_ENV_KEY)
+        .is_some_and(|value| value == "1")
+    {
+        return Ok(None);
+    }
+    if !env.keys().any(|key| is_profile_owned_env_key(key)) {
+        return Ok(None);
+    }
+
+    let id = next_imported_profile_id(data_dir);
+    let base_url = env.get("ANTHROPIC_BASE_URL").cloned();
+    let auth_token = env.get("ANTHROPIC_AUTH_TOKEN").cloned();
+    let model = env.get("ANTHROPIC_MODEL").cloned();
+    let mut imported_env = serde_json::Map::new();
+    for (key, value) in &env {
+        if is_profile_owned_env_key(key)
+            && key != "ANTHROPIC_BASE_URL"
+            && key != "ANTHROPIC_AUTH_TOKEN"
+            && key != "ANTHROPIC_MODEL"
+            && key != "CLAUDE_AUTH_MODE"
+        {
+            imported_env.insert(key.clone(), serde_json::Value::String(value.clone()));
+        }
+    }
+    let settings_json = pretty_settings_object(&serde_json::json!({ "env": imported_env }))?;
+    claude_profile_upsert_core(
+        data_dir,
+        ClaudeProfileUpsert {
+            id: id.clone(),
+            label: imported_profile_label(base_url.as_deref()),
+            kind: ClaudeProfileKind::Managed,
+            config_dir: None,
+            base_url,
+            auth_token,
+            model,
+            settings_json: Some(settings_json),
+            env: None,
+        },
+    )?;
+
+    env.retain(|key, _| !is_profile_owned_env_key(key));
+    env.insert(CODEG_CLAUDE_PROFILE_ENV_KEY.to_string(), id.clone());
+    env.insert(
+        CODEG_CLAUDE_PROFILE_MIGRATED_ENV_KEY.to_string(),
+        "1".to_string(),
+    );
+    let env_json = serde_json::to_string(&env)
+        .map_err(|error| AppCommandError::configuration_invalid(error.to_string()))?;
+    agent_setting_service::update(
+        &db.conn,
+        AgentType::ClaudeCode,
+        agent_setting_service::AgentSettingsUpdate {
+            enabled: setting.enabled,
+            env_json: Some(env_json),
+            model_provider_id: setting.model_provider_id,
+        },
+    )
+    .await
+    .map_err(AppCommandError::from)?;
+
+    Ok(Some(id))
 }
 
 /// Existing work-task / automation `config_values` key for the model pin.
@@ -682,6 +987,11 @@ fn validate_upsert(input: &ClaudeProfileUpsert) -> Result<(), AppCommandError> {
             ));
         }
         ClaudeProfileKind::ConfigDir => {
+            if input.settings_json.is_some() {
+                return Err(AppCommandError::invalid_input(
+                    "settingsJson is only valid for kind=managed; configDir profiles use the user's own directory",
+                ));
+            }
             let dir = trim_non_empty(input.config_dir.as_deref()).ok_or_else(|| {
                 AppCommandError::invalid_input("configDir is required for kind=configDir")
             })?;
@@ -691,7 +1001,13 @@ fn validate_upsert(input: &ClaudeProfileUpsert) -> Result<(), AppCommandError> {
                 ));
             }
         }
-        ClaudeProfileKind::Managed => {}
+        ClaudeProfileKind::Managed => {
+            if let Some(raw) = input.settings_json.as_deref() {
+                if !raw.trim().is_empty() {
+                    parse_settings_object(raw, "settingsJson")?;
+                }
+            }
+        }
     }
     Ok(())
 }
@@ -710,6 +1026,12 @@ pub fn claude_profile_upsert_core(
     let auth_token = match input.auth_token.as_deref() {
         None => existing.as_ref().and_then(|r| r.auth_token.clone()),
         Some(raw) => trim_non_empty(Some(raw)),
+    };
+    let settings_json = match input.settings_json.as_deref() {
+        None => existing
+            .as_ref()
+            .and_then(|record| record.settings_json.clone()),
+        Some(raw) => sanitized_settings_json(raw, existing.as_ref())?,
     };
     // Whole-map replace: omitted keeps the stored map; Some (including empty)
     // replaces it.
@@ -737,6 +1059,10 @@ pub fn claude_profile_upsert_core(
             ClaudeProfileKind::Managed => trim_non_empty(input.model.as_deref()),
             _ => None,
         },
+        settings_json: match input.kind {
+            ClaudeProfileKind::Managed => settings_json,
+            _ => None,
+        },
         env,
         created_at,
         updated_at: now,
@@ -750,7 +1076,7 @@ pub fn claude_profile_upsert_core(
     if record.kind == ClaudeProfileKind::Managed {
         materialize_managed_profile(data_dir, &record)?;
     }
-    Ok(record_to_info(&record))
+    record_to_info(&record)
 }
 
 pub fn claude_profile_delete_core(data_dir: &Path, id: &str) -> Result<(), AppCommandError> {
@@ -875,6 +1201,14 @@ pub fn claude_profile_list(
 
 #[cfg(feature = "tauri-runtime")]
 #[tauri::command]
+pub fn claude_settings_read(
+    path: Option<String>,
+) -> Result<ClaudeSettingsReadResult, AppCommandError> {
+    claude_settings_read_core(path)
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
 pub fn claude_profile_upsert(
     app: tauri::AppHandle,
     payload: ClaudeProfileUpsert,
@@ -911,6 +1245,12 @@ pub async fn conversation_set_claude_profile(
 #[serde(rename_all = "camelCase")]
 pub struct ClaudeProfileDeleteParams {
     pub id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaudeSettingsReadParams {
+    pub path: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -973,6 +1313,7 @@ mod tests {
                 base_url: None,
                 auth_token: None,
                 model: None,
+                settings_json: None,
                 env: None,
             },
         )
@@ -996,6 +1337,7 @@ mod tests {
                 base_url: base_url.map(str::to_string),
                 auth_token: auth_token.map(str::to_string),
                 model: model.map(str::to_string),
+                settings_json: None,
                 env: None,
             },
         )
@@ -1024,6 +1366,7 @@ mod tests {
                 base_url: None,
                 auth_token: None,
                 model: None,
+                settings_json: None,
                 env: None,
             },
         )
@@ -1039,6 +1382,7 @@ mod tests {
                 base_url: None,
                 auth_token: None,
                 model: None,
+                settings_json: None,
                 env: None,
             },
         )
@@ -1054,6 +1398,7 @@ mod tests {
                 base_url: None,
                 auth_token: None,
                 model: None,
+                settings_json: None,
                 env: None,
             },
         )
@@ -1071,6 +1416,7 @@ mod tests {
                 base_url: None,
                 auth_token: None,
                 model: None,
+                settings_json: None,
                 env: None,
             },
         )
@@ -1082,15 +1428,16 @@ mod tests {
     fn list_always_starts_with_virtual_follow_default() {
         let data = tempfile::tempdir().unwrap();
         let list = claude_profile_list_core(data.path()).unwrap();
-        assert_eq!(list.len(), 2);
+        assert_eq!(list.len(), 1);
         assert_eq!(list[0].id, FOLLOW_DEFAULT_PROFILE_ID);
         assert_eq!(list[0].kind, ClaudeProfileKind::FollowDefault);
         assert!(list[0].is_virtual);
         assert!(list[0].auth_token_masked.is_empty());
-        assert_eq!(list[1].id, OFFICIAL_DIRECT_PROFILE_ID);
-        assert_eq!(list[1].kind, ClaudeProfileKind::OfficialDirect);
-        assert!(list[1].is_virtual);
-        assert!(list[1].env.is_empty());
+        assert!(
+            list.iter()
+                .all(|profile| profile.id != OFFICIAL_DIRECT_PROFILE_ID),
+            "official-direct is retired from discovery"
+        );
     }
 
     #[test]
@@ -1170,6 +1517,272 @@ mod tests {
             env.get("ANTHROPIC_MODEL").and_then(|v| v.as_str()),
             Some("claude-sonnet-4")
         );
+    }
+
+    #[test]
+    fn managed_settings_json_is_base_and_dedicated_fields_win_without_deleting_base_keys() {
+        let data = tempfile::tempdir().unwrap();
+        let base = serde_json::json!({
+            "permissions": { "allow": ["Read"] },
+            "env": {
+                "ANTHROPIC_BASE_URL": "https://base.example/v1",
+                "ANTHROPIC_AUTH_TOKEN": "sk-base-secret",
+                "ANTHROPIC_MODEL": "base-model",
+                "ANTHROPIC_DEFAULT_FABLE_MODEL": "fable-base"
+            }
+        });
+        let info = claude_profile_upsert_core(
+            data.path(),
+            ClaudeProfileUpsert {
+                id: "base".into(),
+                label: "Base".into(),
+                kind: ClaudeProfileKind::Managed,
+                config_dir: None,
+                base_url: Some("https://dedicated.example/v1".into()),
+                auth_token: None,
+                model: None,
+                settings_json: Some(serde_json::to_string_pretty(&base).unwrap()),
+                env: None,
+            },
+        )
+        .unwrap();
+
+        let masked: serde_json::Value =
+            serde_json::from_str(info.settings_json.as_deref().unwrap()).unwrap();
+        assert_ne!(
+            masked["env"]["ANTHROPIC_AUTH_TOKEN"],
+            serde_json::json!("sk-base-secret")
+        );
+        let materialized: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(managed_config_dir(data.path(), "base").join("settings.json"))
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(materialized["permissions"]["allow"][0], "Read");
+        assert_eq!(
+            materialized["env"]["ANTHROPIC_BASE_URL"],
+            "https://dedicated.example/v1"
+        );
+        assert_eq!(
+            materialized["env"]["ANTHROPIC_AUTH_TOKEN"], "sk-base-secret",
+            "absent dedicated token must not delete the base key"
+        );
+        assert_eq!(materialized["env"]["ANTHROPIC_MODEL"], "base-model");
+        assert_eq!(
+            materialized["env"]["ANTHROPIC_DEFAULT_FABLE_MODEL"],
+            "fable-base"
+        );
+    }
+
+    #[test]
+    fn settings_json_validation_and_config_dir_rejection_are_frontend_readable() {
+        let data = tempfile::tempdir().unwrap();
+        for (raw, needle) in [
+            ("{broken", "must be valid JSON"),
+            (r#"["not", "an", "object"]"#, "top level"),
+        ] {
+            let err = claude_profile_upsert_core(
+                data.path(),
+                ClaudeProfileUpsert {
+                    id: "bad".into(),
+                    label: "Bad".into(),
+                    kind: ClaudeProfileKind::Managed,
+                    config_dir: None,
+                    base_url: None,
+                    auth_token: None,
+                    model: None,
+                    settings_json: Some(raw.into()),
+                    env: None,
+                },
+            )
+            .unwrap_err();
+            assert!(err.message.contains(needle), "{}", err.message);
+        }
+
+        let err = claude_profile_upsert_core(
+            data.path(),
+            ClaudeProfileUpsert {
+                id: "user".into(),
+                label: "User".into(),
+                kind: ClaudeProfileKind::ConfigDir,
+                config_dir: Some(data.path().to_string_lossy().into_owned()),
+                base_url: None,
+                auth_token: None,
+                model: None,
+                settings_json: Some("{}".into()),
+                env: None,
+            },
+        )
+        .unwrap_err();
+        assert!(err.message.contains("only valid for kind=managed"));
+    }
+
+    #[test]
+    fn masked_settings_secret_round_trip_preserves_stored_plaintext() {
+        let data = tempfile::tempdir().unwrap();
+        claude_profile_upsert_core(
+            data.path(),
+            ClaudeProfileUpsert {
+                id: "secret".into(),
+                label: "Secret".into(),
+                kind: ClaudeProfileKind::Managed,
+                config_dir: None,
+                base_url: None,
+                auth_token: None,
+                model: None,
+                settings_json: Some(
+                    r#"{"env":{"MY_GATEWAY_SECRET":"secret-value-12345678"}}"#.into(),
+                ),
+                env: None,
+            },
+        )
+        .unwrap();
+        let masked = claude_profile_list_core(data.path())
+            .unwrap()
+            .into_iter()
+            .find(|profile| profile.id == "secret")
+            .unwrap()
+            .settings_json
+            .unwrap();
+        assert!(masked.contains('\u{2022}'));
+        assert!(!masked.contains("secret-value-12345678"));
+
+        claude_profile_upsert_core(
+            data.path(),
+            ClaudeProfileUpsert {
+                id: "secret".into(),
+                label: "Secret renamed".into(),
+                kind: ClaudeProfileKind::Managed,
+                config_dir: None,
+                base_url: None,
+                auth_token: None,
+                model: None,
+                settings_json: Some(masked),
+                env: None,
+            },
+        )
+        .unwrap();
+        let stored = read_record(data.path(), "secret").unwrap().unwrap();
+        assert!(stored
+            .settings_json
+            .as_deref()
+            .unwrap()
+            .contains("secret-value-12345678"));
+    }
+
+    #[test]
+    fn settings_json_omit_and_null_keep_while_empty_string_clears() {
+        let data = tempfile::tempdir().unwrap();
+        claude_profile_upsert_core(
+            data.path(),
+            ClaudeProfileUpsert {
+                id: "patch".into(),
+                label: "Patch".into(),
+                kind: ClaudeProfileKind::Managed,
+                config_dir: None,
+                base_url: None,
+                auth_token: None,
+                model: None,
+                settings_json: Some(r#"{"theme":"dark"}"#.into()),
+                env: None,
+            },
+        )
+        .unwrap();
+
+        for wire in [
+            serde_json::json!({ "id": "patch", "label": "Patch", "kind": "managed" }),
+            serde_json::json!({
+                "id": "patch",
+                "label": "Patch",
+                "kind": "managed",
+                "settingsJson": null
+            }),
+        ] {
+            let payload: ClaudeProfileUpsert = serde_json::from_value(wire).unwrap();
+            assert!(payload.settings_json.is_none());
+            let info = claude_profile_upsert_core(data.path(), payload).unwrap();
+            assert!(info.settings_json.as_deref().unwrap().contains("dark"));
+        }
+
+        let cleared = claude_profile_upsert_core(
+            data.path(),
+            ClaudeProfileUpsert {
+                id: "patch".into(),
+                label: "Patch".into(),
+                kind: ClaudeProfileKind::Managed,
+                config_dir: None,
+                base_url: None,
+                auth_token: None,
+                model: None,
+                settings_json: Some(String::new()),
+                env: None,
+            },
+        )
+        .unwrap();
+        assert!(cleared.settings_json.is_none());
+        let materialized: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(managed_config_dir(data.path(), "patch").join("settings.json"))
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(materialized, serde_json::json!({}));
+    }
+
+    #[test]
+    fn new_profile_drops_mask_shaped_settings_secrets() {
+        let data = tempfile::tempdir().unwrap();
+        claude_profile_upsert_core(
+            data.path(),
+            ClaudeProfileUpsert {
+                id: "import".into(),
+                label: "Import".into(),
+                kind: ClaudeProfileKind::Managed,
+                config_dir: None,
+                base_url: None,
+                auth_token: None,
+                model: None,
+                settings_json: Some(
+                    r#"{"env":{"ANTHROPIC_API_KEY":"sk-a••••••••••••7890","KEEP":"yes"}}"#.into(),
+                ),
+                env: None,
+            },
+        )
+        .unwrap();
+        let stored = read_record(data.path(), "import").unwrap().unwrap();
+        let parsed: serde_json::Value =
+            serde_json::from_str(stored.settings_json.as_deref().unwrap()).unwrap();
+        assert!(parsed["env"].get("ANTHROPIC_API_KEY").is_none());
+        assert_eq!(parsed["env"]["KEEP"], "yes");
+    }
+
+    #[test]
+    fn settings_read_masks_secrets_reports_drops_and_preserves_invalid_text() {
+        let data = tempfile::tempdir().unwrap();
+        let path = data.path().join("settings.json");
+        fs::write(
+            &path,
+            r#"{"theme":"dark","env":{"ANTHROPIC_API_KEY":"sk-import-1234567890","NORMAL":"keep"}}"#,
+        )
+        .unwrap();
+        let result = claude_settings_read_core(Some(path.to_string_lossy().into_owned())).unwrap();
+        assert!(result.exists);
+        assert_eq!(result.dropped_secret_keys, vec!["ANTHROPIC_API_KEY"]);
+        assert!(!result.text.contains("sk-import-1234567890"));
+        assert!(result.text.contains('\u{2022}'));
+        assert!(result.text.contains("\"NORMAL\": \"keep\""));
+
+        let invalid = "{ this is the broken original";
+        fs::write(&path, invalid).unwrap();
+        let result = claude_settings_read_core(Some(path.to_string_lossy().into_owned())).unwrap();
+        assert!(result.exists);
+        assert_eq!(result.text, invalid);
+        assert!(result.dropped_secret_keys.is_empty());
+
+        fs::remove_file(&path).unwrap();
+        let result = claude_settings_read_core(Some(path.to_string_lossy().into_owned())).unwrap();
+        assert!(!result.exists);
+        assert!(result.text.is_empty());
+        assert!(result.dropped_secret_keys.is_empty());
     }
 
     #[tokio::test]
@@ -1427,7 +2040,7 @@ mod tests {
         let err = launch_config_values(data.path(), Some("nope"), Some("opus")).unwrap_err();
         assert!(err.contains("nope"), "{err}");
         assert!(err.contains("follow-default"), "{err}");
-        assert!(err.contains("official-direct"), "{err}");
+        assert!(!err.contains("official-direct"), "{err}");
         assert!(err.contains("api"), "{err}");
         // Nothing to persist: the map is never returned.
         let values = launch_config_values(data.path(), None, None).unwrap();
@@ -1487,13 +2100,10 @@ mod tests {
         assert!(follow_dest.contains("default"), "{follow_dest}");
         assert!(follow.is_virtual);
 
-        let official = list
-            .iter()
-            .find(|p| p.id == OFFICIAL_DIRECT_PROFILE_ID)
-            .unwrap();
-        assert!(official.is_virtual);
-        let official_dest = profile_destination_summary(official);
-        assert!(official_dest.contains("official-direct"), "{official_dest}");
+        assert!(
+            list.iter().all(|p| p.id != OFFICIAL_DIRECT_PROFILE_ID),
+            "retired virtual profile must not be advertised"
+        );
 
         let managed = list.iter().find(|p| p.id == "gw").unwrap();
         let managed_dest = profile_destination_summary(managed);
@@ -1583,6 +2193,7 @@ mod tests {
         ));
         assert!(is_profile_owned_env_key("ANTHROPIC_DEFAULT_SONNET_MODEL"));
         assert!(is_profile_owned_env_key("ANTHROPIC_DEFAULT_HAIKU_MODEL"));
+        assert!(is_profile_owned_env_key("ANTHROPIC_DEFAULT_FABLE_MODEL"));
         assert!(!is_profile_owned_env_key("ANTHROPIC_DEFAULT_FOO"));
         assert!(!is_profile_owned_env_key("ANTHROPIC_REASONING_MODEL"));
         assert!(!is_profile_owned_env_key("CLAUDE_CODE_GIT_BASH_PATH"));
@@ -1594,7 +2205,7 @@ mod tests {
     }
 
     #[test]
-    fn old_profile_json_without_env_deserializes() {
+    fn old_profile_json_without_env_or_settings_json_deserializes() {
         let raw = r#"{
             "id": "legacy",
             "label": "Legacy",
@@ -1605,6 +2216,7 @@ mod tests {
         }"#;
         let record: ClaudeProfileRecord = serde_json::from_str(raw).unwrap();
         assert!(record.env.is_empty());
+        assert!(record.settings_json.is_none());
         assert_eq!(record.id, "legacy");
         assert_eq!(record.kind, ClaudeProfileKind::Managed);
         assert_eq!(record.base_url.as_deref(), Some("https://old.example/v1"));
@@ -1632,6 +2244,7 @@ mod tests {
                 base_url: Some("https://example.test/v1".into()),
                 auth_token: None,
                 model: None,
+                settings_json: None,
                 env: Some(env),
             },
         )
@@ -1671,6 +2284,7 @@ mod tests {
                 base_url: Some("https://example.test/v1".into()),
                 auth_token: None,
                 model: None,
+                settings_json: None,
                 env: Some(BTreeMap::new()),
             },
         )
@@ -1708,6 +2322,7 @@ mod tests {
                 base_url: Some("https://from-field.example/v1".into()),
                 auth_token: Some("sk-from-field".into()),
                 model: Some("from-field-model".into()),
+                settings_json: None,
                 env: Some(env),
             },
         )
@@ -1792,10 +2407,24 @@ mod tests {
                 follow.contains_key(*key),
                 "follow-default regression lost {key}"
             );
-            assert!(
-                !swept.contains_key(*key),
-                "configDir profile must not inject owned key {key}: {swept:?}"
-            );
+            if [
+                "ANTHROPIC_BASE_URL",
+                "ANTHROPIC_AUTH_TOKEN",
+                "ANTHROPIC_API_KEY",
+            ]
+            .contains(key)
+            {
+                assert_eq!(
+                    swept.get(*key).map(String::as_str),
+                    Some(""),
+                    "configDir must env_remove inherited credential {key}: {swept:?}"
+                );
+            } else {
+                assert!(
+                    !swept.contains_key(*key),
+                    "configDir profile must not inject owned key {key}: {swept:?}"
+                );
+            }
         }
         for key in MISC_SAMPLE_KEYS {
             assert_eq!(
@@ -1893,6 +2522,7 @@ mod tests {
                 base_url: Some("https://from-field.example/v1".into()),
                 auth_token: Some("sk-from-field".into()),
                 model: Some("from-field-model".into()),
+                settings_json: None,
                 env: Some(env),
             },
         )
@@ -1961,6 +2591,7 @@ mod tests {
                 base_url: None,
                 auth_token: None,
                 model: None,
+                settings_json: None,
                 env: Some(env),
             },
         )
@@ -2042,6 +2673,245 @@ mod tests {
             env.get("ANTHROPIC_BASE_URL").map(String::as_str),
             Some(OFFICIAL_ANTHROPIC_BASE_URL)
         );
+    }
+
+    fn real_legacy_claude_env() -> BTreeMap<String, String> {
+        BTreeMap::from([
+            ("ANTHROPIC_AUTH_TOKEN".into(), "sk-real-shape".into()),
+            (
+                "ANTHROPIC_BASE_URL".into(),
+                "https://relay.example/v1".into(),
+            ),
+            (
+                "ANTHROPIC_CUSTOM_MODEL_OPTION".into(),
+                "relay/custom".into(),
+            ),
+            ("ANTHROPIC_DEFAULT_FABLE_MODEL".into(), "relay/fable".into()),
+            ("ANTHROPIC_DEFAULT_HAIKU_MODEL".into(), "relay/haiku".into()),
+            ("ANTHROPIC_DEFAULT_OPUS_MODEL".into(), "relay/opus".into()),
+            (
+                "ANTHROPIC_DEFAULT_SONNET_MODEL".into(),
+                "relay/sonnet".into(),
+            ),
+            ("CLAUDE_AUTH_MODE".into(), "custom".into()),
+            ("CLAUDE_CODE_ATTRIBUTION_HEADER".into(), "x-codeg".into()),
+            ("CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY".into(), "1".into()),
+            (
+                "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC".into(),
+                "1".into(),
+            ),
+            ("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS".into(), "1".into()),
+            (
+                "CLAUDE_CODE_GIT_BASH_PATH".into(),
+                "C:/Program Files/Git/bin/bash.exe".into(),
+            ),
+            ("CLAUDE_CODE_SCROLL_SPEED".into(), "2".into()),
+            ("DISABLE_AUTOUPDATER".into(), "1".into()),
+            ("DISABLE_FEEDBACK_COMMAND".into(), "1".into()),
+            ("DISABLE_TELEMETRY".into(), "1".into()),
+            ("ENABLE_TOOL_SEARCH".into(), "1".into()),
+        ])
+    }
+
+    #[tokio::test]
+    async fn migration_preserves_effective_connection_config_and_misc_key_for_key() {
+        use crate::commands::acp::build_session_runtime_env;
+
+        let db = fresh_in_memory_db().await;
+        let data = tempfile::tempdir().unwrap();
+        let before = real_legacy_claude_env();
+        seed_claude_agent(&db, Some(&serde_json::to_string(&before).unwrap())).await;
+
+        let created = migrate_claude_profile_owned_env(&db, data.path())
+            .await
+            .unwrap();
+        assert_eq!(created.as_deref(), Some("imported"));
+
+        let list = claude_profile_list_core(data.path()).unwrap();
+        assert_eq!(
+            list.iter()
+                .map(|profile| profile.id.as_str())
+                .collect::<Vec<_>>(),
+            vec![FOLLOW_DEFAULT_PROFILE_ID, "imported"]
+        );
+        assert_eq!(list[1].label, "relay.example");
+
+        let setting = agent_setting_service::get_by_agent_type(&db.conn, AgentType::ClaudeCode)
+            .await
+            .unwrap()
+            .unwrap();
+        let after_db: BTreeMap<String, String> =
+            serde_json::from_str(setting.env_json.as_deref().unwrap()).unwrap();
+        assert_eq!(
+            after_db
+                .get(CODEG_CLAUDE_PROFILE_ENV_KEY)
+                .map(String::as_str),
+            Some("imported")
+        );
+        assert_eq!(
+            after_db
+                .get(CODEG_CLAUDE_PROFILE_MIGRATED_ENV_KEY)
+                .map(String::as_str),
+            Some("1")
+        );
+        for (key, value) in &before {
+            if is_profile_owned_env_key(key) {
+                assert!(
+                    !after_db.contains_key(key),
+                    "legacy connection key survived: {key}"
+                );
+            } else {
+                assert_eq!(after_db.get(key), Some(value), "misc key changed: {key}");
+            }
+        }
+
+        let settings: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(managed_config_dir(data.path(), "imported").join("settings.json"))
+                .unwrap(),
+        )
+        .unwrap();
+        let mut effective: BTreeMap<String, String> =
+            serde_json::from_value(settings["env"].clone()).unwrap();
+        assert!(!effective.contains_key("CLAUDE_AUTH_MODE"));
+
+        let runtime =
+            build_session_runtime_env(&db, AgentType::ClaudeCode, None, data.path(), None)
+                .await
+                .unwrap();
+        assert_eq!(
+            runtime.get("ANTHROPIC_BASE_URL"),
+            before.get("ANTHROPIC_BASE_URL")
+        );
+        assert_eq!(
+            runtime.get("ANTHROPIC_AUTH_TOKEN"),
+            before.get("ANTHROPIC_AUTH_TOKEN")
+        );
+        assert_eq!(
+            runtime.get("ANTHROPIC_API_KEY").map(String::as_str),
+            Some(""),
+            "selected profile must env_remove an inherited API key"
+        );
+        for key in [
+            "ANTHROPIC_CUSTOM_MODEL_OPTION",
+            "ANTHROPIC_DEFAULT_FABLE_MODEL",
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+            "ANTHROPIC_DEFAULT_OPUS_MODEL",
+            "ANTHROPIC_DEFAULT_SONNET_MODEL",
+        ] {
+            assert!(
+                !runtime.contains_key(key),
+                "settingsJson-only key must be read by the CLI, not injected: {key}"
+            );
+        }
+        for (key, value) in &runtime {
+            if is_profile_owned_env_key(key) && key != "CLAUDE_AUTH_MODE" {
+                effective.insert(key.clone(), value.clone());
+            }
+        }
+        for (key, value) in &before {
+            if is_profile_owned_env_key(key) && key != "CLAUDE_AUTH_MODE" {
+                assert_eq!(
+                    effective.get(key),
+                    Some(value),
+                    "effective key changed: {key}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn migration_is_idempotent_and_does_not_create_a_second_profile() {
+        let db = fresh_in_memory_db().await;
+        let data = tempfile::tempdir().unwrap();
+        let before = real_legacy_claude_env();
+        seed_claude_agent(&db, Some(&serde_json::to_string(&before).unwrap())).await;
+        assert_eq!(
+            migrate_claude_profile_owned_env(&db, data.path())
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("imported")
+        );
+        assert_eq!(
+            migrate_claude_profile_owned_env(&db, data.path())
+                .await
+                .unwrap(),
+            None
+        );
+        let persisted = fs::read_dir(claude_profiles_dir(data.path()))
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| path.is_file() && path.extension().is_some_and(|ext| ext == "json"))
+            .count();
+        assert_eq!(persisted, 1);
+    }
+
+    #[tokio::test]
+    async fn migrated_official_auth_mode_is_expressed_by_profile_credential_scrub() {
+        use crate::commands::acp::build_session_runtime_env;
+
+        let db = fresh_in_memory_db().await;
+        let data = tempfile::tempdir().unwrap();
+        let before = BTreeMap::from([(
+            "CLAUDE_AUTH_MODE".to_string(),
+            "official_subscription".to_string(),
+        )]);
+        seed_claude_agent(&db, Some(&serde_json::to_string(&before).unwrap())).await;
+        assert_eq!(
+            migrate_claude_profile_owned_env(&db, data.path())
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("imported")
+        );
+
+        let runtime =
+            build_session_runtime_env(&db, AgentType::ClaudeCode, None, data.path(), None)
+                .await
+                .unwrap();
+        assert!(!runtime.contains_key("CLAUDE_AUTH_MODE"));
+        for key in [
+            "ANTHROPIC_BASE_URL",
+            "ANTHROPIC_AUTH_TOKEN",
+            "ANTHROPIC_API_KEY",
+        ] {
+            assert_eq!(
+                runtime.get(key).map(String::as_str),
+                Some(""),
+                "profile must preserve official-subscription credential scrub for {key}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn migration_no_connection_keys_is_a_true_noop() {
+        for source in [
+            BTreeMap::<String, String>::new(),
+            BTreeMap::from([
+                ("CLAUDE_CODE_GIT_BASH_PATH".into(), "C:/Git/bash.exe".into()),
+                ("DISABLE_TELEMETRY".into(), "1".into()),
+            ]),
+        ] {
+            let db = fresh_in_memory_db().await;
+            let data = tempfile::tempdir().unwrap();
+            seed_claude_agent(&db, Some(&serde_json::to_string(&source).unwrap())).await;
+            assert_eq!(
+                migrate_claude_profile_owned_env(&db, data.path())
+                    .await
+                    .unwrap(),
+                None
+            );
+            let setting = agent_setting_service::get_by_agent_type(&db.conn, AgentType::ClaudeCode)
+                .await
+                .unwrap()
+                .unwrap();
+            let after: BTreeMap<String, String> =
+                serde_json::from_str(setting.env_json.as_deref().unwrap()).unwrap();
+            assert_eq!(after, source);
+            assert!(!after.contains_key(CODEG_CLAUDE_PROFILE_MIGRATED_ENV_KEY));
+            assert!(!claude_profiles_dir(data.path()).exists());
+        }
     }
 
     #[test]

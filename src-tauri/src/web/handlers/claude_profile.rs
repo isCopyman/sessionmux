@@ -6,7 +6,8 @@ use crate::app_error::AppCommandError;
 use crate::app_state::AppState;
 use crate::commands::claude_profile as profile_commands;
 use crate::models::claude_profile::{
-    ClaudeProfileInfo, ClaudeProfileUpsert, ConversationClaudeProfileResult,
+    ClaudeProfileInfo, ClaudeProfileUpsert, ClaudeSettingsReadResult,
+    ConversationClaudeProfileResult,
 };
 
 pub async fn claude_profile_list(
@@ -14,6 +15,14 @@ pub async fn claude_profile_list(
 ) -> Result<Json<Vec<ClaudeProfileInfo>>, AppCommandError> {
     let result = profile_commands::claude_profile_list_core(&state.data_dir)?;
     Ok(Json(result))
+}
+
+pub async fn claude_settings_read(
+    Json(params): Json<profile_commands::ClaudeSettingsReadParams>,
+) -> Result<Json<ClaudeSettingsReadResult>, AppCommandError> {
+    Ok(Json(profile_commands::claude_settings_read_core(
+        params.path,
+    )?))
 }
 
 pub async fn claude_profile_upsert(
