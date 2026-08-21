@@ -125,6 +125,15 @@ pub async fn acp_connect(
         )
         .await
         .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    // Reconnecting to a conversation that already exists emits no
+    // `ConversationLinked`, so without this the respawned connection would carry
+    // no conversation id and every by-conversation lookup would miss it. See
+    // `ConnectionManager::bind_conversation`.
+    if let Some(conversation_id) = params.conversation_id {
+        manager
+            .bind_conversation(&connection_id, conversation_id)
+            .await;
+    }
 
     Ok(Json(connection_id))
 }

@@ -3543,6 +3543,32 @@ impl ConnectionManager {
         None
     }
 
+    /// Bind an already-existing conversation to a freshly spawned connection.
+    ///
+    /// `SessionState::conversation_id` is otherwise only ever assigned by the
+    /// `ConversationLinked` / `ConversationForked` events, and those fire when a
+    /// conversation ROW IS CREATED — never when a connect attaches to a row that
+    /// already exists. So every reconnect (notably the respawn a profile switch
+    /// performs) produced a connection with no conversation id, and every lookup
+    /// that scans connections by conversation silently missed it.
+    ///
+    /// The user-visible symptom that led here: switching a session's Claude
+    /// profile worked exactly once. The first switch found the original
+    /// connection and restarted it; the restarted connection had no conversation
+    /// id, so `mark_conversation_config_stale` returned `false` for every later
+    /// switch, the composer reported "switched" and nothing restarted — the
+    /// session kept running the old profile while the chip and the database both
+    /// said otherwise.
+    ///
+    /// A no-op when the connection is gone: losing the race with a disconnect
+    /// just means there is nothing left to bind.
+    pub async fn bind_conversation(&self, connection_id: &str, conversation_id: i32) {
+        let Some(state) = self.get_state(connection_id).await else {
+            return;
+        };
+        state.write().await.conversation_id = Some(conversation_id);
+    }
+
     /// Mark a live connection bound to `conversation_id` as config-stale so the
     /// frontend `SessionConfigStaleBanner` can ask for a reconnect. Does not
     /// rewrite `last_observed_fingerprint`: an agent-level refresh must not
@@ -4068,6 +4094,51 @@ mod tests {
         assert!(!mgr.get_state("c2").await.unwrap().read().await.config_stale);
         assert!(
             !mgr.mark_conversation_config_stale(7, ConfigStaleKind::AgentConfig)
+                .await
+        );
+    }
+
+    /// A reconnect emits no `ConversationLinked`, so before `bind_conversation`
+    /// existed the respawned connection was invisible to every by-conversation
+    /// lookup. Measured symptom: the second Claude-profile switch on a session
+    /// reported success and never restarted anything.
+    #[tokio::test]
+    async fn bind_conversation_makes_a_respawned_connection_findable() {
+        let mgr = ConnectionManager::new();
+        insert_fake_connection(&mgr, "respawned", AgentType::ClaudeCode, None, EventEmitter::Noop)
+            .await;
+
+        // A fresh connection starts unbound — this is the state a reconnect left
+        // behind, and why the lookup missed.
+        assert!(
+            !mgr.mark_conversation_config_stale(292, ConfigStaleKind::AgentConfig)
+                .await
+        );
+
+        mgr.bind_conversation("respawned", 292).await;
+
+        assert!(
+            mgr.mark_conversation_config_stale(292, ConfigStaleKind::AgentConfig)
+                .await
+        );
+        assert!(
+            mgr.get_state("respawned")
+                .await
+                .unwrap()
+                .read()
+                .await
+                .config_stale
+        );
+    }
+
+    /// Binding a connection that has already gone away must not panic: connect
+    /// returning and the process dying can interleave.
+    #[tokio::test]
+    async fn bind_conversation_is_a_noop_for_a_missing_connection() {
+        let mgr = ConnectionManager::new();
+        mgr.bind_conversation("never-existed", 1).await;
+        assert!(
+            !mgr.mark_conversation_config_stale(1, ConfigStaleKind::AgentConfig)
                 .await
         );
     }

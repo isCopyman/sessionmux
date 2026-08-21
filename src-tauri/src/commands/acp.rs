@@ -9728,7 +9728,7 @@ pub async fn acp_connect(
     .await;
 
     let emitter = EventEmitter::Tauri(app_handle);
-    manager
+    let connection_id = manager
         .spawn_agent(
             agent_type,
             working_dir,
@@ -9739,7 +9739,15 @@ pub async fn acp_connect(
             preferred_mode_id,
             preferred_config_values,
         )
-        .await
+        .await?;
+    // Reconnecting to a conversation that already exists emits no
+    // `ConversationLinked`, so without this the respawned connection would carry
+    // no conversation id and every by-conversation lookup would miss it. See
+    // `ConnectionManager::bind_conversation`.
+    if let Some(conversation_id) = conversation_id {
+        manager.bind_conversation(&connection_id, conversation_id).await;
+    }
+    Ok(connection_id)
 }
 
 #[cfg(feature = "tauri-runtime")]
