@@ -23,6 +23,7 @@ pub enum ClaudeProfileKind {
 /// `authToken` is stored in the file (0600 on Unix) so managed profiles can
 /// materialize `settings.json`. It is never returned on the wire.
 /// `env` defaults to empty so pre-O66 files without the field still load.
+/// `settingsJson` defaults to absent so pre-O69 files still load.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClaudeProfileRecord {
@@ -37,6 +38,10 @@ pub struct ClaudeProfileRecord {
     pub auth_token: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Raw JSON-object text used as the base of the managed profile's
+    /// codeg-owned `settings.json`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settings_json: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub env: BTreeMap<String, String>,
     pub created_at: String,
@@ -59,6 +64,10 @@ pub struct ClaudeProfileInfo {
     pub auth_token_masked: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Masked JSON-object text. Secret-looking values directly under `env`
+    /// never contain their stored plaintext on the wire.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub settings_json: Option<String>,
     #[serde(default)]
     pub env: BTreeMap<String, String>,
     pub is_virtual: bool,
@@ -69,6 +78,8 @@ pub struct ClaudeProfileInfo {
 /// Create/update payload from the frontend. `authToken` is write-only:
 /// omitted on update keeps the stored value; empty string clears it.
 /// `env` is whole-map replace: omitted = leave stored env; `{}` = clear.
+/// `settingsJson` follows the same update convention: omitted / null keeps the
+/// stored value, empty string clears it, and a JSON-object string replaces it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClaudeProfileUpsert {
@@ -84,7 +95,22 @@ pub struct ClaudeProfileUpsert {
     #[serde(default)]
     pub model: Option<String>,
     #[serde(default)]
+    pub settings_json: Option<String>,
+    #[serde(default)]
     pub env: Option<BTreeMap<String, String>>,
+}
+
+/// Read-only import preview for a Claude `settings.json` file.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaudeSettingsReadResult {
+    pub path: String,
+    pub text: String,
+    pub exists: bool,
+    /// Secret-looking `env` keys whose values were masked in `text`. A new
+    /// profile cannot recover those values and will drop mask-shaped values.
+    #[serde(default)]
+    pub dropped_secret_keys: Vec<String>,
 }
 
 /// Result of binding a conversation to a profile (or unbinding with `null`).

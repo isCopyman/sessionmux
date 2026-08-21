@@ -108,7 +108,17 @@ pub async fn init_database(
         Err(e) => tracing::warn!("[folder-link] failed to hydrate workspace links: {e}"),
     }
 
-    Ok(AppDatabase { conn })
+    let db = AppDatabase { conn };
+
+    // O69-A profile ownership migration. This startup chokepoint is shared by
+    // desktop and server, after schema migration and before any session can
+    // spawn. It changes no schema: the idempotence marker stays in the existing
+    // Claude `agent_setting.env_json` row.
+    crate::commands::claude_profile::migrate_claude_profile_owned_env(&db, app_data_dir)
+        .await
+        .map_err(|error| DbError::Migration(error.to_string()))?;
+
+    Ok(db)
 }
 
 /// Apply SQLite performance and reliability pragmas to a freshly opened
