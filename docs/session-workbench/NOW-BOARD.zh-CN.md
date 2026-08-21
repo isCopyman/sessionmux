@@ -6,7 +6,7 @@
 >
 > 状态记号：`[ ]` 待办 / `[~]` 进行中 / `[x]` 本批已完成待归档 / `[?]` 等用户拍板
 
-最后更新：2026-08-21 深夜（项目设置开关撤销 + 后台唤醒改判为显示层）
+最后更新：2026-08-22 凌晨（交接：见 HANDOFF-2026-08-22.zh-CN.md）
 
 ## ⚠️ 先读这条：清单会腐烂
 
@@ -23,11 +23,37 @@
 **规则收紧：派活的那一刻就写进「进行中」，不要等回收再补。** 收尾时再把状态改掉。
 只在脑子里记 = 等于没记，换会话就丢。
 
+## ⚠️ 交接中（2026-08-22 凌晨）
+
+**接手请先读 `HANDOFF-2026-08-22.zh-CN.md`。** 那份文档比本板子新，
+包含：今晚合入的 10 项、两条在飞车道的验收方法、三个 P0 的完整诊断、
+CDP 实机验证的可行路径与三个前提、以及我今晚犯过的判断错误清单。
+
 ## 进行中（派出去了，等回收）
 
+- [~] **authmode** —— 清理 `CLAUDE_AUTH_MODE` 残留（纯减法）。派给 grok，
+      worktree `.cli-delegate/worktrees/authmode`，
+      结果 JSON `%TEMP%\grok-authmode.json`
+- [~] **kanban1** —— 看板多回合任务阶段一。派给 grok，
+      worktree `.cli-delegate/worktrees/kanban1`，
+      结果 JSON `%TEMP%\grok-kanban1.json`，
+      设计事实源 `KANBAN-MULTITURN-DESIGN-2026-08-22.zh-CN.md`
 - [x] **后台任务唤醒缺口调研** —— 已交，见
       `BACKGROUND-WAKE-RECON-2026-08-21.zh-CN.md`。**结论跟原假设相反**
 - [x] **遗漏任务盘点**（codex）—— 已交，结论见下
+
+## 未派工的 P0（接手第一件事）
+
+- [ ] **chip 说谎 + conversation pin 缺口** —— 分析已完成、已落库：
+      `CHIP-PROFILE-PIN-ANALYSIS-2026-08-22.zh-CN.md`（codex 只读产出，带全套锚点）。
+      **任务书还没写。** 两条硬约束必须带进任务书：eslint 禁止 effect 内同步
+      `setState`；chip 里不能导入 `useAcpAgents`（会拖垮测试）。
+- [ ] **模型下拉不显示 profile 的槽位重映射** —— 已查清（见交接文档 P0 第二条）。
+      CPA 把「Sonnet」重定向到 `k3[1m]`，下拉却显示官方名字和官方定价，主动误导。
+      codeg 自己写的 settings.json，知道这个映射，应该在行上标注。纯增量 UI。
+- [ ] **CDP 实机验证** —— 用户明确要求过，今晚没做成。路径已验证可行：
+      `pnpm build` + `codeg-server --no-default-features` 带 `CODEG_STATIC_DIR`。
+      三个前提见交接文档第 5 节（连不上 Tauri webview / 必须同源 / 别用真实数据目录）。
 
 ## 待办（用户已拍板，不需要再问）
 
