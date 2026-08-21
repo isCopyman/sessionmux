@@ -363,3 +363,62 @@ lane `cli-delegate-settings-overlay` 的 `e8bdbd38`（深合并 + spawn 折叠 +
 都仍然生效。但 auto memory 无论 settingSources 如何**始终加载**，两个机制混在一起，
 探针分不开。**结论：未能分离，不要引用 §9.4 那条"已排掉的坑"。**
 （§9.4 的原始表述过于自信，此处更正。）
+
+## 11. 空串能压掉下层——「官方订阅」必须显式写空(实测)
+
+### 11.1 问题
+
+§10 说清了 `--settings` 是**按键叠加**。由此推出一件当时没想到的事：
+
+**档里「没填 Base URL / API Key」并不等于「走官方订阅」。**
+
+没填 = 这一层对该键没意见 → CLI 继续往下读项目级、用户级。任一层设了网关，
+session 就走那个网关。用户在 UI 上看到的「官方订阅」标签是假的。
+
+那能不能用空串把下层压掉？两个子问题，都得测，不能猜：
+
+- 合并语义：叠加层的 `""` 会覆盖下层的非空值，还是被当成「没写」跳过？
+- 读取语义：CLI 拿到 `ANTHROPIC_BASE_URL=""` 是回落官方，还是拿空 URL 去请求然后炸？
+
+### 11.2 测量
+
+复用 §9 的探针（`/tmp/prec-probe`）。项目层 `.claude/settings.json` 指向本地
+`127.0.0.1:4711`，监听器记录命中并回 401。改叠加层内容，跑
+`claude --settings <overlay> -p "reply with the single word OK"`。
+
+| 叠加层内容 | 4711 命中 | CLI 行为 |
+|---|---|---|
+| `{"env":{"CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY":"1"}}`（对照，不碰这两个键） | **7 次** | 走项目层网关 |
+| `{"env":{"ANTHROPIC_BASE_URL":"","ANTHROPIC_AUTH_TOKEN":""}}` | **0 次** | 正常答 `OK` |
+
+对照组证明探针是活的、项目层确实生效。实验组两件事同时成立：
+
+1. **空串赢下合并** —— 项目层的 4711 被压掉了，一次都没打到。
+2. **CLI 把 `""` 读成「未设置」** —— 干净回落官方订阅并**成功返回**，
+   不是拿空 URL 去请求然后报错。
+
+（用户全局 `~/.claude/settings.json` 已核实**不含** `ANTHROPIC_BASE_URL` /
+`ANTHROPIC_AUTH_TOKEN`，用户层不构成混淆。）
+
+### 11.3 结论：连接方式是三态，不是两态
+
+| 状态 | settings.json 里的样子 | 含义 |
+|---|---|---|
+| 走本档网关 | `BASE_URL`/`TOKEN` 有值 | 明确指向某个第三方端点 |
+| **强制官方订阅** | 三个连接键显式 `""` | 压掉项目级和用户级 |
+| **不表态** | 键不在文件里 | 继承项目级 / 用户级 |
+
+`ANTHROPIC_API_KEY` 也要一起写空——它是第二种凭据拼写，只清 `AUTH_TOKEN`
+会让带 API_KEY 的下层配置活下来。
+
+### 11.4 当前代码是错的
+
+`src/components/settings/claude-settings-projection.ts`：
+
+- 写路径 `applyClaudeConfig`：`authMode === "official_subscription"` 时执行
+  `delete env[key]`（三个连接键）。**这产出的是第三态「不表态」，却贴第二态的标签。**
+  在有项目级网关的仓库里，用户选了「官方订阅」并保存，会话照样在计费网关上。
+- 读路径 `readClaudeConfig`：`authMode: baseUrl || authToken ? "custom" :
+  "official_subscription"`。它只看本档文件就下「官方订阅」的结论，把第三态误报成第二态。
+
+修法：三态显式建模，「官方订阅」写 `""` 而不是 delete，「不表态」才是 delete。
