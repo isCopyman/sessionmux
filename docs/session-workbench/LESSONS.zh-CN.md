@@ -65,7 +65,17 @@ test-utils --lib` 跑 server 模式测试（room-read 工人发明，实测有�
 规则：处理队列事故时按 source+时间窗全量清点（不要只清点已知的那批）；
 设计层修复（重启不自动重放滞留项）见 O47 建议 C，待拍板。
 
-## L11. 派工任务书的固定骨架
+## L11. 不要用 CDP 改 Tauri 主窗口的地址栏
+
+场景：实机走查时用 `Runtime.evaluate` 执行 `location.href='/settings/agents'`
+想跳到设置页，**整个 dev 应用当场退出**，用户正在用的窗口没了。
+
+规则：走查一律走**应用内导航**（点侧栏、点按钮、派发真实事件），
+绝不给主窗口赋 `location.href` / `location.replace`。设置页在独立窗口里，
+要么让应用自己开，要么在 CDP target 列表里找那个窗口的 target。
+只读的 `Runtime.evaluate`（查 DOM、读文本）随便用。
+
+## L12. 派工任务书的固定骨架
 
 场景：每次手写铁律段容易漂移。
 规则：任务书必含——工作区铁律（worktree 路径/不改主仓/不 push/显式 git add/报告
