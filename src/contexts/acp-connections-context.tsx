@@ -218,6 +218,9 @@ export interface ConnectionState {
    *  revision watermarks; the banner splits active from resolved itself. */
   sessionFailures: SessionFailureRecord[]
   error: string | null
+  /** Stable backend `AcpEvent::Error.code`, if any. Used to offer Retry on
+   *  `turn_failed_transient` without parsing the localized `error` string. */
+  errorCode: string | null
   /**
    * Set when the agent rejected `session/load` non-recoverably (currently
    * only `Resource not found` for an expired/missing historical session).
@@ -579,7 +582,12 @@ type Action =
       contextKey: string
       retry: ClaudeApiRetryState | null
     }
-  | { type: "ERROR"; contextKey: string; message: string }
+  | {
+      type: "ERROR"
+      contextKey: string
+      message: string
+      code?: string | null
+    }
   | { type: "ACP_LOAD_ERROR"; contextKey: string; message: string }
   | { type: "CLEAR_ACP_LOAD_ERROR"; contextKey: string }
   | {
@@ -1300,6 +1308,7 @@ function connectionsReducer(
         claudeApiRetry: null,
         sessionFailures: [],
         error: null,
+        errorCode: null,
         loadError: null,
         lastAppliedSeq: 0,
         isDelegationChild: false,
@@ -1358,6 +1367,7 @@ function connectionsReducer(
         claudeApiRetry: null,
         sessionFailures: [],
         error: null,
+        errorCode: null,
         loadError: null,
         lastAppliedSeq: 0,
         isDelegationChild: true,
@@ -1493,6 +1503,7 @@ function connectionsReducer(
         backgroundOutstanding: action.patch.backgroundOutstanding,
         sessionFailures: mergedSessionFailures,
         error: action.patch.lastError,
+        errorCode: action.patch.lastErrorCode ?? null,
         lastAppliedSeq: action.patch.eventSeq,
       })
       return next
@@ -1546,6 +1557,7 @@ function connectionsReducer(
         updated.pendingQuestion = null
         updated.claudeApiRetry = null
         updated.error = null
+        updated.errorCode = null
         // Starting a prompt past an active AIR failure acknowledges it —
         // settle EVERYTHING (watermarks retained). A failure that is still
         // real re-arms via a higher revision on the same id.
@@ -2398,6 +2410,7 @@ function connectionsReducer(
         ...conn,
         claudeApiRetry: null,
         error: action.message,
+        errorCode: action.code ?? null,
       })
       return next
     }
@@ -4024,6 +4037,10 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
                 return t("backendErrors.turnFailedEmptyMetadata", {
                   agent: agentLabel,
                 })
+              case "turn_failed_transient":
+                return t("backendErrors.turnFailedTransient", {
+                  agent: agentLabel,
+                })
               case "grok_model_switch_incompatible_agent":
                 return t("backendErrors.grokModelSwitchIncompatibleAgent", {
                   agent: agentLabel,
@@ -4051,7 +4068,12 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
           const tooltipMessage = evidence
             ? `${localizedMessage} ${t("backendErrors.detailsInAlerts")}`
             : localizedMessage
-          dispatch({ type: "ERROR", contextKey, message: tooltipMessage })
+          dispatch({
+            type: "ERROR",
+            contextKey,
+            message: tooltipMessage,
+            code: e.code,
+          })
           if (!echo) {
             pushAlertRef.current(
               "error",

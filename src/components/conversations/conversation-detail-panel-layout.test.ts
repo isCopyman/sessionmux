@@ -532,3 +532,12 @@ describe("ConversationDetailPanel session-load failure surface", () => {
     expect(dock).toContain("mx-auto w-full max-w-3xl")
   })
 })
+
+describe("ConversationDetailPanel transient turn-failure Retry", () => {
+  it("wires Retry on the composer error strip to the AIR last-prompt enqueue", () => {
+    expect(conversationShellSource).toContain("onTransientRetry")
+    expect(conversationShellSource).toContain('tSessionFailure("action.retry")')
+    expect(source).toContain('conn.errorCode === "turn_failed_transient"')
+    expect(source).toContain('handleSessionFailureAction("retry")')
+  })
+})

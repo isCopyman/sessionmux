@@ -2779,6 +2779,7 @@
           "turnFailedEmpty": "{agent} finalizó el turno sin producir ninguna respuesta.",
           "turnFailedEmptyProtocol": "{agent} produjo una salida que codeg no pudo analizar; la versión del agente podría no coincidir con el protocolo.",
           "turnFailedEmptyMetadata": "{agent} solo envió actualizaciones de estado en este turno (plan / modo / uso) y ninguna respuesta.",
+          "turnFailedTransient": "{agent} encontró un error temporal en este turno. Puedes reintentar sin volver a conectar.",
           "detailsInAlerts": "Abre Alertas en la barra de estado y despliega los detalles para ver la salida del agente."
         },
         "unableReadAgentConfig": "No se puede leer la configuración del agente: {message}",

@@ -73,6 +73,9 @@ export interface UseConnectionReturn {
    *  `lib/session-failures.ts`). `[]` when the connection has none. */
   sessionFailures: SessionFailureRecord[]
   error: string | null
+  /** Stable backend error code (`turn_failed_transient`, …). `null` when the
+   *  current `error` has no code or there is no error. */
+  errorCode: string | null
   loadError: string | null
   /** True when the running session is on stale (launch-time) config after a
    *  later settings save. Drives the "restart to apply" banner. */
@@ -231,6 +234,7 @@ export function useConnection(contextKey: string): UseConnectionReturn {
   const claudeApiRetry = connection?.claudeApiRetry ?? null
   const sessionFailures = connection?.sessionFailures ?? EMPTY_SESSION_FAILURES
   const error = connection?.error ?? null
+  const errorCode = connection?.errorCode ?? null
   const loadError = connection?.loadError ?? null
   const configStale = connection?.configStale ?? false
   const configStaleKind = connection?.configStaleKind ?? null
@@ -337,6 +341,7 @@ export function useConnection(contextKey: string): UseConnectionReturn {
       claudeApiRetry,
       sessionFailures,
       error,
+      errorCode,
       loadError,
       configStale,
       configStaleKind,
@@ -377,6 +382,7 @@ export function useConnection(contextKey: string): UseConnectionReturn {
       claudeApiRetry,
       sessionFailures,
       error,
+      errorCode,
       loadError,
       configStale,
       configStaleKind,

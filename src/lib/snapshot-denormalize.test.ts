@@ -97,6 +97,7 @@ describe("denormalizeSnapshot — last_error", () => {
       })
     )
     expect(patch.lastError).toBe("ACP protocol error: Forbidden")
+    expect(patch.lastErrorCode).toBe("forbidden")
     expect(patch.status).toBe("connected")
   })
 
@@ -105,6 +106,7 @@ describe("denormalizeSnapshot — last_error", () => {
     delete (snap as { last_error?: unknown }).last_error
     const patch = denormalizeSnapshot(snap)
     expect(patch.lastError).toBeNull()
+    expect(patch.lastErrorCode).toBeNull()
     expect(patch.status).toBe("connected")
   })
 })

@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use sacp::schema::{
     BlobResourceContents, CancelNotification, ClientCapabilities, ContentBlock, ContentChunk,
@@ -7118,6 +7118,74 @@ fn stop_reason_to_str(reason: StopReason) -> &'static str {
     }
 }
 
+/// Conservative predicate for treating a `session/prompt` JSON-RPC failure as
+/// a recoverable turn failure instead of killing the connection.
+///
+/// All five clauses of the O8 §4.2 retryable set must hold; anything we cannot
+/// classify stays on today's terminal path. Auto-retry (A1) is intentionally
+/// not implemented — this only decides whether the connection survives.
+fn is_transient_prompt_rpc_error(
+    code: sacp::schema::ErrorCode,
+    message: &str,
+    probe: &TurnOutputProbe,
+    has_unresolved_air_warning: bool,
+) -> bool {
+    if probe.saw_agent_output || probe.dropped_total() != 0 {
+        return false;
+    }
+    if has_unresolved_air_warning {
+        return false;
+    }
+    if matches!(
+        code,
+        sacp::schema::ErrorCode::AuthRequired
+            | sacp::schema::ErrorCode::MethodNotFound
+            | sacp::schema::ErrorCode::ResourceNotFound
+    ) {
+        return false;
+    }
+    let lower = message.to_lowercase();
+    if looks_non_retryable_prompt_message(&lower) {
+        return false;
+    }
+    looks_transient_prompt_message(&lower)
+}
+
+fn looks_non_retryable_prompt_message(lower: &str) -> bool {
+    lower.contains("authentication")
+        || lower.contains("unauthorized")
+        || lower.contains("invalid api key")
+        || lower.contains("permission denied")
+        || lower.contains("prompt too long")
+        || lower.contains("context overflow")
+        || lower.contains("resume rejected")
+}
+
+fn looks_transient_prompt_message(lower: &str) -> bool {
+    static RE_5XX: OnceLock<regex::Regex> = OnceLock::new();
+    static RE_429: OnceLock<regex::Regex> = OnceLock::new();
+    let re_5xx = RE_5XX.get_or_init(|| regex::Regex::new(r"\b5\d{2}\b").expect("static 5xx regex"));
+    let re_429 = RE_429.get_or_init(|| regex::Regex::new(r"\b429\b").expect("static 429 regex"));
+    re_5xx.is_match(lower)
+        || re_429.is_match(lower)
+        || lower.contains("status 503")
+        || lower.contains("status 502")
+        || lower.contains("status 529")
+        || lower.contains("overloaded")
+        || lower.contains("rate limit")
+        || lower.contains("rate_limit")
+        || lower.contains("too many requests")
+        || lower.contains("no available accounts")
+        || lower.contains("temporarily unavailable")
+        || lower.contains("try again")
+        || lower.contains("unavailable")
+        || lower.contains("connection reset")
+        || lower.contains("connection refused")
+        || lower.contains("timed out")
+        || lower.contains("timeout")
+        || lower.contains("transport_lost")
+}
+
 /// Classify a `session/load` failure into a stable frontend `code` when the
 /// historical session cannot be restored — either the agent has no record of
 /// it (`ResourceNotFound`, -32002) or the agent process/session died mid-load.
@@ -7552,7 +7620,8 @@ fn finish_turn_reason<'a>(
 
 /// Build an `AcpEvent::Error` for a non-success stop reason so the user gets a
 /// toast instead of a silent transition to `PendingReview`. Returns `None` for
-/// `end_turn` (success) and `cancelled` (already user-driven).
+/// `end_turn` (success) and `cancelled` (already user-driven). `"transient"` is
+/// the synthesized reason for a recoverable `session/prompt` RPC failure.
 ///
 /// `Refusal` is included because OpenCode (and similar agents) map backend /
 /// gateway errors to `Refusal` per the ACP spec gap — see
@@ -7584,6 +7653,11 @@ fn turn_failure_error_event(
         "unknown" => (
             "turn_failed_unknown",
             format!("{agent_type} ended the turn with an unrecognized stop reason."),
+            None,
+        ),
+        "transient" => (
+            "turn_failed_transient",
+            format!("{agent_type} hit a temporary error this turn."),
             None,
         ),
         "empty" => {
@@ -8073,7 +8147,70 @@ async fn run_conversation_loop<'a>(
                             }
                         }
                         prompt_result = &mut prompt_response => {
-                            let response = prompt_result?;
+                            let response = match prompt_result {
+                                Ok(response) => response,
+                                Err(e) => {
+                                    // A0: a transient `session/prompt` RPC
+                                    // failure used to `?` out of the loop and
+                                    // kill the connection. Keep the connection
+                                    // alive and finish the turn like the
+                                    // StopReason exit. A1 (auto-retry) is
+                                    // deliberately not done — the agent may
+                                    // already have persisted the user message.
+                                    let err_str = e.to_string();
+                                    let has_unresolved_air_warning = {
+                                        let s = state.read().await;
+                                        s.session_failures.values().any(|f| {
+                                            !f.resolved && f.severity == "warning"
+                                        })
+                                    };
+                                    if !is_transient_prompt_rpc_error(
+                                        e.code,
+                                        &err_str,
+                                        &probe,
+                                        has_unresolved_air_warning,
+                                    ) {
+                                        return Err(e);
+                                    }
+                                    tracing::warn!(
+                                        connection_id = %conn_id,
+                                        error = %err_str,
+                                        "[ACP] session/prompt failed transiently; keeping connection alive"
+                                    );
+                                    if !tracked_terminal_tool_calls.is_empty() {
+                                        poll_tracked_terminal_tool_calls(
+                                            terminal_runtime.as_ref(),
+                                            &sid,
+                                            state,
+                                            emitter,
+                                            &mut tracked_terminal_tool_calls,
+                                        )
+                                        .await;
+                                    }
+                                    if let Some(mut err_event) = turn_failure_error_event(
+                                        "transient",
+                                        agent_type,
+                                        None,
+                                    ) {
+                                        if let AcpEvent::Error { details, .. } = &mut err_event {
+                                            *details = Some(err_str);
+                                        }
+                                        emit_with_state(state, emitter, err_event).await;
+                                    }
+                                    drain_permissions_then_emit(
+                                        perms,
+                                        state,
+                                        emitter,
+                                        AcpEvent::TurnComplete {
+                                            session_id: sid.0.to_string(),
+                                            stop_reason: "transient".into(),
+                                            agent_type: agent_type.to_string(),
+                                        },
+                                    )
+                                    .await;
+                                    break;
+                                }
+                            };
                             // A turn's terminal AIR failure rides on the
                             // response `_meta` (see `response_session_failure`
                             // — the update channel only carries the retry
@@ -14203,6 +14340,7 @@ mod tests {
             ("max_tokens", "turn_failed_max_tokens"),
             ("max_turn_requests", "turn_failed_max_turn_requests"),
             ("unknown", "turn_failed_unknown"),
+            ("transient", "turn_failed_transient"),
         ] {
             let Some(AcpEvent::Error { code, details, .. }) =
                 turn_failure_error_event(reason, AgentType::ClaudeCode, None)
@@ -14250,6 +14388,103 @@ mod tests {
         };
         assert_eq!(code.as_deref(), Some("turn_failed_empty"));
         assert!(details.is_none());
+    }
+
+    #[test]
+    fn turn_failure_error_event_maps_transient_as_non_terminal() {
+        let Some(AcpEvent::Error {
+            code,
+            details,
+            terminal,
+            ..
+        }) = turn_failure_error_event("transient", AgentType::ClaudeCode, None)
+        else {
+            panic!("transient should produce an error event");
+        };
+        assert_eq!(code.as_deref(), Some("turn_failed_transient"));
+        assert!(details.is_none());
+        assert!(
+            !terminal,
+            "a transient prompt failure must not kill the connection"
+        );
+    }
+
+    #[test]
+    fn transient_prompt_rpc_error_matches_conservative_503() {
+        let probe = TurnOutputProbe::new(0);
+        assert!(is_transient_prompt_rpc_error(
+            sacp::schema::ErrorCode::InternalError,
+            "API Error: 503 No available accounts",
+            &probe,
+            false,
+        ));
+    }
+
+    #[test]
+    fn transient_prompt_rpc_error_rejects_non_retryable_and_unknown() {
+        let empty = TurnOutputProbe::new(0);
+        assert!(
+            !is_transient_prompt_rpc_error(
+                sacp::schema::ErrorCode::InternalError,
+                "some unrelated boom",
+                &empty,
+                false,
+            ),
+            "InternalError alone is not enough"
+        );
+        assert!(!is_transient_prompt_rpc_error(
+            sacp::schema::ErrorCode::AuthRequired,
+            "API Error: 503 No available accounts",
+            &empty,
+            false,
+        ));
+        assert!(!is_transient_prompt_rpc_error(
+            sacp::schema::ErrorCode::MethodNotFound,
+            "API Error: 503 No available accounts",
+            &empty,
+            false,
+        ));
+        assert!(!is_transient_prompt_rpc_error(
+            sacp::schema::ErrorCode::ResourceNotFound,
+            "API Error: 503 No available accounts",
+            &empty,
+            false,
+        ));
+        assert!(!is_transient_prompt_rpc_error(
+            sacp::schema::ErrorCode::InternalError,
+            "API Error: 503 unauthorized",
+            &empty,
+            false,
+        ));
+        assert!(
+            !is_transient_prompt_rpc_error(
+                sacp::schema::ErrorCode::InternalError,
+                "API Error: 503 No available accounts",
+                &empty,
+                true,
+            ),
+            "unresolved AIR warning means the adapter is already retrying"
+        );
+
+        let mut with_output = TurnOutputProbe::new(0);
+        with_output.note_update(&SessionUpdate::AgentMessageChunk(
+            sacp::schema::ContentChunk::new("hi".into()),
+        ));
+        assert!(!is_transient_prompt_rpc_error(
+            sacp::schema::ErrorCode::InternalError,
+            "API Error: 503 No available accounts",
+            &with_output,
+            false,
+        ));
+
+        let mut dropped = TurnOutputProbe::new(0);
+        dropped.note_dropped(DropSite::Dispatch, &"schema drift");
+        assert!(!is_transient_prompt_rpc_error(
+            sacp::schema::ErrorCode::InternalError,
+            "API Error: 503 No available accounts",
+            &dropped,
+            false,
+        ));
     }
 
     #[test]

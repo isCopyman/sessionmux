@@ -2257,6 +2257,7 @@ describe("empty-turn error diagnostics", () => {
       ["turn_failed_empty", "backendErrors.turnFailedEmpty"],
       ["turn_failed_empty_protocol", "backendErrors.turnFailedEmptyProtocol"],
       ["turn_failed_empty_metadata", "backendErrors.turnFailedEmptyMetadata"],
+      ["turn_failed_transient", "backendErrors.turnFailedTransient"],
     ] as const
 
     // Sequence numbers must advance — the store's seq guard drops replays.
@@ -2336,6 +2337,24 @@ describe("empty-turn error diagnostics", () => {
       "backendErrors.turnFailedEmpty"
     )
   })
+
+  it("stores turn_failed_transient on errorCode so the composer can offer Retry", async () => {
+    const handlers = await connectOwner()
+    emitAcpEvent(handlers, {
+      seq: 1,
+      connection_id: "spawned-conn",
+      type: "error",
+      message: "raw english fallback",
+      agent_type: "claude_code",
+      code: "turn_failed_transient",
+      details: "API Error: 503 No available accounts",
+    })
+    const conn = h.store!.getConnection(TAB)!
+    expect(conn.error).toBe(
+      "backendErrors.turnFailedTransient backendErrors.detailsInAlerts"
+    )
+    expect(conn.errorCode).toBe("turn_failed_transient")
+  })
 })
 
 describe("HYDRATE_FROM_SNAPSHOT last_error recovery", () => {
@@ -2346,6 +2365,7 @@ describe("HYDRATE_FROM_SNAPSHOT last_error recovery", () => {
     eventSeq: number
     lastError: string | null
     lastErrorDetails?: string | null
+    lastErrorCode?: string | null
     connectionId?: string
   }) {
     return {
@@ -2368,6 +2388,7 @@ describe("HYDRATE_FROM_SNAPSHOT last_error recovery", () => {
       backgroundOutstanding: 0,
       activeDelegations: [],
       lastErrorDetails: null,
+      lastErrorCode: null,
       ...overrides,
     }
   }
@@ -2401,6 +2422,23 @@ describe("HYDRATE_FROM_SNAPSHOT last_error recovery", () => {
       event_seq: 5,
     } as unknown as LiveSessionSnapshot)
     expect(h.store!.getConnection(TAB)!.error).toBe("boom from snapshot")
+  })
+
+  it("recovers last_error.code so a refreshed client can still offer Retry", async () => {
+    const handlers = await connectOwner()
+    h.denormalizeSnapshot.mockReturnValue(
+      snapshotPatch({
+        eventSeq: 5,
+        lastError: "hit a temporary error this turn.",
+        lastErrorCode: "turn_failed_transient",
+      })
+    )
+    hydrateSnapshot(handlers, {
+      event_seq: 5,
+    } as unknown as LiveSessionSnapshot)
+    const conn = h.store!.getConnection(TAB)!
+    expect(conn.error).toBe("hit a temporary error this turn.")
+    expect(conn.errorCode).toBe("turn_failed_transient")
   })
 
   it("does NOT resurrect a cleared error from a STALE snapshot", async () => {

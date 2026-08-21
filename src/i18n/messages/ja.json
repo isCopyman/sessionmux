@@ -2779,6 +2779,7 @@
           "turnFailedEmpty": "{agent} は応答を生成せずにターンを終了しました。",
           "turnFailedEmptyProtocol": "{agent} の出力を codeg が解析できませんでした。エージェントのバージョンがプロトコルと一致していない可能性があります。",
           "turnFailedEmptyMetadata": "{agent} はこのターンでステータス更新（計画 / モード / 使用量）のみを送信し、応答はありませんでした。",
+          "turnFailedTransient": "{agent} はこのターンで一時的なエラーが発生しました。再接続せずに再試行できます。",
           "detailsInAlerts": "ステータスバーのアラートを開き、詳細を展開するとエージェントの出力を確認できます。"
         },
         "unableReadAgentConfig": "エージェント設定を読み取れません: {message}",

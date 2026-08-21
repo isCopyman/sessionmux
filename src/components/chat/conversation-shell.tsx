@@ -17,13 +17,14 @@ import type {
 } from "@/lib/types"
 import type { SessionFailureAction } from "@/lib/session-failures"
 import { SessionFailureBanner } from "@/components/chat/session-failure-banner"
+import { Button } from "@/components/ui/button"
 import type {
   PendingPermission,
   PendingQuestion,
   ClaudeApiRetryState,
 } from "@/contexts/acp-connections-context"
 import type { QueuedMessage } from "@/hooks/use-message-queue"
-import { Loader2 } from "lucide-react"
+import { Loader2, RefreshCw } from "lucide-react"
 import { ChatInput } from "@/components/chat/chat-input"
 import type { ComposerInjectContent } from "@/components/chat/message-input"
 import { PermissionDialog } from "@/components/chat/permission-dialog"
@@ -38,6 +39,9 @@ interface ConversationShellProps {
   defaultPath?: string
   agentName?: string
   error: string | null
+  /** Owner-only Retry for a recoverable `turn_failed_transient` red bar.
+   *  Omitted for viewers and for errors that are not retryable this way. */
+  onTransientRetry?: () => void
   claudeApiRetry: ClaudeApiRetryState | null
   /** AIR typed session failures for this connection (active + resolved; the
    *  banner splits them itself). Omit/empty renders nothing. */
@@ -138,6 +142,7 @@ export function ConversationShell({
   defaultPath,
   agentName,
   error,
+  onTransientRetry,
   claudeApiRetry,
   sessionFailures,
   onSessionFailureAction,
@@ -195,6 +200,7 @@ export function ConversationShell({
   topBanner,
 }: ConversationShellProps) {
   const tAcp = useTranslations("Folder.chat.acpConnections")
+  const tSessionFailure = useTranslations("Folder.chat.sessionFailure")
   const retryLineText = useMemo(() => {
     const retry = claudeApiRetry
     if (!retry) return null
@@ -369,7 +375,20 @@ export function ConversationShell({
 
       {error && (
         <div className="px-4 py-2 text-xs text-destructive bg-destructive/5 border-t border-destructive/20">
-          {error}
+          <div className="flex items-center gap-2">
+            <span className="min-w-0 flex-1">{error}</span>
+            {onTransientRetry ? (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-6 shrink-0 px-2 text-xs"
+                onClick={onTransientRetry}
+              >
+                <RefreshCw aria-hidden="true" className="me-1 h-3 w-3" />
+                {tSessionFailure("action.retry")}
+              </Button>
+            ) : null}
+          </div>
         </div>
       )}
     </div>

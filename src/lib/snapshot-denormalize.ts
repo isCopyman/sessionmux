@@ -80,8 +80,11 @@ export interface SnapshotPatch {
   sessionFailures: SessionFailureRecord[]
   /** Latest ACP runtime error carried by the snapshot. `null` means none. */
   lastError: string | null
+  /** Stable backend error code from `last_error.code`. `null` when the
+   *  snapshot has no error or the error has no code. */
+  lastErrorCode: string | null
   /** Diagnostic evidence attached to `lastError` (agent stderr tail, unparsed
-   *  update counts) — only the inferred `turn_failed_empty*` family carries it.
+   *  update counts). `turn_failed_empty*` and `turn_failed_transient` carry it.
    *  Already redacted by the backend. Kept separate from `lastError` because
    *  that string feeds the composer status tooltip, which must stay one line. */
   lastErrorDetails: string | null
@@ -100,6 +103,7 @@ export function denormalizeSnapshot(wire: LiveSessionSnapshot): SnapshotPatch {
     toolMap.set(tc.id, tc)
   }
   const lastError = normalizeSnapshotLastError(wire.last_error)
+  const lastErrorCode = wire.last_error?.code?.trim() || null
   const lastErrorDetails = wire.last_error?.details?.trim()
     ? wire.last_error.details
     : null
@@ -148,6 +152,7 @@ export function denormalizeSnapshot(wire: LiveSessionSnapshot): SnapshotPatch {
     backgroundOutstanding: wire.background_outstanding ?? 0,
     sessionFailures: wire.session_failures ?? [],
     lastError,
+    lastErrorCode,
     lastErrorDetails,
     eventSeq: wire.event_seq,
   }
