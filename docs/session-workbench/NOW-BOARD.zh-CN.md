@@ -6,22 +6,23 @@
 >
 > 状态记号：`[ ]` 待办 / `[~]` 进行中 / `[x]` 本批已完成待归档 / `[?]` 等用户拍板
 
-最后更新：2026-08-21 14:05（档后端合并、UI 与 MCP 两路派出后）
+最后更新：2026-08-21 15:40（配置模型定稿：只留「跟随 CLI」和「codeg 档」）
 
 ## 进行中（派出去了，等回收）
 
-- [~] **O59-B** — 档的**前端**：组合框 chip（裸档名 + 下拉第一行写控件名）+ 设置页目录
-      （grok via cli-delegate，worktree `codeg-wt/claude-profile-ui`）
-- [~] **O59-C** — 档对 **agent 可见**：`list_profiles` 工具 + `create_work_task` /
-      `create_automation` 加 `profile` / `model`（worktree `codeg-wt/profile-mcp`）
-- [~] 主仓 Rust 权威门禁（档后端合并后）：FMT/CLIPPY 已 0，桌面 test 跑着
+- [~] **O69-A** — 档吃下整份 settings.json + 从现成 settings.json 单向导入 +
+      把 agent 全局连接配置迁进一个档 + 退休 `official-direct`
+      （codex `gpt-5.6-sol` `xhigh`，lane `.cli-delegate/worktrees/profile-own`）
+- [~] dev 应用重启中（我用 CDP 改主窗口地址栏把它弄挂了，见 L11）
 
 ## 待办（我自己排的，不需要用户点头）
 
-- [ ] 实机走查 O51/O56/O57/O61（建群→拉人→加入群聊全链路，CDP）
-- [ ] 看板 RFC 按 O46 调研结论修订：**一级容器＝项目 Folder**（不是 Collection/Room/工作台），
-      列沿用现成 `WorkTaskStatus` 四列；并更正"看板尚不存在"的旧表述——**它已经存在**
-- [ ] 档第二期（等第一期落稳）：`claude_profile` → `launch_profile` 改名 + 加 `agentType`，
+- [ ] **O69-B**（等 O69-A 契约）：档编辑器接 `settingsJson` 折叠编辑区 +
+      `+` 菜单加「从现有配置导入」；Claude 的全局连接块整块删掉
+- [ ] 实机走查：O51/O56/O57/O61 建群全链路 + 今天的 O67 看板三件 + O68 配置层级
+- [ ] `model_provider` 绑定仍会把连接键写回 `env_json`（`acp.rs:10670` 一带）——
+      O69-A 若确认，下一批堵掉；否则迁移完还会被重新污染
+- [ ] 档第二期：`claude_profile` → `launch_profile` 改名 + 加 `agentType`，
       按 `agent_root_slots` 查表支持 Codex 等（RFC §5.6 已写清成本）
 
 ## 等用户拍板（不许自己动）
@@ -36,6 +37,14 @@
 
 ## 本批已完成（下次收尾时归档进台账）
 
+- [x] **O66-A** 档拥有连接 env + 防御清扫（订阅档不再被全局 token 打穿）
+- [x] **O66-C / O68** 配置层级自明：CLI 全局设置改成「跟随默认」页签的正文；
+      虚拟档走后端 `isVirtual`；档的 kind 选择器删掉
+- [x] **O67** 看板三件：分组维度、attention 列内分层、卡片活动点
+- [x] **配置模型定稿** `CONFIG-MODEL-2026-08-21`：只留两种概念，逐条记了删哪层为什么删
+- [x] `envVarsScope` 文案**说反了**（写成 overlay 赢配置文件，实际是文件赢）——十语改正
+- [x] Claude 的 env 覆盖层折叠（它和 settings.json 的 env 块是同一批键）
+- [x] 磁盘卫生：合并完的 8 棵 worktree 全删（含 11G 的 claude-profile），23 个 wt/* 分支清掉
 - [x] O8 瞬时失败不杀连接 + Retry ｜ O48 群帖逐步披露 ｜ O51 先建群后拉人
 - [x] O52 会话中心最近活动排序 ｜ O53 群聊每条消息带时间
 - [x] O55 配置 chip 通用值带名字 → **用户否决，已改**：chip 恢复裸值，
