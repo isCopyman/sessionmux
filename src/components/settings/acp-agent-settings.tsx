@@ -10958,18 +10958,6 @@ supports_websockets = true`}
                       />
                     )}
 
-                    {selectedAgent.agent_type === "claude_code" &&
-                      claudeCliGlobalsVisible && (
-                        <div className="rounded-md border border-dashed bg-background/60 px-2.5 py-2">
-                          <p className="text-[11px] font-medium">
-                            {t("claudeProfile.cliGlobalTitle")}
-                          </p>
-                          <p className="mt-0.5 text-[11px] text-muted-foreground">
-                            {t("claudeProfile.cliGlobalHint")}
-                          </p>
-                        </div>
-                      )}
-
                     {claudeCliGlobalsVisible &&
                       selectedAgent.agent_type !== "claude_code" && (
                         <>

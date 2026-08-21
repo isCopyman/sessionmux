@@ -267,7 +267,7 @@ describe("ClaudeProfileCatalog", () => {
     expect(api.claudeProfileList).toHaveBeenCalledTimes(1)
   })
 
-  it("offers no editing controls while Follow default is the active tab", async () => {
+  it("offers no editing controls while User-level settings is the active tab", async () => {
     renderCatalog()
     await addProfileButton()
     expect(screen.queryByLabelText("Name")).toBeNull()
@@ -286,7 +286,9 @@ describe("ClaudeProfileCatalog", () => {
     // The tab renames live, and carries an unsaved marker.
     expect(screen.getByRole("tab", { name: /renamed/ })).toBeInTheDocument()
     // Leave and come back: an unsaved edit is not a reason to lose typing.
-    await user.click(screen.getByRole("tab", { name: "Follow default" }))
+    await user.click(
+      screen.getByRole("tab", { name: "User-level settings (~/.claude)" })
+    )
     await user.click(screen.getByRole("tab", { name: /renamed/ }))
     expect(screen.getByLabelText("Name")).toHaveValue("renamed")
   })
@@ -347,13 +349,13 @@ describe("ClaudeProfileCatalog", () => {
       await screen.findByRole("tab", { name: "Official direct" })
     )
     expect(screen.getByText(/Forces api\.anthropic\.com/)).toBeInTheDocument()
-    // No editor: it is file-less, exactly like Follow default.
+    // No editor: it is file-less, exactly like User-level settings.
     expect(screen.queryByLabelText("Name")).toBeNull()
     expect(screen.queryByRole("button", { name: "Save" })).toBeNull()
     expect(screen.queryByRole("button", { name: "Delete" })).toBeNull()
   })
 
-  // The parent renders the CLI-global settings as the Follow-default tab's
+  // The parent renders the CLI-global settings as the User-level settings tab's
   // body, so it has to be told which tab is open — including the initial one.
   it("reports the active tab to the parent", async () => {
     api.claudeProfileList.mockResolvedValue([FOLLOW, RELAY])
@@ -366,7 +368,9 @@ describe("ClaudeProfileCatalog", () => {
     await user.click(await screen.findByRole("tab", { name: "中转" }))
     expect(onActiveProfileChange).toHaveBeenLastCalledWith("api")
 
-    await user.click(screen.getByRole("tab", { name: "Follow default" }))
+    await user.click(
+      screen.getByRole("tab", { name: "User-level settings (~/.claude)" })
+    )
     expect(onActiveProfileChange).toHaveBeenLastCalledWith("follow-default")
   })
 
