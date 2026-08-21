@@ -1464,3 +1464,20 @@ w-replycopy 预警过的 Radix tooltip 悬停测试（jsdom 无布局，连续�
   O50 修复），主仓 target-gate 权威复验全绿。判定为该 worktree 本地环境
   怪癖（tauri_build 对 out/ 占位的路径差异嫌疑），不影响修复有效性；若
   未来 worktree 内跑桌面测试复现，再立项细查。
+
+### 5.25 2026-08-21 晨四批：O46 看板 RFC 落库 + 尾巴加固自撤
+
+- **O46 RFC 执笔完成**（`TASKBOARD-RFC-2026-08-21.zh-CN.md`，等用户过目）：
+  以 r-taskboard 前提修正为纲，补一条关键实证——**召唤层已存在**
+  （tasks-view-context.tsx:162-183 对 review/failed 翻转发系统通知），
+  awaiting_input 只是被 :170 一行过滤条件排除；通知管道全链路已通。
+  四缺口设计 + 三期切分 + 待拍板 A–F；负空间维持"Room 派工不进
+  work_task"。
+- **background_watch 尾巴加固自撤**（原判"有界小修可派工"，核查后撤销）：
+  前端 overlay 退役按字节水位、不带会话身份
+  （conversation-runtime-store.ts:525-544），fork 拷贝的新转录水位≈旧文件
+  尺寸——补发的旧尾巴要么被立即退役（白发）、要么 rewind 早锚点时永远钉死
+  在新视图（更糟）。做对需 overlay 会话作用域改造 = fork/rewind 显示语义
+  真手术，非小修。**裁决：不做，维持现状**（现状即该机制下的安全行为）；
+  已回写 O43 节。与会话中心排序自撤同一教训：**改显示语义前先读退役/
+  排序机制的设计注释**。
