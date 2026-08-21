@@ -255,6 +255,23 @@ NOW-BOARD 与它重复；MAINTAINABILITY 同时兼计划 / 决策 / 执行日志
   写进用户的 `~/.claude/settings.json`。默认关，但按这条规则它也该没。单独决定
 - 「用户级设置」这个名字在删掉编辑器后要再想：它已经不编辑任何东西了
 
+### 档的身份：id 是机器键，label 是人看的（2026-08-21 夜查清）
+
+- **id 已经够严**：`is_valid_profile_id`（`claude_profile.rs:405`）只放行
+  `a-z 0-9 - _`、长度 1–64，**小写**。大写/空格/斜杠/点全拒。
+  `follow-default`、`official-direct` 是保留字。一个 id 一个文件，所以 id 天然唯一。
+- **MCP 认 id 不认 label**。`create_work_task` / `create_automation` 的 `profile`
+  参数收的是 id，未知 id **直接报错并列出合法 id，不静默回退**。
+  改页签标签对 MCP 零影响。**注意：不传 `profile` ≠ follow-default**，
+  不传是"沿用当前默认"（本机是 managed 档 `imported`）。
+- 派工中的两个缺口：
+  1. **新建档撞 id 会静默覆盖**。`claude_profile_upsert_core` 是纯 upsert，
+     没有"已存在就拒绝"。新建时把 id 手敲成 `api` 一保存，原来的 `api` 档
+     连存着的 token 一起没，无提示。**真数据丢失路径。**
+  2. **label 可以重名**，没人查。页签条上两个一模一样的标签，
+     `list_profiles` 给 agent 的也是两个一样的 label，人和 LLM 都分不开。
+     修法是**查重，不是限字符集**——十语应用，「中转」必须合法。
+
 ### 今晚实测钉死的事实（都进了 CONFIG-MODEL §11，动工前先读）
 
 - **空串能压掉下层，且被 CLI 读成"未设置"**：项目层指向本地 4711，叠加层不碰
