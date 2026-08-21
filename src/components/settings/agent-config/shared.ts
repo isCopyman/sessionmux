@@ -10,7 +10,7 @@ import type {
   FixAction,
   PreflightResult,
 } from "@/lib/types"
-import type { ClaudeAuthMode, ClaudeEffortLevel } from "../claude-config-fields"
+import type { ClaudeEffortLevel } from "../claude-config-fields"
 import type { ClaudeModelKey } from "./claude"
 import type { GeminiAuthMode } from "./gemini"
 import type {
@@ -35,7 +35,6 @@ export interface AgentDraft {
   apiBaseUrl: string
   apiKey: string
   model: string
-  claudeAuthMode: ClaudeAuthMode
   modelProviderId: number | null
   geminiAuthMode: GeminiAuthMode
   geminiApiKey: string

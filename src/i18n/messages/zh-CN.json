@@ -1089,8 +1089,6 @@
       "rawEditorWarning": "在此保存会按原文覆盖整个文件，替换掉上方的结构化配置。",
       "rawEditorPlaceholder": "[providers.codeg]\ntype = \"kimi\"\nbase_url = \"https://api.moonshot.cn/v1\"\napi_key = \"sk-...\""
     },
-    "authModeInherit": "继承（项目 / 用户级配置）",
-    "authModeInheritHint": "本档不表态，端点由项目级和用户级的 .claude/settings.json 决定。",
     "authModeOfficialSubscription": "官网订阅",
     "authModeCustomEndpoint": "自定义接口",
     "authModeCustomEndpointHint": "手动配置 API URL 和 API Key 连接自定义接口。",

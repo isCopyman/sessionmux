@@ -1089,8 +1089,6 @@
       "rawEditorWarning": "Enregistrer ici écrase tout le fichier tel quel et remplace les réglages structurés ci-dessus.",
       "rawEditorPlaceholder": "[providers.codeg]\ntype = \"kimi\"\nbase_url = \"https://api.moonshot.cn/v1\"\napi_key = \"sk-...\""
     },
-    "authModeInherit": "Hériter (configuration projet / utilisateur)",
-    "authModeInheritHint": "Ne rien définir ici : l'endpoint est déterminé par les .claude/settings.json du projet et de l'utilisateur.",
     "authModeOfficialSubscription": "Abonnement officiel",
     "authModeCustomEndpoint": "Endpoint personnalisé",
     "authModeCustomEndpointHint": "Configurer manuellement l'URL API et la clé API pour un endpoint personnalisé.",
