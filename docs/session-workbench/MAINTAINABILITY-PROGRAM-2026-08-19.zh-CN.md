@@ -1440,3 +1440,15 @@ w-replycopy 预警过的 Radix tooltip 悬停测试（jsdom 无布局，连续�
 - 收工态：主干 de255e33 工作区干净；八批门禁全绿（终批 10/10 含桌面测试
   历史首绿）；dev 实例重启 #4 在跑（CDP 9222）；磁盘 209G；worktree 对账
   仅剩 5 项有意保留 + 2 个句柄锁死的空目录壳（重启自清）。
+
+### 5.23 2026-08-21 晨二批：O10 文档 + 切面 ⑤ 前置盘点交付（裁决修订）
+
+- O10 结案：`DEV-RELEASE-INSTANCE-BOUNDARY.zh-CN.md` 落库（dev/release 不共
+  库、影子会话机制、四条实用推论）。
+- 切面 ⑤ 前置盘点（grok 只读）交付：`SERDE-PERSISTENCE-INVENTORY.zh-CN.md`
+  ——16 类红项、黄绿分级、"外壳 camel + 内核 snake"三明治实证、types.ts 是
+  镜像非第三套。**裁决修订：全局统一改名取消**，改为红项冻结 + 新线 DTO
+  camelCase 规范 + round-trip 样本测试收尾（已回写 RFC ⑤ 节）。手术顺序里
+  的"⑤ 序列化统一"由改名工程降级为规范+测试工程，随时可插单。
+- 附带纠错：RFC 原文"collaboration_event 的 metadata"并不存在——真身是
+  队列 draft 信封 JSON（collaboration_service.rs:590-613），盘点已钉。
