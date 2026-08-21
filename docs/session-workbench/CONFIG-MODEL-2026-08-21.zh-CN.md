@@ -147,3 +147,32 @@ kind 与解析语义保留，已绑定的会话不会炸。
 - 不给 Haiku/Sonnet/Opus/effort/自定义模型各造一个独立字段。
 - 不做双向同步。
 - 不改 DB schema。
+
+## 6. 适配器原生的 `providers/*`（2026-08-21 傍晚发现，未采用，记着）
+
+用户给了 [claude-agent-acp PR #1002](https://github.com/agentclientprotocol/claude-agent-acp/pull/1002)
+（"switch providers for loaded Claude sessions"，2026-08-17 合并）。适配器有一套原生的
+客户端托管路由：`providers/list` / `providers/set` / `providers/disable`
+（实现里叫 `unstable_listProviders` / `unstable_setProvider` / `unstable_disableProvider`，
+带 `unstable_` 前缀）。
+
+**我们装的 0.69.0 有这三个方法，但没有那个 PR 的改进。** 实测（grep dist/acp-agent.js）：
+`clearAuth` / `restoreAuth` / `apiKeyHelper` / `forceLoginMethod` 一个符号都没有，
+所以"停用竞争认证再恢复"和"重建已加载会话"都还没进这一版。
+
+**和 `--settings` 叠加是互补关系，不是替代：**
+
+| | `--settings` 叠加（O69-C，已上） | `providers/set`（未采用） |
+| --- | --- | --- |
+| 覆盖面 | 整份 settings.json：模型别名、effortLevel、permissions、hooks、env | 只有 `apiType` / `baseUrl` / `headers` |
+| 作用域 | 每次 spawn（`session/new` 的 `_meta`） | 进程级（codeg 一会话一进程，≈会话级） |
+| 时机 | 启动时 | 可在会话中途调用（新版才重建在跑的会话） |
+| 能否清掉用户 settings.json 里的 token | **不能**（见 O69-C §2.1） | 新版能（本版没有） |
+
+**采纳条件**：升级适配器到含 #1002 的版本之后，用 `providers/set` 补 §2.1 那个洞
+（纯订阅档不受用户 settings 里 API token 影响），`--settings` 继续承担其余部分。
+`unstable_` 前缀意味着形状可能变，接的时候要做能力探测而不是硬调。
+
+顺带记一条：同一份 `initialize` 结果里还宣告了
+`sessionCapabilities: { close, delete, fork, list, resume }` —— **`fork` 是适配器原生的**，
+跟 P7 的 rewind/fork 课题直接相关，动工前先读这里。

@@ -1110,6 +1110,7 @@
       "customModelOptionName": "Custom Model Name",
       "customModelOptionDescription": "Custom Model Description",
       "customModelOptionHint": "Adds a single custom entry to Claude's model picker (e.g. a model behind a custom gateway/proxy). Name and description are optional display overrides.",
+      "advancedFields": "Advanced",
       "effortLevel": "Reasoning Effort Level",
       "effortLevelDefault": "Default Level",
       "effortLevel_low": "Low",

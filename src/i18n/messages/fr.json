@@ -1110,6 +1110,7 @@
       "customModelOptionName": "Nom du modèle personnalisé",
       "customModelOptionDescription": "Description du modèle personnalisé",
       "customModelOptionHint": "Ajoute une entrée personnalisée au sélecteur de modèles de Claude (par exemple un modèle derrière une passerelle/un proxy personnalisé). Le nom et la description sont des informations d'affichage facultatives.",
+      "advancedFields": "Avancé",
       "effortLevel": "Niveau de raisonnement",
       "effortLevelDefault": "Niveau par défaut",
       "effortLevel_low": "Bas",

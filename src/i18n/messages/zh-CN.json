@@ -1110,6 +1110,7 @@
       "customModelOptionName": "自定义模型名称",
       "customModelOptionDescription": "自定义模型描述",
       "customModelOptionHint": "在 Claude 模型选择器中追加一个自定义条目（例如经自定义网关/代理提供的模型）。名称与描述为可选的显示信息。",
+      "advancedFields": "高级",
       "effortLevel": "推理级别",
       "effortLevelDefault": "默认级别",
       "effortLevel_low": "低",

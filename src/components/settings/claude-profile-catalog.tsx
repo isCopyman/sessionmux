@@ -46,6 +46,14 @@ import {
   type ClaudeProfileInfo,
   type ClaudeProfileUpsert,
 } from "@/lib/types"
+import {
+  ClaudeConfigFields,
+  type ClaudeConfigValue,
+} from "./claude-config-fields"
+import {
+  applyClaudeConfig,
+  readClaudeConfig,
+} from "./claude-settings-projection"
 
 type EditableKind = ClaudeProfileUpsert["kind"]
 
@@ -260,6 +268,55 @@ export function ClaudeProfileCatalog({
         const current = prev[selectedId]
         if (!current) return prev
         return { ...prev, [selectedId]: { ...current, ...patch } }
+      })
+    },
+    [selectedId]
+  )
+
+  /**
+   * The shared form's view of this draft. The dedicated columns win over the
+   * file, mirroring what `materialize_managed_profile` does on the way out.
+   */
+  const configValue = useMemo(
+    () =>
+      readClaudeConfig(
+        selectedDraft?.settingsJson ?? "",
+        {
+          baseUrl: selectedDraft?.baseUrl ?? "",
+          authToken: selectedDraft?.authToken ?? "",
+          model: selectedDraft?.model ?? "",
+        },
+        Boolean(selectedProfile?.authTokenMasked?.trim())
+      ),
+    [selectedDraft, selectedProfile]
+  )
+
+  /**
+   * One field edit from the shared form. It lands in `settings.json` and, for
+   * the three keys that have one, the dedicated column too — kept in step so
+   * the JSON editor below never disagrees with the fields above it.
+   */
+  const patchConfig = useCallback(
+    (patch: Partial<ClaudeConfigValue>) => {
+      setDrafts((prev) => {
+        const current = prev[selectedId]
+        if (!current) return prev
+        const written = applyClaudeConfig(current.settingsJson, patch)
+        if (!written) {
+          // The text is not a JSON object, so there is nothing to patch into.
+          // Saying so beats silently discarding whatever is in the editor.
+          setFormError(tRef.current("settingsJsonInvalid"))
+          return prev
+        }
+        setFormError(null)
+        return {
+          ...prev,
+          [selectedId]: {
+            ...current,
+            ...written.columns,
+            settingsJson: written.settingsJson,
+          },
+        }
       })
     },
     [selectedId]
@@ -631,78 +688,33 @@ export function ClaudeProfileCatalog({
                   </div>
                 ) : (
                   <>
-                    <div className="space-y-1.5">
-                      <label
-                        htmlFor="claude-profile-base-url"
-                        className="text-[11px] text-muted-foreground"
-                      >
-                        {t("fieldBaseUrl")}
-                      </label>
-                      <Input
-                        id="claude-profile-base-url"
-                        value={selectedDraft.baseUrl}
-                        onChange={(event) =>
-                          patchDraft({ baseUrl: event.target.value })
-                        }
-                        placeholder="https://api.example.com"
-                      />
-                    </div>
-                    <div className="space-y-1.5">
-                      <label
-                        htmlFor="claude-profile-token"
-                        className="text-[11px] text-muted-foreground"
-                      >
-                        {t("fieldAuthToken")}
-                      </label>
-                      <Input
-                        id="claude-profile-token"
-                        type="password"
-                        value={selectedDraft.authToken}
-                        onChange={(event) =>
-                          patchDraft({ authToken: event.target.value })
-                        }
-                        placeholder={
-                          selectedProfile?.authTokenMasked?.trim()
-                            ? t("tokenKeepPlaceholder")
-                            : undefined
-                        }
-                        aria-describedby={
-                          selectedDraft.isNew && copiedFrom
-                            ? "claude-profile-token-hint"
-                            : undefined
-                        }
-                        autoComplete="off"
-                      />
-                      {selectedDraft.isNew && copiedFrom ? (
-                        <p
-                          id="claude-profile-token-hint"
-                          className="text-[10px] text-muted-foreground"
-                        >
-                          {t("tokenNotCopied")}
-                        </p>
-                      ) : null}
-                    </div>
-                    <div className="space-y-1.5">
-                      <label
-                        htmlFor="claude-profile-model"
-                        className="text-[11px] text-muted-foreground"
-                      >
-                        {t("fieldModel")}
-                      </label>
-                      <Input
-                        id="claude-profile-model"
-                        value={selectedDraft.model}
-                        onChange={(event) =>
-                          patchDraft({ model: event.target.value })
-                        }
-                      />
-                    </div>
+                    {/* Same form the "Follow default" tab renders. The two
+                        used to be different components against different
+                        stores and looked nothing alike; a field added there
+                        now shows up here by construction. What differs is
+                        only where it lands — see claude-settings-projection. */}
+                    <ClaudeConfigFields
+                      idPrefix="claude-profile"
+                      value={configValue}
+                      onChange={patchConfig}
+                      apiKeyPlaceholder={
+                        selectedProfile?.authTokenMasked?.trim()
+                          ? t("tokenKeepPlaceholder")
+                          : undefined
+                      }
+                      apiKeyHint={
+                        selectedDraft.isNew && copiedFrom ? (
+                          <p className="text-[10px] text-muted-foreground">
+                            {t("tokenNotCopied")}
+                          </p>
+                        ) : null
+                      }
+                    />
 
-                    {/* Everything else a profile can carry — the rest of the
-                        `env` block, effortLevel, permissions, hooks — is just
-                        settings.json, so it gets one editor instead of a
-                        field per key. Collapsed: the three inputs above are
-                        the whole job for a gateway. */}
+                    {/* Everything the form does not name — permissions, hooks,
+                        statusLine, any env key we have no field for — is just
+                        settings.json, so it gets one editor instead of a field
+                        per key. The fields above write into this same text. */}
                     <div className="space-y-1.5">
                       <button
                         type="button"

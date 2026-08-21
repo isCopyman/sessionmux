@@ -1110,6 +1110,7 @@
       "customModelOptionName": "Name des benutzerdefinierten Modells",
       "customModelOptionDescription": "Beschreibung des benutzerdefinierten Modells",
       "customModelOptionHint": "Fügt der Modellauswahl von Claude einen einzelnen benutzerdefinierten Eintrag hinzu (z. B. ein Modell hinter einem benutzerdefinierten Gateway/Proxy). Name und Beschreibung sind optionale Anzeigeangaben.",
+      "advancedFields": "Erweitert",
       "effortLevel": "Reasoning-Stufe",
       "effortLevelDefault": "Standardstufe",
       "effortLevel_low": "Niedrig",

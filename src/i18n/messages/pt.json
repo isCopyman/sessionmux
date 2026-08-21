@@ -1110,6 +1110,7 @@
       "customModelOptionName": "Nome do modelo personalizado",
       "customModelOptionDescription": "Descrição do modelo personalizado",
       "customModelOptionHint": "Adiciona uma única entrada personalizada ao seletor de modelos do Claude (por exemplo, um modelo atrás de um gateway/proxy personalizado). Nome e descrição são informações de exibição opcionais.",
+      "advancedFields": "Avançado",
       "effortLevel": "Nível de raciocínio",
       "effortLevelDefault": "Nível padrão",
       "effortLevel_low": "Baixo",

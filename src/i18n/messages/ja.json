@@ -1110,6 +1110,7 @@
       "customModelOptionName": "カスタムモデル名",
       "customModelOptionDescription": "カスタムモデルの説明",
       "customModelOptionHint": "Claude のモデル選択メニューにカスタム項目を1つ追加します（例: カスタムゲートウェイ/プロキシ経由のモデル）。名前と説明は任意の表示用設定です。",
+      "advancedFields": "詳細設定",
       "effortLevel": "推論レベル",
       "effortLevelDefault": "デフォルトレベル",
       "effortLevel_low": "低",

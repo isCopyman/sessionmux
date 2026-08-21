@@ -7507,6 +7507,84 @@ export function AcpAgentSettings() {
     }
   }, [selectedAgent, codexLoginStatus, cancelCodexDeviceLogin])
 
+  /**
+   * Adapter between this panel's draft and {@link ClaudeConfigFields}, the form
+   * the profile tabs render. Same questions, same layout, either tab.
+   *
+   * It is only an adapter because the draft still stores each Claude setting
+   * twice — once in `configText` (the CLI's settings.json) and once in
+   * `envText` (the DB env overlay) — and the handlers below keep the two in
+   * step. A profile needs none of that: it reads and writes one settings.json
+   * through `claude-settings-projection`. Collapsing this side onto the same
+   * projection is the follow-up; it means changing what `AgentDraft` stores,
+   * which is shared with every other agent's save path.
+   */
+  const claudeConfigValue: ClaudeConfigValue = selectedDraft
+    ? {
+        authMode: selectedDraft.claudeAuthMode,
+        apiBaseUrl: selectedDraft.apiBaseUrl,
+        apiKey: selectedDraft.apiKey,
+        mainModel: selectedDraft.claudeMainModel,
+        reasoningModel: selectedDraft.claudeReasoningModel,
+        haikuModel: selectedDraft.claudeDefaultHaikuModel,
+        sonnetModel: selectedDraft.claudeDefaultSonnetModel,
+        opusModel: selectedDraft.claudeDefaultOpusModel,
+        customModelOption: selectedDraft.claudeCustomModelOption,
+        customModelOptionName: selectedDraft.claudeCustomModelOptionName,
+        customModelOptionDescription:
+          selectedDraft.claudeCustomModelOptionDescription,
+        effortLevel: selectedDraft.claudeEffortLevel,
+        sendAttributionHeader: selectedDraft.claudeSendAttributionHeader,
+        disableNonessentialTraffic:
+          selectedDraft.claudeDisableNonessentialTraffic,
+      }
+    : EMPTY_CLAUDE_CONFIG_VALUE
+
+  /** Which draft field each plain-text form field writes through. */
+  const CLAUDE_FORM_TO_DRAFT = {
+    apiBaseUrl: "apiBaseUrl",
+    apiKey: "apiKey",
+    mainModel: "claudeMainModel",
+    reasoningModel: "claudeReasoningModel",
+    haikuModel: "claudeDefaultHaikuModel",
+    sonnetModel: "claudeDefaultSonnetModel",
+    opusModel: "claudeDefaultOpusModel",
+    customModelOption: "claudeCustomModelOption",
+    customModelOptionName: "claudeCustomModelOptionName",
+    customModelOptionDescription: "claudeCustomModelOptionDescription",
+  } as const
+
+  const handleClaudeConfigFieldsChange = (
+    patch: Partial<ClaudeConfigValue>
+  ) => {
+    if (patch.authMode !== undefined) {
+      handleClaudeAuthModeChange(patch.authMode)
+    }
+    if (patch.effortLevel !== undefined) {
+      handleClaudeEffortLevelChange(patch.effortLevel)
+    }
+    if (patch.sendAttributionHeader !== undefined) {
+      handleClaudeEnvFlagChange(
+        "claudeSendAttributionHeader",
+        CLAUDE_ATTRIBUTION_HEADER_ENV_KEY,
+        patch.sendAttributionHeader
+      )
+    }
+    if (patch.disableNonessentialTraffic !== undefined) {
+      handleClaudeEnvFlagChange(
+        "claudeDisableNonessentialTraffic",
+        CLAUDE_NONESSENTIAL_TRAFFIC_ENV_KEY,
+        patch.disableNonessentialTraffic
+      )
+    }
+    for (const [formKey, draftKey] of Object.entries(CLAUDE_FORM_TO_DRAFT)) {
+      const value = patch[formKey as keyof typeof CLAUDE_FORM_TO_DRAFT]
+      if (value !== undefined) {
+        handleImportantConfigChange(draftKey as ImportantConfigKey, value)
+      }
+    }
+  }
+
   if (loadingAgents) {
     return (
       <div className="h-full flex items-center justify-center text-sm text-muted-foreground">

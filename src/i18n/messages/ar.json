@@ -1110,6 +1110,7 @@
       "customModelOptionName": "اسم النموذج المخصّص",
       "customModelOptionDescription": "وصف النموذج المخصّص",
       "customModelOptionHint": "يضيف عنصرًا مخصّصًا واحدًا إلى محدِّد نماذج Claude (مثل نموذج خلف بوابة/وكيل مخصّص). الاسم والوصف اختياريان لأغراض العرض فقط.",
+      "advancedFields": "خيارات متقدمة",
       "effortLevel": "مستوى الاستدلال",
       "effortLevelDefault": "المستوى الافتراضي",
       "effortLevel_low": "منخفض",
