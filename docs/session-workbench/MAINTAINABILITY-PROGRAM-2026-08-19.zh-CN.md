@@ -1452,3 +1452,15 @@ w-replycopy 预警过的 Radix tooltip 悬停测试（jsdom 无布局，连续�
   的"⑤ 序列化统一"由改名工程降级为规范+测试工程，随时可插单。
 - 附带纠错：RFC 原文"collaboration_event 的 metadata"并不存在——真身是
   队列 draft 信封 JSON（collaboration_service.rs:590-613），盘点已钉。
+
+### 5.24 2026-08-21 晨三批：切面 ⑤ 闭合——红项 casing 钉进 CI
+
+- grok 第八单交付合并（9e856ec0 一线）：24 条 round-trip 样本测试钉死全部
+  红项结构体的落盘 casing（含 PromptQueueDraft 外 camel 内 snake 三明治、
+  Deserialize-only 通道配置用"camel 样本必须解失败"的反向钉法、AgentType
+  查重后不重复）。生产代码 0 行改动。九号批 Rust 四面全绿——**切面 ⑤ 按
+  修订后裁决（冻结+规范+测试）就此闭合**，无迁移、无改名、无升级窗口。
+- 插曲：grok 自己的 worktree 里桌面测试 exe 仍报 0xc0000139（其基线含
+  O50 修复），主仓 target-gate 权威复验全绿。判定为该 worktree 本地环境
+  怪癖（tauri_build 对 out/ 占位的路径差异嫌疑），不影响修复有效性；若
+  未来 worktree 内跑桌面测试复现，再立项细查。
