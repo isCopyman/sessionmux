@@ -21,14 +21,21 @@ export function roomMemberCandidates(
 }
 
 /**
- * Default Room title from the member picks: the first two titles joined, with
- * an ellipsis when more Sessions are in. Same rule as the bulk action bar's
- * create-room flow.
+ * Default Room title from the member picks. One Session uses `formatSolo`
+ * ("{name}'s room") when provided; two or more still join the first two
+ * titles, with an ellipsis when more Sessions are in — the bulk action bar's
+ * create-room rule.
  */
 export function defaultRoomTitle(
   members: readonly Pick<DbConversationSummary, "title">[],
-  fallback: string
+  fallback: string,
+  formatSolo?: (name: string) => string
 ): string {
+  if (members.length === 1) {
+    const name = formatConversationTitle(members[0].title)
+    if (name && formatSolo) return formatSolo(name)
+    return name || fallback
+  }
   const title =
     members
       .slice(0, 2)
