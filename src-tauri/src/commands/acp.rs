@@ -9443,12 +9443,16 @@ fn is_volatile_fingerprint_key(key: &str) -> bool {
     // refresh is conversation-agnostic, so including this key would mark every
     // non-default-profile session stale on any agent settings save. Profile
     // switches emit SessionConfigStale via conversation_set_claude_profile.
+    // CODEG_CLAUDE_SETTINGS_OVERLAY: same pin, now a --settings path for
+    // managed profiles instead of a second config home. Stripped before spawn;
+    // hashed here only as a belt if a caller forgets to strip.
     // Profile-owned ANTHROPIC_* / CLAUDE_AUTH_MODE / cloud-routing keys: same
     // reason — official-direct injects BASE_URL and empty tokens, and the
     // defense sweep drops agent-global connection env. Hashing those would
     // mark every non-follow-default Claude session stale on any settings save.
     key == "OPENCLAW_RESET_SESSION"
         || key == "CLAUDE_CONFIG_DIR"
+        || key == crate::commands::claude_profile::CLAUDE_SETTINGS_OVERLAY_ENV_KEY
         || crate::commands::claude_profile::is_profile_owned_env_key(key)
 }
 
@@ -15023,6 +15027,17 @@ wire_api = "chat"
                 fp1,
                 fingerprint_config(agent, &env_profile),
                 "per-conversation CLAUDE_CONFIG_DIR must not flip the agent-level fingerprint"
+            );
+
+            let mut env_overlay = env.clone();
+            env_overlay.insert(
+                crate::commands::claude_profile::CLAUDE_SETTINGS_OVERLAY_ENV_KEY.to_string(),
+                "/tmp/Claude Profiles/档/settings.json".to_string(),
+            );
+            assert_eq!(
+                fp1,
+                fingerprint_config(agent, &env_overlay),
+                "per-conversation --settings overlay path must not flip the agent-level fingerprint"
             );
         });
     }

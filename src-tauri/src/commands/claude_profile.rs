@@ -6,8 +6,10 @@
 //!
 //! `codeg-mcp` is **not** written into a managed profile's `settings.json`.
 //! The companion is injected over the ACP wire (`session/new.mcpServers`) by
-//! `inject_codeg_mcp` in `acp/connection.rs`, independent of
-//! `CLAUDE_CONFIG_DIR`. See CLAUDE-PROFILE-BACKEND-REPORT.md.
+//! `inject_codeg_mcp` in `acp/connection.rs`. A managed profile takes effect
+//! as `_meta.claudeCode.options.extraArgs.settings` (equivalent to
+//! `claude --settings <absolute path>`), not as a second `CLAUDE_CONFIG_DIR`.
+//! `configDir` profiles still set `CLAUDE_CONFIG_DIR`.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -50,6 +52,16 @@ pub const CODEG_CLAUDE_PROFILE_ENV_KEY: &str = "CODEG_CLAUDE_PROFILE";
 /// `agent_setting.env_json`. It deliberately needs no schema column.
 pub const CODEG_CLAUDE_PROFILE_MIGRATED_ENV_KEY: &str = "CODEG_CLAUDE_PROFILE_MIGRATED";
 
+/// Stashed on `runtime_env` by [`apply_claude_profile_env`] for a `managed`
+/// profile so `session/new` can put the path on
+/// `_meta.claudeCode.options.extraArgs.settings`.
+///
+/// `spawn_agent_connection` removes this key before the child is spawned
+/// and before the config fingerprint is hashed. It is never a process
+/// environment variable of the agent. Path bytes are stored verbatim
+/// (no shell quoting).
+pub const CLAUDE_SETTINGS_OVERLAY_ENV_KEY: &str = "CODEG_CLAUDE_SETTINGS_OVERLAY";
+
 const PROFILES_DIR_NAME: &str = "claude-profiles";
 const VIRTUAL_CREATED_AT: &str = "1970-01-01T00:00:00Z";
 
@@ -85,13 +97,17 @@ pub const PROFILE_OWNED_ENV_KEYS: &[&str] = &[
 /// so an unrelated `ANTHROPIC_DEFAULT_FOO` is left alone.
 pub const PROFILE_OWNED_ENV_PREFIXES: &[&str] = &["ANTHROPIC_CUSTOM_MODEL_OPTION"];
 
-/// Resolved launch profile: which directory (if any) becomes `CLAUDE_CONFIG_DIR`,
-/// plus the profile-owned connection env to overlay after the defense sweep.
+/// Resolved launch profile: which directory (if any) is materialized or used
+/// as `CLAUDE_CONFIG_DIR`, plus the profile-owned connection env to overlay
+/// after the defense sweep. Managed profiles keep `config_dir` as the
+/// materialized folder but do **not** set `CLAUDE_CONFIG_DIR`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedClaudeProfile {
     pub id: String,
     pub kind: ClaudeProfileKind,
-    /// `None` for virtual profiles — `CLAUDE_CONFIG_DIR` must not be set.
+    /// Materialized managed directory, or the user-maintained `configDir`.
+    /// `None` for virtual profiles. Only `configDir` copies this into
+    /// `CLAUDE_CONFIG_DIR`.
     pub config_dir: Option<PathBuf>,
     pub env: BTreeMap<String, String>,
     pub base_url: Option<String>,
@@ -148,6 +164,21 @@ pub fn is_profile_owned_env_key(key: &str) -> bool {
 /// the resolved Claude profile is not `follow-default`.
 pub fn strip_profile_owned_agent_env(runtime_env: &mut BTreeMap<String, String>) {
     runtime_env.retain(|k, _| !is_profile_owned_env_key(k));
+}
+
+/// Absolute path of a managed profile's materialized `settings.json`.
+pub fn managed_settings_json_path(data_dir: &Path, id: &str) -> PathBuf {
+    managed_config_dir(data_dir, id).join("settings.json")
+}
+
+/// Pull the managed `--settings` overlay path out of `runtime_env`.
+///
+/// Used at spawn so the path can ride on `session/new` `_meta` without
+/// becoming a child-process environment variable.
+pub fn take_claude_settings_overlay(runtime_env: &mut BTreeMap<String, String>) -> Option<PathBuf> {
+    runtime_env
+        .remove(CLAUDE_SETTINGS_OVERLAY_ENV_KEY)
+        .map(PathBuf::from)
 }
 
 fn is_secret_env_key(key: &str) -> bool {
@@ -589,8 +620,10 @@ pub async fn resolve_claude_profile(
 
 /// Overlay the profile's own connection env after the defense sweep.
 ///
-/// Dedicated `baseUrl` / `authToken` / `model` win over `record.env` on the
-/// three Anthropic keys — same rule as `materialize_managed_profile`.
+/// Used by `official-direct` (forced official URL + empty tokens) and by
+/// `configDir` profiles (`record.env`; they have no `--settings` file).
+/// Managed profiles do **not** call this: dedicated fields and `record.env`
+/// live in the materialized `settings.json` that `--settings` loads.
 fn apply_profile_connection_env(
     resolved: &ResolvedClaudeProfile,
     runtime_env: &mut BTreeMap<String, String>,
@@ -614,26 +647,22 @@ fn apply_profile_connection_env(
             runtime_env.insert(key.clone(), trimmed);
         }
     }
-    if resolved.kind == ClaudeProfileKind::Managed {
-        if let Some(url) = trim_non_empty(resolved.base_url.as_deref()) {
-            runtime_env.insert("ANTHROPIC_BASE_URL".to_string(), url);
-        }
-        if let Some(token) = trim_non_empty(resolved.auth_token.as_deref()) {
-            runtime_env.insert("ANTHROPIC_AUTH_TOKEN".to_string(), token);
-        }
-        if let Some(model) = trim_non_empty(resolved.model.as_deref()) {
-            runtime_env.insert("ANTHROPIC_MODEL".to_string(), model);
-        }
-    }
 }
 
 /// Last step of `build_session_runtime_env` for Claude Code.
 ///
-/// `follow-default`: today's behaviour — no sweep, no `CLAUDE_CONFIG_DIR`.
+/// `follow-default`: today's behaviour — no sweep, no `CLAUDE_CONFIG_DIR`,
+/// no `_meta` overlay.
 /// Anything else: strip `PROFILE_OWNED_ENV_KEYS` (and prefix families) so
-/// agent-global connection env cannot override the profile, then overlay
-/// the profile's own env / official-direct sentinels / `CLAUDE_CONFIG_DIR`.
-/// A user-explicit `CLAUDE_CONFIG_DIR` in `env_json` still wins and is warned.
+/// agent-global connection env cannot override the profile, then empty-sentinel
+/// the three credential keys (`env_remove`).
+///
+/// `managed`: stash the materialized `settings.json` absolute path on
+/// [`CLAUDE_SETTINGS_OVERLAY_ENV_KEY`] (stripped before spawn) and do **not**
+/// set `CLAUDE_CONFIG_DIR` or re-inject baseUrl/token/model/`record.env`.
+/// `configDir`: keep `CLAUDE_CONFIG_DIR` + `record.env` injection.
+/// A user-explicit `CLAUDE_CONFIG_DIR` in `env_json` still wins for
+/// `configDir` and is warned.
 pub async fn apply_claude_profile_env(
     db: &AppDatabase,
     data_dir: &Path,
@@ -652,10 +681,9 @@ pub async fn apply_claude_profile_env(
     // A selected profile is the authentication-mode boundary. Empty values are
     // not injected into the child: sacp-tokio translates them to `env_remove`,
     // preventing credentials exported by codeg's parent shell/container from
-    // overriding the selected config directory. Dedicated fields (or the
-    // retained O66 `record.env` compatibility map) overlay these sentinels
-    // below. This replaces the old CLAUDE_AUTH_MODE=official_subscription
-    // launch policy without carrying that codeg-only selector into the profile.
+    // overriding the selected settings. This replaces the old
+    // CLAUDE_AUTH_MODE=official_subscription launch policy without carrying
+    // that codeg-only selector into the profile.
     for key in [
         "ANTHROPIC_BASE_URL",
         "ANTHROPIC_AUTH_TOKEN",
@@ -663,27 +691,43 @@ pub async fn apply_claude_profile_env(
     ] {
         runtime_env.insert(key.to_string(), String::new());
     }
-    apply_profile_connection_env(&resolved, runtime_env);
 
-    let Some(dir) = resolved.config_dir else {
-        return Ok(());
-    };
-    let env_json_has_key = claude_agent_env_json
-        .and_then(|raw| serde_json::from_str::<BTreeMap<String, String>>(raw).ok())
-        .is_some_and(|map| map.contains_key("CLAUDE_CONFIG_DIR"));
-    if env_json_has_key {
-        tracing::warn!(
-            "[claude-profile] env_json already sets CLAUDE_CONFIG_DIR; \
-             not overriding with profile '{}' ({})",
-            resolved.id,
-            dir.display()
-        );
-        return Ok(());
+    match resolved.kind {
+        ClaudeProfileKind::FollowDefault => {}
+        ClaudeProfileKind::OfficialDirect => {
+            apply_profile_connection_env(&resolved, runtime_env);
+        }
+        ClaudeProfileKind::Managed => {
+            if let Some(dir) = &resolved.config_dir {
+                runtime_env.insert(
+                    CLAUDE_SETTINGS_OVERLAY_ENV_KEY.to_string(),
+                    dir.join("settings.json").to_string_lossy().into_owned(),
+                );
+            }
+        }
+        ClaudeProfileKind::ConfigDir => {
+            apply_profile_connection_env(&resolved, runtime_env);
+            let Some(dir) = resolved.config_dir else {
+                return Ok(());
+            };
+            let env_json_has_key = claude_agent_env_json
+                .and_then(|raw| serde_json::from_str::<BTreeMap<String, String>>(raw).ok())
+                .is_some_and(|map| map.contains_key("CLAUDE_CONFIG_DIR"));
+            if env_json_has_key {
+                tracing::warn!(
+                    "[claude-profile] env_json already sets CLAUDE_CONFIG_DIR; \
+                     not overriding with profile '{}' ({})",
+                    resolved.id,
+                    dir.display()
+                );
+                return Ok(());
+            }
+            runtime_env.insert(
+                "CLAUDE_CONFIG_DIR".to_string(),
+                dir.to_string_lossy().into_owned(),
+            );
+        }
     }
-    runtime_env.insert(
-        "CLAUDE_CONFIG_DIR".to_string(),
-        dir.to_string_lossy().into_owned(),
-    );
     Ok(())
 }
 
@@ -1842,6 +1886,10 @@ mod tests {
             !env.contains_key("CLAUDE_CONFIG_DIR"),
             "follow-default must not set CLAUDE_CONFIG_DIR: {env:?}"
         );
+        assert!(
+            !env.contains_key(CLAUDE_SETTINGS_OVERLAY_ENV_KEY),
+            "follow-default must not set a --settings overlay: {env:?}"
+        );
     }
 
     #[tokio::test]
@@ -1892,12 +1940,89 @@ mod tests {
             build_session_runtime_env(&db, AgentType::ClaudeCode, None, data.path(), Some(conv))
                 .await
                 .unwrap();
-        let expected = managed_config_dir(data.path(), "hosted");
+        let expected = managed_settings_json_path(data.path(), "hosted");
+        assert!(
+            !env.contains_key("CLAUDE_CONFIG_DIR"),
+            "managed must not set CLAUDE_CONFIG_DIR: {env:?}"
+        );
         assert_eq!(
-            env.get("CLAUDE_CONFIG_DIR").map(String::as_str),
+            env.get(CLAUDE_SETTINGS_OVERLAY_ENV_KEY).map(String::as_str),
             Some(expected.to_string_lossy().as_ref())
         );
-        assert!(expected.join("settings.json").is_file());
+        assert!(expected.is_file());
+    }
+
+    #[tokio::test]
+    async fn managed_overlay_path_keeps_spaces_and_non_ascii_verbatim() {
+        use crate::commands::acp::build_session_runtime_env;
+        let db = fresh_in_memory_db().await;
+        let root = tempfile::tempdir().unwrap();
+        let data_dir = root.path().join("Claude Profiles").join("用户 档");
+        fs::create_dir_all(&data_dir).unwrap();
+        seed_claude_agent(&db, None).await;
+        let folder = seed_folder(&db, data_dir.to_str().unwrap()).await;
+        let conv = seed_conversation(&db, folder, AgentType::ClaudeCode).await;
+        upsert_managed(
+            &data_dir,
+            "hosted",
+            Some("https://gw.example"),
+            Some("sk-hosted"),
+            None,
+        );
+        conversation_service::merge_selector_config_value(
+            &db.conn,
+            conv,
+            PREFERRED_PROFILE_CONFIG_KEY,
+            "hosted",
+        )
+        .await
+        .unwrap();
+
+        let env =
+            build_session_runtime_env(&db, AgentType::ClaudeCode, None, &data_dir, Some(conv))
+                .await
+                .unwrap();
+        let overlay = managed_settings_json_path(&data_dir, "hosted");
+        let stored = env
+            .get(CLAUDE_SETTINGS_OVERLAY_ENV_KEY)
+            .cloned()
+            .expect("managed overlay path");
+        let expected = overlay.to_string_lossy().into_owned();
+        assert_eq!(stored, expected);
+        assert!(
+            stored.contains(' ') && stored.contains('档'),
+            "path must keep spaces and non-ASCII: {stored}"
+        );
+        assert!(
+            !stored.starts_with('"') && !stored.ends_with('"'),
+            "path must not be quote-wrapped: {stored}"
+        );
+        assert!(!env.contains_key("CLAUDE_CONFIG_DIR"));
+
+        let mut child_env = env.clone();
+        let taken = take_claude_settings_overlay(&mut child_env);
+        assert_eq!(taken.as_deref(), Some(overlay.as_path()));
+        assert!(
+            !child_env.contains_key(CLAUDE_SETTINGS_OVERLAY_ENV_KEY),
+            "overlay key must be stripped before the child spawn: {child_env:?}"
+        );
+    }
+
+    #[test]
+    fn take_claude_settings_overlay_is_a_remove_not_a_read() {
+        let mut env = BTreeMap::new();
+        env.insert("KEEP".to_string(), "1".to_string());
+        assert_eq!(take_claude_settings_overlay(&mut env), None);
+        assert_eq!(env.get("KEEP").map(String::as_str), Some("1"));
+
+        let path = PathBuf::from("/tmp/Claude Profiles/档/settings.json");
+        env.insert(
+            CLAUDE_SETTINGS_OVERLAY_ENV_KEY.to_string(),
+            path.to_string_lossy().into_owned(),
+        );
+        assert_eq!(take_claude_settings_overlay(&mut env), Some(path));
+        assert!(!env.contains_key(CLAUDE_SETTINGS_OVERLAY_ENV_KEY));
+        assert_eq!(env.get("KEEP").map(String::as_str), Some("1"));
     }
 
     #[tokio::test]
@@ -1925,6 +2050,10 @@ mod tests {
         assert!(
             !env.contains_key("CLAUDE_CONFIG_DIR"),
             "Codex must not receive CLAUDE_CONFIG_DIR: {env:?}"
+        );
+        assert!(
+            !env.contains_key(CLAUDE_SETTINGS_OVERLAY_ENV_KEY),
+            "Codex must not receive a Claude --settings overlay: {env:?}"
         );
     }
 
@@ -2371,6 +2500,7 @@ mod tests {
             );
         }
         assert!(!env.contains_key("CLAUDE_CONFIG_DIR"));
+        assert!(!env.contains_key(CLAUDE_SETTINGS_OVERLAY_ENV_KEY));
     }
 
     #[tokio::test]
@@ -2468,6 +2598,7 @@ mod tests {
         );
         assert_eq!(env.get("ANTHROPIC_API_KEY").map(String::as_str), Some(""));
         assert!(!env.contains_key("CLAUDE_CONFIG_DIR"));
+        assert!(!env.contains_key(CLAUDE_SETTINGS_OVERLAY_ENV_KEY));
         assert!(!env.contains_key("CLAUDE_AUTH_MODE"));
         assert!(!env.contains_key("ANTHROPIC_MODEL"));
         assert!(!env.contains_key("ANTHROPIC_DEFAULT_SONNET_MODEL"));
@@ -2540,29 +2671,60 @@ mod tests {
             build_session_runtime_env(&db, AgentType::ClaudeCode, None, data.path(), Some(conv))
                 .await
                 .unwrap();
-        assert_eq!(
-            runtime.get("ANTHROPIC_BASE_URL").map(String::as_str),
-            Some("https://from-field.example/v1")
-        );
-        assert_eq!(
-            runtime.get("ANTHROPIC_AUTH_TOKEN").map(String::as_str),
-            Some("sk-from-field")
-        );
-        assert_eq!(
-            runtime.get("ANTHROPIC_MODEL").map(String::as_str),
-            Some("from-field-model")
-        );
+        let overlay = managed_settings_json_path(data.path(), "gw");
         assert_eq!(
             runtime
-                .get("ANTHROPIC_DEFAULT_HAIKU_MODEL")
+                .get(CLAUDE_SETTINGS_OVERLAY_ENV_KEY)
                 .map(String::as_str),
-            Some("haiku-profile")
+            Some(overlay.to_string_lossy().as_ref())
+        );
+        assert!(!runtime.contains_key("CLAUDE_CONFIG_DIR"));
+        for key in [
+            "ANTHROPIC_BASE_URL",
+            "ANTHROPIC_AUTH_TOKEN",
+            "ANTHROPIC_API_KEY",
+        ] {
+            assert_eq!(
+                runtime.get(key).map(String::as_str),
+                Some(""),
+                "managed must env_remove {key}, not re-inject it: {runtime:?}"
+            );
+        }
+        assert!(
+            !runtime.contains_key("ANTHROPIC_MODEL"),
+            "managed dedicated fields ride on --settings, not process env: {runtime:?}"
+        );
+        assert!(
+            !runtime.contains_key("ANTHROPIC_DEFAULT_HAIKU_MODEL"),
+            "managed record.env rides on --settings, not process env: {runtime:?}"
         );
         assert_eq!(
             runtime.get("DISABLE_TELEMETRY").map(String::as_str),
             Some("1")
         );
         assert!(!runtime.contains_key("CLAUDE_AUTH_MODE"));
+
+        let settings: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&overlay).unwrap()).unwrap();
+        let block = settings.get("env").and_then(|v| v.as_object()).unwrap();
+        assert_eq!(
+            block.get("ANTHROPIC_BASE_URL").and_then(|v| v.as_str()),
+            Some("https://from-field.example/v1")
+        );
+        assert_eq!(
+            block.get("ANTHROPIC_AUTH_TOKEN").and_then(|v| v.as_str()),
+            Some("sk-from-field")
+        );
+        assert_eq!(
+            block.get("ANTHROPIC_MODEL").and_then(|v| v.as_str()),
+            Some("from-field-model")
+        );
+        assert_eq!(
+            block
+                .get("ANTHROPIC_DEFAULT_HAIKU_MODEL")
+                .and_then(|v| v.as_str()),
+            Some("haiku-profile")
+        );
     }
 
     #[tokio::test]
@@ -2618,6 +2780,10 @@ mod tests {
         assert_eq!(
             runtime.get("CLAUDE_CONFIG_DIR").map(String::as_str),
             Some(user_dir.to_string_lossy().as_ref())
+        );
+        assert!(
+            !runtime.contains_key(CLAUDE_SETTINGS_OVERLAY_ENV_KEY),
+            "configDir must not set extraArgs.settings: {runtime:?}"
         );
         assert!(
             !user_dir.join("settings.json").exists(),
@@ -2770,7 +2936,7 @@ mod tests {
                 .unwrap(),
         )
         .unwrap();
-        let mut effective: BTreeMap<String, String> =
+        let effective: BTreeMap<String, String> =
             serde_json::from_value(settings["env"].clone()).unwrap();
         assert!(!effective.contains_key("CLAUDE_AUTH_MODE"));
 
@@ -2778,19 +2944,25 @@ mod tests {
             build_session_runtime_env(&db, AgentType::ClaudeCode, None, data.path(), None)
                 .await
                 .unwrap();
+        let overlay = managed_settings_json_path(data.path(), "imported");
         assert_eq!(
-            runtime.get("ANTHROPIC_BASE_URL"),
-            before.get("ANTHROPIC_BASE_URL")
+            runtime
+                .get(CLAUDE_SETTINGS_OVERLAY_ENV_KEY)
+                .map(String::as_str),
+            Some(overlay.to_string_lossy().as_ref())
         );
-        assert_eq!(
-            runtime.get("ANTHROPIC_AUTH_TOKEN"),
-            before.get("ANTHROPIC_AUTH_TOKEN")
-        );
-        assert_eq!(
-            runtime.get("ANTHROPIC_API_KEY").map(String::as_str),
-            Some(""),
-            "selected profile must env_remove an inherited API key"
-        );
+        assert!(!runtime.contains_key("CLAUDE_CONFIG_DIR"));
+        for key in [
+            "ANTHROPIC_BASE_URL",
+            "ANTHROPIC_AUTH_TOKEN",
+            "ANTHROPIC_API_KEY",
+        ] {
+            assert_eq!(
+                runtime.get(key).map(String::as_str),
+                Some(""),
+                "managed migration must env_remove {key}, not re-inject it"
+            );
+        }
         for key in [
             "ANTHROPIC_CUSTOM_MODEL_OPTION",
             "ANTHROPIC_DEFAULT_FABLE_MODEL",
@@ -2803,17 +2975,12 @@ mod tests {
                 "settingsJson-only key must be read by the CLI, not injected: {key}"
             );
         }
-        for (key, value) in &runtime {
-            if is_profile_owned_env_key(key) && key != "CLAUDE_AUTH_MODE" {
-                effective.insert(key.clone(), value.clone());
-            }
-        }
         for (key, value) in &before {
             if is_profile_owned_env_key(key) && key != "CLAUDE_AUTH_MODE" {
                 assert_eq!(
                     effective.get(key),
                     Some(value),
-                    "effective key changed: {key}"
+                    "settings.json env key changed: {key}"
                 );
             }
         }

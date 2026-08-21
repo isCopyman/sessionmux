@@ -1350,7 +1350,7 @@ pub async fn spawn_agent_connection(
     // stop instead of opening a different native Session. See
     // `LoadFailureRoute::StopResumeOnly`.
     resume_only: bool,
-    runtime_env: BTreeMap<String, String>,
+    mut runtime_env: BTreeMap<String, String>,
     owner_window_label: String,
     emitter: EventEmitter,
     connections: Arc<tokio::sync::Mutex<HashMap<String, AgentConnection>>>,
@@ -1406,6 +1406,12 @@ pub async fn spawn_agent_connection(
         )
         .await;
     }
+
+    // Managed Claude profiles stash the `--settings` path on runtime_env so
+    // this spawn can put it on `session/new` `_meta`. It must not reach the
+    // child process or the config fingerprint.
+    let claude_settings_overlay =
+        crate::commands::claude_profile::take_claude_settings_overlay(&mut runtime_env);
 
     // Align ~/.hermes/.env's base-URL var with config.yaml's model.base_url so
     // Hermes' auxiliary tasks (title generation, compression, …) resolve the
@@ -1555,6 +1561,7 @@ pub async fn spawn_agent_connection(
                     fs_policy,
                     host_tools,
                     stderr_tail,
+                    claude_settings_overlay,
                 )
                 .await;
 
@@ -3168,6 +3175,7 @@ fn resolve_working_dir(working_dir: Option<&str>) -> PathBuf {
 
 fn claude_raw_sdk_session_meta(
     agent_type: AgentType,
+    settings_overlay: Option<&Path>,
 ) -> Option<serde_json::Map<String, serde_json::Value>> {
     if agent_type != AgentType::ClaudeCode {
         return None;
@@ -3178,6 +3186,23 @@ fn claude_raw_sdk_session_meta(
         "emitRawSDKMessages".to_string(),
         serde_json::Value::Bool(true),
     );
+    // Managed profiles: `_meta.claudeCode.options.extraArgs.settings` is
+    // equivalent to `claude --settings <absolute path>` (adapter extraArgs
+    // → SDK argv). Path is stored verbatim; argv is an array, not a shell
+    // string, so spaces / non-ASCII must not be quoted here.
+    if let Some(path) = settings_overlay {
+        let mut extra_args = serde_json::Map::new();
+        extra_args.insert(
+            "settings".to_string(),
+            serde_json::Value::String(path.to_string_lossy().into_owned()),
+        );
+        let mut options = serde_json::Map::new();
+        options.insert(
+            "extraArgs".to_string(),
+            serde_json::Value::Object(extra_args),
+        );
+        claude_code.insert("options".to_string(), serde_json::Value::Object(options));
+    }
 
     let mut meta = serde_json::Map::new();
     meta.insert(
@@ -3325,9 +3350,10 @@ fn build_new_session_request(
     agent_type: AgentType,
     cwd: &Path,
     mcp_servers: Vec<McpServer>,
+    settings_overlay: Option<&Path>,
 ) -> NewSessionRequest {
     let mut req = NewSessionRequest::new(session_request_cwd(agent_type, cwd));
-    if let Some(meta) = claude_raw_sdk_session_meta(agent_type) {
+    if let Some(meta) = claude_raw_sdk_session_meta(agent_type, settings_overlay) {
         req = req.meta(meta);
     }
     if !mcp_servers.is_empty() {
@@ -3341,9 +3367,10 @@ fn build_load_session_request(
     session_id: SessionId,
     cwd: &Path,
     mcp_servers: Vec<McpServer>,
+    settings_overlay: Option<&Path>,
 ) -> LoadSessionRequest {
     let mut req = LoadSessionRequest::new(session_id, session_request_cwd(agent_type, cwd));
-    if let Some(meta) = claude_raw_sdk_session_meta(agent_type) {
+    if let Some(meta) = claude_raw_sdk_session_meta(agent_type, settings_overlay) {
         req = req.meta(meta);
     }
     if !mcp_servers.is_empty() {
@@ -3367,9 +3394,10 @@ fn build_resume_session_request(
     session_id: SessionId,
     cwd: &Path,
     mcp_servers: Vec<McpServer>,
+    settings_overlay: Option<&Path>,
 ) -> ResumeSessionRequest {
     let mut req = ResumeSessionRequest::new(session_id, session_request_cwd(agent_type, cwd));
-    if let Some(meta) = claude_raw_sdk_session_meta(agent_type) {
+    if let Some(meta) = claude_raw_sdk_session_meta(agent_type, settings_overlay) {
         req = req.meta(meta);
     }
     if !mcp_servers.is_empty() {
@@ -4062,6 +4090,11 @@ async fn run_connection(
     // callback installed by `build_agent`. Read only when a turn ends without
     // agent output, to attach evidence to the synthesized error.
     stderr_tail: Arc<StderrTail>,
+    // Managed Claude `--settings` overlay. `None` for follow-default,
+    // configDir, and every non-Claude agent. Applied on session/new|load|resume
+    // `_meta.claudeCode.options.extraArgs.settings` next to emitRawSDKMessages
+    // and independently of `mcpServers` / codeg-mcp.
+    claude_settings_overlay: Option<PathBuf>,
 ) -> Result<(), AcpError> {
     let pending_perms: PendingPermissions =
         Arc::new(tokio::sync::Mutex::new(PermissionQueue::default()));
@@ -4652,6 +4685,7 @@ async fn run_connection(
                         SessionId::new(sid.clone()),
                         &cwd,
                         mcp_servers.clone(),
+                        claude_settings_overlay.as_deref(),
                     );
                     match send_resume_session(&cx, resume_req).await {
                         Ok((resume_resp, grok_models_raw)) => {
@@ -4784,6 +4818,7 @@ async fn run_connection(
                         SessionId::new(sid.clone()),
                         &cwd,
                         mcp_servers.clone(),
+                        claude_settings_overlay.as_deref(),
                     );
                     send_load_session(&cx, load_req).await
                 } else {
@@ -5081,7 +5116,12 @@ async fn run_connection(
                         let (new_resp, grok_models_raw) = send_new_session_within_budget(
                             &cx,
                             agent_type,
-                            build_new_session_request(agent_type, &cwd, mcp_servers.clone()),
+                            build_new_session_request(
+                                agent_type,
+                                &cwd,
+                                mcp_servers.clone(),
+                                claude_settings_overlay.as_deref(),
+                            ),
                             &companion_servers,
                         )
                         .await
@@ -5173,7 +5213,12 @@ async fn run_connection(
                 let (new_resp, grok_models_raw) = send_new_session_within_budget(
                     &cx,
                     agent_type,
-                    build_new_session_request(agent_type, &cwd, mcp_servers.clone()),
+                    build_new_session_request(
+                        agent_type,
+                        &cwd,
+                        mcp_servers.clone(),
+                        claude_settings_overlay.as_deref(),
+                    ),
                     &companion_servers,
                 )
                 .await
@@ -13127,7 +13172,7 @@ mod tests {
 
     #[test]
     fn claude_raw_sdk_meta_enabled_only_for_claude() {
-        let claude_meta = claude_raw_sdk_session_meta(AgentType::ClaudeCode)
+        let claude_meta = claude_raw_sdk_session_meta(AgentType::ClaudeCode, None)
             .expect("Claude must have raw SDK meta");
         assert_eq!(
             claude_meta
@@ -13137,7 +13182,7 @@ mod tests {
             Some(true)
         );
 
-        assert!(claude_raw_sdk_session_meta(AgentType::Codex).is_none());
+        assert!(claude_raw_sdk_session_meta(AgentType::Codex, None).is_none());
     }
 
     #[test]
@@ -14534,7 +14579,7 @@ mod tests {
     #[test]
     fn build_new_session_request_sets_claude_raw_meta() {
         let cwd = std::path::PathBuf::from("/tmp/codeg");
-        let req = build_new_session_request(AgentType::ClaudeCode, &cwd, Vec::new());
+        let req = build_new_session_request(AgentType::ClaudeCode, &cwd, Vec::new(), None);
 
         assert_eq!(
             req.meta
@@ -14544,6 +14589,102 @@ mod tests {
                 .and_then(|v| v.as_bool()),
             Some(true)
         );
+        assert!(
+            req.meta
+                .as_ref()
+                .and_then(|m| m.get("claudeCode"))
+                .and_then(|v| v.get("options"))
+                .is_none(),
+            "follow-default / no overlay must not set extraArgs: {:?}",
+            req.meta
+        );
+    }
+
+    fn extra_args_settings(req: &NewSessionRequest) -> Option<&str> {
+        req.meta
+            .as_ref()
+            .and_then(|m| m.get("claudeCode"))
+            .and_then(|v| v.get("options"))
+            .and_then(|v| v.get("extraArgs"))
+            .and_then(|v| v.get("settings"))
+            .and_then(|v| v.as_str())
+    }
+
+    #[test]
+    fn managed_overlay_path_is_passed_verbatim_without_quotes() {
+        let cwd = std::path::PathBuf::from("/tmp/codeg");
+        let overlay = std::path::PathBuf::from("/tmp/Claude Profiles/档 α/settings.json");
+        let overlay_str = overlay.to_string_lossy().into_owned();
+        assert!(
+            overlay_str.contains(' ') && overlay_str.contains('档'),
+            "fixture must include space and non-ASCII: {overlay_str}"
+        );
+
+        let req = build_new_session_request(
+            AgentType::ClaudeCode,
+            &cwd,
+            Vec::new(),
+            Some(overlay.as_path()),
+        );
+        let settings =
+            extra_args_settings(&req).expect("managed overlay must set extraArgs.settings");
+        assert_eq!(settings, overlay_str);
+        assert!(
+            !settings.starts_with('"') && !settings.ends_with('"'),
+            "argv array must not wrap the path in quotes: {settings}"
+        );
+        assert_eq!(
+            req.meta
+                .as_ref()
+                .and_then(|m| m.get("claudeCode"))
+                .and_then(|v| v.get("emitRawSDKMessages"))
+                .and_then(|v| v.as_bool()),
+            Some(true),
+            "overlay must coexist with emitRawSDKMessages"
+        );
+    }
+
+    #[test]
+    fn overlay_and_codeg_mcp_coexist_on_session_new() {
+        let cwd = std::path::PathBuf::from("/tmp/codeg");
+        let overlay = std::path::PathBuf::from("/tmp/claude-profiles/hosted/settings.json");
+        let mcp = vec![McpServer::Stdio(McpServerStdio::new(
+            "codeg-mcp",
+            std::path::PathBuf::from("/usr/bin/codeg-mcp"),
+        ))];
+        let req =
+            build_new_session_request(AgentType::ClaudeCode, &cwd, mcp, Some(overlay.as_path()));
+        let overlay_str = overlay.to_string_lossy().into_owned();
+        assert_eq!(extra_args_settings(&req), Some(overlay_str.as_str()));
+        assert_eq!(
+            req.mcp_servers.len(),
+            1,
+            "codeg-mcp must stay on mcpServers"
+        );
+        match &req.mcp_servers[0] {
+            McpServer::Stdio(server) => assert_eq!(server.name, "codeg-mcp"),
+            other => panic!("expected stdio codeg-mcp, got {other:?}"),
+        }
+        assert_eq!(
+            req.meta
+                .as_ref()
+                .and_then(|m| m.get("claudeCode"))
+                .and_then(|v| v.get("emitRawSDKMessages"))
+                .and_then(|v| v.as_bool()),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn config_dir_and_non_claude_do_not_set_extra_args_settings() {
+        let cwd = std::path::PathBuf::from("/tmp/codeg");
+        let overlay = std::path::PathBuf::from("/tmp/ignored/settings.json");
+        let claude = build_new_session_request(AgentType::ClaudeCode, &cwd, Vec::new(), None);
+        assert!(extra_args_settings(&claude).is_none());
+
+        let codex =
+            build_new_session_request(AgentType::Codex, &cwd, Vec::new(), Some(overlay.as_path()));
+        assert!(codex.meta.is_none(), "Codex must not receive Claude _meta");
     }
 
     /// The `loadSession` capability gate hands the failure ladder a synthetic
@@ -14605,6 +14746,7 @@ mod tests {
             SessionId::new("abc".to_string()),
             &cwd,
             Vec::new(),
+            None,
         );
 
         assert!(req.meta.is_none());
@@ -14627,7 +14769,7 @@ mod tests {
         let canonical = std::fs::canonicalize(&cwd).expect("canonicalize");
         assert_ne!(cwd, canonical, "fixture must be non-canonical to be a test");
 
-        let new_req = build_new_session_request(AgentType::Grok, &cwd, Vec::new());
+        let new_req = build_new_session_request(AgentType::Grok, &cwd, Vec::new(), None);
         assert_eq!(
             new_req.cwd, canonical,
             "session/new must send canonical cwd"
@@ -14638,6 +14780,7 @@ mod tests {
             SessionId::new("grok-session".to_string()),
             &cwd,
             Vec::new(),
+            None,
         );
         assert_eq!(
             load_req.cwd, canonical,
@@ -14649,6 +14792,7 @@ mod tests {
             SessionId::new("grok-session".to_string()),
             &cwd,
             Vec::new(),
+            None,
         );
         assert_eq!(
             resume_req.cwd, canonical,
@@ -14674,7 +14818,7 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let missing = tmp.path().join("not-created-yet");
 
-        let new_req = build_new_session_request(AgentType::Grok, &missing, Vec::new());
+        let new_req = build_new_session_request(AgentType::Grok, &missing, Vec::new(), None);
         assert_eq!(new_req.cwd, missing);
 
         let load_req = build_load_session_request(
@@ -14682,6 +14826,7 @@ mod tests {
             SessionId::new("grok-session".to_string()),
             &missing,
             Vec::new(),
+            None,
         );
         assert_eq!(load_req.cwd, missing);
     }
@@ -14708,7 +14853,7 @@ mod tests {
             AgentType::Custom("my-agent"),
         ] {
             assert_eq!(
-                build_new_session_request(agent, &cwd, Vec::new()).cwd,
+                build_new_session_request(agent, &cwd, Vec::new(), None).cwd,
                 cwd,
                 "{agent:?} session/new cwd must be untouched"
             );
@@ -14718,6 +14863,7 @@ mod tests {
                     SessionId::new("s".to_string()),
                     &cwd,
                     Vec::new(),
+                    None,
                 )
                 .cwd,
                 cwd,
@@ -14729,6 +14875,7 @@ mod tests {
                     SessionId::new("s".to_string()),
                     &cwd,
                     Vec::new(),
+                    None,
                 )
                 .cwd,
                 cwd,
@@ -14750,7 +14897,7 @@ mod tests {
     fn openclaw_session_requests_carry_no_mcp_servers() {
         let cwd = std::path::PathBuf::from("/tmp/codeg");
 
-        let new_req = build_new_session_request(AgentType::OpenClaw, &cwd, Vec::new());
+        let new_req = build_new_session_request(AgentType::OpenClaw, &cwd, Vec::new(), None);
         assert!(
             new_req.mcp_servers.is_empty(),
             "OpenClaw session/new must carry no MCP servers"
@@ -14767,6 +14914,7 @@ mod tests {
             SessionId::new("openclaw-session".to_string()),
             &cwd,
             Vec::new(),
+            None,
         );
         assert!(
             load_req.mcp_servers.is_empty(),
@@ -14932,6 +15080,7 @@ mod tests {
             SessionId::new("abc".to_string()),
             &cwd,
             Vec::new(),
+            None,
         );
 
         assert_eq!(
@@ -14952,6 +15101,7 @@ mod tests {
             SessionId::new("abc".to_string()),
             &cwd,
             Vec::new(),
+            None,
         );
 
         assert!(req.meta.is_none());
@@ -14973,6 +15123,7 @@ mod tests {
             SessionId::new("openclaw-session".to_string()),
             &cwd,
             Vec::new(),
+            None,
         );
         assert!(
             req.mcp_servers.is_empty(),
@@ -17190,7 +17341,7 @@ mod tests {
     #[test]
     fn untyped_new_session_carries_the_typed_request_payload() {
         let cwd = std::path::PathBuf::from("/tmp/codeg");
-        let req = build_new_session_request(AgentType::Cline, &cwd, Vec::new());
+        let req = build_new_session_request(AgentType::Cline, &cwd, Vec::new(), None);
         let expected = serde_json::to_value(&req).unwrap();
 
         let untyped = UntypedMessage::new("session/new", req).expect("builds");
