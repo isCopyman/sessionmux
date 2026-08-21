@@ -1190,6 +1190,8 @@
       "switchRestartBody": "프로필은 에이전트가 시작할 때만 적용되므로 실행 중인 프로세스는 아직 이전 설정입니다. 진행 중인 턴은 중단되지만 대화 기록과 대기 중인 메시지는 유지됩니다.",
       "switchRestartConfirm": "다시 시작하고 적용",
       "switchRestartLater": "계속 실행하고 나중에 적용",
+      "projectSettings": "이 프로젝트의 .claude 설정 사용",
+      "projectSettingsHint": "작업 폴더의 .claude/settings.json과 settings.local.json도 함께 불러옵니다.",
       "switchRestartFailed": "프로필은 저장했지만 세션을 다시 시작하지 못했습니다"
     },
     "dialogs": {

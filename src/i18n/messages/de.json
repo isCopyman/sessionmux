@@ -1190,6 +1190,8 @@
       "switchRestartBody": "Ein Profil greift erst beim Start des Agents, der laufende Prozess nutzt also noch das alte. Der laufende Zug wird abgebrochen; Verlauf und Nachrichten in der Warteschlange bleiben erhalten.",
       "switchRestartConfirm": "Neu starten und anwenden",
       "switchRestartLater": "Weiterlaufen, später anwenden",
+      "projectSettings": "Die .claude-Einstellungen dieses Projekts verwenden",
+      "projectSettingsHint": "Lädt zusätzlich .claude/settings.json und settings.local.json aus dem Arbeitsordner.",
       "switchRestartFailed": "Profil gespeichert, aber die Sitzung konnte nicht neu starten"
     },
     "dialogs": {

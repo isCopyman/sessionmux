@@ -24,6 +24,8 @@ import type {
   ClaudeProfileUpsert,
   ClaudeSettingsReadResult,
   ConversationClaudeProfileResult,
+  ConversationProjectSettings,
+  ConversationProjectSettingsResult,
   Automation,
   AutomationRun,
   AutomationDraft,
@@ -627,6 +629,28 @@ export async function conversationGetClaudeProfile(
 ): Promise<ConversationClaudeProfileResult> {
   return getTransport().call("conversation_get_claude_profile", {
     conversationId,
+  })
+}
+
+/** Whether this conversation loads the project's own `.claude/settings.json`
+ *  (and `.local.json`). Missing on the backend means on. */
+export async function conversationGetProjectSettings(
+  conversationId: number
+): Promise<ConversationProjectSettings> {
+  return getTransport().call("conversation_get_project_settings", {
+    conversationId,
+  })
+}
+
+/** Only reaches the agent at spawn, so a live session needs a restart — see
+ *  `affectedRunningSessions`. */
+export async function conversationSetProjectSettings(
+  conversationId: number,
+  enabled: boolean
+): Promise<ConversationProjectSettingsResult> {
+  return getTransport().call("conversation_set_project_settings", {
+    conversationId,
+    enabled,
   })
 }
 

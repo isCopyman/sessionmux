@@ -1190,6 +1190,8 @@
       "switchRestartBody": "Un profil ne prend effet qu'au démarrage de l'agent : le processus en cours utilise encore l'ancien. Le tour en cours sera interrompu ; la conversation et les messages en file d'attente sont conservés.",
       "switchRestartConfirm": "Redémarrer et appliquer",
       "switchRestartLater": "Continuer, appliquer plus tard",
+      "projectSettings": "Utiliser les réglages .claude de ce projet",
+      "projectSettingsHint": "Charge aussi .claude/settings.json et settings.local.json du dossier de travail.",
       "switchRestartFailed": "Profil enregistré, mais la session n'a pas pu redémarrer"
     },
     "dialogs": {

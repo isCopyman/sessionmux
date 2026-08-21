@@ -7,7 +7,8 @@ use crate::app_state::AppState;
 use crate::commands::claude_profile as profile_commands;
 use crate::models::claude_profile::{
     ClaudeProfileInfo, ClaudeProfileUpsert, ClaudeSettingsReadResult,
-    ConversationClaudeProfileResult,
+    ConversationClaudeProfileResult, ConversationProjectSettings,
+    ConversationProjectSettingsResult,
 };
 
 pub async fn claude_profile_list(
@@ -64,6 +65,30 @@ pub async fn conversation_set_claude_profile(
         &state.data_dir,
         params.conversation_id,
         params.profile_id,
+    )
+    .await?;
+    Ok(Json(result))
+}
+
+pub async fn conversation_get_project_settings(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<profile_commands::ConversationGetProjectSettingsParams>,
+) -> Result<Json<ConversationProjectSettings>, AppCommandError> {
+    let result =
+        profile_commands::conversation_get_project_settings_core(&state.db, params.conversation_id)
+            .await?;
+    Ok(Json(result))
+}
+
+pub async fn conversation_set_project_settings(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<profile_commands::ConversationSetProjectSettingsParams>,
+) -> Result<Json<ConversationProjectSettingsResult>, AppCommandError> {
+    let result = profile_commands::conversation_set_project_settings_core(
+        &state.db,
+        &state.connection_manager,
+        params.conversation_id,
+        params.enabled,
     )
     .await?;
     Ok(Json(result))

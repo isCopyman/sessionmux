@@ -1190,6 +1190,8 @@
       "switchRestartBody": "プロファイルはエージェントの起動時にのみ反映されるため、実行中のプロセスは古いままです。進行中のターンは中断されますが、履歴とキュー内のメッセージは保持されます。",
       "switchRestartConfirm": "再起動して適用",
       "switchRestartLater": "続行し、あとで適用",
+      "projectSettings": "このプロジェクトの .claude 設定を使う",
+      "projectSettingsHint": "作業フォルダーの .claude/settings.json と settings.local.json も読み込みます。",
       "switchRestartFailed": "プロファイルは保存しましたが、セッションを再起動できませんでした"
     },
     "dialogs": {
