@@ -1947,8 +1947,13 @@ export type WorkTaskStatus =
   | "queued"
   /** Out of the queue, setting up: worktree, init command, agent spawn. */
   | "preparing"
+  /** Execution period: a turn may be in flight, or the connection is idle
+   *  between turns. Occupies a concurrency slot until `task_complete` or a
+   *  human submit-for-review. */
   | "running"
   | "awaiting_input"
+  /** Agent or user explicitly ended the work stage; waiting to accept, return,
+   *  or drop. */
   | "review"
   | "merging"
   | "done"
@@ -1990,8 +1995,8 @@ export interface WorkTask {
    *  else the folder default). Absent/null = nothing configured anywhere. */
   agent_type?: AgentType | null
   conversation_id: number | null
-  /** Live ACP connection of the current generation; stale after a settle —
-   *  gate on status before attaching. */
+  /** Live ACP connection of the current generation; held between ordinary
+   *  turns and stale after a settle — gate on status before attaching. */
   connection_id: string | null
   base_branch: string | null
   base_sha: string | null

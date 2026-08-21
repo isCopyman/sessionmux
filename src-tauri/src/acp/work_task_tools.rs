@@ -41,8 +41,8 @@ pub trait WorkTaskToolAccess: Send + Sync {
     async fn report_progress(&self, parent_connection_id: &str, message: &str) -> TaskReportAck;
 
     /// Record the final verdict (+ optional summary) for the task driven by
-    /// `parent_connection_id`; the verdict decides how the task settles when
-    /// the turn ends.
+    /// `parent_connection_id`; the following TurnComplete reads it to settle.
+    /// A turn that ends without a verdict does not settle the task.
     async fn complete(
         &self,
         parent_connection_id: &str,

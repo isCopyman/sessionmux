@@ -4760,6 +4760,7 @@
     "actionStart": "Iniciar",
     "actionSchedule": "Agendar",
     "actionCancel": "Cancelar",
+    "actionSubmitReview": "Enviar para revisão",
     "actionRetry": "Tentar novamente",
     "actionRequeue": "Reenfileirar",
     "actionViewSession": "Ver conversa",

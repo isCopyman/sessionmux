@@ -35,8 +35,8 @@ pub struct WorkTaskInfo {
     pub agent_type: Option<String>,
     pub conversation_id: Option<i32>,
     /// Live ACP connection of the current generation — the transcript viewer
-    /// attaches by it. Only meaningful while the task is running/awaiting;
-    /// stale after a settle (gate on status client-side).
+    /// attaches by it. Held between ordinary turns; stale after a settle
+    /// (gate on status client-side).
     pub connection_id: Option<String>,
     pub base_branch: Option<String>,
     pub base_sha: Option<String>,

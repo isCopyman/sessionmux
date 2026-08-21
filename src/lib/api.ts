@@ -3780,6 +3780,14 @@ export async function workTaskCancel(
   return getTransport().call("work_task_cancel", { id, reason: reason ?? null })
 }
 
+/**
+ * Submit a running, idle task for review — the human counterpart of the
+ * agent's `task_complete`. Refused while a turn is in flight.
+ */
+export async function workTaskRequestReview(id: number): Promise<void> {
+  return getTransport().call("work_task_request_review", { id })
+}
+
 /** Dispatch the agent-driven merge (`message: null` = the agent writes the
  *  commit message itself); the outcome rides `task://changed` events.
  *  Resolves `true` when the merge was QUEUED behind another landing of the same

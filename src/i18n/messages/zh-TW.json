@@ -4760,6 +4760,7 @@
     "actionStart": "開始",
     "actionSchedule": "定時執行",
     "actionCancel": "取消",
+    "actionSubmitReview": "提交驗收",
     "actionRetry": "重試",
     "actionRequeue": "重新排隊",
     "actionViewSession": "檢視會話",

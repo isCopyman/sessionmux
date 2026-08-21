@@ -43,6 +43,7 @@ export function columnForStatus(status: WorkTaskStatus): BoardColumnId {
     // Already out of the queue and working (worktree, init command, agent
     // spawn), just without a session to show yet.
     case "preparing":
+    // Execution period, including idle gaps between turns — still In Progress.
     case "running":
       return "inProgress"
     case "awaiting_input":

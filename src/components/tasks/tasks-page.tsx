@@ -20,6 +20,7 @@ import {
   workTaskCreate,
   workTaskMergeUnqueue,
   workTaskReorder,
+  workTaskRequestReview,
   workTaskStart,
   workTaskUpdate,
 } from "@/lib/api"
@@ -479,6 +480,7 @@ export function TasksPage() {
     (task: WorkTask): TaskActionHandlers => ({
       onStart: () => void act(() => workTaskStart(task.id)),
       onCancel: () => openCancel(task),
+      onSubmitReview: () => void act(() => workTaskRequestReview(task.id)),
       onRetry: () => openRestart(task, "retry"),
       onRequeue: () => openRestart(task, "requeue"),
       onViewSession: () => openSession(task),

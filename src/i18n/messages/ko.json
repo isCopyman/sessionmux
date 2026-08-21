@@ -4760,6 +4760,7 @@
     "actionStart": "시작",
     "actionSchedule": "예약 실행",
     "actionCancel": "취소",
+    "actionSubmitReview": "검토 제출",
     "actionRetry": "다시 시도",
     "actionRequeue": "다시 대기열에",
     "actionViewSession": "대화 보기",

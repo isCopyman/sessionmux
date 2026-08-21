@@ -4760,6 +4760,7 @@
     "actionStart": "بدء",
     "actionSchedule": "جدولة",
     "actionCancel": "إلغاء",
+    "actionSubmitReview": "إرسال للمراجعة",
     "actionRetry": "إعادة المحاولة",
     "actionRequeue": "إعادة الإدراج",
     "actionViewSession": "عرض المحادثة",

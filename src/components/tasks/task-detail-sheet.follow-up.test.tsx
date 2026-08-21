@@ -38,6 +38,7 @@ vi.mock("@/lib/api", () => ({
   workTaskRequeue: (...args: unknown[]) => workTaskRequeue(...args),
   workTaskRetry: (...args: unknown[]) => workTaskRetry(...args),
   workTaskReturn: (...args: unknown[]) => workTaskReturn(...args),
+  workTaskRequestReview: vi.fn().mockResolvedValue(undefined),
   workTaskStart: vi.fn().mockResolvedValue(undefined),
 }))
 vi.mock("@/lib/platform", () => ({
@@ -133,6 +134,34 @@ beforeEach(() => {
   uploading = false
   composerProps = null
   vi.clearAllMocks()
+})
+
+describe("task drawer submit-for-review", () => {
+  it("offers submit-for-review on a running task with a live connection", () => {
+    mount(
+      task({
+        status: "running",
+        connection_id: "conn-7",
+        conversation_id: 3,
+      })
+    )
+    expect(
+      screen.getByRole("button", { name: "Submit for review" })
+    ).toBeInTheDocument()
+  })
+
+  it("does not offer submit-for-review while awaiting input", () => {
+    mount(
+      task({
+        status: "awaiting_input",
+        connection_id: "conn-7",
+        conversation_id: 3,
+      })
+    )
+    expect(
+      screen.queryByRole("button", { name: "Submit for review" })
+    ).toBeNull()
+  })
 })
 
 describe("task drawer follow-up", () => {
