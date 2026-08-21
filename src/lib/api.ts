@@ -5119,7 +5119,7 @@ export async function setChatAuthoringSettings(
  * it advertises (modes / config_options), and tears down. Used by automation
  * and task editors so their option set matches what a later launch accepts.
  *
- * Does NOT touch chat-side `selectorsCache` or `localStorage` preferences. */
+ * Does NOT touch chat-side `localStorage` preferences. */
 export async function describeAgentOptions(
   agentType: AgentType,
   workingDir?: string | null

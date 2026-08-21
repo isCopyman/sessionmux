@@ -7,6 +7,7 @@ import {
   useAcpActions,
   useConnectionStore,
 } from "@/contexts/acp-connections-context"
+import { useConnection } from "@/hooks/use-connection"
 import { parsePermissionToolCall } from "@/lib/permission-request"
 import { subscribe } from "@/lib/platform"
 import { saveConfigPreference } from "@/lib/selector-prefs-storage"
@@ -48,6 +49,10 @@ const h = vi.hoisted(() => {
     pushAlert: vi.fn(),
     sendSystemNotification: vi.fn(async () => undefined),
     toastWarning: vi.fn(),
+    selectorSnapshots: new Map<
+      string,
+      { configOptions: SessionConfigOptionInfo[] | null }
+    >(),
   }
 })
 
@@ -120,20 +125,35 @@ function Probe() {
   return null
 }
 
-async function mountProvider() {
+function SelectorProbe({ contextKey }: { contextKey: string }) {
+  const connection = useConnection(contextKey)
+  useEffect(() => {
+    h.selectorSnapshots.set(contextKey, {
+      configOptions: connection.configOptions,
+    })
+  }, [connection.configOptions, contextKey])
+  return null
+}
+
+async function mountProvider(selectorKeys: string[] = []) {
   render(
     <AcpConnectionsProvider>
       <Probe />
+      {selectorKeys.map((contextKey) => (
+        <SelectorProbe key={contextKey} contextKey={contextKey} />
+      ))}
     </AcpConnectionsProvider>
   )
   await act(async () => {})
 }
 
 const TAB = "conv-1-claude_code-42"
+const SECOND_TAB = "conv-2-claude_code-43"
 
 beforeEach(() => {
   h.attach.mockClear()
   h.store = null
+  h.selectorSnapshots.clear()
   h.eventStreamValue = h.stream
   h.acpGetAgentStatus.mockReset()
   h.acpFindConnectionForConversation.mockReset()
@@ -207,6 +227,49 @@ function hydrateSnapshot(
     handlers.onSnapshot(snapshot, snapshot.event_seq)
   })
 }
+
+describe("AcpConnectionsProvider selector ownership", () => {
+  it("does not show selectors from another connection of the same agent type", async () => {
+    h.acpConnect
+      .mockResolvedValueOnce("profile-a-conn")
+      .mockResolvedValueOnce("profile-b-conn")
+    await mountProvider([TAB, SECOND_TAB])
+
+    await act(async () => {
+      await h.actions!.connect(TAB, "claude_code", "/tmp/x", "session-a")
+    })
+    emitAcpEvent(latestAttachHandlers(), {
+      seq: 1,
+      connection_id: "profile-a-conn",
+      type: "session_config_options",
+      config_options: [
+        {
+          id: "model",
+          name: "Model",
+          description: null,
+          kind: {
+            type: "select",
+            current_value: "profile-a-model",
+            options: [{ value: "profile-a-model", name: "Profile A model" }],
+            groups: [],
+          },
+        },
+      ],
+    })
+    expect(
+      h.selectorSnapshots.get(TAB)?.configOptions?.[0]?.kind.current_value
+    ).toBe("profile-a-model")
+
+    await act(async () => {
+      await h.actions!.connect(SECOND_TAB, "claude_code", "/tmp/x", "session-b")
+    })
+
+    // Until profile B reports its own options, the UI must remain in the
+    // loading state. Borrowing profile A's list here is the cross-profile flash
+    // this regression guards against.
+    expect(h.selectorSnapshots.get(SECOND_TAB)?.configOptions).toBeNull()
+  })
+})
 
 describe("AcpConnectionsProvider cross-client viewer lifecycle", () => {
   it("attaches as a viewer (no spawn) when a live connection is discovered", async () => {

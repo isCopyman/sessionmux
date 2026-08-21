@@ -48,7 +48,6 @@ vi.mock("@/contexts/acp-connections-context", () => {
   return {
     useConnectionStore: () => fake.store,
     useAcpActions: () => actions,
-    getCachedSelectors: () => null,
   }
 })
 

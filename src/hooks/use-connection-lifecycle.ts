@@ -167,24 +167,19 @@ export function useConnectionLifecycle({
     respondPermission: connRespondPermission,
     modes,
     configOptions,
-    hasCachedSelectors,
   } = conn
   const isInteractiveStatus = status === "connected" || status === "prompting"
   const hasSelectorsData = modes !== null || configOptions !== null
   const effectiveSelectorsReady = selectorsReady || hasSelectorsData
   const selectorTaskIdRef = useRef<string | null>(null)
-  // Visual-only loading indicators for selector chips.
-  // Skip loading indicators when we have cached selectors — even if the
-  // cache contains no modes/configOptions (the agent simply doesn't have
-  // them), we already know what to show and don't need a loading state.
+  // Visual-only loading indicators for selector chips. The live ACP
+  // connection is the only source of selector truth: reusing another
+  // connection's model/mode list here can briefly show controls from a
+  // different profile, working directory, or native session.
   const modeLoading =
-    !hasCachedSelectors &&
-    (status === "connecting" ||
-      (isInteractiveStatus && !effectiveSelectorsReady))
+    status === "connecting" || (isInteractiveStatus && !effectiveSelectorsReady)
   const configOptionsLoading =
-    !hasCachedSelectors &&
-    (status === "connecting" ||
-      (isInteractiveStatus && !effectiveSelectorsReady))
+    status === "connecting" || (isInteractiveStatus && !effectiveSelectorsReady)
   // Gate for send button: block until the backend session is fully
   // initialized (selectorsReady from the real backend event, not cache).
   const selectorsLoading = isInteractiveStatus && !selectorsReady

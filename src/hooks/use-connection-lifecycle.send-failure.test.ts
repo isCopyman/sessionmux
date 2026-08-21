@@ -62,7 +62,6 @@ vi.mock("@/hooks/use-connection", () => ({
     respondPermission: vi.fn().mockResolvedValue(undefined),
     modes: null,
     configOptions: null,
-    hasCachedSelectors: true,
     isViewer: false,
     backgroundOutstanding: 0,
   }),

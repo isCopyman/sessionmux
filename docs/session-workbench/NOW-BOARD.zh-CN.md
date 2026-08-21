@@ -6,7 +6,7 @@
 >
 > 状态记号：`[ ]` 待办 / `[~]` 进行中 / `[x]` 本批已完成待归档 / `[?]` 等用户拍板
 
-最后更新：2026-08-22 凌晨（交接：见 HANDOFF-2026-08-22.zh-CN.md）
+最后更新：2026-08-22（profile 生命周期修复与 selector 隔离实机验收）
 
 ## ⚠️ 先读这条：清单会腐烂
 
@@ -66,7 +66,9 @@
 **这是用户报的那个 bug 的真正根因，用 CDP 实机三次切换 + 后端日志 + 数据库坐实的，
 不是读代码推的。** 用户原话："第一次加载的时候 model 倒是会跟着变，但是后面的切换都不会。"
 
-`SessionState::conversation_id` 在生产代码里**只由 `ConversationLinked` /
+Codeg 数据库里的稳定 `conversation_id` **一直存在**；缺失的是重连后临时 ACP
+`SessionState` 对它的运行时绑定。`SessionState::conversation_id` 在生产代码里当时
+**只由 `ConversationLinked` /
 `ConversationForked` 两个事件赋值**（`session_state.rs:1006/1016`），而这两个事件在
 **会话行被创建**时才发——重连到一个已存在的会话不发。
 
@@ -91,31 +93,39 @@
 
 修复：`ConnectionManager::bind_conversation`，在两条 connect 路径
 （`commands/acp.rs` 与 `web/handlers/acp.rs`，两者本来就手握 `conversation_id`）
-spawn 成功后调用。
+spawn 成功后调用。已提交 `97e07dfc`；真实 Desktop 往返切换
+`跟随默认 → CPA → 跟随默认 → CPA` 均产生新的 ACP connection/session，最终 selector
+与当前 profile 一致。
 
-## ⚠️ 主工作树是脏的（接手第 0 件事）
+同批后续清理：删除按 `agentType` 全局共享的 `selectorsCache`。同一个 Harness 的不同
+profile、cwd 与原生 Session 可能返回完全不同的模型/配置列表，按 Harness 复用本身就是错误
+所有权。重连期间现在显示真实 loading，只有当前 ACP connection 返回的 selectors 才能进入
+Composer。相应跨连接回归测试与 Desktop/CDP 往返验证均已通过。
 
-- [ ] **8 个 Rust 文件未提交，没验证过能不能编译**。内容：让 Claude profile 变成
+## 已处理：交接时的 profile 半成品
+
+- [x] **交接时 8 个 Rust 文件的 profile 显式启动参数已完成并提交**。内容：让 Claude profile 变成
       **连接时显式带上的参数**，而不是让后端从数据库行反查
       （`resolve_claude_profile` 加一层最优先的 `explicit_profile_id`，
       `build_session_runtime_env` 往下透，两条 connect 路径从
       `preferred_config_values` 里读）。这是「新标签页切 profile 无效」的后端一半。
       **前端一半还没动**（`handleSelect` 要标记连接过期 + 重连时带上 profile）。
-      做完可以整段删掉 `applyPendingClaudeProfile` 的绕路——**机制净减少，不是打补丁**。
-      细节和「留还是扔」的选择见 `HANDOFF-2026-08-22.zh-CN.md` §3.1。
+      最终与前端 draft 重启、运行时 conversation binding 一起落在 `97e07dfc`，并完成
+      Rust/前端测试与 CDP 验收。细节见 `HANDOFF-2026-08-22.zh-CN.md` §3.1；该处只保留
+      历史背景，不再是待办。
 
 ## 未派工的 P0（接手第一件事）
 
-- [ ] **chip 说谎 + conversation pin 缺口** —— 分析已完成、已落库：
+- [x] **chip 说谎 + conversation pin 缺口** —— 已随 `97e07dfc` 修复并实机验证。原分析：
       `CHIP-PROFILE-PIN-ANALYSIS-2026-08-22.zh-CN.md`（codex 只读产出，带全套锚点）。
-      **任务书还没写。** 两条硬约束必须带进任务书：eslint 禁止 effect 内同步
-      `setState`；chip 里不能导入 `useAcpAgents`（会拖垮测试）。
+      实现遵守两条硬约束：eslint 禁止 effect 内同步 `setState`；chip 不导入
+      `useAcpAgents`。
 - [x] ~~模型下拉不显示 profile 的槽位重映射~~ —— **诊断作废**，见本文件顶部⭐那条。
       模型列表是诚实的，问题在切换没生效。任务书 `%TEMP%/lane-modelslots.md` 不要派。
-- [ ] **CDP 实机验证** —— 用户明确要求过（原话：不只是只跑 test，要实际 CDP 进 dev 试），
-      今晚没做成。**照 `DESKTOP-DEVELOPMENT-AND-VALIDATION-GUIDE` §4.5/§4.6 做**，
-      那里有直连真实 Tauri WebView2 的完整流程和可跑的探针，不要自己发明。
-      该点什么见交接文档第 5 节末尾的五条。
+- [x] **profile / selector CDP 实机验证** —— 真实 Tauri WebView2 中完成
+      `跟随默认 → CPA → 跟随默认 → CPA` 往返；每次后端都 disconnect + spawn +
+      `session/new`，CPA 最终显示自有 `claude-opus-5[1m]` 等模型，无错误 toast。
+      截图留在 gitignored `.artifacts/desktop-validation/profile-switch/`。
 
 ## 待办（用户已拍板，不需要再问）
 

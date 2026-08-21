@@ -26,11 +26,7 @@ import {
 } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
-import {
-  getCachedSelectors,
-  useAcpActions,
-  useAcpEvent,
-} from "@/contexts/acp-connections-context"
+import { useAcpActions, useAcpEvent } from "@/contexts/acp-connections-context"
 import { useAcpAgents } from "@/hooks/use-acp-agents"
 import { useActiveFolder } from "@/contexts/active-folder-context"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
@@ -880,16 +876,12 @@ const ConversationTabView = memo(function ConversationTabView({
   // must NOT surface the previous agent's selectors / ready-state as the
   // selected one's: doing so showed the old agent's model + config list and
   // (worse) let a send reach the wrong agent. Reconcile everything the composer
-  // reads against `selectedAgent`, falling back to that agent's own cached
-  // selectors (empty until it connects).
+  // reads against `selectedAgent`; selector controls stay in their honest
+  // loading state until the replacement ACP connection reports its own data.
   const connIsForOtherAgent =
     conn.agentType != null && conn.agentType !== selectedAgent
-  const effectiveModes = connIsForOtherAgent
-    ? (getCachedSelectors(selectedAgent)?.modes ?? null)
-    : conn.modes
-  const effectiveConfigOptions = connIsForOtherAgent
-    ? (getCachedSelectors(selectedAgent)?.configOptions ?? null)
-    : conn.configOptions
+  const effectiveModes = connIsForOtherAgent ? null : conn.modes
+  const effectiveConfigOptions = connIsForOtherAgent ? null : conn.configOptions
   // The live connection is ready for THIS tab only when it's connected AND its
   // cwd matches the tab's intended working dir. A just-retargeted chat draft (or
   // any mid-reconnect) can briefly read a stale "connected" for the PREVIOUS cwd;
