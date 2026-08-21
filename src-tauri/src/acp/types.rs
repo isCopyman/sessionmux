@@ -1384,4 +1384,57 @@ mod envelope_tests {
             ]
         );
     }
+
+    /// Frozen ACP/queue/task prompt-block shape: `type` tags `text` / `image`
+    /// / `resource_link` and image/link mime uses `mime_type`, not `mimeType`.
+    #[test]
+    fn prompt_input_block_persisted_json_shape_is_pinned() {
+        let text: PromptInputBlock =
+            serde_json::from_str(r#"{"type":"text","text":"hi"}"#).unwrap();
+        match &text {
+            PromptInputBlock::Text { text } => assert_eq!(text, "hi"),
+            other => panic!("expected text, got {other:?}"),
+        }
+        let tv = serde_json::to_value(&text).unwrap();
+        assert_eq!(tv["type"], "text");
+
+        let image: PromptInputBlock =
+            serde_json::from_str(r#"{"type":"image","data":"QUJD","mime_type":"image/png"}"#)
+                .unwrap();
+        match &image {
+            PromptInputBlock::Image {
+                mime_type, data, ..
+            } => {
+                assert_eq!(mime_type, "image/png");
+                assert_eq!(data, "QUJD");
+            }
+            other => panic!("expected image, got {other:?}"),
+        }
+        let iv = serde_json::to_value(&image).unwrap();
+        assert_eq!(iv["type"], "image");
+        assert!(iv.get("mime_type").is_some());
+        assert!(iv.get("mimeType").is_none());
+
+        let link: PromptInputBlock = serde_json::from_str(
+            r#"{"type":"resource_link","uri":"file:///a.rs","name":"a.rs","mime_type":"text/rust"}"#,
+        )
+        .unwrap();
+        match &link {
+            PromptInputBlock::ResourceLink {
+                name, mime_type, ..
+            } => {
+                assert_eq!(name, "a.rs");
+                assert_eq!(mime_type.as_deref(), Some("text/rust"));
+            }
+            other => panic!("expected resource_link, got {other:?}"),
+        }
+        let lv = serde_json::to_value(&link).unwrap();
+        assert_eq!(lv["type"], "resource_link");
+        assert!(lv.get("mime_type").is_some());
+        assert!(lv.get("mimeType").is_none());
+        assert!(serde_json::from_str::<PromptInputBlock>(
+            r#"{"type":"resourceLink","uri":"file:///a.rs","name":"a.rs"}"#
+        )
+        .is_err());
+    }
 }

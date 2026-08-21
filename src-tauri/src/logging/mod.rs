@@ -103,3 +103,36 @@ pub struct LogSettings {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub targets: Vec<TargetDirective>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn log_settings_persisted_json_shape_is_pinned() {
+        // Pre-targets shape still decodes.
+        let bare: LogSettings =
+            serde_json::from_str(r#"{"level":"info"}"#).expect("legacy logging.level decodes");
+        assert_eq!(bare.level, LogLevel::Info);
+        assert!(bare.targets.is_empty());
+
+        let legacy = r#"{
+            "level": "debug",
+            "targets": [{"target": "codeg_lib::acp", "level": "trace"}]
+        }"#;
+        let s: LogSettings =
+            serde_json::from_str(legacy).expect("logging.level with targets decodes");
+        assert_eq!(s.level, LogLevel::Debug);
+        assert_eq!(s.targets.len(), 1);
+        assert_eq!(s.targets[0].target, "codeg_lib::acp");
+        assert_eq!(s.targets[0].level, LogLevel::Trace);
+
+        let v = serde_json::to_value(&s).unwrap();
+        assert_eq!(v["level"], "debug");
+        assert!(v.get("targets").is_some());
+        assert_eq!(v["targets"][0]["target"], "codeg_lib::acp");
+        assert_eq!(v["targets"][0]["level"], "trace");
+        assert!(serde_json::from_str::<LogLevel>("\"Debug\"").is_err());
+        assert!(serde_json::from_str::<LogLevel>("\"DEBUG\"").is_err());
+    }
+}

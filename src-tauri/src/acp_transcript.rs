@@ -1357,6 +1357,62 @@ mod tests {
     }
 
     #[test]
+    fn transcript_header_persisted_json_shape_is_pinned() {
+        let legacy = r#"{
+            "v": 1,
+            "kind": "header",
+            "agent": "custom:goose",
+            "session_id": "s1",
+            "cwd": "/repo",
+            "started_at_ms": 1750000000000
+        }"#;
+        let h: TranscriptHeader = serde_json::from_str(legacy).expect("legacy header line decodes");
+        assert_eq!(h.v, 1);
+        assert_eq!(h.kind, "header");
+        assert_eq!(h.agent, "custom:goose");
+        assert_eq!(h.session_id, "s1");
+        assert_eq!(h.cwd, "/repo");
+        assert_eq!(h.started_at_ms, 1_750_000_000_000);
+        assert!(h.continues_from.is_none());
+
+        let v = serde_json::to_value(&h).unwrap();
+        assert!(v.get("v").is_some());
+        assert!(v.get("kind").is_some());
+        assert!(v.get("session_id").is_some());
+        assert!(v.get("sessionId").is_none());
+        assert!(v.get("started_at_ms").is_some());
+        assert!(v.get("startedAtMs").is_none());
+        assert!(v.get("continues_from").is_none());
+    }
+
+    #[test]
+    fn transcript_entry_persisted_json_shape_is_pinned() {
+        let legacy = r#"{
+            "t": 1750000000001,
+            "k": "prompt",
+            "p": [{"type":"text","text":"hi"}]
+        }"#;
+        let e: TranscriptEntry = serde_json::from_str(legacy).expect("legacy entry line decodes");
+        assert_eq!(e.t, 1_750_000_000_001);
+        assert_eq!(e.k, EntryKind::Prompt);
+        assert!(e.p.is_array());
+
+        let v = serde_json::to_value(&e).unwrap();
+        assert!(v.get("t").is_some());
+        assert!(v.get("k").is_some());
+        assert!(v.get("p").is_some());
+        assert_eq!(v["k"], "prompt");
+        assert!(v.get("kind").is_none());
+        assert!(v.get("payload").is_none());
+        assert_eq!(serde_json::to_value(EntryKind::Update).unwrap(), "update");
+        assert_eq!(
+            serde_json::to_value(EntryKind::TurnEnd).unwrap(),
+            "turn_end"
+        );
+        assert!(serde_json::from_str::<EntryKind>("\"turnEnd\"").is_err());
+    }
+
+    #[test]
     fn skips_malformed_lines_without_losing_the_rest() {
         let root = temp_root();
         append_line_in(&root, "goose", "s2", &header_line("s2"));

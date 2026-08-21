@@ -407,6 +407,50 @@ mod tests {
         assert_eq!(reserialized["spritesheetPath"], "spritesheet.webp");
     }
 
+    /// Same Codex-compatible camelCase as `manifest_round_trips_codex_layout`,
+    /// plus negative asserts so a stray `rename_all` snake flip fails CI.
+    #[test]
+    fn pet_manifest_persisted_json_shape_is_pinned() {
+        let legacy = r#"{
+            "id": "duck",
+            "displayName": "Dewey",
+            "description": "A small duck.",
+            "spritesheetPath": "spritesheet.webp"
+        }"#;
+        let manifest: PetManifest = serde_json::from_str(legacy).expect("legacy pet.json decodes");
+        assert_eq!(manifest.display_name, "Dewey");
+        assert_eq!(manifest.spritesheet_path, "spritesheet.webp");
+
+        let v = serde_json::to_value(&manifest).unwrap();
+        assert!(v.get("displayName").is_some());
+        assert!(v.get("display_name").is_none());
+        assert!(v.get("spritesheetPath").is_some());
+        assert!(v.get("spritesheet_path").is_none());
+    }
+
+    #[test]
+    fn pet_window_config_persisted_json_shape_is_pinned() {
+        let legacy = r#"{
+            "enabled": true,
+            "activePetId": "duck",
+            "x": 10.0,
+            "y": 20.0,
+            "scale": 0.5,
+            "alwaysOnTop": false
+        }"#;
+        let cfg: PetWindowConfig = serde_json::from_str(legacy).expect("legacy pet.config decodes");
+        assert_eq!(cfg.active_pet_id.as_deref(), Some("duck"));
+        assert!(cfg.enabled);
+        assert!(!cfg.always_on_top);
+        assert_eq!(cfg.scale, 0.5);
+
+        let v = serde_json::to_value(&cfg).unwrap();
+        assert!(v.get("activePetId").is_some());
+        assert!(v.get("active_pet_id").is_none());
+        assert!(v.get("alwaysOnTop").is_some());
+        assert!(v.get("always_on_top").is_none());
+    }
+
     fn session_entry(
         status: crate::acp::types::ConnectionStatus,
         pending: bool,
