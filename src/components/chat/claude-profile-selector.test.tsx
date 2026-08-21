@@ -18,8 +18,6 @@ const api = vi.hoisted(() => ({
   claudeProfileList: vi.fn(),
   conversationSetClaudeProfile: vi.fn(),
   conversationGetClaudeProfile: vi.fn(),
-  conversationGetProjectSettings: vi.fn(),
-  conversationSetProjectSettings: vi.fn(),
   openSettingsWindow: vi.fn(),
 }))
 
@@ -29,10 +27,6 @@ vi.mock("@/lib/api", () => ({
     api.conversationSetClaudeProfile(...args),
   conversationGetClaudeProfile: (...args: unknown[]) =>
     api.conversationGetClaudeProfile(...args),
-  conversationGetProjectSettings: (...args: unknown[]) =>
-    api.conversationGetProjectSettings(...args),
-  conversationSetProjectSettings: (...args: unknown[]) =>
-    api.conversationSetProjectSettings(...args),
   openSettingsWindow: (...args: unknown[]) => api.openSettingsWindow(...args),
 }))
 
@@ -99,15 +93,6 @@ describe("InlineClaudeProfileSelector", () => {
     api.conversationGetClaudeProfile.mockResolvedValue({
       conversationId: 12,
       profileId: "follow-default",
-      affectedRunningSessions: 0,
-    })
-    api.conversationGetProjectSettings.mockResolvedValue({
-      conversationId: 12,
-      enabled: true,
-    })
-    api.conversationSetProjectSettings.mockResolvedValue({
-      conversationId: 12,
-      enabled: false,
       affectedRunningSessions: 0,
     })
     conn.status = "idle"
@@ -221,112 +206,5 @@ describe("InlineClaudeProfileSelector", () => {
       within(dialog).getByRole("button", { name: "Restart and apply" })
     )
     await waitFor(() => expect(conn.reapplyConfig).toHaveBeenCalledTimes(1))
-  })
-
-  describe("the project-settings switch", () => {
-    // Absent on the backend means on, so an unanswered read must not render as
-    // "off" — that would tell the user their repo config is being ignored.
-    it("shows on by default and reflects what the conversation stored", async () => {
-      api.conversationGetProjectSettings.mockResolvedValue({
-        conversationId: 12,
-        enabled: false,
-      })
-      const user = userEvent.setup()
-      renderSelector()
-
-      await user.click(
-        await screen.findByRole("button", {
-          name: "Launch profile: Follow default",
-        })
-      )
-      await waitFor(() =>
-        expect(
-          screen.getByRole("menuitemcheckbox", {
-            name: /Use this project's \.claude settings/,
-          })
-        ).toHaveAttribute("aria-checked", "false")
-      )
-    })
-
-    it("stores the flip and leaves an idle session's restart to the shared path", async () => {
-      api.conversationSetProjectSettings.mockResolvedValue({
-        conversationId: 12,
-        enabled: false,
-        affectedRunningSessions: 1,
-      })
-      const user = userEvent.setup()
-      renderSelector({ tabId: "tab-1" })
-
-      await user.click(
-        await screen.findByRole("button", {
-          name: "Launch profile: Follow default",
-        })
-      )
-      await user.click(
-        await screen.findByRole("menuitemcheckbox", {
-          name: /Use this project's \.claude settings/,
-        })
-      )
-
-      await waitFor(() =>
-        expect(api.conversationSetProjectSettings).toHaveBeenCalledWith(
-          12,
-          false
-        )
-      )
-      await waitFor(() => expect(conn.reapplyConfig).toHaveBeenCalledTimes(1))
-      expect(screen.queryByRole("alertdialog")).toBeNull()
-    })
-
-    it("asks first when a turn is in flight", async () => {
-      conn.status = "prompting"
-      api.conversationSetProjectSettings.mockResolvedValue({
-        conversationId: 12,
-        enabled: false,
-        affectedRunningSessions: 1,
-      })
-      const user = userEvent.setup()
-      renderSelector({ tabId: "tab-1" })
-
-      await user.click(
-        await screen.findByRole("button", {
-          name: "Launch profile: Follow default",
-        })
-      )
-      await user.click(
-        await screen.findByRole("menuitemcheckbox", {
-          name: /Use this project's \.claude settings/,
-        })
-      )
-
-      expect(await screen.findByRole("alertdialog")).toBeInTheDocument()
-      expect(conn.reapplyConfig).not.toHaveBeenCalled()
-    })
-
-    // A failed write must not leave the menu claiming a state the backend
-    // never took.
-    it("puts the checkbox back when the write fails", async () => {
-      api.conversationSetProjectSettings.mockRejectedValue(new Error("nope"))
-      const user = userEvent.setup()
-      renderSelector()
-
-      await user.click(
-        await screen.findByRole("button", {
-          name: "Launch profile: Follow default",
-        })
-      )
-      const item = await screen.findByRole("menuitemcheckbox", {
-        name: /Use this project's \.claude settings/,
-      })
-      await user.click(item)
-
-      await waitFor(() =>
-        expect(
-          screen.getByRole("menuitemcheckbox", {
-            name: /Use this project's \.claude settings/,
-          })
-        ).toHaveAttribute("aria-checked", "true")
-      )
-    })
   })
 })

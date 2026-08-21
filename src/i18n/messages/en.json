@@ -1190,8 +1190,6 @@
       "switchRestartBody": "A profile only takes effect when the agent starts, so the running process is still on the old one. The turn in progress will be interrupted; the transcript and any queued messages are kept.",
       "switchRestartConfirm": "Restart and apply",
       "switchRestartLater": "Keep running, apply later",
-      "projectSettings": "Use this project's .claude settings",
-      "projectSettingsHint": "Also loads .claude/settings.json and settings.local.json from the working folder.",
       "switchRestartFailed": "Profile saved, but the session could not restart"
     },
     "dialogs": {

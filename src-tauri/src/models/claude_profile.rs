@@ -123,23 +123,3 @@ pub struct ConversationClaudeProfileResult {
     /// 1 if a live ACP connection for this conversation was marked stale.
     pub affected_running_sessions: usize,
 }
-
-/// Current per-session "load the cwd's `.claude/settings.json`" preference.
-/// Missing key is on (`enabled: true`).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ConversationProjectSettings {
-    pub conversation_id: i32,
-    pub enabled: bool,
-}
-
-/// Result of flipping that preference. Same shape as
-/// [`ConversationClaudeProfileResult`] plus the resulting `enabled` flag.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ConversationProjectSettingsResult {
-    pub conversation_id: i32,
-    pub enabled: bool,
-    /// 1 if a live ACP connection for this conversation was marked stale.
-    pub affected_running_sessions: usize,
-}

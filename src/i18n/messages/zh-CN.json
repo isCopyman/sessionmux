@@ -1190,8 +1190,6 @@
       "switchRestartBody": "配置只在智能体启动时生效，所以正在跑的进程用的还是旧配置。重启会中断当前这一轮；对话记录和队列里的消息都会保留。",
       "switchRestartConfirm": "重启并应用",
       "switchRestartLater": "先不重启，稍后应用",
-      "projectSettings": "使用本项目的 .claude 配置",
-      "projectSettingsHint": "同时加载工作目录下的 .claude/settings.json 与 settings.local.json。",
       "switchRestartFailed": "配置已保存，但会话重启失败"
     },
     "dialogs": {

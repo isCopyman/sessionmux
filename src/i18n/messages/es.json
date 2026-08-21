@@ -1190,8 +1190,6 @@
       "switchRestartBody": "Un perfil solo surte efecto al arrancar el agente, así que el proceso en marcha sigue con el anterior. Se interrumpirá el turno en curso; se conservan la conversación y los mensajes en cola.",
       "switchRestartConfirm": "Reiniciar y aplicar",
       "switchRestartLater": "Seguir y aplicar más tarde",
-      "projectSettings": "Usar la configuración .claude de este proyecto",
-      "projectSettingsHint": "También carga .claude/settings.json y settings.local.json de la carpeta de trabajo.",
       "switchRestartFailed": "Perfil guardado, pero no se pudo reiniciar la sesión"
     },
     "dialogs": {

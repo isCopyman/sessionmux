@@ -18,7 +18,6 @@ import {
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
-  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
@@ -31,9 +30,7 @@ import { DropdownRadioItemContent } from "@/components/chat/dropdown-radio-item-
 import {
   claudeProfileList,
   conversationGetClaudeProfile,
-  conversationGetProjectSettings,
   conversationSetClaudeProfile,
-  conversationSetProjectSettings,
   openSettingsWindow,
 } from "@/lib/api"
 import { useConnection } from "@/hooks/use-connection"
@@ -76,10 +73,6 @@ export function InlineClaudeProfileSelector({
   // the session. Held until the user answers when a turn is in flight.
   const [confirmRestart, setConfirmRestart] = useState(false)
   const [restarting, setRestarting] = useState(false)
-  // Whether this session also loads the working folder's own `.claude`
-  // settings. Absent on the backend means on, so `true` is the right value to
-  // show before the read lands.
-  const [projectSettings, setProjectSettings] = useState(true)
   const { status, reapplyConfig } = useConnection(tabId ?? "")
 
   useEffect(() => {
@@ -124,21 +117,6 @@ export function InlineClaudeProfileSelector({
     }
   }, [conversationId])
 
-  // Same deal for the project-settings switch, and silent for the same reason.
-  useEffect(() => {
-    if (conversationId == null) return
-    let cancelled = false
-    void conversationGetProjectSettings(conversationId)
-      .then((result) => {
-        if (cancelled) return
-        setProjectSettings(result.enabled)
-      })
-      .catch(() => {})
-    return () => {
-      cancelled = true
-    }
-  }, [conversationId])
-
   const selected = useMemo(
     () => profiles.find((item) => item.id === selectedId),
     [profiles, selectedId]
@@ -171,26 +149,6 @@ export function InlineClaudeProfileSelector({
     }
   }, [reapplyConfig, t])
 
-  /**
-   * Everything in this menu is read at spawn, so every change here lands the
-   * same way: nothing running → next launch picks it up; a turn in flight →
-   * ask, because that turn is what a restart costs; otherwise → just restart.
-   */
-  const settleChange = useCallback(
-    async (affectedRunningSessions: number) => {
-      if (affectedRunningSessions < 1) {
-        toast.success(t("switchSuccess"))
-        return
-      }
-      if (status === "prompting") {
-        setConfirmRestart(true)
-        return
-      }
-      await applyNow()
-    },
-    [applyNow, status, t]
-  )
-
   const handleSelect = useCallback(
     async (profileId: string) => {
       if (disabled || conversationId == null || profileId === selectedId) {
@@ -203,7 +161,16 @@ export function InlineClaudeProfileSelector({
           conversationId,
           profileId
         )
-        await settleChange(result.affectedRunningSessions)
+        // Nothing running to restart: the next launch reads the new binding.
+        if (result.affectedRunningSessions < 1) {
+          toast.success(t("switchSuccess"))
+          return
+        }
+        if (status === "prompting") {
+          setConfirmRestart(true)
+          return
+        }
+        await applyNow()
       } catch (error: unknown) {
         setSelectedId(previous)
         toast.error(t("switchFailed"), {
@@ -211,30 +178,7 @@ export function InlineClaudeProfileSelector({
         })
       }
     },
-    [conversationId, disabled, selectedId, settleChange, t]
-  )
-
-  const handleProjectSettingsChange = useCallback(
-    async (enabled: boolean) => {
-      if (disabled || conversationId == null || enabled === projectSettings) {
-        return
-      }
-      const previous = projectSettings
-      setProjectSettings(enabled)
-      try {
-        const result = await conversationSetProjectSettings(
-          conversationId,
-          enabled
-        )
-        await settleChange(result.affectedRunningSessions)
-      } catch (error: unknown) {
-        setProjectSettings(previous)
-        toast.error(t("switchFailed"), {
-          description: toErrorMessage(error),
-        })
-      }
-    },
-    [conversationId, disabled, projectSettings, settleChange, t]
+    [applyNow, conversationId, disabled, selectedId, status, t]
   )
 
   const handleManage = useCallback(() => {
@@ -307,29 +251,6 @@ export function InlineClaudeProfileSelector({
               </DropdownMenuRadioItem>
             ))}
           </DropdownMenuRadioGroup>
-          <DropdownMenuSeparator />
-          {/* The layer below the profile, not a second profile: whatever the
-            working folder ships in `.claude/`. Kept in this menu because it
-            answers the same question the profile does — which config is this
-            session running on. */}
-          <DropdownMenuCheckboxItem
-            checked={projectSettings}
-            disabled={disabled}
-            title={t("projectSettingsHint")}
-            onSelect={(event) => {
-              // Keep the menu open: this is a setting, not a destination, and
-              // the next thing to read is the hint right under it.
-              event.preventDefault()
-            }}
-            onCheckedChange={(checked) => {
-              void handleProjectSettingsChange(checked === true)
-            }}
-          >
-            {t("projectSettings")}
-          </DropdownMenuCheckboxItem>
-          <p className="px-2 pb-1 text-xs text-muted-foreground">
-            {t("projectSettingsHint")}
-          </p>
           <DropdownMenuSeparator />
           <DropdownMenuItem onSelect={handleManage}>
             {t("manage")}

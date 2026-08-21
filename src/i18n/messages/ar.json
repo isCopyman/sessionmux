@@ -1190,8 +1190,6 @@
       "switchRestartBody": "لا يسري الملف الشخصي إلا عند بدء تشغيل الوكيل، لذا ما زالت العملية الجارية تستخدم الملف القديم. ستُقاطَع الجولة الحالية، مع الاحتفاظ بسجل المحادثة والرسائل في قائمة الانتظار.",
       "switchRestartConfirm": "إعادة التشغيل والتطبيق",
       "switchRestartLater": "المتابعة والتطبيق لاحقًا",
-      "projectSettings": "استخدام إعدادات ‎.claude‎ الخاصة بهذا المشروع",
-      "projectSettingsHint": "يحمّل أيضًا ‎.claude/settings.json‎ و‎settings.local.json‎ من مجلد العمل.",
       "switchRestartFailed": "تم حفظ الملف الشخصي، لكن تعذّرت إعادة تشغيل الجلسة"
     },
     "dialogs": {

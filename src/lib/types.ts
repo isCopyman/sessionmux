@@ -1805,17 +1805,6 @@ export interface ConversationClaudeProfileResult {
   affectedRunningSessions: number
 }
 
-/** Whether this conversation loads the cwd's own `.claude/settings.json`.
- *  Absent on the backend means on, so `enabled` is never undefined here. */
-export interface ConversationProjectSettings {
-  conversationId: number
-  enabled: boolean
-}
-
-export interface ConversationProjectSettingsResult extends ConversationProjectSettings {
-  affectedRunningSessions: number
-}
-
 /** Frontend gate matching backend `is_valid_profile_id` plus reserved ids. */
 export function isValidClaudeProfileId(id: string): boolean {
   return (
