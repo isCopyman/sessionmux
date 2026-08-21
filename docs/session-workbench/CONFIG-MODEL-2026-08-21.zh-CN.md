@@ -203,3 +203,55 @@ kind 与解析语义保留，已绑定的会话不会炸。
 
 **还没做**：面板只显示单层，不显示合并后的实际生效值。要做「有效配置」视图的话，
 需要后端按会话 cwd 去读项目层再合并——记为待办，不在本批。
+
+## 8. 提案：档上的「信任本仓库配置」开关（未实现，待实验）
+
+用户 2026-08-21 晚提的问题："不同 settings 位于不同仓库和项目下，我想用项目下的配置怎么办？
+为每个 profile 加一个开关，是否允许项目级的 settings 覆盖？"
+
+**先纠正前提**：「想用项目下的配置」**今天已经是默认行为**——`.claude/settings.json`
+本来就加载，而且压过用户全局（见 §7）。用户不需要做任何事。
+
+**真正缺的是反向能力**，而且它的价值不在覆盖顺序，在**信任**：
+仓库里的 `.claude/settings.json` 能定义 **hooks（任意命令）** 和 permissions。
+克隆别人的仓库、在里面开 Claude，等于替对方执行他写的 hook。
+
+### 形状
+
+档上一个开关：**「信任本仓库自带的 Claude 配置」，默认开**。
+
+| 开关 | `settingSources` | 效果 |
+| --- | --- | --- |
+| 开（默认） | `["user","project","local"]` | 今天的行为，零变化 |
+| 关 | `["user"]` | 仓库的 `.claude/settings.json` / `.local.json` 一概不加载，hooks 不执行 |
+
+不给「跟随默认」这个开关：它的定义就是零注入，想控制就建档。
+
+### 机制（源码上成立，**尚未实测**）
+
+适配器 `dist/acp-agent.js`：
+
+```js
+const options = {
+    systemPrompt,
+    settingSources: ["user", "project", "local"],
+    ...(thinking !== undefined && { thinking }),
+    ...userProvidedOptions,     // ← 在后面展开，所以客户端传的会盖掉上面那行
+    ...
+}
+```
+
+所以 `_meta.claudeCode.options.settingSources` 应该能覆盖写死的三层，
+**不需要改适配器**。和 `extraArgs.settings` 走同一个 `_meta` 入口。
+
+### 开工前必须先做的实验（L13）
+
+建一个临时项目目录，放 `.claude/settings.json` 带一个可观测标记
+（例如 `env.CODEG_PROJECT_PROBE`，或一个会打印的 SessionStart hook），
+然后两次 `session/new`：一次不传 `settingSources`，一次传 `["user"]`，
+看标记是否消失。**验完再动工**，不要照着源码就写。
+
+### 顺带
+
+`settingSources` 若真能传，也解释了另一件事：`--settings`（档）和项目层是两个正交的旋钮，
+一个管"加什么内容"，一个管"从哪些地方加"。文案上要分清，别混成一句话。
