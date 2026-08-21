@@ -40,7 +40,6 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
-import { Checkbox } from "@/components/ui/checkbox"
 import {
   Dialog,
   DialogContent,
@@ -87,7 +86,6 @@ import type { ConversationFindEntry } from "@/lib/conversation-find"
 import { formatConversationTitle } from "@/lib/conversation-title"
 import { basenameOf } from "@/lib/folder-links"
 import {
-  addCollaborationRoomMembers,
   addCollaborationRoomPath,
   deleteCollaborationRoom,
   getCollaborationRoom,
@@ -98,6 +96,8 @@ import {
   removeCollaborationRoomPath,
   renameCollaborationRoom,
 } from "@/lib/api"
+import { roomMemberCandidates } from "@/lib/room-create"
+import { useRoomMembership } from "@/lib/room-membership"
 import { subscribe } from "@/lib/platform"
 import { ROOM_CHANGED_EVENT } from "@/lib/room-events"
 import { cn } from "@/lib/utils"
@@ -113,6 +113,7 @@ import {
 } from "@/lib/room-message-body"
 import { buildRoomMentionSearch } from "@/components/rooms/room-mention-search"
 import { RoomPostBody } from "@/components/rooms/room-post-body"
+import { SessionPicker } from "@/components/rooms/session-picker"
 import { useRoomFind } from "@/components/rooms/use-room-find"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { useCollectionStore } from "@/stores/collection-store"
@@ -123,7 +124,6 @@ import type {
   AgentType,
   CollaborationRoomDetail,
   CollaborationRoomMember,
-  DbConversationSummary,
   RoomChanged,
   RoomTimelineEvent,
 } from "@/lib/types"
@@ -136,15 +136,6 @@ function memberLabel(
   return title
     ? formatConversationTitle(title)
     : untitled(member.conversationId)
-}
-
-function conversationLabel(
-  conversation: DbConversationSummary,
-  untitled: (id: number) => string
-) {
-  return (
-    formatConversationTitle(conversation.title) || untitled(conversation.id)
-  )
 }
 
 const GROUP_MS = 5 * 60 * 1000
@@ -504,6 +495,7 @@ export function RoomWorkspace({
   const openOrFocusSession = useOpenOrFocusSession()
   const conversations = useAppWorkspaceStore((state) => state.conversations)
   const allFolders = useAppWorkspaceStore((state) => state.allFolders)
+  const { addMembersTo } = useRoomMembership()
   const collections = useCollectionStore((state) => state.items)
   const [detail, setDetail] = useState<CollaborationRoomDetail | null>(null)
   const [events, setEvents] = useState<RoomTimelineEvent[]>([])
@@ -872,19 +864,10 @@ export function RoomWorkspace({
     ]
   )
 
-  const candidates = useMemo(() => {
-    const query = addQuery.trim().toLowerCase()
-    return conversations
-      .filter(
-        (conversation) =>
-          conversation.archived_at == null && !memberIds.has(conversation.id)
-      )
-      .filter((conversation) => {
-        if (!query) return true
-        const title = formatConversationTitle(conversation.title).toLowerCase()
-        return title.includes(query) || String(conversation.id).includes(query)
-      })
-  }, [addQuery, conversations, memberIds])
+  const candidates = useMemo(
+    () => roomMemberCandidates(conversations, addQuery),
+    [addQuery, conversations]
+  )
 
   const handlePost = useCallback(async () => {
     if (!detail || !body.trim()) return
@@ -956,22 +939,17 @@ export function RoomWorkspace({
     if (addSelected.length === 0) return
     setAdding(true)
     try {
-      const updated = await addCollaborationRoomMembers({
-        roomId,
-        conversationIds: addSelected,
-      })
+      const updated = await addMembersTo(roomId, addSelected)
+      if (updated == null) return
       setDetail(updated)
       setAddOpen(false)
       setAddSelected([])
       setAddQuery("")
-      toast.success(t("added"))
       void useRoomCatalogStore.getState().refresh()
-    } catch (error) {
-      toast.error(toErrorMessage(error))
     } finally {
       setAdding(false)
     }
-  }, [addSelected, roomId, t])
+  }, [addMembersTo, addSelected, roomId])
 
   const handleRemove = useCallback(
     async (conversationId: number) => {
@@ -1127,15 +1105,6 @@ export function RoomWorkspace({
           >
             <Users className="h-3.5 w-3.5" />
           </Button>
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            onClick={() => setAddOpen(true)}
-          >
-            <UserPlus className="h-3.5 w-3.5" />
-            {t("addMember")}
-          </Button>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
@@ -1242,8 +1211,9 @@ export function RoomWorkspace({
                 type="button"
                 size="icon-sm"
                 variant="ghost"
-                className="h-6 w-6"
+                className="h-7 w-7"
                 aria-label={t("addMember")}
+                title={t("addMember")}
                 onClick={() => setAddOpen(true)}
               >
                 <Plus className="h-3.5 w-3.5" />
@@ -1366,50 +1336,16 @@ export function RoomWorkspace({
           <DialogHeader>
             <DialogTitle>{t("addMemberTitle")}</DialogTitle>
           </DialogHeader>
-          <Input
-            value={addQuery}
-            onChange={(event) => setAddQuery(event.target.value)}
-            placeholder={t("addMemberSearch")}
+          <SessionPicker
+            mode="multi"
+            candidates={candidates}
+            value={addSelected}
+            onChange={setAddSelected}
+            query={addQuery}
+            onQueryChange={setAddQuery}
+            emptyLabel={t("noCandidates")}
+            excludeIds={[...memberIds]}
           />
-          <ScrollArea className="h-56">
-            {candidates.length === 0 ? (
-              <p className="px-1 py-6 text-center text-xs text-muted-foreground">
-                {t("noCandidates")}
-              </p>
-            ) : (
-              <ul className="flex flex-col gap-1">
-                {candidates.map((conversation) => {
-                  const checked = addSelected.includes(conversation.id)
-                  return (
-                    <li key={conversation.id}>
-                      <button
-                        type="button"
-                        className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs hover:bg-muted/60"
-                        onClick={() =>
-                          setAddSelected((current) =>
-                            current.includes(conversation.id)
-                              ? current.filter((id) => id !== conversation.id)
-                              : [...current, conversation.id]
-                          )
-                        }
-                      >
-                        <Checkbox checked={checked} />
-                        <AgentIcon
-                          agentType={conversation.agent_type}
-                          className="h-3.5 w-3.5"
-                        />
-                        <span className="min-w-0 flex-1 truncate">
-                          {conversationLabel(conversation, (id) =>
-                            t("untitled", { id })
-                          )}
-                        </span>
-                      </button>
-                    </li>
-                  )
-                })}
-              </ul>
-            )}
-          </ScrollArea>
           <DialogFooter>
             <Button variant="outline" onClick={() => setAddOpen(false)}>
               {t("cancel")}

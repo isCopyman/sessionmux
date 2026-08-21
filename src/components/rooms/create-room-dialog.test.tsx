@@ -45,8 +45,15 @@ vi.mock("@/stores/tab-store", () => ({
 
 vi.mock("@/stores/app-workspace-store", () => ({
   useAppWorkspaceStore: (
-    selector: (state: { conversations: DbConversationSummary[] }) => unknown
-  ) => selector({ conversations: h.conversations }),
+    selector: (state: {
+      conversations: DbConversationSummary[]
+      folders: Array<{ id: number; name: string; alias: string | null }>
+    }) => unknown
+  ) =>
+    selector({
+      conversations: h.conversations,
+      folders: [{ id: 7, name: "codeg", alias: null }],
+    }),
 }))
 
 function conversation(
