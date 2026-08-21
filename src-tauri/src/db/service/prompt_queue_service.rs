@@ -1526,6 +1526,16 @@ pub(crate) async fn has_queued_items(
     Ok(found != 0)
 }
 
+/// Session-level freeze, if any. Does not create a state row and does not
+/// change pause / resume semantics.
+pub(crate) async fn queue_paused_reason(
+    conn: &DatabaseConnection,
+    conversation_id: i32,
+) -> Result<Option<String>, DbError> {
+    let (_, paused_reason) = state_row(conn, conversation_id).await?;
+    Ok(paused_reason.filter(|reason| !reason.is_empty()))
+}
+
 pub(crate) async fn has_pending_mailbox_attention(
     conn: &DatabaseConnection,
     conversation_id: i32,
