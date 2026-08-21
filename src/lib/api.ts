@@ -20,6 +20,9 @@ import type { FollowUpIntent } from "./task-follow-up"
 import type {
   AgentType,
   AgentOptionsSnapshot,
+  ClaudeProfileInfo,
+  ClaudeProfileUpsert,
+  ConversationClaudeProfileResult,
   Automation,
   AutomationRun,
   AutomationDraft,
@@ -581,6 +584,30 @@ export async function acpUpdateAgentEnv(
     enabled: params.enabled,
     env: params.env,
     modelProviderId: params.modelProviderId ?? null,
+  })
+}
+
+export async function claudeProfileList(): Promise<ClaudeProfileInfo[]> {
+  return getTransport().call("claude_profile_list")
+}
+
+export async function claudeProfileUpsert(
+  payload: ClaudeProfileUpsert
+): Promise<ClaudeProfileInfo> {
+  return getTransport().call("claude_profile_upsert", { payload })
+}
+
+export async function claudeProfileDelete(id: string): Promise<void> {
+  return getTransport().call("claude_profile_delete", { id })
+}
+
+export async function conversationSetClaudeProfile(
+  conversationId: number,
+  profileId: string | null
+): Promise<ConversationClaudeProfileResult> {
+  return getTransport().call("conversation_set_claude_profile", {
+    conversationId,
+    profileId,
   })
 }
 

@@ -92,6 +92,25 @@ vi.mock("@/lib/platform", () => ({
 vi.mock("@/lib/transport", () => ({
   getActiveRemoteConnectionId: () => null,
 }))
+
+const claudeProfileApi = vi.hoisted(() => ({
+  claudeProfileList: vi.fn(async () => [
+    {
+      id: "follow-default",
+      label: "Follow default",
+      kind: "followDefault" as const,
+      authTokenMasked: "",
+      createdAt: "1970-01-01T00:00:00Z",
+      updatedAt: "1970-01-01T00:00:00Z",
+    },
+  ]),
+  conversationSetClaudeProfile: vi.fn(),
+  openSettingsWindow: vi.fn(),
+}))
+vi.mock("@/lib/api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/api")>()
+  return { ...actual, ...claudeProfileApi }
+})
 // Real classifier only recognizes actual backend NoActiveTurn payloads; the
 // steering tests flip this per-case to drive the enqueue fallback.
 vi.mock("@/lib/turn-busy", () => ({
@@ -514,6 +533,41 @@ const AUTO_APPROVE_OPTION: SessionConfigOptionInfo = {
   category: null,
   kind: { type: "boolean", current_value: false },
 }
+
+describe("MessageInput Claude launch profile chip", () => {
+  afterEach(() => cleanup())
+
+  it("renders the chip only for Claude Code", async () => {
+    const { unmount } = renderInput({
+      agentType: "claude_code",
+      sourceConversationId: 9,
+    })
+    expect(
+      await screen.findByRole("button", {
+        name: "Launch profile: Follow default",
+      })
+    ).toBeInTheDocument()
+    unmount()
+
+    renderInput({ agentType: "codex", sourceConversationId: 9 })
+    await waitFor(() =>
+      expect(document.querySelector('[role="textbox"]')).not.toBeNull()
+    )
+    expect(screen.queryByRole("button", { name: /Launch profile/ })).toBeNull()
+  })
+
+  it("disables the chip while the turn is running", async () => {
+    renderInput({
+      agentType: "claude_code",
+      sourceConversationId: 9,
+      isPrompting: true,
+    })
+    const chip = await screen.findByRole("button", {
+      name: "Launch profile: Follow default",
+    })
+    expect(chip).toBeDisabled()
+  })
+})
 
 describe("MessageInput boolean config options", () => {
   afterEach(() => cleanup())

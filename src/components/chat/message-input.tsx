@@ -74,6 +74,7 @@ import {
 } from "@/components/chat/conversation-context-bar"
 import { ComposerContextUsage } from "@/components/chat/composer-context-usage"
 import { ComposerConnectionStatus } from "@/components/chat/composer-connection-status"
+import { InlineClaudeProfileSelector } from "@/components/chat/claude-profile-selector"
 import { InlineModeSelector } from "@/components/chat/mode-selector"
 import {
   InlineSessionConfigSelector,
@@ -301,7 +302,7 @@ export function MessageInput({
   promptCapabilities,
   attachmentTabId,
   draftStorageKey,
-  sourceConversationId: _sourceConversationId = null,
+  sourceConversationId = null,
   isActive = false,
   showActiveFlow = false,
   onEnqueue,
@@ -666,9 +667,15 @@ export function MessageInput({
     hasModes && Boolean(effectiveModeId) && !hasConfigOptions
   const showModeLoading = modeLoading && !hasConfigOptions && !showModeSelector
   const showConfigLoading = configOptionsLoading && !hasConfigOptions
+  const showClaudeProfile = agentType === "claude_code"
   const hasAnySelector =
-    showConfigLoading || hasConfigOptions || showModeLoading || showModeSelector
-  const hasInlineSelectors = hasConfigOptions || showModeSelector
+    showConfigLoading ||
+    hasConfigOptions ||
+    showModeLoading ||
+    showModeSelector ||
+    showClaudeProfile
+  const hasInlineSelectors =
+    hasConfigOptions || showModeSelector || showClaudeProfile
   const hasFolderBranchPicker =
     useConversationFolderBranchPickerVisible(attachmentTabId)
   const folderBranchPickerAttached = hasFolderBranchPicker
@@ -1412,6 +1419,12 @@ export function MessageInput({
 
   const inlineSelectorItems = (
     <>
+      {showClaudeProfile && (
+        <InlineClaudeProfileSelector
+          conversationId={sourceConversationId}
+          disabled={isPrompting || sourceConversationId == null}
+        />
+      )}
       {hasConfigOptions &&
         availableConfigOptions.map((option) => {
           // On/off options flip in place — a dropdown for a binary choice is a
