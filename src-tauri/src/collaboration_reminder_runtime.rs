@@ -194,6 +194,19 @@ async fn enqueue_mailbox_attention(
     {
         return Ok(false);
     }
+    // Independent of the queued/claimed short-circuit above: a Session-level
+    // freeze leaves items in `paused`, which that check does not see.
+    if let Some(paused_reason) =
+        prompt_queue_service::queue_paused_reason(conn, target.conversation_id)
+            .await
+            .map_err(|error| error.to_string())?
+    {
+        tracing::info!(
+            "[collaboration-reminder] skip enqueue: Session {} queue is paused ({paused_reason})",
+            target.conversation_id
+        );
+        return Ok(false);
+    }
     if target.letters.len() == 1 {
         let letter = &target.letters[0];
         let item_id = uuid::Uuid::new_v4().to_string();
@@ -249,6 +262,7 @@ mod tests {
     use super::*;
     use crate::db::test_helpers::{fresh_in_memory_db, seed_conversation, seed_folder};
     use crate::models::AgentType;
+    use sea_orm::ConnectionTrait;
     use std::path::PathBuf;
 
     /// A turn that already swallowed one letter steer must not get a reminder
@@ -317,5 +331,173 @@ mod tests {
             state.read().await.collaboration_steered_this_turn,
             "the claimed slot stays claimed until TurnComplete"
         );
+    }
+
+    fn attention_target(conversation_id: i32) -> collaboration_service::ReminderTargetSnapshot {
+        collaboration_service::ReminderTargetSnapshot {
+            conversation_id,
+            overdue_unread: 1,
+            overdue_reply: 0,
+            reminder_repeat_count: 0,
+            reminder_last_at: None,
+            letters: Vec::new(),
+        }
+    }
+
+    async fn reminder_cursor(
+        conn: &sea_orm::DatabaseConnection,
+        conversation_id: i32,
+    ) -> (Option<String>, i64) {
+        let row = conn
+            .query_one(sea_orm::Statement::from_sql_and_values(
+                sea_orm::DbBackend::Sqlite,
+                "SELECT reminder_last_at, \
+                        COALESCE(reminder_repeat_count, 0) AS reminder_repeat_count \
+                 FROM conversation_collaboration_state WHERE conversation_id = ?",
+                [conversation_id.into()],
+            ))
+            .await
+            .expect("query reminder cursor");
+        match row {
+            Some(row) => (
+                row.try_get("", "reminder_last_at")
+                    .expect("reminder_last_at"),
+                row.try_get("", "reminder_repeat_count")
+                    .expect("reminder_repeat_count"),
+            ),
+            None => (None, 0),
+        }
+    }
+
+    /// A Session-level freeze must not accept another reminder item, and the
+    /// sweep must not treat the skip as a successful nag.
+    #[tokio::test]
+    async fn enqueue_mailbox_attention_skips_paused_session_queue_without_recording() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/codeg-reminder-paused").await;
+        let source = seed_conversation(&db, folder_id, AgentType::Codex).await;
+        let conversation_id = seed_conversation(&db, folder_id, AgentType::ClaudeCode).await;
+        let mut letter = crate::models::SendCollaborationMessageInput::letter(
+            source,
+            vec![conversation_id],
+            "pause-skip",
+            "Test letter",
+            "hello",
+        );
+        letter.invocation_policy = crate::models::CollaborationInvocationPolicy::InvokeWhenIdle;
+        collaboration_service::send(&db.conn, letter)
+            .await
+            .expect("send");
+        db.conn
+            .execute(sea_orm::Statement::from_sql_and_values(
+                sea_orm::DbBackend::Sqlite,
+                "UPDATE collaboration_delivery \
+                 SET created_at = datetime('now', '-6 minutes') \
+                 WHERE target_conversation_id = ?",
+                [conversation_id.into()],
+            ))
+            .await
+            .expect("age delivery");
+        assert_eq!(
+            collaboration_service::list_overdue_reminder_targets(&db.conn)
+                .await
+                .expect("overdue")
+                .len(),
+            1,
+            "the letter is due before the pause check runs"
+        );
+
+        // First delivery left a queued collaboration origin. That would trip
+        // the existing queued/claimed short-circuit. Drop it so only the
+        // Session-level pause check is under test.
+        db.conn
+            .execute(sea_orm::Statement::from_sql_and_values(
+                sea_orm::DbBackend::Sqlite,
+                "DELETE FROM conversation_prompt_queue_item WHERE conversation_id = ?",
+                [conversation_id.into()],
+            ))
+            .await
+            .expect("drop first-delivery origin");
+        prompt_queue_service::pause_queue(
+            &db.conn,
+            conversation_id,
+            "connection not found: 428be5bf-test".to_string(),
+        )
+        .await
+        .expect("pause");
+
+        let prompt_queue = PromptQueueHandle::disconnected_for_test();
+        let inserted = enqueue_mailbox_attention(
+            &db.conn,
+            &prompt_queue,
+            &EventEmitter::Noop,
+            &attention_target(conversation_id),
+            "有 1 封未读会话信件".to_string(),
+        )
+        .await
+        .expect("enqueue");
+        assert!(
+            !inserted,
+            "a paused Session queue must not accept a reminder"
+        );
+        let snapshot = prompt_queue_service::snapshot(&db.conn, conversation_id)
+            .await
+            .expect("snapshot after direct enqueue");
+        assert!(
+            snapshot.items.is_empty(),
+            "paused Session queues must not grow reminder items"
+        );
+
+        sweep_once(
+            &db.conn,
+            &ConnectionManager::new(),
+            &prompt_queue,
+            &EventEmitter::Noop,
+        )
+        .await
+        .expect("sweep");
+        let snapshot = prompt_queue_service::snapshot(&db.conn, conversation_id)
+            .await
+            .expect("snapshot after sweep");
+        assert!(
+            snapshot.items.is_empty(),
+            "the sweep must not enqueue into a paused Session queue"
+        );
+        let (last_at, repeats) = reminder_cursor(&db.conn, conversation_id).await;
+        assert!(
+            last_at.is_none(),
+            "skipping a paused queue is not a successful reminder"
+        );
+        assert_eq!(repeats, 0, "the repeat budget must not advance on a skip");
+    }
+
+    #[tokio::test]
+    async fn enqueue_mailbox_attention_still_enqueues_when_session_queue_is_not_paused() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/codeg-reminder-unpaused").await;
+        let conversation_id = seed_conversation(&db, folder_id, AgentType::Codex).await;
+        let prompt_queue = PromptQueueHandle::disconnected_for_test();
+        let inserted = enqueue_mailbox_attention(
+            &db.conn,
+            &prompt_queue,
+            &EventEmitter::Noop,
+            &attention_target(conversation_id),
+            "有 1 封未读会话信件".to_string(),
+        )
+        .await
+        .expect("enqueue");
+        assert!(
+            inserted,
+            "an unpaused Session queue still accepts a reminder"
+        );
+        let snapshot = prompt_queue_service::snapshot(&db.conn, conversation_id)
+            .await
+            .expect("snapshot");
+        assert_eq!(snapshot.items.len(), 1);
+        assert_eq!(
+            snapshot.items[0].source,
+            crate::models::PromptQueueSource::Reminder
+        );
+        assert!(snapshot.paused_reason.is_none());
     }
 }

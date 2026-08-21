@@ -2343,12 +2343,16 @@ pub async fn list_overdue_reminder_targets(
         reminder_in_cooldown, MAX_REMINDER_REPEATS, REPLY_AFTER_SECS, UNREAD_AFTER_SECS,
     };
 
+    // overdue_unread must exclude `failed`, matching overdue_reply and
+    // reset_idle_reminder_cursors: a failed delivery never reached the Agent,
+    // so redelivery is the queue's job, not the reminder sweep's.
     let rows = conn
         .query_all(statement(
             &format!(
                 "SELECT d.target_conversation_id AS conversation_id, \
                  SUM(CASE WHEN d.invocation_policy = 'invoke_when_idle' \
-                      AND d.agent_received_at IS NULL AND d.state <> 'dismissed' \
+                      AND d.agent_received_at IS NULL \
+                      AND d.state <> 'dismissed' AND d.state <> 'failed' \
                       AND datetime(d.created_at) <= datetime('now', '-{UNREAD_AFTER_SECS} seconds') \
                       THEN 1 ELSE 0 END) AS overdue_unread, \
                  SUM(CASE WHEN d.obligation_state = 'awaiting_reply' \
@@ -5093,6 +5097,59 @@ mod tests {
         assert_eq!(overdue[0].overdue_reply, 1);
         assert_eq!(overdue[0].letters.len(), 1);
         assert!(overdue[0].letters[0].awaiting_reply);
+    }
+
+    #[tokio::test]
+    async fn overdue_unread_does_not_count_failed_deliveries() {
+        let (db, source, target, _) = seeded_memory().await;
+        let sent = send(
+            &db.conn,
+            invoke_input(source, vec![target], "failed-unread", "hello"),
+        )
+        .await
+        .unwrap();
+        db.conn
+            .execute(statement(
+                "UPDATE collaboration_delivery \
+                 SET state = 'failed', error = 'transport', \
+                     created_at = datetime('now', '-6 minutes') \
+                 WHERE event_id = ?",
+                vec![sent.event_id.clone().into()],
+            ))
+            .await
+            .unwrap();
+        assert!(
+            list_overdue_reminder_targets(&db.conn)
+                .await
+                .unwrap()
+                .is_empty(),
+            "failed deliveries never reached the Agent; they are not reminder debts"
+        );
+    }
+
+    #[tokio::test]
+    async fn overdue_unread_still_counts_queued_deliveries() {
+        let (db, source, target, _) = seeded_memory().await;
+        let sent = send(
+            &db.conn,
+            invoke_input(source, vec![target], "queued-unread", "hello"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(sent.deliveries[0].state, CollaborationDeliveryState::Queued);
+        db.conn
+            .execute(statement(
+                "UPDATE collaboration_delivery \
+                 SET created_at = datetime('now', '-6 minutes') \
+                 WHERE event_id = ?",
+                vec![sent.event_id.clone().into()],
+            ))
+            .await
+            .unwrap();
+        let overdue = list_overdue_reminder_targets(&db.conn).await.unwrap();
+        assert_eq!(overdue.len(), 1);
+        assert_eq!(overdue[0].conversation_id, target);
+        assert_eq!(overdue[0].overdue_unread, 1);
     }
 
     #[tokio::test]
