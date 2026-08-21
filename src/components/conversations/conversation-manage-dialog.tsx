@@ -1174,7 +1174,7 @@ function RoomListRow({
         <span className="text-muted-foreground/60">—</span>
       </span>
       <span className="w-10 shrink-0 text-right text-xs text-muted-foreground">
-        {formatRelative(room.createdAt)}
+        {formatRelative(room.updatedAt)}
       </span>
       <span className="inline-flex h-2 w-2 shrink-0" aria-hidden="true" />
     </div>
@@ -1511,7 +1511,7 @@ export function ConversationManageDialog({
               contentResult.value?.available === false)
         )
         const sorted = [...merged.values()].sort(
-          (a, b) => parseTimestamp(b.created_at) - parseTimestamp(a.created_at)
+          (a, b) => parseTimestamp(b.updated_at) - parseTimestamp(a.updated_at)
         )
         setRows(sorted)
         // A server too old to know the endpoint costs the Room lane, not the
@@ -1877,23 +1877,24 @@ export function ConversationManageDialog({
   ])
 
   /**
-   * Sessions and Rooms as one list, newest first.
+   * Sessions and Rooms as one list, most recently active first.
    *
-   * Both sort on creation time — the very value each row prints in its time
-   * column — so the mixed list still reads top-to-bottom as one descending
-   * clock. Rooms arrive from the backend in last-activity order; re-keying them
-   * on `createdAt` is what lets them slot between Sessions at all.
+   * Both sort on last-activity time (`updated_at`/`updatedAt`) — the very
+   * value each row prints in its time column — so the mixed list still reads
+   * top-to-bottom as one descending clock. Sort key and printed time must
+   * always change together; sorting on a value the row doesn't show makes the
+   * list look shuffled.
    */
   const listItems = useMemo<SessionCenterItem[]>(() => {
     const items: SessionCenterItem[] = [
       ...visibleRows.map((conversation) => ({
         kind: "session" as const,
-        sortKey: parseTimestamp(conversation.created_at),
+        sortKey: parseTimestamp(conversation.updated_at),
         conversation,
       })),
       ...visibleRooms.map((room) => ({
         kind: "room" as const,
-        sortKey: parseTimestamp(room.createdAt),
+        sortKey: parseTimestamp(room.updatedAt),
         room,
       })),
     ]
@@ -3073,7 +3074,7 @@ export function ConversationManageDialog({
                             )}
                           </span>
                           <span className="shrink-0 text-xs text-muted-foreground w-10 text-right">
-                            {formatRelative(conv.created_at)}
+                            {formatRelative(conv.updated_at)}
                           </span>
                           <ConversationStatusDot
                             status={conv.status as ConversationStatus}
