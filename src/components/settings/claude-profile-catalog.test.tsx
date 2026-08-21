@@ -10,7 +10,33 @@ import { NextIntlClientProvider } from "next-intl"
 import type { ComponentProps } from "react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
+// Match the shared Monaco test convention: expose the controlled editor as a
+// textarea so the profile's draft/save contract remains testable in jsdom.
+vi.mock("@monaco-editor/react", async () => {
+  const { createElement } = await import("react")
+  return {
+    default: ({
+      value,
+      onChange,
+      options,
+    }: {
+      value?: string
+      onChange?: (value: string | undefined) => void
+      options?: { ariaLabel?: string }
+    }) =>
+      createElement("textarea", {
+        "aria-label": options?.ariaLabel,
+        value: value ?? "",
+        onChange: (event: { target: { value: string } }) =>
+          onChange?.(event.target.value),
+      }),
+  }
+})
+
+vi.mock("@/lib/monaco-local", () => ({}))
+
 import { ClaudeProfileCatalog } from "./claude-profile-catalog"
+import { AppearanceProvider } from "@/components/appearance-provider"
 import enMessages from "@/i18n/messages/en.json"
 import {
   FOLLOW_DEFAULT_CLAUDE_PROFILE_ID,
@@ -78,11 +104,13 @@ function renderCatalog(
 ) {
   return render(
     <NextIntlClientProvider locale="en" messages={enMessages}>
-      <ClaudeProfileCatalog
-        defaultProfileId=""
-        onSetAgentDefault={vi.fn(async () => {})}
-        {...props}
-      />
+      <AppearanceProvider>
+        <ClaudeProfileCatalog
+          defaultProfileId=""
+          onSetAgentDefault={vi.fn(async () => {})}
+          {...props}
+        />
+      </AppearanceProvider>
     </NextIntlClientProvider>
   )
 }
