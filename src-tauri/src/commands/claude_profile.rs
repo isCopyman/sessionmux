@@ -1855,6 +1855,66 @@ mod tests {
     }
 
     #[test]
+    fn folded_legacy_env_round_trip_preserves_secret_and_ordinary_values() {
+        let data = tempfile::tempdir().unwrap();
+        let secret = "legacy-secret-value-12345678";
+        let mut legacy_env = BTreeMap::new();
+        legacy_env.insert("ANTHROPIC_AUTH_TOKEN".into(), secret.into());
+        legacy_env.insert("BUS_PROJECT".into(), "alpha".into());
+
+        let seeded = claude_profile_upsert_core(
+            data.path(),
+            ClaudeProfileUpsert {
+                id: "legacy-env".into(),
+                label: "Legacy env".into(),
+                kind: ClaudeProfileKind::Managed,
+                config_dir: None,
+                base_url: None,
+                auth_token: None,
+                model: None,
+                settings_json: Some("{}".into()),
+                env: Some(legacy_env),
+            },
+        )
+        .unwrap();
+        let mask = seeded.env.get("ANTHROPIC_AUTH_TOKEN").unwrap().clone();
+        assert!(mask.contains('\u{2022}'));
+        assert!(!mask.contains(secret));
+
+        claude_profile_upsert_core(
+            data.path(),
+            ClaudeProfileUpsert {
+                id: "legacy-env".into(),
+                label: "Legacy env renamed".into(),
+                kind: ClaudeProfileKind::Managed,
+                config_dir: None,
+                base_url: None,
+                auth_token: Some(mask.clone()),
+                model: None,
+                settings_json: Some(
+                    serde_json::json!({
+                        "env": {
+                            "ANTHROPIC_AUTH_TOKEN": mask,
+                            "BUS_PROJECT": "alpha"
+                        }
+                    })
+                    .to_string(),
+                ),
+                env: Some(BTreeMap::new()),
+            },
+        )
+        .unwrap();
+
+        let stored = read_record(data.path(), "legacy-env").unwrap().unwrap();
+        assert!(stored.env.is_empty());
+        assert!(stored.auth_token.as_deref() == Some(secret));
+        let settings: serde_json::Value =
+            serde_json::from_str(stored.settings_json.as_deref().unwrap()).unwrap();
+        assert!(settings["env"]["ANTHROPIC_AUTH_TOKEN"] == secret);
+        assert_eq!(settings["env"]["BUS_PROJECT"], "alpha");
+    }
+
+    #[test]
     fn settings_json_omit_and_null_keep_while_empty_string_clears() {
         let data = tempfile::tempdir().unwrap();
         claude_profile_upsert_core(

@@ -38,10 +38,7 @@ import {
 import { parse as parseTomlDocument } from "smol-toml"
 import {
   CLAUDE_AUTH_MODES,
-  ClaudeConfigFields,
-  EMPTY_CLAUDE_CONFIG_VALUE,
   type ClaudeAuthMode,
-  type ClaudeConfigValue,
   type ClaudeEffortLevel,
 } from "./claude-config-fields"
 import { isDesktop, openUrl } from "@/lib/platform"
@@ -614,7 +611,6 @@ const CLAUDE_ATTRIBUTION_HEADER_ENV_KEY = "CLAUDE_CODE_ATTRIBUTION_HEADER"
 const CLAUDE_NONESSENTIAL_TRAFFIC_ENV_KEY =
   "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"
 const CLAUDE_ENV_FLAG_ON = "1"
-const CLAUDE_ENV_FLAG_OFF = "0"
 // `CLAUDE_CODE_ATTRIBUTION_HEADER` = "send the attribution/billing header" →
 // default OFF (don't send). `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` = "disable
 // telemetry / redundant pings" → default ON (disabled).
@@ -3245,119 +3241,6 @@ export function patchImportantConfigText(
   }
 }
 
-/**
- * Make a Claude agent's native config provider-authoritative. When a provider
- * was bound in an earlier session, the on-disk config loaded into the draft can
- * still carry stale model keys (e.g. a leftover ANTHROPIC_CUSTOM_MODEL_OPTION)
- * that no longer match the provider — `handleModelProviderSelect` only rewrites
- * configText when the dropdown changes, not on reload. A config-management save
- * would otherwise persist that stale text back over the backend bind cascade, so
- * re-derive the provider-controlled keys here (empty => cleared by `assignEnv`)
- * before saving. Unrelated config/env keys are preserved.
- */
-export function applyClaudeProviderToConfigText(
-  configText: string,
-  provider: Pick<ModelProviderInfo, "api_url" | "api_key" | "model">
-): string {
-  const model = parseClaudeProviderModel(provider.model ?? null)
-  return patchImportantConfigText("claude_code", configText, {
-    apiBaseUrl: provider.api_url,
-    apiKey: provider.api_key,
-    claudeMainModel: model.main ?? "",
-    claudeReasoningModel: model.reasoning ?? "",
-    claudeDefaultHaikuModel: model.haiku ?? "",
-    claudeDefaultSonnetModel: model.sonnet ?? "",
-    claudeDefaultOpusModel: model.opus ?? "",
-    claudeCustomModelOption: model.customOption ?? "",
-    claudeCustomModelOptionName: model.customOptionName ?? "",
-    claudeCustomModelOptionDescription: model.customOptionDescription ?? "",
-  }).configText
-}
-
-/**
- * Decide the config text to persist for a config-management save. For a bound
- * Claude agent with VALID config JSON, rewrite the provider-controlled keys to be
- * provider-authoritative (see {@link applyClaudeProviderToConfigText}). Anything
- * else — non-Claude, unbound, or INVALID JSON — passes through unchanged. The
- * invalid-JSON passthrough is important: persistConfig must still surface the
- * parse error, otherwise patchImportantConfigText would silently recover the bad
- * text as `{}` and persist provider-derived config over the user's broken edits.
- */
-export function configTextForClaudeSave(
-  configText: string,
-  agentType: AgentType,
-  modelProviderId: number | null,
-  provider: Pick<ModelProviderInfo, "api_url" | "api_key" | "model"> | undefined
-): string {
-  if (
-    agentType === "claude_code" &&
-    modelProviderId != null &&
-    provider &&
-    !parseConfigJsonText(configText).error
-  ) {
-    return applyClaudeProviderToConfigText(configText, provider)
-  }
-  return configText
-}
-
-/**
- * Set a Claude Code env flag to an explicit value inside the native config's
- * `env` (creating `env` if needed), preserving all other keys. Used by the
- * hardening toggles and their save-time materialization so the flag is always
- * written explicitly ("1"/"0") rather than left implicit/absent. Pure — shared
- * by the toggle handler, the save path, and tests.
- */
-export function setClaudeEnvFlagInConfigText(
-  configText: string,
-  envKey: string,
-  value: string
-): { configText: string; recoveredFromInvalid: boolean } {
-  const parseResult = parseConfigJsonText(configText)
-  const config: Record<string, unknown> = parseResult.error
-    ? {}
-    : { ...parseResult.config }
-  const env =
-    typeof config.env === "object" && config.env && !Array.isArray(config.env)
-      ? { ...(config.env as Record<string, unknown>) }
-      : {}
-  env[envKey] = value
-  config.env = env
-  return {
-    configText: JSON.stringify(config, null, 2),
-    recoveredFromInvalid: Boolean(parseResult.error),
-  }
-}
-
-/**
- * Materialize both Claude hardening toggles into the native config `env` AND the
- * DB env overlay (envText), writing the explicit "1"/"0" per toggle so the shown
- * default positions are actually applied on save. Returns the inputs UNCHANGED
- * when `configText` is invalid JSON — never recover it here, or the caller's
- * merge diff would treat the recovered minimal config as authoritative and
- * delete every other on-disk key. Pure — shared by the save handler and tests.
- */
-export function materializeClaudeHardeningFlags(
-  configText: string,
-  envText: string,
-  flags: { sendAttributionHeader: boolean; disableNonessentialTraffic: boolean }
-): { configText: string; envText: string } {
-  if (parseConfigJsonText(configText).error) {
-    return { configText, envText }
-  }
-  const entries: Array<[string, boolean]> = [
-    [CLAUDE_ATTRIBUTION_HEADER_ENV_KEY, flags.sendAttributionHeader],
-    [CLAUDE_NONESSENTIAL_TRAFFIC_ENV_KEY, flags.disableNonessentialTraffic],
-  ]
-  let nextConfig = configText
-  let nextEnv = envText
-  for (const [key, on] of entries) {
-    const value = on ? CLAUDE_ENV_FLAG_ON : CLAUDE_ENV_FLAG_OFF
-    nextConfig = setClaudeEnvFlagInConfigText(nextConfig, key, value).configText
-    nextEnv = patchEnvText(nextEnv, { [key]: value })
-  }
-  return { configText: nextConfig, envText: nextEnv }
-}
-
 function patchEnvByImportantKey(
   agentType: AgentType,
   envText: string,
@@ -5661,82 +5544,6 @@ export function AcpAgentSettings() {
     [selectedAgent, selectedDraft, t, updateSelectedDraft]
   )
 
-  const handleClaudeEffortLevelChange = useCallback(
-    (nextValue: ClaudeEffortLevel) => {
-      if (
-        !selectedAgent ||
-        !selectedDraft ||
-        selectedAgent.agent_type !== "claude_code"
-      )
-        return
-      const parsed = parseConfigJsonText(selectedDraft.configText)
-      if (parsed.error) {
-        toast.warning(t("warnings.nativeJsonRecoveredStructured"))
-      }
-      const config: Record<string, unknown> = parsed.error
-        ? {}
-        : { ...parsed.config }
-      if (nextValue) {
-        config[CLAUDE_EFFORT_LEVEL_CONFIG_KEY] = nextValue
-      } else {
-        delete config[CLAUDE_EFFORT_LEVEL_CONFIG_KEY]
-      }
-      const nextConfigText =
-        Object.keys(config).length === 0 ? "" : JSON.stringify(config, null, 2)
-      setConfigErrors((prev) => ({
-        ...prev,
-        [selectedAgent.agent_type]: null,
-      }))
-      updateSelectedDraft((current) => ({
-        ...current,
-        claudeEffortLevel: nextValue,
-        configText: nextConfigText,
-      }))
-    },
-    [selectedAgent, selectedDraft, t, updateSelectedDraft]
-  )
-
-  // Toggle a Claude Code hardening flag: write the explicit "1"/"0" value into
-  // the native config's `env` (and the DB env overlay in lockstep).
-  const handleClaudeEnvFlagChange = useCallback(
-    (
-      field: "claudeSendAttributionHeader" | "claudeDisableNonessentialTraffic",
-      envKey: string,
-      enabled: boolean
-    ) => {
-      if (
-        !selectedAgent ||
-        !selectedDraft ||
-        selectedAgent.agent_type !== "claude_code"
-      )
-        return
-      const value = enabled ? CLAUDE_ENV_FLAG_ON : CLAUDE_ENV_FLAG_OFF
-      const next = setClaudeEnvFlagInConfigText(
-        selectedDraft.configText,
-        envKey,
-        value
-      )
-      if (next.recoveredFromInvalid) {
-        toast.warning(t("warnings.nativeJsonRecoveredStructured"))
-      }
-      setConfigErrors((prev) => ({
-        ...prev,
-        [selectedAgent.agent_type]: null,
-      }))
-      updateSelectedDraft((current) => ({
-        ...current,
-        [field]: enabled,
-        // The backend folds native `config.env` into `agent.env`, so keep the
-        // DB env overlay (envText) in lockstep — otherwise persistEnv would
-        // re-persist a stale value from the overlay. Mirrors
-        // handleImportantConfigChange's dual configText + envText write.
-        envText: patchEnvText(current.envText, { [envKey]: value }),
-        configText: next.configText,
-      }))
-    },
-    [selectedAgent, selectedDraft, t, updateSelectedDraft]
-  )
-
   const handleGrokAuthModeChange = useCallback(
     (nextMode: GrokAuthMethod) => {
       if (
@@ -5757,74 +5564,6 @@ export function AcpAgentSettings() {
           GROK_AUTH_MODE: nextMode,
           ...(nextMode === "subscription" ? { XAI_API_KEY: "" } : {}),
         }),
-      }))
-    },
-    [selectedAgent, selectedDraft, updateSelectedDraft]
-  )
-
-  const handleClaudeAuthModeChange = useCallback(
-    (nextMode: ClaudeAuthMode) => {
-      if (
-        !selectedAgent ||
-        !selectedDraft ||
-        selectedAgent.agent_type !== "claude_code"
-      )
-        return
-
-      const keys = importantEnvKeysByAgent("claude_code")
-      const allEnvKeys = [...keys.apiBaseUrl, ...keys.apiKey]
-
-      if (nextMode === "official_subscription") {
-        // Clear API URL/API Key from env and config, and record the knob so the
-        // launch path can strip the inherited credentials too (the saved env
-        // being empty is not enough — the child inherits codeg's own
-        // environment; see apply_claude_env_policy).
-        const envPatch = claudeAuthModeEnvPatch(nextMode)
-        // Build clean display config (remove null keys)
-        const parsed = parseConfigJsonText(selectedDraft.configText)
-        const config: Record<string, unknown> = parsed.error
-          ? {}
-          : { ...parsed.config }
-        delete config.apiBaseUrl
-        delete config.apiKey
-        if (config.env && typeof config.env === "object") {
-          const cfgEnv = { ...(config.env as Record<string, unknown>) }
-          for (const k of allEnvKeys) delete cfgEnv[k]
-          if (Object.keys(cfgEnv).length > 0) {
-            config.env = cfgEnv
-          } else {
-            delete config.env
-          }
-        }
-        const nextConfigText =
-          Object.keys(config).length > 0 ? JSON.stringify(config, null, 2) : ""
-        setConfigErrors((prev) => ({
-          ...prev,
-          [selectedAgent.agent_type]: null,
-        }))
-        updateSelectedDraft((current) => ({
-          ...current,
-          claudeAuthMode: nextMode,
-          modelProviderId: null,
-          apiBaseUrl: "",
-          apiKey: "",
-          envText: patchEnvText(current.envText, envPatch),
-          configText: nextConfigText,
-        }))
-        return
-      }
-
-      // "custom" or "model_provider" — keep existing values, just switch mode.
-      // The knob is still written: an absent one falls back to inference, and a
-      // row whose credentials are only reachable through a bound provider would
-      // otherwise read back as official subscription and get them stripped.
-      const modeEnvPatch = claudeAuthModeEnvPatch(nextMode)
-      updateSelectedDraft((current) => ({
-        ...current,
-        claudeAuthMode: nextMode,
-        modelProviderId:
-          nextMode === "model_provider" ? current.modelProviderId : null,
-        envText: patchEnvText(current.envText, modeEnvPatch),
       }))
     },
     [selectedAgent, selectedDraft, updateSelectedDraft]
@@ -7506,84 +7245,6 @@ export function AcpAgentSettings() {
       cancelCodexDeviceLogin()
     }
   }, [selectedAgent, codexLoginStatus, cancelCodexDeviceLogin])
-
-  /**
-   * Adapter between this panel's draft and {@link ClaudeConfigFields}, the form
-   * the profile tabs render. Same questions, same layout, either tab.
-   *
-   * It is only an adapter because the draft still stores each Claude setting
-   * twice — once in `configText` (the CLI's settings.json) and once in
-   * `envText` (the DB env overlay) — and the handlers below keep the two in
-   * step. A profile needs none of that: it reads and writes one settings.json
-   * through `claude-settings-projection`. Collapsing this side onto the same
-   * projection is the follow-up; it means changing what `AgentDraft` stores,
-   * which is shared with every other agent's save path.
-   */
-  const claudeConfigValue: ClaudeConfigValue = selectedDraft
-    ? {
-        authMode: selectedDraft.claudeAuthMode,
-        apiBaseUrl: selectedDraft.apiBaseUrl,
-        apiKey: selectedDraft.apiKey,
-        mainModel: selectedDraft.claudeMainModel,
-        reasoningModel: selectedDraft.claudeReasoningModel,
-        haikuModel: selectedDraft.claudeDefaultHaikuModel,
-        sonnetModel: selectedDraft.claudeDefaultSonnetModel,
-        opusModel: selectedDraft.claudeDefaultOpusModel,
-        customModelOption: selectedDraft.claudeCustomModelOption,
-        customModelOptionName: selectedDraft.claudeCustomModelOptionName,
-        customModelOptionDescription:
-          selectedDraft.claudeCustomModelOptionDescription,
-        effortLevel: selectedDraft.claudeEffortLevel,
-        sendAttributionHeader: selectedDraft.claudeSendAttributionHeader,
-        disableNonessentialTraffic:
-          selectedDraft.claudeDisableNonessentialTraffic,
-      }
-    : EMPTY_CLAUDE_CONFIG_VALUE
-
-  /** Which draft field each plain-text form field writes through. */
-  const CLAUDE_FORM_TO_DRAFT = {
-    apiBaseUrl: "apiBaseUrl",
-    apiKey: "apiKey",
-    mainModel: "claudeMainModel",
-    reasoningModel: "claudeReasoningModel",
-    haikuModel: "claudeDefaultHaikuModel",
-    sonnetModel: "claudeDefaultSonnetModel",
-    opusModel: "claudeDefaultOpusModel",
-    customModelOption: "claudeCustomModelOption",
-    customModelOptionName: "claudeCustomModelOptionName",
-    customModelOptionDescription: "claudeCustomModelOptionDescription",
-  } as const
-
-  const handleClaudeConfigFieldsChange = (
-    patch: Partial<ClaudeConfigValue>
-  ) => {
-    if (patch.authMode !== undefined) {
-      handleClaudeAuthModeChange(patch.authMode)
-    }
-    if (patch.effortLevel !== undefined) {
-      handleClaudeEffortLevelChange(patch.effortLevel)
-    }
-    if (patch.sendAttributionHeader !== undefined) {
-      handleClaudeEnvFlagChange(
-        "claudeSendAttributionHeader",
-        CLAUDE_ATTRIBUTION_HEADER_ENV_KEY,
-        patch.sendAttributionHeader
-      )
-    }
-    if (patch.disableNonessentialTraffic !== undefined) {
-      handleClaudeEnvFlagChange(
-        "claudeDisableNonessentialTraffic",
-        CLAUDE_NONESSENTIAL_TRAFFIC_ENV_KEY,
-        patch.disableNonessentialTraffic
-      )
-    }
-    for (const [formKey, draftKey] of Object.entries(CLAUDE_FORM_TO_DRAFT)) {
-      const value = patch[formKey as keyof typeof CLAUDE_FORM_TO_DRAFT]
-      if (value !== undefined) {
-        handleImportantConfigChange(draftKey as ImportantConfigKey, value)
-      }
-    }
-  }
 
   if (loadingAgents) {
     return (
@@ -11309,18 +10970,6 @@ supports_websockets = true`}
                         </div>
                       )}
 
-                    {selectedAgent.agent_type === "claude_code" &&
-                      claudeCliGlobalsVisible && (
-                        <ClaudeConfigFields
-                          idPrefix="claude-cli-global"
-                          value={claudeConfigValue}
-                          onChange={handleClaudeConfigFieldsChange}
-                          providers={selectedModelProviders}
-                          providerId={selectedDraft.modelProviderId}
-                          onProviderSelect={handleModelProviderSelect}
-                        />
-                      )}
-
                     {claudeCliGlobalsVisible &&
                       selectedAgent.agent_type !== "claude_code" && (
                         <>
@@ -11411,7 +11060,9 @@ supports_websockets = true`}
                     {claudeCliGlobalsVisible && (
                       <div className="space-y-1.5">
                         <label className="text-[11px] text-muted-foreground">
-                          {t("nativeJsonConfig")}
+                          {selectedAgent.agent_type === "claude_code"
+                            ? t("claudeProfile.fieldSettingsJson")
+                            : t("nativeJsonConfig")}
                         </label>
                         <NativeConfigFileHint
                           agentType={selectedAgent.agent_type}
@@ -11421,15 +11072,26 @@ supports_websockets = true`}
                           onChange={(event) => {
                             handleConfigTextChange(event.target.value)
                           }}
-                          placeholder={`{
+                          placeholder={
+                            selectedAgent.agent_type === "claude_code"
+                              ? `{
+  "env": {}
+}`
+                              : `{
   "apiBaseUrl": "https://api.example.com",
   "apiKey": "sk-...",
   "model": "gpt-5",
   "env": {
     "CUSTOM_KEY": "VALUE"
   }
-}`}
-                          className="min-h-36 font-mono text-xs"
+}`
+                          }
+                          className={cn(
+                            selectedAgent.agent_type === "claude_code"
+                              ? "min-h-64"
+                              : "min-h-36",
+                            "font-mono text-xs"
+                          )}
                         />
                         {selectedConfigError && (
                           <div className="rounded-md border border-red-500/30 bg-red-500/5 px-2.5 py-1.5 text-[11px] text-red-400">
@@ -11448,94 +11110,23 @@ supports_websockets = true`}
                               toast.error(t("toasts.modelProviderRequired"))
                               return
                             }
-                            // When a Claude provider is bound, the on-disk config
-                            // loaded into configText may carry stale model keys
-                            // (e.g. a leftover custom model option) from before the
-                            // binding — re-derive them from the provider so
-                            // persistConfig cannot write a stale value back over
-                            // the backend bind cascade (invalid JSON passes through
-                            // so persistConfig still surfaces the error). Sequence
-                            // env→config (never parallel): persistEnv also rewrites
-                            // config.env on the backend, so concurrent writes would
-                            // interleave two writers of ~/.claude/settings.json.
-                            let configToSave = configTextForClaudeSave(
-                              selectedDraft.configText,
-                              selectedAgent.agent_type,
-                              selectedDraft.modelProviderId,
-                              modelProviders.find(
-                                (p) => p.id === selectedDraft.modelProviderId
-                              )
-                            )
-                            // Materialize the Claude hardening toggles so the shown
-                            // default positions are actually applied on save —
-                            // writing the explicit "1"/"0" into both the native
-                            // config `env` and the DB env overlay — regardless of
-                            // whether the user touched the switches. Invalid JSON is
-                            // left untouched so persistConfig surfaces the error.
-                            let envToSave = selectedDraft.envText
-                            if (selectedAgent.agent_type === "claude_code") {
-                              const materialized =
-                                materializeClaudeHardeningFlags(
-                                  configToSave,
-                                  envToSave,
-                                  {
-                                    sendAttributionHeader:
-                                      selectedDraft.claudeSendAttributionHeader,
-                                    disableNonessentialTraffic:
-                                      selectedDraft.claudeDisableNonessentialTraffic,
-                                  }
-                                )
-                              configToSave = materialized.configText
-                              envToSave = materialized.envText
-                            }
+                            // Sequence env→config (never parallel): persistEnv
+                            // also rewrites config.env on the backend, so
+                            // concurrent writes would interleave two writers of
+                            // ~/.claude/settings.json.
                             persistEnv(
                               selectedAgent.agent_type,
                               selectedDraft.enabled,
-                              envToSave,
+                              selectedDraft.envText,
                               selectedDraft.modelProviderId
                             )
                               .then(() =>
                                 persistConfig(
                                   selectedAgent.agent_type,
-                                  configToSave
+                                  selectedDraft.configText
                                 )
                               )
                               .then(() => {
-                                // Reflect the provider-authoritative rewrite AND the
-                                // materialized hardening flags in the editors so the
-                                // textareas don't show stale values until reload —
-                                // and so a later env-only save doesn't persist a
-                                // stale envText that drops the flags from the DB
-                                // overlay. Each inner guard preserves an edit the
-                                // user typed while the save was in flight.
-                                const syncedConfig =
-                                  configToSave !== selectedDraft.configText
-                                    ? normalizeConfigText(configToSave)
-                                    : null
-                                const syncEnv =
-                                  envToSave !== selectedDraft.envText
-                                if (syncedConfig !== null || syncEnv) {
-                                  updateSelectedDraft((current) => {
-                                    let next = current
-                                    if (
-                                      syncedConfig !== null &&
-                                      current.configText ===
-                                        selectedDraft.configText
-                                    ) {
-                                      next = {
-                                        ...next,
-                                        configText: syncedConfig,
-                                      }
-                                    }
-                                    if (
-                                      syncEnv &&
-                                      current.envText === selectedDraft.envText
-                                    ) {
-                                      next = { ...next, envText: envToSave }
-                                    }
-                                    return next
-                                  })
-                                }
                                 toast.success(t("toasts.configSaved"), {
                                   description: t("toasts.configSavedHint"),
                                 })

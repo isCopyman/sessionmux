@@ -1175,7 +1175,7 @@
       "addCopy": "「{name}」を複製",
       "tokenNotCopied": "認証トークンはコピーされません（画面にはマスクしか届きません）。入力し直してください。",
       "cliGlobalTitle": "Claude CLI のグローバル設定",
-      "cliGlobalHint": "このプロファイルは何も注入しません。以下の項目は CLI 自身のグローバル設定（~/.claude/settings.json）を編集します。これは最下層で、セッションのプロジェクトにある .claude/settings.json が同名キーを上書きします。codeg プロファイルはそのどちらよりも優先されますが、実際に値を入れたキーだけです。空欄のキーは引き続きプロジェクト、次にこのグローバル設定から決まります。",
+      "cliGlobalHint": "このプロファイルは何も注入しません。以下のエディターは CLI 自身のグローバル設定（~/.claude/settings.json）を編集します。これは最下層で、セッションのプロジェクトにある .claude/settings.json が同名キーを上書きします。codeg プロファイルはそのどちらよりも優先されますが、実際に値を入れたキーだけです。空欄のキーは引き続きプロジェクト、次にこのグローバル設定から決まります。",
       "officialDirect": "公式に直接接続",
       "officialDirectBody": "api.anthropic.com を強制し、サードパーティのトークンを消去します。CLI は自身の設定ディレクトリに保存されたサブスクリプションでサインインします。ほかに設定する項目はありません。",
       "fieldSettingsJson": "settings.json",
