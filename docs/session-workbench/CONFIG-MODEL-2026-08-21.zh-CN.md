@@ -42,6 +42,19 @@ const options = { settingSources: ["user","project","local"], ...userProvidedOpt
 **所以 `_meta.claudeCode.options.extraArgs = { settings: "<绝对路径>" }` ≡ `claude --settings <path>`**，
 也就是 Monet 的机制（O39 §2，`streaming.rs:924-926`）。
 
+**实测（2026-08-21，不是源码推理）**：直接驱动 ACP 适配器
+`@agentclientprotocol/claude-agent-acp@0.69.0`（codeg 实际装的那个版本），
+`initialize` → `session/new` 带 `_meta.claudeCode.options.extraArgs.settings=<file>` → `session/prompt`，
+只换那份文件的内容：
+
+| settings 内容 | 结果 |
+| --- | --- |
+| `{"env":{"CODEG_SETTINGS_PROBE":"x"}}` | 几秒回 `pong`（走 `~/.claude` 的 OAuth 订阅） |
+| `{"env":{"ANTHROPIC_BASE_URL":"http://127.0.0.1:1"}}` | 挂 90 秒零输出 |
+| `{"env":{"ANTHROPIC_AUTH_TOKEN":"sk-ant-probe-invalid-0000"}}` | **`401 Invalid bearer token`** |
+
+401 是决定性证据：那个假 token 被真的拿去认证了。第一行同时证明**不写 token 的档就是订阅档**。
+
 被推翻的两条（都是我说错的，记在这里防止再犯）：
 
 | 说过的 | 实际 |

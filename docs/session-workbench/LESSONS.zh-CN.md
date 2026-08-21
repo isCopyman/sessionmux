@@ -82,3 +82,14 @@ test-utils --lib` 跑 server 模式测试（room-read 工人发明，实测有�
 落 worktree 根）、已核实事实（file:line）、要做的事、明确不做、验证命令（带 L1 的
 exit-code 纪律）、纪律段（不发明规格/失败两次停手/核验对应真实输出）。样例见
 近期 *-REPORT 对应的任务书。
+
+## L13. 机制问题靠跑，不靠读源码
+
+场景：「`--settings` 能不能穿过 ACP 适配器」这个问题，我先说「Claude 只能指目录」（错），
+再改口「能，源码里有」（对但没验），中间还读错了包（翻的是 `@zed-industries/claude-agent-acp@0.21.0`，
+codeg 实际装的是 `@agentclientprotocol/claude-agent-acp@0.69.0`）。一个下午在同一点上错两次。
+
+规则：涉及**外部进程行为**的结论，源码只能当假设，**必须跑一次二值实验**再下结论。
+探针要有对照组，且信号要是**正向**的（`401 Invalid bearer token` 这种），
+不要用「挂住了」当证据——挂住有太多别的解释。
+读第三方包之前先确认**仓库钉的是哪个包哪个版本**（`registry.rs` 的 `package:` 字段）。
