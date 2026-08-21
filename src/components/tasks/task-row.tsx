@@ -16,9 +16,10 @@ import {
   ScheduleChip,
   statusAccent,
   StatusChip,
-  TaskAgentMark,
+  TaskAgentMarkWithActivity,
   WorktreeRemovedChip,
 } from "./task-card"
+import type { TaskActivityDot } from "./task-activity"
 import {
   buildTaskActions,
   type TaskActionHandlers,
@@ -61,6 +62,8 @@ interface TaskRowProps extends TaskActionHandlers {
   now: number
   /** Place in line when this task is waiting to merge (see `mergeQueueRanks`). */
   mergeQueueRank?: number
+  /** Live-session activity; same prop the board card takes. */
+  activity?: TaskActivityDot | null
   onOpen: () => void
 }
 
@@ -90,6 +93,7 @@ export function TaskRow({
   folderName,
   now,
   mergeQueueRank,
+  activity,
   onOpen,
   ...handlers
 }: TaskRowProps) {
@@ -164,7 +168,11 @@ export function TaskRow({
           columns are for. mt-[0.125rem] centres it on the title line, which is
           where it belongs when a note pushes the block taller. */}
       <div className={cn(TASK_LIST_CELLS.title, "flex items-start gap-1.5")}>
-        <TaskAgentMark task={task} className="mt-[0.125rem]" />
+        <TaskAgentMarkWithActivity
+          task={task}
+          activity={activity}
+          className="mt-[0.125rem]"
+        />
         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
           <div className="flex min-w-0 items-center gap-1.5">
             <span className="truncate text-[0.8125rem] font-medium leading-snug">

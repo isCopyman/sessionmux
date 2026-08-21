@@ -1,13 +1,16 @@
 import { beforeEach, describe, expect, it } from "vitest"
 import {
+  loadTasksBoardGrouping,
   loadTasksStatusFilter,
   loadTasksViewMode,
+  saveTasksBoardGrouping,
   saveTasksStatusFilter,
   saveTasksViewMode,
 } from "./tasks-board-filter-storage"
 
 const VIEW_MODE_KEY = "workspace:tasks-view-mode"
 const STATUS_FILTER_KEY = "workspace:tasks-status-filter"
+const GROUPING_KEY = "workspace:tasks-board-grouping"
 
 beforeEach(() => {
   localStorage.clear()
@@ -55,5 +58,24 @@ describe("tasks status filter storage", () => {
 
     localStorage.setItem(STATUS_FILTER_KEY, "{not json")
     expect(loadTasksStatusFilter()).toBeNull()
+  })
+})
+
+describe("tasks board grouping storage", () => {
+  it("round-trips a stored grouping and defaults to none", () => {
+    expect(loadTasksBoardGrouping()).toBe("none")
+    saveTasksBoardGrouping("folder")
+    expect(loadTasksBoardGrouping()).toBe("folder")
+    saveTasksBoardGrouping("agent")
+    expect(loadTasksBoardGrouping()).toBe("agent")
+    saveTasksBoardGrouping("none")
+    expect(loadTasksBoardGrouping()).toBe("none")
+  })
+
+  it("falls back to none on a junk entry", () => {
+    localStorage.setItem(GROUPING_KEY, "collection")
+    expect(loadTasksBoardGrouping()).toBe("none")
+    localStorage.setItem(GROUPING_KEY, "room")
+    expect(loadTasksBoardGrouping()).toBe("none")
   })
 })

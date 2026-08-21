@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vitest"
 import enMessages from "@/i18n/messages/en.json"
 import type { WorkTask } from "@/lib/types"
 import { TaskCard } from "./task-card"
+import type { TaskActivityDot } from "./task-activity"
 
 function task(overrides?: Partial<WorkTask>): WorkTask {
   return {
@@ -45,7 +46,8 @@ function task(overrides?: Partial<WorkTask>): WorkTask {
 function renderCard(
   t: WorkTask,
   handlers?: Partial<Record<string, () => void>>,
-  mergeQueueRank?: number
+  mergeQueueRank?: number,
+  activity?: TaskActivityDot | null
 ) {
   const noop = () => {}
   const props = {
@@ -70,6 +72,7 @@ function renderCard(
         folderName="repo"
         now={Date.parse("2026-08-01T01:00:00Z")}
         mergeQueueRank={mergeQueueRank}
+        activity={activity}
         {...props}
       />
     </NextIntlClientProvider>
@@ -250,5 +253,63 @@ describe("TaskCard agent mark", () => {
     renderCard(task({ agent_type: null }))
     expect(screen.queryByTitle("Claude Code")).toBeNull()
     expect(screen.getByText("Answer the question")).toBeInTheDocument()
+  })
+})
+
+describe("TaskCard activity dot", () => {
+  it("pulses when running and the session is Prompting", () => {
+    renderCard(
+      task({ status: "running", conversation_id: 11 }),
+      undefined,
+      undefined,
+      "pulse"
+    )
+    const dot = screen.getByTestId("task-activity-dot")
+    expect(dot).toHaveAttribute("data-pulse", "true")
+    expect(dot).toHaveClass("animate-pulse")
+  })
+
+  it("is still when running but not Prompting", () => {
+    renderCard(
+      task({ status: "running", conversation_id: 11 }),
+      undefined,
+      undefined,
+      "static"
+    )
+    const dot = screen.getByTestId("task-activity-dot")
+    expect(dot).toHaveAttribute("data-pulse", "false")
+    expect(dot).not.toHaveClass("animate-pulse")
+  })
+
+  it("does not render a dot without a conversation id", () => {
+    renderCard(
+      task({ status: "running", conversation_id: null }),
+      undefined,
+      undefined,
+      null
+    )
+    expect(screen.queryByTestId("task-activity-dot")).toBeNull()
+  })
+})
+
+describe("TaskCard attention surface", () => {
+  it("washes failed red, ambers awaiting input, leaves review neutral, fades merging", () => {
+    const failed = renderCard(task({ status: "failed" }))
+    expect(failed.container.firstChild).toHaveClass("border-destructive/50")
+    failed.unmount()
+
+    const awaiting = renderCard(task({ status: "awaiting_input" }))
+    expect(awaiting.container.firstChild).toHaveClass("border-amber-500/45")
+    expect(awaiting.container.querySelector(".animate-pulse")).not.toBeNull()
+    awaiting.unmount()
+
+    const review = renderCard(task({ status: "review" }))
+    expect(review.container.firstChild).not.toHaveClass("border-destructive/50")
+    expect(review.container.firstChild).not.toHaveClass("opacity-70")
+    expect(review.container.querySelector(".animate-pulse")).toBeNull()
+    review.unmount()
+
+    const merging = renderCard(task({ status: "merging" }))
+    expect(merging.container.firstChild).toHaveClass("opacity-70")
   })
 })

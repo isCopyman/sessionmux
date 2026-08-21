@@ -7,6 +7,9 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
 import type { TaskActionHandlers } from "./task-actions"
+import type { TaskActivityDot } from "./task-activity"
+import type { TaskBoardSegment } from "./board-grouping"
+import { TaskGroupHeader } from "./task-group-header"
 import { TASK_LIST_CELLS, TASK_LIST_LINE, TaskRow } from "./task-row"
 import type { WorkTask } from "@/lib/types"
 
@@ -24,6 +27,11 @@ interface TaskListProps {
   onClearFilter: () => void
   onOpen: (taskId: number) => void
   handlersFor: (task: WorkTask) => TaskActionHandlers
+  /** Column-internal grouping segments. Ignored unless `showGroupHeaders`. */
+  segments?: TaskBoardSegment[]
+  showGroupHeaders?: boolean
+  ungroupedLabel?: string
+  activityFor?: (task: WorkTask) => TaskActivityDot | null
 }
 
 /**
@@ -46,6 +54,10 @@ export function TaskList({
   onClearFilter,
   onOpen,
   handlersFor,
+  segments,
+  showGroupHeaders = false,
+  ungroupedLabel,
+  activityFor,
 }: TaskListProps) {
   const t = useTranslations("Tasks")
 
@@ -106,19 +118,52 @@ export function TaskList({
                 its skip-delay, so sweeping across a row's buttons names them
                 instantly while merely crossing the list doesn't flash one. */}
             <TooltipProvider delayDuration={400}>
-              <div className="divide-y divide-border/50">
-                {tasks.map((task) => (
-                  <TaskRow
-                    key={task.id}
-                    task={task}
-                    folderName={folderNames.get(task.folder_id) ?? null}
-                    now={now}
-                    mergeQueueRank={mergeQueueRanks.get(task.id)}
-                    onOpen={() => onOpen(task.id)}
-                    {...handlersFor(task)}
-                  />
-                ))}
-              </div>
+              {showGroupHeaders && segments && segments.length > 0 ? (
+                <div>
+                  {segments.map((seg) => (
+                    <div key={seg.key}>
+                      <TaskGroupHeader
+                        label={
+                          seg.ungrouped || !seg.label
+                            ? (ungroupedLabel ?? "")
+                            : seg.label
+                        }
+                        count={seg.tasks.length}
+                        className="bg-muted/20 px-3 py-1.5"
+                      />
+                      <div className="divide-y divide-border/50">
+                        {seg.tasks.map((task) => (
+                          <TaskRow
+                            key={task.id}
+                            task={task}
+                            folderName={folderNames.get(task.folder_id) ?? null}
+                            now={now}
+                            mergeQueueRank={mergeQueueRanks.get(task.id)}
+                            activity={activityFor?.(task) ?? null}
+                            onOpen={() => onOpen(task.id)}
+                            {...handlersFor(task)}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="divide-y divide-border/50">
+                  {tasks.map((task) => (
+                    <TaskRow
+                      key={task.id}
+                      task={task}
+                      folderName={folderNames.get(task.folder_id) ?? null}
+                      now={now}
+                      mergeQueueRank={mergeQueueRanks.get(task.id)}
+                      activity={activityFor?.(task) ?? null}
+                      onOpen={() => onOpen(task.id)}
+                      {...handlersFor(task)}
+                    />
+                  ))}
+                </div>
+              )}
             </TooltipProvider>
           </ScrollArea>
         )}
