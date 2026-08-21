@@ -27,27 +27,29 @@
 
 - [~] **配置优先级倒挂修复**（grok，lane `settings-overlay`）—— 见下面「今晚实测」。
       目标序：`~/.claude < codeg 档 < 项目 .claude/settings.json < .local.json`
-- [~] **后台任务唤醒缺口调研**（grok，只读）—— 见下面「新立项」
-- [~] **遗漏任务盘点**（codex，只读）—— 挖「用户提过但没做也没进看板」的活 + 盘清有几个
-      互相竞争的看板文件
+- [x] **后台任务唤醒缺口调研** —— 已交，见
+      `BACKGROUND-WAKE-RECON-2026-08-21.zh-CN.md`。**结论跟原假设相反**
+- [x] **遗漏任务盘点**（codex）—— 已交，结论见下
 
 ## 待办（用户已拍板，不需要再问）
 
-- [ ] **后台任务唤醒（新立项，2026-08-21 用户提出）**。用户判断：这是**产品缺口**，
-      不是「ACP 做不到所以算了」。三家都解决了一部分：
+- [ ] **后台任务唤醒：补显示层，不重写 adapter**（实证已完成，见
+      `BACKGROUND-WAKE-RECON-2026-08-21`）。原假设「codeg 收不到官方 wake」**是错的**：
 
-      | | 官方通道 | 自己写了什么 | 唤醒从哪来 |
-      | --- | --- | --- | --- |
-      | grok-app | grok agent stdio ACP | ACP 客户端 + 保活/分流 FSM | Grok CLI 的 `auto_wake_enabled` |
-      | Paseo | `claude-agent-sdk` `query()` | spawn 包装 + idle 后继续泵 + autonomous turn | Claude 的 `task_notification` |
-      | Monet | claude CLI stream-json | 解析 `<task-notification>` 做任务账本 | 同上 |
-      | **codeg** | `claude-agent-acp` | 只给 Claude 叠了 jsonl watcher | **官方 wake 到不了 UI** |
+      1. 适配器 0.69.0 的 `AUTONOMOUS_RESULT_ORIGINS` 里就有 `task-notification`
+         （`acp-agent.js:114`），唯一发送口 `sendUpdate`（`:1249`）**没有**
+         「没活跃回合就不发」的守卫
+      2. codeg 的 idle 循环一直在读，每条 notification 都过
+         `emit_conversation_update`（`connection.rs:7857`）——跟回合内同一个函数
 
-      **共同模式：别自己实现「后台结束 → 再调一次模型」。接官方 harness，然后别在 idle
-      时把流关掉。** 所以**不要重写 adapter**——三家都没写协议适配器，写的都是宿主胶水。
-      直接影响：codeg 会话里跑「宿主后台 shell + 跑完唤醒」的工作流（cli-delegate 这类
-      skill、agentbus）大概率**跑不通**。调研在飞，回来再定施工范围。
+      **所以内容早就进转录了。缺的是回合语义**：没有 `TurnComplete` →
+      系统通知不响（`acp-connections-context.tsx:3952`）、状态不翻「在跑」、
+      不进任何调度器、没有后台任务列表。
 
+      施工点就在 `connection.rs:7857` 那个 idle 分支（它按定义就是「没有活跃回合」）：
+      只认 `agent_message_chunk` / `tool_call*` 这类真活动，发个新事件让 UI 翻状态，
+      静默后走和 `TurnComplete` 同一条通知路径。**Grok 线要单独接**
+      （`task_backgrounded` / `task_completed`，本轮未查）。
 
 - [ ] **换档/换配置后自动重启 ACP**（2026-08-21 夜用户拍板"这个要做"）。
       现状是标 stale + 挂横幅，用户得自己去点，而且横幅能 dismiss——
@@ -98,6 +100,28 @@
       永远不满足 sweep 的 `invocation_policy='invoke_when_idle'` 前提）。
       但 dev 库里有 08-18 的这种投递至今 `attention_state='unread'`。
       要判断的是：UI 上把它显示成"未读"合不合适，还是该有别的呈现。
+
+## 文档腐烂：审计结论（codex，2026-08-21）
+
+**仓库里根本没有 `board.md`** —— 用户记忆里的 board 就是本文件。
+
+**6 个会被误认为「当前真相」的状态源**：NOW-BOARD、DOGFOODING-LOG、
+MAINTAINABILITY-PROGRAM、release8 handoff、fork-rewind-slices/README、
+旧 ISSUE-TRACKER（近 6 天没动）。其中真正互相竞争的是前三个 + handoff。
+
+已发现的实际冲突：release8 handoff 的 P0/P1/P5/P6 部分早已完成却仍写成未做；
+NOW-BOARD 与它重复；MAINTAINABILITY 同时兼计划 / 决策 / 执行日志，三头重复。
+
+- [ ] **收敛状态源**：NOW-BOARD 是当前状态的**唯一**事实源；handoff 用完即冻结归档；
+      MAINTAINABILITY 只留自己的执行记录；ISSUE-TRACKER 标注「历史存档，勿当现状」。
+
+### ⚠️ 唯一的高置信度遗漏
+
+- [?] **自动导入从未见过的本地会话**。用户 2026-08-20 16:34 问过
+      「要不要做自动导入会话。还是说不做。」—— **既没做、也没进任何看板、也没回答**。
+      `ATRIUM-FEATURE-AUDIT:167` 记着「需要手动导入，自动监听仍缺」；
+      旧 issue #458 只是「自动同步**已导入**的」，不是同一件事。
+      等你拍：做还是明确不做。
 
 ## 等用户拍板（不许自己动）
 
