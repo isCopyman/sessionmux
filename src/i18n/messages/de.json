@@ -613,7 +613,7 @@
     "emptyNoAgent": "Keine verfügbaren Agenten.",
     "configManagement": "Konfigurationsverwaltung",
     "envVars": "Umgebungsvariablen",
-    "envVarsScope": "Werden nur in die von codeg gestarteten Prozesse dieses Agenten injiziert und haben Vorrang vor der Konfigurationsdatei.",
+    "envVarsScope": "Wird nur in die von codeg gestarteten Prozesse dieses Agenten injiziert. Steht derselbe Schlüssel auch in der Konfigurationsdatei des Agenten, gewinnt die Datei.",
     "envVarsScopeHint": "Diese Variablen liegen in codegs eigener Datenbank, nicht in der Konfigurationsdatei des Agenten. Selbst gestartete Terminal-Sitzungen bleiben unberührt, sodass Sie Zugangsdaten für den Headless-Betrieb (etwa XAI_API_KEY) hier ablegen können, ohne Ihre globale Konfiguration anzufassen.",
     "hostTools": {
       "label": "Dateien und Befehle vom Agenten selbst ausführen lassen",

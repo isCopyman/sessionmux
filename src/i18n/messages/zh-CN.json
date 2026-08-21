@@ -613,7 +613,7 @@
     "emptyNoAgent": "暂无可用 Agent。",
     "configManagement": "配置管理",
     "envVars": "环境变量",
-    "envVarsScope": "只注入 codeg 拉起的这个 Agent 进程，优先级高于配置文件。",
+    "envVarsScope": "只注入 codeg 启动的该 agent 进程。同一个键如果在 agent 自己的配置文件里也有，以文件为准。",
     "envVarsScopeHint": "这些变量存在 codeg 自己的数据库里，不会写进 Agent 的配置文件。你自己在终端里开的会话不受影响，所以可以把无头认证要用的密钥（比如 XAI_API_KEY）放在这里，而不弄脏全局配置。",
     "hostTools": {
       "label": "由 Agent 自行处理文件与命令",

@@ -613,7 +613,7 @@
     "emptyNoAgent": "暫無可用 Agent。",
     "configManagement": "配置管理",
     "envVars": "環境變數",
-    "envVarsScope": "只注入 codeg 啟動的這個 Agent 行程，優先權高於設定檔。",
+    "envVarsScope": "只注入 codeg 啟動的該 agent 行程。同一個鍵若在 agent 自己的設定檔裡也有，以檔案為準。",
     "envVarsScopeHint": "這些變數存在 codeg 自己的資料庫裡，不會寫進 Agent 的設定檔。你自己在終端機開的工作階段不受影響，因此可以把無頭認證要用的金鑰（例如 XAI_API_KEY）放在這裡，而不弄髒全域設定。",
     "hostTools": {
       "label": "由 Agent 自行處理檔案與指令",

@@ -23,13 +23,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
 import { cn } from "@/lib/utils"
 import {
   claudeProfileDelete,
@@ -528,35 +521,13 @@ export function ClaudeProfileCatalog({
                   </p>
                 </div>
 
-                <div className="space-y-1.5">
-                  <label
-                    htmlFor="claude-profile-kind"
-                    className="text-[11px] text-muted-foreground"
-                  >
-                    {t("fieldKind")}
-                  </label>
-                  <Select
-                    value={selectedDraft.kind}
-                    onValueChange={(value) => {
-                      if (value === "configDir" || value === "managed") {
-                        patchDraft({ kind: value })
-                      }
-                    }}
-                  >
-                    <SelectTrigger id="claude-profile-kind" className="w-full">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent align="start">
-                      <SelectItem value="configDir">
-                        {t("kindConfigDir")}
-                      </SelectItem>
-                      <SelectItem value="managed">
-                        {t("kindManaged")}
-                      </SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-
+                {/* No kind picker. There are two things a user needs — follow
+                    the CLI, or a config codeg owns — and a third choice
+                    ("point at a directory someone else maintains") only made
+                    the panel harder to read. The backend still resolves
+                    `configDir` profiles, so one created through the API keeps
+                    working and stays editable here; the panel just will not
+                    make a new one. */}
                 {selectedDraft.kind === "configDir" ? (
                   <div className="space-y-1.5">
                     <label

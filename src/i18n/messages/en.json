@@ -613,7 +613,7 @@
     "emptyNoAgent": "No available agent.",
     "configManagement": "Config Management",
     "envVars": "Environment Variables",
-    "envVarsScope": "Injected only into this agent's processes launched by codeg, and they win over the config file.",
+    "envVarsScope": "Injected only into this agent's processes that codeg launches. Set the same key in the agent's own config file and the file wins.",
     "envVarsScopeHint": "These variables are stored in codeg's own database, not in the agent's config file. Terminal sessions you start yourself are unaffected, so you can keep headless credentials (for example XAI_API_KEY) here without touching your global config.",
     "hostTools": {
       "label": "Let the agent handle files and commands",

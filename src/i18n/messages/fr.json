@@ -613,7 +613,7 @@
     "emptyNoAgent": "Aucun agent disponible.",
     "configManagement": "Gestion de configuration",
     "envVars": "Variables d'environnement",
-    "envVarsScope": "Injectées uniquement dans les processus de cet agent lancés par codeg, et elles priment sur le fichier de configuration.",
+    "envVarsScope": "Injectées uniquement dans les processus de cet agent lancés par codeg. Si la même clé figure dans le fichier de configuration de l'agent, c'est le fichier qui l'emporte.",
     "envVarsScopeHint": "Ces variables sont stockées dans la base de données de codeg, pas dans le fichier de configuration de l'agent. Les sessions de terminal que vous lancez vous-même ne sont pas affectées : vous pouvez donc garder ici des identifiants pour un usage sans interface (par exemple XAI_API_KEY) sans toucher à votre configuration globale.",
     "hostTools": {
       "label": "Laisser l'agent gérer les fichiers et les commandes",

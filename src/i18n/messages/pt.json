@@ -613,7 +613,7 @@
     "emptyNoAgent": "Nenhum agente disponível.",
     "configManagement": "Gerenciamento de configuração",
     "envVars": "Variáveis de ambiente",
-    "envVarsScope": "Injetadas apenas nos processos deste agente iniciados pelo codeg e têm prioridade sobre o arquivo de configuração.",
+    "envVarsScope": "Injetadas apenas nos processos deste agente iniciados pelo codeg. Se a mesma chave estiver no arquivo de configuração do agente, o arquivo vence.",
     "envVarsScopeHint": "Estas variáveis ficam no banco de dados do próprio codeg, não no arquivo de configuração do agente. As sessões de terminal que você abre não são afetadas, então dá para guardar aqui credenciais de uso headless (por exemplo XAI_API_KEY) sem mexer na configuração global.",
     "hostTools": {
       "label": "Deixar o agente cuidar de arquivos e comandos",
