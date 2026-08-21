@@ -1089,6 +1089,8 @@
       "rawEditorWarning": "在此儲存會按原文覆寫整個檔案，取代掉上方的結構化設定。",
       "rawEditorPlaceholder": "[providers.codeg]\ntype = \"kimi\"\nbase_url = \"https://api.moonshot.cn/v1\"\napi_key = \"sk-...\""
     },
+    "authModeInherit": "繼承（專案 / 使用者層設定）",
+    "authModeInheritHint": "本設定檔不表態，端點由專案層與使用者層的 .claude/settings.json 決定。",
     "authModeOfficialSubscription": "官網訂閱",
     "authModeCustomEndpoint": "自定義介面",
     "authModeCustomEndpointHint": "手動配置 API URL 和 API Key 連接自定義介面。",
@@ -1100,7 +1102,7 @@
     "claude": {
       "authMode": "認證方式",
       "officialSubscription": "官方訂閱",
-      "officialSubscriptionHint": "使用 Anthropic 官方訂閱，無需 API Key。",
+      "officialSubscriptionHint": "使用 Anthropic 官方訂閱。會把連線鍵寫成空值，藉此覆寫專案層與使用者層設定。",
       "mainModel": "主模型",
       "reasoningModel": "推理模型（thinking）",
       "haikuDefaultModel": "Haiku 預設模型",

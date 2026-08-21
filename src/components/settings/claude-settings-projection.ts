@@ -18,6 +18,7 @@
 
 import {
   EMPTY_CLAUDE_CONFIG_VALUE,
+  type ClaudeAuthMode,
   type ClaudeConfigValue,
   type ClaudeEffortLevel,
 } from "./claude-config-fields"
@@ -37,12 +38,45 @@ const ATTRIBUTION_HEADER_ENV_KEY = "CLAUDE_CODE_ATTRIBUTION_HEADER"
 const NONESSENTIAL_TRAFFIC_ENV_KEY = "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"
 const EFFORT_LEVEL_KEY = "effortLevel"
 
-/** Connection keys an "official subscription" profile must not carry. */
+/**
+ * The keys that decide where a session bills.
+ *
+ * All three, not just the two codeg writes: `ANTHROPIC_API_KEY` is the second
+ * credential spelling the CLI accepts, so blanking only `AUTH_TOKEN` lets a
+ * lower layer's key survive and keep authenticating.
+ */
 const CONNECTION_ENV_KEYS = [
   "ANTHROPIC_BASE_URL",
   "ANTHROPIC_AUTH_TOKEN",
   "ANTHROPIC_API_KEY",
 ] as const
+
+function hasKey(bag: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(bag, key)
+}
+
+/**
+ * Which of the three connection states this profile is in.
+ *
+ * Absent keys and blank keys are *different answers*, and reading them as the
+ * same one is what made "official subscription" a label rather than a fact:
+ * `--settings` is additive per key, so omitting `ANTHROPIC_BASE_URL` leaves the
+ * project's `.claude/settings.json` in charge. Writing it as `""` is what
+ * actually overrides the lower layers.
+ */
+function readAuthMode(
+  env: Record<string, unknown>,
+  columns: ClaudeProfileColumns
+): ClaudeAuthMode {
+  if (columns.baseUrl.trim() || columns.authToken.trim()) return "custom"
+  if (CONNECTION_ENV_KEYS.some((key) => readString(env, key).trim())) {
+    return "custom"
+  }
+  if (CONNECTION_ENV_KEYS.some((key) => hasKey(env, key))) {
+    return "official_subscription"
+  }
+  return "inherit"
+}
 
 const EFFORT_LEVELS: readonly ClaudeEffortLevel[] = [
   "",
@@ -139,11 +173,7 @@ export function readClaudeConfig(
     readString(env, "ANTHROPIC_API_KEY")
   return {
     ...EMPTY_CLAUDE_CONFIG_VALUE,
-    // A profile has no provider binding, so there are only two honest answers
-    // here: it points somewhere, or it rides the CLI's own login. A stored
-    // token shows up as its mask in `columns.authToken`, so this reads the
-    // credential's presence directly rather than being told about it.
-    authMode: baseUrl || authToken ? "custom" : "official_subscription",
+    authMode: readAuthMode(env, columns),
     apiBaseUrl: baseUrl,
     apiKey: authToken,
     mainModel: columns.model || readString(env, "ANTHROPIC_MODEL"),
@@ -197,10 +227,19 @@ export function applyClaudeConfig(
   const columns: Partial<ClaudeProfileColumns> = {}
 
   if (patch.authMode === "official_subscription") {
-    // Official means official: the file must not still carry an endpoint or a
-    // token, or the "subscription" profile would quietly keep billing a
-    // gateway. Clearing the columns alone is not enough — the file wins over
-    // nothing here, it *is* the profile.
+    // Blank, not deleted. Deleting only removes *this* profile's opinion, and
+    // the project's `.claude/settings.json` then decides — which is how a
+    // profile labelled "official subscription" kept billing a gateway. An
+    // empty string wins the merge and the CLI reads it as unset, so the
+    // session lands on the subscription login. Measured both ways in
+    // CONFIG-MODEL-2026-08-21 §11.2.
+    for (const key of CONNECTION_ENV_KEYS) env[key] = ""
+    columns.baseUrl = ""
+    columns.authToken = ""
+  }
+  if (patch.authMode === "inherit") {
+    // The opposite choice, and a real one: say nothing, let the project and
+    // user layers decide. That is what deleting the keys means.
     for (const key of CONNECTION_ENV_KEYS) delete env[key]
     columns.baseUrl = ""
     columns.authToken = ""

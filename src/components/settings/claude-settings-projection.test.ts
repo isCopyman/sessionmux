@@ -13,9 +13,12 @@ const NO_COLUMNS: ClaudeProfileColumns = {
 }
 
 describe("readClaudeConfig", () => {
-  it("reads an empty profile as a subscription profile", () => {
+  // Not "official subscription": a profile that never mentions the connection
+  // keys has not overridden anything, so the project's own .claude/settings.json
+  // still decides where the session bills.
+  it("reads an empty profile as inheriting, not as a subscription", () => {
     const value = readClaudeConfig("", NO_COLUMNS)
-    expect(value.authMode).toBe("official_subscription")
+    expect(value.authMode).toBe("inherit")
     expect(value.apiBaseUrl).toBe("")
     // Documented defaults, not "whatever false is".
     expect(value.sendAttributionHeader).toBe(false)
@@ -59,13 +62,29 @@ describe("readClaudeConfig", () => {
     expect(value.apiKey).toBe("sk-t••••••••7890")
   })
 
-  it("reads back as a subscription once nothing is set", () => {
+  it("reads back as inheriting once nothing is set", () => {
     const value = readClaudeConfig("", {
       baseUrl: "",
       authToken: "",
       model: "",
     })
-    expect(value.authMode).toBe("official_subscription")
+    expect(value.authMode).toBe("inherit")
+  })
+
+  // The distinction the old two-state read could not express, and the reason
+  // "official subscription" used to be a label rather than a fact.
+  it("tells a blanked key apart from a missing one", () => {
+    const blanked = JSON.stringify({
+      env: { ANTHROPIC_BASE_URL: "", ANTHROPIC_AUTH_TOKEN: "" },
+    })
+    expect(readClaudeConfig(blanked, NO_COLUMNS).authMode).toBe(
+      "official_subscription"
+    )
+
+    const missing = JSON.stringify({
+      env: { ANTHROPIC_DEFAULT_OPUS_MODEL: "x" },
+    })
+    expect(readClaudeConfig(missing, NO_COLUMNS).authMode).toBe("inherit")
   })
 
   // A settings.json that authenticates with ANTHROPIC_API_KEY used to read
@@ -156,27 +175,52 @@ describe("applyClaudeConfig", () => {
     )
   })
 
-  it("strips every connection key when the profile is switched to official", () => {
-    const before = JSON.stringify({
-      env: {
-        ANTHROPIC_BASE_URL: "https://gw.example",
-        ANTHROPIC_AUTH_TOKEN: "sk-test",
-        ANTHROPIC_API_KEY: "sk-other",
-        ANTHROPIC_DEFAULT_OPUS_MODEL: "claude-opus-5",
-      },
-    })
-    const result = applyClaudeConfig(before, {
+  const GATEWAY_PROFILE = JSON.stringify({
+    env: {
+      ANTHROPIC_BASE_URL: "https://gw.example",
+      ANTHROPIC_AUTH_TOKEN: "sk-test",
+      ANTHROPIC_API_KEY: "sk-other",
+      ANTHROPIC_DEFAULT_OPUS_MODEL: "claude-opus-5",
+    },
+  })
+
+  it("blanks every connection key when the profile is switched to official", () => {
+    const result = applyClaudeConfig(GATEWAY_PROFILE, {
       authMode: "official_subscription",
     })
     const parsed = JSON.parse(result!.settingsJson)
-    // Otherwise a "subscription" profile keeps billing the gateway.
+    // Blank, not absent. Deleting the keys only withdraws this profile's
+    // opinion and hands the decision to the project's .claude/settings.json,
+    // which is how a "subscription" profile kept billing a gateway. An empty
+    // string wins the merge and reads back as unset.
+    expect(parsed.env.ANTHROPIC_BASE_URL).toBe("")
+    expect(parsed.env.ANTHROPIC_AUTH_TOKEN).toBe("")
+    expect(parsed.env.ANTHROPIC_API_KEY).toBe("")
+    expect(result!.columns.baseUrl).toBe("")
+    expect(result!.columns.authToken).toBe("")
+    // Model choices are not connection state and must survive the switch.
+    expect(parsed.env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("claude-opus-5")
+  })
+
+  it("removes the connection keys when the profile switches to inherit", () => {
+    const result = applyClaudeConfig(GATEWAY_PROFILE, { authMode: "inherit" })
+    const parsed = JSON.parse(result!.settingsJson)
     expect(parsed.env.ANTHROPIC_BASE_URL).toBeUndefined()
     expect(parsed.env.ANTHROPIC_AUTH_TOKEN).toBeUndefined()
     expect(parsed.env.ANTHROPIC_API_KEY).toBeUndefined()
     expect(result!.columns.baseUrl).toBe("")
     expect(result!.columns.authToken).toBe("")
-    // Model choices are not connection state and must survive the switch.
     expect(parsed.env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("claude-opus-5")
+  })
+
+  // The two writes must be distinguishable by the reader, or the round trip
+  // silently collapses them back into one state.
+  it("round-trips both official and inherit", () => {
+    for (const mode of ["official_subscription", "inherit"] as const) {
+      const written = applyClaudeConfig(GATEWAY_PROFILE, { authMode: mode })
+      const readBack = readClaudeConfig(written!.settingsJson, NO_COLUMNS)
+      expect(readBack.authMode).toBe(mode)
+    }
   })
 
   it("writes effort at the top level and removes it for the default", () => {

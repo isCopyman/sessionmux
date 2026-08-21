@@ -37,7 +37,18 @@ import {
 import { Switch } from "@/components/ui/switch"
 import { cn } from "@/lib/utils"
 
+/**
+ * `inherit` is not cosmetic. `--settings` is additive *per key*, so a profile
+ * that simply omits the connection keys is not an official-subscription
+ * profile — it is a profile with no opinion, and the project's own
+ * `.claude/settings.json` still decides where the session bills. Forcing the
+ * official endpoint means writing those keys as `""`, which does win the merge
+ * and does read back as unset (measured; see CONFIG-MODEL-2026-08-21 §11).
+ * Collapsing the two states is what let "official subscription" ship a session
+ * that was still on a gateway.
+ */
 export const CLAUDE_AUTH_MODES = [
+  "inherit",
   "official_subscription",
   "custom",
   "model_provider",
@@ -68,7 +79,9 @@ export interface ClaudeConfigValue {
 }
 
 export const EMPTY_CLAUDE_CONFIG_VALUE: ClaudeConfigValue = {
-  authMode: "official_subscription",
+  // A form that has said nothing yet has no opinion — that is `inherit`, not a
+  // silent decision to override the project's endpoint.
+  authMode: "inherit",
   apiBaseUrl: "",
   apiKey: "",
   mainModel: "",
@@ -131,7 +144,10 @@ export function ClaudeConfigFields({
   // rather than being editable, same as before the two forms were merged.
   const boundToProvider =
     providerModeAvailable && value.authMode === "model_provider"
-  const showConnection = value.authMode !== "official_subscription"
+  // Only "custom" has an endpoint to type. `inherit` deliberately says nothing
+  // and `official_subscription` writes blanks, so showing empty inputs on
+  // either would invite a value that contradicts the mode.
+  const showConnection = value.authMode === "custom" || boundToProvider
 
   const modelField = (
     key: Extract<
@@ -183,6 +199,7 @@ export function ClaudeConfigFields({
             <SelectValue />
           </SelectTrigger>
           <SelectContent align="start">
+            <SelectItem value="inherit">{t("authModeInherit")}</SelectItem>
             <SelectItem value="official_subscription">
               {t("authModeOfficialSubscription")}
             </SelectItem>
@@ -197,11 +214,13 @@ export function ClaudeConfigFields({
           </SelectContent>
         </Select>
         <p className="text-[11px] text-muted-foreground">
-          {value.authMode === "official_subscription"
-            ? t("claude.officialSubscriptionHint")
-            : value.authMode === "custom"
-              ? t("authModeCustomEndpointHint")
-              : t("modelProviderHint")}
+          {value.authMode === "inherit"
+            ? t("authModeInheritHint")
+            : value.authMode === "official_subscription"
+              ? t("claude.officialSubscriptionHint")
+              : value.authMode === "custom"
+                ? t("authModeCustomEndpointHint")
+                : t("modelProviderHint")}
         </p>
       </div>
 

@@ -1089,6 +1089,8 @@
       "rawEditorWarning": "Guardar aquí sobrescribe el archivo completo tal cual y reemplaza la configuración estructurada de arriba.",
       "rawEditorPlaceholder": "[providers.codeg]\ntype = \"kimi\"\nbase_url = \"https://api.moonshot.cn/v1\"\napi_key = \"sk-...\""
     },
+    "authModeInherit": "Heredar (configuración de proyecto / usuario)",
+    "authModeInheritHint": "No definir nada aquí: el endpoint lo deciden los .claude/settings.json del proyecto y del usuario.",
     "authModeOfficialSubscription": "Suscripción oficial",
     "authModeCustomEndpoint": "Endpoint personalizado",
     "authModeCustomEndpointHint": "Configurar manualmente la URL de API y la clave API para un endpoint personalizado.",
@@ -1100,7 +1102,7 @@
     "claude": {
       "authMode": "Modo de autenticación",
       "officialSubscription": "Suscripción oficial",
-      "officialSubscriptionHint": "Usar la suscripción oficial de Anthropic, no se requiere API Key.",
+      "officialSubscriptionHint": "Usar la suscripción oficial de Anthropic. Escribe las claves de conexión vacías, lo que anula la configuración de proyecto y de usuario.",
       "mainModel": "Modelo principal",
       "reasoningModel": "Modelo de razonamiento (thinking)",
       "haikuDefaultModel": "Modelo Haiku predeterminado",

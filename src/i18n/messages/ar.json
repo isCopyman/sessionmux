@@ -1089,6 +1089,8 @@
       "rawEditorWarning": "الحفظ هنا يستبدل الملف بأكمله حرفيًا، ويحل محل الإعدادات المنظَّمة أعلاه.",
       "rawEditorPlaceholder": "[providers.codeg]\ntype = \"kimi\"\nbase_url = \"https://api.moonshot.cn/v1\"\napi_key = \"sk-...\""
     },
+    "authModeInherit": "الوراثة (إعدادات المشروع / المستخدم)",
+    "authModeInheritHint": "لا تحدد شيئاً هنا — تُقرَّر الوجهة عبر ملفي .claude/settings.json الخاصين بالمشروع والمستخدم.",
     "authModeOfficialSubscription": "الاشتراك الرسمي",
     "authModeCustomEndpoint": "نقطة نهاية مخصصة",
     "authModeCustomEndpointHint": "تكوين عنوان API ومفتاح API يدوياً لنقطة نهاية مخصصة.",
@@ -1100,7 +1102,7 @@
     "claude": {
       "authMode": "وضع المصادقة",
       "officialSubscription": "الاشتراك الرسمي",
-      "officialSubscriptionHint": "استخدم اشتراك Anthropic الرسمي، لا حاجة لمفتاح API.",
+      "officialSubscriptionHint": "استخدام اشتراك Anthropic الرسمي. يكتب مفاتيح الاتصال فارغة، مما يتجاوز إعدادات المشروع والمستخدم.",
       "mainModel": "النموذج الرئيسي",
       "reasoningModel": "نموذج الاستدلال (thinking)",
       "haikuDefaultModel": "نموذج Haiku الافتراضي",
