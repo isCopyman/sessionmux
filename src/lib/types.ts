@@ -1724,6 +1724,54 @@ export interface SessionConfigOptionInfo {
   kind: SessionConfigKindInfo
 }
 
+/** Virtual Claude launch profile: do not set `CLAUDE_CONFIG_DIR`. */
+export const FOLLOW_DEFAULT_CLAUDE_PROFILE_ID = "follow-default"
+
+/** Agent-setting `env_json` key for the default Claude launch profile. */
+export const CODEG_CLAUDE_PROFILE_ENV_KEY = "CODEG_CLAUDE_PROFILE"
+
+/**
+ * Wire DTO for `claude_profile_list` / `claude_profile_upsert`. Tokens are
+ * masked; there is no raw `authToken` on the wire.
+ */
+export type ClaudeProfileKind = "followDefault" | "configDir" | "managed"
+
+export interface ClaudeProfileInfo {
+  id: string
+  label: string
+  kind: ClaudeProfileKind
+  configDir?: string | null
+  baseUrl?: string | null
+  authTokenMasked: string
+  model?: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+/** Create/update payload. `authToken` is write-only: omit to keep stored. */
+export interface ClaudeProfileUpsert {
+  id: string
+  label: string
+  kind: Exclude<ClaudeProfileKind, "followDefault">
+  configDir?: string | null
+  baseUrl?: string | null
+  authToken?: string | null
+  model?: string | null
+}
+
+export interface ConversationClaudeProfileResult {
+  conversationId: number
+  profileId?: string | null
+  affectedRunningSessions: number
+}
+
+/** Frontend gate matching backend `is_valid_profile_id` plus the reserved id. */
+export function isValidClaudeProfileId(id: string): boolean {
+  return (
+    /^[a-z0-9-_]{1,64}$/.test(id) && id !== FOLLOW_DEFAULT_CLAUDE_PROFILE_ID
+  )
+}
+
 export interface AgentOptionsSnapshot {
   modes: SessionModeStateInfo | null
   config_options: SessionConfigOptionInfo[]

@@ -125,6 +125,7 @@ import type {
   PreflightResult,
 } from "@/lib/types"
 import {
+  CODEG_CLAUDE_PROFILE_ENV_KEY,
   HERMES_PROVIDERS,
   parseClaudeProviderModel,
   parseCodexModelConfig,
@@ -160,6 +161,7 @@ import {
 } from "./deepseek-config-panel"
 import { KimiCodeConfigPanel } from "./kimi-code-config-panel"
 import { PiConfigPanel } from "./pi-config-panel"
+import { ClaudeProfileCatalog } from "./claude-profile-catalog"
 
 interface AgentCheckState {
   result?: PreflightResult
@@ -11156,6 +11158,26 @@ supports_websockets = true`}
                           : t("generalConfigDescriptionDefault")}
                       </p>
                     </div>
+
+                    {selectedAgent.agent_type === "claude_code" && (
+                      <ClaudeProfileCatalog
+                        defaultProfileId={
+                          selectedAgent.env[CODEG_CLAUDE_PROFILE_ENV_KEY] ?? ""
+                        }
+                        onSetAgentDefault={async (profileId) => {
+                          const next = patchEnvText(selectedDraft.envText, {
+                            [CODEG_CLAUDE_PROFILE_ENV_KEY]: profileId,
+                          })
+                          await persistEnv(
+                            selectedAgent.agent_type,
+                            selectedDraft.enabled,
+                            next,
+                            selectedDraft.modelProviderId,
+                            { [CODEG_CLAUDE_PROFILE_ENV_KEY]: profileId }
+                          )
+                        }}
+                      />
+                    )}
 
                     {selectedAgent.agent_type === "claude_code" && (
                       <div className="space-y-1.5">
