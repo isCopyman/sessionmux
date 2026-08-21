@@ -19,10 +19,42 @@
 | | 跟随 CLI | codeg 档 |
 | --- | --- | --- |
 | 是什么 | 零注入、零写入 | codeg 目录里的一份 `settings.json` |
-| 怎么生效 | 不设 `CLAUDE_CONFIG_DIR` | `CLAUDE_CONFIG_DIR` 指过去 |
+| 怎么生效 | 什么都不传 | `--settings <档的 settings.json>` 叠加（见 §1.1） |
 | 谁在管 | 你自己的 `~/.claude` 和项目级配置 | codeg |
 | 面板里 | 页签下是你自己的 settings.json 编辑器 | 页签下是这份档的编辑器 |
 | 切换粒度 | —— | **每个会话**（输入框上方的 chip） |
+
+### 1.1 生效机制（2026-08-21 下午核实，推翻了两个早先的错误结论）
+
+codeg 启动 Claude 走 ACP 适配器 `@zed-industries/claude-agent-acp`，不是 `claude` CLI 本体。
+但适配器把 `session/new` 的 `_meta.claudeCode.options` **透传进 SDK**：
+
+```js
+// dist/acp-agent.js
+const userProvidedOptions = params._meta?.claudeCode?.options;
+const options = { settingSources: ["user","project","local"], ...userProvidedOptions,
+                  extraArgs: { ...userProvidedOptions?.extraArgs, "replay-user-messages": "" }, ... }
+```
+
+而 SDK（`@anthropic-ai/claude-agent-sdk/sdk.mjs`）把 `extraArgs` 逐条渲染成 argv：
+`... else h.push(\`--${key}\`, value)`。
+
+**所以 `_meta.claudeCode.options.extraArgs = { settings: "<绝对路径>" }` ≡ `claude --settings <path>`**，
+也就是 Monet 的机制（O39 §2，`streaming.rs:924-926`）。
+
+被推翻的两条（都是我说错的，记在这里防止再犯）：
+
+| 说过的 | 实际 |
+| --- | --- |
+| 「Claude 只能指目录，不能指单个 settings 文件」 | 错。`claude --settings <file-or-json>` 存在，`--help` 有 |
+| 「codeg 档用不了订阅」 | 只对 `CLAUDE_CONFIG_DIR` 方案成立。`--settings` 是**叠加**，家还是 `~/.claude`，OAuth / projects / todos / skills 都在，**不写 token 的档就是订阅档** |
+
+顺带一条用户实测 + 源码核对的结论：「settings 里有 URL 就静默掉官方登录」——现象对，**触发条件是 token 不是 URL**。
+`isAnthropicAuthEnabled()` 看的是 `ANTHROPIC_AUTH_TOKEN` / `apiKeyHelper` / `ANTHROPIC_API_KEY` /
+Bedrock·Vertex·Foundry。只是中转 URL 和 token 总是一起写，看着像 URL 触发。
+
+**后果（前端文案要照顾）**：档不是白纸——用户自己 `~/.claude/settings.json` 里的 hooks / statusLine /
+permissions 仍然生效，档叠在上面。多半是好事（切档不丢 hooks），但要说清楚。
 
 档的编辑器 = **名称 + Base URL + API Key + 模型**（Key 要掩码所以必须是独立字段）
 \+ 折叠的 **settings.json 全文编辑器**。
@@ -53,6 +85,7 @@ kind 与解析语义保留，已绑定的会话不会炸。
 
 **UI 已删。** `configDir`（指向别人维护的目录）是"链接"语义、双向；
 用户明确选了单向导入。后端仍解析 configDir 档，面板只是不再新建它。
+`configDir` 也是唯一还用 `CLAUDE_CONFIG_DIR` 的 kind——那正是它的语义（换一个完整的家）。
 
 ### ④ 档自己的 `env` 自由表
 
