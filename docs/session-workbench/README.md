@@ -27,7 +27,8 @@
   `AT-COMPLETION-RECON-2026-08-20.zh-CN.md`（@ 补全与多路径）
 - **序列化/持久化**：`SERDE-PERSISTENCE-INVENTORY.zh-CN.md`（红黄绿盘点）；
   `SERDE-PINS-REPORT.zh-CN.md`（24 条钉死测试）
-- **Provider 切换（O39）**：`O39-PROVIDER-SWITCH-RECON.zh-CN.md`（paseo/monet 调研）
+- **Provider 切换（O39）**：`O39-PROVIDER-SWITCH-RECON.zh-CN.md`（paseo/monet 调研）；
+  `CLAUDE-PROFILE-RFC-2026-08-21.zh-CN.md`（**启动配置档设计，待拍板**：CLAUDE_CONFIG_DIR 机制）
 - **fork/rewind**：`fork-rewind-slices/`（切片调查）；
   `FORK-REWIND-RECON-GROK-CURSOR-2026-08-19.zh-CN.md`
 - **转录面骨架**：`CHARTER1-PACKAGE-I-REPORT.zh-CN.md`、`CHARTER1-PHASE2-REPORT.zh-CN.md`

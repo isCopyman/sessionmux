@@ -52,7 +52,7 @@
 | O36 | 分屏窗口临时最大化（herdr 式 focus） | **已修**（页签条 maximize/restore，当前分支） |
 | O37 | Collection 行没有「新建会话」入口 | **已修**（collection-newsession 已合入） |
 | O38 | @ 弹层每次全量重搜、无缓存 | **已修**（前缀复用 + 共享文件列表，O21 渐进渲染仍排队） |
-| O39 | Claude 订阅 vs API 的 provider 切换 | **用户已拍板做**·先调研 paseo/monet 抄法（grok run-mt2co9bl 在跑） |
+| O39 | Claude 订阅 vs API 的 provider 切换 | 调研已交付；**设计 RFC 已备好等拍板**（`CLAUDE-PROFILE-RFC-2026-08-21`：走 CLAUDE_CONFIG_DIR 启动档，不再写用户原生文件） |
 | O40 | 「不代为文件/终端」沙箱开关不自明 | **已修**（开关说明文案已合并） |
 | O41 | 删 timer / 移群成员无确认弹窗 | **已修**（g5-quickwins 已合入） |
 | O42 | Grok token 用量恒为 0 | **已修**（报真实 usage 而非上下文占用） |
