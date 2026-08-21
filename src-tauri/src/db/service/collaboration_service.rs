@@ -2343,9 +2343,16 @@ pub async fn list_overdue_reminder_targets(
         reminder_in_cooldown, MAX_REMINDER_REPEATS, REPLY_AFTER_SECS, UNREAD_AFTER_SECS,
     };
 
-    // overdue_unread must exclude `failed`, matching overdue_reply and
-    // reset_idle_reminder_cursors: a failed delivery never reached the Agent,
-    // so redelivery is the queue's job, not the reminder sweep's.
+    // Every branch here excludes `failed`, matching reset_idle_reminder_cursors:
+    // a failed delivery never reached the Agent, so redelivery is the queue's
+    // job, not the reminder sweep's.
+    //
+    // `newest_due_at` needs the exclusion as much as the counts do, for a
+    // reason that is easy to miss: it decides `fresh_debt`, and `fresh_debt`
+    // resets `reminder_repeat_count` to zero. Let a failed delivery pull the
+    // due time forward and the repeat cap is defeated by mail that was never
+    // delivered — the Session gets nagged past MAX_REMINDER_REPEATS over a
+    // debt that does not exist.
     let rows = conn
         .query_all(statement(
             &format!(
@@ -2362,7 +2369,8 @@ pub async fn list_overdue_reminder_targets(
                       THEN 1 ELSE 0 END) AS overdue_reply, \
                  MAX(CASE \
                       WHEN d.invocation_policy = 'invoke_when_idle' \
-                       AND d.agent_received_at IS NULL AND d.state <> 'dismissed' \
+                       AND d.agent_received_at IS NULL \
+                       AND d.state <> 'dismissed' AND d.state <> 'failed' \
                        AND datetime(d.created_at) <= datetime('now', '-{UNREAD_AFTER_SECS} seconds') \
                       THEN datetime(d.created_at, '+{UNREAD_AFTER_SECS} seconds') \
                       WHEN d.obligation_state = 'awaiting_reply' \
@@ -5124,6 +5132,82 @@ mod tests {
                 .unwrap()
                 .is_empty(),
             "failed deliveries never reached the Agent; they are not reminder debts"
+        );
+    }
+
+    // The counts already skipped `failed`, but `newest_due_at` did not, and
+    // that is the column deciding `fresh_debt` — so a delivery that never
+    // reached the Agent could hand an exhausted Session a brand-new budget
+    // and nag it forever over a debt that does not exist.
+    #[tokio::test]
+    async fn a_failed_delivery_does_not_refresh_an_exhausted_reminder_budget() {
+        let (db, source, target, _) = seeded_memory().await;
+
+        // A real unread debt, old enough that the last nag came after it.
+        let real = send(
+            &db.conn,
+            invoke_input(source, vec![target], "real-debt", "hello"),
+        )
+        .await
+        .unwrap();
+        db.conn
+            .execute(Statement::from_sql_and_values(
+                DbBackend::Sqlite,
+                "UPDATE collaboration_delivery \
+                 SET created_at = datetime('now', '-120 minutes') \
+                 WHERE event_id = ?",
+                vec![real.event_id.clone().into()],
+            ))
+            .await
+            .unwrap();
+
+        record_successful_reminder(&db.conn, target, 2)
+            .await
+            .unwrap();
+        db.conn
+            .execute(Statement::from_sql_and_values(
+                DbBackend::Sqlite,
+                "UPDATE conversation_collaboration_state \
+                 SET reminder_last_at = datetime('now', '-60 minutes') \
+                 WHERE conversation_id = ?",
+                vec![target.into()],
+            ))
+            .await
+            .unwrap();
+        assert!(
+            list_overdue_reminder_targets(&db.conn)
+                .await
+                .unwrap()
+                .is_empty(),
+            "precondition: the budget is spent and nothing newer is due"
+        );
+
+        // Now a delivery fails, newer than the last nag. It reached nobody, so
+        // it owes nothing and must not restart the episode.
+        let failed = send(
+            &db.conn,
+            invoke_input(source, vec![target], "failed-debt", "hello"),
+        )
+        .await
+        .unwrap();
+        db.conn
+            .execute(Statement::from_sql_and_values(
+                DbBackend::Sqlite,
+                "UPDATE collaboration_delivery \
+                 SET state = 'failed', error = 'transport', \
+                     created_at = datetime('now', '-6 minutes') \
+                 WHERE event_id = ?",
+                vec![failed.event_id.clone().into()],
+            ))
+            .await
+            .unwrap();
+
+        assert!(
+            list_overdue_reminder_targets(&db.conn)
+                .await
+                .unwrap()
+                .is_empty(),
+            "a failed delivery must not hand an exhausted budget a fresh episode"
         );
     }
 
