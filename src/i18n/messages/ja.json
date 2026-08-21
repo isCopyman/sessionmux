@@ -628,7 +628,7 @@
       "hint": "codeg は独自のコピーを持ちません。このファイルを読み込み、変更をマージして書き戻します。上の API URL / API キー / モデルの各項目は、同じファイルを別の形で見せているだけです。"
     },
     "modelHintDefault": "空欄の場合はシステム既定モデルを使用します。",
-    "generalConfigDescriptionClaude": "API URL、API Key、Claude モデルをすばやく設定でき、ネイティブ JSON 設定と同期します。",
+    "generalConfigDescriptionClaude": "2 階層です。起動プロファイルはエンドポイント・キー・モデルを自分で持ち、紐づいたセッションがそれを使います。「デフォルトに従う」は何も上書きせず、CLI 自身の設定ファイルを編集します。上のタブで編集する階層を切り替えてください。",
     "generalConfigDescriptionDefault": "重要な設定入力（API URL、API Key、Model）とネイティブ JSON 設定管理をサポートします。",
     "actions": {
       "dragSort": "ドラッグして並べ替え",
@@ -1170,7 +1170,9 @@
       "newProfileName": "設定 {n}",
       "addBlank": "空のプロファイル",
       "addCopy": "「{name}」を複製",
-      "tokenNotCopied": "認証トークンはコピーされません（画面にはマスクしか届きません）。入力し直してください。"
+      "tokenNotCopied": "認証トークンはコピーされません（画面にはマスクしか届きません）。入力し直してください。",
+      "cliGlobalTitle": "Claude CLI のグローバル設定",
+      "cliGlobalHint": "このタブは何も注入しません。以下の項目は CLI 自身の設定ファイル（~/.claude/settings.json）を編集し、「デフォルトに従う」すべてのセッションに適用されます。他のタブはそれぞれ独自のエンドポイント・キー・モデルを持ちます。"
     },
     "dialogs": {
       "confirmDeleteProvider": "Provider {providerId} を削除しますか？",
@@ -3895,12 +3897,12 @@
   },
   "ModelProviderSettings": {
     "sectionTitle": "モデルプロバイダー",
-    "sectionDescription": "エージェントのAPIプロバイダー認証情報を管理します。",
+    "sectionDescription": "エンドポイントとキーを使い回すためのアドレス帳です。単体では効きません。「エージェント → 認証方式 → モデルプロバイダー」で参照して初めて有効になります。",
     "filterAll": "すべて",
     "providerListTitle": "設定済みプロバイダー",
     "addProvider": "プロバイダーを追加",
     "editProvider": "プロバイダーを編集",
-    "noProviders": "モデルプロバイダーはまだ設定されていません。",
+    "noProviders": "プロバイダーはまだありません。追加すると同じエンドポイントとキーを複数のエージェントで使い回せます。",
     "providerName": "名前",
     "providerNamePlaceholder": "例: OpenAI、Anthropic",
     "apiUrl": "API URL",

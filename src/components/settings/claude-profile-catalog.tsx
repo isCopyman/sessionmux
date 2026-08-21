@@ -49,6 +49,12 @@ type EditableKind = ClaudeProfileUpsert["kind"]
 interface ClaudeProfileCatalogProps {
   defaultProfileId: string
   onSetAgentDefault: (profileId: string) => Promise<void>
+  /**
+   * Which tab is open. The parent renders the CLI-global connection settings
+   * as the body of the "Follow default" tab, the way VS Code shows the User
+   * settings under the User tab, so it has to know which tab won.
+   */
+  onActiveProfileChange?: (profileId: string) => void
 }
 
 interface FormState {
@@ -116,6 +122,7 @@ function nextFreeSuffix(taken: Set<string>): number {
 export function ClaudeProfileCatalog({
   defaultProfileId,
   onSetAgentDefault,
+  onActiveProfileChange,
 }: ClaudeProfileCatalogProps) {
   const t = useTranslations("AcpAgentSettings.claudeProfile")
   const tActions = useTranslations("AcpAgentSettings.actions")
@@ -139,6 +146,14 @@ export function ClaudeProfileCatalog({
   // late response overwrites a profile the user just saved.
   const tRef = useRef(t)
   tRef.current = t
+
+  // Same reason as `tRef`: the parent passes an inline arrow, so depending on
+  // the callback itself would fire this on every render.
+  const notifyActiveRef = useRef(onActiveProfileChange)
+  notifyActiveRef.current = onActiveProfileChange
+  useEffect(() => {
+    notifyActiveRef.current?.(selectedId)
+  }, [selectedId])
 
   useEffect(() => {
     let cancelled = false

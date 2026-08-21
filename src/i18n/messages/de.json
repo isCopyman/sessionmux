@@ -628,7 +628,7 @@
       "hint": "codeg legt keine eigene Kopie an: Es liest diese Datei, führt Ihre Änderungen zusammen und schreibt sie zurück. Die Felder API-URL / API-Key / Modell oben sind eine verknüpfte Ansicht derselben Datei."
     },
     "modelHintDefault": "Leer lassen, um das System-Standardmodell zu verwenden.",
-    "generalConfigDescriptionClaude": "Unterstützt schnelle Konfiguration von API-URL, API-Key und Claude-Modellen und synchronisiert mit der nativen JSON-Konfiguration.",
+    "generalConfigDescriptionClaude": "Zwei Ebenen. Ein Startprofil bringt Endpunkt, Schlüssel und Modelle selbst mit, und die daran gebundenen Sitzungen nutzen sie. „Standard folgen“ überschreibt nichts, sondern bearbeitet die eigene Konfigurationsdatei der CLI. Wähle oben den Tab der Ebene, die du bearbeiten willst.",
     "generalConfigDescriptionDefault": "Unterstützt wichtige Konfigurationseingaben (API URL, API Key, Model) und native JSON-Konfigurationsverwaltung.",
     "actions": {
       "dragSort": "Zum Neuordnen ziehen",
@@ -1170,7 +1170,9 @@
       "newProfileName": "Einstellungen {n}",
       "addBlank": "Leeres Profil",
       "addCopy": "„{name}“ duplizieren",
-      "tokenNotCopied": "Das Token wurde nicht kopiert – die Oberfläche sieht nur eine Maske. Bitte erneut eingeben."
+      "tokenNotCopied": "Das Token wurde nicht kopiert – die Oberfläche sieht nur eine Maske. Bitte erneut eingeben.",
+      "cliGlobalTitle": "Globale Einstellungen der Claude-CLI",
+      "cliGlobalHint": "Dieser Tab injiziert nichts. Die Felder unten bearbeiten die eigene Konfigurationsdatei der CLI (~/.claude/settings.json) und gelten für jede Sitzung, die dem Standard folgt. Andere Tabs bringen eigenen Endpunkt, Schlüssel und eigene Modelle mit."
     },
     "dialogs": {
       "confirmDeleteProvider": "Provider {providerId} löschen?",
@@ -3895,12 +3897,12 @@
   },
   "ModelProviderSettings": {
     "sectionTitle": "Modellanbieter",
-    "sectionDescription": "API-Anbieter-Zugangsdaten für Agenten verwalten.",
+    "sectionDescription": "Ein wiederverwendbares Adressbuch aus Endpunkten und Schlüsseln. Ein Eintrag wirkt für sich allein nicht – binde ihn unter Agenten → Authentifizierungsmodus → Modellanbieter ein.",
     "filterAll": "Alle",
     "providerListTitle": "Konfigurierte Anbieter",
     "addProvider": "Anbieter hinzufügen",
     "editProvider": "Anbieter bearbeiten",
-    "noProviders": "Noch keine Modellanbieter konfiguriert.",
+    "noProviders": "Noch keine Anbieter. Füge einen hinzu, um denselben Endpunkt und Schlüssel für mehrere Agenten wiederzuverwenden.",
     "providerName": "Name",
     "providerNamePlaceholder": "z.B. OpenAI, Anthropic",
     "apiUrl": "API-URL",

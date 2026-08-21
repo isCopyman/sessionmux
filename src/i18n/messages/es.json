@@ -628,7 +628,7 @@
       "hint": "codeg no guarda una copia propia: lee este archivo, fusiona tus cambios y lo vuelve a escribir. Los campos API URL / API Key / Modelo de arriba son una vista enlazada del mismo archivo."
     },
     "modelHintDefault": "Déjalo vacío para usar el modelo predeterminado del sistema.",
-    "generalConfigDescriptionClaude": "Admite configuración rápida de API URL, API Key y modelos de Claude, y sincroniza con la configuración JSON nativa.",
+    "generalConfigDescriptionClaude": "Dos niveles. Un perfil de arranque lleva su propio endpoint, clave y modelos, y las sesiones vinculadas a él los usan. «Seguir predeterminado» no sobrescribe nada y edita la configuración propia de la CLI. Elige arriba la pestaña del nivel que quieras editar.",
     "generalConfigDescriptionDefault": "Admite entrada de configuración importante (API URL, API Key, Model) y gestión de configuración JSON nativa.",
     "actions": {
       "dragSort": "Arrastrar para reordenar",
@@ -1170,7 +1170,9 @@
       "newProfileName": "Ajustes {n}",
       "addBlank": "Perfil en blanco",
       "addCopy": "Duplicar «{name}»",
-      "tokenNotCopied": "El token no se copió: la interfaz solo recibe una máscara. Vuelve a introducirlo."
+      "tokenNotCopied": "El token no se copió: la interfaz solo recibe una máscara. Vuelve a introducirlo.",
+      "cliGlobalTitle": "Ajustes globales de la CLI de Claude",
+      "cliGlobalHint": "Esta pestaña no inyecta nada. Los campos siguientes editan la configuración propia de la CLI (~/.claude/settings.json) y se aplican a todas las sesiones que siguen el valor predeterminado. Las demás pestañas llevan su propio endpoint, clave y modelos."
     },
     "dialogs": {
       "confirmDeleteProvider": "¿Eliminar proveedor {providerId}?",
@@ -3895,12 +3897,12 @@
   },
   "ModelProviderSettings": {
     "sectionTitle": "Proveedores de Modelos",
-    "sectionDescription": "Gestionar las credenciales de proveedores API para agentes.",
+    "sectionDescription": "Una libreta reutilizable de endpoints y claves. Una entrada no hace nada por sí sola: enlázala en Agentes → Modo de autenticación → Proveedor de modelos.",
     "filterAll": "Todos",
     "providerListTitle": "Proveedores Configurados",
     "addProvider": "Agregar Proveedor",
     "editProvider": "Editar Proveedor",
-    "noProviders": "Aún no se han configurado proveedores de modelos.",
+    "noProviders": "Aún no hay proveedores. Añade uno para reutilizar el mismo endpoint y la misma clave en varios agentes.",
     "providerName": "Nombre",
     "providerNamePlaceholder": "Ej. OpenAI, Anthropic",
     "apiUrl": "URL de API",

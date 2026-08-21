@@ -628,7 +628,7 @@
       "hint": "codeg n'en conserve aucune copie privée : il lit ce fichier, y fusionne vos modifications et le réécrit. Les champs API URL / clé API / modèle ci-dessus sont une vue liée du même fichier."
     },
     "modelHintDefault": "Laissez vide pour utiliser le modèle système par défaut.",
-    "generalConfigDescriptionClaude": "Prend en charge la configuration rapide de l'API URL, API Key et des modèles Claude, et synchronise avec la configuration JSON native.",
+    "generalConfigDescriptionClaude": "Deux niveaux. Un profil de lancement porte son propre point de terminaison, sa clé et ses modèles, et les sessions qui y sont liées les utilisent. « Suivre la valeur par défaut » ne remplace rien et modifie le fichier de configuration propre à la CLI. Choisissez ci-dessus l'onglet du niveau à modifier.",
     "generalConfigDescriptionDefault": "Prend en charge les entrées de configuration importantes (API URL, API Key, Model) et la gestion de la configuration JSON native.",
     "actions": {
       "dragSort": "Glisser pour réordonner",
@@ -1170,7 +1170,9 @@
       "newProfileName": "Paramètres {n}",
       "addBlank": "Profil vierge",
       "addCopy": "Dupliquer « {name} »",
-      "tokenNotCopied": "Le jeton n'a pas été copié : l'interface ne reçoit qu'un masque. Saisissez-le à nouveau."
+      "tokenNotCopied": "Le jeton n'a pas été copié : l'interface ne reçoit qu'un masque. Saisissez-le à nouveau.",
+      "cliGlobalTitle": "Paramètres globaux de la CLI Claude",
+      "cliGlobalHint": "Cet onglet n'injecte rien. Les champs ci-dessous modifient le fichier de configuration propre à la CLI (~/.claude/settings.json) et s'appliquent à toutes les sessions qui suivent la valeur par défaut. Les autres onglets ont leur propre point de terminaison, clé et modèles."
     },
     "dialogs": {
       "confirmDeleteProvider": "Supprimer le provider {providerId} ?",
@@ -3895,12 +3897,12 @@
   },
   "ModelProviderSettings": {
     "sectionTitle": "Fournisseurs de Modèles",
-    "sectionDescription": "Gérer les identifiants des fournisseurs d'API pour les agents.",
+    "sectionDescription": "Un carnet d'adresses réutilisable de points de terminaison et de clés. Une entrée seule n'a aucun effet : liez-la dans Agents → Mode d'authentification → Fournisseur de modèles.",
     "filterAll": "Tous",
     "providerListTitle": "Fournisseurs Configurés",
     "addProvider": "Ajouter un Fournisseur",
     "editProvider": "Modifier le Fournisseur",
-    "noProviders": "Aucun fournisseur de modèle configuré.",
+    "noProviders": "Aucun fournisseur pour l'instant. Ajoutez-en un pour réutiliser le même point de terminaison et la même clé sur plusieurs agents.",
     "providerName": "Nom",
     "providerNamePlaceholder": "Ex. OpenAI, Anthropic",
     "apiUrl": "URL de l'API",

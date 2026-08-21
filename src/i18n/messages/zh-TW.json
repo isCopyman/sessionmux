@@ -628,7 +628,7 @@
       "hint": "codeg 不另存副本：它讀這個檔案，把你的變更合併後寫回去。上面的 API URL / API Key / 模型 快捷欄位就是同一個檔案的連動檢視。"
     },
     "modelHintDefault": "留空則使用系統預設模型。",
-    "generalConfigDescriptionClaude": "支援 API URL、API Key 與 Claude 模型快捷配置，並與原生 JSON 配置聯動。",
+    "generalConfigDescriptionClaude": "兩層。接入設定檔帶著自己的介面位址、金鑰與模型，綁定它的工作階段就用它；「跟隨預設」不做任何覆寫，改的是 CLI 自己的設定檔。點上面的頁籤切換要編輯的那一層。",
     "generalConfigDescriptionDefault": "支援重要配置輸入（API URL、API Key、Model）和原生 JSON 配置管理。",
     "actions": {
       "dragSort": "拖拽排序",
@@ -1170,7 +1170,9 @@
       "newProfileName": "設定 {n}",
       "addBlank": "空白設定",
       "addCopy": "複製「{name}」",
-      "tokenNotCopied": "權杖沒有被複製——介面只取得到遮罩。請重新填寫。"
+      "tokenNotCopied": "權杖沒有被複製——介面只取得到遮罩。請重新填寫。",
+      "cliGlobalTitle": "Claude CLI 全域設定",
+      "cliGlobalHint": "這一檔不注入任何東西。下面這些欄位改的是 CLI 自己的設定檔（~/.claude/settings.json），對所有「跟隨預設」的工作階段生效。其他檔各自帶著自己的介面位址、金鑰與模型。"
     },
     "dialogs": {
       "confirmDeleteProvider": "確認刪除 Provider {providerId}？",
@@ -3895,12 +3897,12 @@
   },
   "ModelProviderSettings": {
     "sectionTitle": "模型供應商",
-    "sectionDescription": "管理 Agent 的 API 供應商憑據。",
+    "sectionDescription": "可重複使用的介面位址 + 金鑰通訊錄。條目本身不生效，要在「智慧體 → 認證方式 → 模型供應商」裡引用後才起作用。",
     "filterAll": "全部",
     "providerListTitle": "已配置的供應商",
     "addProvider": "新增供應商",
     "editProvider": "編輯供應商",
-    "noProviders": "尚未配置模型供應商。",
+    "noProviders": "還沒有供應商。新增後可以在多個智慧體之間重複使用同一組介面位址與金鑰。",
     "providerName": "名稱",
     "providerNamePlaceholder": "例如 OpenAI、Anthropic",
     "apiUrl": "API 位址",

@@ -455,7 +455,7 @@
   },
   {
     "name": "list_tasks",
-    "description": "Read-only: list cards on codeg's task board. Does not create, claim, or change any task. Defaults to the project this conversation is in (a worktree working directory is resolved to that project). Pass folder_path=\"all\" to list every live project, newest updated_at first. Optional status accepts a board column (todo, in_progress, attention, done) or a raw status such as awaiting_input. Returns compact rows (id, title, status, agent, updated_at) — never the prompt body. total is the filtered count; truncated is true when limit hid the rest (default 30, hard cap 100).",
+    "description": "Read-only: list cards on codeg's task board. Does not create, claim, or change any task. Defaults to the project this conversation is in (a worktree working directory is resolved to that project). Pass folder_path=\"all\" to list every live project, newest updated_at first. Optional status accepts a board column (todo, in_progress, attention, done) or a raw status such as awaiting_input. Returns compact rows (id, title, status, agent, updated_at) — never the prompt body. total is the filtered count; truncated is true when limit hid the rest (default 30, hard cap 100). A card you see here may already be owned by another session (check status and conversation_id): do not create a duplicate for work that is already on the board.",
     "inputSchema": {
       "type": "object",
       "additionalProperties": false,

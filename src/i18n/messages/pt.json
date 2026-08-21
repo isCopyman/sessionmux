@@ -628,7 +628,7 @@
       "hint": "O codeg não guarda uma cópia própria: ele lê este arquivo, mescla as suas alterações e grava de volta. Os campos API URL / API Key / Modelo acima são uma visão vinculada do mesmo arquivo."
     },
     "modelHintDefault": "Deixe em branco para usar o modelo padrão do sistema.",
-    "generalConfigDescriptionClaude": "Suporta configuração rápida de API URL, API Key e modelos Claude, e sincroniza com a configuração JSON nativa.",
+    "generalConfigDescriptionClaude": "Dois níveis. Um perfil de inicialização carrega endpoint, chave e modelos próprios, e as sessões ligadas a ele usam esses valores. “Seguir padrão” não sobrescreve nada e edita o arquivo de configuração da própria CLI. Escolha acima a aba do nível que quer editar.",
     "generalConfigDescriptionDefault": "Suporta entrada de configuração importante (API URL, API Key, Model) e gerenciamento de configuração JSON nativa.",
     "actions": {
       "dragSort": "Arraste para reordenar",
@@ -1170,7 +1170,9 @@
       "newProfileName": "Configurações {n}",
       "addBlank": "Perfil em branco",
       "addCopy": "Duplicar “{name}”",
-      "tokenNotCopied": "O token não foi copiado — a interface só recebe uma máscara. Digite-o novamente."
+      "tokenNotCopied": "O token não foi copiado — a interface só recebe uma máscara. Digite-o novamente.",
+      "cliGlobalTitle": "Configurações globais da CLI do Claude",
+      "cliGlobalHint": "Esta aba não injeta nada. Os campos abaixo editam o arquivo de configuração da própria CLI (~/.claude/settings.json) e valem para todas as sessões que seguem o padrão. As outras abas têm endpoint, chave e modelos próprios."
     },
     "dialogs": {
       "confirmDeleteProvider": "Excluir o provedor {providerId}?",
@@ -3895,12 +3897,12 @@
   },
   "ModelProviderSettings": {
     "sectionTitle": "Provedores de Modelos",
-    "sectionDescription": "Gerenciar credenciais de provedores de API para agentes.",
+    "sectionDescription": "Uma agenda reutilizável de endpoints e chaves. Uma entrada sozinha não faz nada: vincule-a em Agentes → Modo de autenticação → Provedor de modelos.",
     "filterAll": "Todos",
     "providerListTitle": "Provedores Configurados",
     "addProvider": "Adicionar Provedor",
     "editProvider": "Editar Provedor",
-    "noProviders": "Nenhum provedor de modelo configurado.",
+    "noProviders": "Ainda não há provedores. Adicione um para reutilizar o mesmo endpoint e a mesma chave em vários agentes.",
     "providerName": "Nome",
     "providerNamePlaceholder": "Ex. OpenAI, Anthropic",
     "apiUrl": "URL da API",

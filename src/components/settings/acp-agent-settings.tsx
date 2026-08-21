@@ -126,6 +126,7 @@ import type {
 } from "@/lib/types"
 import {
   CODEG_CLAUDE_PROFILE_ENV_KEY,
+  FOLLOW_DEFAULT_CLAUDE_PROFILE_ID,
   HERMES_PROVIDERS,
   parseClaudeProviderModel,
   parseCodexModelConfig,
@@ -4155,6 +4156,11 @@ export function AcpAgentSettings() {
     Partial<Record<AgentType, boolean>>
   >({})
   const [modelProviders, setModelProviders] = useState<ModelProviderInfo[]>([])
+  // Which Claude launch-profile tab is open, mirrored out of the catalog so the
+  // CLI-global settings can render as that tab's body.
+  const [claudeProfileTab, setClaudeProfileTab] = useState<string>(
+    FOLLOW_DEFAULT_CLAUDE_PROFILE_ID
+  )
   const [uninstallConfirmAgent, setUninstallConfirmAgent] =
     useState<AcpAgentInfo | null>(null)
   const [removeConfirmAgent, setRemoveConfirmAgent] =
@@ -5308,6 +5314,15 @@ export function AcpAgentSettings() {
   const selectedConfigError = selectedAgent
     ? (configErrors[selectedAgent.agent_type] ?? null)
     : null
+  // Everything below the Claude profile tab strip — auth mode, API URL/Key,
+  // model aliases, effort, the native JSON editor — edits the CLI's OWN global
+  // config, so it belongs to exactly one tab: "Follow default". Under any other
+  // profile those keys are the profile's to own, and showing two editors for
+  // the same setting is what made this panel unreadable.
+  const claudeCliGlobalsVisible =
+    !selectedAgent ||
+    selectedAgent.agent_type !== "claude_code" ||
+    claudeProfileTab === FOLLOW_DEFAULT_CLAUDE_PROFILE_ID
   const selectedIsSaving = selectedAgent
     ? Boolean(
         savingEnv[selectedAgent.agent_type] ||
@@ -11164,6 +11179,7 @@ supports_websockets = true`}
                         defaultProfileId={
                           selectedAgent.env[CODEG_CLAUDE_PROFILE_ENV_KEY] ?? ""
                         }
+                        onActiveProfileChange={setClaudeProfileTab}
                         onSetAgentDefault={async (profileId) => {
                           const next = patchEnvText(selectedDraft.envText, {
                             [CODEG_CLAUDE_PROFILE_ENV_KEY]: profileId,
@@ -11179,52 +11195,66 @@ supports_websockets = true`}
                       />
                     )}
 
-                    {selectedAgent.agent_type === "claude_code" && (
-                      <div className="space-y-1.5">
-                        <label className="text-[11px] text-muted-foreground">
-                          {t("claude.authMode")}
-                        </label>
-                        <Select
-                          value={selectedDraft.claudeAuthMode}
-                          onValueChange={(value) => {
-                            if (
-                              CLAUDE_AUTH_MODES.includes(
-                                value as ClaudeAuthMode
-                              )
-                            ) {
-                              handleClaudeAuthModeChange(
-                                value as ClaudeAuthMode
-                              )
-                            }
-                          }}
-                        >
-                          <SelectTrigger className="w-full">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent align="start">
-                            <SelectItem value="official_subscription">
-                              {t("authModeOfficialSubscription")}
-                            </SelectItem>
-                            <SelectItem value="custom">
-                              {t("authModeCustomEndpoint")}
-                            </SelectItem>
-                            <SelectItem value="model_provider">
-                              {t("authModeModelProvider")}
-                            </SelectItem>
-                          </SelectContent>
-                        </Select>
-                        <p className="text-[11px] text-muted-foreground">
-                          {selectedDraft.claudeAuthMode ===
-                          "official_subscription"
-                            ? t("claude.officialSubscriptionHint")
-                            : selectedDraft.claudeAuthMode === "custom"
-                              ? t("authModeCustomEndpointHint")
-                              : t("modelProviderHint")}
-                        </p>
-                      </div>
-                    )}
+                    {selectedAgent.agent_type === "claude_code" &&
+                      claudeCliGlobalsVisible && (
+                        <div className="rounded-md border border-dashed bg-background/60 px-2.5 py-2">
+                          <p className="text-[11px] font-medium">
+                            {t("claudeProfile.cliGlobalTitle")}
+                          </p>
+                          <p className="mt-0.5 text-[11px] text-muted-foreground">
+                            {t("claudeProfile.cliGlobalHint")}
+                          </p>
+                        </div>
+                      )}
 
                     {selectedAgent.agent_type === "claude_code" &&
+                      claudeCliGlobalsVisible && (
+                        <div className="space-y-1.5">
+                          <label className="text-[11px] text-muted-foreground">
+                            {t("claude.authMode")}
+                          </label>
+                          <Select
+                            value={selectedDraft.claudeAuthMode}
+                            onValueChange={(value) => {
+                              if (
+                                CLAUDE_AUTH_MODES.includes(
+                                  value as ClaudeAuthMode
+                                )
+                              ) {
+                                handleClaudeAuthModeChange(
+                                  value as ClaudeAuthMode
+                                )
+                              }
+                            }}
+                          >
+                            <SelectTrigger className="w-full">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent align="start">
+                              <SelectItem value="official_subscription">
+                                {t("authModeOfficialSubscription")}
+                              </SelectItem>
+                              <SelectItem value="custom">
+                                {t("authModeCustomEndpoint")}
+                              </SelectItem>
+                              <SelectItem value="model_provider">
+                                {t("authModeModelProvider")}
+                              </SelectItem>
+                            </SelectContent>
+                          </Select>
+                          <p className="text-[11px] text-muted-foreground">
+                            {selectedDraft.claudeAuthMode ===
+                            "official_subscription"
+                              ? t("claude.officialSubscriptionHint")
+                              : selectedDraft.claudeAuthMode === "custom"
+                                ? t("authModeCustomEndpointHint")
+                                : t("modelProviderHint")}
+                          </p>
+                        </div>
+                      )}
+
+                    {selectedAgent.agent_type === "claude_code" &&
+                      claudeCliGlobalsVisible &&
                       selectedDraft.claudeAuthMode === "model_provider" && (
                         <div className="space-y-1.5">
                           <label className="text-[11px] text-muted-foreground">
@@ -11263,42 +11293,17 @@ supports_websockets = true`}
                         </div>
                       )}
 
-                    {(selectedAgent.agent_type !== "claude_code" ||
-                      selectedDraft.claudeAuthMode === "custom" ||
-                      selectedDraft.claudeAuthMode === "model_provider") && (
-                      <>
-                        <div className="space-y-1.5">
-                          <label className="text-[11px] text-muted-foreground">
-                            API URL
-                          </label>
-                          <Input
-                            value={selectedDraft.apiBaseUrl}
-                            readOnly={
-                              selectedAgent.agent_type === "claude_code" &&
-                              selectedDraft.claudeAuthMode === "model_provider"
-                            }
-                            onChange={(event) => {
-                              handleImportantConfigChange(
-                                "apiBaseUrl",
-                                event.target.value
-                              )
-                            }}
-                            placeholder="https://api.example.com"
-                          />
-                        </div>
-
-                        <div className="space-y-1.5">
-                          <label className="text-[11px] text-muted-foreground">
-                            API Key
-                          </label>
-                          <div className="flex items-center gap-2">
+                    {claudeCliGlobalsVisible &&
+                      (selectedAgent.agent_type !== "claude_code" ||
+                        selectedDraft.claudeAuthMode === "custom" ||
+                        selectedDraft.claudeAuthMode === "model_provider") && (
+                        <>
+                          <div className="space-y-1.5">
+                            <label className="text-[11px] text-muted-foreground">
+                              API URL
+                            </label>
                             <Input
-                              type={
-                                showApiKeys[selectedAgent.agent_type]
-                                  ? "text"
-                                  : "password"
-                              }
-                              value={selectedDraft.apiKey}
+                              value={selectedDraft.apiBaseUrl}
                               readOnly={
                                 selectedAgent.agent_type === "claude_code" &&
                                 selectedDraft.claudeAuthMode ===
@@ -11306,316 +11311,349 @@ supports_websockets = true`}
                               }
                               onChange={(event) => {
                                 handleImportantConfigChange(
-                                  "apiKey",
+                                  "apiBaseUrl",
                                   event.target.value
                                 )
                               }}
-                              placeholder="sk-..."
+                              placeholder="https://api.example.com"
                             />
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="sm"
-                              onClick={() => {
-                                setShowApiKeys((prev) => ({
-                                  ...prev,
-                                  [selectedAgent.agent_type]:
-                                    !prev[selectedAgent.agent_type],
-                                }))
-                              }}
-                              title={
-                                showApiKeys[selectedAgent.agent_type]
-                                  ? t("actions.hideApiKey")
-                                  : t("actions.showApiKey")
-                              }
-                            >
-                              {showApiKeys[selectedAgent.agent_type] ? (
-                                <EyeOff className="h-3.5 w-3.5" />
-                              ) : (
-                                <Eye className="h-3.5 w-3.5" />
-                              )}
-                            </Button>
                           </div>
-                        </div>
-                      </>
-                    )}
 
-                    {selectedAgent.agent_type === "claude_code" ? (
-                      <div className="space-y-2">
-                        <div className="grid gap-3 md:grid-cols-2">
                           <div className="space-y-1.5">
                             <label className="text-[11px] text-muted-foreground">
-                              {t("claude.mainModel")}
+                              API Key
                             </label>
-                            <Input
-                              value={selectedDraft.claudeMainModel}
-                              readOnly={
-                                selectedDraft.claudeAuthMode ===
-                                "model_provider"
-                              }
-                              onChange={(event) => {
-                                handleImportantConfigChange(
-                                  "claudeMainModel",
-                                  event.target.value
-                                )
-                              }}
-                              placeholder="claude-sonnet-5"
-                            />
+                            <div className="flex items-center gap-2">
+                              <Input
+                                type={
+                                  showApiKeys[selectedAgent.agent_type]
+                                    ? "text"
+                                    : "password"
+                                }
+                                value={selectedDraft.apiKey}
+                                readOnly={
+                                  selectedAgent.agent_type === "claude_code" &&
+                                  selectedDraft.claudeAuthMode ===
+                                    "model_provider"
+                                }
+                                onChange={(event) => {
+                                  handleImportantConfigChange(
+                                    "apiKey",
+                                    event.target.value
+                                  )
+                                }}
+                                placeholder="sk-..."
+                              />
+                              <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                onClick={() => {
+                                  setShowApiKeys((prev) => ({
+                                    ...prev,
+                                    [selectedAgent.agent_type]:
+                                      !prev[selectedAgent.agent_type],
+                                  }))
+                                }}
+                                title={
+                                  showApiKeys[selectedAgent.agent_type]
+                                    ? t("actions.hideApiKey")
+                                    : t("actions.showApiKey")
+                                }
+                              >
+                                {showApiKeys[selectedAgent.agent_type] ? (
+                                  <EyeOff className="h-3.5 w-3.5" />
+                                ) : (
+                                  <Eye className="h-3.5 w-3.5" />
+                                )}
+                              </Button>
+                            </div>
                           </div>
-                          <div className="space-y-1.5">
-                            <label className="text-[11px] text-muted-foreground">
-                              {t("claude.reasoningModel")}
-                            </label>
-                            <Input
-                              value={selectedDraft.claudeReasoningModel}
-                              readOnly={
-                                selectedDraft.claudeAuthMode ===
-                                "model_provider"
-                              }
-                              onChange={(event) => {
-                                handleImportantConfigChange(
-                                  "claudeReasoningModel",
-                                  event.target.value
-                                )
-                              }}
-                              placeholder="claude-opus-5"
-                            />
-                          </div>
-                          <div className="space-y-1.5">
-                            <label className="text-[11px] text-muted-foreground">
-                              {t("claude.haikuDefaultModel")}
-                            </label>
-                            <Input
-                              value={selectedDraft.claudeDefaultHaikuModel}
-                              readOnly={
-                                selectedDraft.claudeAuthMode ===
-                                "model_provider"
-                              }
-                              onChange={(event) => {
-                                handleImportantConfigChange(
-                                  "claudeDefaultHaikuModel",
-                                  event.target.value
-                                )
-                              }}
-                              placeholder="claude-haiku-4-5"
-                            />
-                          </div>
-                          <div className="space-y-1.5">
-                            <label className="text-[11px] text-muted-foreground">
-                              {t("claude.sonnetDefaultModel")}
-                            </label>
-                            <Input
-                              value={selectedDraft.claudeDefaultSonnetModel}
-                              readOnly={
-                                selectedDraft.claudeAuthMode ===
-                                "model_provider"
-                              }
-                              onChange={(event) => {
-                                handleImportantConfigChange(
-                                  "claudeDefaultSonnetModel",
-                                  event.target.value
-                                )
-                              }}
-                              placeholder="claude-sonnet-5"
-                            />
-                          </div>
-                          <div className="space-y-1.5 md:col-span-2">
-                            <label className="text-[11px] text-muted-foreground">
-                              {t("claude.opusDefaultModel")}
-                            </label>
-                            <Input
-                              value={selectedDraft.claudeDefaultOpusModel}
-                              readOnly={
-                                selectedDraft.claudeAuthMode ===
-                                "model_provider"
-                              }
-                              onChange={(event) => {
-                                handleImportantConfigChange(
-                                  "claudeDefaultOpusModel",
-                                  event.target.value
-                                )
-                              }}
-                              placeholder="claude-opus-5"
-                            />
-                          </div>
-                        </div>
-                        <p className="text-[11px] text-muted-foreground">
-                          {t("modelHintDefault")}
-                        </p>
-                        <div className="space-y-2 border-t border-border/60 pt-3">
+                        </>
+                      )}
+
+                    {claudeCliGlobalsVisible &&
+                      (selectedAgent.agent_type === "claude_code" ? (
+                        <div className="space-y-2">
                           <div className="grid gap-3 md:grid-cols-2">
+                            <div className="space-y-1.5">
+                              <label className="text-[11px] text-muted-foreground">
+                                {t("claude.mainModel")}
+                              </label>
+                              <Input
+                                value={selectedDraft.claudeMainModel}
+                                readOnly={
+                                  selectedDraft.claudeAuthMode ===
+                                  "model_provider"
+                                }
+                                onChange={(event) => {
+                                  handleImportantConfigChange(
+                                    "claudeMainModel",
+                                    event.target.value
+                                  )
+                                }}
+                                placeholder="claude-sonnet-5"
+                              />
+                            </div>
+                            <div className="space-y-1.5">
+                              <label className="text-[11px] text-muted-foreground">
+                                {t("claude.reasoningModel")}
+                              </label>
+                              <Input
+                                value={selectedDraft.claudeReasoningModel}
+                                readOnly={
+                                  selectedDraft.claudeAuthMode ===
+                                  "model_provider"
+                                }
+                                onChange={(event) => {
+                                  handleImportantConfigChange(
+                                    "claudeReasoningModel",
+                                    event.target.value
+                                  )
+                                }}
+                                placeholder="claude-opus-5"
+                              />
+                            </div>
+                            <div className="space-y-1.5">
+                              <label className="text-[11px] text-muted-foreground">
+                                {t("claude.haikuDefaultModel")}
+                              </label>
+                              <Input
+                                value={selectedDraft.claudeDefaultHaikuModel}
+                                readOnly={
+                                  selectedDraft.claudeAuthMode ===
+                                  "model_provider"
+                                }
+                                onChange={(event) => {
+                                  handleImportantConfigChange(
+                                    "claudeDefaultHaikuModel",
+                                    event.target.value
+                                  )
+                                }}
+                                placeholder="claude-haiku-4-5"
+                              />
+                            </div>
+                            <div className="space-y-1.5">
+                              <label className="text-[11px] text-muted-foreground">
+                                {t("claude.sonnetDefaultModel")}
+                              </label>
+                              <Input
+                                value={selectedDraft.claudeDefaultSonnetModel}
+                                readOnly={
+                                  selectedDraft.claudeAuthMode ===
+                                  "model_provider"
+                                }
+                                onChange={(event) => {
+                                  handleImportantConfigChange(
+                                    "claudeDefaultSonnetModel",
+                                    event.target.value
+                                  )
+                                }}
+                                placeholder="claude-sonnet-5"
+                              />
+                            </div>
                             <div className="space-y-1.5 md:col-span-2">
                               <label className="text-[11px] text-muted-foreground">
-                                {t("claude.customModelOption")}
+                                {t("claude.opusDefaultModel")}
                               </label>
                               <Input
-                                value={selectedDraft.claudeCustomModelOption}
+                                value={selectedDraft.claudeDefaultOpusModel}
                                 readOnly={
                                   selectedDraft.claudeAuthMode ===
                                   "model_provider"
                                 }
                                 onChange={(event) => {
                                   handleImportantConfigChange(
-                                    "claudeCustomModelOption",
+                                    "claudeDefaultOpusModel",
                                     event.target.value
                                   )
                                 }}
-                                placeholder="my-gateway/claude-opus-5"
-                              />
-                            </div>
-                            <div className="space-y-1.5">
-                              <label className="text-[11px] text-muted-foreground">
-                                {t("claude.customModelOptionName")}
-                              </label>
-                              <Input
-                                value={
-                                  selectedDraft.claudeCustomModelOptionName
-                                }
-                                readOnly={
-                                  selectedDraft.claudeAuthMode ===
-                                  "model_provider"
-                                }
-                                onChange={(event) => {
-                                  handleImportantConfigChange(
-                                    "claudeCustomModelOptionName",
-                                    event.target.value
-                                  )
-                                }}
-                                placeholder="Gateway Opus"
-                              />
-                            </div>
-                            <div className="space-y-1.5">
-                              <label className="text-[11px] text-muted-foreground">
-                                {t("claude.customModelOptionDescription")}
-                              </label>
-                              <Input
-                                value={
-                                  selectedDraft.claudeCustomModelOptionDescription
-                                }
-                                readOnly={
-                                  selectedDraft.claudeAuthMode ===
-                                  "model_provider"
-                                }
-                                onChange={(event) => {
-                                  handleImportantConfigChange(
-                                    "claudeCustomModelOptionDescription",
-                                    event.target.value
-                                  )
-                                }}
-                                placeholder="Routed via custom gateway"
+                                placeholder="claude-opus-5"
                               />
                             </div>
                           </div>
                           <p className="text-[11px] text-muted-foreground">
-                            {t("claude.customModelOptionHint")}
+                            {t("modelHintDefault")}
                           </p>
+                          <div className="space-y-2 border-t border-border/60 pt-3">
+                            <div className="grid gap-3 md:grid-cols-2">
+                              <div className="space-y-1.5 md:col-span-2">
+                                <label className="text-[11px] text-muted-foreground">
+                                  {t("claude.customModelOption")}
+                                </label>
+                                <Input
+                                  value={selectedDraft.claudeCustomModelOption}
+                                  readOnly={
+                                    selectedDraft.claudeAuthMode ===
+                                    "model_provider"
+                                  }
+                                  onChange={(event) => {
+                                    handleImportantConfigChange(
+                                      "claudeCustomModelOption",
+                                      event.target.value
+                                    )
+                                  }}
+                                  placeholder="my-gateway/claude-opus-5"
+                                />
+                              </div>
+                              <div className="space-y-1.5">
+                                <label className="text-[11px] text-muted-foreground">
+                                  {t("claude.customModelOptionName")}
+                                </label>
+                                <Input
+                                  value={
+                                    selectedDraft.claudeCustomModelOptionName
+                                  }
+                                  readOnly={
+                                    selectedDraft.claudeAuthMode ===
+                                    "model_provider"
+                                  }
+                                  onChange={(event) => {
+                                    handleImportantConfigChange(
+                                      "claudeCustomModelOptionName",
+                                      event.target.value
+                                    )
+                                  }}
+                                  placeholder="Gateway Opus"
+                                />
+                              </div>
+                              <div className="space-y-1.5">
+                                <label className="text-[11px] text-muted-foreground">
+                                  {t("claude.customModelOptionDescription")}
+                                </label>
+                                <Input
+                                  value={
+                                    selectedDraft.claudeCustomModelOptionDescription
+                                  }
+                                  readOnly={
+                                    selectedDraft.claudeAuthMode ===
+                                    "model_provider"
+                                  }
+                                  onChange={(event) => {
+                                    handleImportantConfigChange(
+                                      "claudeCustomModelOptionDescription",
+                                      event.target.value
+                                    )
+                                  }}
+                                  placeholder="Routed via custom gateway"
+                                />
+                              </div>
+                            </div>
+                            <p className="text-[11px] text-muted-foreground">
+                              {t("claude.customModelOptionHint")}
+                            </p>
+                          </div>
+                          <div className="space-y-1.5">
+                            <label className="text-[11px] text-muted-foreground">
+                              {t("claude.effortLevel")}
+                            </label>
+                            <Select
+                              value={
+                                selectedDraft.claudeEffortLevel || "default"
+                              }
+                              onValueChange={(nextValue) => {
+                                handleClaudeEffortLevelChange(
+                                  nextValue === "default"
+                                    ? ""
+                                    : (nextValue as ClaudeEffortLevel)
+                                )
+                              }}
+                            >
+                              <SelectTrigger className="w-full">
+                                <SelectValue
+                                  placeholder={t("claude.effortLevelDefault")}
+                                />
+                              </SelectTrigger>
+                              <SelectContent align="start">
+                                <SelectItem value="default">
+                                  {t("claude.effortLevelDefault")}
+                                </SelectItem>
+                                {CLAUDE_EFFORT_LEVEL_VALUES.map((value) => (
+                                  <SelectItem key={value} value={value}>
+                                    {t(`claude.effortLevel_${value}`)}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          <div className="space-y-1.5">
+                            <div className="flex items-center justify-between rounded-md border px-3 py-2">
+                              <label className="text-[11px] text-muted-foreground">
+                                {t("claude.sendAttributionHeader")}
+                              </label>
+                              <Switch
+                                checked={
+                                  selectedDraft.claudeSendAttributionHeader
+                                }
+                                onCheckedChange={(checked) => {
+                                  handleClaudeEnvFlagChange(
+                                    "claudeSendAttributionHeader",
+                                    CLAUDE_ATTRIBUTION_HEADER_ENV_KEY,
+                                    checked
+                                  )
+                                }}
+                                aria-label={t(
+                                  "claude.sendAttributionHeaderAria"
+                                )}
+                              />
+                            </div>
+                          </div>
+                          <div className="space-y-1.5">
+                            <div className="flex items-center justify-between rounded-md border px-3 py-2">
+                              <label className="text-[11px] text-muted-foreground">
+                                {t("claude.disableNonessentialTraffic")}
+                              </label>
+                              <Switch
+                                checked={
+                                  selectedDraft.claudeDisableNonessentialTraffic
+                                }
+                                onCheckedChange={(checked) => {
+                                  handleClaudeEnvFlagChange(
+                                    "claudeDisableNonessentialTraffic",
+                                    CLAUDE_NONESSENTIAL_TRAFFIC_ENV_KEY,
+                                    checked
+                                  )
+                                }}
+                                aria-label={t(
+                                  "claude.disableNonessentialTrafficAria"
+                                )}
+                              />
+                            </div>
+                          </div>
                         </div>
+                      ) : (
                         <div className="space-y-1.5">
                           <label className="text-[11px] text-muted-foreground">
-                            {t("claude.effortLevel")}
+                            Model
                           </label>
-                          <Select
-                            value={selectedDraft.claudeEffortLevel || "default"}
-                            onValueChange={(nextValue) => {
-                              handleClaudeEffortLevelChange(
-                                nextValue === "default"
-                                  ? ""
-                                  : (nextValue as ClaudeEffortLevel)
+                          <Input
+                            value={selectedDraft.model}
+                            readOnly={selectedDraft.modelProviderId != null}
+                            onChange={(event) => {
+                              handleImportantConfigChange(
+                                "model",
+                                event.target.value
                               )
                             }}
-                          >
-                            <SelectTrigger className="w-full">
-                              <SelectValue
-                                placeholder={t("claude.effortLevelDefault")}
-                              />
-                            </SelectTrigger>
-                            <SelectContent align="start">
-                              <SelectItem value="default">
-                                {t("claude.effortLevelDefault")}
-                              </SelectItem>
-                              {CLAUDE_EFFORT_LEVEL_VALUES.map((value) => (
-                                <SelectItem key={value} value={value}>
-                                  {t(`claude.effortLevel_${value}`)}
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
+                            placeholder="gpt-5 / claude-sonnet / gemini-2.5-pro"
+                          />
                         </div>
-                        <div className="space-y-1.5">
-                          <div className="flex items-center justify-between rounded-md border px-3 py-2">
-                            <label className="text-[11px] text-muted-foreground">
-                              {t("claude.sendAttributionHeader")}
-                            </label>
-                            <Switch
-                              checked={
-                                selectedDraft.claudeSendAttributionHeader
-                              }
-                              onCheckedChange={(checked) => {
-                                handleClaudeEnvFlagChange(
-                                  "claudeSendAttributionHeader",
-                                  CLAUDE_ATTRIBUTION_HEADER_ENV_KEY,
-                                  checked
-                                )
-                              }}
-                              aria-label={t("claude.sendAttributionHeaderAria")}
-                            />
-                          </div>
-                        </div>
-                        <div className="space-y-1.5">
-                          <div className="flex items-center justify-between rounded-md border px-3 py-2">
-                            <label className="text-[11px] text-muted-foreground">
-                              {t("claude.disableNonessentialTraffic")}
-                            </label>
-                            <Switch
-                              checked={
-                                selectedDraft.claudeDisableNonessentialTraffic
-                              }
-                              onCheckedChange={(checked) => {
-                                handleClaudeEnvFlagChange(
-                                  "claudeDisableNonessentialTraffic",
-                                  CLAUDE_NONESSENTIAL_TRAFFIC_ENV_KEY,
-                                  checked
-                                )
-                              }}
-                              aria-label={t(
-                                "claude.disableNonessentialTrafficAria"
-                              )}
-                            />
-                          </div>
-                        </div>
-                      </div>
-                    ) : (
+                      ))}
+
+                    {claudeCliGlobalsVisible && (
                       <div className="space-y-1.5">
                         <label className="text-[11px] text-muted-foreground">
-                          Model
+                          {t("nativeJsonConfig")}
                         </label>
-                        <Input
-                          value={selectedDraft.model}
-                          readOnly={selectedDraft.modelProviderId != null}
-                          onChange={(event) => {
-                            handleImportantConfigChange(
-                              "model",
-                              event.target.value
-                            )
-                          }}
-                          placeholder="gpt-5 / claude-sonnet / gemini-2.5-pro"
+                        <NativeConfigFileHint
+                          agentType={selectedAgent.agent_type}
                         />
-                      </div>
-                    )}
-
-                    <div className="space-y-1.5">
-                      <label className="text-[11px] text-muted-foreground">
-                        {t("nativeJsonConfig")}
-                      </label>
-                      <NativeConfigFileHint
-                        agentType={selectedAgent.agent_type}
-                      />
-                      <Textarea
-                        value={selectedDraft.configText}
-                        onChange={(event) => {
-                          handleConfigTextChange(event.target.value)
-                        }}
-                        placeholder={`{
+                        <Textarea
+                          value={selectedDraft.configText}
+                          onChange={(event) => {
+                            handleConfigTextChange(event.target.value)
+                          }}
+                          placeholder={`{
   "apiBaseUrl": "https://api.example.com",
   "apiKey": "sk-...",
   "model": "gpt-5",
@@ -11623,144 +11661,149 @@ supports_websockets = true`}
     "CUSTOM_KEY": "VALUE"
   }
 }`}
-                        className="min-h-36 font-mono text-xs"
-                      />
-                      {selectedConfigError && (
-                        <div className="rounded-md border border-red-500/30 bg-red-500/5 px-2.5 py-1.5 text-[11px] text-red-400">
-                          {selectedConfigError}
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="flex justify-end">
-                      <Button
-                        size="sm"
-                        onClick={() => {
-                          if (selectedMissingModelProvider) {
-                            toast.error(t("toasts.modelProviderRequired"))
-                            return
-                          }
-                          // When a Claude provider is bound, the on-disk config
-                          // loaded into configText may carry stale model keys
-                          // (e.g. a leftover custom model option) from before the
-                          // binding — re-derive them from the provider so
-                          // persistConfig cannot write a stale value back over
-                          // the backend bind cascade (invalid JSON passes through
-                          // so persistConfig still surfaces the error). Sequence
-                          // env→config (never parallel): persistEnv also rewrites
-                          // config.env on the backend, so concurrent writes would
-                          // interleave two writers of ~/.claude/settings.json.
-                          let configToSave = configTextForClaudeSave(
-                            selectedDraft.configText,
-                            selectedAgent.agent_type,
-                            selectedDraft.modelProviderId,
-                            modelProviders.find(
-                              (p) => p.id === selectedDraft.modelProviderId
-                            )
-                          )
-                          // Materialize the Claude hardening toggles so the shown
-                          // default positions are actually applied on save —
-                          // writing the explicit "1"/"0" into both the native
-                          // config `env` and the DB env overlay — regardless of
-                          // whether the user touched the switches. Invalid JSON is
-                          // left untouched so persistConfig surfaces the error.
-                          let envToSave = selectedDraft.envText
-                          if (selectedAgent.agent_type === "claude_code") {
-                            const materialized =
-                              materializeClaudeHardeningFlags(
-                                configToSave,
-                                envToSave,
-                                {
-                                  sendAttributionHeader:
-                                    selectedDraft.claudeSendAttributionHeader,
-                                  disableNonessentialTraffic:
-                                    selectedDraft.claudeDisableNonessentialTraffic,
-                                }
-                              )
-                            configToSave = materialized.configText
-                            envToSave = materialized.envText
-                          }
-                          persistEnv(
-                            selectedAgent.agent_type,
-                            selectedDraft.enabled,
-                            envToSave,
-                            selectedDraft.modelProviderId
-                          )
-                            .then(() =>
-                              persistConfig(
-                                selectedAgent.agent_type,
-                                configToSave
-                              )
-                            )
-                            .then(() => {
-                              // Reflect the provider-authoritative rewrite AND the
-                              // materialized hardening flags in the editors so the
-                              // textareas don't show stale values until reload —
-                              // and so a later env-only save doesn't persist a
-                              // stale envText that drops the flags from the DB
-                              // overlay. Each inner guard preserves an edit the
-                              // user typed while the save was in flight.
-                              const syncedConfig =
-                                configToSave !== selectedDraft.configText
-                                  ? normalizeConfigText(configToSave)
-                                  : null
-                              const syncEnv =
-                                envToSave !== selectedDraft.envText
-                              if (syncedConfig !== null || syncEnv) {
-                                updateSelectedDraft((current) => {
-                                  let next = current
-                                  if (
-                                    syncedConfig !== null &&
-                                    current.configText ===
-                                      selectedDraft.configText
-                                  ) {
-                                    next = {
-                                      ...next,
-                                      configText: syncedConfig,
-                                    }
-                                  }
-                                  if (
-                                    syncEnv &&
-                                    current.envText === selectedDraft.envText
-                                  ) {
-                                    next = { ...next, envText: envToSave }
-                                  }
-                                  return next
-                                })
-                              }
-                              toast.success(t("toasts.configSaved"), {
-                                description: t("toasts.configSavedHint"),
-                              })
-                            })
-                            .catch((err) => {
-                              console.error(
-                                "[Settings] save config management failed:",
-                                err
-                              )
-                              const message = toErrorMessage(err)
-                              toast.error(
-                                t("toasts.saveConfigManagementFailed"),
-                                {
-                                  description: message,
-                                }
-                              )
-                            })
-                        }}
-                        disabled={selectedIsSavingEnv || selectedIsSavingConfig}
-                      >
-                        {selectedIsSavingEnv || selectedIsSavingConfig ? (
-                          <>
-                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                            {t("actions.saving")}
-                          </>
-                        ) : (
-                          <>
-                            <Save className="h-3.5 w-3.5" />
-                            {t("actions.saveConfigManagement")}
-                          </>
+                          className="min-h-36 font-mono text-xs"
+                        />
+                        {selectedConfigError && (
+                          <div className="rounded-md border border-red-500/30 bg-red-500/5 px-2.5 py-1.5 text-[11px] text-red-400">
+                            {selectedConfigError}
+                          </div>
                         )}
-                      </Button>
-                    </div>
+                      </div>
+                    )}
+
+                    {claudeCliGlobalsVisible && (
+                      <div className="flex justify-end">
+                        <Button
+                          size="sm"
+                          onClick={() => {
+                            if (selectedMissingModelProvider) {
+                              toast.error(t("toasts.modelProviderRequired"))
+                              return
+                            }
+                            // When a Claude provider is bound, the on-disk config
+                            // loaded into configText may carry stale model keys
+                            // (e.g. a leftover custom model option) from before the
+                            // binding — re-derive them from the provider so
+                            // persistConfig cannot write a stale value back over
+                            // the backend bind cascade (invalid JSON passes through
+                            // so persistConfig still surfaces the error). Sequence
+                            // env→config (never parallel): persistEnv also rewrites
+                            // config.env on the backend, so concurrent writes would
+                            // interleave two writers of ~/.claude/settings.json.
+                            let configToSave = configTextForClaudeSave(
+                              selectedDraft.configText,
+                              selectedAgent.agent_type,
+                              selectedDraft.modelProviderId,
+                              modelProviders.find(
+                                (p) => p.id === selectedDraft.modelProviderId
+                              )
+                            )
+                            // Materialize the Claude hardening toggles so the shown
+                            // default positions are actually applied on save —
+                            // writing the explicit "1"/"0" into both the native
+                            // config `env` and the DB env overlay — regardless of
+                            // whether the user touched the switches. Invalid JSON is
+                            // left untouched so persistConfig surfaces the error.
+                            let envToSave = selectedDraft.envText
+                            if (selectedAgent.agent_type === "claude_code") {
+                              const materialized =
+                                materializeClaudeHardeningFlags(
+                                  configToSave,
+                                  envToSave,
+                                  {
+                                    sendAttributionHeader:
+                                      selectedDraft.claudeSendAttributionHeader,
+                                    disableNonessentialTraffic:
+                                      selectedDraft.claudeDisableNonessentialTraffic,
+                                  }
+                                )
+                              configToSave = materialized.configText
+                              envToSave = materialized.envText
+                            }
+                            persistEnv(
+                              selectedAgent.agent_type,
+                              selectedDraft.enabled,
+                              envToSave,
+                              selectedDraft.modelProviderId
+                            )
+                              .then(() =>
+                                persistConfig(
+                                  selectedAgent.agent_type,
+                                  configToSave
+                                )
+                              )
+                              .then(() => {
+                                // Reflect the provider-authoritative rewrite AND the
+                                // materialized hardening flags in the editors so the
+                                // textareas don't show stale values until reload —
+                                // and so a later env-only save doesn't persist a
+                                // stale envText that drops the flags from the DB
+                                // overlay. Each inner guard preserves an edit the
+                                // user typed while the save was in flight.
+                                const syncedConfig =
+                                  configToSave !== selectedDraft.configText
+                                    ? normalizeConfigText(configToSave)
+                                    : null
+                                const syncEnv =
+                                  envToSave !== selectedDraft.envText
+                                if (syncedConfig !== null || syncEnv) {
+                                  updateSelectedDraft((current) => {
+                                    let next = current
+                                    if (
+                                      syncedConfig !== null &&
+                                      current.configText ===
+                                        selectedDraft.configText
+                                    ) {
+                                      next = {
+                                        ...next,
+                                        configText: syncedConfig,
+                                      }
+                                    }
+                                    if (
+                                      syncEnv &&
+                                      current.envText === selectedDraft.envText
+                                    ) {
+                                      next = { ...next, envText: envToSave }
+                                    }
+                                    return next
+                                  })
+                                }
+                                toast.success(t("toasts.configSaved"), {
+                                  description: t("toasts.configSavedHint"),
+                                })
+                              })
+                              .catch((err) => {
+                                console.error(
+                                  "[Settings] save config management failed:",
+                                  err
+                                )
+                                const message = toErrorMessage(err)
+                                toast.error(
+                                  t("toasts.saveConfigManagementFailed"),
+                                  {
+                                    description: message,
+                                  }
+                                )
+                              })
+                          }}
+                          disabled={
+                            selectedIsSavingEnv || selectedIsSavingConfig
+                          }
+                        >
+                          {selectedIsSavingEnv || selectedIsSavingConfig ? (
+                            <>
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              {t("actions.saving")}
+                            </>
+                          ) : (
+                            <>
+                              <Save className="h-3.5 w-3.5" />
+                              {t("actions.saveConfigManagement")}
+                            </>
+                          )}
+                        </Button>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

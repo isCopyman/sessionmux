@@ -204,6 +204,23 @@ describe("ClaudeProfileCatalog", () => {
     expect(screen.getByText(/was not copied/)).toBeInTheDocument()
   })
 
+  // The parent renders the CLI-global settings as the Follow-default tab's
+  // body, so it has to be told which tab is open — including the initial one.
+  it("reports the active tab to the parent", async () => {
+    api.claudeProfileList.mockResolvedValue([FOLLOW, RELAY])
+    const onActiveProfileChange = vi.fn()
+    const user = userEvent.setup()
+    renderCatalog({ onActiveProfileChange })
+
+    expect(onActiveProfileChange).toHaveBeenCalledWith("follow-default")
+
+    await user.click(await screen.findByRole("tab", { name: "中转" }))
+    expect(onActiveProfileChange).toHaveBeenLastCalledWith("api")
+
+    await user.click(screen.getByRole("tab", { name: "Follow default" }))
+    expect(onActiveProfileChange).toHaveBeenLastCalledWith("follow-default")
+  })
+
   it("removes a deleted profile from the tab strip after confirm", async () => {
     api.claudeProfileList.mockResolvedValue([FOLLOW, RELAY])
     const user = userEvent.setup()
