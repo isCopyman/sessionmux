@@ -24,7 +24,7 @@ vi.mock("@monaco-editor/react", async () => {
   }: {
     value?: string
     language?: string
-    height?: number
+    height?: number | string
     options?: { ariaLabel?: string; tabSize?: number }
     beforeMount?: (monaco: object) => void
     onMount?: (editor: object, monaco: object) => void

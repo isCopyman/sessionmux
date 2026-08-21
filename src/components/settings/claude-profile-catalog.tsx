@@ -676,7 +676,7 @@ export function ClaudeProfileCatalog({
                         onChange={(settingsJson) =>
                           patchDraft({ settingsJson })
                         }
-                        height={256}
+                        height="52vh"
                       />
                       <p className="text-[10px] text-muted-foreground">
                         {t("settingsJsonHint")}

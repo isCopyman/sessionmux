@@ -11063,7 +11063,7 @@ supports_websockets = true`}
                             label={t("claudeProfile.fieldSettingsJson")}
                             value={selectedDraft.configText}
                             onChange={handleConfigTextChange}
-                            height={144}
+                            height="52vh"
                           />
                         ) : (
                           <Textarea

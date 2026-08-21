@@ -28,7 +28,9 @@ interface JsonConfigEditorProps {
   label: string
   value: string
   onChange: (value: string) => void
-  height: number
+  /** Passed straight to Monaco. A `vh` string lets the editor grow with the
+   *  window, which is what a settings.json of unknown length needs. */
+  height: number | string
 }
 
 export function JsonConfigEditor({
