@@ -31,9 +31,10 @@ CDP 实机验证的可行路径与三个前提、以及我今晚犯过的判断�
 
 ## 进行中（派出去了，等回收）
 
-- [~] **authmode** —— 清理 `CLAUDE_AUTH_MODE` 残留（纯减法）。派给 grok，
-      worktree `.cli-delegate/worktrees/authmode`，
-      结果 JSON `%TEMP%\grok-authmode.json`
+- [x] **authmode** —— 已合。删掉"有人写、没人读"的 `CLAUDE_AUTH_MODE`，
+      16 文件 −182/+4，门全绿（tsc/eslint 0，vitest 394 文件 4970 测试）。
+      工人核实后只删了 2 个 Claude 独有的 i18n 键，另外 4 个是顶层共享、
+      codex/gemini/grok/cursor 还在用——**它没照我的任务书删，是对的**
 - [~] **kanban1** —— 看板多回合任务阶段一。派给 grok，
       worktree `.cli-delegate/worktrees/kanban1`，
       结果 JSON `%TEMP%\grok-kanban1.json`，
