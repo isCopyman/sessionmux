@@ -1436,7 +1436,8 @@
       "baseUrlInvalid": "请输入完整的 http(s) 地址。",
       "apiKeyLabel": "API 密钥",
       "apiKeyHint": "保存在本地，以 DEEPSEEK_API_KEY 传给智能体。"
-    }
+    },
+    "envVarsShowOverlay": "显示 codeg 的环境变量覆盖层（高级——你的 settings.json 里已经有 env 块，而且以它为准）"
   },
   "SettingsPages": {
     "agentsLoading": "加载 Agent 设置中...",

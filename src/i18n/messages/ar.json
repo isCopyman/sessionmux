@@ -1436,7 +1436,8 @@
       "baseUrlInvalid": "أدخل عنوان http(s)‎ كاملًا.",
       "apiKeyLabel": "مفتاح API",
       "apiKeyHint": "يُحفظ محليًا ويُمرَّر إلى الوكيل باسم DEEPSEEK_API_KEY."
-    }
+    },
+    "envVarsShowOverlay": "إظهار طبقة متغيّرات البيئة الخاصة بـ codeg (متقدّم — ملف settings.json لديك يحتوي بالفعل على كتلة env، وهي الأولى بالأولوية)"
   },
   "SettingsPages": {
     "agentsLoading": "جارٍ تحميل إعدادات الوكلاء...",

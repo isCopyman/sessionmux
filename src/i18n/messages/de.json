@@ -1436,7 +1436,8 @@
       "baseUrlInvalid": "Vollständige http(s)-URL eingeben.",
       "apiKeyLabel": "API-Schlüssel",
       "apiKeyHint": "Wird lokal gespeichert und als DEEPSEEK_API_KEY an den Agenten übergeben."
-    }
+    },
+    "envVarsShowOverlay": "codegs Umgebungsvariablen-Overlay anzeigen (fortgeschritten – deine settings.json hat bereits einen env-Block, und der gewinnt)"
   },
   "SettingsPages": {
     "agentsLoading": "Agent-Einstellungen werden geladen...",

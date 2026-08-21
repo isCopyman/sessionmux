@@ -1436,7 +1436,8 @@
       "baseUrlInvalid": "完全な http(s) URL を入力してください。",
       "apiKeyLabel": "API キー",
       "apiKeyHint": "ローカルに保存され、DEEPSEEK_API_KEY としてエージェントに渡されます。"
-    }
+    },
+    "envVarsShowOverlay": "codeg の環境変数オーバーレイを表示（上級者向け — settings.json にすでに env ブロックがあり、そちらが優先されます）"
   },
   "SettingsPages": {
     "agentsLoading": "エージェント設定を読み込み中...",

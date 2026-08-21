@@ -1436,7 +1436,8 @@
       "baseUrlInvalid": "Insira uma URL http(s) completa.",
       "apiKeyLabel": "Chave de API",
       "apiKeyHint": "Armazenada localmente e repassada ao agente como DEEPSEEK_API_KEY."
-    }
+    },
+    "envVarsShowOverlay": "Mostrar a camada de variáveis de ambiente do codeg (avançado — seu settings.json já tem um bloco env, e ele vence)"
   },
   "SettingsPages": {
     "agentsLoading": "Carregando configurações de agentes...",

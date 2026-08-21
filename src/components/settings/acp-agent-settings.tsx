@@ -4161,6 +4161,8 @@ export function AcpAgentSettings() {
   const [claudeProfileTab, setClaudeProfileTab] = useState<string>(
     FOLLOW_DEFAULT_CLAUDE_PROFILE_ID
   )
+  // Claude's env overlay starts collapsed (see the render site for why).
+  const [claudeEnvOverlayOpen, setClaudeEnvOverlayOpen] = useState(false)
   const [uninstallConfirmAgent, setUninstallConfirmAgent] =
     useState<AcpAgentInfo | null>(null)
   const [removeConfirmAgent, setRemoveConfirmAgent] =
@@ -5323,6 +5325,8 @@ export function AcpAgentSettings() {
     !selectedAgent ||
     selectedAgent.agent_type !== "claude_code" ||
     claudeProfileTab === FOLLOW_DEFAULT_CLAUDE_PROFILE_ID
+  const claudeEnvOverlayCollapsed =
+    selectedAgent?.agent_type === "claude_code" && !claudeEnvOverlayOpen
   const selectedIsSaving = selectedAgent
     ? Boolean(
         savingEnv[selectedAgent.agent_type] ||
@@ -7866,32 +7870,52 @@ export function AcpAgentSettings() {
                 </div>
 
                 <div className="space-y-2">
-                  <label className="text-xs font-medium">{t("envVars")}</label>
-                  {/* Scope, spelled out: this is codeg's own overlay, not the
-                      agent's config file, and it outranks that file. The
-                      "where does it live / what is it for" detail is the
-                      tooltip. */}
-                  <p
-                    className="text-[11px] text-muted-foreground"
-                    title={t("envVarsScopeHint")}
-                  >
-                    {t("envVarsScope")}
-                  </p>
-                  <div className="relative group">
-                    <Textarea
-                      value={selectedDraft.envText}
-                      onChange={(event) => {
-                        updateSelectedDraft((current) => ({
-                          ...current,
-                          envText: event.target.value,
-                        }))
-                      }}
-                      placeholder={"KEY1=VALUE1\nKEY2=VALUE2"}
-                      className="min-h-24"
-                      disabled={selectedGrokSaving}
-                    />
-                    <div className="pointer-events-none absolute inset-0 rounded-md bg-background/10 backdrop-blur-[3px] transition-opacity duration-200 group-focus-within:opacity-0" />
-                  </div>
+                  {/* Claude is the one agent whose own config file already has
+                      an `env` block, so this overlay is a second door onto the
+                      same setting — and the file wins, which is the confusing
+                      half. Collapsed rather than removed: a key that lives
+                      only in the database would otherwise be unreachable. The
+                      other agents have no such file and keep it open. */}
+                  {claudeEnvOverlayCollapsed ? (
+                    <button
+                      type="button"
+                      className="text-[11px] text-muted-foreground underline-offset-2 hover:underline"
+                      onClick={() => setClaudeEnvOverlayOpen(true)}
+                    >
+                      {t("envVarsShowOverlay")}
+                    </button>
+                  ) : (
+                    <>
+                      <label className="text-xs font-medium">
+                        {t("envVars")}
+                      </label>
+                      {/* Scope, spelled out: this is codeg's own overlay, not
+                          the agent's config file, and the FILE outranks it.
+                          The "where does it live / what is it for" detail is
+                          the tooltip. */}
+                      <p
+                        className="text-[11px] text-muted-foreground"
+                        title={t("envVarsScopeHint")}
+                      >
+                        {t("envVarsScope")}
+                      </p>
+                      <div className="relative group">
+                        <Textarea
+                          value={selectedDraft.envText}
+                          onChange={(event) => {
+                            updateSelectedDraft((current) => ({
+                              ...current,
+                              envText: event.target.value,
+                            }))
+                          }}
+                          placeholder={"KEY1=VALUE1\nKEY2=VALUE2"}
+                          className="min-h-24"
+                          disabled={selectedGrokSaving}
+                        />
+                        <div className="pointer-events-none absolute inset-0 rounded-md bg-background/10 backdrop-blur-[3px] transition-opacity duration-200 group-focus-within:opacity-0" />
+                      </div>
+                    </>
+                  )}
                   {/*
                     Backed by the same `envText` draft as the textarea above,
                     not self-persisting: saving on toggle would also commit
