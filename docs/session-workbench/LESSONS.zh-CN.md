@@ -27,7 +27,11 @@
 
 场景：`git worktree remove` 报 "Directory not empty"，元数据删了目录还在。
 规则：`git worktree remove --force` → `rm -rf` → `ls` 验证；句柄锁死的空壳重启自清。
-worktree 一合并立即删（磁盘 20G/棵），详见 DISK-WORKTREE-HYGIENE。
+
+删哪些（2026-08-21 修订，原来那句"一合并立即删"已作废）：**一次性树**合并即删；
+**常驻车道**（按子系统各一条，如 `ui` / `backend`）留着复用。留的理由不是省 git IO，
+是省构建产物冷启——新树 = Rust 全量冷编译 + turbopack 冷编译。代价 20G/棵，常驻控制在 2–3 条。
+详见 DISK-WORKTREE-HYGIENE「常驻车道 vs 一次性树」。
 
 ## L5. worktree 里桌面测试 exe 载入即死（0xc0000139）
 

@@ -28,6 +28,10 @@ const eslintConfig = defineConfig([
     // own .next build output) under .claude/ — linting those multiplies the
     // repo and once pinned `pnpm eslint .` for minutes on generated chunks.
     ".claude/**",
+    // Same problem, newer tool: cli-delegate parks named lanes (full checkouts
+    // with their own src-tauri/target) under .cli-delegate/worktrees/. Left in,
+    // `pnpm eslint .` reports the whole repo twice plus generated build JS.
+    ".cli-delegate/**",
     // One-off validation tooling (CDP probes, session scratch): committed for
     // provenance, never part of the product build, not held to repo lint.
     ".artifacts/**",
@@ -37,6 +41,17 @@ const eslintConfig = defineConfig([
   {
     rules: {
       "prettier/prettier": "error",
+      // Match tsconfig's `noUnusedParameters`, which exempts a leading `_`.
+      // Without this the codebase's own "deliberately unused" marker warns
+      // forever, and a permanently-warning lint is a lint nobody reads.
+      "@typescript-eslint/no-unused-vars": [
+        "warn",
+        {
+          argsIgnorePattern: "^_",
+          varsIgnorePattern: "^_",
+          caughtErrorsIgnorePattern: "^_",
+        },
+      ],
     },
   },
   {
