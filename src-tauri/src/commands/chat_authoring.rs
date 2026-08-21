@@ -1133,6 +1133,7 @@ mod tests {
                 model: None,
                 settings_json: None,
                 env: None,
+                expect_new: false,
             },
         )
         .expect("upsert managed profile");

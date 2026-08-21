@@ -1008,6 +1008,7 @@ pub async fn migrate_claude_profile_owned_env(
             model,
             settings_json: Some(settings_json),
             env: None,
+            expect_new: false,
         },
     )?;
 
@@ -1160,6 +1161,10 @@ fn validate_upsert(input: &ClaudeProfileUpsert) -> Result<(), AppCommandError> {
     Ok(())
 }
 
+fn normalized_profile_label(label: &str) -> String {
+    label.trim().to_lowercase()
+}
+
 pub fn claude_profile_upsert_core(
     data_dir: &Path,
     input: ClaudeProfileUpsert,
@@ -1167,6 +1172,25 @@ pub fn claude_profile_upsert_core(
     validate_upsert(&input)?;
     let now = Utc::now().to_rfc3339();
     let existing = read_record(data_dir, &input.id)?;
+    if input.expect_new && existing.is_some() {
+        return Err(AppCommandError::invalid_input(format!(
+            "profile id '{}' already exists",
+            input.id
+        )));
+    }
+    let needle = normalized_profile_label(&input.label);
+    for info in claude_profile_list_core(data_dir)? {
+        // Virtual labels are translated, not stored; uniqueness is among files.
+        if info.is_virtual || info.id == input.id {
+            continue;
+        }
+        if normalized_profile_label(&info.label) == needle {
+            return Err(AppCommandError::invalid_input(format!(
+                "profile label '{}' is already used",
+                input.label.trim()
+            )));
+        }
+    }
     let created_at = existing
         .as_ref()
         .map(|r| r.created_at.clone())
@@ -1524,6 +1548,7 @@ mod tests {
                 model: None,
                 settings_json: None,
                 env: None,
+                expect_new: false,
             },
         )
         .expect("upsert configDir")
@@ -1548,6 +1573,7 @@ mod tests {
                 model: model.map(str::to_string),
                 settings_json: None,
                 env: None,
+                expect_new: false,
             },
         )
         .expect("upsert managed")
@@ -1577,6 +1603,7 @@ mod tests {
                 model: None,
                 settings_json: None,
                 env: None,
+                expect_new: false,
             },
         )
         .unwrap_err();
@@ -1593,6 +1620,7 @@ mod tests {
                 model: None,
                 settings_json: None,
                 env: None,
+                expect_new: false,
             },
         )
         .unwrap_err();
@@ -1609,6 +1637,7 @@ mod tests {
                 model: None,
                 settings_json: None,
                 env: None,
+                expect_new: false,
             },
         )
         .unwrap_err();
@@ -1627,10 +1656,170 @@ mod tests {
                 model: None,
                 settings_json: None,
                 env: None,
+                expect_new: false,
             },
         )
         .unwrap_err();
         assert!(err.message.contains("[a-z0-9-_]"), "{}", err.message);
+    }
+
+    #[test]
+    fn create_rejects_existing_id_and_update_still_succeeds() {
+        let data = tempfile::tempdir().unwrap();
+        let created = claude_profile_upsert_core(
+            data.path(),
+            ClaudeProfileUpsert {
+                id: "work".into(),
+                label: "Work".into(),
+                kind: ClaudeProfileKind::Managed,
+                config_dir: None,
+                base_url: Some("https://example.test/v1".into()),
+                auth_token: Some("sk-original-secret-token".into()),
+                model: None,
+                settings_json: None,
+                env: None,
+                expect_new: true,
+            },
+        )
+        .unwrap();
+        let original_mask = created.auth_token_masked.clone();
+        assert!(!original_mask.is_empty());
+
+        let err = claude_profile_upsert_core(
+            data.path(),
+            ClaudeProfileUpsert {
+                id: "work".into(),
+                label: "Hijacked".into(),
+                kind: ClaudeProfileKind::Managed,
+                config_dir: None,
+                base_url: None,
+                auth_token: Some("sk-other-token".into()),
+                model: None,
+                settings_json: None,
+                env: None,
+                expect_new: true,
+            },
+        )
+        .unwrap_err();
+        assert!(err.message.contains("already exists"), "{}", err.message);
+
+        let stored = read_record(data.path(), "work").unwrap().unwrap();
+        assert_eq!(stored.label, "Work");
+        assert_eq!(
+            stored.auth_token.as_deref(),
+            Some("sk-original-secret-token")
+        );
+
+        let updated = claude_profile_upsert_core(
+            data.path(),
+            ClaudeProfileUpsert {
+                id: "work".into(),
+                label: "Work renamed".into(),
+                kind: ClaudeProfileKind::Managed,
+                config_dir: None,
+                base_url: Some("https://example.test/v1".into()),
+                auth_token: None,
+                model: None,
+                settings_json: None,
+                env: None,
+                expect_new: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(updated.label, "Work renamed");
+        assert_eq!(updated.auth_token_masked, original_mask);
+    }
+
+    #[test]
+    fn upsert_rejects_duplicate_label() {
+        let data = tempfile::tempdir().unwrap();
+        claude_profile_upsert_core(
+            data.path(),
+            ClaudeProfileUpsert {
+                id: "a".into(),
+                label: "中转".into(),
+                kind: ClaudeProfileKind::Managed,
+                config_dir: None,
+                base_url: None,
+                auth_token: None,
+                model: None,
+                settings_json: None,
+                env: None,
+                expect_new: false,
+            },
+        )
+        .unwrap();
+
+        let err = claude_profile_upsert_core(
+            data.path(),
+            ClaudeProfileUpsert {
+                id: "b".into(),
+                label: "中转 ".into(),
+                kind: ClaudeProfileKind::Managed,
+                config_dir: None,
+                base_url: None,
+                auth_token: None,
+                model: None,
+                settings_json: None,
+                env: None,
+                expect_new: false,
+            },
+        )
+        .unwrap_err();
+        assert!(err.message.contains("already used"), "{}", err.message);
+
+        claude_profile_upsert_core(
+            data.path(),
+            ClaudeProfileUpsert {
+                id: "c".into(),
+                label: "Relay".into(),
+                kind: ClaudeProfileKind::Managed,
+                config_dir: None,
+                base_url: None,
+                auth_token: None,
+                model: None,
+                settings_json: None,
+                env: None,
+                expect_new: false,
+            },
+        )
+        .unwrap();
+
+        let err = claude_profile_upsert_core(
+            data.path(),
+            ClaudeProfileUpsert {
+                id: "d".into(),
+                label: "relay".into(),
+                kind: ClaudeProfileKind::Managed,
+                config_dir: None,
+                base_url: None,
+                auth_token: None,
+                model: None,
+                settings_json: None,
+                env: None,
+                expect_new: false,
+            },
+        )
+        .unwrap_err();
+        assert!(err.message.contains("already used"), "{}", err.message);
+
+        let kept = claude_profile_upsert_core(
+            data.path(),
+            ClaudeProfileUpsert {
+                id: "a".into(),
+                label: "中转".into(),
+                kind: ClaudeProfileKind::Managed,
+                config_dir: None,
+                base_url: None,
+                auth_token: None,
+                model: None,
+                settings_json: None,
+                env: None,
+                expect_new: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(kept.label, "中转");
     }
 
     #[test]
@@ -1766,6 +1955,7 @@ mod tests {
                 model: None,
                 settings_json: Some(serde_json::to_string_pretty(&base).unwrap()),
                 env: None,
+                expect_new: false,
             },
         )
         .unwrap();
@@ -1816,6 +2006,7 @@ mod tests {
                     model: None,
                     settings_json: Some(raw.into()),
                     env: None,
+                    expect_new: false,
                 },
             )
             .unwrap_err();
@@ -1834,6 +2025,7 @@ mod tests {
                 model: None,
                 settings_json: Some("{}".into()),
                 env: None,
+                expect_new: false,
             },
         )
         .unwrap_err();
@@ -1857,6 +2049,7 @@ mod tests {
                     r#"{"env":{"MY_GATEWAY_SECRET":"secret-value-12345678"}}"#.into(),
                 ),
                 env: None,
+                expect_new: false,
             },
         )
         .unwrap();
@@ -1882,6 +2075,7 @@ mod tests {
                 model: None,
                 settings_json: Some(masked),
                 env: None,
+                expect_new: false,
             },
         )
         .unwrap();
@@ -1913,6 +2107,7 @@ mod tests {
                 model: None,
                 settings_json: Some("{}".into()),
                 env: Some(legacy_env),
+                expect_new: false,
             },
         )
         .unwrap();
@@ -1940,6 +2135,7 @@ mod tests {
                     .to_string(),
                 ),
                 env: Some(BTreeMap::new()),
+                expect_new: false,
             },
         )
         .unwrap();
@@ -1968,6 +2164,7 @@ mod tests {
                 model: None,
                 settings_json: Some(r#"{"theme":"dark"}"#.into()),
                 env: None,
+                expect_new: false,
             },
         )
         .unwrap();
@@ -1999,6 +2196,7 @@ mod tests {
                 model: None,
                 settings_json: Some(String::new()),
                 env: None,
+                expect_new: false,
             },
         )
         .unwrap();
@@ -2028,6 +2226,7 @@ mod tests {
                     r#"{"env":{"ANTHROPIC_API_KEY":"sk-a••••••••••••7890","KEEP":"yes"}}"#.into(),
                 ),
                 env: None,
+                expect_new: false,
             },
         )
         .unwrap();
@@ -2660,6 +2859,7 @@ mod tests {
                 model: None,
                 settings_json: None,
                 env: Some(env),
+                expect_new: false,
             },
         )
         .unwrap();
@@ -2700,6 +2900,7 @@ mod tests {
                 model: None,
                 settings_json: None,
                 env: Some(BTreeMap::new()),
+                expect_new: false,
             },
         )
         .unwrap();
@@ -2738,6 +2939,7 @@ mod tests {
                 model: Some("from-field-model".into()),
                 settings_json: None,
                 env: Some(env),
+                expect_new: false,
             },
         )
         .unwrap();
@@ -2970,6 +3172,7 @@ mod tests {
                 model: Some("from-field-model".into()),
                 settings_json: None,
                 env: Some(env),
+                expect_new: false,
             },
         )
         .unwrap();
@@ -3070,6 +3273,7 @@ mod tests {
                 model: None,
                 settings_json: None,
                 env: Some(env),
+                expect_new: false,
             },
         )
         .unwrap();

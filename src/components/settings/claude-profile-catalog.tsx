@@ -370,6 +370,9 @@ export function ClaudeProfileCatalog({
     }
 
     const payload: ClaudeProfileUpsert = { id, label, kind: draft.kind }
+    if (draft.isNew) {
+      payload.expectNew = true
+    }
     if (draft.kind === "configDir") {
       payload.configDir = draft.configDir.trim()
     } else {
