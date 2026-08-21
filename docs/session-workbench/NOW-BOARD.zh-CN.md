@@ -75,7 +75,9 @@ CDP 实机验证的可行路径与三个前提、以及我今晚犯过的判断�
       静默后走和 `TurnComplete` 同一条通知路径。**Grok 线要单独接**
       （`task_backgrounded` / `task_completed`，本轮未查）。
 
-- [ ] **换档/换配置后自动重启 ACP**（2026-08-21 夜用户拍板"这个要做"）。
+- [x] **换档/换配置后自动重启 ACP** —— 已做，`3691f506` (lane autorestart)。
+      空闲直接重启不弹框，忙时弹框写清丢什么。以下为原始记录：
+- [x] ~~换档/换配置后自动重启 ACP~~（2026-08-21 夜用户拍板"这个要做"）。
       现状是标 stale + 挂横幅，用户得自己去点，而且横幅能 dismiss——
       dismiss 之后就跑在一个"以为换了其实没换"的会话上，这才是真 bug。
       按下表做：
@@ -90,7 +92,11 @@ CDP 实机验证的可行路径与三个前提、以及我今晚犯过的判断�
       涉及 `acp/manager.rs`（`mark_conversation_config_stale`）和
       `src/components/chat/session-config-stale-banner.tsx`。
 
-- [ ] **把锁死的会话在全局露出来**。今晚查出三个会话的队列被会话级锁死 1–3 天
+- [x] **把锁死的会话在全局露出来** —— 已做，`465586e1` (lane lockedsessions)。
+      侧边栏会话行现在有琥珀色标记，无障碍标签和 tooltip 复用会话内已有的十语文案。
+      **留了一个缺口**：展开的子会话行不会实时更新（`updateConversationLocal` 只 patch 根行）。
+      以下为原始记录：
+- [x] ~~把锁死的会话在全局露出来~~。今晚查出三个会话的队列被会话级锁死 1–3 天
       （`paused_reason`），但这个状态**只在会话内部**的输入框上方显示
       （`message-queue-display.tsx`），不点进去根本不知道。
       这就是"催办为什么没响"用户查不出来的直接原因。
