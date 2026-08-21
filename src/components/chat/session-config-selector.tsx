@@ -17,6 +17,51 @@ import { DropdownRadioItemContent } from "@/components/chat/dropdown-radio-item-
 import type { ModelOptionGroup } from "@/lib/model-config-groups"
 import type { SessionConfigOptionInfo } from "@/lib/types"
 
+/**
+ * Value labels that say nothing on their own. A chip printing just "Off" or
+ * "Default" is unreadable — the composer bar becomes a row of mystery words and
+ * the only way to learn what a control does is to hover it. Values that name
+ * themselves (`claude-opus-5`, `Bypass Permissions`) stay bare, so the bar keeps
+ * its short labels where short labels work.
+ *
+ * `configChipLabel` is the single source of truth for the rule and
+ * session-config-selector.test.tsx pins both branches.
+ */
+const GENERIC_VALUE_LABELS = new Set([
+  "on",
+  "off",
+  "default",
+  "auto",
+  "none",
+  "enabled",
+  "disabled",
+  "yes",
+  "no",
+  "true",
+  "false",
+  "standard",
+  "normal",
+  "开",
+  "关",
+  "开启",
+  "关闭",
+  "默认",
+  "自动",
+  "无",
+  "是",
+  "否",
+])
+
+/** Chip text for a select option: `name: value` when the value is generic. */
+export function configChipLabel(
+  optionName: string,
+  valueLabel: string
+): string {
+  return GENERIC_VALUE_LABELS.has(valueLabel.trim().toLowerCase())
+    ? `${optionName}: ${valueLabel}`
+    : valueLabel
+}
+
 interface SessionConfigSelectorProps {
   option: SessionConfigOptionInfo
   onSelect: (configId: string, valueId: string) => void
@@ -73,7 +118,9 @@ export function InlineSessionConfigSelector({
           }
           className="min-w-0 gap-0.5 px-1 text-muted-foreground"
         >
-          <span className="max-w-[10rem] truncate">{currentLabel}</span>
+          <span className="max-w-[10rem] truncate">
+            {configChipLabel(option.name, currentLabel)}
+          </span>
           <ChevronDown className="size-3 shrink-0 text-muted-foreground" />
         </Button>
       </DropdownMenuTrigger>

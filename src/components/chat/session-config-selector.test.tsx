@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import {
+  configChipLabel,
   InlineSessionConfigSelector,
   InlineSessionConfigToggle,
 } from "./session-config-selector"
@@ -26,6 +27,63 @@ function modelOption(
     },
   }
 }
+
+function namedOption(
+  id: string,
+  name: string,
+  values: string[],
+  current: string
+): SessionConfigOptionInfo {
+  return {
+    id,
+    name,
+    description: null,
+    category: null,
+    kind: {
+      type: "select",
+      current_value: current,
+      options: values.map((v) => ({ value: v, name: v, description: null })),
+      groups: [],
+    },
+  }
+}
+
+describe("configChipLabel", () => {
+  it("prefixes the option name when the value says nothing on its own", () => {
+    // The composer bar used to read "… Xhigh Off Default" — three mystery
+    // words. Fast mode / Agent must name themselves.
+    expect(configChipLabel("Fast mode", "Off")).toBe("Fast mode: Off")
+    expect(configChipLabel("Agent", "Default")).toBe("Agent: Default")
+    expect(configChipLabel("Thinking", "auto")).toBe("Thinking: auto")
+    expect(configChipLabel("快速模式", "关")).toBe("快速模式: 关")
+  })
+
+  it("leaves self-naming values bare so short labels stay short", () => {
+    expect(configChipLabel("Model", "claude-opus-5[1m]")).toBe(
+      "claude-opus-5[1m]"
+    )
+    expect(configChipLabel("Mode", "Bypass Permissions")).toBe(
+      "Bypass Permissions"
+    )
+    expect(configChipLabel("Effort", "Xhigh")).toBe("Xhigh")
+  })
+})
+
+describe("InlineSessionConfigSelector — ambiguous values", () => {
+  afterEach(() => cleanup())
+
+  it("shows the option name on the trigger for a generic current value", () => {
+    render(
+      <InlineSessionConfigSelector
+        option={namedOption("fast_mode", "Fast mode", ["On", "Off"], "Off")}
+        onSelect={vi.fn()}
+      />
+    )
+    expect(
+      screen.getByRole("button", { name: "Fast mode: Off" })
+    ).toHaveTextContent("Fast mode: Off")
+  })
+})
 
 describe("InlineSessionConfigSelector — model grouping", () => {
   afterEach(() => cleanup())
