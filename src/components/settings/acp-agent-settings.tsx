@@ -36,6 +36,14 @@ import {
   Wrench,
 } from "lucide-react"
 import { parse as parseTomlDocument } from "smol-toml"
+import {
+  CLAUDE_AUTH_MODES,
+  ClaudeConfigFields,
+  EMPTY_CLAUDE_CONFIG_VALUE,
+  type ClaudeAuthMode,
+  type ClaudeConfigValue,
+  type ClaudeEffortLevel,
+} from "./claude-config-fields"
 import { isDesktop, openUrl } from "@/lib/platform"
 import { getActiveRemoteConnectionId } from "@/lib/transport"
 import { toast } from "sonner"
@@ -169,12 +177,10 @@ interface AgentCheckState {
   error?: string
 }
 
-const CLAUDE_AUTH_MODES = [
-  "official_subscription",
-  "custom",
-  "model_provider",
-] as const
-export type ClaudeAuthMode = (typeof CLAUDE_AUTH_MODES)[number]
+// Defined with the form that renders them, so the profile tabs and this panel
+// cannot drift apart on what an auth mode is. Re-exported: the test suite and
+// the draft type both name it.
+export type { ClaudeAuthMode }
 
 interface AgentDraft {
   enabled: boolean
@@ -616,12 +622,6 @@ const CLAUDE_SEND_ATTRIBUTION_HEADER_DEFAULT = false
 const CLAUDE_DISABLE_NONESSENTIAL_TRAFFIC_DEFAULT = true
 
 const CLAUDE_EFFORT_LEVEL_CONFIG_KEY = "effortLevel"
-
-type ClaudeEffortLevel = "" | "low" | "medium" | "high" | "xhigh"
-
-const CLAUDE_EFFORT_LEVEL_VALUES: ReadonlyArray<
-  Exclude<ClaudeEffortLevel, "">
-> = ["low", "medium", "high", "xhigh"]
 
 function normalizeClaudeEffortLevel(value: unknown): ClaudeEffortLevel {
   if (typeof value !== "string") return ""
@@ -11311,94 +11311,18 @@ supports_websockets = true`}
 
                     {selectedAgent.agent_type === "claude_code" &&
                       claudeCliGlobalsVisible && (
-                        <div className="space-y-1.5">
-                          <label className="text-[11px] text-muted-foreground">
-                            {t("claude.authMode")}
-                          </label>
-                          <Select
-                            value={selectedDraft.claudeAuthMode}
-                            onValueChange={(value) => {
-                              if (
-                                CLAUDE_AUTH_MODES.includes(
-                                  value as ClaudeAuthMode
-                                )
-                              ) {
-                                handleClaudeAuthModeChange(
-                                  value as ClaudeAuthMode
-                                )
-                              }
-                            }}
-                          >
-                            <SelectTrigger className="w-full">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent align="start">
-                              <SelectItem value="official_subscription">
-                                {t("authModeOfficialSubscription")}
-                              </SelectItem>
-                              <SelectItem value="custom">
-                                {t("authModeCustomEndpoint")}
-                              </SelectItem>
-                              <SelectItem value="model_provider">
-                                {t("authModeModelProvider")}
-                              </SelectItem>
-                            </SelectContent>
-                          </Select>
-                          <p className="text-[11px] text-muted-foreground">
-                            {selectedDraft.claudeAuthMode ===
-                            "official_subscription"
-                              ? t("claude.officialSubscriptionHint")
-                              : selectedDraft.claudeAuthMode === "custom"
-                                ? t("authModeCustomEndpointHint")
-                                : t("modelProviderHint")}
-                          </p>
-                        </div>
-                      )}
-
-                    {selectedAgent.agent_type === "claude_code" &&
-                      claudeCliGlobalsVisible &&
-                      selectedDraft.claudeAuthMode === "model_provider" && (
-                        <div className="space-y-1.5">
-                          <label className="text-[11px] text-muted-foreground">
-                            {t("selectModelProvider")}
-                          </label>
-                          {selectedModelProviders.length > 0 ? (
-                            <Select
-                              value={
-                                selectedDraft.modelProviderId != null
-                                  ? String(selectedDraft.modelProviderId)
-                                  : ""
-                              }
-                              onValueChange={handleModelProviderSelect}
-                            >
-                              <SelectTrigger className="w-full">
-                                <SelectValue
-                                  placeholder={t("selectModelProvider")}
-                                />
-                              </SelectTrigger>
-                              <SelectContent align="start">
-                                {selectedModelProviders.map((provider) => (
-                                  <SelectItem
-                                    key={provider.id}
-                                    value={String(provider.id)}
-                                  >
-                                    {provider.name}
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                          ) : (
-                            <p className="text-[11px] text-muted-foreground">
-                              {t("noModelProviderAvailable")}
-                            </p>
-                          )}
-                        </div>
+                        <ClaudeConfigFields
+                          idPrefix="claude-cli-global"
+                          value={claudeConfigValue}
+                          onChange={handleClaudeConfigFieldsChange}
+                          providers={selectedModelProviders}
+                          providerId={selectedDraft.modelProviderId}
+                          onProviderSelect={handleModelProviderSelect}
+                        />
                       )}
 
                     {claudeCliGlobalsVisible &&
-                      (selectedAgent.agent_type !== "claude_code" ||
-                        selectedDraft.claudeAuthMode === "custom" ||
-                        selectedDraft.claudeAuthMode === "model_provider") && (
+                      selectedAgent.agent_type !== "claude_code" && (
                         <>
                           <div className="space-y-1.5">
                             <label className="text-[11px] text-muted-foreground">
@@ -11475,255 +11399,7 @@ supports_websockets = true`}
                       )}
 
                     {claudeCliGlobalsVisible &&
-                      (selectedAgent.agent_type === "claude_code" ? (
-                        <div className="space-y-2">
-                          <div className="grid gap-3 md:grid-cols-2">
-                            <div className="space-y-1.5">
-                              <label className="text-[11px] text-muted-foreground">
-                                {t("claude.mainModel")}
-                              </label>
-                              <Input
-                                value={selectedDraft.claudeMainModel}
-                                readOnly={
-                                  selectedDraft.claudeAuthMode ===
-                                  "model_provider"
-                                }
-                                onChange={(event) => {
-                                  handleImportantConfigChange(
-                                    "claudeMainModel",
-                                    event.target.value
-                                  )
-                                }}
-                                placeholder="claude-sonnet-5"
-                              />
-                            </div>
-                            <div className="space-y-1.5">
-                              <label className="text-[11px] text-muted-foreground">
-                                {t("claude.reasoningModel")}
-                              </label>
-                              <Input
-                                value={selectedDraft.claudeReasoningModel}
-                                readOnly={
-                                  selectedDraft.claudeAuthMode ===
-                                  "model_provider"
-                                }
-                                onChange={(event) => {
-                                  handleImportantConfigChange(
-                                    "claudeReasoningModel",
-                                    event.target.value
-                                  )
-                                }}
-                                placeholder="claude-opus-5"
-                              />
-                            </div>
-                            <div className="space-y-1.5">
-                              <label className="text-[11px] text-muted-foreground">
-                                {t("claude.haikuDefaultModel")}
-                              </label>
-                              <Input
-                                value={selectedDraft.claudeDefaultHaikuModel}
-                                readOnly={
-                                  selectedDraft.claudeAuthMode ===
-                                  "model_provider"
-                                }
-                                onChange={(event) => {
-                                  handleImportantConfigChange(
-                                    "claudeDefaultHaikuModel",
-                                    event.target.value
-                                  )
-                                }}
-                                placeholder="claude-haiku-4-5"
-                              />
-                            </div>
-                            <div className="space-y-1.5">
-                              <label className="text-[11px] text-muted-foreground">
-                                {t("claude.sonnetDefaultModel")}
-                              </label>
-                              <Input
-                                value={selectedDraft.claudeDefaultSonnetModel}
-                                readOnly={
-                                  selectedDraft.claudeAuthMode ===
-                                  "model_provider"
-                                }
-                                onChange={(event) => {
-                                  handleImportantConfigChange(
-                                    "claudeDefaultSonnetModel",
-                                    event.target.value
-                                  )
-                                }}
-                                placeholder="claude-sonnet-5"
-                              />
-                            </div>
-                            <div className="space-y-1.5 md:col-span-2">
-                              <label className="text-[11px] text-muted-foreground">
-                                {t("claude.opusDefaultModel")}
-                              </label>
-                              <Input
-                                value={selectedDraft.claudeDefaultOpusModel}
-                                readOnly={
-                                  selectedDraft.claudeAuthMode ===
-                                  "model_provider"
-                                }
-                                onChange={(event) => {
-                                  handleImportantConfigChange(
-                                    "claudeDefaultOpusModel",
-                                    event.target.value
-                                  )
-                                }}
-                                placeholder="claude-opus-5"
-                              />
-                            </div>
-                          </div>
-                          <p className="text-[11px] text-muted-foreground">
-                            {t("modelHintDefault")}
-                          </p>
-                          <div className="space-y-2 border-t border-border/60 pt-3">
-                            <div className="grid gap-3 md:grid-cols-2">
-                              <div className="space-y-1.5 md:col-span-2">
-                                <label className="text-[11px] text-muted-foreground">
-                                  {t("claude.customModelOption")}
-                                </label>
-                                <Input
-                                  value={selectedDraft.claudeCustomModelOption}
-                                  readOnly={
-                                    selectedDraft.claudeAuthMode ===
-                                    "model_provider"
-                                  }
-                                  onChange={(event) => {
-                                    handleImportantConfigChange(
-                                      "claudeCustomModelOption",
-                                      event.target.value
-                                    )
-                                  }}
-                                  placeholder="my-gateway/claude-opus-5"
-                                />
-                              </div>
-                              <div className="space-y-1.5">
-                                <label className="text-[11px] text-muted-foreground">
-                                  {t("claude.customModelOptionName")}
-                                </label>
-                                <Input
-                                  value={
-                                    selectedDraft.claudeCustomModelOptionName
-                                  }
-                                  readOnly={
-                                    selectedDraft.claudeAuthMode ===
-                                    "model_provider"
-                                  }
-                                  onChange={(event) => {
-                                    handleImportantConfigChange(
-                                      "claudeCustomModelOptionName",
-                                      event.target.value
-                                    )
-                                  }}
-                                  placeholder="Gateway Opus"
-                                />
-                              </div>
-                              <div className="space-y-1.5">
-                                <label className="text-[11px] text-muted-foreground">
-                                  {t("claude.customModelOptionDescription")}
-                                </label>
-                                <Input
-                                  value={
-                                    selectedDraft.claudeCustomModelOptionDescription
-                                  }
-                                  readOnly={
-                                    selectedDraft.claudeAuthMode ===
-                                    "model_provider"
-                                  }
-                                  onChange={(event) => {
-                                    handleImportantConfigChange(
-                                      "claudeCustomModelOptionDescription",
-                                      event.target.value
-                                    )
-                                  }}
-                                  placeholder="Routed via custom gateway"
-                                />
-                              </div>
-                            </div>
-                            <p className="text-[11px] text-muted-foreground">
-                              {t("claude.customModelOptionHint")}
-                            </p>
-                          </div>
-                          <div className="space-y-1.5">
-                            <label className="text-[11px] text-muted-foreground">
-                              {t("claude.effortLevel")}
-                            </label>
-                            <Select
-                              value={
-                                selectedDraft.claudeEffortLevel || "default"
-                              }
-                              onValueChange={(nextValue) => {
-                                handleClaudeEffortLevelChange(
-                                  nextValue === "default"
-                                    ? ""
-                                    : (nextValue as ClaudeEffortLevel)
-                                )
-                              }}
-                            >
-                              <SelectTrigger className="w-full">
-                                <SelectValue
-                                  placeholder={t("claude.effortLevelDefault")}
-                                />
-                              </SelectTrigger>
-                              <SelectContent align="start">
-                                <SelectItem value="default">
-                                  {t("claude.effortLevelDefault")}
-                                </SelectItem>
-                                {CLAUDE_EFFORT_LEVEL_VALUES.map((value) => (
-                                  <SelectItem key={value} value={value}>
-                                    {t(`claude.effortLevel_${value}`)}
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                          </div>
-                          <div className="space-y-1.5">
-                            <div className="flex items-center justify-between rounded-md border px-3 py-2">
-                              <label className="text-[11px] text-muted-foreground">
-                                {t("claude.sendAttributionHeader")}
-                              </label>
-                              <Switch
-                                checked={
-                                  selectedDraft.claudeSendAttributionHeader
-                                }
-                                onCheckedChange={(checked) => {
-                                  handleClaudeEnvFlagChange(
-                                    "claudeSendAttributionHeader",
-                                    CLAUDE_ATTRIBUTION_HEADER_ENV_KEY,
-                                    checked
-                                  )
-                                }}
-                                aria-label={t(
-                                  "claude.sendAttributionHeaderAria"
-                                )}
-                              />
-                            </div>
-                          </div>
-                          <div className="space-y-1.5">
-                            <div className="flex items-center justify-between rounded-md border px-3 py-2">
-                              <label className="text-[11px] text-muted-foreground">
-                                {t("claude.disableNonessentialTraffic")}
-                              </label>
-                              <Switch
-                                checked={
-                                  selectedDraft.claudeDisableNonessentialTraffic
-                                }
-                                onCheckedChange={(checked) => {
-                                  handleClaudeEnvFlagChange(
-                                    "claudeDisableNonessentialTraffic",
-                                    CLAUDE_NONESSENTIAL_TRAFFIC_ENV_KEY,
-                                    checked
-                                  )
-                                }}
-                                aria-label={t(
-                                  "claude.disableNonessentialTrafficAria"
-                                )}
-                              />
-                            </div>
-                          </div>
-                        </div>
-                      ) : (
+                      selectedAgent.agent_type !== "claude_code" && (
                         <div className="space-y-1.5">
                           <label className="text-[11px] text-muted-foreground">
                             Model
@@ -11740,7 +11416,7 @@ supports_websockets = true`}
                             placeholder="gpt-5 / claude-sonnet / gemini-2.5-pro"
                           />
                         </div>
-                      ))}
+                      )}
 
                     {claudeCliGlobalsVisible && (
                       <div className="space-y-1.5">

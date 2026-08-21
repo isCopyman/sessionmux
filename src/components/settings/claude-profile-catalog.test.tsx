@@ -216,11 +216,37 @@ describe("ClaudeProfileCatalog", () => {
     await user.click(screen.getByRole("button", { name: "Add profile" }))
     await user.click(await screen.findByRole("menuitem", { name: /Duplicate/ }))
 
-    expect(screen.getByLabelText("Base URL")).toHaveValue(
+    // Same form the "Follow default" tab renders, so the connection fields are
+    // labelled the way that tab has always labelled them.
+    expect(screen.getByLabelText("API URL")).toHaveValue(
       "https://example.test/v1"
     )
-    expect(screen.getByLabelText("Auth token")).toHaveValue("")
+    expect(screen.getByLabelText("API Key")).toHaveValue("")
     expect(screen.getByText(/was not copied/)).toBeInTheDocument()
+  })
+
+  // The complaint that started this: "why does the new profile look nothing
+  // like Follow default — isn't it also official-vs-API, also models?" It is,
+  // and both tabs now render `ClaudeConfigFields`. This pins the fields a
+  // profile tab must offer so the two cannot drift apart again.
+  it("offers a profile the same auth choice and model fields as the CLI tab", async () => {
+    api.claudeProfileList.mockResolvedValue([FOLLOW, RELAY])
+    const user = userEvent.setup()
+    renderCatalog()
+
+    await user.click(await screen.findByRole("tab", { name: "中转" }))
+
+    expect(screen.getByLabelText("Auth Mode")).toBeInTheDocument()
+    expect(screen.getByLabelText("Main Model")).toBeInTheDocument()
+    expect(screen.getByLabelText("Default Haiku Model")).toBeInTheDocument()
+    expect(screen.getByLabelText("Default Sonnet Model")).toBeInTheDocument()
+    expect(screen.getByLabelText("Default Opus Model")).toBeInTheDocument()
+    expect(
+      screen.getByLabelText("Reasoning Model (thinking)")
+    ).toBeInTheDocument()
+    expect(screen.getByLabelText("Reasoning Effort Level")).toBeInTheDocument()
+    // A profile has no provider binding, so that third mode is not offered.
+    expect(screen.queryByLabelText("Select Model Provider")).toBeNull()
   })
 
   it("treats Official direct as a read-only tab of its own", async () => {

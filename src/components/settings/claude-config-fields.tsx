@@ -186,7 +186,9 @@ export function ClaudeConfigFields({
             <SelectItem value="official_subscription">
               {t("authModeOfficialSubscription")}
             </SelectItem>
-            <SelectItem value="custom">{t("authModeCustomEndpoint")}</SelectItem>
+            <SelectItem value="custom">
+              {t("authModeCustomEndpoint")}
+            </SelectItem>
             {providerModeAvailable ? (
               <SelectItem value="model_provider">
                 {t("authModeModelProvider")}
@@ -326,7 +328,8 @@ export function ClaudeConfigFields({
           value={value.effortLevel || "default"}
           onValueChange={(next) =>
             onChange({
-              effortLevel: next === "default" ? "" : (next as ClaudeEffortLevel),
+              effortLevel:
+                next === "default" ? "" : (next as ClaudeEffortLevel),
             })
           }
         >
