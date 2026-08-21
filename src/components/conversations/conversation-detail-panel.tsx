@@ -77,6 +77,7 @@ import { AgentDiagnosticsDialog } from "@/components/settings/agent-diagnostics-
 import { useFeedbackEnabled } from "@/hooks/use-feedback-enabled"
 import { useSessionFeedback } from "@/hooks/use-session-feedback"
 import { AgentSelector } from "@/components/chat/agent-selector"
+import { applyPendingClaudeProfileAndRespawn } from "@/components/chat/apply-pending-claude-profile"
 import { ChatInput } from "@/components/chat/chat-input"
 import {
   WelcomeHero,
@@ -438,6 +439,7 @@ const ConversationTabView = memo(function ConversationTabView({
   const mountedRef = useRef(true)
   const selectedAgentRef = useRef(selectedAgent)
   const createConversationPendingRef = useRef(false)
+  const pendingClaudeProfileRef = useRef<string | null>(null)
   // Single-flight guard for the eager scratch-dir prepare (on chat-mode select).
   const prepareChatDirPendingRef = useRef(false)
   const sessionIdRef = useRef<string | null>(null)
@@ -480,6 +482,11 @@ const ConversationTabView = memo(function ConversationTabView({
 
   useEffect(() => {
     selectedAgentRef.current = selectedAgent
+  }, [selectedAgent])
+
+  useEffect(() => {
+    if (selectedAgent === "claude_code") return
+    pendingClaudeProfileRef.current = null
   }, [selectedAgent])
 
   // Eagerly create the chat-mode scratch dir the moment this becomes an unbound
@@ -682,6 +689,11 @@ const ConversationTabView = memo(function ConversationTabView({
     ),
   })
   const { status: connStatus, sessionId: connSessionId } = conn
+  const connConnect = conn.connect
+  const connDisconnect = conn.disconnect
+  const handlePendingClaudeProfileChange = useCallback((profileId: string) => {
+    pendingClaudeProfileRef.current = profileId
+  }, [])
   const messageQueue = useMessageQueue(dbConversationId, {
     onPersistFailure: handleQueuePersistFailure,
   })
@@ -1237,6 +1249,30 @@ const ConversationTabView = memo(function ConversationTabView({
       const chatExistingDir = sendOwnTab?.workingDir
 
       void (async () => {
+        const applyPendingProfile = async (conversationId: number) => {
+          // Write then respawn before the picker learns the new id
+          // (`setCreatedConversationId` below). Auto-connect already spawned
+          // without a conversation id; `connect()` no-ops on a live
+          // same-agent/cwd connection, so we disconnect first. Awaited
+          // before `lifecycleSend` so the first prompt cannot land on the
+          // unbound process.
+          await applyPendingClaudeProfileAndRespawn({
+            conversationId,
+            pendingProfileId:
+              selectedAgent === "claude_code"
+                ? pendingClaudeProfileRef.current
+                : null,
+            disconnect: connDisconnect,
+            connect: (id) =>
+              connConnect(
+                selectedAgent,
+                workingDirForConnection,
+                undefined,
+                id
+              ),
+          })
+          pendingClaudeProfileRef.current = null
+        }
         try {
           let newConversationId: number
           // The send's folderId defaults to the active folder; a chat send
@@ -1251,6 +1287,7 @@ const ConversationTabView = memo(function ConversationTabView({
             newConversationId = res.conversationId
             sendFolderId = res.folderId
             dbConvIdRef.current = newConversationId
+            await applyPendingProfile(newConversationId)
             setExternalId(effectiveConversationId, sessionIdRef.current ?? null)
             // Bind the DB id BEFORE the prompt goes out. The mirror effect
             // below also binds, but only after a re-render — this closes that
@@ -1283,6 +1320,7 @@ const ConversationTabView = memo(function ConversationTabView({
               title
             )
             dbConvIdRef.current = newConversationId
+            await applyPendingProfile(newConversationId)
             // Set external ID on the stable virtual session (no migration needed —
             // effectiveConversationId never changes, so the session stays in place).
             // DB persistence of external_id is now backend-driven from
@@ -1356,6 +1394,8 @@ const ConversationTabView = memo(function ConversationTabView({
       mqGetQueueLength,
       bindConversationTab,
       canAutoConnect,
+      connConnect,
+      connDisconnect,
       connectionReady,
       effectiveConversationId,
       folderId,
@@ -1373,6 +1413,7 @@ const ConversationTabView = memo(function ConversationTabView({
       tWelcome,
       tabId,
       upsertFolder,
+      workingDirForConnection,
     ]
   )
 
@@ -2148,6 +2189,7 @@ const ConversationTabView = memo(function ConversationTabView({
       attachmentTabId={tabId}
       draftStorageKey={draftStorageKey}
       sourceConversationId={dbConversationId}
+      onPendingClaudeProfileChange={handlePendingClaudeProfileChange}
       hideInput={isWelcomeMode || Boolean(acpLoadError)}
       composerBanner={acpLoadErrorBanner}
       feedbackList={
@@ -2280,6 +2322,7 @@ const ConversationTabView = memo(function ConversationTabView({
                 attachmentTabId={tabId}
                 draftStorageKey={draftStorageKey}
                 sourceConversationId={dbConversationId}
+                onPendingClaudeProfileChange={handlePendingClaudeProfileChange}
                 isActive={isActive}
                 showActiveFlow={showActiveFlow}
                 onAddFeedback={

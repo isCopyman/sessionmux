@@ -177,6 +177,9 @@ interface MessageInputProps {
   /** Persisted Session this composer belongs to. Kept for callers; `@` Session
    *  tokens are references for the Agent, not a human mail send. */
   sourceConversationId?: number | null
+  /** Pending Claude launch profile while `sourceConversationId` is null.
+   *  Applied onto the new row before the first spawn. */
+  onPendingClaudeProfileChange?: (profileId: string) => void
   isActive?: boolean
   /** Paint the flowing active-session gradient on the composer border. Set only
    *  for the active tab while tiled across multiple sessions; a lone or
@@ -303,6 +306,7 @@ export function MessageInput({
   attachmentTabId,
   draftStorageKey,
   sourceConversationId = null,
+  onPendingClaudeProfileChange,
   isActive = false,
   showActiveFlow = false,
   onEnqueue,
@@ -668,6 +672,20 @@ export function MessageInput({
   const showModeLoading = modeLoading && !hasConfigOptions && !showModeSelector
   const showConfigLoading = configOptionsLoading && !hasConfigOptions
   const showClaudeProfile = agentType === "claude_code"
+  const [pendingClaudeProfileId, setPendingClaudeProfileId] = useState<
+    string | null
+  >(null)
+  const handlePendingClaudeProfileChange = useCallback(
+    (profileId: string) => {
+      setPendingClaudeProfileId(profileId)
+      onPendingClaudeProfileChange?.(profileId)
+    },
+    [onPendingClaudeProfileChange]
+  )
+  useEffect(() => {
+    if (agentType === "claude_code") return
+    setPendingClaudeProfileId(null)
+  }, [agentType])
   const hasAnySelector =
     showConfigLoading ||
     hasConfigOptions ||
@@ -1422,7 +1440,15 @@ export function MessageInput({
       {showClaudeProfile && (
         <InlineClaudeProfileSelector
           conversationId={sourceConversationId}
-          disabled={isPrompting || sourceConversationId == null}
+          disabled={isPrompting}
+          pendingProfileId={
+            sourceConversationId == null ? pendingClaudeProfileId : null
+          }
+          onPendingProfileChange={
+            sourceConversationId == null
+              ? handlePendingClaudeProfileChange
+              : undefined
+          }
         />
       )}
       {hasConfigOptions &&

@@ -32,6 +32,10 @@ import {
 interface InlineClaudeProfileSelectorProps {
   conversationId: number | null
   disabled?: boolean
+  /** Composer's pending choice while no conversation exists. Shown the same
+   *  way a saved binding is. Ignored once `conversationId` is set. */
+  pendingProfileId?: string | null
+  onPendingProfileChange?: (profileId: string) => void
 }
 
 function profileDescription(profile: ClaudeProfileInfo): string | null {
@@ -47,10 +51,14 @@ function profileDescription(profile: ClaudeProfileInfo): string | null {
 export function InlineClaudeProfileSelector({
   conversationId,
   disabled = false,
+  pendingProfileId = null,
+  onPendingProfileChange,
 }: InlineClaudeProfileSelectorProps) {
   const t = useTranslations("AcpAgentSettings.claudeProfile")
   const [profiles, setProfiles] = useState<ClaudeProfileInfo[]>([])
-  const [selectedId, setSelectedId] = useState(FOLLOW_DEFAULT_CLAUDE_PROFILE_ID)
+  const [selectedId, setSelectedId] = useState(
+    pendingProfileId ?? FOLLOW_DEFAULT_CLAUDE_PROFILE_ID
+  )
   useEffect(() => {
     let cancelled = false
     void claudeProfileList()
@@ -105,7 +113,12 @@ export function InlineClaudeProfileSelector({
 
   const handleSelect = useCallback(
     async (profileId: string) => {
-      if (disabled || conversationId == null || profileId === selectedId) {
+      if (disabled || profileId === selectedId) {
+        return
+      }
+      if (conversationId == null) {
+        setSelectedId(profileId)
+        onPendingProfileChange?.(profileId)
         return
       }
       const previous = selectedId
@@ -129,7 +142,7 @@ export function InlineClaudeProfileSelector({
         })
       }
     },
-    [conversationId, disabled, selectedId, t]
+    [conversationId, disabled, onPendingProfileChange, selectedId, t]
   )
 
   const handleManage = useCallback(() => {

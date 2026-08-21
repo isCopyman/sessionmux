@@ -103,6 +103,15 @@ const claudeProfileApi = vi.hoisted(() => ({
       createdAt: "1970-01-01T00:00:00Z",
       updatedAt: "1970-01-01T00:00:00Z",
     },
+    {
+      id: "api",
+      label: "中转",
+      kind: "managed" as const,
+      baseUrl: "https://example.test/v1",
+      authTokenMasked: "sk-t••••••••7890",
+      createdAt: "2026-08-21T00:00:00+00:00",
+      updatedAt: "2026-08-21T00:00:00+00:00",
+    },
   ]),
   conversationSetClaudeProfile: vi.fn(),
   conversationGetClaudeProfile: vi.fn(async () => ({
@@ -545,7 +554,11 @@ const AUTO_APPROVE_OPTION: SessionConfigOptionInfo = {
 }
 
 describe("MessageInput Claude launch profile chip", () => {
-  afterEach(() => cleanup())
+  afterEach(() => {
+    cleanup()
+    claudeProfileApi.conversationSetClaudeProfile.mockClear()
+    claudeProfileApi.conversationGetClaudeProfile.mockClear()
+  })
 
   it("renders the chip only for Claude Code", async () => {
     const { unmount } = renderInput({
@@ -576,6 +589,65 @@ describe("MessageInput Claude launch profile chip", () => {
       name: "Launch profile: Follow default",
     })
     expect(chip).toBeDisabled()
+  })
+
+  it("keeps the chip usable when the session has no conversation yet", async () => {
+    renderInput({ agentType: "claude_code" })
+    const chip = await screen.findByRole("button", {
+      name: "Launch profile: Follow default",
+    })
+    expect(chip).toBeEnabled()
+  })
+
+  it("holds a pending profile locally until a conversation exists", async () => {
+    const onPendingClaudeProfileChange = vi.fn()
+    const user = userEvent.setup()
+    renderInput({
+      agentType: "claude_code",
+      onPendingClaudeProfileChange,
+    })
+
+    await user.click(
+      await screen.findByRole("button", {
+        name: "Launch profile: Follow default",
+      })
+    )
+    await user.click(await screen.findByRole("menuitemradio", { name: /中转/ }))
+
+    expect(claudeProfileApi.conversationSetClaudeProfile).not.toHaveBeenCalled()
+    expect(onPendingClaudeProfileChange).toHaveBeenCalledWith("api")
+    expect(
+      screen.getByRole("button", { name: "Launch profile: 中转" })
+    ).toBeInTheDocument()
+  })
+
+  it("writes a profile through immediately on an existing conversation", async () => {
+    const onPendingClaudeProfileChange = vi.fn()
+    const user = userEvent.setup()
+    claudeProfileApi.conversationSetClaudeProfile.mockResolvedValue({
+      conversationId: 9,
+      profileId: "api",
+      affectedRunningSessions: 0,
+    })
+    renderInput({
+      agentType: "claude_code",
+      sourceConversationId: 9,
+      onPendingClaudeProfileChange,
+    })
+
+    await user.click(
+      await screen.findByRole("button", {
+        name: "Launch profile: Follow default",
+      })
+    )
+    await user.click(await screen.findByRole("menuitemradio", { name: /中转/ }))
+
+    await waitFor(() =>
+      expect(
+        claudeProfileApi.conversationSetClaudeProfile
+      ).toHaveBeenCalledWith(9, "api")
+    )
+    expect(onPendingClaudeProfileChange).not.toHaveBeenCalled()
   })
 })
 

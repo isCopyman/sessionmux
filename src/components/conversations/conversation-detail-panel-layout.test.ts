@@ -414,6 +414,27 @@ describe("ConversationDetailPanel chat-mode send path", () => {
     expect(source).not.toContain("createChatPendingRef")
   })
 
+  it("applies a pending Claude profile after create and before lifecycleSend", () => {
+    const sendStart = source.indexOf("const chatSend = sendOwnTab?.isChat")
+    const sendEnd = source.indexOf(
+      "createConversationPendingRef.current = false"
+    )
+    expect(sendStart).toBeGreaterThan(-1)
+    expect(sendEnd).toBeGreaterThan(sendStart)
+    const block = source.slice(sendStart, sendEnd)
+    expect(block).toContain("applyPendingClaudeProfileAndRespawn(")
+    const applyIdx = block.indexOf(
+      "await applyPendingProfile(newConversationId)"
+    )
+    const createdIdx = block.indexOf(
+      "setCreatedConversationId(newConversationId)"
+    )
+    const sendIdx = block.indexOf("lifecycleSend(draft, selectedModeIdArg, {")
+    expect(applyIdx).toBeGreaterThan(-1)
+    expect(createdIdx).toBeGreaterThan(applyIdx)
+    expect(sendIdx).toBeGreaterThan(createdIdx)
+  })
+
   it("creates the chat row inline in the shared new-tab path and sends via lifecycleSend", () => {
     // Chat send is selected synchronously, then the SAME async block that
     // handles normal new conversations creates the row and delivers inline.
