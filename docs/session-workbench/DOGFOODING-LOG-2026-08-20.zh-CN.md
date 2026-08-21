@@ -76,6 +76,8 @@
 | O56 | 房间成员管理跨组件重复（4 个入口各写一遍）+ 添加成员弹窗 button 套 button 报 hydration 错 | **施工中**（共享 SessionPicker + membership 服务 + 去重复大按钮 + 消歧行；run-mt2faacf） |
 | O57 | 只能从群里加人，不能从会话侧加入群 | **施工中**（会话面板 ⋯ 菜单加「加入群聊」；run-mt2faayo） |
 | O58 | 侧栏多选建群 | **本就已存在**（bulk action bar；且已按第一个选中会话的 collection 建群）——用户所问功能无需新建，需提升可发现性（排队） |
+| O59 | Claude 接入方式无法按会话切换（订阅/API/中转） | **设计已定·后端施工中**（档=一套 settings，`CLAUDE_CONFIG_DIR` 注入，零 schema；run-mt2gl8qm） |
+| O60 | 会话中心筛选行冒出一条竖滚动条 | **已修**（`overflow-x-auto` 令另一轴自动变 auto 的 CSS 陷阱；加 `overflow-y-hidden`，317 测试绿） |
 
 ## 观察记录
 

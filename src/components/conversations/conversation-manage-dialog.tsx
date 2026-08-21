@@ -2608,8 +2608,13 @@ export function ConversationManageDialog({
             <div className="flex min-w-0 items-center gap-2">
               {/* The worklist axis, always visible. A horizontal scroller keeps
                   the pill whole on a narrow dialog rather than wrapping its
-                  segments into a second, ragged row. */}
-              <div className="min-w-0 flex-1 overflow-x-auto scrollbar-thin">
+                  segments into a second, ragged row.
+
+                  `overflow-y-hidden` is load-bearing: CSS computes a `visible`
+                  axis to `auto` as soon as the other one is scrollable, so
+                  `overflow-x-auto` alone grows a stray vertical scrollbar the
+                  moment the pill is a pixel taller than this box. */}
+              <div className="min-w-0 flex-1 overflow-x-auto overflow-y-hidden scrollbar-thin">
                 <Tabs
                   value={collaborationFilter}
                   onValueChange={(value) =>

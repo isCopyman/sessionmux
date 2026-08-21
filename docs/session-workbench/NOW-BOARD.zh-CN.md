@@ -1,46 +1,45 @@
-# 作战板（当前在飞的活，每次唤醒先读后更）
+# TODO 作战板
 
-> 规则：领导会话每次醒来第一件事读这里，收尾最后一件事更新这里。
-> 只记"现在"，历史进台账/程序日志。更新时间戳手写。
+> 这是领导会话的**待办清单**（没有 todo 工具，所以清单落在文件里，好处是跨会话不丢、
+> 用户随时能翻）。规则：每次醒来先读这里，收尾最后一件事更新这里。
+> 只记"现在"，做完的移进 DOGFOODING-LOG 台账，不在这里堆历史。
+>
+> 状态记号：`[ ]` 待办 / `[~]` 进行中 / `[x]` 本批已完成待归档 / `[?]` 等用户拍板
 
-最后更新：2026-08-21 白天（O56/O57 已合并；O39 启动档 RFC 待拍板）
+最后更新：2026-08-21 12:40（O59 档后端派工后）
 
-## 在飞（等结果）
+## 进行中（派出去了，等回收）
 
-| 线程 | 状态 | 下一步 |
-| --- | --- | --- |
-| o46-research（看板按项目/群聊/Collection 组织，grok） | running | 回来→修订 TASKBOARD RFC 二期 |
-| O54 分类树文件夹菜单「新建群聊」 | 待派工（等 O56 合并——**已合并，可派**） | 用统一 SessionPicker 做 |
+- [~] **O46 调研** — 看板按项目/群聊/Collection 组织，参照 vibe-kanban（grok run-mt2co8i0）
+      → 回来后修订 TASKBOARD RFC 二期
+- [~] **O54** — 分类树文件夹右键菜单加「新建群聊」（grok run-mt2g4uvz）
+- [~] **O59-A** — Claude 启动配置档**后端**：档存文件、`CLAUDE_CONFIG_DIR` 注入、
+      会话绑定走 `__codeg_profile__`、停写用户 `~/.claude`（grok run-mt2gl8qm）
 
-## 已合并待实机走查（dev 重建后 CDP）
+## 待办（我自己排的，不需要用户点头）
 
-- O51 建群流程（单人建群→面板→拉人按钮/空群引导）
-- O52 会话中心最近活动排序
-- O53 聚合消息左轨时间
-- O46 一期（awaiting_input 通知 + attention 分层——通知要等真实任务翻转才能看到）
-- O8 红条 Retry（要等真实瞬时失败或手工注入）
+- [ ] **O59-B** — 档的前端：设置页档目录 + 输入框那排 chip 加「接入」+ 换档下一回合生效
+      （等 O59-A 的 API 契约回来再派）
+- [ ] **O58** — 侧栏多选建群的可发现性（功能已存在，用户不知道）
+- [ ] 实机走查 O51/O56/O57（建群→拉人→加入群聊全链路，CDP）
 
 ## 等用户拍板（不许自己动）
 
-- GitHub：fork（公开）还是自建私库
-- O47 建议 C：后端重启不自动重放滞留队列项（A 已降级不做，B 在看板 RFC）
-- TASKBOARD RFC 待拍板 A–F 逐项确认（一期已按建议值施工）
-- schema 手术批（human 一等公民等，模型体检 RFC ②③①）
-- 旧 worktree 处置：sessionmux-session-timer、agent-a31e34…、fork-rewind/o8-audit 空壳
-- 唤醒分级/协同税进一步治理方向
+- [?] **GitHub**：fork（必须公开）还是自建私库？现在 origin 是上游主仓，一次没推过
+- [?] **Claude 档 RFC 剩余项**：凭据存哪、第一期是否只做 Claude（建议是）
+- [?] **看板 RFC A–F**：一期已按建议值施工，其余等确认
+- [?] **O47 建议 C**：后端重启后滞留的队列催办要不要禁止自动重放
+- [?] **schema 手术批**：human 一等公民化等（模型体检 RFC ②③①）
+- [?] **旧 worktree 处置**：sessionmux-session-timer、agent-a31e34…
+- [?] **产品改名**
 
-## 记账
+## 本批已完成（下次收尾时归档进台账）
 
-- 六单 grok 派工：5 完成已合并（taskboard-p1/o39-research/room-create/o8-retry/room-read）+1 在跑（o46-research）
-- 领导亲改已合并：O52 排序、O53 时间轨、O47 复查（含 2 条漏网催办补暂停）
-- Trellis 借鉴两件套已落地：任务书骨架=LESSONS L11；教训回灌惯例=LESSONS 本身
-
-## 2026-08-21 白天增补
-
-已合并（门禁绿）：O52 排序 / O53 消息时间 / O55 配置 chip 命名 / O56 共享 SessionPicker
-+ membership 服务（顺带修掉 hydration button 套 button，带回归钉）/ O57 会话面板
-「加入群聊」。O8 / O48 / O51 早批已合并并跑过 Rust 全套。
-
-新等拍板：**`CLAUDE-PROFILE-RFC-2026-08-21`**（Claude 启动配置档）——机制已核实
-（`CLAUDE_CONFIG_DIR` per-spawn，适配器与 SDK 都认），拍板点 A–F，其中 A（停写用户
-原生配置文件，顺带解上游 #520 一类污染）与 B（会话绑定需要一个可空列）是前提。
+- [x] O8 瞬时失败不杀连接 + Retry ｜ O48 群帖逐步披露 ｜ O51 先建群后拉人
+- [x] O52 会话中心最近活动排序 ｜ O53 群聊每条消息带时间
+- [x] O55 配置 chip 通用值带名字（Fast mode/Agent 认得出了）
+- [x] O56 共享 SessionPicker + membership 服务（顺带修 hydration button 套 button）
+- [x] O57 会话面板「加入群聊」
+- [x] O60 会话中心筛选行冒出竖滚动条（`overflow-x-auto` 的 CSS 陷阱）
+- [x] O47 复查二挖：不是空转，是协同税定价过高（唤醒分级降级不做）
+- [x] 知识体系：README 索引 + LESSONS 教训库 + 本清单，CLAUDE.md/AGENTS.md 指路
