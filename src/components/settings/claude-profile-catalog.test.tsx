@@ -314,7 +314,7 @@ describe("ClaudeProfileCatalog", () => {
   // The typed form is gone on purpose. It was a second store for settings that
   // already live in the file: it could not stay in step with the JSON below it,
   // and it could not keep up with the vendor's env surface either. Anything it
-  // used to offer is now one editor plus a menu that writes into that editor.
+  // used to offer is now written directly in that one editor.
   it("edits a profile through the file alone, with no rival fields", async () => {
     api.claudeProfileList.mockResolvedValue([FOLLOW, RELAY])
     const user = userEvent.setup()

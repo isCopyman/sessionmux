@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest"
 
 import {
-  applyClaudeProviderToConfigText,
   buildCodexSandboxConfig,
   codexSandboxBaselineOf,
   codexSandboxSaveConfig,
@@ -11,16 +10,13 @@ import {
   buildAcpAdapterCheck,
   buildVersionCheck,
   claudeAuthModeEnvPatch,
-  configTextForClaudeSave,
   getAgentChecks,
   hostToolsAgentModeEnabled,
   inferClaudeAuthMode,
   inferGrokMode,
-  materializeClaudeHardeningFlags,
   patchCodexConfigTomlText,
   patchImportantConfigText,
   rebaseDeepSeekDraft,
-  setClaudeEnvFlagInConfigText,
   setHostToolsAgentMode,
 } from "./acp-agent-settings"
 import { parse as parseTomlDocument } from "smol-toml"
@@ -1028,178 +1024,6 @@ describe("patchImportantConfigText — Claude custom model option", () => {
   })
 })
 
-describe("applyClaudeProviderToConfigText — provider-bound stale config", () => {
-  function envOf(configText: string): Record<string, string> {
-    const parsed = JSON.parse(configText) as { env?: Record<string, string> }
-    return parsed.env ?? {}
-  }
-
-  // Regression for the config-management save path: a provider bound in an
-  // earlier session can leave ANTHROPIC_CUSTOM_MODEL_OPTION* in the on-disk
-  // config loaded into configText (handleModelProviderSelect only rewrites it on
-  // dropdown change, not on reload). Saving must not persist that stale value —
-  // re-deriving from the provider (which omits the custom option) clears it while
-  // keeping the provider's model and unrelated keys.
-  it("clears a stale custom model option absent from the bound provider", () => {
-    const staleConfig = JSON.stringify({
-      env: {
-        ANTHROPIC_CUSTOM_MODEL_OPTION: "gw/opus-stale",
-        ANTHROPIC_CUSTOM_MODEL_OPTION_NAME: "Stale",
-        ANTHROPIC_MODEL: "old-main",
-        CUSTOM_KEY: "keep-me",
-      },
-    })
-
-    const next = applyClaudeProviderToConfigText(staleConfig, {
-      api_url: "https://gw.example/v1",
-      api_key: "sk-x",
-      model: JSON.stringify({ main: "prov-main" }), // provider omits the trio
-    })
-
-    const env = envOf(next)
-    expect(env.ANTHROPIC_CUSTOM_MODEL_OPTION).toBeUndefined()
-    expect(env.ANTHROPIC_CUSTOM_MODEL_OPTION_NAME).toBeUndefined()
-    expect(env.ANTHROPIC_MODEL).toBe("prov-main") // provider authoritative
-    expect(env.ANTHROPIC_BASE_URL).toBe("https://gw.example/v1")
-    expect(env.CUSTOM_KEY).toBe("keep-me") // unrelated key preserved
-  })
-
-  // When the provider DOES define a custom option, it is written through.
-  it("writes the provider's custom model option through", () => {
-    const next = applyClaudeProviderToConfigText("", {
-      api_url: "https://gw.example/v1",
-      api_key: "sk-x",
-      model: JSON.stringify({
-        main: "prov-main",
-        customOption: "gw/opus-preview",
-        customOptionName: "GW Opus",
-        customOptionDescription: "via gateway",
-      }),
-    })
-
-    const env = envOf(next)
-    expect(env.ANTHROPIC_CUSTOM_MODEL_OPTION).toBe("gw/opus-preview")
-    expect(env.ANTHROPIC_CUSTOM_MODEL_OPTION_NAME).toBe("GW Opus")
-    expect(env.ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION).toBe("via gateway")
-  })
-
-  // The hardening toggles are not provider-controlled, so a provider-authoritative
-  // rewrite must leave them intact while it overwrites the model keys.
-  it("preserves a hardening env flag through the provider rewrite", () => {
-    const withFlag = JSON.stringify({
-      env: {
-        CLAUDE_CODE_ATTRIBUTION_HEADER: "0",
-        ANTHROPIC_MODEL: "old-main",
-      },
-    })
-    const next = applyClaudeProviderToConfigText(withFlag, {
-      api_url: "https://gw.example/v1",
-      api_key: "sk-x",
-      model: JSON.stringify({ main: "prov-main" }),
-    })
-    const env = envOf(next)
-    expect(env.CLAUDE_CODE_ATTRIBUTION_HEADER).toBe("0")
-    expect(env.ANTHROPIC_MODEL).toBe("prov-main")
-  })
-})
-
-describe("configTextForClaudeSave — bound-Claude save payload", () => {
-  const provider = {
-    api_url: "https://gw.example/v1",
-    api_key: "sk-x",
-    model: JSON.stringify({ main: "prov-main" }), // provider omits the trio
-  }
-
-  // Bound Claude + valid config: rewrite to provider-authoritative, clearing a
-  // stale custom option loaded from disk.
-  it("rewrites valid bound-Claude config to be provider-authoritative", () => {
-    const stale = JSON.stringify({
-      env: {
-        ANTHROPIC_CUSTOM_MODEL_OPTION: "gw/stale",
-        ANTHROPIC_MODEL: "old-main",
-      },
-    })
-    const next = configTextForClaudeSave(
-      stale,
-      "claude_code" as AgentType,
-      7,
-      provider
-    )
-    const env = (JSON.parse(next) as { env: Record<string, string> }).env
-    expect(env.ANTHROPIC_CUSTOM_MODEL_OPTION).toBeUndefined()
-    expect(env.ANTHROPIC_MODEL).toBe("prov-main")
-  })
-
-  // Regression (round 4): INVALID config JSON must pass through UNCHANGED so
-  // persistConfig surfaces the parse error — otherwise patchImportantConfigText
-  // would silently recover it to `{}` and persist provider-derived config over
-  // the user's broken edits.
-  it("passes invalid config through unchanged so the save surfaces the error", () => {
-    const invalid = "{ not valid json"
-    expect(
-      configTextForClaudeSave(invalid, "claude_code" as AgentType, 7, provider)
-    ).toBe(invalid)
-  })
-
-  // Non-Claude or unbound agents are never rewritten.
-  it("leaves config untouched for unbound or non-Claude agents", () => {
-    const cfg = JSON.stringify({ env: { FOO: "bar" } })
-    expect(
-      configTextForClaudeSave(cfg, "claude_code" as AgentType, null, undefined)
-    ).toBe(cfg)
-    expect(
-      configTextForClaudeSave(cfg, "codex" as AgentType, 7, provider)
-    ).toBe(cfg)
-  })
-})
-
-describe("setClaudeEnvFlagInConfigText — Claude hardening toggles", () => {
-  const KEY = "CLAUDE_CODE_ATTRIBUTION_HEADER"
-
-  function envOf(configText: string): Record<string, string> {
-    const parsed = JSON.parse(configText) as { env?: Record<string, string> }
-    return parsed.env ?? {}
-  }
-
-  it("sets the flag value while preserving other env + root keys", () => {
-    const base = JSON.stringify({
-      model: "opus",
-      env: { ANTHROPIC_BASE_URL: "https://gw" },
-    })
-    const next = setClaudeEnvFlagInConfigText(base, KEY, "1")
-    expect(next.recoveredFromInvalid).toBe(false)
-    const parsed = JSON.parse(next.configText) as {
-      model?: string
-      env?: Record<string, string>
-    }
-    expect(parsed.model).toBe("opus")
-    expect(parsed.env?.[KEY]).toBe("1")
-    expect(parsed.env?.ANTHROPIC_BASE_URL).toBe("https://gw")
-  })
-
-  it("creates the env when the config has none", () => {
-    const next = setClaudeEnvFlagInConfigText("", KEY, "0")
-    expect(next.recoveredFromInvalid).toBe(false)
-    expect(envOf(next.configText)[KEY]).toBe("0")
-  })
-
-  it("overwrites an existing value (off → on) and keeps siblings", () => {
-    const base = JSON.stringify({
-      env: { [KEY]: "0", ANTHROPIC_MODEL: "keep" },
-    })
-    const next = setClaudeEnvFlagInConfigText(base, KEY, "1")
-    const env = envOf(next.configText)
-    expect(env[KEY]).toBe("1")
-    expect(env.ANTHROPIC_MODEL).toBe("keep")
-  })
-
-  it("recovers from invalid JSON and writes a fresh config", () => {
-    const next = setClaudeEnvFlagInConfigText("{ not json", KEY, "1")
-    expect(next.recoveredFromInvalid).toBe(true)
-    expect(envOf(next.configText)[KEY]).toBe("1")
-  })
-})
-
 describe("buildMergeConfigPayload — merge-strategy save diff", () => {
   const KEY = "CLAUDE_CODE_ATTRIBUTION_HEADER"
 
@@ -1230,63 +1054,6 @@ describe("buildMergeConfigPayload — merge-strategy save diff", () => {
     const current = JSON.stringify({ env: { [KEY]: "0" } })
     const payload = buildMergeConfigPayload(current, null)
     expect(JSON.parse(payload as string)).toEqual({ env: { [KEY]: "0" } })
-  })
-})
-
-describe("materializeClaudeHardeningFlags — save-time toggle defaults", () => {
-  const ATTR = "CLAUDE_CODE_ATTRIBUTION_HEADER"
-  const TRAFFIC = "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"
-
-  function envOf(configText: string): Record<string, string> {
-    const parsed = JSON.parse(configText) as { env?: Record<string, string> }
-    return parsed.env ?? {}
-  }
-
-  // Fresh config + the intended defaults: don't send the header ("0"), disable
-  // telemetry ("1") — written into BOTH the native config env and envText.
-  it("writes both flags per the defaults into config env and envText", () => {
-    const { configText, envText } = materializeClaudeHardeningFlags("", "", {
-      sendAttributionHeader: false,
-      disableNonessentialTraffic: true,
-    })
-    const env = envOf(configText)
-    expect(env[ATTR]).toBe("0")
-    expect(env[TRAFFIC]).toBe("1")
-    expect(envText).toContain(`${ATTR}=0`)
-    expect(envText).toContain(`${TRAFFIC}=1`)
-  })
-
-  it("writes both on when both toggles are enabled, preserving other keys", () => {
-    const base = JSON.stringify({ model: "opus", env: { KEEP: "y" } })
-    const { configText, envText } = materializeClaudeHardeningFlags(
-      base,
-      "KEEP=y",
-      { sendAttributionHeader: true, disableNonessentialTraffic: true }
-    )
-    const parsed = JSON.parse(configText) as {
-      model?: string
-      env?: Record<string, string>
-    }
-    expect(parsed.model).toBe("opus")
-    expect(parsed.env?.[ATTR]).toBe("1")
-    expect(parsed.env?.[TRAFFIC]).toBe("1")
-    expect(parsed.env?.KEEP).toBe("y")
-    expect(envText).toContain("KEEP=y")
-    expect(envText).toContain(`${ATTR}=1`)
-  })
-
-  // Regression: invalid JSON must be returned UNCHANGED (never recovered to a
-  // minimal {env}), so persistConfig rejects it instead of the merge diff
-  // deleting every other on-disk key.
-  it("leaves invalid config JSON untouched (no recovery, no data loss)", () => {
-    const invalid = "{ not valid json"
-    const { configText, envText } = materializeClaudeHardeningFlags(
-      invalid,
-      "EXISTING=1",
-      { sendAttributionHeader: false, disableNonessentialTraffic: true }
-    )
-    expect(configText).toBe(invalid)
-    expect(envText).toBe("EXISTING=1")
   })
 })
 
