@@ -253,8 +253,14 @@ NOW-BOARD 与它重复；MAINTAINABILITY 同时兼计划 / 决策 / 执行日志
   `envText`→进程环境（输给 settings 文件）。都够不着项目级之上。
   可能的修法：给它也发一份只含三个空连接键的 `--settings` 叠加
 - **虚拟档 `OfficialDirect` 同上**：只塞进程环境，被项目配置击穿
-- **session-sync 空转**：`pnpm tauri dev` 日志里 reconciliation 每 ~10 秒一次、
-  每次都报 `updated=1~2`。空闲状态不该一直有更新，要么真在无谓写库、要么计数是假的
+- ~~**session-sync 空转**~~ **误报，已撤销**（2026-08-21 夜复核）。那条
+  `reconciliation complete updated=1~2` 不是定时空转：`run_local_session_sync`
+  是 **fs-watch 驱动**的（`local_session_sync.rs:162`），而
+  `desired_watch_targets` 递归监听所有外部 transcript 源，其中就包括
+  `~/.claude/projects/**`。当时那台 dev 正在监听**我自己这个 Claude 会话**在追写的
+  jsonl，所以每 ~10 秒有 1~2 行被更新是**正确行为**，不是 bug。
+  日志停止的时刻正好是我杀掉那个 dev 的时刻，可对上。
+  教训：拿"日志一直在刷"当 bug 之前，先确认它是定时器驱动还是事件驱动
 - **claude_code 的 model_provider 绑定成了孤儿**（`bf9e0b4b` 带出来的）。被删的那处
   `<ClaudeConfigFields>` 是传了 `providers=` 的，所以那页**曾经**能把 Claude 绑到一个
   model provider 上。删掉之后：没有界面能看到或解绑，但
