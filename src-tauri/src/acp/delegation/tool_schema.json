@@ -249,7 +249,7 @@
   },
   {
     "name": "read_room",
-    "description": "Read a shared Room timeline this Session belongs to. Returns members and posts with full bodies. Default is the newest window. Set unread=true to catch up from this Session's last-read cursor (all posts, not only @mentions) and advance that cursor. Set needs_reply=true to list unpaid reply obligations that involve you (you owe a reply, or someone still owes you one); that filter does not mark posts read. Set before_event_id to page older. Opening consumes Room @ deliveries in the returned window unless needs_reply=true, and does not clear a reply obligation. Room posts never appear in list_inbox. A Room mention envelope is marked channel=room and kind=room_mention and already includes that post's body, plus a short parent snippet when the mention quotes another post. Reply with post_room using the same room_id and reply_to_event_id. Quoting does not wake the parent author; add mention_session_ids if they must act. Do not send_message a private letter unless asked.",
+    "description": "Read a shared Room timeline this Session belongs to. Returns members and posts. Each post body is inlined up to 2000 characters; longer posts set body_truncated and body_total_chars and tell you to call read_room_post for the rest. Default is the newest window. Set unread=true to catch up from this Session's last-read cursor (all posts, not only @mentions) and advance that cursor. Set needs_reply=true to list unpaid reply obligations that involve you (you owe a reply, or someone still owes you one); that filter does not mark posts read. Set before_event_id to page older. Opening consumes Room @ deliveries in the returned window unless needs_reply=true, and does not clear a reply obligation — a truncated body is still consumed. Room posts never appear in list_inbox. A Room mention envelope is marked channel=room and kind=room_mention and already includes that post's body (first 8000 characters), plus a short parent snippet when the mention quotes another post. Reply with post_room using the same room_id and reply_to_event_id. Quoting does not wake the parent author; add mention_session_ids if they must act. Do not send_message a private letter unless asked.",
     "inputSchema": {
       "type": "object",
       "required": ["room_id"],
@@ -277,6 +277,32 @@
           "type": "string",
           "minLength": 1,
           "description": "Page older than this event_id. Ignored when unread=true."
+        }
+      }
+    }
+  },
+  {
+    "name": "read_room_post",
+    "description": "Read one Room post body by event_id as a character window, like a file Read with offset/limit. Use this after read_room or a truncated mention envelope when a post is longer than the inline head. offset is a character offset (default 0); max_chars defaults to 8000 and is capped at 40000. Returns event metadata, the body window, body_total_chars, and a note with the next offset when more remains. Does not mark the Room read and does not advance the last-read cursor — this is a close read of one post, not window consumption. The caller must already be a Room member.",
+    "inputSchema": {
+      "type": "object",
+      "required": ["event_id"],
+      "properties": {
+        "event_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The Room post event_id from read_room or a Room mention envelope."
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Character offset into the post body. Defaults to 0."
+        },
+        "max_chars": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 40000,
+          "description": "Maximum characters to return. Defaults to 8000, hard cap 40000."
         }
       }
     }

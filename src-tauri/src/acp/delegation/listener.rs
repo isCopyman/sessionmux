@@ -17,8 +17,9 @@ use crate::acp::delegation::transport::{
     BrokerCreateAutomationRequest, BrokerCreateWorkTaskRequest, BrokerFeedbackRequest,
     BrokerHostControlHelpRequest, BrokerHostControlUseRequest, BrokerListInboxRequest,
     BrokerListRoomsRequest, BrokerListSessionsRequest, BrokerMessage, BrokerPostRoomRequest,
-    BrokerReadMessageRequest, BrokerReadRoomRequest, BrokerResponse, BrokerSendMessageRequest,
-    BrokerSessionRequest, BrokerTaskCompleteRequest, BrokerTaskProgressRequest,
+    BrokerReadMessageRequest, BrokerReadRoomPostRequest, BrokerReadRoomRequest, BrokerResponse,
+    BrokerSendMessageRequest, BrokerSessionRequest, BrokerTaskCompleteRequest,
+    BrokerTaskProgressRequest,
 };
 use crate::acp::feedback::{PendingFeedback, SessionFeedbackAccess};
 use crate::acp::host_control::{
@@ -27,7 +28,8 @@ use crate::acp::host_control::{
 use crate::acp::question::{QuestionOutcome, SessionQuestionAccess};
 use crate::acp::session_collaboration::{
     SessionCollaborationAccess, SessionInboxFilter, SessionInboxOutcome, SessionListOutcome,
-    SessionMessageReadOutcome, SessionRoomListOutcome, SessionRoomReadOutcome, SessionSendOutcome,
+    SessionMessageReadOutcome, SessionRoomListOutcome, SessionRoomPostReadOutcome,
+    SessionRoomReadOutcome, SessionSendOutcome,
 };
 use crate::acp::session_info::{SessionInfo, SessionInfoAccess};
 use crate::acp::work_task_tools::{TaskReportAck, WorkTaskToolAccess};
@@ -335,6 +337,9 @@ impl HostBridgeListener {
             BrokerMessage::ReadRoom(req) => {
                 session_room_read_response(self.process_read_room(req).await)?
             }
+            BrokerMessage::ReadRoomPost(req) => {
+                session_room_post_read_response(self.process_read_room_post(req).await)?
+            }
             BrokerMessage::PostRoom(req) => {
                 session_send_response(self.process_post_room(req).await)?
             }
@@ -628,6 +633,37 @@ impl HostBridgeListener {
             .await
     }
 
+    async fn process_read_room_post(
+        &self,
+        req: BrokerReadRoomPostRequest,
+    ) -> SessionRoomPostReadOutcome {
+        let Some(entry) = self.tokens.lookup(&req.token).await else {
+            return SessionRoomPostReadOutcome::unavailable(
+                None,
+                "This Codeg Session identity has expired. Resume the Session before reading a Room post.",
+            );
+        };
+        let Some(caller_session_id) = self
+            .parent_lookup
+            .current_conversation_id(&entry.parent_connection_id)
+            .await
+        else {
+            return SessionRoomPostReadOutcome::unavailable(
+                None,
+                "The calling connection is not bound to a persistent Codeg Session.",
+            );
+        };
+        self.collaboration
+            .read_room_post(
+                caller_session_id,
+                req.event_id,
+                req.offset,
+                req.max_chars
+                    .unwrap_or(crate::acp::session_collaboration::DEFAULT_ROOM_POST_READ_CHARS),
+            )
+            .await
+    }
+
     async fn process_post_room(&self, req: BrokerPostRoomRequest) -> SessionSendOutcome {
         let Some(entry) = self.tokens.lookup(&req.token).await else {
             return SessionSendOutcome::rejected(
@@ -796,6 +832,16 @@ fn session_room_list_response(outcome: SessionRoomListOutcome) -> std::io::Resul
 }
 
 fn session_room_read_response(outcome: SessionRoomReadOutcome) -> std::io::Result<BrokerResponse> {
+    Ok(BrokerResponse {
+        outcome: serde_json::to_value(&outcome).map_err(|e| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, format!("encode: {e}"))
+        })?,
+    })
+}
+
+fn session_room_post_read_response(
+    outcome: SessionRoomPostReadOutcome,
+) -> std::io::Result<BrokerResponse> {
     Ok(BrokerResponse {
         outcome: serde_json::to_value(&outcome).map_err(|e| {
             std::io::Error::new(std::io::ErrorKind::InvalidData, format!("encode: {e}"))
@@ -1054,6 +1100,21 @@ mod tests {
                 available: true,
                 caller_session_id: Some(caller_session_id),
                 room_id: Some(query.room_id),
+                ..Default::default()
+            }
+        }
+
+        async fn read_room_post(
+            &self,
+            caller_session_id: i32,
+            event_id: String,
+            _offset: u32,
+            _max_chars: u32,
+        ) -> crate::acp::session_collaboration::SessionRoomPostReadOutcome {
+            crate::acp::session_collaboration::SessionRoomPostReadOutcome {
+                available: true,
+                caller_session_id: Some(caller_session_id),
+                event_id: Some(event_id),
                 ..Default::default()
             }
         }

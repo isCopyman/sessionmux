@@ -1,6 +1,6 @@
 ---
 name: codeg-room
-description: Use when a managed Codeg Agent needs to create, join, read, or post in a shared Room (room.create, room.add_member, list_rooms, read_room, post_room). Do not use for private mailbox letters, creating Sessions, or talking to AgentBus.
+description: Use when a managed Codeg Agent needs to create, join, read, or post in a shared Room (room.create, room.add_member, list_rooms, read_room, read_room_post, post_room). Do not use for private mailbox letters, creating Sessions, or talking to AgentBus.
 ---
 
 # Codeg Room
@@ -103,10 +103,17 @@ These live on the `codeg-room` MCP server, not `codeg-mcp`. Host Control
   - `before_event_id`: page older.
   - Opening consumes `@` deliveries in the returned window (marks them
     read) unless `needs_reply=true`. It clears unread only, never a reply
-    obligation.
-  A Room mention envelope already includes that post's body. If the
-  mention quotes another post, the envelope also embeds the parent
-  author and a short snippet. Quoting still does not wake that author.
+    obligation. A truncated inline body is still consumed.
+  - Each post is inlined up to 2000 characters. Longer posts set
+    `body_truncated` / `body_total_chars` and tell you to call
+    `read_room_post`.
+  A Room mention envelope already includes that post's body (first 8000
+  characters). If the mention quotes another post, the envelope also
+  embeds the parent author and a short snippet. Quoting still does not
+  wake that author.
+- `read_room_post`: one post body as a character window (`event_id`,
+  `offset` default 0, `max_chars` default 8000, cap 40000). Does not
+  mark the Room read. Use it for the rest of a truncated post.
 - `post_room`: write to the Room.
   - Omit `mention_session_ids` (and `mention_all=false`) to record only.
   - Pass `mention_session_ids` or `mention_all=true` to tap a Session.
@@ -142,8 +149,9 @@ These live on the `codeg-room` MCP server, not `codeg-mcp`. Host Control
 1. If you need a new Room, `codeg_use` `room.create`. If you already
    belong to one, call `list_rooms`.
 2. The mention envelope already has that post. Call `read_room` when you
-   need surrounding posts, a truncated remainder, or `unread=true` to
-   catch up on posts you missed (including posts that did not `@` you).
+   need surrounding posts or `unread=true` to catch up on posts you
+   missed (including posts that did not `@` you). Call `read_room_post`
+   for the rest of a truncated body.
 3. Reply with `post_room` and `reply_to_event_id`. Default back to the
    Room, not to private mail. Quoting clears your reply debt; it still
    does not wake the asker. If they must see the answer now, also pass
@@ -160,7 +168,7 @@ Call `read_room` if you need surrounding posts beyond that snippet.
 
 ## Hard rules
 
-- You must already be a member to `read_room` or `post_room`.
+- You must already be a member to `read_room`, `read_room_post`, or `post_room`.
 - Mentions must already be members.
 - Quote ≠ wake. `reply_to_event_id` never wakes the parent author.
   Wake only with structured `@`.

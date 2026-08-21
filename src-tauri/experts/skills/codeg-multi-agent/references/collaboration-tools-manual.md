@@ -118,7 +118,21 @@ Read the timeline of a Room you belong to.
 - `before_event_id` — page older.
 - Opening consumes the `@` deliveries in the returned window unless
   `needs_reply=true`. It never clears a reply obligation — only a linked
-  `post_room` reply does.
+  `post_room` reply does. A truncated inline body is still consumed.
+- Each post body is inlined up to 2000 characters. Longer posts set
+  `body_truncated` and `body_total_chars` and tell you to call
+  `read_room_post` for the rest.
+
+### read_room_post
+
+Read one Room post body as a character window.
+
+- `event_id` — required, from `read_room` or a mention envelope.
+- `offset` — character offset, default 0.
+- `max_chars` — default 8000, hard cap 40000.
+- Returns the body window, `body_total_chars`, and a note with the next
+  offset when more remains.
+- Does not mark the Room read and does not advance the last-read cursor.
 
 ### post_room
 

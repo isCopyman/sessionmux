@@ -2,7 +2,7 @@
 //!
 //! The caller is the token-derived current Session. Creating a room always
 //! includes that Session as host. Messaging lives on the dedicated MCP tools
-//! `list_rooms` / `read_room` / `post_room`, not on this gateway.
+//! `list_rooms` / `read_room` / `read_room_post` / `post_room`, not on this gateway.
 
 use std::sync::Arc;
 

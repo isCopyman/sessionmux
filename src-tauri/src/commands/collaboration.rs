@@ -7,11 +7,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::acp::manager::ConnectionManager;
 use crate::acp::session_collaboration::{
-    RoomPostSpec, RoomReadQuery, SessionAddress, SessionCollaborationAccess,
-    SessionCollaborationConfig, SessionCollaborationRuntimeConfig, SessionListOutcome,
-    SessionMessageDeliveryOutcome, SessionMessageSpec, SessionRoomEvent, SessionRoomListItem,
-    SessionRoomListOutcome, SessionRoomMember, SessionRoomReadOutcome, SessionSendOutcome,
-    MAX_SESSION_LIST_LIMIT, SEND_MESSAGE_ROOM_HINT,
+    inline_room_read_body, room_body_truncated_note, room_body_window, RoomPostSpec, RoomReadQuery,
+    SessionAddress, SessionCollaborationAccess, SessionCollaborationConfig,
+    SessionCollaborationRuntimeConfig, SessionListOutcome, SessionMessageDeliveryOutcome,
+    SessionMessageSpec, SessionRoomEvent, SessionRoomListItem, SessionRoomListOutcome,
+    SessionRoomMember, SessionRoomPostReadOutcome, SessionRoomReadOutcome, SessionSendOutcome,
+    MAX_ROOM_POST_READ_CHARS, MAX_SESSION_LIST_LIMIT, SEND_MESSAGE_ROOM_HINT,
 };
 use crate::app_error::AppCommandError;
 use crate::db::service::{
@@ -505,6 +506,26 @@ fn delivery_state_name(state: CollaborationDeliveryState) -> String {
     state.as_str().to_string()
 }
 
+fn map_session_room_event(event: crate::models::RoomTimelineEvent) -> SessionRoomEvent {
+    let title = crate::acp::session_collaboration::letter_title(&event.subject, &event.body);
+    let (body, body_truncated, body_total_chars) = inline_room_read_body(&event.id, event.body);
+    SessionRoomEvent {
+        event_id: event.id,
+        from_session_id: event.source.conversation_id,
+        from_title: event.source.title,
+        title,
+        body,
+        reply_to_event_id: event.reply_to_event_id,
+        mention_session_ids: event.mention_conversation_ids,
+        mention_human: event.mention_human,
+        from_author_kind: event.author_kind.as_str().to_string(),
+        expects_reply: event.expects_reply,
+        created_at: event.created_at,
+        body_truncated,
+        body_total_chars,
+    }
+}
+
 #[async_trait]
 impl SessionCollaborationAccess for DbSessionCollaboration {
     async fn list_sessions(
@@ -978,6 +999,8 @@ impl SessionCollaborationAccess for DbSessionCollaboration {
                 )
             }
         };
+        // Inline body truncation does not change cursor semantics: a post
+        // whose body is head-only in this window is still consumed.
         if !query.needs_reply {
             let event_ids: Vec<String> = timeline
                 .events
@@ -1036,24 +1059,81 @@ impl SessionCollaborationAccess for DbSessionCollaboration {
             events: timeline
                 .events
                 .into_iter()
-                .map(|event| SessionRoomEvent {
-                    event_id: event.id,
-                    from_session_id: event.source.conversation_id,
-                    from_title: event.source.title,
-                    title: crate::acp::session_collaboration::letter_title(
-                        &event.subject,
-                        &event.body,
-                    ),
-                    body: event.body,
-                    reply_to_event_id: event.reply_to_event_id,
-                    mention_session_ids: event.mention_conversation_ids,
-                    mention_human: event.mention_human,
-                    from_author_kind: event.author_kind.as_str().to_string(),
-                    expects_reply: event.expects_reply,
-                    created_at: event.created_at,
-                })
+                .map(map_session_room_event)
                 .collect(),
             truncated: timeline.truncated,
+            note,
+        }
+    }
+
+    async fn read_room_post(
+        &self,
+        caller_session_id: i32,
+        event_id: String,
+        offset: u32,
+        max_chars: u32,
+    ) -> SessionRoomPostReadOutcome {
+        if !self.config.is_enabled().await {
+            return SessionRoomPostReadOutcome::unavailable(
+                Some(caller_session_id),
+                "Session collaboration is disabled in Codeg settings.",
+            );
+        }
+        let event = match collaboration_room_service::get_room_event(&self.db.conn, &event_id).await
+        {
+            Ok(event) => event,
+            Err(err) => {
+                return SessionRoomPostReadOutcome::unavailable(
+                    Some(caller_session_id),
+                    err.to_string(),
+                )
+            }
+        };
+        if let Err(err) = collaboration_room_service::require_member(
+            &self.db.conn,
+            &event.room_id,
+            caller_session_id,
+        )
+        .await
+        {
+            return SessionRoomPostReadOutcome::unavailable(
+                Some(caller_session_id),
+                err.to_string(),
+            );
+        }
+        // Single-post close-read: never consume deliveries or advance the
+        // member last-read cursor. That remains read_room's job.
+        let max_chars = max_chars.clamp(1, MAX_ROOM_POST_READ_CHARS);
+        let window = room_body_window(&event.body, offset as usize, max_chars as usize);
+        let note = if window.truncated {
+            Some(room_body_truncated_note(
+                &event.id,
+                window.next_offset,
+                window.total_chars,
+            ))
+        } else {
+            None
+        };
+        SessionRoomPostReadOutcome {
+            available: true,
+            caller_session_id: Some(caller_session_id),
+            room_id: Some(event.room_id),
+            event_id: Some(event.id),
+            from_session_id: Some(event.source.conversation_id),
+            from_title: event.source.title,
+            title: Some(crate::acp::session_collaboration::letter_title(
+                &event.subject,
+                &event.body,
+            )),
+            body: Some(window.body),
+            reply_to_event_id: event.reply_to_event_id,
+            mention_session_ids: event.mention_conversation_ids,
+            mention_human: event.mention_human,
+            from_author_kind: event.author_kind.as_str().to_string(),
+            expects_reply: event.expects_reply,
+            created_at: Some(event.created_at),
+            body_total_chars: u32::try_from(window.total_chars).unwrap_or(u32::MAX),
+            body_truncated: window.truncated,
             note,
         }
     }
@@ -2876,6 +2956,226 @@ mod tests {
             )
             .await;
         assert!(mail.items.is_empty());
+    }
+
+    #[tokio::test]
+    async fn room_post_bodies_are_progressively_disclosed() {
+        use crate::acp::session_collaboration::{
+            MAX_ROOM_POST_READ_CHARS, ROOM_READ_INLINE_BODY_CHARS,
+        };
+
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-room-read-post").await;
+        let source = seed_conversation(&db, folder, AgentType::Codex).await;
+        let peer = seed_conversation(&db, folder, AgentType::ClaudeCode).await;
+        let outsider = seed_conversation(&db, folder, AgentType::Gemini).await;
+        let access = enabled_agent_access(&db, EventEmitter::Noop).await;
+        let room = collaboration_room_service::create(
+            &db.conn,
+            CreateCollaborationRoomInput {
+                workbench_id: 1,
+                title: "Disclosure".into(),
+                member_conversation_ids: vec![source, peer],
+                created_by_conversation_id: source,
+                collection_id: None,
+                root_folder_id: None,
+            },
+        )
+        .await
+        .expect("create room");
+
+        let short_body = "测".repeat(ROOM_READ_INLINE_BODY_CHARS);
+        let short = access
+            .post_room(
+                source,
+                RoomPostSpec {
+                    room_id: room.id.clone(),
+                    content: short_body.clone(),
+                    mention_session_ids: vec![peer],
+                    mention_all: false,
+                    mention_human: false,
+                    priority: Some(crate::acp::session_collaboration::SessionMessagePriority::High),
+                    expects_reply: false,
+                    reply_to_event_id: None,
+                    client_dedupe_id: "mcp:room-short".into(),
+                },
+            )
+            .await;
+        assert!(short.accepted, "{:?}", short.note);
+        let short_id = short.event_id.clone().expect("short event");
+
+        let long_body = {
+            let mut s = "a".repeat(ROOM_READ_INLINE_BODY_CHARS - 1);
+            s.push('😀');
+            s.push_str(&"测".repeat(80));
+            s
+        };
+        let long = access
+            .post_room(
+                source,
+                RoomPostSpec {
+                    room_id: room.id.clone(),
+                    content: long_body.clone(),
+                    mention_session_ids: vec![peer],
+                    mention_all: false,
+                    mention_human: false,
+                    priority: Some(crate::acp::session_collaboration::SessionMessagePriority::High),
+                    expects_reply: false,
+                    reply_to_event_id: None,
+                    client_dedupe_id: "mcp:room-long".into(),
+                },
+            )
+            .await;
+        assert!(long.accepted, "{:?}", long.note);
+        let long_id = long.event_id.clone().expect("long event");
+
+        let huge_body = "x".repeat(MAX_ROOM_POST_READ_CHARS as usize + 40);
+        let huge = access
+            .post_room(
+                source,
+                RoomPostSpec {
+                    room_id: room.id.clone(),
+                    content: huge_body.clone(),
+                    mention_session_ids: vec![peer],
+                    mention_all: false,
+                    mention_human: false,
+                    priority: Some(crate::acp::session_collaboration::SessionMessagePriority::High),
+                    expects_reply: false,
+                    reply_to_event_id: None,
+                    client_dedupe_id: "mcp:room-huge".into(),
+                },
+            )
+            .await;
+        assert!(huge.accepted, "{:?}", huge.note);
+        let huge_id = huge.event_id.clone().expect("huge event");
+
+        let listed = access.list_rooms(peer, None, 50).await;
+        assert_eq!(listed.rooms[0].unread_count, 3);
+
+        let close = access.read_room_post(peer, long_id.clone(), 0, 8_000).await;
+        assert!(close.available);
+        assert_eq!(close.body.as_deref(), Some(long_body.as_str()));
+        assert_eq!(
+            close.body_total_chars,
+            u32::try_from(long_body.chars().count()).unwrap()
+        );
+        assert!(!close.body_truncated);
+        let listed = access.list_rooms(peer, None, 50).await;
+        assert_eq!(
+            listed.rooms[0].unread_count, 3,
+            "read_room_post must not consume the cursor"
+        );
+
+        let timeline = access
+            .read_room(
+                peer,
+                RoomReadQuery {
+                    room_id: room.id.clone(),
+                    limit: 50,
+                    unread: true,
+                    needs_reply: false,
+                    before_event_id: None,
+                },
+            )
+            .await;
+        assert!(timeline.available);
+        assert_eq!(timeline.events.len(), 3);
+        let short_event = timeline
+            .events
+            .iter()
+            .find(|event| event.event_id == short_id)
+            .expect("short event");
+        assert_eq!(short_event.body, short_body);
+        assert_eq!(short_event.body.as_bytes(), short_body.as_bytes());
+        assert!(!short_event.body_truncated);
+        assert_eq!(short_event.body_total_chars, None);
+
+        let long_event = timeline
+            .events
+            .iter()
+            .find(|event| event.event_id == long_id)
+            .expect("long event");
+        assert!(long_event.body_truncated);
+        assert_eq!(
+            long_event.body_total_chars,
+            Some(u32::try_from(long_body.chars().count()).unwrap())
+        );
+        let head: String = long_body
+            .chars()
+            .take(ROOM_READ_INLINE_BODY_CHARS)
+            .collect();
+        assert!(head.ends_with('😀'));
+        assert!(long_event.body.starts_with(&head));
+        assert_eq!(&long_event.body.as_bytes()[..head.len()], head.as_bytes());
+        assert!(long_event.body.contains(&format!(
+            "Call read_room_post with event_id={long_id} offset=2000"
+        )));
+        assert!(std::str::from_utf8(long_event.body.as_bytes()).is_ok());
+
+        let listed = access.list_rooms(peer, None, 50).await;
+        assert_eq!(
+            listed.rooms[0].unread_count, 0,
+            "truncated posts still count as consumed"
+        );
+
+        let tail = access
+            .read_room_post(peer, long_id.clone(), 2000, 8_000)
+            .await;
+        assert!(tail.available);
+        let expected_tail: String = long_body.chars().skip(2000).collect();
+        assert_eq!(tail.body.as_deref(), Some(expected_tail.as_str()));
+        assert!(!tail.body_truncated);
+        assert!(tail.note.is_none());
+
+        let mid = access.read_room_post(peer, long_id.clone(), 10, 5).await;
+        assert!(mid.available);
+        let expected_mid: String = long_body.chars().skip(10).take(5).collect();
+        assert_eq!(mid.body.as_deref(), Some(expected_mid.as_str()));
+        assert!(mid.body_truncated);
+        assert!(mid.note.as_deref().unwrap_or("").contains("offset=15"));
+
+        let past = access
+            .read_room_post(peer, long_id.clone(), 10_000, 8_000)
+            .await;
+        assert!(past.available);
+        assert_eq!(past.body.as_deref(), Some(""));
+        assert!(!past.body_truncated);
+
+        let capped = access
+            .read_room_post(peer, huge_id.clone(), 0, 50_000)
+            .await;
+        assert!(capped.available);
+        assert_eq!(
+            capped.body.as_ref().map(|body| body.chars().count()),
+            Some(MAX_ROOM_POST_READ_CHARS as usize)
+        );
+        assert!(capped.body_truncated);
+        assert!(capped
+            .note
+            .as_deref()
+            .unwrap_or("")
+            .contains(&format!("offset={MAX_ROOM_POST_READ_CHARS}")));
+
+        let denied = access
+            .read_room_post(outsider, long_id.clone(), 0, 8_000)
+            .await;
+        assert!(!denied.available);
+        assert!(denied
+            .note
+            .as_deref()
+            .unwrap_or("")
+            .contains("not a member"));
+
+        let missing = access
+            .read_room_post(peer, "does-not-exist".into(), 0, 8_000)
+            .await;
+        assert!(!missing.available);
+        assert!(missing
+            .note
+            .as_deref()
+            .unwrap_or("")
+            .to_ascii_lowercase()
+            .contains("not found"));
     }
 
     async fn conversation_row_count(db: &AppDatabase) -> i64 {

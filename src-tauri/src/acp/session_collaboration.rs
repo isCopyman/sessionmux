@@ -24,6 +24,11 @@ pub const DEFAULT_ROOM_LIST_LIMIT: u32 = 50;
 pub const MAX_ROOM_LIST_LIMIT: u32 = 200;
 pub const DEFAULT_ROOM_READ_LIMIT: u32 = 50;
 pub const MAX_ROOM_READ_LIMIT: u32 = 200;
+/// Inline body cap for every `read_room` mode. Longer posts keep a char-safe
+/// head and tell the caller to continue with `read_room_post`.
+pub const ROOM_READ_INLINE_BODY_CHARS: usize = 2_000;
+pub const DEFAULT_ROOM_POST_READ_CHARS: u32 = 8_000;
+pub const MAX_ROOM_POST_READ_CHARS: u32 = 40_000;
 pub const SEND_MESSAGE_ROOM_HINT: &str =
     "send_message is private mailbox mail only. Use post_room to post in a Room.";
 
@@ -57,6 +62,64 @@ pub fn normalize_letter_title(subject: &str) -> Result<String, String> {
         ));
     }
     Ok(trimmed)
+}
+
+/// Character-window over a Room post body. Counts Unicode scalar values
+/// (`char`), never bytes, so a cut cannot land inside a multi-byte sequence.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RoomBodyWindow {
+    pub body: String,
+    pub total_chars: usize,
+    pub truncated: bool,
+    pub next_offset: usize,
+}
+
+/// Slice `body` at `char` boundaries. `offset` and `max_chars` are character
+/// counts. An offset at or past the end yields an empty window.
+pub fn room_body_window(body: &str, offset: usize, max_chars: usize) -> RoomBodyWindow {
+    let total_chars = body.chars().count();
+    if offset >= total_chars || max_chars == 0 {
+        return RoomBodyWindow {
+            body: String::new(),
+            total_chars,
+            truncated: false,
+            next_offset: offset.min(total_chars),
+        };
+    }
+    let window: String = body.chars().skip(offset).take(max_chars).collect();
+    let next_offset = offset + window.chars().count();
+    RoomBodyWindow {
+        body: window,
+        total_chars,
+        truncated: next_offset < total_chars,
+        next_offset,
+    }
+}
+
+pub fn room_body_truncated_note(event_id: &str, shown_chars: usize, total_chars: usize) -> String {
+    format!(
+        "Body truncated ({shown_chars} of {total_chars} chars). Call read_room_post with event_id={event_id} offset={shown_chars} for the rest."
+    )
+}
+
+/// Bound a `read_room` timeline body. At or under the inline limit the
+/// original bytes are returned unchanged. Over the limit, the char-safe head
+/// is followed by a continuation note.
+pub fn inline_room_read_body(event_id: &str, body: String) -> (String, bool, Option<u32>) {
+    let total_chars = body.chars().count();
+    if total_chars <= ROOM_READ_INLINE_BODY_CHARS {
+        return (body, false, None);
+    }
+    let window = room_body_window(&body, 0, ROOM_READ_INLINE_BODY_CHARS);
+    let note = room_body_truncated_note(event_id, window.next_offset, window.total_chars);
+    let mut out = window.body;
+    out.push('\n');
+    out.push_str(&note);
+    (
+        out,
+        true,
+        Some(u32::try_from(window.total_chars).unwrap_or(u32::MAX)),
+    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -449,6 +512,10 @@ pub struct SessionRoomEvent {
     #[serde(default)]
     pub expects_reply: bool,
     pub created_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub body_truncated: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body_total_chars: Option<u32>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -483,6 +550,55 @@ impl SessionRoomReadOutcome {
             members: Vec::new(),
             events: Vec::new(),
             truncated: false,
+            note: Some(note.into()),
+            ..Default::default()
+        }
+    }
+}
+
+/// One Room post body window. `read_room_post` never consumes deliveries or
+/// advances the member last-read cursor — that remains `read_room`'s job.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SessionRoomPostReadOutcome {
+    pub available: bool,
+    pub caller_session_id: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub room_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub event_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from_session_id: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub from_title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reply_to_event_id: Option<String>,
+    #[serde(default)]
+    pub mention_session_ids: Vec<i32>,
+    #[serde(default)]
+    pub mention_human: bool,
+    #[serde(default)]
+    pub from_author_kind: String,
+    #[serde(default)]
+    pub expects_reply: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub body_total_chars: u32,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub body_truncated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+impl SessionRoomPostReadOutcome {
+    pub fn unavailable(caller_session_id: Option<i32>, note: impl Into<String>) -> Self {
+        Self {
+            available: false,
+            caller_session_id,
             note: Some(note.into()),
             ..Default::default()
         }
@@ -547,6 +663,14 @@ pub trait SessionCollaborationAccess: Send + Sync {
         caller_session_id: i32,
         query: RoomReadQuery,
     ) -> SessionRoomReadOutcome;
+
+    async fn read_room_post(
+        &self,
+        caller_session_id: i32,
+        event_id: String,
+        offset: u32,
+        max_chars: u32,
+    ) -> SessionRoomPostReadOutcome;
 
     async fn post_room(&self, source_session_id: i32, spec: RoomPostSpec) -> SessionSendOutcome;
 }
@@ -695,5 +819,107 @@ mod tests {
             .set(SessionCollaborationConfig { enabled: true })
             .await;
         assert!(config.is_enabled().await);
+    }
+
+    #[test]
+    fn room_body_window_is_char_boundary_safe_and_identity_under_inline_limit() {
+        let ascii = "a".repeat(ROOM_READ_INLINE_BODY_CHARS);
+        let (body, truncated, total) = inline_room_read_body("evt-1", ascii.clone());
+        assert_eq!(body, ascii);
+        assert_eq!(body.as_bytes(), ascii.as_bytes());
+        assert!(!truncated);
+        assert_eq!(total, None);
+
+        let cjk = "测".repeat(ROOM_READ_INLINE_BODY_CHARS);
+        let (body, truncated, total) = inline_room_read_body("evt-1", cjk.clone());
+        assert_eq!(body, cjk);
+        assert_eq!(body.as_bytes(), cjk.as_bytes());
+        assert!(!truncated);
+        assert_eq!(total, None);
+
+        let over = "测".repeat(ROOM_READ_INLINE_BODY_CHARS + 1);
+        let (body, truncated, total) = inline_room_read_body("evt-cjk", over.clone());
+        assert!(truncated);
+        assert_eq!(total, Some((ROOM_READ_INLINE_BODY_CHARS + 1) as u32));
+        let head: String = over.chars().take(ROOM_READ_INLINE_BODY_CHARS).collect();
+        assert!(body.starts_with(&head));
+        assert_eq!(&body.as_bytes()[..head.len()], head.as_bytes());
+        assert!(std::str::from_utf8(body.as_bytes()).is_ok());
+        assert!(!body.contains(&over));
+        assert!(body.contains("read_room_post"));
+        assert!(body.contains("offset=2000"));
+
+        let mut emoji_at_boundary = "a".repeat(ROOM_READ_INLINE_BODY_CHARS - 1);
+        emoji_at_boundary.push('😀');
+        emoji_at_boundary.push_str("bbbb");
+        let (body, truncated, total) =
+            inline_room_read_body("evt-emoji", emoji_at_boundary.clone());
+        assert!(truncated);
+        assert_eq!(total, Some((ROOM_READ_INLINE_BODY_CHARS + 4) as u32));
+        let head: String = emoji_at_boundary
+            .chars()
+            .take(ROOM_READ_INLINE_BODY_CHARS)
+            .collect();
+        assert!(head.ends_with('😀'));
+        assert!(body.starts_with(&head));
+        assert_eq!(&body.as_bytes()[..head.len()], head.as_bytes());
+    }
+
+    #[test]
+    fn room_body_window_offset_tail_and_empty_past_end() {
+        let body = "测".repeat(30);
+        let mid = room_body_window(&body, 10, 8);
+        assert_eq!(mid.body, "测".repeat(8));
+        assert_eq!(mid.total_chars, 30);
+        assert!(mid.truncated);
+        assert_eq!(mid.next_offset, 18);
+
+        let tail = room_body_window(&body, 25, 8_000);
+        assert_eq!(tail.body, "测".repeat(5));
+        assert!(!tail.truncated);
+        assert_eq!(tail.next_offset, 30);
+
+        let past = room_body_window(&body, 30, 8_000);
+        assert!(past.body.is_empty());
+        assert!(!past.truncated);
+        assert_eq!(past.next_offset, 30);
+
+        let capped = room_body_window(&"x".repeat(50_000), 0, MAX_ROOM_POST_READ_CHARS as usize);
+        assert_eq!(
+            capped.body.chars().count(),
+            MAX_ROOM_POST_READ_CHARS as usize
+        );
+        assert!(capped.truncated);
+        assert_eq!(capped.next_offset, MAX_ROOM_POST_READ_CHARS as usize);
+    }
+
+    #[test]
+    fn session_room_event_omits_truncation_fields_when_full() {
+        let event = SessionRoomEvent {
+            event_id: "e1".into(),
+            from_session_id: 1,
+            from_title: None,
+            title: "t".into(),
+            body: "short".into(),
+            reply_to_event_id: None,
+            mention_session_ids: Vec::new(),
+            mention_human: false,
+            from_author_kind: "session".into(),
+            expects_reply: false,
+            created_at: DateTime::from_timestamp(0, 0).expect("epoch"),
+            body_truncated: false,
+            body_total_chars: None,
+        };
+        let value = serde_json::to_value(&event).expect("serialize");
+        assert!(value.get("body_truncated").is_none());
+        assert!(value.get("body_total_chars").is_none());
+        let truncated = SessionRoomEvent {
+            body_truncated: true,
+            body_total_chars: Some(4_000),
+            ..event
+        };
+        let value = serde_json::to_value(&truncated).expect("serialize");
+        assert_eq!(value["body_truncated"], true);
+        assert_eq!(value["body_total_chars"], 4_000);
     }
 }

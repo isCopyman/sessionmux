@@ -28,8 +28,8 @@ const DEFAULT_FEED_LIMIT: u32 = 100;
 const MAX_FEED_LIMIT: u32 = 500;
 const MAX_STORE_ONLY_DELIVERIES_PER_TURN: usize = 16;
 /// First delivery copies a bounded prefix of the body into the prompt.
-/// The rest stays in the mailbox / Room ledger; `read_message` / `read_room`
-/// return it. Legal events may be up to `MAX_BODY_BYTES`.
+/// The rest stays in the mailbox / Room ledger; `read_message` /
+/// `read_room_post` return it. Legal events may be up to `MAX_BODY_BYTES`.
 const MAX_FIRST_DELIVERY_BODY_CHARS: usize = 8_000;
 const MAX_PARENT_SNIPPET_CHARS: usize = 200;
 const DELIVERY_ENVELOPE_SELECT: &str =
@@ -557,8 +557,8 @@ fn parent_quote_from_row(row: &QueryResult) -> Result<Option<(String, i32, Strin
 }
 
 /// First delivery includes title + a bounded body. Consume is still
-/// `read_message` / `read_room`; overdue nags stay a short digest without
-/// repeating the body.
+/// `read_message` / `read_room`; remaining Room body is `read_room_post`.
+/// Overdue nags stay a short digest without repeating the body.
 fn prompt_draft_from_delivery_row(row: &QueryResult) -> Result<PromptQueueDraft, DbError> {
     let event_id: String = row.try_get("", "event_id")?;
     let delivery_id: String = row.try_get("", "delivery_id")?;
@@ -629,7 +629,7 @@ fn prompt_draft_from_delivery_row(row: &QueryResult) -> Result<PromptQueueDraft,
         let room = room_id.as_deref().unwrap_or("");
         let consume = if truncated {
             format!(
-                "Body truncated after {MAX_FIRST_DELIVERY_BODY_CHARS} characters. Call read_room with room_id={room} (event_id={event_id}) for surrounding posts and the rest of this mention."
+                "Body truncated after {MAX_FIRST_DELIVERY_BODY_CHARS} characters. Call read_room_post with event_id={event_id} offset={MAX_FIRST_DELIVERY_BODY_CHARS} for the rest. Call read_room with room_id={room} for surrounding posts."
             )
         } else {
             format!(
@@ -5143,5 +5143,27 @@ mod tests {
         assert!(text.contains(&"x".repeat(MAX_FIRST_DELIVERY_BODY_CHARS)));
         assert!(!text.contains(&body));
         assert!(text.contains("Call read_message"));
+    }
+
+    #[tokio::test]
+    async fn first_delivery_truncates_oversized_room_mention_and_points_at_read_room_post() {
+        let (db, source, target, _) = seeded_memory().await;
+        let room = seeded_room(&db, source, target).await;
+        let body = "x".repeat(MAX_FIRST_DELIVERY_BODY_CHARS + 40);
+        let mut post = room_post(&room.id, source, vec![target], "huge-room-mention");
+        post.body = body.clone();
+        let posted = post_room(&db.conn, post).await.unwrap();
+        let draft = prompt_draft_for_origin(&db.conn, target, &posted.event_id)
+            .await
+            .expect("truncated room mention must still be injectable");
+        let PromptInputBlock::Text { text } = &draft.blocks[0] else {
+            panic!("expected a text envelope");
+        };
+        assert!(text.contains("Body truncated"));
+        assert!(text.contains("Call read_room_post"));
+        assert!(text.contains(&format!("offset={MAX_FIRST_DELIVERY_BODY_CHARS}")));
+        assert!(text.contains("Call read_room"));
+        assert!(text.contains(&"x".repeat(MAX_FIRST_DELIVERY_BODY_CHARS)));
+        assert!(!text.contains(&body));
     }
 }

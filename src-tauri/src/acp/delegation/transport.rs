@@ -180,6 +180,16 @@ pub struct BrokerReadRoomRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BrokerReadRoomPostRequest {
+    pub token: String,
+    pub event_id: String,
+    #[serde(default)]
+    pub offset: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_chars: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BrokerPostRoomRequest {
     pub token: String,
     pub spec: RoomPostSpec,
@@ -242,6 +252,7 @@ pub enum BrokerMessage {
     ReadMessage(BrokerReadMessageRequest),
     ListRooms(BrokerListRoomsRequest),
     ReadRoom(BrokerReadRoomRequest),
+    ReadRoomPost(BrokerReadRoomPostRequest),
     PostRoom(BrokerPostRoomRequest),
     TaskProgress(BrokerTaskProgressRequest),
     TaskComplete(BrokerTaskCompleteRequest),
@@ -418,6 +429,13 @@ pub async fn client_read_room_round_trip(
     req: &BrokerReadRoomRequest,
 ) -> io::Result<BrokerResponse> {
     message_round_trip(socket_path, &BrokerMessage::ReadRoom(req.clone())).await
+}
+
+pub async fn client_read_room_post_round_trip(
+    socket_path: &str,
+    req: &BrokerReadRoomPostRequest,
+) -> io::Result<BrokerResponse> {
+    message_round_trip(socket_path, &BrokerMessage::ReadRoomPost(req.clone())).await
 }
 
 pub async fn client_post_room_round_trip(
