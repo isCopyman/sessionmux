@@ -72,6 +72,21 @@ interface Draft extends FormState {
   isNew: boolean
 }
 
+/**
+ * File-less profiles: `follow-default` and `official-direct`. They have no
+ * fields to edit and cannot be saved or deleted, so every "can I edit this
+ * tab" question routes through here rather than comparing ids one by one.
+ * `isVirtual` is the backend's own flag; the kinds are the fallback for a
+ * server that predates it.
+ */
+function isVirtualProfile(profile: ClaudeProfileInfo): boolean {
+  return (
+    profile.isVirtual === true ||
+    profile.kind === "followDefault" ||
+    profile.kind === "officialDirect"
+  )
+}
+
 function isAbsolutePath(value: string): boolean {
   const trimmed = value.trim()
   if (!trimmed) return false
@@ -165,7 +180,7 @@ export function ClaudeProfileCatalog({
         setDrafts((prev) => {
           const next = { ...prev }
           for (const profile of list) {
-            if (profile.kind === "followDefault") continue
+            if (isVirtualProfile(profile)) continue
             if (!next[profile.id]) next[profile.id] = draftFromProfile(profile)
           }
           return next
@@ -202,10 +217,11 @@ export function ClaudeProfileCatalog({
         id: profile.id,
         // The draft's name wins so the tab renames as you type, the way a
         // renamed file tab does.
-        label:
-          profile.kind === "followDefault"
+        label: isVirtualProfile(profile)
+          ? profile.kind === "followDefault"
             ? t("followDefault")
-            : (drafts[profile.id]?.label ?? profile.label),
+            : t("officialDirect")
+          : (drafts[profile.id]?.label ?? profile.label),
         isNew: false,
       })),
       ...pending.map((draft) => ({
@@ -219,6 +235,9 @@ export function ClaudeProfileCatalog({
   const selectedDraft = drafts[selectedId]
   const selectedProfile = profileById.get(selectedId)
   const isFollowDefaultTab = selectedId === FOLLOW_DEFAULT_CLAUDE_PROFILE_ID
+  const isVirtualTab = selectedProfile
+    ? isVirtualProfile(selectedProfile)
+    : isFollowDefaultTab
   const currentDefault =
     defaultProfileId.trim() || FOLLOW_DEFAULT_CLAUDE_PROFILE_ID
   const dirty = selectedDraft ? isDirty(selectedDraft, selectedProfile) : false
@@ -465,9 +484,11 @@ export function ClaudeProfileCatalog({
           </div>
 
           <div className="space-y-3 p-3">
-            {isFollowDefaultTab ? (
+            {isVirtualTab ? (
               <p className="text-[11px] text-muted-foreground">
-                {t("followDefaultBody")}
+                {isFollowDefaultTab
+                  ? t("followDefaultBody")
+                  : t("officialDirectBody")}
               </p>
             ) : selectedDraft ? (
               <>
@@ -653,7 +674,7 @@ export function ClaudeProfileCatalog({
                 </Button>
               )}
               <div className="flex-1" />
-              {!isFollowDefaultTab && selectedDraft?.isNew ? (
+              {!isVirtualTab && selectedDraft?.isNew ? (
                 <Button
                   type="button"
                   variant="ghost"
@@ -664,7 +685,7 @@ export function ClaudeProfileCatalog({
                   {tActions("cancel")}
                 </Button>
               ) : null}
-              {!isFollowDefaultTab && selectedProfile ? (
+              {!isVirtualTab && selectedProfile ? (
                 <Button
                   type="button"
                   variant="ghost"
@@ -676,7 +697,7 @@ export function ClaudeProfileCatalog({
                   <Trash2 className="h-3.5 w-3.5" />
                 </Button>
               ) : null}
-              {!isFollowDefaultTab ? (
+              {!isVirtualTab ? (
                 <Button
                   type="button"
                   size="xs"

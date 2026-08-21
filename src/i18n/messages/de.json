@@ -1172,7 +1172,9 @@
       "addCopy": "„{name}“ duplizieren",
       "tokenNotCopied": "Das Token wurde nicht kopiert – die Oberfläche sieht nur eine Maske. Bitte erneut eingeben.",
       "cliGlobalTitle": "Globale Einstellungen der Claude-CLI",
-      "cliGlobalHint": "Dieser Tab injiziert nichts. Die Felder unten bearbeiten die eigene Konfigurationsdatei der CLI (~/.claude/settings.json) und gelten für jede Sitzung, die dem Standard folgt. Andere Tabs bringen eigenen Endpunkt, Schlüssel und eigene Modelle mit."
+      "cliGlobalHint": "Dieser Tab injiziert nichts. Die Felder unten bearbeiten die eigene Konfigurationsdatei der CLI (~/.claude/settings.json) und gelten für jede Sitzung, die dem Standard folgt. Andere Tabs bringen eigenen Endpunkt, Schlüssel und eigene Modelle mit.",
+      "officialDirect": "Offizielle Direktverbindung",
+      "officialDirectBody": "Erzwingt api.anthropic.com und löscht jeden Drittanbieter-Token, sodass sich die CLI mit dem Abo aus ihrem eigenen Konfigurationsverzeichnis anmeldet. Sonst gibt es nichts einzustellen."
     },
     "dialogs": {
       "confirmDeleteProvider": "Provider {providerId} löschen?",

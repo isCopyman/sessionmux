@@ -1172,7 +1172,9 @@
       "addCopy": "Duplicate “{name}”",
       "tokenNotCopied": "The auth token was not copied — the app only ever sees a mask. Enter it again.",
       "cliGlobalTitle": "Claude CLI global settings",
-      "cliGlobalHint": "This tab injects nothing. The fields below edit the CLI's own config file (~/.claude/settings.json) and apply to every session that follows the default. Other tabs carry their own endpoint, key and models."
+      "cliGlobalHint": "This tab injects nothing. The fields below edit the CLI's own config file (~/.claude/settings.json) and apply to every session that follows the default. Other tabs carry their own endpoint, key and models.",
+      "officialDirect": "Official direct",
+      "officialDirectBody": "Forces api.anthropic.com and clears any third-party token, so the CLI signs in with the subscription stored in its own config directory. Nothing else to configure."
     },
     "dialogs": {
       "confirmDeleteProvider": "Delete Provider {providerId}?",

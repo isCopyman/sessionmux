@@ -1172,7 +1172,9 @@
       "addCopy": "Dupliquer « {name} »",
       "tokenNotCopied": "Le jeton n'a pas été copié : l'interface ne reçoit qu'un masque. Saisissez-le à nouveau.",
       "cliGlobalTitle": "Paramètres globaux de la CLI Claude",
-      "cliGlobalHint": "Cet onglet n'injecte rien. Les champs ci-dessous modifient le fichier de configuration propre à la CLI (~/.claude/settings.json) et s'appliquent à toutes les sessions qui suivent la valeur par défaut. Les autres onglets ont leur propre point de terminaison, clé et modèles."
+      "cliGlobalHint": "Cet onglet n'injecte rien. Les champs ci-dessous modifient le fichier de configuration propre à la CLI (~/.claude/settings.json) et s'appliquent à toutes les sessions qui suivent la valeur par défaut. Les autres onglets ont leur propre point de terminaison, clé et modèles.",
+      "officialDirect": "Connexion officielle directe",
+      "officialDirectBody": "Force api.anthropic.com et efface tout jeton tiers, afin que la CLI se connecte avec l'abonnement enregistré dans son propre répertoire de configuration. Rien d'autre à configurer."
     },
     "dialogs": {
       "confirmDeleteProvider": "Supprimer le provider {providerId} ?",

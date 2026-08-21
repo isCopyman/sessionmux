@@ -1172,7 +1172,9 @@
       "addCopy": "Duplicar “{name}”",
       "tokenNotCopied": "O token não foi copiado — a interface só recebe uma máscara. Digite-o novamente.",
       "cliGlobalTitle": "Configurações globais da CLI do Claude",
-      "cliGlobalHint": "Esta aba não injeta nada. Os campos abaixo editam o arquivo de configuração da própria CLI (~/.claude/settings.json) e valem para todas as sessões que seguem o padrão. As outras abas têm endpoint, chave e modelos próprios."
+      "cliGlobalHint": "Esta aba não injeta nada. Os campos abaixo editam o arquivo de configuração da própria CLI (~/.claude/settings.json) e valem para todas as sessões que seguem o padrão. As outras abas têm endpoint, chave e modelos próprios.",
+      "officialDirect": "Conexão oficial direta",
+      "officialDirectBody": "Força api.anthropic.com e limpa qualquer token de terceiros, então a CLI entra com a assinatura guardada no próprio diretório de configuração. Não há mais nada para configurar."
     },
     "dialogs": {
       "confirmDeleteProvider": "Excluir o provedor {providerId}?",

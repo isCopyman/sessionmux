@@ -1172,7 +1172,9 @@
       "addCopy": "'{name}' 복제",
       "tokenNotCopied": "인증 토큰은 복사되지 않습니다. 화면에는 마스킹된 값만 전달됩니다. 다시 입력하세요.",
       "cliGlobalTitle": "Claude CLI 전역 설정",
-      "cliGlobalHint": "이 탭은 아무것도 주입하지 않습니다. 아래 항목은 CLI 자체 설정 파일(~/.claude/settings.json)을 수정하며 '기본값 따르기'를 쓰는 모든 세션에 적용됩니다. 다른 탭은 각자의 엔드포인트, 키, 모델을 가집니다."
+      "cliGlobalHint": "이 탭은 아무것도 주입하지 않습니다. 아래 항목은 CLI 자체 설정 파일(~/.claude/settings.json)을 수정하며 '기본값 따르기'를 쓰는 모든 세션에 적용됩니다. 다른 탭은 각자의 엔드포인트, 키, 모델을 가집니다.",
+      "officialDirect": "공식 직접 연결",
+      "officialDirectBody": "api.anthropic.com을 강제하고 서드파티 토큰을 지웁니다. CLI는 자체 설정 디렉터리에 저장된 구독으로 로그인합니다. 그 외에 설정할 항목은 없습니다."
     },
     "dialogs": {
       "confirmDeleteProvider": "Provider {providerId}를 삭제하시겠습니까?",

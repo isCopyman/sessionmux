@@ -1172,7 +1172,9 @@
       "addCopy": "「{name}」を複製",
       "tokenNotCopied": "認証トークンはコピーされません（画面にはマスクしか届きません）。入力し直してください。",
       "cliGlobalTitle": "Claude CLI のグローバル設定",
-      "cliGlobalHint": "このタブは何も注入しません。以下の項目は CLI 自身の設定ファイル（~/.claude/settings.json）を編集し、「デフォルトに従う」すべてのセッションに適用されます。他のタブはそれぞれ独自のエンドポイント・キー・モデルを持ちます。"
+      "cliGlobalHint": "このタブは何も注入しません。以下の項目は CLI 自身の設定ファイル（~/.claude/settings.json）を編集し、「デフォルトに従う」すべてのセッションに適用されます。他のタブはそれぞれ独自のエンドポイント・キー・モデルを持ちます。",
+      "officialDirect": "公式に直接接続",
+      "officialDirectBody": "api.anthropic.com を強制し、サードパーティのトークンを消去します。CLI は自身の設定ディレクトリに保存されたサブスクリプションでサインインします。ほかに設定する項目はありません。"
     },
     "dialogs": {
       "confirmDeleteProvider": "Provider {providerId} を削除しますか？",

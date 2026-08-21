@@ -1172,7 +1172,9 @@
       "addCopy": "複製「{name}」",
       "tokenNotCopied": "權杖沒有被複製——介面只取得到遮罩。請重新填寫。",
       "cliGlobalTitle": "Claude CLI 全域設定",
-      "cliGlobalHint": "這一檔不注入任何東西。下面這些欄位改的是 CLI 自己的設定檔（~/.claude/settings.json），對所有「跟隨預設」的工作階段生效。其他檔各自帶著自己的介面位址、金鑰與模型。"
+      "cliGlobalHint": "這一檔不注入任何東西。下面這些欄位改的是 CLI 自己的設定檔（~/.claude/settings.json），對所有「跟隨預設」的工作階段生效。其他檔各自帶著自己的介面位址、金鑰與模型。",
+      "officialDirect": "官方直連",
+      "officialDirectBody": "強制走 api.anthropic.com 並清掉第三方 token，讓 CLI 用它設定目錄裡存的訂閱登入。沒有其他可設定的項目。"
     },
     "dialogs": {
       "confirmDeleteProvider": "確認刪除 Provider {providerId}？",

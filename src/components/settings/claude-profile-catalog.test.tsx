@@ -53,6 +53,17 @@ const RELAY: ClaudeProfileInfo = {
   updatedAt: "2026-08-21T00:00:00+00:00",
 }
 
+/** The second file-less profile: forces the official endpoint, edits nothing. */
+const OFFICIAL_DIRECT: ClaudeProfileInfo = {
+  id: "official-direct",
+  label: "Official direct",
+  kind: "officialDirect",
+  authTokenMasked: "",
+  isVirtual: true,
+  createdAt: "1970-01-01T00:00:00Z",
+  updatedAt: "1970-01-01T00:00:00Z",
+}
+
 function renderCatalog(
   props?: Partial<ComponentProps<typeof ClaudeProfileCatalog>>
 ) {
@@ -202,6 +213,21 @@ describe("ClaudeProfileCatalog", () => {
     )
     expect(screen.getByLabelText("Auth token")).toHaveValue("")
     expect(screen.getByText(/was not copied/)).toBeInTheDocument()
+  })
+
+  it("treats Official direct as a read-only tab of its own", async () => {
+    api.claudeProfileList.mockResolvedValue([FOLLOW, OFFICIAL_DIRECT, RELAY])
+    const user = userEvent.setup()
+    renderCatalog()
+
+    await user.click(
+      await screen.findByRole("tab", { name: "Official direct" })
+    )
+    expect(screen.getByText(/Forces api\.anthropic\.com/)).toBeInTheDocument()
+    // No editor: it is file-less, exactly like Follow default.
+    expect(screen.queryByLabelText("Name")).toBeNull()
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "Delete" })).toBeNull()
   })
 
   // The parent renders the CLI-global settings as the Follow-default tab's

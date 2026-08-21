@@ -1727,6 +1727,13 @@ export interface SessionConfigOptionInfo {
 /** Virtual Claude launch profile: do not set `CLAUDE_CONFIG_DIR`. */
 export const FOLLOW_DEFAULT_CLAUDE_PROFILE_ID = "follow-default"
 
+/**
+ * Virtual Claude launch profile: force the official endpoint and clear the
+ * third-party token, so the CLI falls back to the OAuth subscription stored in
+ * its config directory. Also file-less; also not editable.
+ */
+export const OFFICIAL_DIRECT_CLAUDE_PROFILE_ID = "official-direct"
+
 /** Agent-setting `env_json` key for the default Claude launch profile. */
 export const CODEG_CLAUDE_PROFILE_ENV_KEY = "CODEG_CLAUDE_PROFILE"
 
@@ -1734,7 +1741,11 @@ export const CODEG_CLAUDE_PROFILE_ENV_KEY = "CODEG_CLAUDE_PROFILE"
  * Wire DTO for `claude_profile_list` / `claude_profile_upsert`. Tokens are
  * masked; there is no raw `authToken` on the wire.
  */
-export type ClaudeProfileKind = "followDefault" | "configDir" | "managed"
+export type ClaudeProfileKind =
+  | "followDefault"
+  | "officialDirect"
+  | "configDir"
+  | "managed"
 
 export interface ClaudeProfileInfo {
   id: string
@@ -1744,6 +1755,10 @@ export interface ClaudeProfileInfo {
   baseUrl?: string | null
   authTokenMasked: string
   model?: string | null
+  /** Extra env the profile injects. Secret-looking values arrive masked. */
+  env?: Record<string, string>
+  /** File-less profile (`follow-default`, `official-direct`): not editable. */
+  isVirtual?: boolean
   createdAt: string
   updatedAt: string
 }
@@ -1752,11 +1767,13 @@ export interface ClaudeProfileInfo {
 export interface ClaudeProfileUpsert {
   id: string
   label: string
-  kind: Exclude<ClaudeProfileKind, "followDefault">
+  kind: Exclude<ClaudeProfileKind, "followDefault" | "officialDirect">
   configDir?: string | null
   baseUrl?: string | null
   authToken?: string | null
   model?: string | null
+  /** Whole-table replace. Omit to keep stored; `{}` clears. */
+  env?: Record<string, string>
 }
 
 export interface ConversationClaudeProfileResult {
@@ -1765,10 +1782,12 @@ export interface ConversationClaudeProfileResult {
   affectedRunningSessions: number
 }
 
-/** Frontend gate matching backend `is_valid_profile_id` plus the reserved id. */
+/** Frontend gate matching backend `is_valid_profile_id` plus reserved ids. */
 export function isValidClaudeProfileId(id: string): boolean {
   return (
-    /^[a-z0-9-_]{1,64}$/.test(id) && id !== FOLLOW_DEFAULT_CLAUDE_PROFILE_ID
+    /^[a-z0-9-_]{1,64}$/.test(id) &&
+    id !== FOLLOW_DEFAULT_CLAUDE_PROFILE_ID &&
+    id !== OFFICIAL_DIRECT_CLAUDE_PROFILE_ID
   )
 }
 

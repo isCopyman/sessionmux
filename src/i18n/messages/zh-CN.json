@@ -1172,7 +1172,9 @@
       "addCopy": "复制「{name}」",
       "tokenNotCopied": "令牌没有被复制——界面只拿得到掩码。请重新填写。",
       "cliGlobalTitle": "Claude CLI 全局设置",
-      "cliGlobalHint": "这一档不注入任何东西。下面这些字段改的是 CLI 自己的配置文件（~/.claude/settings.json），对所有「跟随默认」的会话生效。其它档各自带着自己的接口地址、密钥和模型。"
+      "cliGlobalHint": "这一档不注入任何东西。下面这些字段改的是 CLI 自己的配置文件（~/.claude/settings.json），对所有「跟随默认」的会话生效。其它档各自带着自己的接口地址、密钥和模型。",
+      "officialDirect": "官方直连",
+      "officialDirectBody": "强制走 api.anthropic.com 并清掉第三方 token，让 CLI 用它配置目录里存的订阅登录。没有别的可配。"
     },
     "dialogs": {
       "confirmDeleteProvider": "确认删除 Provider {providerId}？",
