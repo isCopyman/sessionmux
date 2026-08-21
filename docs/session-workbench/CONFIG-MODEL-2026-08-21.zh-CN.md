@@ -266,3 +266,56 @@ kind 与解析语义保留，已绑定的会话不会炸。
 
 档记录是 `claude-profiles/<id>/` 下的 **JSON 文件**（`claude_profile.rs:433 read_record`），
 不是数据库表——给档加字段只是 serde 加 `#[serde(default)]`，**零迁移、不需要用户签字**。
+
+
+## 9. 优先级倒挂：实测 + 用户拍板的目标序（2026-08-21 深夜）
+
+### 9.1 实测（两侧正向信号，不是推断）
+
+临时项目目录下放 `.claude/settings.json`，`env.ANTHROPIC_BASE_URL` 指向
+`127.0.0.1:4711`；另写一份 overlay 指向 `127.0.0.1:4712`。两个端口各起一个只记日志、
+一律回 401 的监听器，看哪个被打到。
+
+| 跑法 | 命中 |
+| --- | --- |
+| `claude -p "say pong"`（不带 overlay） | **PROJECT** `4711 POST /v1/messages` |
+| `claude --settings overlay.json -p "say pong"` | **OVERLAY** `4712 POST /v1/messages`，4711 一次没碰 |
+
+对照组是必须的：只跑第二行的话，4711 没命中也可能是"目录没被信任、项目 settings 压根
+没加载"。第一行证明它会加载。
+
+**结论：`--settings` 压过项目层。所以 codeg 当前的实际优先级是**
+
+    ~/.claude(用户全局)  <  项目 .claude  <  codeg 档   ← 倒挂
+
+### 9.2 用户拍板的目标序
+
+用户原话：「codeg 视为全局设置，然后项目级的设置肯定要覆盖全局设置啊，怎么可能是全局
+设置覆盖项目设置」「即全局用户级 < codeg < 项目级」。就是 VSCode 的
+「用户设置 < 工作区设置」。目标：
+
+    ~/.claude(用户全局)  <  codeg 档  <  项目 .claude/settings.json  <  .claude/settings.local.json
+
+### 9.3 落地方案（不改机制，改我们塞进 overlay 的内容）
+
+`--settings` 只有一层且恒在顶上，改不了它的位置，所以**由我们自己把项目层折叠进
+overlay**：
+
+| 有 overlay | 开关 | `settingSources` | overlay 内容 |
+| --- | --- | --- | --- |
+| 有 | 开 | `["user"]` | 档 + 项目 `settings.json` + `settings.local.json` 深合并叠上 |
+| 有 | 关 | `["user"]` | 只有档（不读项目文件） |
+| 无 | 开 | 省略（适配器默认 user/project/local） | — |
+| 无 | 关 | `["user"]` | — |
+
+**有 overlay 时 `settingSources` 恒为 `["user"]`**：项目层已经由我们折叠进去了，不能让
+适配器再加载一遍。用户全局留在最底下，正好对上 9.2 的目标序。
+
+深合并规则：两边都是 object 就递归；其余（数组、标量、类型不一致）高层直接替换。
+
+### 9.4 顺带排掉的一个坑
+
+SDK 文档里 `settingSources: []` 会连项目 `CLAUDE.md` 一起不加载。**实测 CLI 不是这样**：
+临时目录放 `CLAUDE.md`（"问 codeword 就回 MANGO"），`claude -p "codeword?"` 与
+`claude --setting-sources user -p "codeword?"` **都回 MANGO**。
+所以关掉项目 settings **不会**顺手砍掉项目指令。
