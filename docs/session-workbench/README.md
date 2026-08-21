@@ -34,7 +34,10 @@
   `AT-COMPLETION-RECON-2026-08-20.zh-CN.md`（@ 补全与多路径）
 - **序列化/持久化**：`SERDE-PERSISTENCE-INVENTORY.zh-CN.md`（红黄绿盘点）；
   `SERDE-PINS-REPORT.zh-CN.md`（24 条钉死测试）
-- **Provider 切换（O39）**：`O39-PROVIDER-SWITCH-RECON.zh-CN.md`（paseo/monet 调研）；
+- **Provider 切换（O39）**：`CONFIG-MODEL-2026-08-21.zh-CN.md`（**配置模型定稿，先读这份**：
+  只保留「跟随 CLI」和「codeg 档＝一份 settings.json」两种，逐条记了删掉哪些层、
+  为什么删，以及 `build_runtime_env_from_setting` 的真实覆盖顺序）；
+  `O39-PROVIDER-SWITCH-RECON.zh-CN.md`（paseo/monet 调研）；
   `CLAUDE-PROFILE-RFC-2026-08-21.zh-CN.md`（**启动配置档设计**：CLAUDE_CONFIG_DIR 机制、
   认证优先级、MCP 暴露与泛化到其它 harness 的成本）；
   `O59A-CLAUDE-PROFILE-BACKEND-REPORT.zh-CN.md`（**后端已落地**：磁盘布局、解析顺序、
