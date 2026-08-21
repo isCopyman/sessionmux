@@ -23,8 +23,8 @@ use crate::acp::types::{
 };
 #[cfg(feature = "tauri-runtime")]
 use crate::acp::types::{ConnectionInfo, ForkResultInfo, PromptInputBlock};
-use crate::db::service::agent_setting_service;
 use crate::db::service::model_provider_service;
+use crate::db::service::{agent_setting_service, conversation_service};
 use crate::db::AppDatabase;
 use crate::models::agent::AgentType;
 use crate::web::event_bridge::EventEmitter;
@@ -9682,6 +9682,140 @@ pub(crate) async fn persist_config_choice_for_connection(
     }
 }
 
+pub(crate) struct AcpConnectRequest {
+    pub agent_type: AgentType,
+    pub working_dir: Option<String>,
+    pub session_id: Option<String>,
+    pub preferred_mode_id: Option<String>,
+    pub preferred_config_values: Option<BTreeMap<String, String>>,
+    pub conversation_id: Option<i32>,
+    pub wait_until_ready: bool,
+}
+
+async fn resolve_connect_binding(
+    db: &AppDatabase,
+    conversation_id: Option<i32>,
+    agent_type: AgentType,
+) -> Result<Option<(i32, i32)>, AcpError> {
+    let Some(conversation_id) = conversation_id else {
+        return Ok(None);
+    };
+    let conversation = conversation_service::get_by_id(&db.conn, conversation_id)
+        .await
+        .map_err(|error| {
+            AcpError::protocol(format!(
+                "cannot attach ACP runtime to conversation {conversation_id}: {error}"
+            ))
+        })?;
+    if conversation.agent_type != agent_type {
+        return Err(AcpError::protocol(format!(
+            "conversation {conversation_id} belongs to agent '{:?}', not '{:?}'",
+            conversation.agent_type, agent_type
+        )));
+    }
+    Ok(Some((conversation_id, conversation.folder_id)))
+}
+
+/// The one ACP connect path shared by Tauri and Web clients. Stable Codeg
+/// identity is resolved from SQLite once and installed in the runtime before
+/// the connection is published; transports do not patch `SessionState` after
+/// spawn or maintain their own profile/selector lifecycle.
+pub(crate) async fn acp_connect_core(
+    manager: &ConnectionManager,
+    db: &AppDatabase,
+    data_dir: &Path,
+    owner_window_label: String,
+    emitter: EventEmitter,
+    request: AcpConnectRequest,
+) -> Result<String, AcpError> {
+    let AcpConnectRequest {
+        agent_type,
+        working_dir,
+        session_id,
+        preferred_mode_id,
+        preferred_config_values,
+        conversation_id,
+        wait_until_ready,
+    } = request;
+
+    // A profile picked in the composer travels on THIS request, not through a
+    // conversation row: a tab whose conversation does not exist yet still has to
+    // be able to relaunch on the profile the user just chose. Read before
+    // `resolve_connect_selector_prefs` consumes the map.
+    let explicit_claude_profile_id = preferred_config_values
+        .as_ref()
+        .and_then(|values| values.get(crate::acp::connection::PREFERRED_PROFILE_CONFIG_KEY))
+        .cloned();
+    let runtime_env = build_session_runtime_env(
+        db,
+        agent_type,
+        session_id.as_deref(),
+        data_dir,
+        conversation_id,
+        explicit_claude_profile_id.as_deref(),
+    )
+    .await?;
+
+    // Guard: the session page must never trigger a download or install.
+    // If the agent isn't ready, return SdkNotInstalled here so the frontend
+    // can prompt the user to install it from Agent Settings.
+    verify_agent_installed(agent_type).await?;
+
+    let (preferred_mode_id, preferred_config_values) = resolve_connect_selector_prefs(
+        db,
+        conversation_id,
+        preferred_mode_id,
+        preferred_config_values.unwrap_or_default(),
+    )
+    .await;
+
+    let conversation_binding = resolve_connect_binding(db, conversation_id, agent_type).await?;
+    let wait_for_fresh_session = wait_until_ready && session_id.is_none();
+
+    if let Some((conversation_id, folder_id)) = conversation_binding {
+        manager
+            .spawn_agent_for_conversation(
+                agent_type,
+                working_dir,
+                session_id,
+                runtime_env,
+                owner_window_label,
+                emitter,
+                preferred_mode_id,
+                preferred_config_values,
+                conversation_id,
+                folder_id,
+                wait_for_fresh_session,
+            )
+            .await
+    } else if wait_for_fresh_session {
+        manager
+            .spawn_agent_wait_ready(
+                agent_type,
+                working_dir,
+                runtime_env,
+                owner_window_label,
+                emitter,
+                preferred_mode_id,
+                preferred_config_values,
+            )
+            .await
+    } else {
+        manager
+            .spawn_agent(
+                agent_type,
+                working_dir,
+                session_id,
+                runtime_env,
+                owner_window_label,
+                emitter,
+                preferred_mode_id,
+                preferred_config_values,
+            )
+            .await
+    }
+}
+
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 #[allow(clippy::too_many_arguments)]
@@ -9708,72 +9842,23 @@ pub async fn acp_connect(
         .app_data_dir()
         .map(|p| crate::paths::resolve_effective_data_dir(&p))
         .unwrap_or_else(|_| std::path::PathBuf::from("."));
-    // A profile picked in the composer travels on THIS request, not through a
-    // conversation row: a tab whose conversation does not exist yet still has to
-    // be able to relaunch on the profile the user just chose. Read before
-    // `resolve_connect_selector_prefs` consumes the map.
-    let explicit_claude_profile_id = preferred_config_values
-        .as_ref()
-        .and_then(|values| values.get(crate::acp::connection::PREFERRED_PROFILE_CONFIG_KEY))
-        .cloned();
-    let runtime_env = build_session_runtime_env(
+    acp_connect_core(
+        &manager,
         &db,
-        agent_type,
-        session_id.as_deref(),
         &app_data_dir,
-        conversation_id,
-        explicit_claude_profile_id.as_deref(),
+        window.label().to_string(),
+        EventEmitter::Tauri(app_handle),
+        AcpConnectRequest {
+            agent_type,
+            working_dir,
+            session_id,
+            preferred_mode_id,
+            preferred_config_values,
+            conversation_id,
+            wait_until_ready: wait_until_ready.unwrap_or(false),
+        },
     )
-    .await?;
-
-    // Guard: the session page must never trigger a download or install.
-    // If the agent isn't ready, return SdkNotInstalled here so the frontend
-    // can prompt the user to install it from Agent Settings.
-    verify_agent_installed(agent_type).await?;
-
-    let (preferred_mode_id, preferred_config_values) = resolve_connect_selector_prefs(
-        &db,
-        conversation_id,
-        preferred_mode_id,
-        preferred_config_values.unwrap_or_default(),
-    )
-    .await;
-
-    let emitter = EventEmitter::Tauri(app_handle);
-    let connection_id = if wait_until_ready.unwrap_or(false) && session_id.is_none() {
-        manager
-            .spawn_agent_wait_ready(
-                agent_type,
-                working_dir,
-                runtime_env,
-                window.label().to_string(),
-                emitter,
-                preferred_mode_id,
-                preferred_config_values,
-            )
-            .await?
-    } else {
-        manager
-            .spawn_agent(
-                agent_type,
-                working_dir,
-                session_id,
-                runtime_env,
-                window.label().to_string(),
-                emitter,
-                preferred_mode_id,
-                preferred_config_values,
-            )
-            .await?
-    };
-    // Reconnecting to a conversation that already exists emits no
-    // `ConversationLinked`, so without this the respawned connection would carry
-    // no conversation id and every by-conversation lookup would miss it. See
-    // `ConnectionManager::bind_conversation`.
-    if let Some(conversation_id) = conversation_id {
-        manager.bind_conversation(&connection_id, conversation_id).await;
-    }
-    Ok(connection_id)
+    .await
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -10068,13 +10153,11 @@ pub async fn acp_get_session_snapshot_by_conversation(
 /// and it spawns/owns one.
 ///
 /// Matches by `conversation_id` first, then falls back to `session_id`
-/// (`external_id`). The fallback is load-bearing: a connection binds its
-/// `conversation_id` only on the first prompt, so a historical conversation
-/// opened by a second client BEFORE any prompt is sent would miss the
-/// by-conversation lookup — and then `acp_connect` would reuse the live owner's
-/// connection by `external_id` and the frontend would mis-tag it as a locally
-/// owned connection, tearing it down (killing the real owner's agent) on tab
-/// close. Discovering it here lets the second client attach as a viewer.
+/// (`external_id`). Persisted-session connects now bind `conversation_id` before
+/// publishing the runtime. The native-id fallback remains load-bearing for
+/// legacy/unbound connections and in-flight compatibility cases: without it a
+/// second client could mis-tag the live owner's connection as locally owned and
+/// tear down the real owner's Agent when its tab closes.
 pub(crate) async fn acp_find_connection_for_conversation_core(
     manager: &ConnectionManager,
     conversation_id: i32,
@@ -12581,6 +12664,53 @@ mod selector_prefs_tests {
     use super::*;
     use crate::db::service::conversation_service;
     use crate::db::test_helpers::{fresh_in_memory_db, seed_conversation, seed_folder};
+
+    #[tokio::test]
+    async fn connect_binding_uses_the_persisted_conversation_identity() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/connect-binding").await;
+        let conversation_id = seed_conversation(&db, folder_id, AgentType::ClaudeCode).await;
+
+        assert_eq!(
+            resolve_connect_binding(&db, Some(conversation_id), AgentType::ClaudeCode)
+                .await
+                .expect("resolve binding"),
+            Some((conversation_id, folder_id))
+        );
+        assert_eq!(
+            resolve_connect_binding(&db, None, AgentType::ClaudeCode)
+                .await
+                .expect("draft has no binding"),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn connect_binding_rejects_a_different_harness() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/connect-binding-agent").await;
+        let conversation_id = seed_conversation(&db, folder_id, AgentType::ClaudeCode).await;
+
+        let error = resolve_connect_binding(&db, Some(conversation_id), AgentType::Codex)
+            .await
+            .expect_err("a runtime cannot change the conversation harness");
+        assert!(
+            error.to_string().contains("belongs to agent"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn connect_binding_rejects_a_missing_conversation() {
+        let db = fresh_in_memory_db().await;
+        let error = resolve_connect_binding(&db, Some(999_999), AgentType::ClaudeCode)
+            .await
+            .expect_err("missing stable identity must not create an unbound runtime");
+        assert!(
+            error.to_string().contains("cannot attach ACP runtime"),
+            "unexpected error: {error}"
+        );
+    }
 
     #[tokio::test]
     async fn session_pins_override_the_agent_template_per_key() {

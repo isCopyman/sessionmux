@@ -87,82 +87,24 @@ pub async fn acp_connect(
     Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<AcpConnectParams>,
 ) -> Result<Json<String>, AppCommandError> {
-    let db = &state.db;
-    let manager = &state.connection_manager;
-
-    // A profile picked in the composer travels on THIS request, not through a
-    // conversation row: a tab whose conversation does not exist yet still has to
-    // be able to relaunch on the profile the user just chose. Read before
-    // `resolve_connect_selector_prefs` consumes the map.
-    let explicit_claude_profile_id = params
-        .preferred_config_values
-        .as_ref()
-        .and_then(|values| values.get(crate::acp::connection::PREFERRED_PROFILE_CONFIG_KEY))
-        .cloned();
-    let runtime_env = acp_commands::build_session_runtime_env(
-        db,
-        params.agent_type,
-        params.session_id.as_deref(),
+    let connection_id = acp_commands::acp_connect_core(
+        &state.connection_manager,
+        &state.db,
         &state.data_dir,
-        params.conversation_id,
-        explicit_claude_profile_id.as_deref(),
+        "web".to_string(),
+        state.emitter.clone(),
+        acp_commands::AcpConnectRequest {
+            agent_type: params.agent_type,
+            working_dir: params.working_dir,
+            session_id: params.session_id,
+            preferred_mode_id: params.preferred_mode_id,
+            preferred_config_values: params.preferred_config_values,
+            conversation_id: params.conversation_id,
+            wait_until_ready: params.wait_until_ready,
+        },
     )
     .await
     .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
-
-    // Guard: the session page must never trigger a download or install.
-    // If the agent isn't ready, return SdkNotInstalled here so the frontend
-    // can prompt the user to install it from Agent Settings.
-    acp_commands::verify_agent_installed(params.agent_type)
-        .await
-        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
-
-    let (preferred_mode_id, preferred_config_values) =
-        acp_commands::resolve_connect_selector_prefs(
-            db,
-            params.conversation_id,
-            params.preferred_mode_id,
-            params.preferred_config_values.unwrap_or_default(),
-        )
-        .await;
-
-    let emitter = state.emitter.clone();
-    let connection_id = if params.wait_until_ready && params.session_id.is_none() {
-        manager
-            .spawn_agent_wait_ready(
-                params.agent_type,
-                params.working_dir,
-                runtime_env,
-                "web".to_string(),
-                emitter,
-                preferred_mode_id,
-                preferred_config_values,
-            )
-            .await
-    } else {
-        manager
-            .spawn_agent(
-                params.agent_type,
-                params.working_dir,
-                params.session_id,
-                runtime_env,
-                "web".to_string(),
-                emitter,
-                preferred_mode_id,
-                preferred_config_values,
-            )
-            .await
-    }
-    .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
-    // Reconnecting to a conversation that already exists emits no
-    // `ConversationLinked`, so without this the respawned connection would carry
-    // no conversation id and every by-conversation lookup would miss it. See
-    // `ConnectionManager::bind_conversation`.
-    if let Some(conversation_id) = params.conversation_id {
-        manager
-            .bind_conversation(&connection_id, conversation_id)
-            .await;
-    }
 
     Ok(Json(connection_id))
 }

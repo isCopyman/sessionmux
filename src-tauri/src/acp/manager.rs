@@ -617,6 +617,46 @@ impl ConnectionManager {
         .await
     }
 
+    /// Spawn or reattach an ACP runtime for an already-persisted Codeg
+    /// Conversation. The stable Codeg identity is installed before the new
+    /// connection is published, rather than patched onto `SessionState` after
+    /// `spawn_agent` returns.
+    ///
+    /// Reusing a live native Session is also identity-safe: an unbound legacy
+    /// connection is linked through the normal `ConversationLinked` event, an
+    /// already matching binding is a no-op, and a conflicting binding is
+    /// rejected instead of silently making the runtime change owners.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn spawn_agent_for_conversation(
+        &self,
+        agent_type: AgentType,
+        working_dir: Option<String>,
+        session_id: Option<String>,
+        runtime_env: BTreeMap<String, String>,
+        owner_window_label: String,
+        emitter: EventEmitter,
+        preferred_mode_id: Option<String>,
+        preferred_config_values: BTreeMap<String, String>,
+        conversation_id: i32,
+        folder_id: i32,
+        wait_until_ready: bool,
+    ) -> Result<String, AcpError> {
+        self.spawn_agent_inner(
+            agent_type,
+            working_dir,
+            session_id,
+            false,
+            runtime_env,
+            owner_window_label,
+            emitter,
+            preferred_mode_id,
+            preferred_config_values,
+            Some((conversation_id, folder_id)),
+            wait_until_ready,
+        )
+        .await
+    }
+
     /// Bring an existing Codeg Session's runtime back up for a Session
     /// Dispatcher wake (queued collaboration mail, mailbox reminders).
     ///
@@ -721,6 +761,10 @@ impl ConnectionManager {
                 existing,
                 session_id.as_deref().unwrap_or("")
             );
+            if let Some((conversation_id, folder_id)) = initial_conversation_binding {
+                self.ensure_conversation_binding(&existing, conversation_id, folder_id)
+                    .await?;
+            }
             return Ok(existing);
         }
 
@@ -3591,30 +3635,53 @@ impl ConnectionManager {
         None
     }
 
-    /// Bind an already-existing conversation to a freshly spawned connection.
-    ///
-    /// `SessionState::conversation_id` is otherwise only ever assigned by the
-    /// `ConversationLinked` / `ConversationForked` events, and those fire when a
-    /// conversation ROW IS CREATED — never when a connect attaches to a row that
-    /// already exists. So every reconnect (notably the respawn a profile switch
-    /// performs) produced a connection with no conversation id, and every lookup
-    /// that scans connections by conversation silently missed it.
-    ///
-    /// The user-visible symptom that led here: switching a session's Claude
-    /// profile worked exactly once. The first switch found the original
-    /// connection and restarted it; the restarted connection had no conversation
-    /// id, so `mark_conversation_config_stale` returned `false` for every later
-    /// switch, the composer reported "switched" and nothing restarted — the
-    /// session kept running the old profile while the chip and the database both
-    /// said otherwise.
-    ///
-    /// A no-op when the connection is gone: losing the race with a disconnect
-    /// just means there is nothing left to bind.
-    pub async fn bind_conversation(&self, connection_id: &str, conversation_id: i32) {
-        let Some(state) = self.get_state(connection_id).await else {
-            return;
+    /// Ensure a reused live connection has the same stable Codeg identity as
+    /// the attach request. New connections receive the binding in
+    /// `spawn_agent_connection` before they enter the manager map; this helper
+    /// only covers dedup reuse and legacy unbound runtimes.
+    async fn ensure_conversation_binding(
+        &self,
+        connection_id: &str,
+        conversation_id: i32,
+        folder_id: i32,
+    ) -> Result<(), AcpError> {
+        let Some((state, emitter)) = ({
+            let connections = self.connections.lock().await;
+            connections
+                .get(connection_id)
+                .map(|connection| (Arc::clone(&connection.state), connection.emitter.clone()))
+        }) else {
+            return Err(AcpError::ConnectionNotFound(connection_id.to_string()));
         };
-        state.write().await.conversation_id = Some(conversation_id);
+
+        let (current_conversation_id, current_folder_id) = {
+            let state = state.read().await;
+            (state.conversation_id, state.folder_id)
+        };
+        if let Some(current_conversation_id) = current_conversation_id {
+            if current_conversation_id != conversation_id {
+                return Err(AcpError::protocol(format!(
+                    "connection {connection_id} is already bound to conversation \
+                     {current_conversation_id}, not {conversation_id}"
+                )));
+            }
+            if current_folder_id == Some(folder_id) {
+                return Ok(());
+            }
+        }
+
+        emit_with_state(
+            &state,
+            &emitter,
+            AcpEvent::ConversationLinked {
+                conversation_id,
+                folder_id,
+                parent_conversation_id: None,
+                parent_tool_use_id: None,
+            },
+        )
+        .await;
+        Ok(())
     }
 
     /// Mark a live connection bound to `conversation_id` as config-stale so the
@@ -3689,13 +3756,12 @@ impl ConnectionManager {
     /// Resolve an `(external_id, agent_type)` (agent session) to its
     /// currently-active connection id, if any. Sibling to
     /// `find_connection_by_conversation_id`, used as the discovery fallback for
-    /// the cross-client viewer attach: a connection binds its `conversation_id`
-    /// only on the first prompt, but its `external_id` is set as soon as the
-    /// session starts — so for a historical conversation opened by a second
-    /// client *before* anyone has sent a prompt, the by-conversation lookup
-    /// misses while this one still finds the live owner, letting the second
-    /// client attach as a viewer instead of reusing the connection as a
-    /// (mis-tagged) owner and later tearing it down.
+    /// cross-client viewer attach. Normal persisted-session connects now install
+    /// `conversation_id` before publishing the runtime, but the native id remains
+    /// a compatibility fallback for legacy/unbound connections and transports
+    /// whose stable binding has not landed yet. Finding the live owner here lets
+    /// a second client attach as a viewer instead of treating the runtime as its
+    /// own and later tearing it down.
     ///
     /// `agent_type` is part of the match because `external_id` is unique only
     /// per agent (`UNIQUE(external_id, agent_type)`), not globally — without it,
@@ -4146,15 +4212,20 @@ mod tests {
         );
     }
 
-    /// A reconnect emits no `ConversationLinked`, so before `bind_conversation`
-    /// existed the respawned connection was invisible to every by-conversation
-    /// lookup. Measured symptom: the second Claude-profile switch on a session
-    /// reported success and never restarted anything.
+    /// A legacy/unbound connection reused by native Session id must acquire the
+    /// stable Codeg identity through the ordinary lifecycle event, not through
+    /// a raw field patch.
     #[tokio::test]
-    async fn bind_conversation_makes_a_respawned_connection_findable() {
+    async fn ensure_conversation_binding_links_a_reused_legacy_connection() {
         let mgr = ConnectionManager::new();
-        insert_fake_connection(&mgr, "respawned", AgentType::ClaudeCode, None, EventEmitter::Noop)
-            .await;
+        insert_fake_connection(
+            &mgr,
+            "respawned",
+            AgentType::ClaudeCode,
+            None,
+            EventEmitter::Noop,
+        )
+        .await;
 
         // A fresh connection starts unbound — this is the state a reconnect left
         // behind, and why the lookup missed.
@@ -4163,7 +4234,9 @@ mod tests {
                 .await
         );
 
-        mgr.bind_conversation("respawned", 292).await;
+        mgr.ensure_conversation_binding("respawned", 292, 7)
+            .await
+            .expect("bind reused runtime");
 
         assert!(
             mgr.mark_conversation_config_stale(292, ConfigStaleKind::AgentConfig)
@@ -4177,17 +4250,52 @@ mod tests {
                 .await
                 .config_stale
         );
+        assert_eq!(
+            mgr.get_state("respawned")
+                .await
+                .unwrap()
+                .read()
+                .await
+                .folder_id,
+            Some(7)
+        );
     }
 
-    /// Binding a connection that has already gone away must not panic: connect
-    /// returning and the process dying can interleave.
+    /// Dedup must never let one native runtime silently change which stable
+    /// Codeg Conversation owns it.
     #[tokio::test]
-    async fn bind_conversation_is_a_noop_for_a_missing_connection() {
+    async fn ensure_conversation_binding_rejects_identity_conflicts() {
         let mgr = ConnectionManager::new();
-        mgr.bind_conversation("never-existed", 1).await;
+        insert_fake_connection(
+            &mgr,
+            "owned",
+            AgentType::ClaudeCode,
+            None,
+            EventEmitter::Noop,
+        )
+        .await;
+        mgr.ensure_conversation_binding("owned", 1, 7)
+            .await
+            .expect("initial binding");
+
+        let error = mgr
+            .ensure_conversation_binding("owned", 2, 7)
+            .await
+            .expect_err("rebind must fail");
         assert!(
-            !mgr.mark_conversation_config_stale(1, ConfigStaleKind::AgentConfig)
+            error
+                .to_string()
+                .contains("already bound to conversation 1"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(
+            mgr.get_state("owned")
                 .await
+                .unwrap()
+                .read()
+                .await
+                .conversation_id,
+            Some(1)
         );
     }
 

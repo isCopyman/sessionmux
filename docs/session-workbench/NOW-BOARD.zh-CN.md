@@ -91,9 +91,12 @@ Codeg 数据库里的稳定 `conversation_id` **一直存在**；缺失的是重
 **影响面不止 profile**：任何按 conversation 扫描连接的查找在重连后都会失效
 （例如 `acp_get_session_snapshot_by_conversation_core`）。
 
-修复：`ConnectionManager::bind_conversation`，在两条 connect 路径
-（`commands/acp.rs` 与 `web/handlers/acp.rs`，两者本来就手握 `conversation_id`）
-spawn 成功后调用。已提交 `97e07dfc`；真实 Desktop 往返切换
+第一阶段修复曾用 `ConnectionManager::bind_conversation` 在 spawn 后补绑，已提交
+`97e07dfc`。后续已收敛为身份不变量：Desktop 与 Web 共用
+`acp_connect_core`；持久会话先从 SQLite 解析稳定 `conversation_id/folder_id`，再通过
+`spawn_agent_for_conversation` 创建运行时，连接在进入 manager map 前就已绑定。复用连接时
+只允许补齐同一身份，跨 Conversation 重绑会直接失败，不再依赖事后字段补丁。真实 Desktop
+往返切换
 `跟随默认 → CPA → 跟随默认 → CPA` 均产生新的 ACP connection/session，最终 selector
 与当前 profile 一致。
 
