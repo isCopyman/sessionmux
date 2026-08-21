@@ -208,8 +208,11 @@ vi.mock("@/stores/app-workspace-store", () => ({
         folder_id: number
         title: string
         agent_type: string
+        updated_at: string
+        archived_at: string | null
       }>
       allFolders: Array<{ id: number; path: string }>
+      folders: Array<{ id: number; name: string; alias: string | null }>
     }) => unknown
   ) =>
     selector({
@@ -219,17 +222,22 @@ vi.mock("@/stores/app-workspace-store", () => ({
           folder_id: 7,
           title: "Planner",
           agent_type: "codex",
+          updated_at: "2026-06-01T00:00:00.000Z",
+          archived_at: null,
         },
         {
           id: 202,
           folder_id: 7,
           title: "Session D",
           agent_type: "claude_code",
+          updated_at: "2026-06-01T00:00:00.000Z",
+          archived_at: null,
         },
       ],
       // Only the fixtures that set `rootFolderId` reach this list; the rest
       // resolve to "no bound folder".
       allFolders: [{ id: 7, path: "/repo/research" }],
+      folders: [{ id: 7, name: "research", alias: null }],
     }),
 }))
 
@@ -1325,11 +1333,17 @@ describe("RoomWorkspace", () => {
     )
   })
 
-  it("shows a labeled invite button in the room header", async () => {
+  it("opens add-member from the more-actions menu", async () => {
     api.getCollaborationRoomTimeline.mockResolvedValue(timeline([event()]))
     renderRoom()
     await screen.findByText("newest post")
-    fireEvent.click(screen.getByRole("button", { name: "Add a Session" }))
+    // The O51 header "Add a Session" button is gone; the ⋯ menu remains.
+    expect(screen.queryByRole("button", { name: "Add a Session" })).toBeNull()
+    const user = userEvent.setup()
+    await user.click(screen.getByRole("button", { name: "More actions" }))
+    await user.click(
+      await screen.findByRole("menuitem", { name: "Add a Session" })
+    )
     expect(
       await screen.findByRole("heading", { name: "Add Sessions to this room" })
     ).toBeTruthy()

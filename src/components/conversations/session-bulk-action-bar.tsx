@@ -49,11 +49,9 @@ import {
   moveSessionsToCollection,
 } from "@/lib/session-bulk-operations"
 import { cn } from "@/lib/utils"
-import {
-  createCollaborationRoom,
-  listConversationCollectionRefs,
-} from "@/lib/api"
+import { listConversationCollectionRefs } from "@/lib/api"
 import { useOpenRoom } from "@/lib/open-room"
+import { useRoomMembership } from "@/lib/room-membership"
 import {
   appendConversationsToWorkbench,
   appendRoomsToWorkbench,
@@ -121,6 +119,7 @@ export function SessionBulkActionBar({
     useTabActions()
   const { openConversations } = useWorkbenchRoute()
   const openRoom = useOpenRoom()
+  const { createRoomWith } = useRoomMembership()
   const activeWorkbenchId = useTabStore((state) => state.activeWorkbenchId)
   const activeWorkbenchTabs = useTabStore((state) => state.rawTabs)
   const folders = useAppWorkspaceStore((state) => state.folders)
@@ -441,34 +440,55 @@ export function SessionBulkActionBar({
       toast.error(t("toastRoomNeedTwo"))
       return
     }
-    void run(async () => {
-      const title =
-        conversations
-          .slice(0, 2)
-          .map((conversation) => formatConversationTitle(conversation.title))
-          .filter(Boolean)
-          .join(" / ") || t("createRoom")
-      const refs = await listConversationCollectionRefs(
-        conversations.map((conversation) => conversation.id)
-      )
-      const collectionIds = new Set(refs.map((ref) => ref.collection_id))
-      const collectionId =
-        refs.length === conversations.length && collectionIds.size === 1
-          ? refs[0]?.collection_id
-          : undefined
-      const created = await createCollaborationRoom({
-        workbenchId: activeWorkbenchId,
-        title: selectedCount > 2 ? `${title}…` : title,
-        memberConversationIds: conversations.map(
-          (conversation) => conversation.id
-        ),
-        createdByConversationId: conversations[0].id,
-        ...(collectionId != null ? { collectionId } : {}),
-      })
-      toast.success(t("toastRoomCreated", { title: created.title }))
-      await openRoom(created)
-    })
-  }, [activeWorkbenchId, conversations, openRoom, run, sessionCount, t])
+    // Not `run()`: createRoomWith toasts its own failure and returns null,
+    // which `run()` would treat as success and clear the selection.
+    if (selectedCount === 0 || pending) return
+    setPending(true)
+    void (async () => {
+      try {
+        const title =
+          conversations
+            .slice(0, 2)
+            .map((conversation) => formatConversationTitle(conversation.title))
+            .filter(Boolean)
+            .join(" / ") || t("createRoom")
+        const refs = await listConversationCollectionRefs(
+          conversations.map((conversation) => conversation.id)
+        )
+        const collectionIds = new Set(refs.map((ref) => ref.collection_id))
+        const collectionId =
+          refs.length === conversations.length && collectionIds.size === 1
+            ? refs[0]?.collection_id
+            : undefined
+        const created = await createRoomWith({
+          workbenchId: activeWorkbenchId,
+          title: selectedCount > 2 ? `${title}…` : title,
+          memberConversationIds: conversations.map(
+            (conversation) => conversation.id
+          ),
+          createdByConversationId: conversations[0].id,
+          ...(collectionId != null ? { collectionId } : {}),
+        })
+        if (created == null) return
+        await openRoom(created)
+        onClear()
+      } catch (error) {
+        toast.error(t("toastOpFailed", { message: toErrorMessage(error) }))
+      } finally {
+        setPending(false)
+      }
+    })()
+  }, [
+    activeWorkbenchId,
+    conversations,
+    createRoomWith,
+    onClear,
+    openRoom,
+    pending,
+    selectedCount,
+    sessionCount,
+    t,
+  ])
 
   if (selectedCount === 0) return null
 
