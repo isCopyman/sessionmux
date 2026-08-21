@@ -1127,7 +1127,6 @@
     "claudeProfile": {
       "controlName": "Profil de lancement",
       "followDefault": "Suivre le profil par défaut",
-      "userLevelSettings": "Paramètres utilisateur (~/.claude)",
       "manage": "Gérer les profils de lancement…",
       "switchSuccess": "Profil de lancement mis à jour",
       "switchFailed": "Impossible de changer de profil de lancement",

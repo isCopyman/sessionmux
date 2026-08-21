@@ -1127,7 +1127,6 @@
     "claudeProfile": {
       "controlName": "接入設定",
       "followDefault": "跟隨預設",
-      "userLevelSettings": "使用者層級設定（~/.claude）",
       "manage": "管理接入設定…",
       "switchSuccess": "已切換接入設定",
       "switchFailed": "切換接入設定失敗",

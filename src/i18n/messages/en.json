@@ -1127,7 +1127,6 @@
     "claudeProfile": {
       "controlName": "Launch profile",
       "followDefault": "Follow default",
-      "userLevelSettings": "User-level settings (~/.claude)",
       "manage": "Manage launch profiles…",
       "switchSuccess": "Launch profile updated",
       "switchFailed": "Could not switch launch profile",

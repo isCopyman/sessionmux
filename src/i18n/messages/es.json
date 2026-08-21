@@ -1127,7 +1127,6 @@
     "claudeProfile": {
       "controlName": "Perfil de inicio",
       "followDefault": "Seguir el predeterminado",
-      "userLevelSettings": "Configuración de usuario (~/.claude)",
       "manage": "Administrar perfiles de inicio…",
       "switchSuccess": "Perfil de inicio actualizado",
       "switchFailed": "No se pudo cambiar el perfil de inicio",

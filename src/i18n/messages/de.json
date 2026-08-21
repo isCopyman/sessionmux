@@ -1127,7 +1127,6 @@
     "claudeProfile": {
       "controlName": "Startprofil",
       "followDefault": "Standard folgen",
-      "userLevelSettings": "Benutzereinstellungen (~/.claude)",
       "manage": "Startprofile verwalten…",
       "switchSuccess": "Startprofil aktualisiert",
       "switchFailed": "Startprofil konnte nicht gewechselt werden",

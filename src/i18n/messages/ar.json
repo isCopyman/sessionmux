@@ -1127,7 +1127,6 @@
     "claudeProfile": {
       "controlName": "ملف تشغيل",
       "followDefault": "اتباع الافتراضي",
-      "userLevelSettings": "إعدادات مستوى المستخدم (‎~/.claude‎)",
       "manage": "إدارة ملفات التشغيل…",
       "switchSuccess": "تم تحديث ملف التشغيل",
       "switchFailed": "تعذر تبديل ملف التشغيل",

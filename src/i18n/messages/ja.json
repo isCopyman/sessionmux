@@ -1127,7 +1127,6 @@
     "claudeProfile": {
       "controlName": "起動プロファイル",
       "followDefault": "デフォルトに従う",
-      "userLevelSettings": "ユーザーレベル設定（~/.claude）",
       "manage": "起動プロファイルを管理…",
       "switchSuccess": "起動プロファイルを切り替えました",
       "switchFailed": "起動プロファイルを切り替えられませんでした",

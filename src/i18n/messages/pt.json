@@ -1127,7 +1127,6 @@
     "claudeProfile": {
       "controlName": "Perfil de inicialização",
       "followDefault": "Seguir o padrão",
-      "userLevelSettings": "Configurações do usuário (~/.claude)",
       "manage": "Gerenciar perfis de inicialização…",
       "switchSuccess": "Perfil de inicialização atualizado",
       "switchFailed": "Não foi possível alternar o perfil de inicialização",

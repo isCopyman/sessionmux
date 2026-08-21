@@ -1127,7 +1127,6 @@
     "claudeProfile": {
       "controlName": "실행 프로필",
       "followDefault": "기본값 따르기",
-      "userLevelSettings": "사용자 수준 설정(~/.claude)",
       "manage": "실행 프로필 관리…",
       "switchSuccess": "실행 프로필이 변경되었습니다",
       "switchFailed": "실행 프로필을 변경하지 못했습니다",

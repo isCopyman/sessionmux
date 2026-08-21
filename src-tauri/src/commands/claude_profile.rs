@@ -1043,8 +1043,12 @@ pub const LAUNCH_MODEL_CONFIG_KEY: &str = "model";
 pub fn profile_destination_summary(info: &ClaudeProfileInfo) -> String {
     match info.kind {
         ClaudeProfileKind::FollowDefault => {
-            "follow-default: the host's default Claude configuration \
-             (subscription login); CLAUDE_CONFIG_DIR is not set"
+            // Not necessarily the subscription: codeg injects nothing here, so
+            // whatever the CLI's own cascade resolves to wins — including a
+            // project's .claude/settings.json pointing at a paid gateway.
+            "follow-default: codeg sets nothing; the CLI's own configuration \
+             applies, including any project .claude/settings.json. \
+             CLAUDE_CONFIG_DIR is not set"
                 .to_string()
         }
         ClaudeProfileKind::OfficialDirect => {
