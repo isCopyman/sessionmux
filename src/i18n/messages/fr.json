@@ -1173,7 +1173,7 @@
       "addCopy": "Dupliquer « {name} »",
       "tokenNotCopied": "Le jeton n'a pas été copié : l'interface ne reçoit qu'un masque. Saisissez-le à nouveau.",
       "cliGlobalTitle": "Paramètres globaux de la CLI Claude",
-      "cliGlobalHint": "Ce profil n'injecte rien. Les champs ci-dessous modifient la configuration globale du CLI lui-même (~/.claude/settings.json), la couche la plus basse : le .claude/settings.json d'un projet remplace les clés homonymes pour les sessions qui s'y exécutent. Un profil codeg prime sur les deux.",
+      "cliGlobalHint": "Ce profil n'injecte rien. Les champs ci-dessous modifient la configuration globale du CLI lui-même (~/.claude/settings.json), la couche la plus basse : le .claude/settings.json d'un projet remplace les clés homonymes pour les sessions qui s'y exécutent. Un profil codeg prime sur les deux, mais uniquement pour les clés qu'il renseigne réellement ; celles qu'il laisse vides viennent toujours du projet, puis de ce fichier global.",
       "officialDirect": "Connexion officielle directe",
       "officialDirectBody": "Force api.anthropic.com et efface tout jeton tiers, afin que la CLI se connecte avec l'abonnement enregistré dans son propre répertoire de configuration. Rien d'autre à configurer.",
       "fieldSettingsJson": "settings.json",

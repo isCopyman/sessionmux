@@ -1173,7 +1173,7 @@
       "addCopy": "复制「{name}」",
       "tokenNotCopied": "令牌没有被复制——界面只拿得到掩码。请重新填写。",
       "cliGlobalTitle": "Claude CLI 全局设置",
-      "cliGlobalHint": "这一档不注入任何东西。下面这些字段改的是 CLI 自己的全局配置（~/.claude/settings.json），它是最低的一层：会话所在项目的 .claude/settings.json 会覆盖同名键。codeg 档比两者都高。",
+      "cliGlobalHint": "这一档不注入任何东西。下面这些字段改的是 CLI 自己的全局配置（~/.claude/settings.json），它是最低的一层：会话所在项目的 .claude/settings.json 会覆盖同名键。codeg 档比两者都高，但只压过它自己填了的键——没填的键仍旧由项目决定，再由这份全局配置兜底。",
       "officialDirect": "官方直连",
       "officialDirectBody": "强制走 api.anthropic.com 并清掉第三方 token，让 CLI 用它配置目录里存的订阅登录。没有别的可配。",
       "fieldSettingsJson": "settings.json",

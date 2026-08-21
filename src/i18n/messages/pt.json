@@ -1173,7 +1173,7 @@
       "addCopy": "Duplicar “{name}”",
       "tokenNotCopied": "O token não foi copiado — a interface só recebe uma máscara. Digite-o novamente.",
       "cliGlobalTitle": "Configurações globais da CLI do Claude",
-      "cliGlobalHint": "Este perfil não injeta nada. Os campos abaixo editam a configuração global do próprio CLI (~/.claude/settings.json), a camada mais baixa: o .claude/settings.json de um projeto substitui as chaves correspondentes nas sessões executadas ali. Um perfil do codeg prevalece sobre ambos.",
+      "cliGlobalHint": "Este perfil não injeta nada. Os campos abaixo editam a configuração global do próprio CLI (~/.claude/settings.json), a camada mais baixa: o .claude/settings.json de um projeto substitui as chaves correspondentes nas sessões executadas ali. Um perfil do codeg prevalece sobre ambos, mas apenas nas chaves que ele realmente preenche; as que ficam em branco continuam vindo do projeto e depois deste arquivo global.",
       "officialDirect": "Conexão oficial direta",
       "officialDirectBody": "Força api.anthropic.com e limpa qualquer token de terceiros, então a CLI entra com a assinatura guardada no próprio diretório de configuração. Não há mais nada para configurar.",
       "fieldSettingsJson": "settings.json",

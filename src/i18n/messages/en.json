@@ -1173,7 +1173,7 @@
       "addCopy": "Duplicate “{name}”",
       "tokenNotCopied": "The auth token was not copied — the app only ever sees a mask. Enter it again.",
       "cliGlobalTitle": "Claude CLI global settings",
-      "cliGlobalHint": "This profile injects nothing. The fields below edit the CLI's own global config (~/.claude/settings.json), which is the lowest layer: a project's .claude/settings.json overrides matching keys for sessions run there. A codeg profile outranks both.",
+      "cliGlobalHint": "This profile injects nothing. The fields below edit the CLI's own global config (~/.claude/settings.json), which is the lowest layer: a project's .claude/settings.json overrides matching keys for sessions run there. A codeg profile outranks both — but only for the keys it actually fills in; anything it leaves blank still comes from the project, then the global file.",
       "officialDirect": "Official direct",
       "officialDirectBody": "Forces api.anthropic.com and clears any third-party token, so the CLI signs in with the subscription stored in its own config directory. Nothing else to configure.",
       "fieldSettingsJson": "settings.json",
