@@ -1123,6 +1123,39 @@ pub fn claude_profile_upsert_core(
     record_to_info(&record)
 }
 
+/// Read-only counterpart of `conversation_set_claude_profile_core`: which
+/// profile would this conversation actually launch with.
+///
+/// Resolves the same way a spawn does (`resolve_claude_profile`), so the chip
+/// in the composer can show the profile in force rather than guessing. It used
+/// to guess — it defaulted to `follow-default` on every mount, so reloading the
+/// app made every session claim to be following the CLI no matter what it was
+/// bound to, and a user could not tell which endpoint a session was billing.
+///
+/// `affected_running_sessions` is always 0: reading changes nothing. The shape
+/// is shared with the setter so the two cannot describe the binding differently.
+pub async fn conversation_get_claude_profile_core(
+    db: &AppDatabase,
+    data_dir: &Path,
+    conversation_id: i32,
+) -> Result<ConversationClaudeProfileResult, AppCommandError> {
+    let setting = agent_setting_service::get_by_agent_type(&db.conn, AgentType::ClaudeCode)
+        .await
+        .map_err(AppCommandError::from)?;
+    let resolved = resolve_claude_profile(
+        db,
+        data_dir,
+        Some(conversation_id),
+        setting.as_ref().and_then(|m| m.env_json.as_deref()),
+    )
+    .await?;
+    Ok(ConversationClaudeProfileResult {
+        conversation_id,
+        profile_id: Some(resolved.id),
+        affected_running_sessions: 0,
+    })
+}
+
 pub fn claude_profile_delete_core(data_dir: &Path, id: &str) -> Result<(), AppCommandError> {
     if is_virtual_profile_id(id) {
         return Err(AppCommandError::invalid_input(format!(
@@ -1253,6 +1286,16 @@ pub fn claude_settings_read(
 
 #[cfg(feature = "tauri-runtime")]
 #[tauri::command]
+pub async fn conversation_get_claude_profile(
+    db: tauri::State<'_, AppDatabase>,
+    app: tauri::AppHandle,
+    conversation_id: i32,
+) -> Result<ConversationClaudeProfileResult, AppCommandError> {
+    conversation_get_claude_profile_core(&db, &tauri_data_dir(&app), conversation_id).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
 pub fn claude_profile_upsert(
     app: tauri::AppHandle,
     payload: ClaudeProfileUpsert,
@@ -1302,6 +1345,12 @@ pub struct ClaudeSettingsReadParams {
 pub struct ConversationSetClaudeProfileParams {
     pub conversation_id: i32,
     pub profile_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationGetClaudeProfileParams {
+    pub conversation_id: i32,
 }
 
 #[cfg(test)]

@@ -1184,7 +1184,13 @@
       "importSuccess": "{path} から取り込みました",
       "importMissing": "{path} に settings.json がありません",
       "importFailed": "その settings.json を読み込めませんでした",
-      "importDroppedSecrets": "次のキーはマスクされて返るため取り込めませんでした。入力し直してください: {keys}"
+      "importDroppedSecrets": "次のキーはマスクされて返るため取り込めませんでした。入力し直してください: {keys}",
+      "switchApplied": "プロファイルを切り替え、適用のためセッションを再起動しました。",
+      "switchRestartTitle": "このプロファイルを適用するためにセッションを再起動しますか？",
+      "switchRestartBody": "プロファイルはエージェントの起動時にのみ反映されるため、実行中のプロセスは古いままです。進行中のターンは中断されますが、履歴とキュー内のメッセージは保持されます。",
+      "switchRestartConfirm": "再起動して適用",
+      "switchRestartLater": "続行し、あとで適用",
+      "switchRestartFailed": "プロファイルは保存しましたが、セッションを再起動できませんでした"
     },
     "dialogs": {
       "confirmDeleteProvider": "Provider {providerId} を削除しますか？",

@@ -5,6 +5,16 @@ import { ChevronDown } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
@@ -19,9 +29,11 @@ import {
 import { DropdownRadioItemContent } from "@/components/chat/dropdown-radio-item-content"
 import {
   claudeProfileList,
+  conversationGetClaudeProfile,
   conversationSetClaudeProfile,
   openSettingsWindow,
 } from "@/lib/api"
+import { useConnection } from "@/hooks/use-connection"
 import { toErrorMessage } from "@/lib/app-error"
 import {
   FOLLOW_DEFAULT_CLAUDE_PROFILE_ID,
@@ -30,6 +42,12 @@ import {
 
 interface InlineClaudeProfileSelectorProps {
   conversationId: number | null
+  /**
+   * Connection key for this composer, so switching can restart the session it
+   * belongs to. Omitted (tests, surfaces with no live connection) means the
+   * switch is stored and applies on the next launch, same as before.
+   */
+  tabId?: string | null
   disabled?: boolean
 }
 
@@ -45,11 +63,17 @@ function profileDescription(profile: ClaudeProfileInfo): string | null {
 
 export function InlineClaudeProfileSelector({
   conversationId,
+  tabId = null,
   disabled = false,
 }: InlineClaudeProfileSelectorProps) {
   const t = useTranslations("AcpAgentSettings.claudeProfile")
   const [profiles, setProfiles] = useState<ClaudeProfileInfo[]>([])
   const [selectedId, setSelectedId] = useState(FOLLOW_DEFAULT_CLAUDE_PROFILE_ID)
+  // A switch only reaches the agent at spawn, so applying one means restarting
+  // the session. Held until the user answers when a turn is in flight.
+  const [confirmRestart, setConfirmRestart] = useState(false)
+  const [restarting, setRestarting] = useState(false)
+  const { status, reapplyConfig } = useConnection(tabId ?? "")
 
   useEffect(() => {
     let cancelled = false
@@ -73,6 +97,26 @@ export function InlineClaudeProfileSelector({
     }
   }, [t])
 
+  // Which profile this conversation is actually bound to. Without this the chip
+  // read `follow-default` on every mount, so reopening the app made every
+  // session claim to follow the CLI no matter which endpoint it was billing.
+  // A failure here is silent on purpose: the chip falls back to the list's
+  // first entry exactly as it did before, and a toast for a label that is only
+  // cosmetically wrong would be worse than the wrong label.
+  useEffect(() => {
+    if (conversationId == null) return
+    let cancelled = false
+    void conversationGetClaudeProfile(conversationId)
+      .then((result) => {
+        if (cancelled || !result.profileId) return
+        setSelectedId(result.profileId)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [conversationId])
+
   const selected = useMemo(
     () => profiles.find((item) => item.id === selectedId),
     [profiles, selectedId]
@@ -83,6 +127,28 @@ export function InlineClaudeProfileSelector({
       : (selected?.label ?? selectedId)
   const controlName = t("controlName")
 
+  /**
+   * Restart so the running process picks the profile up. `reapplyConfig`
+   * disconnects and resumes the same session, so the transcript survives and
+   * the persisted prompt queue is untouched — the only casualty is a turn that
+   * is mid-flight, which is why that is the one case we ask about.
+   */
+  const applyNow = useCallback(async () => {
+    setRestarting(true)
+    try {
+      const restarted = await reapplyConfig()
+      toast.success(restarted ? t("switchApplied") : t("switchSuccess"))
+    } catch (error: unknown) {
+      // The binding is already stored; only the restart failed. Say so, and
+      // leave the stale-config banner to offer the retry.
+      toast.error(t("switchRestartFailed"), {
+        description: toErrorMessage(error),
+      })
+    } finally {
+      setRestarting(false)
+    }
+  }, [reapplyConfig, t])
+
   const handleSelect = useCallback(
     async (profileId: string) => {
       if (disabled || conversationId == null || profileId === selectedId) {
@@ -91,8 +157,20 @@ export function InlineClaudeProfileSelector({
       const previous = selectedId
       setSelectedId(profileId)
       try {
-        await conversationSetClaudeProfile(conversationId, profileId)
-        toast.success(t("switchSuccess"))
+        const result = await conversationSetClaudeProfile(
+          conversationId,
+          profileId
+        )
+        // Nothing running to restart: the next launch reads the new binding.
+        if (result.affectedRunningSessions < 1) {
+          toast.success(t("switchSuccess"))
+          return
+        }
+        if (status === "prompting") {
+          setConfirmRestart(true)
+          return
+        }
+        await applyNow()
       } catch (error: unknown) {
         setSelectedId(previous)
         toast.error(t("switchFailed"), {
@@ -100,7 +178,7 @@ export function InlineClaudeProfileSelector({
         })
       }
     },
-    [conversationId, disabled, selectedId, t]
+    [applyNow, conversationId, disabled, selectedId, status, t]
   )
 
   const handleManage = useCallback(() => {
@@ -114,69 +192,98 @@ export function InlineClaudeProfileSelector({
   }, [t])
 
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button
-          variant="ghost"
-          size="xs"
-          disabled={disabled}
-          title={controlName}
-          aria-label={
-            currentLabel ? `${controlName}: ${currentLabel}` : controlName
-          }
-          className="min-w-0 gap-0.5 px-1 text-muted-foreground"
-        >
-          <span className="max-w-[10rem] truncate">{currentLabel}</span>
-          <ChevronDown className="size-3 shrink-0 text-muted-foreground" />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent
-        side="top"
-        align="start"
-        className="min-w-72 overflow-y-auto"
-        style={{
-          maxWidth: "min(20rem, calc(100vw - 1rem))",
-          maxHeight:
-            "min(60vh, var(--radix-dropdown-menu-content-available-height))",
-        }}
-      >
-        <DropdownMenuLabel className="text-foreground">
-          {controlName}
-        </DropdownMenuLabel>
-        <DropdownMenuSeparator />
-        <DropdownMenuRadioGroup
-          value={selectedId}
-          onValueChange={(value) => {
-            void handleSelect(value)
+    <>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            variant="ghost"
+            size="xs"
+            disabled={disabled}
+            title={controlName}
+            aria-label={
+              currentLabel ? `${controlName}: ${currentLabel}` : controlName
+            }
+            className="min-w-0 gap-0.5 px-1 text-muted-foreground"
+          >
+            <span className="max-w-[10rem] truncate">{currentLabel}</span>
+            <ChevronDown className="size-3 shrink-0 text-muted-foreground" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent
+          side="top"
+          align="start"
+          className="min-w-72 overflow-y-auto"
+          style={{
+            maxWidth: "min(20rem, calc(100vw - 1rem))",
+            maxHeight:
+              "min(60vh, var(--radix-dropdown-menu-content-available-height))",
           }}
         >
-          {profiles.map((profile) => (
-            <DropdownMenuRadioItem
-              key={profile.id}
-              value={profile.id}
-              title={
-                profile.id === FOLLOW_DEFAULT_CLAUDE_PROFILE_ID
-                  ? t("followDefault")
-                  : profile.label
-              }
-            >
-              <DropdownRadioItemContent
-                label={
+          <DropdownMenuLabel className="text-foreground">
+            {controlName}
+          </DropdownMenuLabel>
+          <DropdownMenuSeparator />
+          <DropdownMenuRadioGroup
+            value={selectedId}
+            onValueChange={(value) => {
+              void handleSelect(value)
+            }}
+          >
+            {profiles.map((profile) => (
+              <DropdownMenuRadioItem
+                key={profile.id}
+                value={profile.id}
+                title={
                   profile.id === FOLLOW_DEFAULT_CLAUDE_PROFILE_ID
                     ? t("followDefault")
                     : profile.label
                 }
-                description={profileDescription(profile)}
-                truncateDescription
-              />
-            </DropdownMenuRadioItem>
-          ))}
-        </DropdownMenuRadioGroup>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem onSelect={handleManage}>
-          {t("manage")}
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
+              >
+                <DropdownRadioItemContent
+                  label={
+                    profile.id === FOLLOW_DEFAULT_CLAUDE_PROFILE_ID
+                      ? t("followDefault")
+                      : profile.label
+                  }
+                  description={profileDescription(profile)}
+                  truncateDescription
+                />
+              </DropdownMenuRadioItem>
+            ))}
+          </DropdownMenuRadioGroup>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem onSelect={handleManage}>
+            {t("manage")}
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      {/* Asked only while a turn is in flight — that turn is the one thing a
+        restart destroys. An idle session restarts without a prompt, because a
+        dialog guarding nothing is the kind of click this panel had too many
+        of. */}
+      <AlertDialog open={confirmRestart} onOpenChange={setConfirmRestart}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{t("switchRestartTitle")}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t("switchRestartBody")}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={restarting}>
+              {t("switchRestartLater")}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              disabled={restarting}
+              onClick={() => {
+                void applyNow()
+              }}
+            >
+              {t("switchRestartConfirm")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   )
 }

@@ -41,6 +41,19 @@ pub async fn claude_profile_delete(
     Ok(Json(()))
 }
 
+pub async fn conversation_get_claude_profile(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<profile_commands::ConversationGetClaudeProfileParams>,
+) -> Result<Json<ConversationClaudeProfileResult>, AppCommandError> {
+    let result = profile_commands::conversation_get_claude_profile_core(
+        &state.db,
+        &state.data_dir,
+        params.conversation_id,
+    )
+    .await?;
+    Ok(Json(result))
+}
+
 pub async fn conversation_set_claude_profile(
     Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<profile_commands::ConversationSetClaudeProfileParams>,

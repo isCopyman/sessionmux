@@ -1184,7 +1184,13 @@
       "importSuccess": "已从 {path} 导入",
       "importMissing": "{path} 没有 settings.json",
       "importFailed": "读不了那份 settings.json",
-      "importDroppedSecrets": "这几个键回传时是掩码，没有带过来，请重新填写：{keys}"
+      "importDroppedSecrets": "这几个键回传时是掩码，没有带过来，请重新填写：{keys}",
+      "switchApplied": "已切换配置，并重启会话以生效。",
+      "switchRestartTitle": "重启会话以应用这个配置？",
+      "switchRestartBody": "配置只在智能体启动时生效，所以正在跑的进程用的还是旧配置。重启会中断当前这一轮；对话记录和队列里的消息都会保留。",
+      "switchRestartConfirm": "重启并应用",
+      "switchRestartLater": "先不重启，稍后应用",
+      "switchRestartFailed": "配置已保存，但会话重启失败"
     },
     "dialogs": {
       "confirmDeleteProvider": "确认删除 Provider {providerId}？",

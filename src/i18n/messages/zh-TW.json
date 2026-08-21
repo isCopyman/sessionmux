@@ -1184,7 +1184,13 @@
       "importSuccess": "已從 {path} 匯入",
       "importMissing": "{path} 沒有 settings.json",
       "importFailed": "讀不了那份 settings.json",
-      "importDroppedSecrets": "這幾個鍵回傳時是遮罩，沒有帶過來，請重新填寫：{keys}"
+      "importDroppedSecrets": "這幾個鍵回傳時是遮罩，沒有帶過來，請重新填寫：{keys}",
+      "switchApplied": "已切換設定檔，並重新啟動工作階段以生效。",
+      "switchRestartTitle": "重新啟動工作階段以套用這個設定檔？",
+      "switchRestartBody": "設定檔只在代理啟動時生效，所以正在執行的行程用的還是舊設定。重新啟動會中斷目前這一輪；對話記錄和佇列中的訊息都會保留。",
+      "switchRestartConfirm": "重新啟動並套用",
+      "switchRestartLater": "先不重新啟動，稍後套用",
+      "switchRestartFailed": "設定檔已儲存，但工作階段重新啟動失敗"
     },
     "dialogs": {
       "confirmDeleteProvider": "確認刪除 Provider {providerId}？",

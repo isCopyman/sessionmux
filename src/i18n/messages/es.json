@@ -1184,7 +1184,13 @@
       "importSuccess": "Importado desde {path}",
       "importMissing": "No hay settings.json en {path}",
       "importFailed": "No se pudo leer ese settings.json",
-      "importDroppedSecrets": "Estas claves llegaron enmascaradas y no se copiaron; vuelve a escribirlas: {keys}"
+      "importDroppedSecrets": "Estas claves llegaron enmascaradas y no se copiaron; vuelve a escribirlas: {keys}",
+      "switchApplied": "Perfil cambiado y sesión reiniciada para aplicarlo.",
+      "switchRestartTitle": "¿Reiniciar la sesión para aplicar este perfil?",
+      "switchRestartBody": "Un perfil solo surte efecto al arrancar el agente, así que el proceso en marcha sigue con el anterior. Se interrumpirá el turno en curso; se conservan la conversación y los mensajes en cola.",
+      "switchRestartConfirm": "Reiniciar y aplicar",
+      "switchRestartLater": "Seguir y aplicar más tarde",
+      "switchRestartFailed": "Perfil guardado, pero no se pudo reiniciar la sesión"
     },
     "dialogs": {
       "confirmDeleteProvider": "¿Eliminar proveedor {providerId}?",

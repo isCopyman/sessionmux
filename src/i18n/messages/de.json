@@ -1184,7 +1184,13 @@
       "importSuccess": "Aus {path} importiert",
       "importMissing": "Unter {path} gibt es keine settings.json",
       "importFailed": "Diese settings.json konnte nicht gelesen werden",
-      "importDroppedSecrets": "Diese Schlüssel kamen maskiert zurück und wurden nicht übernommen – bitte erneut eingeben: {keys}"
+      "importDroppedSecrets": "Diese Schlüssel kamen maskiert zurück und wurden nicht übernommen – bitte erneut eingeben: {keys}",
+      "switchApplied": "Profil gewechselt und Sitzung neu gestartet, damit es greift.",
+      "switchRestartTitle": "Sitzung neu starten, damit dieses Profil greift?",
+      "switchRestartBody": "Ein Profil greift erst beim Start des Agents, der laufende Prozess nutzt also noch das alte. Der laufende Zug wird abgebrochen; Verlauf und Nachrichten in der Warteschlange bleiben erhalten.",
+      "switchRestartConfirm": "Neu starten und anwenden",
+      "switchRestartLater": "Weiterlaufen, später anwenden",
+      "switchRestartFailed": "Profil gespeichert, aber die Sitzung konnte nicht neu starten"
     },
     "dialogs": {
       "confirmDeleteProvider": "Provider {providerId} löschen?",

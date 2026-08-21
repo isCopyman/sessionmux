@@ -1220,6 +1220,10 @@ pub fn build_router(
             "/conversation_set_claude_profile",
             post(handlers::claude_profile::conversation_set_claude_profile),
         )
+        .route(
+            "/conversation_get_claude_profile",
+            post(handlers::claude_profile::conversation_get_claude_profile),
+        )
         // ─── Quick Messages ───
         .route(
             "/quick_messages_list",

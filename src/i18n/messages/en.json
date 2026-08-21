@@ -1184,7 +1184,13 @@
       "importSuccess": "Imported from {path}",
       "importMissing": "No settings.json at {path}",
       "importFailed": "Could not read that settings.json",
-      "importDroppedSecrets": "These keys came back masked and were not copied — type them again: {keys}"
+      "importDroppedSecrets": "These keys came back masked and were not copied — type them again: {keys}",
+      "switchApplied": "Profile switched and the session restarted to apply it.",
+      "switchRestartTitle": "Restart the session to apply this profile?",
+      "switchRestartBody": "A profile only takes effect when the agent starts, so the running process is still on the old one. The turn in progress will be interrupted; the transcript and any queued messages are kept.",
+      "switchRestartConfirm": "Restart and apply",
+      "switchRestartLater": "Keep running, apply later",
+      "switchRestartFailed": "Profile saved, but the session could not restart"
     },
     "dialogs": {
       "confirmDeleteProvider": "Delete Provider {providerId}?",

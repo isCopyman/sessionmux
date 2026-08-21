@@ -620,6 +620,16 @@ export async function conversationSetClaudeProfile(
   })
 }
 
+/** Which profile this conversation would actually launch with, resolved the
+ *  same way a spawn resolves it. `affectedRunningSessions` is always 0. */
+export async function conversationGetClaudeProfile(
+  conversationId: number
+): Promise<ConversationClaudeProfileResult> {
+  return getTransport().call("conversation_get_claude_profile", {
+    conversationId,
+  })
+}
+
 /** Returns the number of running sessions left on stale config by this save
  *  (for the settings-side "N sessions need restart" toast). */
 export async function acpUpdateAgentConfig(

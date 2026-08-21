@@ -1422,6 +1422,7 @@ export function MessageInput({
       {showClaudeProfile && (
         <InlineClaudeProfileSelector
           conversationId={sourceConversationId}
+          tabId={attachmentTabId ?? null}
           disabled={isPrompting || sourceConversationId == null}
         />
       )}

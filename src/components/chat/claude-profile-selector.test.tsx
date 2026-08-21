@@ -17,6 +17,7 @@ import type { ClaudeProfileInfo } from "@/lib/types"
 const api = vi.hoisted(() => ({
   claudeProfileList: vi.fn(),
   conversationSetClaudeProfile: vi.fn(),
+  conversationGetClaudeProfile: vi.fn(),
   openSettingsWindow: vi.fn(),
 }))
 
@@ -24,7 +25,22 @@ vi.mock("@/lib/api", () => ({
   claudeProfileList: (...args: unknown[]) => api.claudeProfileList(...args),
   conversationSetClaudeProfile: (...args: unknown[]) =>
     api.conversationSetClaudeProfile(...args),
+  conversationGetClaudeProfile: (...args: unknown[]) =>
+    api.conversationGetClaudeProfile(...args),
   openSettingsWindow: (...args: unknown[]) => api.openSettingsWindow(...args),
+}))
+
+// The chip restarts the session it belongs to, which means reading the live
+// connection. Mounting the real provider here would drag the whole ACP store
+// into a test about a dropdown, so the connection is stubbed and each test
+// says what state it wants.
+const conn = vi.hoisted(() => ({
+  status: "idle" as string,
+  reapplyConfig: vi.fn(),
+}))
+
+vi.mock("@/hooks/use-connection", () => ({
+  useConnection: () => conn,
 }))
 
 vi.mock("sonner", () => ({
@@ -74,6 +90,14 @@ describe("InlineClaudeProfileSelector", () => {
       affectedRunningSessions: 0,
     })
     api.openSettingsWindow.mockResolvedValue(undefined)
+    api.conversationGetClaudeProfile.mockResolvedValue({
+      conversationId: 12,
+      profileId: "follow-default",
+      affectedRunningSessions: 0,
+    })
+    conn.status = "idle"
+    conn.reapplyConfig.mockReset()
+    conn.reapplyConfig.mockResolvedValue(true)
   })
 
   it("keeps the chip bare and names the control inside the dropdown", async () => {
@@ -120,5 +144,67 @@ describe("InlineClaudeProfileSelector", () => {
       name: "Launch profile: Follow default",
     })
     expect(trigger).toBeDisabled()
+  })
+
+  // It used to read `follow-default` on every mount, so reopening the app made
+  // a session bound to a gateway claim it was following the CLI.
+  it("shows the profile the conversation is actually bound to", async () => {
+    api.conversationGetClaudeProfile.mockResolvedValue({
+      conversationId: 12,
+      profileId: "api",
+      affectedRunningSessions: 0,
+    })
+    renderSelector()
+
+    expect(
+      await screen.findByRole("button", { name: "Launch profile: 中转" })
+    ).toBeInTheDocument()
+  })
+
+  it("restarts an idle session straight away, with no dialog", async () => {
+    api.conversationSetClaudeProfile.mockResolvedValue({
+      conversationId: 12,
+      profileId: "api",
+      affectedRunningSessions: 1,
+    })
+    const user = userEvent.setup()
+    renderSelector({ tabId: "tab-1" })
+
+    await user.click(
+      await screen.findByRole("button", {
+        name: "Launch profile: Follow default",
+      })
+    )
+    await user.click(await screen.findByRole("menuitemradio", { name: /中转/ }))
+
+    await waitFor(() => expect(conn.reapplyConfig).toHaveBeenCalledTimes(1))
+    // Nothing is lost restarting an idle session, so nothing is asked.
+    expect(screen.queryByRole("alertdialog")).toBeNull()
+  })
+
+  it("asks before killing a turn in flight, and only restarts on confirm", async () => {
+    conn.status = "prompting"
+    api.conversationSetClaudeProfile.mockResolvedValue({
+      conversationId: 12,
+      profileId: "api",
+      affectedRunningSessions: 1,
+    })
+    const user = userEvent.setup()
+    renderSelector({ tabId: "tab-1" })
+
+    await user.click(
+      await screen.findByRole("button", {
+        name: "Launch profile: Follow default",
+      })
+    )
+    await user.click(await screen.findByRole("menuitemradio", { name: /中转/ }))
+
+    const dialog = await screen.findByRole("alertdialog")
+    expect(conn.reapplyConfig).not.toHaveBeenCalled()
+
+    await user.click(
+      within(dialog).getByRole("button", { name: "Restart and apply" })
+    )
+    await waitFor(() => expect(conn.reapplyConfig).toHaveBeenCalledTimes(1))
   })
 })

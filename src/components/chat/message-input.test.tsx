@@ -105,12 +105,22 @@ const claudeProfileApi = vi.hoisted(() => ({
     },
   ]),
   conversationSetClaudeProfile: vi.fn(),
+  conversationGetClaudeProfile: vi.fn(async () => ({
+    conversationId: 1,
+    profileId: "follow-default",
+    affectedRunningSessions: 0,
+  })),
   openSettingsWindow: vi.fn(),
 }))
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>()
   return { ...actual, ...claudeProfileApi }
 })
+// The launch-profile chip restarts the session it belongs to, so it reads the
+// live connection. These tests render the composer without the ACP provider.
+vi.mock("@/hooks/use-connection", () => ({
+  useConnection: () => ({ status: "idle", reapplyConfig: vi.fn() }),
+}))
 // Real classifier only recognizes actual backend NoActiveTurn payloads; the
 // steering tests flip this per-case to drive the enqueue fallback.
 vi.mock("@/lib/turn-busy", () => ({

@@ -1184,7 +1184,13 @@
       "importSuccess": "تم الاستيراد من {path}",
       "importMissing": "لا يوجد settings.json في {path}",
       "importFailed": "تعذّرت قراءة ملف settings.json هذا",
-      "importDroppedSecrets": "عادت هذه المفاتيح مُقنَّعة ولم تُنسخ — أعد إدخالها: {keys}"
+      "importDroppedSecrets": "عادت هذه المفاتيح مُقنَّعة ولم تُنسخ — أعد إدخالها: {keys}",
+      "switchApplied": "تم تبديل الملف الشخصي وإعادة تشغيل الجلسة لتطبيقه.",
+      "switchRestartTitle": "هل تريد إعادة تشغيل الجلسة لتطبيق هذا الملف الشخصي؟",
+      "switchRestartBody": "لا يسري الملف الشخصي إلا عند بدء تشغيل الوكيل، لذا ما زالت العملية الجارية تستخدم الملف القديم. ستُقاطَع الجولة الحالية، مع الاحتفاظ بسجل المحادثة والرسائل في قائمة الانتظار.",
+      "switchRestartConfirm": "إعادة التشغيل والتطبيق",
+      "switchRestartLater": "المتابعة والتطبيق لاحقًا",
+      "switchRestartFailed": "تم حفظ الملف الشخصي، لكن تعذّرت إعادة تشغيل الجلسة"
     },
     "dialogs": {
       "confirmDeleteProvider": "حذف المزود {providerId}؟",
