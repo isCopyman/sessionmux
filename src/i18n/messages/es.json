@@ -1185,13 +1185,7 @@
       "importSuccess": "Importado desde {path}",
       "importMissing": "No hay settings.json en {path}",
       "importFailed": "No se pudo leer ese settings.json",
-      "importDroppedSecrets": "Estas claves llegaron enmascaradas y no se copiaron; vuelve a escribirlas: {keys}",
-      "switchApplied": "Perfil cambiado y sesión reiniciada para aplicarlo.",
-      "switchRestartTitle": "¿Reiniciar la sesión para aplicar este perfil?",
-      "switchRestartBody": "Un perfil solo surte efecto al arrancar el agente, así que el proceso en marcha sigue con el anterior. Se interrumpirá el turno en curso; se conservan la conversación y los mensajes en cola.",
-      "switchRestartConfirm": "Reiniciar y aplicar",
-      "switchRestartLater": "Seguir y aplicar más tarde",
-      "switchRestartFailed": "Perfil guardado, pero no se pudo reiniciar la sesión"
+      "importDroppedSecrets": "Estas claves llegaron enmascaradas y no se copiaron; vuelve a escribirlas: {keys}"
     },
     "dialogs": {
       "confirmDeleteProvider": "¿Eliminar proveedor {providerId}?",
@@ -3495,8 +3489,10 @@
         "description": "Esta sesión sigue usando su configuración anterior. Vuelve a conectarte para aplicarla (se conserva el historial de la conversación).",
         "reconnect": "Reconectar para aplicar",
         "reconnecting": "Reconectando…",
-        "reconnectDisabledDuringTurn": "Disponible cuando termine el turno actual",
-        "dismiss": "Descartar",
+        "reconnectDisabledDuringTurn": "Disponible cuando terminen el turno actual y la cola",
+        "restartDescription": "Reiniciar ahora interrumpe cualquier turno en curso. Se conserva el historial de la conversación. Mensajes en cola: {queueDepth}; seguirán en la cola.",
+        "restartNow": "Reiniciar ahora",
+        "restartAfterTurn": "Reiniciar cuando termine este turno",
         "reconnectFailed": "No se pudo reconectar la sesión",
         "applied": "Nueva configuración aplicada"
       },

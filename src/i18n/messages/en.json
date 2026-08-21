@@ -1185,13 +1185,7 @@
       "importSuccess": "Imported from {path}",
       "importMissing": "No settings.json at {path}",
       "importFailed": "Could not read that settings.json",
-      "importDroppedSecrets": "These keys came back masked and were not copied — type them again: {keys}",
-      "switchApplied": "Profile switched and the session restarted to apply it.",
-      "switchRestartTitle": "Restart the session to apply this profile?",
-      "switchRestartBody": "A profile only takes effect when the agent starts, so the running process is still on the old one. The turn in progress will be interrupted; the transcript and any queued messages are kept.",
-      "switchRestartConfirm": "Restart and apply",
-      "switchRestartLater": "Keep running, apply later",
-      "switchRestartFailed": "Profile saved, but the session could not restart"
+      "importDroppedSecrets": "These keys came back masked and were not copied — type them again: {keys}"
     },
     "dialogs": {
       "confirmDeleteProvider": "Delete Provider {providerId}?",
@@ -3495,8 +3489,10 @@
         "description": "This session is still using its previous configuration. Reconnect to apply — your conversation history is kept.",
         "reconnect": "Reconnect to apply",
         "reconnecting": "Reconnecting…",
-        "reconnectDisabledDuringTurn": "Available once the current turn finishes",
-        "dismiss": "Dismiss",
+        "reconnectDisabledDuringTurn": "Available once the current turn and queue finish",
+        "restartDescription": "Restarting now interrupts any turn in progress. Conversation history is kept. Queued messages: {queueDepth}; they remain queued.",
+        "restartNow": "Restart now",
+        "restartAfterTurn": "Restart when this turn finishes",
         "reconnectFailed": "Failed to reconnect session",
         "applied": "New configuration applied"
       },

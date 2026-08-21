@@ -1185,13 +1185,7 @@
       "importSuccess": "Importé depuis {path}",
       "importMissing": "Aucun settings.json à {path}",
       "importFailed": "Impossible de lire ce settings.json",
-      "importDroppedSecrets": "Ces clés sont revenues masquées et n'ont pas été copiées — saisissez-les à nouveau : {keys}",
-      "switchApplied": "Profil changé et session redémarrée pour l'appliquer.",
-      "switchRestartTitle": "Redémarrer la session pour appliquer ce profil ?",
-      "switchRestartBody": "Un profil ne prend effet qu'au démarrage de l'agent : le processus en cours utilise encore l'ancien. Le tour en cours sera interrompu ; la conversation et les messages en file d'attente sont conservés.",
-      "switchRestartConfirm": "Redémarrer et appliquer",
-      "switchRestartLater": "Continuer, appliquer plus tard",
-      "switchRestartFailed": "Profil enregistré, mais la session n'a pas pu redémarrer"
+      "importDroppedSecrets": "Ces clés sont revenues masquées et n'ont pas été copiées — saisissez-les à nouveau : {keys}"
     },
     "dialogs": {
       "confirmDeleteProvider": "Supprimer le provider {providerId} ?",
@@ -3495,8 +3489,10 @@
         "description": "Cette session utilise encore son ancienne configuration. Reconnectez-vous pour l'appliquer (l'historique de conversation est conservé).",
         "reconnect": "Reconnecter pour appliquer",
         "reconnecting": "Reconnexion…",
-        "reconnectDisabledDuringTurn": "Disponible une fois le tour en cours terminé",
-        "dismiss": "Ignorer",
+        "reconnectDisabledDuringTurn": "Disponible une fois le tour en cours terminé et la file d’attente vide",
+        "restartDescription": "Redémarrer maintenant interrompt tout tour en cours. L’historique de la conversation est conservé. Messages en attente : {queueDepth} ; ils restent dans la file.",
+        "restartNow": "Redémarrer maintenant",
+        "restartAfterTurn": "Redémarrer à la fin de ce tour",
         "reconnectFailed": "Échec de la reconnexion de la session",
         "applied": "Nouvelle configuration appliquée"
       },

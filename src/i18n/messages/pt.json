@@ -1185,13 +1185,7 @@
       "importSuccess": "Importado de {path}",
       "importMissing": "Não há settings.json em {path}",
       "importFailed": "Não foi possível ler esse settings.json",
-      "importDroppedSecrets": "Estas chaves voltaram mascaradas e não foram copiadas — digite-as de novo: {keys}",
-      "switchApplied": "Perfil alterado e sessão reiniciada para aplicá-lo.",
-      "switchRestartTitle": "Reiniciar a sessão para aplicar este perfil?",
-      "switchRestartBody": "Um perfil só entra em vigor quando o agente arranca, por isso o processo em execução ainda usa o anterior. A ronda em curso será interrompida; a conversa e as mensagens em fila são mantidas.",
-      "switchRestartConfirm": "Reiniciar e aplicar",
-      "switchRestartLater": "Continuar e aplicar mais tarde",
-      "switchRestartFailed": "Perfil guardado, mas não foi possível reiniciar a sessão"
+      "importDroppedSecrets": "Estas chaves voltaram mascaradas e não foram copiadas — digite-as de novo: {keys}"
     },
     "dialogs": {
       "confirmDeleteProvider": "Excluir o provedor {providerId}?",
@@ -3495,8 +3489,10 @@
         "description": "Esta sessão ainda está usando a configuração anterior. Reconecte para aplicar (o histórico da conversa é mantido).",
         "reconnect": "Reconectar para aplicar",
         "reconnecting": "Reconectando…",
-        "reconnectDisabledDuringTurn": "Disponível quando o turno atual terminar",
-        "dismiss": "Dispensar",
+        "reconnectDisabledDuringTurn": "Disponível quando o turno atual terminar e a fila estiver vazia",
+        "restartDescription": "Reiniciar agora interrompe qualquer turno em curso. O histórico da conversa é mantido. Mensagens na fila: {queueDepth}; elas permanecem na fila.",
+        "restartNow": "Reiniciar agora",
+        "restartAfterTurn": "Reiniciar quando este turno terminar",
         "reconnectFailed": "Falha ao reconectar a sessão",
         "applied": "Nova configuração aplicada"
       },

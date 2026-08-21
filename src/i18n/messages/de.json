@@ -1185,13 +1185,7 @@
       "importSuccess": "Aus {path} importiert",
       "importMissing": "Unter {path} gibt es keine settings.json",
       "importFailed": "Diese settings.json konnte nicht gelesen werden",
-      "importDroppedSecrets": "Diese Schlüssel kamen maskiert zurück und wurden nicht übernommen – bitte erneut eingeben: {keys}",
-      "switchApplied": "Profil gewechselt und Sitzung neu gestartet, damit es greift.",
-      "switchRestartTitle": "Sitzung neu starten, damit dieses Profil greift?",
-      "switchRestartBody": "Ein Profil greift erst beim Start des Agents, der laufende Prozess nutzt also noch das alte. Der laufende Zug wird abgebrochen; Verlauf und Nachrichten in der Warteschlange bleiben erhalten.",
-      "switchRestartConfirm": "Neu starten und anwenden",
-      "switchRestartLater": "Weiterlaufen, später anwenden",
-      "switchRestartFailed": "Profil gespeichert, aber die Sitzung konnte nicht neu starten"
+      "importDroppedSecrets": "Diese Schlüssel kamen maskiert zurück und wurden nicht übernommen – bitte erneut eingeben: {keys}"
     },
     "dialogs": {
       "confirmDeleteProvider": "Provider {providerId} löschen?",
@@ -3495,8 +3489,10 @@
         "description": "Diese Sitzung verwendet weiterhin die bisherige Konfiguration. Zum Anwenden neu verbinden (der Gesprächsverlauf bleibt erhalten).",
         "reconnect": "Zum Anwenden neu verbinden",
         "reconnecting": "Wird neu verbunden…",
-        "reconnectDisabledDuringTurn": "Verfügbar, sobald die aktuelle Runde abgeschlossen ist",
-        "dismiss": "Schließen",
+        "reconnectDisabledDuringTurn": "Verfügbar, sobald die aktuelle Runde abgeschlossen und die Warteschlange leer ist",
+        "restartDescription": "Ein sofortiger Neustart unterbricht jede laufende Runde. Der Gesprächsverlauf bleibt erhalten. Nachrichten in der Warteschlange: {queueDepth}; sie bleiben eingereiht.",
+        "restartNow": "Jetzt neu starten",
+        "restartAfterTurn": "Nach dieser Runde neu starten",
         "reconnectFailed": "Sitzung konnte nicht neu verbunden werden",
         "applied": "Neue Konfiguration angewendet"
       },

@@ -31,10 +31,6 @@ vi.mock("@/lib/api", () => ({
   openSettingsWindow: (...args: unknown[]) => api.openSettingsWindow(...args),
 }))
 
-// The chip restarts the session it belongs to, which means reading the live
-// connection. Mounting the real provider here would drag the whole ACP store
-// into a test about a dropdown, so the connection is stubbed and each test
-// says what state it wants.
 const conn = vi.hoisted(() => ({
   status: "idle" as string,
   reapplyConfig: vi.fn(),
@@ -162,14 +158,14 @@ describe("InlineClaudeProfileSelector", () => {
     ).toBeInTheDocument()
   })
 
-  it("restarts an idle session straight away, with no dialog", async () => {
+  it("leaves a live session restart to the stale-config owner", async () => {
     api.conversationSetClaudeProfile.mockResolvedValue({
       conversationId: 12,
       profileId: "api",
       affectedRunningSessions: 1,
     })
     const user = userEvent.setup()
-    renderSelector({ tabId: "tab-1" })
+    renderSelector()
 
     await user.click(
       await screen.findByRole("button", {
@@ -178,12 +174,14 @@ describe("InlineClaudeProfileSelector", () => {
     )
     await user.click(await screen.findByRole("menuitemradio", { name: /中转/ }))
 
-    await waitFor(() => expect(conn.reapplyConfig).toHaveBeenCalledTimes(1))
-    // Nothing is lost restarting an idle session, so nothing is asked.
+    await waitFor(() =>
+      expect(api.conversationSetClaudeProfile).toHaveBeenCalledTimes(1)
+    )
+    expect(conn.reapplyConfig).not.toHaveBeenCalled()
     expect(screen.queryByRole("alertdialog")).toBeNull()
   })
 
-  it("asks before killing a turn in flight, and only restarts on confirm", async () => {
+  it("does not own the busy-session restart dialog", async () => {
     conn.status = "prompting"
     api.conversationSetClaudeProfile.mockResolvedValue({
       conversationId: 12,
@@ -191,7 +189,7 @@ describe("InlineClaudeProfileSelector", () => {
       affectedRunningSessions: 1,
     })
     const user = userEvent.setup()
-    renderSelector({ tabId: "tab-1" })
+    renderSelector()
 
     await user.click(
       await screen.findByRole("button", {
@@ -200,16 +198,14 @@ describe("InlineClaudeProfileSelector", () => {
     )
     await user.click(await screen.findByRole("menuitemradio", { name: /中转/ }))
 
-    const dialog = await screen.findByRole("alertdialog")
-    expect(conn.reapplyConfig).not.toHaveBeenCalled()
-
-    await user.click(
-      within(dialog).getByRole("button", { name: "Restart and apply" })
+    await waitFor(() =>
+      expect(api.conversationSetClaudeProfile).toHaveBeenCalledTimes(1)
     )
-    await waitFor(() => expect(conn.reapplyConfig).toHaveBeenCalledTimes(1))
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument()
+    expect(conn.reapplyConfig).not.toHaveBeenCalled()
   })
 
-  it("rechecks live status after saving before restarting", async () => {
+  it("does not act on connection status after a delayed save", async () => {
     let finishSave: (value: {
       conversationId: number
       profileId: string
@@ -222,7 +218,7 @@ describe("InlineClaudeProfileSelector", () => {
         })
     )
     const user = userEvent.setup()
-    const view = renderSelector({ tabId: "tab-1" })
+    const view = renderSelector()
 
     await user.click(
       await screen.findByRole("button", {
@@ -237,7 +233,7 @@ describe("InlineClaudeProfileSelector", () => {
     conn.status = "prompting"
     view.rerender(
       <NextIntlClientProvider locale="en" messages={enMessages}>
-        <InlineClaudeProfileSelector conversationId={12} tabId="tab-1" />
+        <InlineClaudeProfileSelector conversationId={12} />
       </NextIntlClientProvider>
     )
     await act(async () => {
@@ -248,7 +244,7 @@ describe("InlineClaudeProfileSelector", () => {
       })
     })
 
-    expect(await screen.findByRole("alertdialog")).toBeInTheDocument()
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument()
     expect(conn.reapplyConfig).not.toHaveBeenCalled()
   })
 })

@@ -1185,13 +1185,7 @@
       "importSuccess": "{path} から取り込みました",
       "importMissing": "{path} に settings.json がありません",
       "importFailed": "その settings.json を読み込めませんでした",
-      "importDroppedSecrets": "次のキーはマスクされて返るため取り込めませんでした。入力し直してください: {keys}",
-      "switchApplied": "プロファイルを切り替え、適用のためセッションを再起動しました。",
-      "switchRestartTitle": "このプロファイルを適用するためにセッションを再起動しますか？",
-      "switchRestartBody": "プロファイルはエージェントの起動時にのみ反映されるため、実行中のプロセスは古いままです。進行中のターンは中断されますが、履歴とキュー内のメッセージは保持されます。",
-      "switchRestartConfirm": "再起動して適用",
-      "switchRestartLater": "続行し、あとで適用",
-      "switchRestartFailed": "プロファイルは保存しましたが、セッションを再起動できませんでした"
+      "importDroppedSecrets": "次のキーはマスクされて返るため取り込めませんでした。入力し直してください: {keys}"
     },
     "dialogs": {
       "confirmDeleteProvider": "Provider {providerId} を削除しますか？",
@@ -3495,8 +3489,10 @@
         "description": "このセッションは以前の設定のままです。再接続すると適用されます（会話履歴は保持されます）。",
         "reconnect": "再接続して適用",
         "reconnecting": "再接続中…",
-        "reconnectDisabledDuringTurn": "現在のターンが完了すると再接続できます",
-        "dismiss": "閉じる",
+        "reconnectDisabledDuringTurn": "現在のターンが完了し、キューが空になると再接続できます",
+        "restartDescription": "今すぐ再起動すると、進行中のターンは中断されます。会話履歴は保持されます。キュー内のメッセージ：{queueDepth} 件。これらはキューに保持されます。",
+        "restartNow": "今すぐ再起動",
+        "restartAfterTurn": "このターンの完了後に再起動",
         "reconnectFailed": "セッションの再接続に失敗しました",
         "applied": "新しい設定を適用しました"
       },
