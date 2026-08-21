@@ -51,7 +51,6 @@ import {
 } from "@/lib/custom-agents"
 import { AgentIcon } from "@/components/agent-icon"
 import { AddCustomAgentDialog } from "@/components/settings/add-custom-agent-dialog"
-import { JsonConfigEditor } from "@/components/settings/json-config-editor"
 import { SettingCard, SettingRow } from "@/components/shared/setting-card"
 import { CustomAgentMcpToggle } from "@/components/settings/custom-agent-mcp-toggle"
 import { CustomAgentSkillsToggle } from "@/components/settings/custom-agent-skills-toggle"
@@ -1487,13 +1486,15 @@ function markRemovedKeysNull(
 }
 
 /**
- * Build the `config_json` payload for a merge-strategy agent save (Claude Code /
- * Gemini / OpenClaw). Diffs the current config against the original so removed
- * keys become explicit `null`s the backend merge deletes from disk — crucially
- * even when the current config emptied to "" (e.g. the last env flag toggled
- * off), which would otherwise serialize to a null `config_json` no-op and leave
- * the stale key on disk. Returns `null` when both sides are empty (nothing to
+ * Build the `config_json` payload for a merge-strategy agent save (Gemini /
+ * OpenClaw). Diffs the current config against the original so removed keys
+ * become explicit `null`s the backend merge deletes from disk — crucially even
+ * when the current config emptied to "" (e.g. the last env flag toggled off),
+ * which would otherwise serialize to a null `config_json` no-op and leave the
+ * stale key on disk. Returns `null` when both sides are empty (nothing to
  * write, no empty file created). Pure — shared by `persistConfig` and tests.
+ * Claude Code does not use this path: follow-default must not write
+ * `~/.claude/settings.json`.
  */
 export function buildMergeConfigPayload(
   currentConfigText: string,
@@ -4488,6 +4489,13 @@ export function AcpAgentSettings() {
         grokStructured?: GrokStructuredConfig
       }
     ) => {
+      // Follow-default must not write the CLI's own ~/.claude/settings.json.
+      // `acp_update_agent_config_core` turns a null/empty config_json into
+      // Some("{}") and still calls persist_agent_local_config_json, which
+      // reformats an existing file or creates an empty one — not a no-op.
+      if (agentType === "claude_code") {
+        return
+      }
       const parsedConfig = parseConfigJsonText(configText)
       if (parsedConfig.error) {
         throw new Error(parsedConfig.error)
@@ -4507,10 +4515,7 @@ export function AcpAgentSettings() {
       // so the backend merge_json_values can delete them from disk.
       let configForPersist =
         agentType === "open_code" && !normalizedConfig ? "{}" : normalizedConfig
-      const usesMerge =
-        agentType === "claude_code" ||
-        agentType === "gemini" ||
-        agentType === "open_claw"
+      const usesMerge = agentType === "gemini" || agentType === "open_claw"
       if (usesMerge) {
         const originalAgent = agents.find((a) => a.agent_type === agentType)
         // Diff even when the current config emptied to "" so removed keys still
@@ -5200,11 +5205,10 @@ export function AcpAgentSettings() {
   const selectedConfigError = selectedAgent
     ? (configErrors[selectedAgent.agent_type] ?? null)
     : null
-  // Everything below the Claude profile tab strip — auth mode, API URL/Key,
-  // model aliases, effort, the native JSON editor — edits the CLI's OWN global
-  // config, so it belongs to exactly one tab: "Follow default". Under any other
-  // profile those keys are the profile's to own, and showing two editors for
-  // the same setting is what made this panel unreadable.
+  // Follow-default used to host the CLI-global API URL/Key/model fields and
+  // a native JSON editor for ~/.claude/settings.json. Those fields are gone
+  // for Claude (follow-default is text-only); the flag still gates the same
+  // region for every other agent.
   const claudeCliGlobalsVisible =
     !selectedAgent ||
     selectedAgent.agent_type !== "claude_code" ||
@@ -11046,26 +11050,15 @@ supports_websockets = true`}
                         </div>
                       )}
 
-                    {claudeCliGlobalsVisible && (
-                      <div className="space-y-1.5">
-                        {selectedAgent.agent_type !== "claude_code" && (
-                          <>
-                            <label className="text-[11px] text-muted-foreground">
-                              {t("nativeJsonConfig")}
-                            </label>
-                            <NativeConfigFileHint
-                              agentType={selectedAgent.agent_type}
-                            />
-                          </>
-                        )}
-                        {selectedAgent.agent_type === "claude_code" ? (
-                          <JsonConfigEditor
-                            label={t("claudeProfile.fieldSettingsJson")}
-                            value={selectedDraft.configText}
-                            onChange={handleConfigTextChange}
-                            height="52vh"
+                    {claudeCliGlobalsVisible &&
+                      selectedAgent.agent_type !== "claude_code" && (
+                        <div className="space-y-1.5">
+                          <label className="text-[11px] text-muted-foreground">
+                            {t("nativeJsonConfig")}
+                          </label>
+                          <NativeConfigFileHint
+                            agentType={selectedAgent.agent_type}
                           />
-                        ) : (
                           <Textarea
                             value={selectedDraft.configText}
                             onChange={(event) => {
@@ -11081,87 +11074,76 @@ supports_websockets = true`}
 }`}
                             className="min-h-36 font-mono text-xs"
                           />
-                        )}
-                        {selectedAgent.agent_type === "claude_code" && (
-                          <>
-                            <NativeConfigFileHint
-                              agentType={selectedAgent.agent_type}
-                            />
-                            <p className="text-[11px] text-muted-foreground">
-                              {t("claudeProfile.settingsJsonEnvHint")}
-                            </p>
-                          </>
-                        )}
-                        {selectedConfigError && (
-                          <div className="rounded-md border border-red-500/30 bg-red-500/5 px-2.5 py-1.5 text-[11px] text-red-400">
-                            {selectedConfigError}
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    {claudeCliGlobalsVisible && (
-                      <div className="flex justify-end">
-                        <Button
-                          size="sm"
-                          onClick={() => {
-                            if (selectedMissingModelProvider) {
-                              toast.error(t("toasts.modelProviderRequired"))
-                              return
-                            }
-                            // Sequence env→config (never parallel): persistEnv
-                            // also rewrites config.env on the backend, so
-                            // concurrent writes would interleave two writers of
-                            // ~/.claude/settings.json.
-                            persistEnv(
-                              selectedAgent.agent_type,
-                              selectedDraft.enabled,
-                              selectedDraft.envText,
-                              selectedDraft.modelProviderId
-                            )
-                              .then(() =>
-                                persistConfig(
-                                  selectedAgent.agent_type,
-                                  selectedDraft.configText
-                                )
-                              )
-                              .then(() => {
-                                toast.success(t("toasts.configSaved"), {
-                                  description: t("toasts.configSavedHint"),
-                                })
-                              })
-                              .catch((err) => {
-                                console.error(
-                                  "[Settings] save config management failed:",
-                                  err
-                                )
-                                const message = toErrorMessage(err)
-                                toast.error(
-                                  t("toasts.saveConfigManagementFailed"),
-                                  {
-                                    description: message,
-                                  }
-                                )
-                              })
-                          }}
-                          disabled={
-                            selectedIsSavingEnv || selectedIsSavingConfig
-                          }
-                        >
-                          {selectedIsSavingEnv || selectedIsSavingConfig ? (
-                            <>
-                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                              {t("actions.saving")}
-                            </>
-                          ) : (
-                            <>
-                              <Save className="h-3.5 w-3.5" />
-                              {t("actions.saveConfigManagement")}
-                            </>
+                          {selectedConfigError && (
+                            <div className="rounded-md border border-red-500/30 bg-red-500/5 px-2.5 py-1.5 text-[11px] text-red-400">
+                              {selectedConfigError}
+                            </div>
                           )}
-                        </Button>
-                      </div>
-                    )}
+                        </div>
+                      )}
+
+                    {claudeCliGlobalsVisible &&
+                      selectedAgent.agent_type !== "claude_code" && (
+                        <div className="flex justify-end">
+                          <Button
+                            size="sm"
+                            onClick={() => {
+                              if (selectedMissingModelProvider) {
+                                toast.error(t("toasts.modelProviderRequired"))
+                                return
+                              }
+                              // Sequence env→config (never parallel): persistEnv
+                              // also rewrites native config.env on the backend, so
+                              // concurrent writes would interleave two writers.
+                              persistEnv(
+                                selectedAgent.agent_type,
+                                selectedDraft.enabled,
+                                selectedDraft.envText,
+                                selectedDraft.modelProviderId
+                              )
+                                .then(() =>
+                                  persistConfig(
+                                    selectedAgent.agent_type,
+                                    selectedDraft.configText
+                                  )
+                                )
+                                .then(() => {
+                                  toast.success(t("toasts.configSaved"), {
+                                    description: t("toasts.configSavedHint"),
+                                  })
+                                })
+                                .catch((err) => {
+                                  console.error(
+                                    "[Settings] save config management failed:",
+                                    err
+                                  )
+                                  const message = toErrorMessage(err)
+                                  toast.error(
+                                    t("toasts.saveConfigManagementFailed"),
+                                    {
+                                      description: message,
+                                    }
+                                  )
+                                })
+                            }}
+                            disabled={
+                              selectedIsSavingEnv || selectedIsSavingConfig
+                            }
+                          >
+                            {selectedIsSavingEnv || selectedIsSavingConfig ? (
+                              <>
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                {t("actions.saving")}
+                              </>
+                            ) : (
+                              <>
+                                <Save className="h-3.5 w-3.5" />
+                                {t("actions.saveConfigManagement")}
+                              </>
+                            )}
+                          </Button>
+                        </div>
+                      )}
                   </div>
                 )}
               </div>

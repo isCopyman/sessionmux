@@ -1170,7 +1170,7 @@
       "addProfile": "프로필 추가",
       "unsaved": "저장되지 않은 변경 사항",
       "idHint": "에이전트는 이 ID로 프로필을 참조합니다(create_work_task의 profile). 저장 후에는 변경할 수 없습니다.",
-      "followDefaultBody": "이 탭은 CLI 자체의 ~/.claude/settings.json을 직접 편집하며, 아래 편집기는 해당 파일을 읽고 씁니다. 이 설정은 우선순위가 가장 낮은 계층입니다. 세션이 실행되는 프로젝트의 .claude/settings.json이 같은 키를 덮어씁니다. codeg 프로필은 둘보다 우선하지만 실제로 값을 채운 키에만 적용됩니다.",
+      "followDefaultBody": "이 옵션에서 codeg는 아무것도 설정하지 않으며 CLI 자체 구성도 건드리지 않습니다. CLI는 프로젝트의 .claude/settings.json을 포함해 기존 구성을 그대로 사용합니다. codeg가 설정을 적용하게 하려면 프로필을 사용하세요.",
       "newProfileName": "설정 {n}",
       "addBlank": "빈 프로필",
       "addCopy": "'{name}' 복제",

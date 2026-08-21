@@ -1170,7 +1170,7 @@
       "addProfile": "Adicionar perfil",
       "unsaved": "Alterações não salvas",
       "idHint": "Os agentes referenciam este perfil por este ID (parâmetro profile de create_work_task). Não pode ser alterado após salvar.",
-      "followDefaultBody": "Esta aba edita diretamente o ~/.claude/settings.json da própria CLI; o editor abaixo lê e grava esse arquivo. Essa é a camada de menor prioridade: o .claude/settings.json de um projeto substitui as chaves correspondentes nas sessões executadas ali. Um perfil do codeg prevalece sobre ambos, mas apenas nas chaves que ele realmente preenche.",
+      "followDefaultBody": "O codeg não define nada nesta opção e não altera a configuração da própria CLI. A CLI usa a configuração como está, inclusive o .claude/settings.json do projeto. Para o codeg impor ajustes, use um perfil.",
       "newProfileName": "Configurações {n}",
       "addBlank": "Perfil em branco",
       "addCopy": "Duplicar “{name}”",
