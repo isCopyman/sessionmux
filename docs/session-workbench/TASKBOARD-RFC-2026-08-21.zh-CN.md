@@ -66,6 +66,27 @@
 - **待拍板 C**：默认关；选择是否记进 localStorage（viewMode 已有先例，
   tasks-view-context.tsx:79）。建议记住。
 
+**2026-08-21 补：维度之争已用证据结案**（详见 `O46-TASKBOARD-RESEARCH.zh-CN.md`）。
+用户问过"看板是分项目好，还是分 Collection / 群聊"，答案是**项目 Folder**，理由是硬约束
+不是口味：
+
+| 事实 | 证据 | 推论 |
+| --- | --- | --- |
+| `work_task` 的**唯一必填容器**就是 `folder_id`，且只许项目根不许 worktree | `entities/work_task.rs:51`、`work_task_service.rs:429` | 换任何别的一级容器都会有大量卡无处可挂 |
+| 引擎不变量按 folder：合并互斥槽、`sort_order` 队列 | `work_task/engine.rs:16`、`tasks-page.tsx:173` | 一级换了，可持久化的顺序和 UI 分组会分裂 |
+| Collection 有根时**不能跨 folder**（写入校验直接拒绝） | `collection_service.rs:408-426` | Collection 只能当 Folder 之下的二级 |
+| Room 硬挂 workbench、成员可跨仓、与 work_task 无边 | `collaboration_room_service.rs:215-244` | Room 不适合当泳道 |
+| Workbench 表里没有 folder_id / collection_id，设计上就跨 folder | `entities/workbench.rs:4-13` | 同上 |
+
+对照物 vibe-kanban 的一级也是 Project（不是 agent、不是布局）。
+
+**因此缺口②的选择器定为**：无（默认）/ 按项目 Folder / 按 agent。**Collection 与 Room 不进
+一级分组**；Collection 若要支持，只能做"项目内的二级"，且需先解决 `work_task` 没有
+`collection_id`（要经 `conversation_id` 反查，`todo` 卡会落 Unclassified）。
+
+顺带发现并已修（O62）：全部项目视图下 To-do 拖拽是**静默无效**的
+（`tasks-page.tsx` `dragEnabled = folderFilter != null`），现在列头会说明原因。
+
 ### 缺口 ③：attention 列轻重混杂
 
 一列里挤着四种语义：awaiting_input（等人回答）、review（等人验收）、
