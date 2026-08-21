@@ -239,7 +239,7 @@ export function ClaudeProfileCatalog({
         // renamed file tab does.
         label: isVirtualProfile(profile)
           ? profile.kind === "followDefault"
-            ? t("followDefault")
+            ? t("userLevelSettings")
             : t("officialDirect")
           : (drafts[profile.id]?.label ?? profile.label),
         isNew: false,
