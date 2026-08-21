@@ -1131,6 +1131,7 @@ mod tests {
                 base_url: Some("https://relay.example/v1".into()),
                 auth_token: Some(token.to_string()),
                 model: None,
+                env: None,
             },
         )
         .expect("upsert managed profile");

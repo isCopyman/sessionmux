@@ -31,8 +31,16 @@ use crate::models::claude_profile::{
 use crate::models::model_provider::mask_api_key;
 
 /// Virtual profile id: do not set `CLAUDE_CONFIG_DIR`. Users cannot create a
-/// file with this id.
+/// file with this id. Follows the CLI / agent `env_json` as today.
 pub const FOLLOW_DEFAULT_PROFILE_ID: &str = "follow-default";
+
+/// Virtual profile id (Monet `official-direct`): force the official Anthropic
+/// endpoint and clear `ANTHROPIC_AUTH_TOKEN` so the CLI falls back to OAuth
+/// in the config directory. No file on disk. Users cannot create this id.
+pub const OFFICIAL_DIRECT_PROFILE_ID: &str = "official-direct";
+
+/// Official Anthropic API host forced by `official-direct`.
+pub const OFFICIAL_ANTHROPIC_BASE_URL: &str = "https://api.anthropic.com";
 
 /// Agent-setting `env_json` key for the default Claude profile (no extra DB
 /// column). Same store as `CLAUDE_AUTH_MODE`.
@@ -41,13 +49,50 @@ pub const CODEG_CLAUDE_PROFILE_ENV_KEY: &str = "CODEG_CLAUDE_PROFILE";
 const PROFILES_DIR_NAME: &str = "claude-profiles";
 const VIRTUAL_CREATED_AT: &str = "1970-01-01T00:00:00Z";
 
-/// Resolved launch profile: which directory (if any) becomes `CLAUDE_CONFIG_DIR`.
+/// Connection / auth / model-routing keys a launch profile owns.
+///
+/// When the resolved profile is **not** `follow-default`, agent-global
+/// `env_json` (and the rest of `build_session_runtime_env`'s overlays:
+/// native `~/.claude/settings.json`, a bound `model_provider`) must not
+/// inject these. Otherwise a "subscription" profile still burns API:
+/// Claude Code's SDK credential order (`Du()`) is `ANTHROPIC_AUTH_TOKEN`
+/// env > … > stored OAuth, so a leftover global token silently wins.
+///
+/// Non-connection keys (`CLAUDE_CODE_GIT_BASH_PATH`, `DISABLE_TELEMETRY`,
+/// `ENABLE_TOOL_SEARCH`, `CLAUDE_CODE_SCROLL_SPEED`, …) stay injected —
+/// they have nothing to do with which account the process uses.
+///
+/// `follow-default` does **not** sweep (that *is* "follow the CLI").
+/// Claude Code only.
+pub const PROFILE_OWNED_ENV_KEYS: &[&str] = &[
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_BASE_URL",
+    "ANTHROPIC_MODEL",
+    "CLAUDE_AUTH_MODE",
+    "CLAUDE_CODE_USE_BEDROCK",
+    "CLAUDE_CODE_USE_VERTEX",
+    "CLAUDE_CODE_USE_FOUNDRY",
+];
+
+/// Prefix families that a launch profile also owns.
+/// `ANTHROPIC_CUSTOM_MODEL_OPTION*` (name / description suffixes included).
+/// `ANTHROPIC_DEFAULT_*_MODEL` is matched separately (prefix + `_MODEL` suffix)
+/// so an unrelated `ANTHROPIC_DEFAULT_FOO` is left alone.
+pub const PROFILE_OWNED_ENV_PREFIXES: &[&str] = &["ANTHROPIC_CUSTOM_MODEL_OPTION"];
+
+/// Resolved launch profile: which directory (if any) becomes `CLAUDE_CONFIG_DIR`,
+/// plus the profile-owned connection env to overlay after the defense sweep.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedClaudeProfile {
     pub id: String,
     pub kind: ClaudeProfileKind,
-    /// `None` for `follow-default` — the env key must not be set.
+    /// `None` for virtual profiles — `CLAUDE_CONFIG_DIR` must not be set.
     pub config_dir: Option<PathBuf>,
+    pub env: BTreeMap<String, String>,
+    pub base_url: Option<String>,
+    pub auth_token: Option<String>,
+    pub model: Option<String>,
 }
 
 impl ResolvedClaudeProfile {
@@ -56,8 +101,66 @@ impl ResolvedClaudeProfile {
             id: FOLLOW_DEFAULT_PROFILE_ID.to_string(),
             kind: ClaudeProfileKind::FollowDefault,
             config_dir: None,
+            env: BTreeMap::new(),
+            base_url: None,
+            auth_token: None,
+            model: None,
         }
     }
+
+    fn official_direct() -> Self {
+        Self {
+            id: OFFICIAL_DIRECT_PROFILE_ID.to_string(),
+            kind: ClaudeProfileKind::OfficialDirect,
+            config_dir: None,
+            env: BTreeMap::new(),
+            base_url: None,
+            auth_token: None,
+            model: None,
+        }
+    }
+}
+
+pub fn is_virtual_profile_id(id: &str) -> bool {
+    id == FOLLOW_DEFAULT_PROFILE_ID || id == OFFICIAL_DIRECT_PROFILE_ID
+}
+
+/// Single source of truth for "does this env key belong to the profile,
+/// not to agent-global `env_json`?"
+pub fn is_profile_owned_env_key(key: &str) -> bool {
+    if PROFILE_OWNED_ENV_KEYS.contains(&key) {
+        return true;
+    }
+    if PROFILE_OWNED_ENV_PREFIXES
+        .iter()
+        .any(|prefix| key.starts_with(prefix))
+    {
+        return true;
+    }
+    key.starts_with("ANTHROPIC_DEFAULT_") && key.ends_with("_MODEL")
+}
+
+/// Drop profile-owned keys from the assembled spawn env. Called only when
+/// the resolved Claude profile is not `follow-default`.
+pub fn strip_profile_owned_agent_env(runtime_env: &mut BTreeMap<String, String>) {
+    runtime_env.retain(|k, _| !is_profile_owned_env_key(k));
+}
+
+fn is_secret_env_key(key: &str) -> bool {
+    let upper = key.to_ascii_uppercase();
+    upper.contains("TOKEN") || upper.contains("KEY") || upper.contains("SECRET")
+}
+
+fn mask_env_map(env: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+    env.iter()
+        .map(|(k, v)| {
+            if is_secret_env_key(k) {
+                (k.clone(), mask_api_key(v))
+            } else {
+                (k.clone(), v.clone())
+            }
+        })
+        .collect()
 }
 
 pub fn claude_profiles_dir(data_dir: &Path) -> PathBuf {
@@ -82,18 +185,36 @@ pub fn is_valid_profile_id(id: &str) -> bool {
             .all(|b| matches!(b, b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_'))
 }
 
-fn follow_default_info() -> ClaudeProfileInfo {
+fn virtual_info(id: &str, label: &str, kind: ClaudeProfileKind) -> ClaudeProfileInfo {
     ClaudeProfileInfo {
-        id: FOLLOW_DEFAULT_PROFILE_ID.to_string(),
-        label: "Follow default".to_string(),
-        kind: ClaudeProfileKind::FollowDefault,
+        id: id.to_string(),
+        label: label.to_string(),
+        kind,
         config_dir: None,
         base_url: None,
         auth_token_masked: String::new(),
         model: None,
+        env: BTreeMap::new(),
+        is_virtual: true,
         created_at: VIRTUAL_CREATED_AT.to_string(),
         updated_at: VIRTUAL_CREATED_AT.to_string(),
     }
+}
+
+fn follow_default_info() -> ClaudeProfileInfo {
+    virtual_info(
+        FOLLOW_DEFAULT_PROFILE_ID,
+        "Follow default",
+        ClaudeProfileKind::FollowDefault,
+    )
+}
+
+fn official_direct_info() -> ClaudeProfileInfo {
+    virtual_info(
+        OFFICIAL_DIRECT_PROFILE_ID,
+        "Official direct",
+        ClaudeProfileKind::OfficialDirect,
+    )
 }
 
 fn record_to_info(record: &ClaudeProfileRecord) -> ClaudeProfileInfo {
@@ -110,6 +231,8 @@ fn record_to_info(record: &ClaudeProfileRecord) -> ClaudeProfileInfo {
             .map(mask_api_key)
             .unwrap_or_default(),
         model: record.model.clone(),
+        env: mask_env_map(&record.env),
+        is_virtual: false,
         created_at: record.created_at.clone(),
         updated_at: record.updated_at.clone(),
     }
@@ -191,7 +314,13 @@ fn trim_non_empty(value: Option<&str>) -> Option<String> {
 
 /// Write `claude-profiles/<id>/settings.json` for a managed profile.
 /// Only env keys with a non-empty value are included. Replace semantics
-/// (idempotent): the file is rewritten from the record, not merged.
+/// (idempotent): the file is rewritten from the record, not merged with
+/// whatever was on disk.
+///
+/// Merge order: `record.env` first, then dedicated `baseUrl` / `authToken` /
+/// `model` overlay those three keys when set. Dedicated fields win on
+/// conflict so a leftover `ANTHROPIC_AUTH_TOKEN` in `env` cannot hide the
+/// token the user just typed into the form.
 pub fn materialize_managed_profile(
     data_dir: &Path,
     record: &ClaudeProfileRecord,
@@ -200,6 +329,11 @@ pub fn materialize_managed_profile(
     fs::create_dir_all(&dir).map_err(AppCommandError::io)?;
 
     let mut env = serde_json::Map::new();
+    for (key, value) in &record.env {
+        if let Some(trimmed) = trim_non_empty(Some(value)) {
+            env.insert(key.clone(), serde_json::Value::String(trimmed));
+        }
+    }
     if let Some(url) = trim_non_empty(record.base_url.as_deref()) {
         env.insert(
             "ANTHROPIC_BASE_URL".to_string(),
@@ -235,7 +369,7 @@ fn config_dir_for_record(
     record: &ClaudeProfileRecord,
 ) -> Result<Option<PathBuf>, AppCommandError> {
     match record.kind {
-        ClaudeProfileKind::FollowDefault => Ok(None),
+        ClaudeProfileKind::FollowDefault | ClaudeProfileKind::OfficialDirect => Ok(None),
         ClaudeProfileKind::ConfigDir => {
             let raw = trim_non_empty(record.config_dir.as_deref()).ok_or_else(|| {
                 AppCommandError::configuration_invalid(format!(
@@ -265,6 +399,9 @@ fn resolve_id_to_profile(
     if id == FOLLOW_DEFAULT_PROFILE_ID {
         return Ok(ResolvedClaudeProfile::follow_default());
     }
+    if id == OFFICIAL_DIRECT_PROFILE_ID {
+        return Ok(ResolvedClaudeProfile::official_direct());
+    }
     match read_record(data_dir, id) {
         Ok(Some(record)) => {
             let config_dir = config_dir_for_record(data_dir, &record)?;
@@ -272,6 +409,10 @@ fn resolve_id_to_profile(
                 id: record.id,
                 kind: record.kind,
                 config_dir,
+                env: record.env,
+                base_url: record.base_url,
+                auth_token: record.auth_token,
+                model: record.model,
             })
         }
         Ok(None) => {
@@ -321,9 +462,53 @@ pub async fn resolve_claude_profile(
     Ok(ResolvedClaudeProfile::follow_default())
 }
 
-/// Inject `CLAUDE_CONFIG_DIR` last for Claude Code. A user-explicit
-/// `CLAUDE_CONFIG_DIR` in `env_json` wins and is warned; `follow-default`
-/// does not set the key.
+/// Overlay the profile's own connection env after the defense sweep.
+///
+/// Dedicated `baseUrl` / `authToken` / `model` win over `record.env` on the
+/// three Anthropic keys — same rule as `materialize_managed_profile`.
+fn apply_profile_connection_env(
+    resolved: &ResolvedClaudeProfile,
+    runtime_env: &mut BTreeMap<String, String>,
+) {
+    if resolved.id == OFFICIAL_DIRECT_PROFILE_ID {
+        // Monet official-direct: force the official endpoint, then empty-string
+        // the token (and API key) so the spawn layer `env_remove`s inherited
+        // values and the CLI falls back to config-dir OAuth. Same empty-sentinel
+        // as `apply_claude_env_policy`.
+        runtime_env.insert(
+            "ANTHROPIC_BASE_URL".to_string(),
+            OFFICIAL_ANTHROPIC_BASE_URL.to_string(),
+        );
+        runtime_env.insert("ANTHROPIC_AUTH_TOKEN".to_string(), String::new());
+        runtime_env.insert("ANTHROPIC_API_KEY".to_string(), String::new());
+        return;
+    }
+
+    for (key, value) in &resolved.env {
+        if let Some(trimmed) = trim_non_empty(Some(value)) {
+            runtime_env.insert(key.clone(), trimmed);
+        }
+    }
+    if resolved.kind == ClaudeProfileKind::Managed {
+        if let Some(url) = trim_non_empty(resolved.base_url.as_deref()) {
+            runtime_env.insert("ANTHROPIC_BASE_URL".to_string(), url);
+        }
+        if let Some(token) = trim_non_empty(resolved.auth_token.as_deref()) {
+            runtime_env.insert("ANTHROPIC_AUTH_TOKEN".to_string(), token);
+        }
+        if let Some(model) = trim_non_empty(resolved.model.as_deref()) {
+            runtime_env.insert("ANTHROPIC_MODEL".to_string(), model);
+        }
+    }
+}
+
+/// Last step of `build_session_runtime_env` for Claude Code.
+///
+/// `follow-default`: today's behaviour — no sweep, no `CLAUDE_CONFIG_DIR`.
+/// Anything else: strip `PROFILE_OWNED_ENV_KEYS` (and prefix families) so
+/// agent-global connection env cannot override the profile, then overlay
+/// the profile's own env / official-direct sentinels / `CLAUDE_CONFIG_DIR`.
+/// A user-explicit `CLAUDE_CONFIG_DIR` in `env_json` still wins and is warned.
 pub async fn apply_claude_profile_env(
     db: &AppDatabase,
     data_dir: &Path,
@@ -334,6 +519,13 @@ pub async fn apply_claude_profile_env(
     let resolved = resolve_claude_profile(db, data_dir, conversation_id, claude_agent_env_json)
         .await
         .map_err(|e| AcpError::protocol(e.to_string()))?;
+    if resolved.id == FOLLOW_DEFAULT_PROFILE_ID {
+        return Ok(());
+    }
+
+    strip_profile_owned_agent_env(runtime_env);
+    apply_profile_connection_env(&resolved, runtime_env);
+
     let Some(dir) = resolved.config_dir else {
         return Ok(());
     };
@@ -359,7 +551,7 @@ pub async fn apply_claude_profile_env(
 pub fn claude_profile_list_core(
     data_dir: &Path,
 ) -> Result<Vec<ClaudeProfileInfo>, AppCommandError> {
-    let mut out = vec![follow_default_info()];
+    let mut out = vec![follow_default_info(), official_direct_info()];
     let dir = claude_profiles_dir(data_dir);
     if !dir.exists() {
         return Ok(out);
@@ -380,7 +572,7 @@ pub fn claude_profile_list_core(
         };
         match serde_json::from_str::<ClaudeProfileRecord>(&raw) {
             Ok(record) => {
-                if record.id == FOLLOW_DEFAULT_PROFILE_ID {
+                if is_virtual_profile_id(&record.id) {
                     continue;
                 }
                 out.push(record_to_info(&record));
@@ -404,6 +596,11 @@ pub fn profile_destination_summary(info: &ClaudeProfileInfo) -> String {
         ClaudeProfileKind::FollowDefault => {
             "follow-default: the host's default Claude configuration \
              (subscription login); CLAUDE_CONFIG_DIR is not set"
+                .to_string()
+        }
+        ClaudeProfileKind::OfficialDirect => {
+            "official-direct: force ANTHROPIC_BASE_URL=https://api.anthropic.com \
+             and clear ANTHROPIC_AUTH_TOKEN so the CLI falls back to config-dir OAuth"
                 .to_string()
         }
         ClaudeProfileKind::ConfigDir => match info.config_dir.as_deref() {
@@ -458,10 +655,11 @@ fn validate_upsert(input: &ClaudeProfileUpsert) -> Result<(), AppCommandError> {
             "profile id must match [a-z0-9-_]{1,64}",
         ));
     }
-    if input.id == FOLLOW_DEFAULT_PROFILE_ID {
-        return Err(AppCommandError::invalid_input(
-            "profile id 'follow-default' is reserved",
-        ));
+    if is_virtual_profile_id(&input.id) {
+        return Err(AppCommandError::invalid_input(format!(
+            "profile id '{}' is reserved",
+            input.id
+        )));
     }
     let label = input.label.trim();
     if label.is_empty() {
@@ -476,6 +674,11 @@ fn validate_upsert(input: &ClaudeProfileUpsert) -> Result<(), AppCommandError> {
         ClaudeProfileKind::FollowDefault => {
             return Err(AppCommandError::invalid_input(
                 "cannot persist the virtual follow-default profile",
+            ));
+        }
+        ClaudeProfileKind::OfficialDirect => {
+            return Err(AppCommandError::invalid_input(
+                "cannot persist the virtual official-direct profile",
             ));
         }
         ClaudeProfileKind::ConfigDir => {
@@ -505,8 +708,14 @@ pub fn claude_profile_upsert_core(
         .map(|r| r.created_at.clone())
         .unwrap_or_else(|| now.clone());
     let auth_token = match input.auth_token.as_deref() {
-        None => existing.and_then(|r| r.auth_token),
+        None => existing.as_ref().and_then(|r| r.auth_token.clone()),
         Some(raw) => trim_non_empty(Some(raw)),
+    };
+    // Whole-map replace: omitted keeps the stored map; Some (including empty)
+    // replaces it.
+    let env = match input.env {
+        None => existing.as_ref().map(|r| r.env.clone()).unwrap_or_default(),
+        Some(map) => map,
     };
     let record = ClaudeProfileRecord {
         id: input.id.clone(),
@@ -528,6 +737,7 @@ pub fn claude_profile_upsert_core(
             ClaudeProfileKind::Managed => trim_non_empty(input.model.as_deref()),
             _ => None,
         },
+        env,
         created_at,
         updated_at: now,
     };
@@ -544,10 +754,10 @@ pub fn claude_profile_upsert_core(
 }
 
 pub fn claude_profile_delete_core(data_dir: &Path, id: &str) -> Result<(), AppCommandError> {
-    if id == FOLLOW_DEFAULT_PROFILE_ID {
-        return Err(AppCommandError::invalid_input(
-            "cannot delete the virtual follow-default profile",
-        ));
+    if is_virtual_profile_id(id) {
+        return Err(AppCommandError::invalid_input(format!(
+            "cannot delete the virtual {id} profile"
+        )));
     }
     if !is_valid_profile_id(id) {
         return Err(AppCommandError::invalid_input(
@@ -590,7 +800,7 @@ pub async fn conversation_set_claude_profile_core(
         .filter(|s| !s.is_empty())
     {
         None => None,
-        Some(FOLLOW_DEFAULT_PROFILE_ID) => Some(FOLLOW_DEFAULT_PROFILE_ID.to_string()),
+        Some(id) if is_virtual_profile_id(id) => Some(id.to_string()),
         Some(id) => {
             if !is_valid_profile_id(id) {
                 return Err(AppCommandError::invalid_input(
@@ -763,6 +973,7 @@ mod tests {
                 base_url: None,
                 auth_token: None,
                 model: None,
+                env: None,
             },
         )
         .expect("upsert configDir")
@@ -785,6 +996,7 @@ mod tests {
                 base_url: base_url.map(str::to_string),
                 auth_token: auth_token.map(str::to_string),
                 model: model.map(str::to_string),
+                env: None,
             },
         )
         .expect("upsert managed")
@@ -812,10 +1024,43 @@ mod tests {
                 base_url: None,
                 auth_token: None,
                 model: None,
+                env: None,
             },
         )
         .unwrap_err();
         assert!(err.message.contains("reserved"), "{}", err.message);
+        let err = claude_profile_upsert_core(
+            data.path(),
+            ClaudeProfileUpsert {
+                id: OFFICIAL_DIRECT_PROFILE_ID.to_string(),
+                label: "nope".into(),
+                kind: ClaudeProfileKind::Managed,
+                config_dir: None,
+                base_url: None,
+                auth_token: None,
+                model: None,
+                env: None,
+            },
+        )
+        .unwrap_err();
+        assert!(err.message.contains("reserved"), "{}", err.message);
+        let err = claude_profile_upsert_core(
+            data.path(),
+            ClaudeProfileUpsert {
+                id: "ok".into(),
+                label: "nope".into(),
+                kind: ClaudeProfileKind::OfficialDirect,
+                config_dir: None,
+                base_url: None,
+                auth_token: None,
+                model: None,
+                env: None,
+            },
+        )
+        .unwrap_err();
+        assert!(err.message.contains("official-direct"), "{}", err.message);
+        let err = claude_profile_delete_core(data.path(), OFFICIAL_DIRECT_PROFILE_ID).unwrap_err();
+        assert!(err.message.contains("virtual"), "{}", err.message);
         let err = claude_profile_upsert_core(
             data.path(),
             ClaudeProfileUpsert {
@@ -826,6 +1071,7 @@ mod tests {
                 base_url: None,
                 auth_token: None,
                 model: None,
+                env: None,
             },
         )
         .unwrap_err();
@@ -836,10 +1082,15 @@ mod tests {
     fn list_always_starts_with_virtual_follow_default() {
         let data = tempfile::tempdir().unwrap();
         let list = claude_profile_list_core(data.path()).unwrap();
-        assert_eq!(list.len(), 1);
+        assert_eq!(list.len(), 2);
         assert_eq!(list[0].id, FOLLOW_DEFAULT_PROFILE_ID);
         assert_eq!(list[0].kind, ClaudeProfileKind::FollowDefault);
+        assert!(list[0].is_virtual);
         assert!(list[0].auth_token_masked.is_empty());
+        assert_eq!(list[1].id, OFFICIAL_DIRECT_PROFILE_ID);
+        assert_eq!(list[1].kind, ClaudeProfileKind::OfficialDirect);
+        assert!(list[1].is_virtual);
+        assert!(list[1].env.is_empty());
     }
 
     #[test]
@@ -1176,6 +1427,7 @@ mod tests {
         let err = launch_config_values(data.path(), Some("nope"), Some("opus")).unwrap_err();
         assert!(err.contains("nope"), "{err}");
         assert!(err.contains("follow-default"), "{err}");
+        assert!(err.contains("official-direct"), "{err}");
         assert!(err.contains("api"), "{err}");
         // Nothing to persist: the map is never returned.
         let values = launch_config_values(data.path(), None, None).unwrap();
@@ -1233,6 +1485,15 @@ mod tests {
         let follow_dest = profile_destination_summary(follow);
         assert!(follow_dest.contains("follow-default"), "{follow_dest}");
         assert!(follow_dest.contains("default"), "{follow_dest}");
+        assert!(follow.is_virtual);
+
+        let official = list
+            .iter()
+            .find(|p| p.id == OFFICIAL_DIRECT_PROFILE_ID)
+            .unwrap();
+        assert!(official.is_virtual);
+        let official_dest = profile_destination_summary(official);
+        assert!(official_dest.contains("official-direct"), "{official_dest}");
 
         let managed = list.iter().find(|p| p.id == "gw").unwrap();
         let managed_dest = profile_destination_summary(managed);
@@ -1247,6 +1508,558 @@ mod tests {
         assert!(
             dir_dest.contains(&user_dir.to_string_lossy().into_owned()),
             "{dir_dest}"
+        );
+        assert!(!config_dir.is_virtual);
+    }
+
+    fn connection_and_misc_env_json() -> (String, BTreeMap<String, String>) {
+        let map = BTreeMap::from([
+            (
+                "ANTHROPIC_AUTH_TOKEN".to_string(),
+                "sk-global-o66".to_string(),
+            ),
+            ("ANTHROPIC_API_KEY".to_string(), "sk-api-o66".to_string()),
+            (
+                "ANTHROPIC_BASE_URL".to_string(),
+                "https://relay.example/v1".to_string(),
+            ),
+            ("ANTHROPIC_MODEL".to_string(), "claude-sonnet".to_string()),
+            (
+                "ANTHROPIC_CUSTOM_MODEL_OPTION".to_string(),
+                "custom-opt".to_string(),
+            ),
+            (
+                "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME".to_string(),
+                "Custom".to_string(),
+            ),
+            (
+                "ANTHROPIC_DEFAULT_SONNET_MODEL".to_string(),
+                "sonnet-x".to_string(),
+            ),
+            ("CLAUDE_AUTH_MODE".to_string(), "custom".to_string()),
+            ("CLAUDE_CODE_USE_BEDROCK".to_string(), "1".to_string()),
+            ("CLAUDE_CODE_USE_VERTEX".to_string(), "1".to_string()),
+            ("CLAUDE_CODE_USE_FOUNDRY".to_string(), "1".to_string()),
+            (
+                "CODEG_O66_MISC".to_string(),
+                "keep-non-connection".to_string(),
+            ),
+            ("DISABLE_TELEMETRY".to_string(), "1".to_string()),
+            ("ENABLE_TOOL_SEARCH".to_string(), "1".to_string()),
+            ("CLAUDE_CODE_SCROLL_SPEED".to_string(), "2".to_string()),
+        ]);
+        (serde_json::to_string(&map).unwrap(), map)
+    }
+
+    const OWNED_SAMPLE_KEYS: &[&str] = &[
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_BASE_URL",
+        "ANTHROPIC_MODEL",
+        "ANTHROPIC_CUSTOM_MODEL_OPTION",
+        "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME",
+        "ANTHROPIC_DEFAULT_SONNET_MODEL",
+        "CLAUDE_AUTH_MODE",
+        "CLAUDE_CODE_USE_BEDROCK",
+        "CLAUDE_CODE_USE_VERTEX",
+        "CLAUDE_CODE_USE_FOUNDRY",
+    ];
+
+    // Unique key that will not appear in the developer's ~/.claude/settings.json,
+    // so value equality is hermetic. Native overlays (GIT_BASH_PATH,
+    // ENABLE_TOOL_SEARCH, …) are compared follow-vs-swept, not vs env_json.
+    const MISC_SAMPLE_KEYS: &[&str] = &["CODEG_O66_MISC"];
+
+    #[test]
+    fn profile_owned_key_table_matches_predicate() {
+        for key in PROFILE_OWNED_ENV_KEYS {
+            assert!(is_profile_owned_env_key(key), "{key}");
+        }
+        assert!(is_profile_owned_env_key(
+            "ANTHROPIC_CUSTOM_MODEL_OPTION_NAME"
+        ));
+        assert!(is_profile_owned_env_key(
+            "ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION"
+        ));
+        assert!(is_profile_owned_env_key("ANTHROPIC_DEFAULT_SONNET_MODEL"));
+        assert!(is_profile_owned_env_key("ANTHROPIC_DEFAULT_HAIKU_MODEL"));
+        assert!(!is_profile_owned_env_key("ANTHROPIC_DEFAULT_FOO"));
+        assert!(!is_profile_owned_env_key("ANTHROPIC_REASONING_MODEL"));
+        assert!(!is_profile_owned_env_key("CLAUDE_CODE_GIT_BASH_PATH"));
+        assert!(!is_profile_owned_env_key("CODEG_O66_MISC"));
+        assert!(!is_profile_owned_env_key("DISABLE_TELEMETRY"));
+        assert!(!is_profile_owned_env_key("ENABLE_TOOL_SEARCH"));
+        assert!(!is_profile_owned_env_key("CLAUDE_CODE_SCROLL_SPEED"));
+        assert!(!is_profile_owned_env_key("CLAUDE_CONFIG_DIR"));
+    }
+
+    #[test]
+    fn old_profile_json_without_env_deserializes() {
+        let raw = r#"{
+            "id": "legacy",
+            "label": "Legacy",
+            "kind": "managed",
+            "baseUrl": "https://old.example/v1",
+            "createdAt": "2026-08-21T00:00:00Z",
+            "updatedAt": "2026-08-21T00:00:00Z"
+        }"#;
+        let record: ClaudeProfileRecord = serde_json::from_str(raw).unwrap();
+        assert!(record.env.is_empty());
+        assert_eq!(record.id, "legacy");
+        assert_eq!(record.kind, ClaudeProfileKind::Managed);
+        assert_eq!(record.base_url.as_deref(), Some("https://old.example/v1"));
+    }
+
+    #[test]
+    fn upsert_env_omit_keeps_empty_map_replaces_and_masks_secrets() {
+        let data = tempfile::tempdir().unwrap();
+        let mut env = BTreeMap::new();
+        env.insert(
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL".to_string(),
+            "haiku-x".to_string(),
+        );
+        env.insert(
+            "MY_GATEWAY_TOKEN".to_string(),
+            "secret-value-12345678".to_string(),
+        );
+        let info = claude_profile_upsert_core(
+            data.path(),
+            ClaudeProfileUpsert {
+                id: "api".to_string(),
+                label: "API".to_string(),
+                kind: ClaudeProfileKind::Managed,
+                config_dir: None,
+                base_url: Some("https://example.test/v1".into()),
+                auth_token: None,
+                model: None,
+                env: Some(env),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            info.env
+                .get("ANTHROPIC_DEFAULT_HAIKU_MODEL")
+                .map(String::as_str),
+            Some("haiku-x")
+        );
+        let masked = info.env.get("MY_GATEWAY_TOKEN").expect("masked token");
+        assert_ne!(masked, "secret-value-12345678");
+        assert!(masked.contains('\u{2022}'), "{masked}");
+
+        let kept = upsert_managed(
+            data.path(),
+            "api",
+            Some("https://example.test/v1"),
+            None,
+            None,
+        );
+        assert_eq!(
+            kept.env
+                .get("ANTHROPIC_DEFAULT_HAIKU_MODEL")
+                .map(String::as_str),
+            Some("haiku-x"),
+            "omitted env must keep the stored map"
+        );
+
+        let cleared = claude_profile_upsert_core(
+            data.path(),
+            ClaudeProfileUpsert {
+                id: "api".to_string(),
+                label: "API".to_string(),
+                kind: ClaudeProfileKind::Managed,
+                config_dir: None,
+                base_url: Some("https://example.test/v1".into()),
+                auth_token: None,
+                model: None,
+                env: Some(BTreeMap::new()),
+            },
+        )
+        .unwrap();
+        assert!(
+            cleared.env.is_empty(),
+            "empty map must replace (clear) stored env"
+        );
+    }
+
+    #[test]
+    fn managed_env_loses_to_dedicated_fields_on_conflict() {
+        let data = tempfile::tempdir().unwrap();
+        let mut env = BTreeMap::new();
+        env.insert(
+            "ANTHROPIC_BASE_URL".to_string(),
+            "https://from-env.example/v1".to_string(),
+        );
+        env.insert(
+            "ANTHROPIC_AUTH_TOKEN".to_string(),
+            "sk-from-env".to_string(),
+        );
+        env.insert("ANTHROPIC_MODEL".to_string(), "from-env-model".to_string());
+        env.insert(
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL".to_string(),
+            "haiku-from-env".to_string(),
+        );
+        claude_profile_upsert_core(
+            data.path(),
+            ClaudeProfileUpsert {
+                id: "gw".to_string(),
+                label: "GW".to_string(),
+                kind: ClaudeProfileKind::Managed,
+                config_dir: None,
+                base_url: Some("https://from-field.example/v1".into()),
+                auth_token: Some("sk-from-field".into()),
+                model: Some("from-field-model".into()),
+                env: Some(env),
+            },
+        )
+        .unwrap();
+        let settings: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(managed_config_dir(data.path(), "gw").join("settings.json"))
+                .unwrap(),
+        )
+        .unwrap();
+        let block = settings.get("env").and_then(|v| v.as_object()).unwrap();
+        assert_eq!(
+            block.get("ANTHROPIC_BASE_URL").and_then(|v| v.as_str()),
+            Some("https://from-field.example/v1")
+        );
+        assert_eq!(
+            block.get("ANTHROPIC_AUTH_TOKEN").and_then(|v| v.as_str()),
+            Some("sk-from-field")
+        );
+        assert_eq!(
+            block.get("ANTHROPIC_MODEL").and_then(|v| v.as_str()),
+            Some("from-field-model")
+        );
+        assert_eq!(
+            block
+                .get("ANTHROPIC_DEFAULT_HAIKU_MODEL")
+                .and_then(|v| v.as_str()),
+            Some("haiku-from-env")
+        );
+    }
+
+    #[tokio::test]
+    async fn follow_default_keeps_agent_connection_env_key_for_key() {
+        use crate::commands::acp::build_session_runtime_env;
+        let db = fresh_in_memory_db().await;
+        let data = tempfile::tempdir().unwrap();
+        let (env_json, expected) = connection_and_misc_env_json();
+        seed_claude_agent(&db, Some(&env_json)).await;
+        let env = build_session_runtime_env(&db, AgentType::ClaudeCode, None, data.path(), None)
+            .await
+            .unwrap();
+        for key in OWNED_SAMPLE_KEYS.iter().chain(MISC_SAMPLE_KEYS) {
+            assert_eq!(
+                env.get(*key),
+                expected.get(*key),
+                "follow-default must keep {key}"
+            );
+        }
+        assert!(!env.contains_key("CLAUDE_CONFIG_DIR"));
+    }
+
+    #[tokio::test]
+    async fn non_follow_default_sweeps_owned_keys_and_keeps_misc() {
+        use crate::commands::acp::build_session_runtime_env;
+        let db = fresh_in_memory_db().await;
+        let data = tempfile::tempdir().unwrap();
+        let (env_json, expected) = connection_and_misc_env_json();
+        seed_claude_agent(&db, Some(&env_json)).await;
+        let folder = seed_folder(&db, data.path().to_str().unwrap()).await;
+        let conv = seed_conversation(&db, folder, AgentType::ClaudeCode).await;
+        let user_dir = data.path().join("user-claude");
+        fs::create_dir_all(&user_dir).unwrap();
+        upsert_config_dir(data.path(), "user", &user_dir);
+        conversation_service::merge_selector_config_value(
+            &db.conn,
+            conv,
+            PREFERRED_PROFILE_CONFIG_KEY,
+            "user",
+        )
+        .await
+        .unwrap();
+
+        let follow = build_session_runtime_env(&db, AgentType::ClaudeCode, None, data.path(), None)
+            .await
+            .unwrap();
+        let swept =
+            build_session_runtime_env(&db, AgentType::ClaudeCode, None, data.path(), Some(conv))
+                .await
+                .unwrap();
+
+        for key in OWNED_SAMPLE_KEYS {
+            assert!(
+                follow.contains_key(*key),
+                "follow-default regression lost {key}"
+            );
+            assert!(
+                !swept.contains_key(*key),
+                "configDir profile must not inject owned key {key}: {swept:?}"
+            );
+        }
+        for key in MISC_SAMPLE_KEYS {
+            assert_eq!(
+                swept.get(*key),
+                follow.get(*key),
+                "non-connection key {key} must survive the sweep"
+            );
+            assert_eq!(swept.get(*key), expected.get(*key));
+        }
+    }
+
+    #[tokio::test]
+    async fn official_direct_forces_official_url_and_clears_token() {
+        use crate::commands::acp::build_session_runtime_env;
+        let db = fresh_in_memory_db().await;
+        let data = tempfile::tempdir().unwrap();
+        let (env_json, expected) = connection_and_misc_env_json();
+        seed_claude_agent(&db, Some(&env_json)).await;
+        let folder = seed_folder(&db, data.path().to_str().unwrap()).await;
+        let conv = seed_conversation(&db, folder, AgentType::ClaudeCode).await;
+        conversation_service::merge_selector_config_value(
+            &db.conn,
+            conv,
+            PREFERRED_PROFILE_CONFIG_KEY,
+            OFFICIAL_DIRECT_PROFILE_ID,
+        )
+        .await
+        .unwrap();
+
+        let env =
+            build_session_runtime_env(&db, AgentType::ClaudeCode, None, data.path(), Some(conv))
+                .await
+                .unwrap();
+        assert_eq!(
+            env.get("ANTHROPIC_BASE_URL").map(String::as_str),
+            Some(OFFICIAL_ANTHROPIC_BASE_URL)
+        );
+        assert_eq!(
+            env.get("ANTHROPIC_AUTH_TOKEN").map(String::as_str),
+            Some("")
+        );
+        assert_eq!(env.get("ANTHROPIC_API_KEY").map(String::as_str), Some(""));
+        assert!(!env.contains_key("CLAUDE_CONFIG_DIR"));
+        assert!(!env.contains_key("CLAUDE_AUTH_MODE"));
+        assert!(!env.contains_key("ANTHROPIC_MODEL"));
+        assert!(!env.contains_key("ANTHROPIC_DEFAULT_SONNET_MODEL"));
+        assert!(!env.contains_key("ANTHROPIC_CUSTOM_MODEL_OPTION"));
+        assert!(!env.contains_key("CLAUDE_CODE_USE_BEDROCK"));
+        for key in MISC_SAMPLE_KEYS {
+            assert_eq!(env.get(*key), expected.get(*key), "{key}");
+        }
+
+        let mgr = ConnectionManager::new();
+        let result = conversation_set_claude_profile_core(
+            &db,
+            &mgr,
+            data.path(),
+            conv,
+            Some(OFFICIAL_DIRECT_PROFILE_ID.into()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            result.profile_id.as_deref(),
+            Some(OFFICIAL_DIRECT_PROFILE_ID)
+        );
+    }
+
+    #[tokio::test]
+    async fn profile_env_is_injected_and_dedicated_fields_win_at_spawn() {
+        use crate::commands::acp::build_session_runtime_env;
+        let db = fresh_in_memory_db().await;
+        let data = tempfile::tempdir().unwrap();
+        let (env_json, _) = connection_and_misc_env_json();
+        seed_claude_agent(&db, Some(&env_json)).await;
+        let folder = seed_folder(&db, data.path().to_str().unwrap()).await;
+        let conv = seed_conversation(&db, folder, AgentType::ClaudeCode).await;
+
+        let mut env = BTreeMap::new();
+        env.insert(
+            "ANTHROPIC_BASE_URL".to_string(),
+            "https://from-env.example/v1".to_string(),
+        );
+        env.insert(
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL".to_string(),
+            "haiku-profile".to_string(),
+        );
+        claude_profile_upsert_core(
+            data.path(),
+            ClaudeProfileUpsert {
+                id: "gw".to_string(),
+                label: "GW".to_string(),
+                kind: ClaudeProfileKind::Managed,
+                config_dir: None,
+                base_url: Some("https://from-field.example/v1".into()),
+                auth_token: Some("sk-from-field".into()),
+                model: Some("from-field-model".into()),
+                env: Some(env),
+            },
+        )
+        .unwrap();
+        conversation_service::merge_selector_config_value(
+            &db.conn,
+            conv,
+            PREFERRED_PROFILE_CONFIG_KEY,
+            "gw",
+        )
+        .await
+        .unwrap();
+
+        let runtime =
+            build_session_runtime_env(&db, AgentType::ClaudeCode, None, data.path(), Some(conv))
+                .await
+                .unwrap();
+        assert_eq!(
+            runtime.get("ANTHROPIC_BASE_URL").map(String::as_str),
+            Some("https://from-field.example/v1")
+        );
+        assert_eq!(
+            runtime.get("ANTHROPIC_AUTH_TOKEN").map(String::as_str),
+            Some("sk-from-field")
+        );
+        assert_eq!(
+            runtime.get("ANTHROPIC_MODEL").map(String::as_str),
+            Some("from-field-model")
+        );
+        assert_eq!(
+            runtime
+                .get("ANTHROPIC_DEFAULT_HAIKU_MODEL")
+                .map(String::as_str),
+            Some("haiku-profile")
+        );
+        assert_eq!(
+            runtime.get("DISABLE_TELEMETRY").map(String::as_str),
+            Some("1")
+        );
+        assert!(!runtime.contains_key("CLAUDE_AUTH_MODE"));
+    }
+
+    #[tokio::test]
+    async fn config_dir_profile_env_is_injected_at_spawn_not_written_to_user_dir() {
+        use crate::commands::acp::build_session_runtime_env;
+        let db = fresh_in_memory_db().await;
+        let data = tempfile::tempdir().unwrap();
+        let (env_json, _) = connection_and_misc_env_json();
+        seed_claude_agent(&db, Some(&env_json)).await;
+        let folder = seed_folder(&db, data.path().to_str().unwrap()).await;
+        let conv = seed_conversation(&db, folder, AgentType::ClaudeCode).await;
+        let user_dir = data.path().join("user-claude");
+        fs::create_dir_all(&user_dir).unwrap();
+        let mut env = BTreeMap::new();
+        env.insert(
+            "ANTHROPIC_DEFAULT_SONNET_MODEL".to_string(),
+            "sonnet-profile".to_string(),
+        );
+        claude_profile_upsert_core(
+            data.path(),
+            ClaudeProfileUpsert {
+                id: "user".to_string(),
+                label: "User dir".to_string(),
+                kind: ClaudeProfileKind::ConfigDir,
+                config_dir: Some(user_dir.to_string_lossy().into_owned()),
+                base_url: None,
+                auth_token: None,
+                model: None,
+                env: Some(env),
+            },
+        )
+        .unwrap();
+        conversation_service::merge_selector_config_value(
+            &db.conn,
+            conv,
+            PREFERRED_PROFILE_CONFIG_KEY,
+            "user",
+        )
+        .await
+        .unwrap();
+
+        let runtime =
+            build_session_runtime_env(&db, AgentType::ClaudeCode, None, data.path(), Some(conv))
+                .await
+                .unwrap();
+        assert_eq!(
+            runtime
+                .get("ANTHROPIC_DEFAULT_SONNET_MODEL")
+                .map(String::as_str),
+            Some("sonnet-profile")
+        );
+        assert_eq!(
+            runtime.get("CLAUDE_CONFIG_DIR").map(String::as_str),
+            Some(user_dir.to_string_lossy().as_ref())
+        );
+        assert!(
+            !user_dir.join("settings.json").exists(),
+            "configDir must not write the user's directory"
+        );
+    }
+
+    #[tokio::test]
+    async fn non_claude_keeps_anthropic_keys_and_ignores_profiles() {
+        use crate::commands::acp::build_session_runtime_env;
+        let db = fresh_in_memory_db().await;
+        let data = tempfile::tempdir().unwrap();
+        seed_claude_agent(&db, None).await;
+        agent_setting_service::update(
+            &db.conn,
+            AgentType::Codex,
+            AgentSettingsUpdate {
+                enabled: true,
+                env_json: Some(
+                    serde_json::to_string(&BTreeMap::from([
+                        (
+                            "ANTHROPIC_AUTH_TOKEN".to_string(),
+                            "sk-codex-should-keep".to_string(),
+                        ),
+                        ("DISABLE_TELEMETRY".to_string(), "1".to_string()),
+                    ]))
+                    .unwrap(),
+                ),
+                model_provider_id: None,
+            },
+        )
+        .await
+        .unwrap();
+        let folder = seed_folder(&db, data.path().to_str().unwrap()).await;
+        let conv = seed_conversation(&db, folder, AgentType::Codex).await;
+        conversation_service::merge_selector_config_value(
+            &db.conn,
+            conv,
+            PREFERRED_PROFILE_CONFIG_KEY,
+            OFFICIAL_DIRECT_PROFILE_ID,
+        )
+        .await
+        .unwrap();
+        let env = build_session_runtime_env(&db, AgentType::Codex, None, data.path(), Some(conv))
+            .await
+            .unwrap();
+        assert_eq!(
+            env.get("ANTHROPIC_AUTH_TOKEN").map(String::as_str),
+            Some("sk-codex-should-keep")
+        );
+        assert!(!env.contains_key("CLAUDE_CONFIG_DIR"));
+        assert_ne!(
+            env.get("ANTHROPIC_BASE_URL").map(String::as_str),
+            Some(OFFICIAL_ANTHROPIC_BASE_URL)
+        );
+    }
+
+    #[test]
+    fn fingerprint_ignores_profile_owned_keys_for_claude() {
+        use crate::commands::acp::fingerprint_config;
+        let mut a = BTreeMap::new();
+        a.insert("DISABLE_TELEMETRY".to_string(), "1".to_string());
+        let mut b = a.clone();
+        b.insert("ANTHROPIC_AUTH_TOKEN".to_string(), "sk-x".to_string());
+        b.insert(
+            "ANTHROPIC_BASE_URL".to_string(),
+            OFFICIAL_ANTHROPIC_BASE_URL.to_string(),
+        );
+        b.insert("CLAUDE_AUTH_MODE".to_string(), "custom".to_string());
+        assert_eq!(
+            fingerprint_config(AgentType::ClaudeCode, &a),
+            fingerprint_config(AgentType::ClaudeCode, &b),
+            "profile-owned keys must not flip the agent-level fingerprint"
         );
     }
 }

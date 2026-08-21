@@ -9443,7 +9443,13 @@ fn is_volatile_fingerprint_key(key: &str) -> bool {
     // refresh is conversation-agnostic, so including this key would mark every
     // non-default-profile session stale on any agent settings save. Profile
     // switches emit SessionConfigStale via conversation_set_claude_profile.
-    key == "OPENCLAW_RESET_SESSION" || key == "CLAUDE_CONFIG_DIR"
+    // Profile-owned ANTHROPIC_* / CLAUDE_AUTH_MODE / cloud-routing keys: same
+    // reason — official-direct injects BASE_URL and empty tokens, and the
+    // defense sweep drops agent-global connection env. Hashing those would
+    // mark every non-follow-default Claude session stale on any settings save.
+    key == "OPENCLAW_RESET_SESSION"
+        || key == "CLAUDE_CONFIG_DIR"
+        || crate::commands::claude_profile::is_profile_owned_env_key(key)
 }
 
 /// Fingerprint the effective config a spawned agent process is locked to: the
