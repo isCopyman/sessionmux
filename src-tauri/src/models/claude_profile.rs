@@ -14,7 +14,7 @@ pub enum ClaudeProfileKind {
     OfficialDirect,
     /// Point `CLAUDE_CONFIG_DIR` at an existing directory the user maintains.
     ConfigDir,
-    /// codeg-owned directory under the data dir, with a generated `settings.json`.
+    /// codeg-owned `settings.json` under the data dir, applied as `--settings`.
     Managed,
 }
 
