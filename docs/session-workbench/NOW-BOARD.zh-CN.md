@@ -216,6 +216,15 @@ NOW-BOARD 与它重复；MAINTAINABILITY 同时兼计划 / 决策 / 执行日志
       复制档不会给别家厂商的密钥留一串圆点
 - [x] 十语提示文案改正（原文还在说"上面的 Base URL、密钥和模型会在保存时写进它"，
       那些字段已经不存在了）
+- [x] **「跟随默认」页签也只剩一个编辑器**（`bf9e0b4b`，合入 `91cdb60c`）。上一批
+      只收敛了档页签，隔壁那页还留着整套表单 + 底下一个编辑同一个文件的 JSON 框。
+      同样处理。连带删掉只为喂那套表单存在的东西：`ClaudeConfigFields`、
+      `applyClaudeProviderToConfigText`、`configTextForClaudeSave`、
+      `setClaudeEnvFlagInConfigText`、`materializeClaudeHardeningFlags`、
+      `readClaudeConfig`、`applyClaudeConfig`。**净 −1531 行**，加的只有 23 行。
+      门禁：tsc / eslint / 343 前端测试 / cargo clippy 全绿，
+      新增 Rust 回归测试 `folded_legacy_env_round_trip_preserves_secret_and_ordinary_values`
+      逐条核过（不是看退出码——那次退出码取的是 `tail` 的，无效）
 
 ### 今晚实测钉死的事实（都进了 CONFIG-MODEL §11，动工前先读）
 
@@ -246,3 +255,16 @@ NOW-BOARD 与它重复；MAINTAINABILITY 同时兼计划 / 决策 / 执行日志
 - **虚拟档 `OfficialDirect` 同上**：只塞进程环境，被项目配置击穿
 - **session-sync 空转**：`pnpm tauri dev` 日志里 reconciliation 每 ~10 秒一次、
   每次都报 `updated=1~2`。空闲状态不该一直有更新，要么真在无谓写库、要么计数是假的
+- **claude_code 的 model_provider 绑定成了孤儿**（`bf9e0b4b` 带出来的）。被删的那处
+  `<ClaudeConfigFields>` 是传了 `providers=` 的，所以那页**曾经**能把 Claude 绑到一个
+  model provider 上。删掉之后：没有界面能看到或解绑，但
+  `inferClaudeAuthMode`（`acp-agent-settings.tsx:841`）仍会因 `model_provider_id != null`
+  判成 `model_provider`，`apply_model_provider_env`（`acp.rs:8865`）仍会在启动时把
+  provider 的 `api_url`/`api_key` 注进运行时环境——**设得上、取不下的隐形配置源**。
+  本机实测不可达：`agent_setting` 全部 14 行 `model_provider_id` 都是 NULL，
+  `model_provider` 表空，所以**不是合并阻断项**。要么把 claude 那条分支一并删掉，
+  要么给它留一个能解绑的控件。另：provider 走的是进程环境，本来就输给项目配置
+- **加固开关不再强写**（同上批的行为改变，不是纯死代码清理）。
+  `materializeClaudeHardeningFlags` 的注释写着"不管用户有没有碰开关"，
+  每次保存都会把两个 `CLAUDE_CODE_*` 键写进用户自己的 `~/.claude/settings.json`。
+  现在不写了。本机无影响（这两个键早就在 agent 的 env 行里），但要记着
