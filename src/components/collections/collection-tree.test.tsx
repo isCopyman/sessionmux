@@ -43,6 +43,7 @@ const h = vi.hoisted(() => ({
   switchTab: vi.fn(),
   openConversations: vi.fn(),
   openRoom: vi.fn(),
+  openForFolder: vi.fn(),
   deleteRoom: vi.fn(),
   activeTab: {
     id: "conv-102",
@@ -306,6 +307,15 @@ vi.mock("@/lib/open-room", () => ({
   useOpenRoom: () => h.openRoom,
   ROOM_TAB_PLACEHOLDER_AGENT: "claude_code",
   roomTabFolderId: () => 7,
+}))
+
+vi.mock("@/contexts/create-room-dialog-context", () => ({
+  useCreateRoomDialog: () => ({
+    open: false,
+    setOpen: vi.fn(),
+    folderScopeId: null,
+    openForFolder: h.openForFolder,
+  }),
 }))
 
 vi.mock("@/stores/room-catalog-store", () => {
@@ -667,6 +677,58 @@ describe("CollectionTree", () => {
     expect(onNewSessionInCollection).toHaveBeenCalledWith(11)
   })
 
+  it("offers New room on a Collection context menu with that Path as scope", async () => {
+    const onNewSessionInCollection = vi.fn()
+    renderTree(vi.fn(), { onNewSessionInCollection })
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Research" }))
+    const newSession = screen.getByRole("menuitem", {
+      name: "New Conversation",
+    })
+    const newRoom = screen.getByRole("menuitem", { name: "New room" })
+    expect(
+      newSession.compareDocumentPosition(newRoom) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+
+    await userEvent.click(newRoom)
+
+    expect(h.openForFolder).toHaveBeenCalledWith(7)
+    expect(onNewSessionInCollection).not.toHaveBeenCalled()
+  })
+
+  it("offers New room on a Collection hover menu with that Path as scope", async () => {
+    const { user } = renderTree(vi.fn(), {
+      onNewSessionInCollection: vi.fn(),
+    })
+
+    await user.click(
+      screen.getByRole("button", { name: "Actions for Research" })
+    )
+    await user.click(screen.getByRole("menuitem", { name: "New room" }))
+
+    expect(h.openForFolder).toHaveBeenCalledWith(7)
+  })
+
+  it("offers New room on a Path folder context menu with that folder id", async () => {
+    renderTree(vi.fn(), { showSessions: true, onNewSession: vi.fn() })
+
+    const pathName = await screen.findByText("project")
+    fireEvent.contextMenu(pathName)
+    const newSession = screen.getByRole("menuitem", {
+      name: "New Conversation",
+    })
+    const newRoom = screen.getByRole("menuitem", { name: "New room" })
+    expect(
+      newSession.compareDocumentPosition(newRoom) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy()
+
+    await userEvent.click(newRoom)
+
+    expect(h.openForFolder).toHaveBeenCalledWith(7)
+  })
+
   it("hides New Conversation on a legacy Collection with no canonical Path", async () => {
     h.items.push({
       id: 20,
@@ -687,6 +749,7 @@ describe("CollectionTree", () => {
       expect(
         screen.queryByRole("menuitem", { name: "New Conversation" })
       ).toBeNull()
+      expect(screen.queryByRole("menuitem", { name: "New room" })).toBeNull()
       // The rest of the menu is untouched.
       expect(
         screen.getByRole("menuitem", { name: "New nested collection" })

@@ -5354,6 +5354,8 @@
     "createSubmit": "إنشاء",
     "createNeedTwo": "اختر جلسة بادئة لإنشاء غرفة",
     "createNoCandidates": "لا توجد جلسات متاحة.",
+    "createFolderScope": "{name} فقط",
+    "createFolderScopeGeneric": "هذا المجلد فقط",
     "emptyInviteHint": "ادعُ جلسة أخرى لبدء التعاون.",
     "emptyInviteAction": "دعوة جلسة",
     "createFailed": "تعذر إنشاء الغرفة: {message}",

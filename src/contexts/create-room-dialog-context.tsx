@@ -2,6 +2,7 @@
 
 import {
   createContext,
+  useCallback,
   useContext,
   useMemo,
   useState,
@@ -13,6 +14,9 @@ import {
 interface CreateRoomDialogContextValue {
   open: boolean
   setOpen: Dispatch<SetStateAction<boolean>>
+  /** Canonical Path to limit initiator candidates. Null = every live Session. */
+  folderScopeId: number | null
+  openForFolder: (folderId: number) => void
 }
 
 const CreateRoomDialogContext =
@@ -27,6 +31,10 @@ const CreateRoomDialogContext =
  * the new-conversation welcome page — and the sidebar in particular unmounts
  * when collapsed, so the boolean cannot live there or the welcome-page entry
  * would be dead whenever the sidebar is hidden.
+ *
+ * `openForFolder` is the classification-tree entry: same dialog, candidates
+ * narrowed to that Path. `setOpen(true)` stays the unscoped global open.
+ * Closing always clears the scope so the next global open is not sticky.
  */
 export function useCreateRoomDialog() {
   const ctx = useContext(CreateRoomDialogContext)
@@ -43,10 +51,32 @@ export function CreateRoomDialogProvider({
 }: {
   children: ReactNode
 }) {
-  const [open, setOpen] = useState(false)
+  const [open, setOpenState] = useState(false)
+  const [folderScopeId, setFolderScopeId] = useState<number | null>(null)
+
+  const setOpen = useCallback<Dispatch<SetStateAction<boolean>>>((action) => {
+    if (typeof action === "function") {
+      setOpenState((prev) => {
+        const next = action(prev)
+        if (!next) setFolderScopeId(null)
+        return next
+      })
+      return
+    }
+    // Boolean form is the global open/close path (sidebar, welcome page,
+    // dialog onOpenChange). Never inherit a leftover folder scope.
+    setFolderScopeId(null)
+    setOpenState(action)
+  }, [])
+
+  const openForFolder = useCallback((folderId: number) => {
+    setFolderScopeId(folderId)
+    setOpenState(true)
+  }, [])
+
   const value = useMemo<CreateRoomDialogContextValue>(
-    () => ({ open, setOpen }),
-    [open]
+    () => ({ open, setOpen, folderScopeId, openForFolder }),
+    [open, setOpen, folderScopeId, openForFolder]
   )
 
   return (

@@ -52,18 +52,22 @@ vi.mock("@/stores/app-workspace-store", () => ({
   ) =>
     selector({
       conversations: h.conversations,
-      folders: [{ id: 7, name: "codeg", alias: null }],
+      folders: [
+        { id: 7, name: "codeg", alias: null },
+        { id: 8, name: "notes", alias: "Notes alias" },
+      ],
     }),
 }))
 
 function conversation(
   id: number,
   title: string | null,
-  archived = false
+  archived = false,
+  folderId = 7
 ): DbConversationSummary {
   return {
     id,
-    folder_id: 7,
+    folder_id: folderId,
     title,
     title_locked: true,
     agent_type: "codex",
@@ -81,10 +85,14 @@ function conversation(
   }
 }
 
-function renderDialog() {
+function renderDialog(folderScopeId?: number | null) {
   return render(
     <NextIntlClientProvider locale="en" messages={enMessages}>
-      <CreateRoomDialog open onOpenChange={vi.fn()} />
+      <CreateRoomDialog
+        open
+        onOpenChange={vi.fn()}
+        folderScopeId={folderScopeId}
+      />
     </NextIntlClientProvider>
   )
 }
@@ -174,5 +182,86 @@ describe("CreateRoomDialog", () => {
     expect(screen.getByRole("radio", { name: /Alpha/ })).not.toBeChecked()
     expect(screen.getByRole("radio", { name: /Beta/ })).not.toBeChecked()
     expect(screen.getByRole("button", { name: "Create room" })).toBeDisabled()
+  })
+
+  it("lists every live Session when no folder scope is set", () => {
+    h.conversations.splice(
+      0,
+      h.conversations.length,
+      conversation(1, "Alpha"),
+      conversation(2, "Beta", false, 8)
+    )
+    renderDialog()
+
+    expect(screen.getByRole("radio", { name: /Alpha/ })).toBeTruthy()
+    expect(screen.getByRole("radio", { name: /Beta/ })).toBeTruthy()
+    expect(screen.queryByText("Only codeg")).toBeNull()
+  })
+
+  it("lists only Sessions in the scoped folder and shows the folder chip", () => {
+    h.conversations.splice(
+      0,
+      h.conversations.length,
+      conversation(1, "Alpha"),
+      conversation(2, "Beta", false, 8)
+    )
+    renderDialog(7)
+
+    expect(screen.getByRole("radio", { name: /Alpha/ })).toBeTruthy()
+    expect(screen.queryByRole("radio", { name: /Beta/ })).toBeNull()
+    expect(screen.getByText("Only codeg")).toBeTruthy()
+  })
+
+  it("uses the folder alias in the scope chip when one is set", () => {
+    h.conversations.splice(
+      0,
+      h.conversations.length,
+      conversation(2, "Beta", false, 8)
+    )
+    h.tabState.activeTabId = "conv-2"
+    h.tabState.rawTabs = [
+      {
+        id: "conv-2",
+        kind: "conversation",
+        conversationId: 2,
+        folderId: 8,
+        agentType: "codex",
+        title: "Beta",
+        isPinned: false,
+      },
+    ]
+    renderDialog(8)
+
+    expect(screen.getByText("Only Notes alias")).toBeTruthy()
+    expect(screen.getByRole("radio", { name: /Beta/ })).toBeChecked()
+  })
+
+  it("does not preselect an active Session outside the folder scope", () => {
+    h.conversations.splice(
+      0,
+      h.conversations.length,
+      conversation(1, "Alpha"),
+      conversation(2, "Beta", false, 8)
+    )
+    renderDialog(8)
+
+    expect(screen.queryByRole("radio", { name: /Alpha/ })).toBeNull()
+    expect(screen.getByRole("radio", { name: /Beta/ })).not.toBeChecked()
+    expect(screen.getByRole("button", { name: "Create room" })).toBeDisabled()
+  })
+
+  it("shows the empty state when the scoped folder has no live Sessions", () => {
+    renderDialog(8)
+
+    expect(screen.queryByRole("radio")).toBeNull()
+    expect(screen.getByText("No Sessions available.")).toBeTruthy()
+    expect(screen.getByRole("button", { name: "Create room" })).toBeDisabled()
+  })
+
+  it("falls back to the generic scope chip when the folder is unknown", () => {
+    renderDialog(99)
+
+    expect(screen.getByText("This folder only")).toBeTruthy()
+    expect(screen.getByText("No Sessions available.")).toBeTruthy()
   })
 })

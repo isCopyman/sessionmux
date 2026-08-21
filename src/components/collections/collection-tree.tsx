@@ -172,6 +172,7 @@ import { useCollectionStore } from "@/stores/collection-store"
 import { useWorkbenchStore } from "@/stores/workbench-store"
 import { useOrganizationRevisionStore } from "@/stores/organization-revision-store"
 import type { SidebarSortMode } from "@/lib/sidebar-view-mode-storage"
+import { useCreateRoomDialog } from "@/contexts/create-room-dialog-context"
 import { useTabActions, useTabStore } from "@/contexts/tab-context"
 import { makeRoomTabId, type TabItemInternal } from "@/stores/tab-store"
 import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
@@ -344,6 +345,7 @@ export const CollectionTree = forwardRef<
   const { closeConversationTab, closeTab, openTab, openRoomTab, switchTab } =
     useTabActions()
   const { openConversations } = useWorkbenchRoute()
+  const { openForFolder } = useCreateRoomDialog()
   const openRoom = useOpenRoom()
   const catalogRooms = useRoomCatalogStore((state) => state.rooms)
   const workbenchIdsKey = useWorkbenchStore((state) =>
@@ -2149,6 +2151,17 @@ export const CollectionTree = forwardRef<
                           {tConversation("newConversation")}
                         </ContextMenuItem>
                       ) : null}
+                      {item.root_folder_id != null ? (
+                        <ContextMenuItem
+                          onSelect={() => {
+                            const folderId = item.root_folder_id
+                            if (folderId != null) openForFolder(folderId)
+                          }}
+                        >
+                          <Users className="h-4 w-4" />
+                          {tSidebar("newRoom")}
+                        </ContextMenuItem>
+                      ) : null}
                       <ContextMenuItem
                         onSelect={() =>
                           openEditor({ mode: "create", parentId: item.id })
@@ -2212,6 +2225,17 @@ export const CollectionTree = forwardRef<
                         >
                           <SquarePen className="h-4 w-4" />
                           {tConversation("newConversation")}
+                        </DropdownMenuItem>
+                      ) : null}
+                      {item.root_folder_id != null ? (
+                        <DropdownMenuItem
+                          onSelect={() => {
+                            const folderId = item.root_folder_id
+                            if (folderId != null) openForFolder(folderId)
+                          }}
+                        >
+                          <Users className="h-4 w-4" />
+                          {tSidebar("newRoom")}
                         </DropdownMenuItem>
                       ) : null}
                       <DropdownMenuItem
@@ -2466,51 +2490,71 @@ export const CollectionTree = forwardRef<
                   "bg-primary/10 ring-1 ring-inset ring-primary/45"
               )}
             >
-              <button
-                type="button"
-                className={cn(
-                  "flex h-6 w-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground",
-                  !expandable && "pointer-events-none opacity-0"
-                )}
-                aria-label={`${isExpanded ? t("collapse") : t("expand")} ${root.name}`}
-                onClick={() =>
-                  setCollapsedPaths((current) => {
-                    const next = new Set(current)
-                    if (next.has(root.id)) next.delete(root.id)
-                    else next.add(root.id)
-                    return next
-                  })
-                }
-              >
-                {isExpanded ? (
-                  <ChevronDown className="h-3.5 w-3.5" />
-                ) : (
-                  <ChevronRight className="h-3.5 w-3.5 rtl:rotate-180" />
-                )}
-              </button>
-              <button
-                type="button"
-                title={`${root.name}\n${root.path}`}
-                className="flex h-full min-w-0 flex-1 items-center gap-1.5 text-start text-xs font-medium"
-                onClick={() =>
-                  setCollapsedPaths((current) => {
-                    const next = new Set(current)
-                    if (next.has(root.id)) next.delete(root.id)
-                    else next.add(root.id)
-                    return next
-                  })
-                }
-              >
-                {isExpanded ? (
-                  <FolderOpen className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                ) : (
-                  <Folder className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                )}
-                <span className="truncate">{root.alias || root.name}</span>
-                <span className="ms-auto shrink-0 text-[10px] font-normal text-muted-foreground">
-                  {sessionCountByRoot.get(root.id) ?? 0}
-                </span>
-              </button>
+              <ContextMenu>
+                <ContextMenuTrigger asChild>
+                  <div className="flex min-h-0 min-w-0 flex-1 items-center">
+                    <button
+                      type="button"
+                      className={cn(
+                        "flex h-6 w-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground",
+                        !expandable && "pointer-events-none opacity-0"
+                      )}
+                      aria-label={`${isExpanded ? t("collapse") : t("expand")} ${root.name}`}
+                      onClick={() =>
+                        setCollapsedPaths((current) => {
+                          const next = new Set(current)
+                          if (next.has(root.id)) next.delete(root.id)
+                          else next.add(root.id)
+                          return next
+                        })
+                      }
+                    >
+                      {isExpanded ? (
+                        <ChevronDown className="h-3.5 w-3.5" />
+                      ) : (
+                        <ChevronRight className="h-3.5 w-3.5 rtl:rotate-180" />
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      title={`${root.name}\n${root.path}`}
+                      className="flex h-full min-w-0 flex-1 items-center gap-1.5 text-start text-xs font-medium"
+                      onClick={() =>
+                        setCollapsedPaths((current) => {
+                          const next = new Set(current)
+                          if (next.has(root.id)) next.delete(root.id)
+                          else next.add(root.id)
+                          return next
+                        })
+                      }
+                    >
+                      {isExpanded ? (
+                        <FolderOpen className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                      ) : (
+                        <Folder className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                      )}
+                      <span className="truncate">
+                        {root.alias || root.name}
+                      </span>
+                      <span className="ms-auto shrink-0 text-[10px] font-normal text-muted-foreground">
+                        {sessionCountByRoot.get(root.id) ?? 0}
+                      </span>
+                    </button>
+                  </div>
+                </ContextMenuTrigger>
+                <ContextMenuContent>
+                  {onNewSession ? (
+                    <ContextMenuItem onSelect={() => onNewSession(root.id)}>
+                      <SquarePen className="h-4 w-4" />
+                      {tConversation("newConversation")}
+                    </ContextMenuItem>
+                  ) : null}
+                  <ContextMenuItem onSelect={() => openForFolder(root.id)}>
+                    <Users className="h-4 w-4" />
+                    {tSidebar("newRoom")}
+                  </ContextMenuItem>
+                </ContextMenuContent>
+              </ContextMenu>
               {onNewSession ? (
                 <Button
                   size="icon-sm"
