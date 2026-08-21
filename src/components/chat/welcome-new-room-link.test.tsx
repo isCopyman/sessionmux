@@ -69,7 +69,10 @@ describe("create-room dialog ownership", () => {
   // The sidebar unmounts when collapsed, so a dialog mounted there would make
   // the welcome-page entry a dead button. Exactly one always-mounted owner.
   it("mounts the dialog in the always-mounted controller, not the sidebar", () => {
-    expect(controllerSource).toContain("<CreateRoomDialog open")
+    // Regex, not `toContain`: prettier breaks the tag across lines as soon as
+    // another prop is added, and this test is about *where* the dialog is
+    // mounted, not how the JSX happens to wrap today.
+    expect(controllerSource).toMatch(/<CreateRoomDialog\s+open\b/)
     expect(controllerSource).toContain("useCreateRoomDialog()")
     expect(sidebarSource).not.toContain("<CreateRoomDialog")
     expect(sidebarSource).toContain("useCreateRoomDialog()")

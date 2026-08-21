@@ -189,11 +189,57 @@ skills + agents）。换档不只换钱包，也换工具箱。设计上必须�
 | # | 问题 | 我的建议 |
 | --- | --- | --- |
 | A | 是否停掉往 `~/.claude/settings.json` / `~/.codex/config.toml` 的 cascade 写入 | **停**（默认关，可开关回退）。顺带解掉上游 #520 一类问题 |
-| B | 会话级绑定要不要加那个可空列（schema 小改） | **加**。这是唯一干净解；改动是加一个 nullable 列，不动既有数据 |
+| B | ~~会话级绑定要不要加那个可空列（schema 小改）~~ **已解，不必拍板** | **不加列**。`conversation.preferred_config_values`（JSON）里已有 codeg 自有键的先例（`__codeg_host_model__` / `__codeg_host_thought_level__`，`acp/connection.rs:6065,6071`），档绑定复用同一约定存 `__codeg_profile__`。**零 schema 改动**，故不再需要签字 |
 | C | 凭据存哪 | 托管档 = 目录内 `settings.json`（0600）；**另修一个现存问题**：`model_provider` 的 API key 今天在 list 接口里明文回传，应改掩码 |
 | D | 第一期范围 | 只做 Claude Code；Codex 的隔离 provider 块单列（它更重） |
 | E | 命名 | 对外叫「接入方式」，档的集合沿用已有「模型供应商」页，不再造第四个词 |
 | F | 换档是否允许中途切 | 允许，但必须重启该会话进程，且 turn 进行中拒绝 |
+
+## 5.5 档必须对 agent 可见（用户 2026-08-21 追加要求）
+
+> 原话："profile 的设置也必须通过 MCP 暴露给 agent，否则新建 session 的时候是不是不方便，
+> 当然也可以设置模型 session，我记得 codex 啥的也能设置 profile，只不过大家的设置方式各不相同罢了。"
+
+**问题成立。** 今天 codeg-mcp 给 LLM 的建会话工具只能指定 agent 类型和目录，指定不了
+档、也指定不了模型（已核实 `acp/delegation/companion.rs`）：
+
+| 工具 | 现有参数 | 缺什么 |
+| --- | --- | --- |
+| `create_work_task`（`companion.rs:1461`） | `title` / `prompt` / `agent_type` / `folder_path` | `profile`、`model` |
+| `create_automation`（`companion.rs:1420`，`action=launch_session`） | `name` / `prompt` / `cron` / `timezone` / `action` / `agent_type` / `folder_path` | `profile`、`model` |
+
+后果：多 agent 协作里派出去的子会话**永远跑默认档**。用户手里能切订阅/API，agent 派活时
+不能——这套配置对协作层不可见，等于半个功能。
+
+**要做（O59-C，排在 O59-A 后端落地之后）**
+1. 新增只读工具 `list_profiles`（或并入现有 `codeg_help` 的能力清单）：返回
+   `id / label / kind / agentType`，**token 一律掩码**，让 LLM 知道有哪些档可选。
+2. 上面两个建会话工具加可选参数 `profile`（档 id）与 `model`；非法档 id 要返回可读错误
+   并列出合法值，不要静默回落默认档（静默回落 = 用户以为用了 API 其实烧了订阅）。
+3. 参数校验走后端同一个 `resolve_*_profile`，不要在 MCP 层复制一份解析逻辑。
+
+## 5.6 泛化：档不是 Claude 专属（同一追加要求）
+
+用户说"codex 啥的也能设置 profile，只不过大家的设置方式各不相同"——这点仓库里已经有
+现成的地基：`acp/file_system_runtime.rs:482` 的 `agent_root_slots` 已经把**每个 agent 的
+配置目录环境变量**列全了：
+
+| agent | 配置目录 env | 默认目录 |
+| --- | --- | --- |
+| ClaudeCode | `CLAUDE_CONFIG_DIR` | `~/.claude` |
+| Codex | `CODEX_HOME` | `~/.codex` |
+| Grok | `GROK_HOME` | `~/.grok` |
+| Gemini | `GEMINI_CLI_HOME`（+ `.gemini` 子路径） | `~/.gemini` |
+| Cursor | `CURSOR_CONFIG_DIR` → `XDG_CONFIG_HOME/cursor` | `~/.cursor` |
+| CodeBuddy / KimiCode / Hermes / Cline / Pi | `CODEBUDDY_CONFIG_DIR` / `KIMI_CODE_HOME` / `HERMES_HOME` / `CLINE_DIR` / `PI_CODING_AGENT_DIR` | 各自 |
+
+也就是说「档 = 这次 spawn 让 agent 看见哪个配置目录」这条抽象**对所有 harness 都成立**，
+差别只在环境变量名，而那张表已经存在且有测试钉住（`agent_data_roots_honor_runtime_env_relocation`）。
+
+**结论**：第一期仍只落 Claude（面小、验证快），但**数据结构从一开始就带 `agentType`**，
+档存储与解析函数按 agent 分组；第二期接 Codex 时只是查表换个 env 名 + 处理它自己的
+`config.toml` 语义，不需要重做上层（绑定、UI、MCP 参数全复用）。反过来，如果第一期把
+`ClaudeProfile` 写死不带 agent 维度，第二期就得推倒重来。
 
 ## 6. 未能确定（施工期要实测）
 
