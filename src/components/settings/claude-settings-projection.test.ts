@@ -46,6 +46,45 @@ describe("readClaudeConfig", () => {
     expect(value.effortLevel).toBe("")
   })
 
+  // The column carries the stored secret's mask, which is what the form shows.
+  // Reading the mode off it directly is what lets an emptied field mean
+  // "no credential" instead of "keep whatever you have".
+  it("treats a masked token column as a real credential", () => {
+    const value = readClaudeConfig("", {
+      baseUrl: "",
+      authToken: "sk-t••••••••7890",
+      model: "",
+    })
+    expect(value.authMode).toBe("custom")
+    expect(value.apiKey).toBe("sk-t••••••••7890")
+  })
+
+  it("reads back as a subscription once nothing is set", () => {
+    const value = readClaudeConfig("", {
+      baseUrl: "",
+      authToken: "",
+      model: "",
+    })
+    expect(value.authMode).toBe("official_subscription")
+  })
+
+  // A settings.json that authenticates with ANTHROPIC_API_KEY used to read
+  // back as a subscription profile: the form then hid the connection fields on
+  // a profile that was still sending a key.
+  it("counts ANTHROPIC_API_KEY as a credential too", () => {
+    const text = JSON.stringify({ env: { ANTHROPIC_API_KEY: "sk-ant-real" } })
+    const value = readClaudeConfig(text, NO_COLUMNS)
+    expect(value.authMode).toBe("custom")
+    expect(value.apiKey).toBe("sk-ant-real")
+  })
+
+  it("prefers ANTHROPIC_AUTH_TOKEN when a file carries both", () => {
+    const text = JSON.stringify({
+      env: { ANTHROPIC_AUTH_TOKEN: "tok", ANTHROPIC_API_KEY: "key" },
+    })
+    expect(readClaudeConfig(text, NO_COLUMNS).apiKey).toBe("tok")
+  })
+
   it("lets the dedicated columns win over the file, as the backend does", () => {
     const text = JSON.stringify({
       env: { ANTHROPIC_BASE_URL: "https://from-file.example" },

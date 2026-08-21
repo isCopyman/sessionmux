@@ -267,6 +267,43 @@ fn is_mask_api_key_shape(value: &str) -> bool {
     chars[4..chars.len() - 4].iter().all(|ch| *ch == '\u{2022}')
 }
 
+/// Resolve the `authToken` column the same way [`sanitized_settings_json`]
+/// resolves a secret `env` key, so the two editors of the same credential obey
+/// one rule instead of two.
+///
+/// | incoming | meaning |
+/// | --- | --- |
+/// | omitted | keep (a caller that does not manage the field at all) |
+/// | the stored value's mask | keep — the field was shown and left alone |
+/// | empty | clear |
+/// | some other mask shape | clear, never store it as a literal |
+/// | anything else | replace |
+///
+/// The mask case is what makes "the box is empty" trustworthy: the API only
+/// ever hands back a mask, so before this the UI had to spend a blank field on
+/// "keep", leaving no way at all to say "drop this token" — a profile switched
+/// to the official subscription went on billing the gateway it had been given.
+fn resolve_incoming_auth_token(incoming: Option<&str>, stored: Option<&str>) -> Option<String> {
+    let Some(raw) = incoming else {
+        return stored.map(str::to_string);
+    };
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Some(stored) = stored {
+        if trimmed == mask_api_key(stored) {
+            return Some(stored.to_string());
+        }
+    }
+    // A mask that matches nothing stored is a stale echo (a copied profile, a
+    // reordered save). Storing it would mint a credential made of bullets.
+    if is_mask_api_key_shape(trimmed) {
+        return None;
+    }
+    Some(trimmed.to_string())
+}
+
 fn sanitized_settings_json(
     incoming: &str,
     existing: Option<&ClaudeProfileRecord>,
@@ -1067,10 +1104,10 @@ pub fn claude_profile_upsert_core(
         .as_ref()
         .map(|r| r.created_at.clone())
         .unwrap_or_else(|| now.clone());
-    let auth_token = match input.auth_token.as_deref() {
-        None => existing.as_ref().and_then(|r| r.auth_token.clone()),
-        Some(raw) => trim_non_empty(Some(raw)),
-    };
+    let auth_token = resolve_incoming_auth_token(
+        input.auth_token.as_deref(),
+        existing.as_ref().and_then(|r| r.auth_token.as_deref()),
+    );
     let settings_json = match input.settings_json.as_deref() {
         None => existing
             .as_ref()
@@ -2174,6 +2211,52 @@ mod tests {
             .await
             .unwrap();
         assert!(!values.contains_key(PREFERRED_PROFILE_CONFIG_KEY));
+    }
+
+    // The column now obeys the rule `sanitized_settings_json` already applied
+    // to secret env keys. Before this there was no way to say "drop the
+    // token": blank meant keep, so a profile moved to the official
+    // subscription kept billing its gateway.
+    #[test]
+    fn auth_token_column_follows_the_settings_json_mask_rule() {
+        let stored = "sk-ant-abcdefghijklmnop";
+        let mask = mask_api_key(stored);
+
+        assert_eq!(
+            resolve_incoming_auth_token(None, Some(stored)).as_deref(),
+            Some(stored),
+            "omitted means the caller does not manage the field"
+        );
+        assert_eq!(
+            resolve_incoming_auth_token(Some(&mask), Some(stored)).as_deref(),
+            Some(stored),
+            "an untouched mask must round-trip to the secret it stands for"
+        );
+        assert_eq!(
+            resolve_incoming_auth_token(Some(""), Some(stored)),
+            None,
+            "an emptied field is the only way to drop a credential"
+        );
+        assert_eq!(
+            resolve_incoming_auth_token(Some("   "), Some(stored)),
+            None,
+            "whitespace is empty"
+        );
+        assert_eq!(
+            resolve_incoming_auth_token(Some("sk-ant-brandnewvalue"), Some(stored)).as_deref(),
+            Some("sk-ant-brandnewvalue")
+        );
+        // A mask belonging to some other profile (a copy, a stale form) must
+        // never be stored as if it were the secret.
+        assert_eq!(
+            resolve_incoming_auth_token(Some(&mask_api_key("sk-ant-somethingelse")), Some(stored)),
+            None
+        );
+        assert_eq!(
+            resolve_incoming_auth_token(Some(&mask), None),
+            None,
+            "a mask with nothing stored behind it resolves to nothing"
+        );
     }
 
     #[test]

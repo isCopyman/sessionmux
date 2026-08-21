@@ -126,6 +126,60 @@ describe("ClaudeProfileCatalog", () => {
     })
   })
 
+  // The whole point of showing the mask: an emptied box is an instruction the
+  // backend can act on. Before this, blank meant "keep", so a gateway profile
+  // switched to the official subscription kept its token and kept billing.
+  describe("the stored token", () => {
+    beforeEach(() => {
+      api.claudeProfileList.mockResolvedValue([FOLLOW, RELAY])
+    })
+
+    it("shows as its mask, so the field says what is stored", async () => {
+      const user = userEvent.setup()
+      renderCatalog()
+      await user.click(await screen.findByRole("tab", { name: "中转" }))
+
+      expect(await screen.findByLabelText("API Key")).toHaveValue(
+        RELAY.authTokenMasked
+      )
+    })
+
+    it("is cleared when the field is emptied", async () => {
+      const user = userEvent.setup()
+      renderCatalog()
+      await user.click(await screen.findByRole("tab", { name: "中转" }))
+
+      fireEvent.change(await screen.findByLabelText("API Key"), {
+        target: { value: "" },
+      })
+      await user.click(screen.getByRole("button", { name: "Save" }))
+
+      await waitFor(() => expect(api.claudeProfileUpsert).toHaveBeenCalled())
+      expect(api.claudeProfileUpsert.mock.calls[0][0]).toMatchObject({
+        id: "api",
+        authToken: "",
+      })
+    })
+
+    // The mask travels back untouched and the backend maps it to the secret,
+    // so an unrelated edit must not disturb the credential.
+    it("survives an edit that never touched it", async () => {
+      const user = userEvent.setup()
+      renderCatalog()
+      await user.click(await screen.findByRole("tab", { name: "中转" }))
+
+      fireEvent.change(await screen.findByLabelText("Name"), {
+        target: { value: "中转 2" },
+      })
+      await user.click(screen.getByRole("button", { name: "Save" }))
+
+      await waitFor(() => expect(api.claudeProfileUpsert).toHaveBeenCalled())
+      expect(api.claudeProfileUpsert.mock.calls[0][0]).toMatchObject({
+        authToken: RELAY.authTokenMasked,
+      })
+    })
+  })
+
   // Adding a profile must not stop to ask for a name or an id first — the
   // panel names it `Settings 2` and lets the user type over that.
   it("names a new profile for you and selects its tab", async () => {

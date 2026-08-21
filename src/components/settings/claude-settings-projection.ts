@@ -123,27 +123,27 @@ function normalizeEffort(value: unknown): ClaudeEffortLevel {
  */
 export function readClaudeConfig(
   settingsJson: string,
-  columns: ClaudeProfileColumns,
-  /**
-   * The profile has a token stored that the API only returns masked, so the
-   * edit buffer's `authToken` is blank meaning "keep". Without this a
-   * token-only profile would read back as a subscription profile and the form
-   * would offer to strip the very credential it cannot see.
-   */
-  hasStoredSecret = false
+  columns: ClaudeProfileColumns
 ): ClaudeConfigValue {
   const root = parseObject(settingsJson) ?? {}
   const env = envBlock(root)
   const baseUrl = columns.baseUrl || readString(env, "ANTHROPIC_BASE_URL")
-  const authToken = columns.authToken || readString(env, "ANTHROPIC_AUTH_TOKEN")
+  // Both spellings are credentials. Reading only AUTH_TOKEN made a file that
+  // authenticates with ANTHROPIC_API_KEY read back as a subscription profile —
+  // the form then hid the connection fields on a profile that was still
+  // sending a key. AUTH_TOKEN wins when a file carries both, matching the
+  // write path, which only ever emits that one.
+  const authToken =
+    columns.authToken ||
+    readString(env, "ANTHROPIC_AUTH_TOKEN") ||
+    readString(env, "ANTHROPIC_API_KEY")
   return {
     ...EMPTY_CLAUDE_CONFIG_VALUE,
     // A profile has no provider binding, so there are only two honest answers
-    // here: it points somewhere, or it rides the CLI's own login.
-    authMode:
-      baseUrl || authToken || hasStoredSecret
-        ? "custom"
-        : "official_subscription",
+    // here: it points somewhere, or it rides the CLI's own login. A stored
+    // token shows up as its mask in `columns.authToken`, so this reads the
+    // credential's presence directly rather than being told about it.
+    authMode: baseUrl || authToken ? "custom" : "official_subscription",
     apiBaseUrl: baseUrl,
     apiKey: authToken,
     mainModel: columns.model || readString(env, "ANTHROPIC_MODEL"),

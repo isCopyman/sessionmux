@@ -107,8 +107,13 @@ function isAbsolutePath(value: string): boolean {
   return /^[a-zA-Z]:[\\/]/.test(trimmed)
 }
 
-/** Edit buffer seeded from a saved profile. The token is never echoed back
- *  (the API only returns a mask), so blank means "keep what is stored". */
+/**
+ * Edit buffer seeded from a saved profile. The token seeds as its mask, the
+ * same way the settings.json editor below already shows it: the backend maps
+ * an unchanged mask back to the stored secret, so the field can mean exactly
+ * what it shows. Blank therefore means blank — clear the credential — instead
+ * of the old "keep", which left no way to drop a token at all.
+ */
 function draftFromProfile(profile: ClaudeProfileInfo): Draft {
   return {
     id: profile.id,
@@ -116,7 +121,7 @@ function draftFromProfile(profile: ClaudeProfileInfo): Draft {
     kind: profile.kind === "configDir" ? "configDir" : "managed",
     configDir: profile.configDir ?? "",
     baseUrl: profile.baseUrl ?? "",
-    authToken: "",
+    authToken: profile.authTokenMasked ?? "",
     model: profile.model ?? "",
     settingsJson: profile.settingsJson ?? "",
     isNew: false,
@@ -136,7 +141,7 @@ function isDirty(
     draft.baseUrl !== base.baseUrl ||
     draft.model !== base.model ||
     draft.settingsJson !== base.settingsJson ||
-    draft.authToken.trim() !== ""
+    draft.authToken !== base.authToken
   )
 }
 
@@ -279,16 +284,12 @@ export function ClaudeProfileCatalog({
    */
   const configValue = useMemo(
     () =>
-      readClaudeConfig(
-        selectedDraft?.settingsJson ?? "",
-        {
-          baseUrl: selectedDraft?.baseUrl ?? "",
-          authToken: selectedDraft?.authToken ?? "",
-          model: selectedDraft?.model ?? "",
-        },
-        Boolean(selectedProfile?.authTokenMasked?.trim())
-      ),
-    [selectedDraft, selectedProfile]
+      readClaudeConfig(selectedDraft?.settingsJson ?? "", {
+        baseUrl: selectedDraft?.baseUrl ?? "",
+        authToken: selectedDraft?.authToken ?? "",
+        model: selectedDraft?.model ?? "",
+      }),
+    [selectedDraft]
   )
 
   /**
@@ -343,6 +344,7 @@ export function ClaudeProfileCatalog({
           kind: source?.kind ?? "managed",
           configDir: source?.configDir ?? "",
           baseUrl: source?.baseUrl ?? "",
+          // A copy never carries the source's secret, so this really is blank.
           authToken: "",
           model: source?.model ?? "",
           settingsJson: seedSettingsJson ?? source?.settingsJson ?? "",
@@ -420,8 +422,10 @@ export function ClaudeProfileCatalog({
     } else {
       payload.baseUrl = draft.baseUrl.trim() || null
       payload.model = draft.model.trim() || null
-      const token = draft.authToken.trim()
-      if (token) payload.authToken = token
+      // Always sent, because blank is now a real instruction ("no
+      // credential"), not the absence of one. An untouched mask round-trips
+      // to the stored secret on the backend.
+      payload.authToken = draft.authToken.trim()
       // Parse before sending so a typo comes back as "line 7", not as an
       // opaque backend rejection. `""` is legal — it clears the base.
       const settings = draft.settingsJson.trim()
@@ -697,11 +701,6 @@ export function ClaudeProfileCatalog({
                       idPrefix="claude-profile"
                       value={configValue}
                       onChange={patchConfig}
-                      apiKeyPlaceholder={
-                        selectedProfile?.authTokenMasked?.trim()
-                          ? t("tokenKeepPlaceholder")
-                          : undefined
-                      }
                       apiKeyHint={
                         selectedDraft.isNew && copiedFrom ? (
                           <p className="text-[10px] text-muted-foreground">
