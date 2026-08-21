@@ -4739,6 +4739,7 @@
     "errorView": "表示",
     "notifyReview": "レビュー待ち: {title}",
     "notifyFailed": "タスクが失敗しました: {title}",
+    "notifyAwaitingInput": "入力待ち: {title}",
     "createFromMessage": "このメッセージからタスクを作成",
     "detailTokens": "合計トークン",
     "editorTitleNew": "新規タスク",

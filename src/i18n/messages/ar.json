@@ -4739,6 +4739,7 @@
     "errorView": "عرض",
     "notifyReview": "جاهزة للمراجعة: {title}",
     "notifyFailed": "فشلت المهمة: {title}",
+    "notifyAwaitingInput": "بانتظار إدخالك: {title}",
     "createFromMessage": "إنشاء مهمة من الرسالة",
     "detailTokens": "إجمالي الرموز",
     "editorTitleNew": "مهمة جديدة",

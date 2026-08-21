@@ -64,12 +64,17 @@ export function columnForStatus(status: WorkTaskStatus): BoardColumnId {
  * `showCanceled`, archived ones unless `showArchived` (archived is always
  * terminal).
  *
- * Every column reads freshest-first: `updated_at` descending, so whatever just
- * moved sits at the top of its column. The sort is stable and the backend hands
- * rows over in board order (sort_order, id), so equal timestamps keep that
- * order — which is exactly what preserves a pending-column drag: `reorder`
- * stamps the whole column with one `updated_at`, the rows tie, and the fallback
- * is their freshly written sort_order. sort_order still drives the launch queue
+ * Todo / in-progress / done read freshest-first: `updated_at` descending, so
+ * whatever just moved sits at the top of its column. Attention is the
+ * exception — it mixes four meanings, so it sorts by severity first
+ * (`failed` > `awaiting_input` > `review` > `merging`) and only then by
+ * freshest, so a dead card is never buried under a merge in progress.
+ *
+ * The sort is stable and the backend hands rows over in board order
+ * (sort_order, id), so equal timestamps keep that order — which is exactly
+ * what preserves a pending-column drag: `reorder` stamps the whole column
+ * with one `updated_at`, the rows tie, and the fallback is their freshly
+ * written sort_order. sort_order still drives the launch queue
  * (`next_queued` / "start all"); it just no longer drives the display.
  */
 export function groupTasksByColumn(
@@ -89,14 +94,39 @@ export function groupTasksByColumn(
     grouped[columnForStatus(task.status)].push(task)
   }
   for (const column of BOARD_COLUMN_IDS) {
-    grouped[column].sort(byFreshest)
+    grouped[column].sort(
+      column === "attention" ? byAttentionSeverityThenFreshest : byFreshest
+    )
   }
   return grouped
 }
 
-/** Freshest-first, the order every board column and the list view read in. */
+/** Freshest-first: the order todo / in-progress / done and the list view
+ *  read in. Attention uses `byAttentionSeverityThenFreshest` instead. */
 function byFreshest(a: WorkTask, b: WorkTask): number {
   return parseTimestamp(b.updated_at) - parseTimestamp(a.updated_at)
+}
+
+/** Lower is more urgent. Statuses that cannot land in attention are last. */
+function attentionSeverity(status: WorkTaskStatus): number {
+  switch (status) {
+    case "failed":
+      return 0
+    case "awaiting_input":
+      return 1
+    case "review":
+      return 2
+    case "merging":
+      return 3
+    default:
+      return 4
+  }
+}
+
+function byAttentionSeverityThenFreshest(a: WorkTask, b: WorkTask): number {
+  const bySeverity = attentionSeverity(a.status) - attentionSeverity(b.status)
+  if (bySeverity !== 0) return bySeverity
+  return byFreshest(a, b)
 }
 
 /**

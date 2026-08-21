@@ -193,8 +193,26 @@ describe("groupTasksByColumn", () => {
     const grouped = groupTasksByColumn(tasks, true)
     expect(grouped.todo.map((t) => t.id)).toEqual([2, 1])
     expect(grouped.inProgress.map((t) => t.id)).toEqual([4, 3])
+    // failed is both more severe and fresher than review, so this pair
+    // still matches freshest-first; the dedicated test below pins severity.
     expect(grouped.attention.map((t) => t.id)).toEqual([6, 5])
     expect(grouped.done.map((t) => t.id)).toEqual([8, 7])
+  })
+
+  it("orders the attention column by severity, then freshest within a tier", () => {
+    const tasks = [
+      task(1, "merging", { updated_at: "2026-08-01T08:00:00Z" }),
+      task(2, "review", { updated_at: "2026-08-01T07:00:00Z" }),
+      task(3, "awaiting_input", { updated_at: "2026-08-01T06:00:00Z" }),
+      task(4, "failed", { updated_at: "2026-08-01T01:00:00Z" }),
+      task(5, "failed", { updated_at: "2026-08-01T02:00:00Z" }),
+      task(6, "awaiting_input", { updated_at: "2026-08-01T03:00:00Z" }),
+      task(7, "review", { updated_at: "2026-08-01T04:00:00Z" }),
+      task(8, "merging", { updated_at: "2026-08-01T05:00:00Z" }),
+    ]
+    const grouped = groupTasksByColumn(tasks, true)
+    // failed > awaiting_input > review > merging; within a tier, freshest.
+    expect(grouped.attention.map((t) => t.id)).toEqual([5, 4, 3, 6, 2, 7, 1, 8])
   })
 
   it("keeps board order on equal timestamps, so a drag survives the sort", () => {

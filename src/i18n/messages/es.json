@@ -4739,6 +4739,7 @@
     "errorView": "Ver",
     "notifyReview": "Listo para revisar: {title}",
     "notifyFailed": "La tarea falló: {title}",
+    "notifyAwaitingInput": "Esperando tu respuesta: {title}",
     "createFromMessage": "Crear tarea desde el mensaje",
     "detailTokens": "Tokens totales",
     "editorTitleNew": "Nueva tarea",
