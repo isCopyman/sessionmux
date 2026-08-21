@@ -1,4 +1,5 @@
 import {
+  act,
   render,
   screen,
   waitFor,
@@ -206,5 +207,48 @@ describe("InlineClaudeProfileSelector", () => {
       within(dialog).getByRole("button", { name: "Restart and apply" })
     )
     await waitFor(() => expect(conn.reapplyConfig).toHaveBeenCalledTimes(1))
+  })
+
+  it("rechecks live status after saving before restarting", async () => {
+    let finishSave: (value: {
+      conversationId: number
+      profileId: string
+      affectedRunningSessions: number
+    }) => void = () => {}
+    api.conversationSetClaudeProfile.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finishSave = resolve
+        })
+    )
+    const user = userEvent.setup()
+    const view = renderSelector({ tabId: "tab-1" })
+
+    await user.click(
+      await screen.findByRole("button", {
+        name: "Launch profile: Follow default",
+      })
+    )
+    await user.click(await screen.findByRole("menuitemradio", { name: /中转/ }))
+    await waitFor(() =>
+      expect(api.conversationSetClaudeProfile).toHaveBeenCalledTimes(1)
+    )
+
+    conn.status = "prompting"
+    view.rerender(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <InlineClaudeProfileSelector conversationId={12} tabId="tab-1" />
+      </NextIntlClientProvider>
+    )
+    await act(async () => {
+      finishSave({
+        conversationId: 12,
+        profileId: "api",
+        affectedRunningSessions: 1,
+      })
+    })
+
+    expect(await screen.findByRole("alertdialog")).toBeInTheDocument()
+    expect(conn.reapplyConfig).not.toHaveBeenCalled()
   })
 })

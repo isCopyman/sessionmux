@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
@@ -41,7 +42,7 @@ use crate::acp::session_state::SessionState;
 use crate::acp::spawn_budget::{
     session_new_budget, session_new_timeout_message, spawn_handshake_timeout_from_env,
 };
-use crate::acp::stderr_tail::{summarize_parser_error, StderrTail, TailScope};
+use crate::acp::stderr_tail::{sanitize_diagnostic, summarize_parser_error, StderrTail, TailScope};
 use crate::acp::terminal_runtime::{
     TerminalRuntime, TerminalRuntimeError, TerminalShellRuntimeConfig,
 };
@@ -881,17 +882,24 @@ fn agent_debug_callback(
     stdio_debug_enabled: bool,
 ) -> impl Fn(&str, sacp_tokio::LineDirection) + Send + Sync + 'static {
     move |line, dir| {
-        let (tag, enabled) = match dir {
+        let (tag, line): (&str, Cow<'_, str>) = match dir {
             sacp_tokio::LineDirection::Stderr => {
                 stderr_tail.push(line);
-                ("stderr", true)
+                ("stderr", Cow::Owned(sanitize_diagnostic(line)))
             }
-            sacp_tokio::LineDirection::Stdout => ("stdout", stdio_debug_enabled),
-            sacp_tokio::LineDirection::Stdin => ("stdin", stdio_debug_enabled),
+            sacp_tokio::LineDirection::Stdout => {
+                if !stdio_debug_enabled {
+                    return;
+                }
+                ("stdout", Cow::Borrowed(line))
+            }
+            sacp_tokio::LineDirection::Stdin => {
+                if !stdio_debug_enabled {
+                    return;
+                }
+                ("stdin", Cow::Borrowed(line))
+            }
         };
-        if !enabled {
-            return;
-        }
         const MAX: usize = 256;
         if line.len() > MAX {
             let head = line
@@ -11433,6 +11441,61 @@ async fn emit_conversation_update(
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+    use std::io::Write;
+
+    #[derive(Clone)]
+    struct CapturedWriter(Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl Write for CapturedWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn agent_stderr_debug_log_is_sanitized() {
+        use tracing_subscriber::prelude::*;
+
+        let output = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let writer_output = Arc::clone(&output);
+        let subscriber = tracing_subscriber::registry().with(
+            tracing_subscriber::fmt::layer()
+                .without_time()
+                .with_ansi(false)
+                .with_writer(move || CapturedWriter(Arc::clone(&writer_output))),
+        );
+        let secret = "sk-ant-this-is-a-fake-token";
+        let callback =
+            agent_debug_callback("test-agent".to_string(), Arc::new(StderrTail::new()), false);
+
+        tracing::subscriber::with_default(subscriber, || {
+            callback(
+                &format!("adapter rejected api key {secret}"),
+                sacp_tokio::LineDirection::Stderr,
+            );
+        });
+
+        let logged = String::from_utf8(
+            output
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .clone(),
+        )
+        .expect("debug log is UTF-8");
+        assert!(
+            logged.contains("sk-***"),
+            "sanitized marker missing: {logged}"
+        );
+        assert!(!logged.contains(secret), "raw token leaked: {logged}");
+    }
 
     #[test]
     fn codeg_internal_pins_are_skipped_and_host_pins_are_not() {

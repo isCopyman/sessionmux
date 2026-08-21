@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { ChevronDown } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
@@ -74,6 +74,11 @@ export function InlineClaudeProfileSelector({
   const [confirmRestart, setConfirmRestart] = useState(false)
   const [restarting, setRestarting] = useState(false)
   const { status, reapplyConfig } = useConnection(tabId ?? "")
+  const statusRef = useRef(status)
+
+  useEffect(() => {
+    statusRef.current = status
+  }, [status])
 
   useEffect(() => {
     let cancelled = false
@@ -166,7 +171,7 @@ export function InlineClaudeProfileSelector({
           toast.success(t("switchSuccess"))
           return
         }
-        if (status === "prompting") {
+        if (statusRef.current === "prompting") {
           setConfirmRestart(true)
           return
         }
@@ -178,7 +183,7 @@ export function InlineClaudeProfileSelector({
         })
       }
     },
-    [applyNow, conversationId, disabled, selectedId, status, t]
+    [applyNow, conversationId, disabled, selectedId, t]
   )
 
   const handleManage = useCallback(() => {

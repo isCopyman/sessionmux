@@ -11330,11 +11330,6 @@ supports_websockets = true`}
                             </label>
                             <Input
                               value={selectedDraft.apiBaseUrl}
-                              readOnly={
-                                selectedAgent.agent_type === "claude_code" &&
-                                selectedDraft.claudeAuthMode ===
-                                  "model_provider"
-                              }
                               onChange={(event) => {
                                 handleImportantConfigChange(
                                   "apiBaseUrl",
@@ -11357,11 +11352,6 @@ supports_websockets = true`}
                                     : "password"
                                 }
                                 value={selectedDraft.apiKey}
-                                readOnly={
-                                  selectedAgent.agent_type === "claude_code" &&
-                                  selectedDraft.claudeAuthMode ===
-                                    "model_provider"
-                                }
                                 onChange={(event) => {
                                   handleImportantConfigChange(
                                     "apiKey",
