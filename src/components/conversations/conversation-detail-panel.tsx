@@ -2088,7 +2088,11 @@ const ConversationTabView = memo(function ConversationTabView({
               conversationId={effectiveConversationId}
             />
           ) : null}
-          <SessionConfigStaleBanner contextKey={tabId} />
+          <SessionConfigStaleBanner
+            contextKey={tabId}
+            queueDepth={msgQueue.length}
+            queueHydrated={mqHydrated}
+          />
           <PiProjectTrustBanner
             contextKey={tabId}
             agentType={selectedAgent}

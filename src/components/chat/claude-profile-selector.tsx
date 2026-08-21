@@ -1,20 +1,10 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import { ChevronDown } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
@@ -33,7 +23,6 @@ import {
   conversationSetClaudeProfile,
   openSettingsWindow,
 } from "@/lib/api"
-import { useConnection } from "@/hooks/use-connection"
 import { toErrorMessage } from "@/lib/app-error"
 import {
   FOLLOW_DEFAULT_CLAUDE_PROFILE_ID,
@@ -42,12 +31,6 @@ import {
 
 interface InlineClaudeProfileSelectorProps {
   conversationId: number | null
-  /**
-   * Connection key for this composer, so switching can restart the session it
-   * belongs to. Omitted (tests, surfaces with no live connection) means the
-   * switch is stored and applies on the next launch, same as before.
-   */
-  tabId?: string | null
   disabled?: boolean
 }
 
@@ -63,23 +46,11 @@ function profileDescription(profile: ClaudeProfileInfo): string | null {
 
 export function InlineClaudeProfileSelector({
   conversationId,
-  tabId = null,
   disabled = false,
 }: InlineClaudeProfileSelectorProps) {
   const t = useTranslations("AcpAgentSettings.claudeProfile")
   const [profiles, setProfiles] = useState<ClaudeProfileInfo[]>([])
   const [selectedId, setSelectedId] = useState(FOLLOW_DEFAULT_CLAUDE_PROFILE_ID)
-  // A switch only reaches the agent at spawn, so applying one means restarting
-  // the session. Held until the user answers when a turn is in flight.
-  const [confirmRestart, setConfirmRestart] = useState(false)
-  const [restarting, setRestarting] = useState(false)
-  const { status, reapplyConfig } = useConnection(tabId ?? "")
-  const statusRef = useRef(status)
-
-  useEffect(() => {
-    statusRef.current = status
-  }, [status])
-
   useEffect(() => {
     let cancelled = false
     void claudeProfileList()
@@ -132,28 +103,6 @@ export function InlineClaudeProfileSelector({
       : (selected?.label ?? selectedId)
   const controlName = t("controlName")
 
-  /**
-   * Restart so the running process picks the profile up. `reapplyConfig`
-   * disconnects and resumes the same session, so the transcript survives and
-   * the persisted prompt queue is untouched — the only casualty is a turn that
-   * is mid-flight, which is why that is the one case we ask about.
-   */
-  const applyNow = useCallback(async () => {
-    setRestarting(true)
-    try {
-      const restarted = await reapplyConfig()
-      toast.success(restarted ? t("switchApplied") : t("switchSuccess"))
-    } catch (error: unknown) {
-      // The binding is already stored; only the restart failed. Say so, and
-      // leave the stale-config banner to offer the retry.
-      toast.error(t("switchRestartFailed"), {
-        description: toErrorMessage(error),
-      })
-    } finally {
-      setRestarting(false)
-    }
-  }, [reapplyConfig, t])
-
   const handleSelect = useCallback(
     async (profileId: string) => {
       if (disabled || conversationId == null || profileId === selectedId) {
@@ -171,11 +120,8 @@ export function InlineClaudeProfileSelector({
           toast.success(t("switchSuccess"))
           return
         }
-        if (statusRef.current === "prompting") {
-          setConfirmRestart(true)
-          return
-        }
-        await applyNow()
+        // A live session is restarted by SessionConfigStaleBanner, which owns
+        // the turn/queue decision and reports success once the new process is up.
       } catch (error: unknown) {
         setSelectedId(previous)
         toast.error(t("switchFailed"), {
@@ -183,7 +129,7 @@ export function InlineClaudeProfileSelector({
         })
       }
     },
-    [applyNow, conversationId, disabled, selectedId, t]
+    [conversationId, disabled, selectedId, t]
   )
 
   const handleManage = useCallback(() => {
@@ -262,33 +208,6 @@ export function InlineClaudeProfileSelector({
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
-      {/* Asked only while a turn is in flight — that turn is the one thing a
-        restart destroys. An idle session restarts without a prompt, because a
-        dialog guarding nothing is the kind of click this panel had too many
-        of. */}
-      <AlertDialog open={confirmRestart} onOpenChange={setConfirmRestart}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>{t("switchRestartTitle")}</AlertDialogTitle>
-            <AlertDialogDescription>
-              {t("switchRestartBody")}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={restarting}>
-              {t("switchRestartLater")}
-            </AlertDialogCancel>
-            <AlertDialogAction
-              disabled={restarting}
-              onClick={() => {
-                void applyNow()
-              }}
-            >
-              {t("switchRestartConfirm")}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
     </>
   )
 }

@@ -1185,13 +1185,7 @@
       "importSuccess": "已从 {path} 导入",
       "importMissing": "{path} 没有 settings.json",
       "importFailed": "读不了那份 settings.json",
-      "importDroppedSecrets": "这几个键回传时是掩码，没有带过来，请重新填写：{keys}",
-      "switchApplied": "已切换配置，并重启会话以生效。",
-      "switchRestartTitle": "重启会话以应用这个配置？",
-      "switchRestartBody": "配置只在智能体启动时生效，所以正在跑的进程用的还是旧配置。重启会中断当前这一轮；对话记录和队列里的消息都会保留。",
-      "switchRestartConfirm": "重启并应用",
-      "switchRestartLater": "先不重启，稍后应用",
-      "switchRestartFailed": "配置已保存，但会话重启失败"
+      "importDroppedSecrets": "这几个键回传时是掩码，没有带过来，请重新填写：{keys}"
     },
     "dialogs": {
       "confirmDeleteProvider": "确认删除 Provider {providerId}？",
@@ -3495,8 +3489,10 @@
         "description": "当前会话仍在使用旧配置，重连后生效（对话历史不会丢失）。",
         "reconnect": "重连以应用",
         "reconnecting": "正在重连…",
-        "reconnectDisabledDuringTurn": "当前回合结束后可重连",
-        "dismiss": "忽略",
+        "reconnectDisabledDuringTurn": "当前回合结束且队列清空后可重连",
+        "restartDescription": "立即重启会中断任何正在进行的回合。对话历史会保留。队列消息：{queueDepth} 条；这些消息会继续留在队列中。",
+        "restartNow": "立即重启",
+        "restartAfterTurn": "当前回合结束后重启",
         "reconnectFailed": "重连会话失败",
         "applied": "新配置已应用"
       },

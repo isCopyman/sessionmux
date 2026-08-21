@@ -1,9 +1,19 @@
 "use client"
 
-import { useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { useTranslations } from "next-intl"
-import { AlertTriangle, RefreshCw, X } from "lucide-react"
+import { AlertTriangle, RefreshCw } from "lucide-react"
 import { toast } from "sonner"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
 import {
   Tooltip,
@@ -23,12 +33,9 @@ import { cn } from "@/lib/utils"
  * Behaviour:
  * - Owners only — viewers and delegation children don't own the backend
  *   process, so reconnecting isn't theirs to do.
- * - "Reconnect to apply" disconnects + resumes the same session (history kept),
- *   so the new process reads current config and the banner clears.
- * - Disabled while a turn is in flight (`prompting`) — reconnecting would
- *   interrupt it — with a tooltip explaining why.
- * - The X dismisses the banner for the CURRENT drift only; a later settings
- *   change re-shows it.
+ * - Restarts immediately when no turn or queued prompt can be disrupted.
+ * - Otherwise forces a choice between restarting now and restarting at the
+ *   next idle moment. The stale state cannot be dismissed without applying it.
  * - Responsive via container queries: in a narrow panel (small screen or a
  *   thin tiled column) the text and the actions stack; they sit on one row
  *   once the panel is wide enough.
@@ -37,58 +44,107 @@ import { cn } from "@/lib/utils"
  */
 export function SessionConfigStaleBanner({
   contextKey,
+  queueDepth,
+  queueHydrated,
 }: {
   contextKey: string
+  queueDepth: number
+  queueHydrated: boolean
 }) {
   const t = useTranslations("Folder.chat.configStale")
   const {
     configStale,
     configStaleKind,
-    configStaleDismissed,
     isViewer,
     isDelegationChild,
     status,
     reapplyConfig,
-    dismissConfigStale,
   } = useConnection(contextKey)
   // Our own "reconnect in flight" flag. Kept distinct from the connection's
   // `connecting` status because `reapplyConfig` briefly disconnects first.
   const [reconnecting, setReconnecting] = useState(false)
+  const [dialogOpen, setDialogOpen] = useState(false)
+  const restartDeferredRef = useRef(false)
+  const handledStaleRef = useRef(false)
 
-  // Owners only: viewers and delegation children don't own the backend process,
-  // so "reconnect to apply" isn't theirs to do.
-  if (!configStale || configStaleDismissed || isViewer || isDelegationChild)
-    return null
-
-  const turnInFlight = status === "prompting"
-  // Spinner while our reconnect is in flight OR the connection is
-  // (re)establishing — `connecting` covers the reconnect `reapplyConfig` fires.
-  const busy = reconnecting || status === "connecting"
-  const actionDisabled = turnInFlight || busy
-
-  const title =
-    configStaleKind === "model_provider"
-      ? t("modelProviderTitle")
-      : t("agentConfigTitle")
-
-  const handleReconnect = async () => {
-    if (actionDisabled) return
+  const handleRestart = useCallback(async () => {
     setReconnecting(true)
     try {
       const reconnected = await reapplyConfig()
-      if (reconnected) toast.success(t("applied"))
-      // else: no-op (connection vanished mid-click, viewer/child) — say nothing.
+      if (reconnected) {
+        setDialogOpen(false)
+        restartDeferredRef.current = false
+        toast.success(t("applied"))
+      }
     } catch (error) {
       toast.error(t("reconnectFailed"), {
         description: error instanceof Error ? error.message : String(error),
       })
     } finally {
-      // Always clear our flag. Returning null above does NOT unmount this
-      // component, so a leaked `true` would later show a phantom "reconnecting…"
-      // spinner on the NEXT drift without the user clicking anything.
       setReconnecting(false)
     }
-  }
+  }, [reapplyConfig, t])
+
+  useEffect(() => {
+    if (!configStale) {
+      handledStaleRef.current = false
+      restartDeferredRef.current = false
+      setDialogOpen(false)
+      return
+    }
+    if (
+      isViewer ||
+      isDelegationChild ||
+      !queueHydrated ||
+      (status !== "connected" && status !== "prompting")
+    ) {
+      return
+    }
+
+    if (restartDeferredRef.current) {
+      if (status === "connected" && queueDepth === 0) {
+        restartDeferredRef.current = false
+        void handleRestart()
+      }
+      return
+    }
+
+    if (handledStaleRef.current) return
+
+    // Claim only the false -> true stale transition. reapplyConfig re-emits
+    // connection states while stale is still true; those states must not start
+    // another restart. The claim resets only after stale becomes false.
+    handledStaleRef.current = true
+    if (status === "prompting" || queueDepth > 0) {
+      setDialogOpen(true)
+    } else {
+      void handleRestart()
+    }
+  }, [
+    configStale,
+    handleRestart,
+    isDelegationChild,
+    isViewer,
+    queueDepth,
+    queueHydrated,
+    status,
+  ])
+
+  // Owners only: viewers and delegation children don't own the backend process,
+  // so restarting isn't theirs to do.
+  if (!configStale || isViewer || isDelegationChild) return null
+
+  const turnInFlight = status === "prompting"
+  // Spinner while our reconnect is in flight OR the connection is
+  // (re)establishing — `connecting` covers the reconnect `reapplyConfig` fires.
+  const busy = reconnecting || status === "connecting"
+  const actionDisabled =
+    !queueHydrated || turnInFlight || queueDepth > 0 || busy
+
+  const title =
+    configStaleKind === "model_provider"
+      ? t("modelProviderTitle")
+      : t("agentConfigTitle")
 
   return (
     <div className="@container border-b border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
@@ -114,7 +170,7 @@ export function SessionConfigStaleBanner({
                     variant="outline"
                     className="h-7 gap-1.5 border-amber-500/40 bg-transparent text-amber-700 hover:bg-amber-500/20 hover:text-amber-800 dark:text-amber-300 dark:hover:text-amber-200"
                     disabled={actionDisabled}
-                    onClick={handleReconnect}
+                    onClick={() => void handleRestart()}
                   >
                     <RefreshCw
                       className={cn("h-3.5 w-3.5", busy && "animate-spin")}
@@ -123,24 +179,42 @@ export function SessionConfigStaleBanner({
                   </Button>
                 </span>
               </TooltipTrigger>
-              {turnInFlight && (
+              {actionDisabled && !busy ? (
                 <TooltipContent>
                   {t("reconnectDisabledDuringTurn")}
                 </TooltipContent>
-              )}
+              ) : null}
             </Tooltip>
           </TooltipProvider>
-          <Button
-            size="icon"
-            variant="ghost"
-            className="h-6 w-6 shrink-0 text-amber-700/70 hover:bg-amber-500/20 hover:text-amber-800 dark:text-amber-300/70 dark:hover:text-amber-200"
-            onClick={dismissConfigStale}
-            aria-label={t("dismiss")}
-          >
-            <X className="h-3.5 w-3.5" />
-          </Button>
         </div>
       </div>
+      <AlertDialog open={dialogOpen} onOpenChange={() => {}}>
+        <AlertDialogContent onEscapeKeyDown={(event) => event.preventDefault()}>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{title}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {t("restartDescription", { queueDepth })}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel
+              disabled={reconnecting}
+              onClick={() => {
+                restartDeferredRef.current = true
+                setDialogOpen(false)
+              }}
+            >
+              {t("restartAfterTurn")}
+            </AlertDialogCancel>
+            <AlertDialogAction
+              disabled={reconnecting}
+              onClick={() => void handleRestart()}
+            >
+              {t("restartNow")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }
