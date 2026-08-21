@@ -999,3 +999,52 @@ session的pane触发，把这个session加入到某个群聊里？"
 去重后仅当只有一个才带上，:454-458）。
 裁决：**不新建功能**，真缺口是**可发现性**（用户用了这么久都不知道有）。排队项：
 多选入口的自明性（如何进入多选态需要提示）。状态：已查证·可发现性排队。
+
+---
+
+## 2026-08-21 下午：配置面板看不懂（O66 / O68 / O69）
+
+用户连问五轮，全部围绕同一件事：**「到底哪些属于配置，哪些是全局的」**。
+原话依次是「整个布局完全不清晰、、、看不懂，不自明」→「模型供应商不就是 settings 里的？」
+→「所谓官方直连不就是删除 settings.json 里的部分配置而已」→「不就是切换配置吗，怎么这么复杂」
+→「如果 env 都在 settings 里那 codeg 为啥还要设置这个 env 字段呢」。
+
+### 查证到的事实（都进了 CONFIG-MODEL-2026-08-21）
+
+1. 用户以为那堆 `ANTHROPIC_*` 在 `settings.json` 里。**不在。** 它们在 codeg 自己的库
+   （`agent_setting.env_json`），启动时当进程环境变量注入。用户截图里那份 settings.json
+   的一大堆 hooks / statusline / `CLAUDE_CODE_*` 是**他自己的**配置，codeg 没写过。
+2. 覆盖顺序是 `env_json` → 配置文件的 `env` 覆盖上去 → 文件的 apiBaseUrl/apiKey 再覆盖
+   （`acp.rs:8817`）。也就是**文件赢**。而面板文案 `envVarsScope` 写的是
+   "they win over the config file"——**说反了**，这条错误文案本身就是困惑来源之一。
+3. 「官方直连」之所以需要，纯粹是为了绕开第 1 条那层全局注入。搬走它就冗余了。
+4. Claude 的 env 覆盖层和它自己 settings.json 的 `env` 块是**同一批键**
+   （用户机器上 10 个非连接类键两处都有）——两个入口，一个赢。
+
+### 裁决
+
+只保留两种概念：**跟随 CLI** 和 **codeg 档（＝一份 codeg 拥有的 settings.json）**。
+删掉的层与理由逐条记在 `CONFIG-MODEL-2026-08-21.zh-CN.md`。
+
+用户在「链接配置文件（双向同步）」和「导入 codeg（单向）」之间选了**单向导入**：
+「导入 codeg 就是单向的，没必要双向同步」。
+
+### 本批落地
+
+- **O66-A**（codex 前的 grok 批）：档拥有连接 env + `PROFILE_OWNED_ENV_KEYS` 防御清扫。
+  修的是最坏的失败模式：全局 `ANTHROPIC_AUTH_TOKEN` 优先级高于配置目录 OAuth，
+  「订阅档」实际在烧 API 钱。
+- **O68**：CLI 全局设置块改成「跟随默认」页签的**正文**（VS Code 的 User/Workspace 隐喻），
+  选别的档就只看到那个档自己的字段。
+- **O66-C**：虚拟档判定走后端 `isVirtual`，不再硬编码 id。
+- 档的 **kind 选择器删掉**（`configDir` 是"链接"语义，与单向导入的裁决冲突）。
+- Claude 的 **env 覆盖层折叠**，`envVarsScope` 文案十语改正。
+- **O69-A**（进行中，codex `gpt-5.6-sol` `xhigh`）：档吃下整份 settings.json、
+  `claude_settings_read` 单向导入、把全局连接配置迁进 `imported` 档、退休 `official-direct`。
+
+### 顺带
+
+- **O67** 看板三件（分组 / attention 分层 / 活动点）合并，主仓独立复跑 138 tests 全绿。
+- 主仓 Rust 门禁 FMT/CLIPPY/TEST/SERVER/MCP 全 `EXIT:0`。
+- 磁盘卫生：8 棵合并完的 worktree 全删（含 11G 的 claude-profile），23 个 `wt/*` 分支清掉。
+- 新教训 **L11**：不要用 CDP 给 Tauri 主窗口赋 `location.href`——当场把用户正在用的应用弄退出了。
