@@ -9004,26 +9004,6 @@ pub(crate) fn provider_codex_model_action(
 /// For `model_env`: entries with `Some(value)` are written; entries with `None`
 /// are explicitly cleared (overwritten with empty string in the env-patch, so
 /// `persist_agent_local_config_json` removes them).
-/// Agent `env_json` opt-in to restore the pre-O59 write of
-/// `ANTHROPIC_*` into the user's `~/.claude/settings.json`. Default off.
-pub(crate) const CODEG_CASCADE_CLAUDE_SETTINGS_KEY: &str = "CODEG_CASCADE_CLAUDE_SETTINGS";
-
-pub(crate) fn claude_native_cascade_enabled(env_json: Option<&str>) -> bool {
-    let Some(raw) = env_json.map(str::trim).filter(|s| !s.is_empty()) else {
-        return false;
-    };
-    let Ok(map) = serde_json::from_str::<BTreeMap<String, String>>(raw) else {
-        return false;
-    };
-    matches!(
-        map.get(CODEG_CASCADE_CLAUDE_SETTINGS_KEY)
-            .map(|s| s.trim().to_ascii_lowercase())
-            .as_deref(),
-        Some("1") | Some("true") | Some("yes") | Some("on")
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
 fn cascade_update_agent_config(
     agent_type: AgentType,
     api_url: &str,
@@ -9031,19 +9011,14 @@ fn cascade_update_agent_config(
     model_env: &BTreeMap<String, Option<String>>,
     codex_model: &CodexModelAction,
     codex_model_raw: Option<&str>,
-    agent_env_json: Option<&str>,
 ) -> Result<(), AcpError> {
     let (url_key, key_key, _) = agent_env_keys(agent_type);
     match agent_type {
-        AgentType::ClaudeCode | AgentType::Gemini => {
-            if agent_type == AgentType::ClaudeCode && !claude_native_cascade_enabled(agent_env_json)
-            {
-                tracing::debug!(
-                    "[claude-profile] skip native ~/.claude/settings.json cascade \
-                     (set {CODEG_CASCADE_CLAUDE_SETTINGS_KEY}=1 in Claude env_json to restore)"
-                );
-                return Ok(());
-            }
+        AgentType::ClaudeCode => {
+            // Native ~/.claude/settings.json belongs to the CLI. Follow-CLI
+            // writes nothing; a managed profile imposes via --settings.
+        }
+        AgentType::Gemini => {
             // Write into config.env (not root-level). For model entries, use
             // JSON-null for "clear" — `merge_json_values` interprets null as
             // "remove this key".
@@ -9332,7 +9307,6 @@ pub(crate) async fn cascade_update_model_provider(
             &model_env,
             &codex_action,
             new_model,
-            setting.env_json.as_deref(),
         ) {
             tracing::warn!(
                 "[ModelProvider] cascade_update_agent_config({agent_type}) failed: {e}, skipping config update"
@@ -10645,14 +10619,6 @@ pub(crate) async fn acp_update_agent_env_core(
     // write. `Some(_)` means "codex provider bound"; the inner option is the
     // provider's stored model value.
     let mut codex_bound_model: Option<Option<String>> = None;
-    // When a Claude provider is bound, capture the inputs to also rewrite the
-    // on-disk config.env below. Claude's model fields live in config.env, which
-    // the runtime overlays OVER db env_json (see `build_runtime_env_from_setting`),
-    // so clearing a key from db env alone is not enough — a stale value left in
-    // `~/.claude/settings.json` (e.g. ANTHROPIC_CUSTOM_MODEL_OPTION) would win at
-    // launch. Binding must therefore be authoritative on disk too, matching the
-    // provider-edit cascade.
-    let mut claude_local_cascade: Option<(String, String, BTreeMap<String, Option<String>>)> = None;
     if let Some(pid) = model_provider_id {
         let provider = crate::db::service::model_provider_service::get_by_id(&db.conn, pid)
             .await
@@ -10692,47 +10658,21 @@ pub(crate) async fn acp_update_agent_env_core(
         // Codex's on-disk config (catalog + root model) is regenerated from the
         // provider's structured model list by `apply_codex_catalog_and_model`
         // below; Gemini's analogous config.env gap is pre-existing and out of
-        // scope here. Only Claude needs the local-config cascade on bind.
+        // scope here.
         if agent_type == AgentType::Codex {
             codex_bound_model = Some(provider.model.clone());
-        }
-        if agent_type == AgentType::ClaudeCode {
-            claude_local_cascade = Some((
-                provider.api_url.clone(),
-                provider.api_key.clone(),
-                model_env,
-            ));
         }
     }
 
     let env_json = serialize_env_map(&merged_env)?;
     let patch = agent_setting_service::AgentSettingsUpdate {
         enabled,
-        env_json: env_json.clone(),
+        env_json,
         model_provider_id,
     };
     agent_setting_service::update(&db.conn, agent_type, patch)
         .await
         .map_err(|e| AcpError::protocol(e.to_string()))?;
-
-    // Authoritatively rewrite the local config.env so a stale model key (e.g. the
-    // custom model option) cannot survive a bind/rebind via any save path. `None`
-    // entries become JSON-null and are removed by `merge_json_values`.
-    if let Some((api_url, api_key, model_env)) = claude_local_cascade {
-        if let Err(e) = cascade_update_agent_config(
-            agent_type,
-            &api_url,
-            &api_key,
-            &model_env,
-            &CodexModelAction::NoOp,
-            None,
-            env_json.as_deref(),
-        ) {
-            eprintln!(
-                "[acp_update_agent_env] cascade_update_agent_config({agent_type}) failed: {e}"
-            );
-        }
-    }
 
     if let Some(model_raw) = codex_bound_model {
         // Codex provider bound: regenerate the catalog + config.toml keys from
@@ -15199,7 +15139,6 @@ wire_api = "chat"
                 &BTreeMap::new(),
                 &CodexModelAction::Set("gpt-5-codex".to_string()),
                 None,
-                None,
             )
             .expect("cascade must succeed");
 
@@ -15232,7 +15171,6 @@ wire_api = "chat"
                 "sk-test",
                 &BTreeMap::new(),
                 &CodexModelAction::NoOp,
-                None,
                 None,
             )
             .expect("cascade must succeed");
@@ -15267,7 +15205,6 @@ wire_api = "chat"
                 &BTreeMap::new(),
                 &CodexModelAction::NoOp,
                 None,
-                None,
             )
             .expect("cascade must succeed");
 
@@ -15286,46 +15223,9 @@ wire_api = "chat"
         });
     }
 
-    #[test]
-    fn claude_native_cascade_is_off_by_default() {
-        assert!(!claude_native_cascade_enabled(None));
-        assert!(!claude_native_cascade_enabled(Some("")));
-        assert!(!claude_native_cascade_enabled(Some("{}")));
-        assert!(!claude_native_cascade_enabled(Some(
-            r#"{"ANTHROPIC_AUTH_TOKEN":"sk"}"#
-        )));
-        assert!(claude_native_cascade_enabled(Some(
-            r#"{"CODEG_CASCADE_CLAUDE_SETTINGS":"1"}"#
-        )));
-        assert!(claude_native_cascade_enabled(Some(
-            r#"{"CODEG_CASCADE_CLAUDE_SETTINGS":"true"}"#
-        )));
-        assert!(!claude_native_cascade_enabled(Some(
-            r#"{"CODEG_CASCADE_CLAUDE_SETTINGS":"0"}"#
-        )));
-    }
-
-    #[test]
-    fn claude_cascade_default_does_not_call_native_write() {
-        // Gate test: with default env_json the Claude branch returns before
-        // persist_agent_local_config_json. We do not point HOME at a temp dir
-        // here because dirs::home_dir() on Windows ignores HOME/USERPROFILE.
-        assert!(!claude_native_cascade_enabled(None));
-        cascade_update_agent_config(
-            AgentType::ClaudeCode,
-            "https://example.test",
-            "sk-test",
-            &BTreeMap::new(),
-            &CodexModelAction::NoOp,
-            None,
-            None,
-        )
-        .expect("disabled Claude cascade must be a no-op");
-    }
-
     #[cfg(unix)]
     #[test]
-    fn claude_cascade_default_does_not_write_home_settings() {
+    fn claude_cascade_does_not_write_home_settings() {
         let dir = tempfile::tempdir().expect("tempdir");
         temp_env::with_var("HOME", Some(dir.path()), || {
             cascade_update_agent_config(
@@ -15335,12 +15235,11 @@ wire_api = "chat"
                 &BTreeMap::new(),
                 &CodexModelAction::NoOp,
                 None,
-                None,
             )
-            .expect("disabled Claude cascade must succeed");
+            .expect("ClaudeCode cascade must succeed");
             assert!(
                 !dir.path().join(".claude").join("settings.json").exists(),
-                "default cascade must not create ~/.claude/settings.json"
+                "ClaudeCode cascade must not write ~/.claude/settings.json"
             );
         });
     }

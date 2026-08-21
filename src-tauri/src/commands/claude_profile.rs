@@ -725,8 +725,7 @@ fn apply_profile_connection_env(
     if resolved.id == OFFICIAL_DIRECT_PROFILE_ID {
         // Monet official-direct: force the official endpoint, then empty-string
         // the token (and API key) so the spawn layer `env_remove`s inherited
-        // values and the CLI falls back to config-dir OAuth. Same empty-sentinel
-        // as `apply_claude_env_policy`.
+        // values and the CLI falls back to config-dir OAuth.
         runtime_env.insert(
             "ANTHROPIC_BASE_URL".to_string(),
             OFFICIAL_ANTHROPIC_BASE_URL.to_string(),
