@@ -1,4 +1,5 @@
 pub mod acp;
+pub(crate) mod acp_connect;
 #[cfg(feature = "tauri-runtime")]
 pub mod app_update;
 pub mod automation;
