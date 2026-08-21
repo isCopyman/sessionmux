@@ -304,6 +304,55 @@ fn resolve_incoming_auth_token(incoming: Option<&str>, stored: Option<&str>) -> 
     Some(trimmed.to_string())
 }
 
+/// The env a save must resolve masks against: what this profile *effectively*
+/// exports today, not merely what its raw `settings_json` happens to name.
+///
+/// [`materialize_managed_profile`] merges three layers — the raw
+/// `settings_json`, then `record.env`, then the three dedicated fields, each
+/// winning over the last — so a credential can be in force while the raw JSON
+/// has never heard of it. The API masks all three on the way out, so the editor
+/// shows one mask and cannot tell which layer it came from.
+///
+/// Comparing an incoming mask against the raw JSON alone made such a secret
+/// unrecognisable: it matched nothing, was discarded as a stale echo, and the
+/// credential was lost the first time the profile was saved — a rename was
+/// enough. Resolving against the merged view is what lets a save collapse the
+/// layers instead of dropping them.
+fn effective_stored_env(
+    existing: Option<&ClaudeProfileRecord>,
+) -> BTreeMap<String, serde_json::Value> {
+    let mut merged: BTreeMap<String, serde_json::Value> = BTreeMap::new();
+    let Some(record) = existing else {
+        return merged;
+    };
+    if let Some(text) = record.settings_json.as_deref() {
+        // A stored file we cannot parse contributes nothing rather than
+        // failing the save; the caller is replacing it anyway.
+        if let Ok(root) = parse_settings_object(text, "stored settingsJson") {
+            if let Some(env) = root.get("env").and_then(serde_json::Value::as_object) {
+                for (key, value) in env {
+                    merged.insert(key.clone(), value.clone());
+                }
+            }
+        }
+    }
+    for (key, value) in &record.env {
+        if let Some(trimmed) = trim_non_empty(Some(value)) {
+            merged.insert(key.clone(), serde_json::Value::String(trimmed));
+        }
+    }
+    for (key, value) in [
+        ("ANTHROPIC_BASE_URL", record.base_url.as_deref()),
+        ("ANTHROPIC_AUTH_TOKEN", record.auth_token.as_deref()),
+        ("ANTHROPIC_MODEL", record.model.as_deref()),
+    ] {
+        if let Some(trimmed) = trim_non_empty(value) {
+            merged.insert(key.to_string(), serde_json::Value::String(trimmed));
+        }
+    }
+    merged
+}
+
 fn sanitized_settings_json(
     incoming: &str,
     existing: Option<&ClaudeProfileRecord>,
@@ -313,14 +362,7 @@ fn sanitized_settings_json(
     }
 
     let mut value = parse_settings_object(incoming, "settingsJson")?;
-    let existing_value = existing
-        .and_then(|record| record.settings_json.as_deref())
-        .map(|text| parse_settings_object(text, "stored settingsJson"))
-        .transpose()?;
-    let existing_env = existing_value
-        .as_ref()
-        .and_then(|root| root.get("env"))
-        .and_then(serde_json::Value::as_object);
+    let existing_env = effective_stored_env(existing);
 
     if let Some(env) = value
         .get_mut("env")
@@ -333,7 +375,7 @@ fn sanitized_settings_json(
             let Some(incoming_text) = incoming_value.as_str() else {
                 return true;
             };
-            if let Some(stored_value) = existing_env.and_then(|stored| stored.get(key)) {
+            if let Some(stored_value) = existing_env.get(key) {
                 if incoming_text == mask_api_key(&secret_value_text(stored_value)) {
                     *incoming_value = stored_value.clone();
                     return true;
@@ -1104,10 +1146,22 @@ pub fn claude_profile_upsert_core(
         .as_ref()
         .map(|r| r.created_at.clone())
         .unwrap_or_else(|| now.clone());
-    let auth_token = resolve_incoming_auth_token(
-        input.auth_token.as_deref(),
-        existing.as_ref().and_then(|r| r.auth_token.as_deref()),
-    );
+    // Against the *effective* credential, not just the column: a legacy profile
+    // can carry its token in `record.env` alone, and the editor shows that
+    // layer's mask like any other. Matching only the column would read such a
+    // mask as a stale echo and drop the credential.
+    let effective_env = effective_stored_env(existing.as_ref());
+    let stored_auth_token = existing
+        .as_ref()
+        .and_then(|r| trim_non_empty(r.auth_token.as_deref()))
+        .or_else(|| {
+            effective_env
+                .get("ANTHROPIC_AUTH_TOKEN")
+                .map(secret_value_text)
+                .filter(|value| !value.is_empty())
+        });
+    let auth_token =
+        resolve_incoming_auth_token(input.auth_token.as_deref(), stored_auth_token.as_deref());
     let settings_json = match input.settings_json.as_deref() {
         None => existing
             .as_ref()
