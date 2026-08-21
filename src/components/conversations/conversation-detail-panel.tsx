@@ -2102,6 +2102,14 @@ const ConversationTabView = memo(function ConversationTabView({
       defaultPath={workingDirForConnection}
       agentName={getAgentLabel(selectedAgent)}
       error={conn.error}
+      onTransientRetry={
+        conn.error &&
+        conn.errorCode === "turn_failed_transient" &&
+        conn.connectionId !== null &&
+        !conn.isViewer
+          ? () => handleSessionFailureAction("retry")
+          : undefined
+      }
       claudeApiRetry={conn.claudeApiRetry}
       sessionFailures={conn.sessionFailures}
       onSessionFailureAction={

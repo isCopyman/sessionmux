@@ -141,9 +141,8 @@ pub(crate) async fn handle_event(
         AcpEvent::TurnComplete { stop_reason, .. } => {
             let target = match stop_reason.as_str() {
                 "end_turn" => Some(ConversationStatus::PendingReview),
-                "refusal" | "max_tokens" | "max_turn_requests" | "unknown" | "empty" => {
-                    Some(ConversationStatus::Cancelled)
-                }
+                "refusal" | "max_tokens" | "max_turn_requests" | "unknown" | "empty"
+                | "transient" => Some(ConversationStatus::Cancelled),
                 _ => None,
             };
             let Some(target) = target else {
@@ -538,6 +537,7 @@ mod tests {
             ("max_turn_requests", ConversationStatus::Cancelled),
             ("unknown", ConversationStatus::Cancelled),
             ("empty", ConversationStatus::Cancelled),
+            ("transient", ConversationStatus::Cancelled),
         ] {
             let (db, manager, conversation_id) =
                 seed_bound_conversation(&format!("/tmp/lifecycle-{stop_reason}")).await;

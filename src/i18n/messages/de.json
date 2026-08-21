@@ -2779,6 +2779,7 @@
           "turnFailedEmpty": "{agent} hat die Runde ohne jegliche Antwort beendet.",
           "turnFailedEmptyProtocol": "{agent} hat eine Ausgabe erzeugt, die codeg nicht auswerten konnte — die Agent-Version passt möglicherweise nicht zum Protokoll.",
           "turnFailedEmptyMetadata": "{agent} hat in dieser Runde nur Statusaktualisierungen gesendet (Plan / Modus / Verbrauch) und keine Antwort.",
+          "turnFailedTransient": "{agent} ist in dieser Runde auf einen vorübergehenden Fehler gestoßen. Sie können erneut versuchen, ohne die Verbindung neu aufzubauen.",
           "detailsInAlerts": "Öffnen Sie die Warnungen in der Statusleiste und klappen Sie die Details auf, um die Ausgabe des Agents zu sehen."
         },
         "unableReadAgentConfig": "Agenten-Konfiguration kann nicht gelesen werden: {message}",

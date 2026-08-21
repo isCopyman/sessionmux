@@ -2779,6 +2779,7 @@
           "turnFailedEmpty": "{agent} 本轮没有产生任何回复就结束了。",
           "turnFailedEmptyProtocol": "{agent} 本轮的输出 codeg 无法解析，可能是代理版本与协议不匹配。",
           "turnFailedEmptyMetadata": "{agent} 本轮只收到状态更新（计划 / 模式 / 用量），没有收到任何回复。",
+          "turnFailedTransient": "{agent} 本轮遇到临时错误，可以重试而无需重新连接。",
           "detailsInAlerts": "在状态栏的「告警」中展开详情，可查看代理输出。"
         },
         "unableReadAgentConfig": "无法读取 Agent 配置：{message}",
