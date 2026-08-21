@@ -54,6 +54,49 @@ spawn 单独构造 env（`build_session_runtime_env`，`commands/acp.rs:9328`）
 - 天然带 OAuth 凭据，"订阅 vs API"不再需要"清空 token 逼它回落 OAuth"这类
   防御式技巧（monet 的 `official-direct` 就在干这个）。
 
+## 1.4 认证优先级（从发行包里挖出的权威表，非记忆）
+
+用户问："settings.json 里没配 url 就是默认用登录凭证？还是 env token？还是把 token
+写进 settings.json？"—— 三个都成立，但有严格顺序。SDK 发行包里的解析函数原文
+（`@anthropic-ai/claude-agent-sdk/cli.js`，`function Du()`）：
+
+```js
+if (process.env.ANTHROPIC_AUTH_TOKEN)      return {source:"ANTHROPIC_AUTH_TOKEN"}
+if (process.env.CLAUDE_CODE_OAUTH_TOKEN)   return {source:"CLAUDE_CODE_OAUTH_TOKEN"}
+if (<oauth token via file descriptor>)     return {source:"CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR"}
+if (<apiKeyHelper 脚本>)                    return {source:"apiKeyHelper"}
+if (<存储的 oauth 凭据>.accessToken)         return {source:"claude.ai"}     // ← 订阅
+return {source:"none"}
+```
+
+另有 `ANTHROPIC_API_KEY` 走独立分支（`f$()`，受 Bedrock/Vertex 等开关门控）。
+
+三条结论：
+
+1. **没有 url / token → 回落 `claude.ai` 存储凭据 = 订阅**（用户猜对了）。凭据文件是
+   `<CLAUDE_CONFIG_DIR>/.credentials.json`（`QN1()`：`storagePath = join(configDir,
+   ".credentials.json")`）——**这正是"换配置目录=换登录账号"成立的原因**。
+2. **`ANTHROPIC_AUTH_TOKEN` 优先级最高，会压过订阅**。所以"我要用订阅"不能只靠
+   "不填 token"，还必须确保没有从别处继承来一个（CLI 自己都为此做了告警：
+   `claude-ai-external-token` —— 已登录 claude.ai 但被外部 token 覆盖时提示）。
+3. **写进 settings.json 的 `env` 块和设进程环境变量是等价的，而且前者会覆盖后者。**
+   实证（`function pxq()`）：`let A = T1().env||{}; for (...) process.env[Y] = z`，
+   逐层设置文件的 `env` **无条件写进 `process.env`**。
+
+### 1.5 由此得到的关键陷阱（推翻"只注入 env 就够了"）
+
+既然设置文件的 `env` 块是**后写入**且无条件覆盖，那么：
+
+> **codeg 今天靠 spawn env 注入的 `ANTHROPIC_*`，会被用户自己的
+> `~/.claude/settings.json`（或项目级 settings）里的同名键静默覆盖。**
+
+这解释了 O39 调研留的悬念"要不要上 `--settings` 文件"——答案是：光靠 env 不可靠。
+而 `CLAUDE_CONFIG_DIR` 方案天然免疫：它换的是**加载哪一份 settings**，不存在被另一
+份覆盖的问题。这条独立地把方案选择从"合成 env"推向"换配置目录"。
+
+（另注：`apiKeyHelper` 是 settings.json 的合法字段，指向一个输出 key 的脚本，优先级
+在订阅之上。托管档若用它可避免 key 明文落 settings，但要多管一个脚本文件，第一期不用。）
+
 ## 2. 今天的做法错在哪（并非空谈，上游已有 issue）
 
 codeg 现在的"绑定模型供应商"会 **cascade 写进用户的全局原生配置文件**：
@@ -115,6 +158,31 @@ skills + agents）。换档不只换钱包，也换工具箱。设计上必须�
    turn 进行中禁止）。**不加新的大按钮**（依你今天的原则）。
 6. **codeg-mcp 必须跟档走**：每个托管档目录生成时一并写入 codeg 的 MCP 注入；
    指向用户自有目录的档，给出"该目录缺少 codeg 协作工具"的显式提示与一键补写。
+
+## 4.5 前后端各干什么（用户追问："UI 在哪改，前后端怎么处理"）
+
+**后端（Rust）**
+1. `build_session_runtime_env`（`commands/acp.rs:9328`）里新增一步"解析本会话的档"：
+   会话绑定 > agent 默认 > 今日行为。Claude 分支的产物就是一个
+   `CLAUDE_CONFIG_DIR=<目录>`（跟随默认时**不设**该键，保持今天的语义）。
+2. 托管档目录的生成/维护（`<数据目录>/claude-profiles/<id>/settings.json`，0600），
+   含把 codeg-mcp 注入写进该目录。
+3. 关掉 Claude 路径的 `cascade_update_agent_config` 写盘（默认关，开关可回退）。
+4. 档的 CRUD 命令 + `_core` 函数（桌面/服务器双模式共用，按仓库惯例）。
+5. 连通性自检（可选）：用该档跑一次最小请求，回报 401/404/超时。
+
+**前端（三处，全部复用已有壳子，不新造页面）**
+1. **设置 → 智能体 → Claude Code**（`src/components/settings/acp-agent-settings.tsx:169`
+   现有三态 `official_subscription / custom / model_provider`）：把这里升级成"档列表"
+   ——跟随默认 / 指向已有目录（填路径，带目录选择器）/ 托管档（填 URL+key）。
+   现有 `/settings/model-providers` 页作为"端点目录"保留，档引用它，不再各填一份。
+2. **新建会话**：`AgentSelector` 旁一个"接入方式"下拉，默认=该 agent 的默认档；
+   用户不选就是 NULL（跟随全局，老会话零影响）。
+3. **会话头部**：显示当前档名（小 chip，**不加大按钮**）；改选 → 标 pending →
+   复用现有 `SessionConfigStaleBanner` 提示重连，turn 进行中禁止。
+
+**数据面**：档表（或复用 `model_provider` 加类型列）+ 会话上一个可空外键。
+后者是唯一的 schema 改动，等签字。
 
 ## 5. 待拍板
 
