@@ -23,7 +23,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
-import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
 import {
   claudeProfileDelete,
@@ -43,6 +42,7 @@ import {
   foldEffectiveSettings,
   stripCredentials,
 } from "./claude-settings-projection"
+import { JsonConfigEditor } from "./json-config-editor"
 
 type EditableKind = ClaudeProfileUpsert["kind"]
 
@@ -670,11 +670,19 @@ export function ClaudeProfileCatalog({
                         neither of the two that did. Curating a field list
                         against a vendor's env surface is a race you lose. */}
                     <div className="space-y-1.5">
-                      <span className="text-[11px] text-muted-foreground">
-                        {t("fieldSettingsJson")}
-                      </span>
+                      <JsonConfigEditor
+                        label={t("fieldSettingsJson")}
+                        value={selectedDraft.settingsJson}
+                        onChange={(settingsJson) =>
+                          patchDraft({ settingsJson })
+                        }
+                        height={256}
+                      />
                       <p className="text-[10px] text-muted-foreground">
                         {t("settingsJsonHint")}
+                      </p>
+                      <p className="text-[10px] text-muted-foreground">
+                        {t("settingsJsonEnvHint")}
                       </p>
                       {selectedDraft.isNew && copiedFrom ? (
                         <p className="text-[10px] text-muted-foreground">
@@ -688,16 +696,6 @@ export function ClaudeProfileCatalog({
                           })}
                         </p>
                       ) : null}
-                      <Textarea
-                        aria-label={t("fieldSettingsJson")}
-                        value={selectedDraft.settingsJson}
-                        onChange={(event) =>
-                          patchDraft({ settingsJson: event.target.value })
-                        }
-                        placeholder={'{\n  "env": {}\n}'}
-                        className="min-h-64 font-mono text-xs"
-                        spellCheck={false}
-                      />
                     </div>
                   </>
                 )}

@@ -51,6 +51,7 @@ import {
 } from "@/lib/custom-agents"
 import { AgentIcon } from "@/components/agent-icon"
 import { AddCustomAgentDialog } from "@/components/settings/add-custom-agent-dialog"
+import { JsonConfigEditor } from "@/components/settings/json-config-editor"
 import { SettingCard, SettingRow } from "@/components/shared/setting-card"
 import { CustomAgentMcpToggle } from "@/components/settings/custom-agent-mcp-toggle"
 import { CustomAgentSkillsToggle } from "@/components/settings/custom-agent-skills-toggle"
@@ -11047,40 +11048,50 @@ supports_websockets = true`}
 
                     {claudeCliGlobalsVisible && (
                       <div className="space-y-1.5">
-                        <label className="text-[11px] text-muted-foreground">
-                          {selectedAgent.agent_type === "claude_code"
-                            ? t("claudeProfile.fieldSettingsJson")
-                            : t("nativeJsonConfig")}
-                        </label>
-                        <NativeConfigFileHint
-                          agentType={selectedAgent.agent_type}
-                        />
-                        <Textarea
-                          value={selectedDraft.configText}
-                          onChange={(event) => {
-                            handleConfigTextChange(event.target.value)
-                          }}
-                          placeholder={
-                            selectedAgent.agent_type === "claude_code"
-                              ? `{
-  "env": {}
-}`
-                              : `{
+                        {selectedAgent.agent_type !== "claude_code" && (
+                          <>
+                            <label className="text-[11px] text-muted-foreground">
+                              {t("nativeJsonConfig")}
+                            </label>
+                            <NativeConfigFileHint
+                              agentType={selectedAgent.agent_type}
+                            />
+                          </>
+                        )}
+                        {selectedAgent.agent_type === "claude_code" ? (
+                          <JsonConfigEditor
+                            label={t("claudeProfile.fieldSettingsJson")}
+                            value={selectedDraft.configText}
+                            onChange={handleConfigTextChange}
+                            height={144}
+                          />
+                        ) : (
+                          <Textarea
+                            value={selectedDraft.configText}
+                            onChange={(event) => {
+                              handleConfigTextChange(event.target.value)
+                            }}
+                            placeholder={`{
   "apiBaseUrl": "https://api.example.com",
   "apiKey": "sk-...",
   "model": "gpt-5",
   "env": {
     "CUSTOM_KEY": "VALUE"
   }
-}`
-                          }
-                          className={cn(
-                            selectedAgent.agent_type === "claude_code"
-                              ? "min-h-64"
-                              : "min-h-36",
-                            "font-mono text-xs"
-                          )}
-                        />
+}`}
+                            className="min-h-36 font-mono text-xs"
+                          />
+                        )}
+                        {selectedAgent.agent_type === "claude_code" && (
+                          <>
+                            <NativeConfigFileHint
+                              agentType={selectedAgent.agent_type}
+                            />
+                            <p className="text-[11px] text-muted-foreground">
+                              {t("claudeProfile.settingsJsonEnvHint")}
+                            </p>
+                          </>
+                        )}
                         {selectedConfigError && (
                           <div className="rounded-md border border-red-500/30 bg-red-500/5 px-2.5 py-1.5 text-[11px] text-red-400">
                             {selectedConfigError}
