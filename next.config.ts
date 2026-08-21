@@ -28,6 +28,12 @@ const withNextIntl = createNextIntlPlugin({
 
 const nextConfig: NextConfig = {
   output: "export",
+  // Codeg is routinely dogfooded through `tauri dev`. Next's browser dev
+  // indicator sits above the WebView in a portal and intercepts clicks on
+  // product controls in the bottom-right corner (for example the task detail
+  // Delete action). Compilation feedback already lives in the terminal, so
+  // the browser badge has no product value here.
+  devIndicators: false,
   images: {
     unoptimized: true,
   },
