@@ -298,6 +298,10 @@ describe("ClaudeProfileCatalog", () => {
   it("offers no editing controls while User-level settings is the active tab", async () => {
     renderCatalog()
     await addProfileButton()
+    expect(
+      screen.getByText(/codeg sets nothing for this option/)
+    ).toBeInTheDocument()
+    expect(screen.queryByLabelText("settings.json")).toBeNull()
     expect(screen.queryByLabelText("Name")).toBeNull()
     expect(screen.queryByRole("button", { name: "Save" })).toBeNull()
     expect(screen.queryByRole("button", { name: "Delete" })).toBeNull()
@@ -377,7 +381,7 @@ describe("ClaudeProfileCatalog", () => {
       await screen.findByRole("tab", { name: "Official direct" })
     )
     expect(screen.getByText(/Forces api\.anthropic\.com/)).toBeInTheDocument()
-    // No editor: it is file-less, exactly like User-level settings.
+    // No editor: it is text-only, like User-level settings.
     expect(screen.queryByLabelText("Name")).toBeNull()
     expect(screen.queryByRole("button", { name: "Save" })).toBeNull()
     expect(screen.queryByRole("button", { name: "Delete" })).toBeNull()

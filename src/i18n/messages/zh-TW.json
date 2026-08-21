@@ -1170,7 +1170,7 @@
       "addProfile": "新增設定",
       "unsaved": "有未儲存的變更",
       "idHint": "agent 透過這個識別碼引用此設定（create_work_task 的 profile 參數）。儲存後不可變更。",
-      "followDefaultBody": "此頁籤直接編輯 CLI 自己的 ~/.claude/settings.json；下面的編輯器讀寫的就是這個檔案。它是優先順序最低的一層：工作階段所在專案的 .claude/settings.json 會覆蓋同名鍵。codeg 設定檔比兩者都高，但只壓過它實際填入的鍵。",
+      "followDefaultBody": "此選項下 codeg 不做任何設定，也不改 CLI 自己的配置。CLI 依現有配置運作，包括專案裡的 .claude/settings.json。若要由 codeg 強制套用設定，請改用接入設定檔。",
       "newProfileName": "設定 {n}",
       "addBlank": "空白設定",
       "addCopy": "複製「{name}」",

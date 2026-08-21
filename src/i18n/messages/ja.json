@@ -1170,7 +1170,7 @@
       "addProfile": "プロファイルを追加",
       "unsaved": "未保存の変更があります",
       "idHint": "エージェントはこの ID でプロファイルを参照します（create_work_task の profile）。保存後は変更できません。",
-      "followDefaultBody": "このタブでは CLI 自身の ~/.claude/settings.json を直接編集し、下のエディターはそのファイルを読み書きします。これは最も優先度の低いレイヤーで、セッションを実行するプロジェクトの .claude/settings.json が同名のキーを上書きします。codeg プロファイルはその両方より優先されますが、実際に値を設定したキーに限ります。",
+      "followDefaultBody": "このオプションでは codeg は何も設定せず、CLI 自身の設定にも触れません。CLI はプロジェクトの .claude/settings.json を含め、現状の設定のまま動作します。codeg に設定を適用させたい場合はプロファイルを使ってください。",
       "newProfileName": "設定 {n}",
       "addBlank": "空のプロファイル",
       "addCopy": "「{name}」を複製",
