@@ -55,8 +55,11 @@ export function WorkspaceChromeController() {
   // Same arrangement as search: the sidebar row and the new-conversation
   // welcome page both trigger it, so the open-state is shared and the dialog
   // is mounted here rather than inside either trigger.
-  const { open: createRoomOpen, setOpen: setCreateRoomOpen } =
-    useCreateRoomDialog()
+  const {
+    open: createRoomOpen,
+    setOpen: setCreateRoomOpen,
+    folderScopeId: createRoomFolderScopeId,
+  } = useCreateRoomDialog()
   const [browserOpen, setBrowserOpen] = useState(false)
 
   // One dialog on every platform: it owns directory selection *and* the
@@ -191,7 +194,11 @@ export function WorkspaceChromeController() {
       {/* Mounted only while open: the dialog subscribes to the whole live
           Session list to build its member picker. */}
       {createRoomOpen ? (
-        <CreateRoomDialog open onOpenChange={setCreateRoomOpen} />
+        <CreateRoomDialog
+          open
+          onOpenChange={setCreateRoomOpen}
+          folderScopeId={createRoomFolderScopeId}
+        />
       ) : null}
       <WorkspaceFolderDialog open={browserOpen} onOpenChange={setBrowserOpen} />
     </>

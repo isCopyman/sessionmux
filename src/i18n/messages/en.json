@@ -5354,6 +5354,8 @@
     "createSubmit": "Create room",
     "createNeedTwo": "Select an initiator Session to create a room",
     "createNoCandidates": "No Sessions available.",
+    "createFolderScope": "Only {name}",
+    "createFolderScopeGeneric": "This folder only",
     "emptyInviteHint": "Invite another Session to start collaborating.",
     "emptyInviteAction": "Invite a Session",
     "createFailed": "Could not create the room: {message}",

@@ -28,12 +28,16 @@ import { useTabStore } from "@/stores/tab-store"
 export function CreateRoomDialog({
   open,
   onOpenChange,
+  folderScopeId = null,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
+  /** When set, initiator candidates are only Sessions in this Path. */
+  folderScopeId?: number | null
 }) {
   const t = useTranslations("Room")
   const conversations = useAppWorkspaceStore((state) => state.conversations)
+  const folders = useAppWorkspaceStore((state) => state.folders)
   const activeWorkbenchId = useTabStore((state) => state.activeWorkbenchId)
   const activeConversationId = useTabStore((state) => {
     const tab = state.rawTabs.find((item) => item.id === state.activeTabId)
@@ -43,16 +47,33 @@ export function CreateRoomDialog({
   const openRoom = useOpenRoom()
   const { createRoomWith } = useRoomMembership()
   const [query, setQuery] = useState("")
-  const [selectedId, setSelectedId] = useState<number | null>(
-    activeConversationId
-  )
+  const [selectedId, setSelectedId] = useState<number | null>(() => {
+    if (activeConversationId == null) return null
+    if (folderScopeId == null) return activeConversationId
+    const active = conversations.find(
+      (conversation) => conversation.id === activeConversationId
+    )
+    if (active == null || active.archived_at != null) return null
+    if (active.folder_id !== folderScopeId) return null
+    return activeConversationId
+  })
   const [titleDraft, setTitleDraft] = useState<string | null>(null)
   const [pending, setPending] = useState(false)
 
-  const candidates = useMemo(
-    () => roomMemberCandidates(conversations, query),
-    [conversations, query]
-  )
+  const scopeFolder = useMemo(() => {
+    if (folderScopeId == null) return undefined
+    return folders.find((folder) => folder.id === folderScopeId)
+  }, [folderScopeId, folders])
+  const scopeLabel =
+    scopeFolder != null ? (scopeFolder.alias ?? scopeFolder.name) : null
+
+  const candidates = useMemo(() => {
+    const live = roomMemberCandidates(conversations, query)
+    if (folderScopeId == null) return live
+    return live.filter(
+      (conversation) => conversation.folder_id === folderScopeId
+    )
+  }, [conversations, folderScopeId, query])
   const conversationById = useMemo(
     () =>
       new Map(
@@ -107,7 +128,16 @@ export function CreateRoomDialog({
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="max-w-sm">
         <DialogHeader>
-          <DialogTitle>{t("createTitle")}</DialogTitle>
+          <DialogTitle className="flex items-center gap-2">
+            {t("createTitle")}
+            {folderScopeId != null ? (
+              <span className="rounded-full bg-muted px-1.5 py-px text-[10px] font-normal text-muted-foreground">
+                {scopeLabel != null && scopeLabel !== ""
+                  ? t("createFolderScope", { name: scopeLabel })
+                  : t("createFolderScopeGeneric")}
+              </span>
+            ) : null}
+          </DialogTitle>
         </DialogHeader>
         <Input
           value={titleDraft ?? autoTitle}

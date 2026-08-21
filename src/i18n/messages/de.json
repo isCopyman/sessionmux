@@ -5354,6 +5354,8 @@
     "createSubmit": "Erstellen",
     "createNeedTwo": "Wähle eine Initiator-Session, um einen Raum zu erstellen",
     "createNoCandidates": "Keine Sessions verfügbar.",
+    "createFolderScope": "Nur {name}",
+    "createFolderScopeGeneric": "Nur dieser Ordner",
     "emptyInviteHint": "Lade eine weitere Session ein, um zusammenzuarbeiten.",
     "emptyInviteAction": "Session einladen",
     "createFailed": "Raum konnte nicht erstellt werden: {message}",

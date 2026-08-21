@@ -5354,6 +5354,8 @@
     "createSubmit": "建群",
     "createNeedTwo": "請選擇一個發起人才能建群",
     "createNoCandidates": "沒有可選的 Session。",
+    "createFolderScope": "僅 {name}",
+    "createFolderScopeGeneric": "僅目前資料夾",
     "emptyInviteHint": "邀請其他 Session 加入後就可以開始協作。",
     "emptyInviteAction": "邀請 Session",
     "createFailed": "建群失敗：{message}",

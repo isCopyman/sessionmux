@@ -5354,6 +5354,8 @@
     "createSubmit": "Crear sala",
     "createNeedTwo": "Selecciona un Session iniciador para crear una sala",
     "createNoCandidates": "No hay Sessions disponibles.",
+    "createFolderScope": "Solo {name}",
+    "createFolderScopeGeneric": "Solo esta carpeta",
     "emptyInviteHint": "Invita a otra Session para empezar a colaborar.",
     "emptyInviteAction": "Invitar a una Session",
     "createFailed": "No se pudo crear la sala: {message}",
