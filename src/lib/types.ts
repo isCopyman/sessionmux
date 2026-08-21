@@ -492,6 +492,10 @@ export interface DbConversationSummary {
    *  the mirror so older test fixtures keep compiling; the backend always
    *  sends it. */
   created_by?: ConversationCreatedBy
+  /** Session-level prompt-queue freeze. Absent/null when the queue is running.
+   *  Backfilled on list/get the same way `child_count` is — not stored on the
+   *  conversation row. */
+  paused_reason?: string | null
 }
 
 export interface SessionContentSearchHit {
@@ -1254,6 +1258,8 @@ export interface PromptQueueSnapshot {
   pausedReason?: string | null
   items: PromptQueueItem[]
 }
+
+export const PROMPT_QUEUE_CHANGED_EVENT = "prompt-queue://changed"
 
 export interface SessionTimer {
   id: string

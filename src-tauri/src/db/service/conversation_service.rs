@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use chrono::Utc;
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::NotSet, ColumnTrait, DatabaseConnection, EntityTrait,
-    QueryFilter, QueryOrder, QuerySelect, Set, TransactionTrait,
+    ActiveModelTrait, ActiveValue::NotSet, ColumnTrait, ConnectionTrait, DatabaseConnection,
+    DbBackend, EntityTrait, QueryFilter, QueryOrder, QuerySelect, Set, Statement, TransactionTrait,
 };
 
 use crate::db::entities::conversation::{ConversationKind, ConversationStatus, CREATED_BY_USER};
@@ -946,7 +946,8 @@ fn conv_to_summary(r: conversation::Model) -> DbConversationSummary {
         external_id: r.external_id,
         message_count: r.message_count as u32,
         // Pure mapper: `child_count` is backfilled by `fill_child_counts` over
-        // the returned set, never queried per-row here.
+        // the returned set, never queried per-row here. `paused_reason` is
+        // backfilled the same way by `fill_paused_reasons`.
         child_count: 0,
         created_at: r.created_at,
         updated_at: r.updated_at,
@@ -958,6 +959,7 @@ fn conv_to_summary(r: conversation::Model) -> DbConversationSummary {
         origin_cwd: r.origin_cwd,
         harness_internal: r.harness_internal,
         created_by: r.created_by,
+        paused_reason: None,
     }
 }
 
@@ -998,6 +1000,50 @@ async fn fill_child_counts(
     Ok(())
 }
 
+/// Backfill each summary's session-level queue freeze using ONE query over the
+/// whole set (never per-row — no N+1). Empty slice is a no-op (avoids `IN ()`).
+async fn fill_paused_reasons(
+    conn: &DatabaseConnection,
+    summaries: &mut [DbConversationSummary],
+) -> Result<(), DbError> {
+    if summaries.is_empty() {
+        return Ok(());
+    }
+    let placeholders = vec!["?"; summaries.len()].join(", ");
+    let sql = format!(
+        "SELECT conversation_id, paused_reason FROM conversation_prompt_queue_state \
+         WHERE conversation_id IN ({placeholders}) \
+           AND paused_reason IS NOT NULL AND paused_reason != ''"
+    );
+    let values: Vec<sea_orm::Value> = summaries.iter().map(|s| s.id.into()).collect();
+    let rows = conn
+        .query_all(Statement::from_sql_and_values(
+            DbBackend::Sqlite,
+            sql,
+            values,
+        ))
+        .await?;
+    let mut reasons: HashMap<i32, String> = HashMap::with_capacity(rows.len());
+    for row in rows {
+        let id: i32 = row.try_get("", "conversation_id")?;
+        let reason: String = row.try_get("", "paused_reason")?;
+        reasons.insert(id, reason);
+    }
+    for s in summaries.iter_mut() {
+        s.paused_reason = reasons.get(&s.id).cloned();
+    }
+    Ok(())
+}
+
+async fn fill_list_aggregates(
+    conn: &DatabaseConnection,
+    summaries: &mut [DbConversationSummary],
+) -> Result<(), DbError> {
+    fill_child_counts(conn, summaries).await?;
+    fill_paused_reasons(conn, summaries).await?;
+    Ok(())
+}
+
 pub async fn get_by_id(
     conn: &DatabaseConnection,
     conversation_id: i32,
@@ -1009,7 +1055,7 @@ pub async fn get_by_id(
         .ok_or_else(|| DbError::Migration(format!("Conversation not found: {conversation_id}")))?;
 
     let mut summary = conv_to_summary(conv);
-    fill_child_counts(conn, std::slice::from_mut(&mut summary)).await?;
+    fill_list_aggregates(conn, std::slice::from_mut(&mut summary)).await?;
     Ok(summary)
 }
 
@@ -1078,7 +1124,7 @@ pub async fn list_by_folder(
     let rows = query.all(conn).await?;
 
     let mut summaries: Vec<DbConversationSummary> = rows.into_iter().map(conv_to_summary).collect();
-    fill_child_counts(conn, &mut summaries).await?;
+    fill_list_aggregates(conn, &mut summaries).await?;
 
     Ok(summaries)
 }
@@ -1172,7 +1218,7 @@ pub async fn list_all(
 
     let rows = query.all(conn).await?;
     let mut summaries: Vec<DbConversationSummary> = rows.into_iter().map(conv_to_summary).collect();
-    fill_child_counts(conn, &mut summaries).await?;
+    fill_list_aggregates(conn, &mut summaries).await?;
     Ok(summaries)
 }
 
@@ -1198,7 +1244,7 @@ pub async fn list_children(
         .all(conn)
         .await?;
     let mut summaries: Vec<DbConversationSummary> = rows.into_iter().map(conv_to_summary).collect();
-    fill_child_counts(conn, &mut summaries).await?;
+    fill_list_aggregates(conn, &mut summaries).await?;
     Ok(summaries)
 }
 
@@ -1620,6 +1666,49 @@ mod tests {
         let children = list_children(&db.conn, parent).await.expect("children");
         let child_row = children.iter().find(|r| r.id == child).expect("child row");
         assert_eq!(child_row.child_count, 1, "child has one grandchild");
+    }
+
+    #[tokio::test]
+    async fn list_all_carries_session_queue_pause_reason() {
+        let db = fresh_in_memory_db().await;
+        let folder = seed_folder(&db, "/tmp/codeg-paused-reason").await;
+        let paused = create(
+            &db.conn,
+            folder,
+            AgentType::ClaudeCode,
+            Some("paused".into()),
+            None,
+        )
+        .await
+        .expect("create paused");
+        let running = create(
+            &db.conn,
+            folder,
+            AgentType::ClaudeCode,
+            Some("running".into()),
+            None,
+        )
+        .await
+        .expect("create running");
+
+        crate::db::service::prompt_queue_service::pause_queue(
+            &db.conn,
+            paused.id,
+            "cancelled_current_turn".into(),
+        )
+        .await
+        .expect("pause");
+
+        let rows = list_all(&db.conn, None, None, None, None, None, false, false)
+            .await
+            .expect("list");
+        let paused_row = rows.iter().find(|r| r.id == paused.id).expect("paused");
+        let running_row = rows.iter().find(|r| r.id == running.id).expect("running");
+        assert_eq!(
+            paused_row.paused_reason.as_deref(),
+            Some("cancelled_current_turn")
+        );
+        assert_eq!(running_row.paused_reason, None);
     }
 
     #[tokio::test]

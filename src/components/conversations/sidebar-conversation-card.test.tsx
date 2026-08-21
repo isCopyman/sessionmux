@@ -585,3 +585,45 @@ describe("SidebarConversationCard sub-session chevron", () => {
     expect(container.querySelectorAll("[data-subsession-rail]")).toHaveLength(0)
   })
 })
+
+describe("SidebarConversationCard paused queue indicator", () => {
+  function renderCard(c: DbConversationSummary) {
+    return renderWithIntl(
+      <SidebarConversationCard
+        conversation={c}
+        isSelected={false}
+        timeLabel="5m"
+        onSelect={onSelect}
+        onDoubleClick={onDoubleClick}
+        onRename={onRename}
+        onDelete={onDelete}
+        onStatusChange={onStatusChange}
+      />
+    )
+  }
+
+  it("shows the pause reason on a paused session", () => {
+    const { getByText, getByTitle } = renderCard({
+      ...conv(1),
+      paused_reason: "cancelled_current_turn",
+    })
+    const label =
+      "Queue paused: The current turn was cancelled. Resume when you are ready."
+    expect(getByText(label)).toBeInTheDocument()
+    expect(getByTitle(label)).toBeInTheDocument()
+  })
+
+  it("does not show the indicator when the queue is not paused", () => {
+    const { queryByText, queryByTitle } = renderCard(conv(2))
+    expect(queryByText(/Queue paused/)).toBeNull()
+    expect(queryByTitle(/Queue paused/)).toBeNull()
+  })
+
+  it("puts a free-text pause reason in the accessible label", () => {
+    const { getByText } = renderCard({
+      ...conv(3),
+      paused_reason: "mode rejected",
+    })
+    expect(getByText("Queue paused: mode rejected")).toBeInTheDocument()
+  })
+})

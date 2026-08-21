@@ -11,15 +11,14 @@ import {
   retryPromptQueueItem,
 } from "@/lib/api"
 import { onTransportReconnect, subscribe } from "@/lib/platform"
-import type {
-  PromptDraft,
-  PromptQueueItem,
-  PromptQueueSource,
-  PromptQueueSnapshot,
+import {
+  PROMPT_QUEUE_CHANGED_EVENT,
+  type PromptDraft,
+  type PromptQueueItem,
+  type PromptQueueSource,
+  type PromptQueueSnapshot,
 } from "@/lib/types"
 import { randomUUID } from "@/lib/utils"
-
-export const PROMPT_QUEUE_CHANGED_EVENT = "prompt-queue://changed"
 
 export interface QueuedMessage {
   id: string

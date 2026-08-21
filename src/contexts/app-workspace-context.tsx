@@ -11,10 +11,12 @@ import {
   CONVERSATIONS_BULK_CHANGED_EVENT,
   CONVERSATION_CHANGED_EVENT,
   FOLDER_CHANGED_EVENT,
+  PROMPT_QUEUE_CHANGED_EVENT,
   type ConversationChange,
   type ConversationsBulkChanged,
   type EventEnvelope,
   type FolderChange,
+  type PromptQueueSnapshot,
 } from "@/lib/types"
 
 interface AppWorkspaceProviderProps {
@@ -95,6 +97,36 @@ export function AppWorkspaceProvider({ children }: AppWorkspaceProviderProps) {
       disposed = true
       unlisten?.()
       offReconnect?.()
+    }
+  }, [])
+
+  // Session-level queue freeze is not on `conversation://changed`. Patch the
+  // sidebar row from the existing prompt-queue snapshot event so a pause is
+  // visible without opening the session. Reconnect already refetches the
+  // conversation list (which now carries `paused_reason`), so this channel
+  // does not need its own reconnect backstop.
+  useEffect(() => {
+    let disposed = false
+    let unlisten: (() => void) | undefined
+
+    void (async () => {
+      const dispose = await subscribe<PromptQueueSnapshot>(
+        PROMPT_QUEUE_CHANGED_EVENT,
+        (snapshot) => {
+          useAppWorkspaceStore
+            .getState()
+            .updateConversationLocal(snapshot.conversationId, {
+              paused_reason: snapshot.pausedReason ?? null,
+            })
+        }
+      )
+      if (disposed) dispose()
+      else unlisten = dispose
+    })()
+
+    return () => {
+      disposed = true
+      unlisten?.()
     }
   }, [])
 

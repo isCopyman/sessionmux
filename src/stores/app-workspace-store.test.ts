@@ -103,6 +103,25 @@ describe("updateConversationLocal — stats reference stability", () => {
     expect(after.conversations.find((c) => c.id === 2)?.title).toBe("Renamed")
   })
 
+  it("patches paused_reason without bumping updated_at or stats", () => {
+    seedTwo()
+    const before = useAppWorkspaceStore.getState()
+    const updatedAt = before.conversations.find((c) => c.id === 1)?.updated_at
+
+    before.updateConversationLocal(1, {
+      paused_reason: "cancelled_current_turn",
+    })
+
+    const after = useAppWorkspaceStore.getState()
+    expect(after.stats).toBe(before.stats)
+    expect(after.conversations.find((c) => c.id === 1)?.paused_reason).toBe(
+      "cancelled_current_turn"
+    )
+    expect(after.conversations.find((c) => c.id === 1)?.updated_at).toBe(
+      updatedAt
+    )
+  })
+
   it("leaves state untouched (stable refs) for an unknown id", () => {
     seedTwo()
     const before = useAppWorkspaceStore.getState()

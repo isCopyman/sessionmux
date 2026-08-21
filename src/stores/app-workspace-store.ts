@@ -75,7 +75,10 @@ export interface AppWorkspaceStoreState {
   updateConversationLocal: (
     id: number,
     patch: Partial<
-      Pick<DbConversationSummary, "status" | "title" | "pinned_at">
+      Pick<
+        DbConversationSummary,
+        "status" | "title" | "pinned_at" | "paused_reason"
+      >
     >
   ) => void
   applyConversationUpsert: (summary: DbConversationSummary) => void
@@ -264,8 +267,10 @@ export const useAppWorkspaceStore = create<AppWorkspaceStoreState>()(
       const next = prev.slice()
       // A pin toggle is a view preference, not activity — mirror the backend
       // (`update_pin`) and leave `updated_at` untouched so an updated-sorted
-      // folder doesn't briefly float the row. Status/title patches still bump.
-      const bumpUpdatedAt = !("pinned_at" in patch)
+      // folder doesn't briefly float the row. A queue pause is the same kind of
+      // overlay: it is not conversation activity. Status/title patches still bump.
+      const bumpUpdatedAt =
+        !("pinned_at" in patch) && !("paused_reason" in patch)
       next[idx] = {
         ...next[idx],
         ...patch,
@@ -273,8 +278,9 @@ export const useAppWorkspaceStore = create<AppWorkspaceStoreState>()(
       }
       // `stats` (computeStats) depends ONLY on the conversation count and each
       // row's agent_type/message_count. This path replaces a row IN PLACE (count
-      // never changes), and the patch type is restricted to status/title/pinned_at
-      // — none of which is a stat input — so a patch here can never move a stat.
+      // never changes), and the patch type is restricted to
+      // status/title/pinned_at/paused_reason — none of which is a stat input —
+      // so a patch here can never move a stat.
       // Reuse the existing `stats` reference instead of recomputing O(n) and
       // minting a fresh object: otherwise every turn-boundary
       // `conversation_status_changed` tick (one per turn start/stop, per running
