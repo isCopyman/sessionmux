@@ -112,6 +112,7 @@ export function SessionBulkActionBar({
   const tCommon = useTranslations("Folder.common")
   const tWorkbench = useTranslations("Folder.workbench")
   const tRoom = useTranslations("Room")
+  const tSidebar = useTranslations("Folder.sidebar")
   const conversations = useMemo(() => [...selected.values()], [selected])
   const rooms = useMemo(() => selectedRooms ?? [], [selectedRooms])
   const sessionCount = conversations.length
@@ -677,9 +678,12 @@ export function SessionBulkActionBar({
                 </DropdownMenuItem>
               ))}
               {roomCatalog.length > 0 ? <DropdownMenuSeparator /> : null}
+              {/* `newRoom`, not the bar's compact `createRoom` ("建群"): inside
+                  a menu there is room for the full verb, and it matches the
+                  "New workbench" row in the sibling menu. */}
               <DropdownMenuItem onSelect={handleCreateRoom}>
                 <Plus className="h-4 w-4" />
-                {t("createRoom")}
+                {tSidebar("newRoom")}
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>

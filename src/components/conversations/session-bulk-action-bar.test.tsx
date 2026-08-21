@@ -265,7 +265,7 @@ describe("SessionBulkActionBar", () => {
   it("creates a room from the current selection", async () => {
     const { onClear, user } = renderBar()
     await openJoinRoomMenu(user)
-    await user.click(screen.getByRole("menuitem", { name: "Create room" }))
+    await user.click(screen.getByRole("menuitem", { name: "New room" }))
     await waitFor(() =>
       expect(h.createCollaborationRoom).toHaveBeenCalledWith({
         workbenchId: 1,
@@ -287,7 +287,7 @@ describe("SessionBulkActionBar", () => {
     ])
     const { user } = renderBar()
     await openJoinRoomMenu(user)
-    await user.click(screen.getByRole("menuitem", { name: "Create room" }))
+    await user.click(screen.getByRole("menuitem", { name: "New room" }))
     await waitFor(() =>
       expect(h.createCollaborationRoom).toHaveBeenCalledWith({
         workbenchId: 1,
