@@ -2,6 +2,13 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## 开工必读（知识路由）
+
+- **教训库**：`docs/session-workbench/LESSONS.zh-CN.md` —— 真实翻车换来的规则（退出码、
+  核验纪律、显示语义、worktree、i18n 十语等），所有 harness 动手前先读。
+- **知识索引**：`docs/session-workbench/README.md` —— 查已知问题/契约/调研**先查重再开工**。
+- **作战板**：`docs/session-workbench/NOW-BOARD.zh-CN.md` —— 当前在飞的活与等拍板项。
+
 ## 项目概述
 
 Codeg（Code Generation）是一个多智能体编码工作台，它将多个智能体（Claude Code、Codex CLI、OpenCode、Gemini CLI、OpenClaw、Cline 等）统一到一个工作区中，支持会话聚合和多智能体协作，支持桌面安装，服务器/Docker 部署。
