@@ -38,7 +38,7 @@ pub const FOLLOW_DEFAULT_PROFILE_ID: &str = "follow-default";
 
 /// Virtual profile id (Monet `official-direct`): force the official Anthropic
 /// endpoint and clear `ANTHROPIC_AUTH_TOKEN` so the CLI falls back to OAuth
-/// in the config directory. No file on disk. Users cannot create this id.
+/// in the config directory. Users cannot create this id.
 pub const OFFICIAL_DIRECT_PROFILE_ID: &str = "official-direct";
 
 /// Official Anthropic API host forced by `official-direct`.
@@ -594,6 +594,21 @@ pub fn materialize_managed_profile(
     Ok(dir)
 }
 
+fn materialize_official_direct_profile(data_dir: &Path) -> Result<PathBuf, AppCommandError> {
+    let dir = managed_config_dir(data_dir, OFFICIAL_DIRECT_PROFILE_ID);
+    let settings = serde_json::json!({
+        "env": {
+            "ANTHROPIC_BASE_URL": OFFICIAL_ANTHROPIC_BASE_URL,
+            "ANTHROPIC_AUTH_TOKEN": "",
+            "ANTHROPIC_API_KEY": "",
+        }
+    });
+    let body = serde_json::to_string_pretty(&settings)
+        .map_err(|e| AppCommandError::configuration_invalid(e.to_string()))?;
+    write_owner_only_file(&dir.join("settings.json"), &format!("{body}\n"))?;
+    Ok(dir)
+}
+
 fn load_record_or_err(data_dir: &Path, id: &str) -> Result<ClaudeProfileRecord, AppCommandError> {
     read_record(data_dir, id)?
         .ok_or_else(|| AppCommandError::not_found(format!("Claude profile '{id}' not found")))
@@ -775,6 +790,12 @@ pub async fn apply_claude_profile_env(
         ClaudeProfileKind::FollowDefault => {}
         ClaudeProfileKind::OfficialDirect => {
             apply_profile_connection_env(&resolved, runtime_env);
+            let dir = materialize_official_direct_profile(data_dir)
+                .map_err(|e| AcpError::protocol(e.to_string()))?;
+            runtime_env.insert(
+                CLAUDE_SETTINGS_OVERLAY_ENV_KEY.to_string(),
+                dir.join("settings.json").to_string_lossy().into_owned(),
+            );
         }
         ClaudeProfileKind::Managed => {
             if let Some(dir) = &resolved.config_dir {
@@ -1701,6 +1722,20 @@ mod tests {
             env.get("ANTHROPIC_MODEL").and_then(|v| v.as_str()),
             Some("claude-sonnet-4")
         );
+    }
+
+    #[test]
+    fn official_direct_materialize_is_idempotent() {
+        let data = tempfile::tempdir().unwrap();
+        let first_dir = materialize_official_direct_profile(data.path()).unwrap();
+        let settings_path = first_dir.join("settings.json");
+        let first = fs::read_to_string(&settings_path).unwrap();
+
+        let second_dir = materialize_official_direct_profile(data.path()).unwrap();
+        let second = fs::read_to_string(second_dir.join("settings.json")).unwrap();
+
+        assert_eq!(first_dir, second_dir);
+        assert_eq!(first, second);
     }
 
     #[test]
@@ -2844,7 +2879,37 @@ mod tests {
         );
         assert_eq!(env.get("ANTHROPIC_API_KEY").map(String::as_str), Some(""));
         assert!(!env.contains_key("CLAUDE_CONFIG_DIR"));
-        assert!(!env.contains_key(CLAUDE_SETTINGS_OVERLAY_ENV_KEY));
+        let settings_path = managed_settings_json_path(data.path(), OFFICIAL_DIRECT_PROFILE_ID);
+        assert_eq!(
+            env.get(CLAUDE_SETTINGS_OVERLAY_ENV_KEY).map(String::as_str),
+            Some(settings_path.to_string_lossy().as_ref())
+        );
+        assert!(settings_path.is_file());
+        let settings: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(settings_path).unwrap()).unwrap();
+        let settings_env = settings
+            .get("env")
+            .and_then(|value| value.as_object())
+            .unwrap();
+        assert_eq!(settings_env.len(), 3);
+        assert_eq!(
+            settings_env
+                .get("ANTHROPIC_BASE_URL")
+                .and_then(|value| value.as_str()),
+            Some(OFFICIAL_ANTHROPIC_BASE_URL)
+        );
+        assert_eq!(
+            settings_env
+                .get("ANTHROPIC_AUTH_TOKEN")
+                .and_then(|value| value.as_str()),
+            Some("")
+        );
+        assert_eq!(
+            settings_env
+                .get("ANTHROPIC_API_KEY")
+                .and_then(|value| value.as_str()),
+            Some("")
+        );
         assert!(!env.contains_key("CLAUDE_AUTH_MODE"));
         assert!(!env.contains_key("ANTHROPIC_MODEL"));
         assert!(!env.contains_key("ANTHROPIC_DEFAULT_SONNET_MODEL"));
