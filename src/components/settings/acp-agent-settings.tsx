@@ -215,7 +215,6 @@ import {
   updateTomlRootStringKey,
 } from "./agent-config"
 
-export type { ClaudeAuthMode } from "./claude-config-fields"
 export type {
   GrokAuthMethod,
   CodexSandboxDraftFields,
@@ -226,8 +225,6 @@ export {
   hostToolsAgentModeEnabled,
   setHostToolsAgentMode,
   inferGrokMode,
-  inferClaudeAuthMode,
-  claudeAuthModeEnvPatch,
   buildMergeConfigPayload,
   codexSandboxBaselineOf,
   buildCodexSandboxConfig,
@@ -1483,8 +1480,6 @@ export function AcpAgentSettings() {
     if (!selectedDraft) return false
     if (!selectedAgent) return false
     const at = selectedAgent.agent_type
-    if (at === "claude_code")
-      return selectedDraft.claudeAuthMode === "model_provider"
     if (at === "codex") return selectedDraft.codexAuthMode === "model_provider"
     if (at === "gemini")
       return selectedDraft.geminiAuthMode === "model_provider"

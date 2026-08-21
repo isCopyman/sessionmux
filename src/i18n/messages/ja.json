@@ -1089,8 +1089,6 @@
       "rawEditorWarning": "ここで保存するとファイル全体がそのまま上書きされ、上の構造化設定が置き換えられます。",
       "rawEditorPlaceholder": "[providers.codeg]\ntype = \"kimi\"\nbase_url = \"https://api.moonshot.cn/v1\"\napi_key = \"sk-...\""
     },
-    "authModeInherit": "継承（プロジェクト / ユーザー設定）",
-    "authModeInheritHint": "ここでは指定せず、プロジェクトとユーザーの .claude/settings.json に従います。",
     "authModeOfficialSubscription": "公式サブスクリプション",
     "authModeCustomEndpoint": "カスタムエンドポイント",
     "authModeCustomEndpointHint": "API URL と API Key を手動で設定してカスタムエンドポイントに接続します。",

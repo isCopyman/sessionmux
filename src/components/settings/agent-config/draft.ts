@@ -1,6 +1,5 @@
 import type { AcpAgentInfo, AgentType } from "@/lib/types"
 import { parseCodexModelConfig } from "@/lib/types"
-import type { ClaudeAuthMode } from "../claude-config-fields"
 import { DEEPSEEK_PANEL_ENV_KEYS } from "../deepseek-config-panel"
 import {
   envMapToText,
@@ -13,12 +12,7 @@ import {
   type ImportantConfigKey,
   type ImportantDraftPatch,
 } from "./shared"
-import {
-  CLAUDE_MODEL_ENV_KEYS,
-  claudeAuthModeEnvPatch,
-  extractImportantConfigValues,
-  inferClaudeAuthMode,
-} from "./claude"
+import { CLAUDE_MODEL_ENV_KEYS, extractImportantConfigValues } from "./claude"
 import { extractGeminiImportantValues } from "./gemini"
 import { extractOpenClawImportantValues } from "./openclaw"
 import { extractClineImportantValues } from "./cline"
@@ -316,22 +310,11 @@ export function buildAgentDraft(agent: AcpAgentInfo): AgentDraft {
           Boolean(agent.grok_settings?.custom_model_id?.trim())
         )
       : "api_key"
-  const claudeAuthMode: ClaudeAuthMode =
-    agent.agent_type === "claude_code"
-      ? inferClaudeAuthMode(
-          agent.env,
-          agent.model_provider_id ?? null,
-          Boolean(important.apiBaseUrl || important.apiKey)
-        )
-      : "official_subscription"
   const rawEnvText = envMapToText(agent.env)
   // When codex is in official subscription mode, clean up API keys/URLs from env.
   // Grok mirrors this: record the auth-method knob, and in subscription mode
   // strip XAI_API_KEY so the editable env can't override the `grok login`
   // credential (the launch path enforces the same — see apply_grok_env_policy).
-  // Claude does the same for its own knob: writing the inferred mode back is what
-  // upgrades a legacy row into one apply_claude_env_policy can act on, so an
-  // inherited ANTHROPIC_BASE_URL stops reaching the subscription launch.
   const envText =
     agent.agent_type === "codex" && codexAuthMode === "chatgpt_subscription"
       ? patchEnvText(rawEnvText, {
@@ -343,9 +326,7 @@ export function buildAgentDraft(agent: AcpAgentInfo): AgentDraft {
             GROK_AUTH_MODE: grokAuthMode,
             ...(grokAuthMode === "subscription" ? { XAI_API_KEY: "" } : {}),
           })
-        : agent.agent_type === "claude_code"
-          ? patchEnvText(rawEnvText, claudeAuthModeEnvPatch(claudeAuthMode))
-          : rawEnvText
+        : rawEnvText
   return {
     enabled: agent.enabled,
     envText,
@@ -376,7 +357,6 @@ export function buildAgentDraft(agent: AcpAgentInfo): AgentDraft {
             : agent.agent_type === "open_code"
               ? openCodeImportant.model
               : important.model,
-    claudeAuthMode,
     modelProviderId: agent.model_provider_id ?? null,
     geminiAuthMode:
       agent.agent_type === "gemini" && agent.model_provider_id != null
