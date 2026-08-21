@@ -22,7 +22,9 @@ const h = vi.hoisted(() => ({
   openConversations: vi.fn(),
   createOnly: vi.fn(),
   createCollaborationRoom: vi.fn(),
+  addCollaborationRoomMembers: vi.fn(),
   listConversationCollectionRefs: vi.fn(),
+  roomCatalog: [] as CollaborationRoomSummary[],
   setRoute: vi.fn(),
   openRoom: vi.fn(),
   deleteRooms: vi.fn(),
@@ -53,7 +55,15 @@ vi.mock("@/lib/room-bulk-operations", async (importOriginal) => {
 
 vi.mock("@/lib/api", () => ({
   createCollaborationRoom: h.createCollaborationRoom,
+  addCollaborationRoomMembers: h.addCollaborationRoomMembers,
   listConversationCollectionRefs: h.listConversationCollectionRefs,
+}))
+
+// The real catalog store would hit the API on hydrate; the bar only reads the
+// list, so a stub keeps "which Rooms are offered" under the test's control.
+vi.mock("@/stores/room-catalog-store", () => ({
+  useRoomCatalogStore: (selector: (state: unknown) => unknown) =>
+    selector({ rooms: h.roomCatalog, hydrated: true, refresh: vi.fn() }),
 }))
 
 vi.mock("@/lib/open-room", () => ({
@@ -189,9 +199,16 @@ function renderBar(
   return { onClear, user: userEvent.setup() }
 }
 
+/** "Create room" now lives at the bottom of the Join-room menu, next to the
+ *  existing Rooms — same shape as the Workbench menu beside it. */
+async function openJoinRoomMenu(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole("button", { name: /Join room/ }))
+}
+
 describe("SessionBulkActionBar", () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    h.roomCatalog = []
     h.archiveSessions.mockResolvedValue(undefined)
     h.deleteSessions.mockResolvedValue(undefined)
     h.moveSessionsToCollection.mockResolvedValue([])
@@ -247,7 +264,8 @@ describe("SessionBulkActionBar", () => {
 
   it("creates a room from the current selection", async () => {
     const { onClear, user } = renderBar()
-    await user.click(screen.getByRole("button", { name: "Create room" }))
+    await openJoinRoomMenu(user)
+    await user.click(screen.getByRole("menuitem", { name: "Create room" }))
     await waitFor(() =>
       expect(h.createCollaborationRoom).toHaveBeenCalledWith({
         workbenchId: 1,
@@ -268,7 +286,8 @@ describe("SessionBulkActionBar", () => {
       { conversation_id: 2, collection_id: 10 },
     ])
     const { user } = renderBar()
-    await user.click(screen.getByRole("button", { name: "Create room" }))
+    await openJoinRoomMenu(user)
+    await user.click(screen.getByRole("menuitem", { name: "Create room" }))
     await waitFor(() =>
       expect(h.createCollaborationRoom).toHaveBeenCalledWith({
         workbenchId: 1,
@@ -280,6 +299,23 @@ describe("SessionBulkActionBar", () => {
     )
   })
 
+  it("adds the selection to a Room that already exists", async () => {
+    h.roomCatalog = [room("rm_a")]
+    h.addCollaborationRoomMembers.mockResolvedValue({ id: "rm_a" })
+    const { onClear, user } = renderBar()
+    await openJoinRoomMenu(user)
+    await user.click(screen.getByRole("menuitem", { name: /Room rm_a/ }))
+    await waitFor(() =>
+      expect(h.addCollaborationRoomMembers).toHaveBeenCalledWith({
+        roomId: "rm_a",
+        conversationIds: [1, 2],
+      })
+    )
+    // Joining an existing Room must not create one.
+    expect(h.createCollaborationRoom).not.toHaveBeenCalled()
+    await waitFor(() => expect(onClear).toHaveBeenCalled())
+  })
+
   it("asks for confirmation before deleting", async () => {
     const { user } = renderBar()
     await user.click(screen.getByRole("button", { name: "Delete" }))
@@ -288,10 +324,10 @@ describe("SessionBulkActionBar", () => {
     await waitFor(() => expect(h.deleteSessions).toHaveBeenCalled())
   })
 
-  it("greys out Archive and Create room while a Room is in the selection", () => {
+  it("greys out Archive and Join room while a Room is in the selection", () => {
     renderBar(undefined, undefined, [room("rm_a")])
     expect(screen.getByRole("button", { name: "Archive" })).toBeDisabled()
-    expect(screen.getByRole("button", { name: "Create room" })).toBeDisabled()
+    expect(screen.getByRole("button", { name: /Join room/ })).toBeDisabled()
     expect(screen.getByRole("button", { name: "Delete" })).toBeEnabled()
   })
 

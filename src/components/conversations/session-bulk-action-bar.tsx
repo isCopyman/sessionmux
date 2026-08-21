@@ -66,6 +66,7 @@ import type {
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { useCollectionStore } from "@/stores/collection-store"
 import { useTabStore } from "@/stores/tab-store"
+import { useRoomCatalogStore } from "@/stores/room-catalog-store"
 import { useWorkbenchStore } from "@/stores/workbench-store"
 
 function collectionMenuOptions(items: CollectionInfo[]) {
@@ -110,6 +111,7 @@ export function SessionBulkActionBar({
   const t = useTranslations("Folder.sidebar.manageConversations")
   const tCommon = useTranslations("Folder.common")
   const tWorkbench = useTranslations("Folder.workbench")
+  const tRoom = useTranslations("Room")
   const conversations = useMemo(() => [...selected.values()], [selected])
   const rooms = useMemo(() => selectedRooms ?? [], [selectedRooms])
   const sessionCount = conversations.length
@@ -119,7 +121,8 @@ export function SessionBulkActionBar({
     useTabActions()
   const { openConversations } = useWorkbenchRoute()
   const openRoom = useOpenRoom()
-  const { createRoomWith } = useRoomMembership()
+  const { createRoomWith, addMembersTo } = useRoomMembership()
+  const roomCatalog = useRoomCatalogStore((state) => state.rooms)
   const activeWorkbenchId = useTabStore((state) => state.activeWorkbenchId)
   const activeWorkbenchTabs = useTabStore((state) => state.rawTabs)
   const folders = useAppWorkspaceStore((state) => state.folders)
@@ -490,6 +493,30 @@ export function SessionBulkActionBar({
     t,
   ])
 
+  /**
+   * Add the selected Sessions to a Room that already exists — the other half of
+   * "create a Room from these", and the same shape as the Workbench dropdown
+   * next to it (pick an existing one, or create a new one at the bottom).
+   */
+  const handleJoinRoom = useCallback(
+    (roomId: string) => {
+      if (sessionCount === 0 || pending) return
+      setPending(true)
+      void (async () => {
+        try {
+          const updated = await addMembersTo(
+            roomId,
+            conversations.map((conversation) => conversation.id)
+          )
+          if (updated) onClear()
+        } finally {
+          setPending(false)
+        }
+      })()
+    },
+    [addMembersTo, conversations, onClear, pending, sessionCount]
+  )
+
   if (selectedCount === 0) return null
 
   return (
@@ -616,18 +643,46 @@ export function SessionBulkActionBar({
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            className="h-7 px-2 text-xs"
-            // Rooms cannot be Room members — greyed out while any is selected.
-            disabled={pending || roomCount > 0}
-            onClick={handleCreateRoom}
-          >
-            <Users className="h-3.5 w-3.5" />
-            {t("createRoom")}
-          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="h-7 px-2 text-xs"
+                // Rooms cannot be Room members — greyed out while any is selected.
+                disabled={pending || roomCount > 0}
+              >
+                <Users className="h-3.5 w-3.5" />
+                {tRoom("joinRoomAction")}
+                <ChevronDown className="h-3 w-3 opacity-60" />
+              </Button>
+            </DropdownMenuTrigger>
+            {/* Same shape as the Workbench menu above: existing targets first,
+                "create a new one" last. `overflow-x-hidden` is deliberate — a
+                lone `overflow-y-auto` lets the other axis compute to `auto` and
+                grow a stray horizontal scrollbar. */}
+            <DropdownMenuContent
+              align="start"
+              className="max-h-64 min-w-52 overflow-y-auto overflow-x-hidden"
+            >
+              {roomCatalog.map((room) => (
+                <DropdownMenuItem
+                  key={room.id}
+                  onSelect={() => handleJoinRoom(room.id)}
+                >
+                  <Users className="h-4 w-4" />
+                  <span className="truncate">{room.title}</span>
+                  <span className="opacity-60">· {room.memberCount}</span>
+                </DropdownMenuItem>
+              ))}
+              {roomCatalog.length > 0 ? <DropdownMenuSeparator /> : null}
+              <DropdownMenuItem onSelect={handleCreateRoom}>
+                <Plus className="h-4 w-4" />
+                {t("createRoom")}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
           <Button
             type="button"
             size="sm"
