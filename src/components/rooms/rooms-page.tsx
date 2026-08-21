@@ -158,6 +158,18 @@ function formatRoomTime(iso: string) {
   })
 }
 
+/** Gutter time for grouped posts: forced 24h so "14:23" fits the w-9 rail
+ *  (12h locales render "02:23 PM", which doesn't). */
+function formatRoomTimeCompact(iso: string) {
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return ""
+  return date.toLocaleTimeString(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  })
+}
+
 function sameSpeaker(a: RoomTimelineEvent, b: RoomTimelineEvent) {
   if ((a.authorKind ?? "session") !== (b.authorKind ?? "session")) return false
   if (a.authorKind === "human") return true
@@ -242,13 +254,23 @@ function RoomTimelinePost({
       )}
     >
       {grouped ? (
-        <span className="flex w-9 shrink-0 items-start justify-center pt-0.5">
-          <RoomReplyButton
-            label={t("reply")}
-            hint={t("replyHint")}
-            compact
-            onReply={() => onReply(event)}
-          />
+        <span className="relative flex w-9 shrink-0 items-start justify-center pt-0.5">
+          {/* Every post carries its own time, aggregated or not — the rail
+              time swaps with the hover-revealed reply button. */}
+          <time
+            className="pt-1 text-[10px] leading-none text-muted-foreground/70 transition-opacity group-hover:opacity-0 group-focus-within:opacity-0"
+            dateTime={event.createdAt}
+          >
+            {formatRoomTimeCompact(event.createdAt)}
+          </time>
+          <span className="absolute inset-x-0 top-0 flex justify-center pt-0.5">
+            <RoomReplyButton
+              label={t("reply")}
+              hint={t("replyHint")}
+              compact
+              onReply={() => onReply(event)}
+            />
+          </span>
         </span>
       ) : (
         <RoomSpeakerAvatar human={fromYou} agentType={event.source.agentType} />
