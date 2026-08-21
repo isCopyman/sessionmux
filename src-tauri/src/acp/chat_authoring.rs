@@ -162,6 +162,122 @@ pub struct ProfileListOutcome {
     pub note: Option<String>,
 }
 
+/// Default / hard cap for `list_tasks`. Over the cap is clamped, never rejected.
+pub const DEFAULT_TASK_LIST_LIMIT: u32 = 30;
+pub const MAX_TASK_LIST_LIMIT: u32 = 100;
+
+/// Character caps for `get_task`. Truncation is character-safe (`truncate_chars`).
+pub const TASK_PROMPT_EXCERPT_CHARS: usize = 1000;
+pub const TASK_EVENT_SUMMARY_CHARS: usize = 200;
+pub const TASK_LAST_ERROR_CHARS: usize = 500;
+pub const TASK_RECENT_EVENT_LIMIT: u64 = 10;
+
+/// Validated `list_tasks` arguments. Every field is optional; the host fills
+/// defaults (caller's project, no status filter, limit 30).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ListTasksQuery {
+    /// Absolute project path, `"all"` for every live project, or `None` to use
+    /// the caller's own project (worktree cwd hops to the project root).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder_path: Option<String>,
+    /// Board column (`todo` / `in_progress` / `attention` / `done`) or a raw
+    /// `WorkTaskStatus` value (`awaiting_input`, …).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+}
+
+/// One compact board row for `list_tasks`. Deliberately omits prompt body,
+/// display_text, timeline, and error stacks — those blow up an LLM context.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskListRow {
+    pub id: i32,
+    pub title: String,
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_type: Option<String>,
+    pub updated_at: DateTime<Utc>,
+    pub has_worktree: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conversation_id: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure_reason: Option<String>,
+}
+
+/// Outcome of `list_tasks`. `total` is the filtered count before `limit`;
+/// `truncated` is true when the LLM is only seeing a prefix.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TaskListOutcome {
+    pub tasks: Vec<TaskListRow>,
+    pub total: u64,
+    pub truncated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+/// One timeline event as shown by `get_task`. `summary` is already truncated.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskEventRow {
+    pub kind: String,
+    pub at: DateTime<Utc>,
+    pub summary: String,
+}
+
+/// Outcome of `get_task`. Absent optional fields are omitted (never a token,
+/// baseUrl, or the untruncated prompt). `found: false` is a soft miss.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TaskDetailOutcome {
+    pub found: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_excerpt: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_branch: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub work_branch: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub has_worktree: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conversation_id: Option<i32>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub recent_events: Vec<TaskEventRow>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+impl TaskListOutcome {
+    pub fn rejected(note: impl Into<String>) -> Self {
+        Self {
+            note: Some(note.into()),
+            ..Default::default()
+        }
+    }
+}
+
+impl TaskDetailOutcome {
+    pub fn rejected(note: impl Into<String>) -> Self {
+        Self {
+            found: false,
+            note: Some(note.into()),
+            ..Default::default()
+        }
+    }
+}
+
 impl AuthoringOutcome {
     /// A soft refusal: nothing was created, and `note` explains why in terms the
     /// LLM can act on (turn the setting on, pass `folder_path`, fix the cron…).
@@ -199,6 +315,12 @@ pub trait ChatAuthoringAccess: Send + Sync {
     /// List Claude launch profiles for `list_profiles`. `agent_type` defaults
     /// to Claude Code; other agents currently have no profiles.
     async fn list_profiles(&self, agent_type: Option<String>) -> ProfileListOutcome;
+
+    /// Read-only board listing for `list_tasks`. Must not write any row.
+    async fn list_tasks(&self, ctx: AuthoringContext, query: ListTasksQuery) -> TaskListOutcome;
+
+    /// Read-only card detail for `get_task`. Must not write any row.
+    async fn get_task(&self, task_id: i32) -> TaskDetailOutcome;
 }
 
 /// The two independently-toggled feature flags. Both default OFF: unlike the

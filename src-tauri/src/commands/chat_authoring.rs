@@ -22,22 +22,31 @@ use sea_orm::DatabaseConnection;
 use serde::{Deserialize, Serialize};
 
 use crate::acp::chat_authoring::{
-    local_timezone, AuthoringContext, AuthoringOutcome, ChatAuthoringAccess, ChatAuthoringConfig,
-    ChatAuthoringRuntimeConfig, NewAutomationSpec, NewWorkTaskSpec, ProfileListEntry,
-    ProfileListOutcome,
+    local_timezone, truncate_chars, AuthoringContext, AuthoringOutcome, ChatAuthoringAccess,
+    ChatAuthoringConfig, ChatAuthoringRuntimeConfig, ListTasksQuery, NewAutomationSpec,
+    NewWorkTaskSpec, ProfileListEntry, ProfileListOutcome, TaskDetailOutcome, TaskEventRow,
+    TaskListOutcome, TaskListRow, DEFAULT_TASK_LIST_LIMIT, MAX_TASK_LIST_LIMIT,
+    TASK_EVENT_SUMMARY_CHARS, TASK_LAST_ERROR_CHARS, TASK_PROMPT_EXCERPT_CHARS,
+    TASK_RECENT_EVENT_LIMIT,
 };
+use crate::acp::connection::PREFERRED_PROFILE_CONFIG_KEY;
 use crate::acp::types::PromptInputBlock;
 use crate::app_error::AppCommandError;
 use crate::commands::claude_profile::{
     claude_profile_list_core, launch_config_values, profile_destination_summary,
+    LAUNCH_MODEL_CONFIG_KEY,
 };
 use crate::db::entities::automation::{IsolationMode, TriggerKind};
 use crate::db::entities::folder::FolderKind;
-use crate::db::service::{app_metadata_service, conversation_service, folder_service};
+use crate::db::error::DbError;
+use crate::db::service::{
+    app_metadata_service, conversation_service, folder_service, work_task_service,
+};
 use crate::db::AppDatabase;
 use crate::models::agent::AgentType;
 use crate::models::{
     AutomationConfig, AutomationDraft, FolderDetail, WorkTaskConfig, WorkTaskDraft,
+    WorkTaskEventInfo, WorkTaskInfo,
 };
 use crate::web::event_bridge::{emit_event, EventEmitter, CHAT_AUTHORING_SETTINGS_CHANGED_EVENT};
 
@@ -194,6 +203,117 @@ fn reject_profile_unless_claude(
         )),
     }
 }
+
+fn clamp_task_list_limit(limit: Option<u32>) -> u64 {
+    u64::from(
+        limit
+            .unwrap_or(DEFAULT_TASK_LIST_LIMIT)
+            .clamp(1, MAX_TASK_LIST_LIMIT),
+    )
+}
+
+fn compact_task_row(row: crate::db::entities::work_task::Model) -> TaskListRow {
+    let cfg: WorkTaskConfig = serde_json::from_str(&row.config).unwrap_or_default();
+    TaskListRow {
+        id: row.id,
+        title: row.title,
+        status: work_task_service::status_str(row.status).to_string(),
+        agent_type: nonempty(cfg.agent_type),
+        updated_at: row.updated_at,
+        has_worktree: row.worktree_folder_id.is_some(),
+        conversation_id: row.conversation_id,
+        failure_reason: nonempty(row.failure_reason),
+    }
+}
+
+fn nonempty(value: Option<String>) -> Option<String> {
+    value.and_then(|s| {
+        let trimmed = s.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
+}
+
+fn compact_event_summary(event: &WorkTaskEventInfo) -> String {
+    let Some(payload) = &event.payload else {
+        return String::new();
+    };
+    let text = if event.kind == "status_changed" {
+        let from = payload.get("from").and_then(|v| v.as_str()).unwrap_or("?");
+        let to = payload.get("to").and_then(|v| v.as_str()).unwrap_or("?");
+        format!("{from} → {to}")
+    } else if let Some(s) = payload
+        .get("message")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+    {
+        s.to_string()
+    } else if let Some(s) = payload
+        .get("summary")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+    {
+        s.to_string()
+    } else if let Some(s) = payload
+        .get("error")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+    {
+        s.to_string()
+    } else {
+        payload.to_string()
+    };
+    truncate_chars(&text, TASK_EVENT_SUMMARY_CHARS)
+}
+
+fn task_detail_from_info(info: WorkTaskInfo, events: Vec<WorkTaskEventInfo>) -> TaskDetailOutcome {
+    let cfg: WorkTaskConfig = serde_json::from_value(info.config).unwrap_or_default();
+    let profile = cfg
+        .config_values
+        .get(PREFERRED_PROFILE_CONFIG_KEY)
+        .cloned()
+        .and_then(|s| nonempty(Some(s)));
+    let model = cfg
+        .config_values
+        .get(LAUNCH_MODEL_CONFIG_KEY)
+        .cloned()
+        .and_then(|s| nonempty(Some(s)));
+    TaskDetailOutcome {
+        found: true,
+        id: Some(info.id),
+        title: Some(info.title),
+        status: Some(work_task_service::status_str(info.status).to_string()),
+        agent_type: nonempty(cfg.agent_type),
+        model,
+        profile,
+        prompt_excerpt: Some(truncate_chars(&cfg.display_text, TASK_PROMPT_EXCERPT_CHARS)),
+        base_branch: nonempty(info.base_branch),
+        work_branch: nonempty(info.work_branch),
+        has_worktree: Some(info.worktree_folder_id.is_some()),
+        conversation_id: info.conversation_id,
+        recent_events: events
+            .into_iter()
+            .map(|event| TaskEventRow {
+                kind: event.kind.clone(),
+                at: event.created_at,
+                summary: compact_event_summary(&event),
+            })
+            .collect(),
+        last_error: info
+            .last_error
+            .map(|s| truncate_chars(&s, TASK_LAST_ERROR_CHARS))
+            .and_then(|s| nonempty(Some(s))),
+        note: None,
+    }
+}
+
+const UNKNOWN_STATUS_NOTE: &str = "unknown status filter. Use a board column \
+     (todo, in_progress, attention, done) or a raw status \
+     (todo, queued, preparing, running, awaiting_input, review, merging, \
+     done, failed, canceled).";
 
 /// Wrap a plain prompt string as the single text block both editors produce for
 /// a text-only prompt.
@@ -465,6 +585,71 @@ impl ChatAuthoringAccess for DbChatAuthoring {
                 note: Some(format!("unknown agent_type '{wire}'")),
             },
         }
+    }
+
+    async fn list_tasks(&self, ctx: AuthoringContext, query: ListTasksQuery) -> TaskListOutcome {
+        let statuses = match query
+            .status
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            None => None,
+            Some(raw) => match work_task_service::board_status_filter(raw) {
+                Some(s) => Some(s),
+                None => return TaskListOutcome::rejected(UNKNOWN_STATUS_NOTE),
+            },
+        };
+        let folder_id = if query.folder_path.as_deref() == Some("all") {
+            None
+        } else {
+            match self
+                .resolve_folder(&ctx, query.folder_path.as_deref())
+                .await
+            {
+                Ok(f) => Some(f.id),
+                Err(note) => return TaskListOutcome::rejected(note),
+            }
+        };
+        let limit = clamp_task_list_limit(query.limit);
+        match work_task_service::list_matching(&self.db.conn, folder_id, statuses.as_deref(), limit)
+            .await
+        {
+            Ok((rows, total)) => {
+                let truncated = total > limit;
+                TaskListOutcome {
+                    tasks: rows.into_iter().map(compact_task_row).collect(),
+                    total,
+                    truncated,
+                    note: None,
+                }
+            }
+            Err(e) => TaskListOutcome::rejected(format!("could not list tasks: {e}")),
+        }
+    }
+
+    async fn get_task(&self, task_id: i32) -> TaskDetailOutcome {
+        let info = match work_task_service::get(&self.db.conn, task_id).await {
+            Ok(info) => info,
+            Err(DbError::NotFound(_)) => {
+                return TaskDetailOutcome::rejected(format!("no task with id {task_id}"));
+            }
+            Err(e) => {
+                return TaskDetailOutcome::rejected(format!("could not load task {task_id}: {e}"));
+            }
+        };
+        let events =
+            match work_task_service::recent_events(&self.db.conn, task_id, TASK_RECENT_EVENT_LIMIT)
+                .await
+            {
+                Ok(events) => events,
+                Err(e) => {
+                    return TaskDetailOutcome::rejected(format!(
+                        "could not load events for task {task_id}: {e}"
+                    ));
+                }
+            };
+        task_detail_from_info(info, events)
     }
 }
 
@@ -1126,5 +1311,316 @@ mod tests {
         let other = access.list_profiles(Some("codex".into())).await;
         assert!(other.profiles.is_empty());
         assert!(other.note.unwrap().contains("Claude Code"));
+    }
+
+    async fn stamp_status(
+        conn: &sea_orm::DatabaseConnection,
+        id: i32,
+        status: crate::db::entities::work_task::WorkTaskStatus,
+    ) {
+        use crate::db::entities::work_task;
+        use sea_orm::{ActiveModelTrait, EntityTrait, IntoActiveModel, Set};
+        let row = work_task::Entity::find_by_id(id)
+            .one(conn)
+            .await
+            .unwrap()
+            .unwrap();
+        let mut am = row.into_active_model();
+        am.status = Set(status);
+        am.updated_at = Set(chrono::Utc::now());
+        am.update(conn).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn list_tasks_defaults_to_the_caller_project_and_hops_off_a_worktree() {
+        let (db, access, _cfg, _data) = harness(false, true).await;
+        let root = folder_service::add_folder(&db.conn, "/repo/app")
+            .await
+            .unwrap();
+        folder_service::add_folder_with_parent(&db.conn, "/repo/app-task-1", Some(root.id))
+            .await
+            .unwrap();
+        folder_service::add_folder(&db.conn, "/repo/other")
+            .await
+            .unwrap();
+        assert!(
+            access
+                .create_work_task(ctx_at("/repo/app"), work_task_spec())
+                .await
+                .created
+        );
+        let mut other_spec = work_task_spec();
+        other_spec.title = "Other project".into();
+        other_spec.folder_path = Some("/repo/other".into());
+        assert!(
+            access
+                .create_work_task(ctx_at("/repo/other"), other_spec)
+                .await
+                .created
+        );
+        assert_eq!(
+            work_task_service::list(&db.conn, None).await.unwrap().len(),
+            2
+        );
+
+        let out = access
+            .list_tasks(ctx_at("/repo/app-task-1/src"), ListTasksQuery::default())
+            .await;
+        assert!(out.note.is_none(), "note: {:?}", out.note);
+        assert_eq!(out.total, 1);
+        assert!(!out.truncated);
+        assert_eq!(out.tasks.len(), 1);
+        assert_eq!(out.tasks[0].title, "Fix the flake");
+        assert_eq!(out.tasks[0].status, "todo");
+        let dumped = serde_json::to_value(&out).unwrap();
+        let row = &dumped["tasks"][0];
+        assert!(row.get("prompt").is_none(), "{row}");
+        assert!(row.get("display_text").is_none(), "{row}");
+        assert!(row.get("prompt_blocks").is_none(), "{row}");
+        assert!(row.get("last_error").is_none(), "{row}");
+        assert!(row.get("config").is_none(), "{row}");
+        assert!(row.get("config_values").is_none(), "{row}");
+    }
+
+    #[tokio::test]
+    async fn list_tasks_folder_path_all_returns_every_project_newest_first() {
+        let (db, access, _cfg, _data) = harness(false, true).await;
+        folder_service::add_folder(&db.conn, "/repo/app")
+            .await
+            .unwrap();
+        folder_service::add_folder(&db.conn, "/repo/other")
+            .await
+            .unwrap();
+        let mut first = work_task_spec();
+        first.title = "Older".into();
+        access.create_work_task(ctx_at("/repo/app"), first).await;
+        let mut second = work_task_spec();
+        second.title = "Newer".into();
+        second.folder_path = Some("/repo/other".into());
+        access.create_work_task(ctx_at("/repo/other"), second).await;
+
+        let out = access
+            .list_tasks(
+                ctx_at("/repo/app"),
+                ListTasksQuery {
+                    folder_path: Some("all".into()),
+                    ..Default::default()
+                },
+            )
+            .await;
+        assert_eq!(out.total, 2);
+        assert_eq!(out.tasks.len(), 2);
+        assert_eq!(out.tasks[0].title, "Newer");
+        assert_eq!(out.tasks[1].title, "Older");
+    }
+
+    #[tokio::test]
+    async fn list_tasks_attention_filter_matches_frontend_column() {
+        let (db, access, _cfg, _data) = harness(false, true).await;
+        folder_service::add_folder(&db.conn, "/repo/app")
+            .await
+            .unwrap();
+        use crate::db::entities::work_task::WorkTaskStatus;
+        let mut ids = Vec::new();
+        for title in [
+            "todo",
+            "queued",
+            "preparing",
+            "running",
+            "awaiting_input",
+            "review",
+            "merging",
+            "failed",
+            "done",
+            "canceled",
+        ] {
+            let mut spec = work_task_spec();
+            spec.title = title.into();
+            let out = access.create_work_task(ctx_at("/repo/app"), spec).await;
+            ids.push((title, out.id.unwrap()));
+        }
+        let statuses = [
+            WorkTaskStatus::Todo,
+            WorkTaskStatus::Queued,
+            WorkTaskStatus::Preparing,
+            WorkTaskStatus::Running,
+            WorkTaskStatus::AwaitingInput,
+            WorkTaskStatus::Review,
+            WorkTaskStatus::Merging,
+            WorkTaskStatus::Failed,
+            WorkTaskStatus::Done,
+            WorkTaskStatus::Canceled,
+        ];
+        for ((_, id), status) in ids.iter().zip(statuses) {
+            stamp_status(&db.conn, *id, status).await;
+        }
+
+        // Pin: src/components/tasks/board-columns.ts STATUSES_BY_COLUMN.attention
+        // = awaiting_input, review, merging, failed.
+        let out = access
+            .list_tasks(
+                ctx_at("/repo/app"),
+                ListTasksQuery {
+                    status: Some("attention".into()),
+                    ..Default::default()
+                },
+            )
+            .await;
+        let mut got: Vec<&str> = out.tasks.iter().map(|t| t.status.as_str()).collect();
+        got.sort_unstable();
+        assert_eq!(
+            got,
+            vec!["awaiting_input", "failed", "merging", "review"],
+            "attention column must match board-columns.ts"
+        );
+        assert_eq!(out.total, 4);
+
+        let raw = access
+            .list_tasks(
+                ctx_at("/repo/app"),
+                ListTasksQuery {
+                    status: Some("awaiting_input".into()),
+                    ..Default::default()
+                },
+            )
+            .await;
+        assert_eq!(raw.total, 1);
+        assert_eq!(raw.tasks[0].status, "awaiting_input");
+    }
+
+    #[tokio::test]
+    async fn list_tasks_clamps_limit_and_sets_truncated() {
+        let (db, access, _cfg, _data) = harness(false, true).await;
+        folder_service::add_folder(&db.conn, "/repo/app")
+            .await
+            .unwrap();
+        for i in 0..5 {
+            let mut spec = work_task_spec();
+            spec.title = format!("card {i}");
+            assert!(
+                access
+                    .create_work_task(ctx_at("/repo/app"), spec)
+                    .await
+                    .created
+            );
+        }
+        let page = access
+            .list_tasks(
+                ctx_at("/repo/app"),
+                ListTasksQuery {
+                    limit: Some(2),
+                    ..Default::default()
+                },
+            )
+            .await;
+        assert_eq!(page.total, 5);
+        assert_eq!(page.tasks.len(), 2);
+        assert!(page.truncated);
+
+        assert_eq!(clamp_task_list_limit(None), 30);
+        assert_eq!(clamp_task_list_limit(Some(150)), 100);
+        assert_eq!(clamp_task_list_limit(Some(0)), 1);
+
+        for i in 5..101 {
+            work_task_service::create(
+                &db.conn,
+                WorkTaskDraft {
+                    folder_id: work_task_service::list(&db.conn, None).await.unwrap()[0].folder_id,
+                    title: format!("extra {i}"),
+                    config: serde_json::json!({
+                        "display_text": "x",
+                        "prompt_blocks": [{ "type": "text", "text": "x" }],
+                    }),
+                },
+            )
+            .await
+            .unwrap();
+        }
+        let capped = access
+            .list_tasks(
+                ctx_at("/repo/app"),
+                ListTasksQuery {
+                    limit: Some(150),
+                    ..Default::default()
+                },
+            )
+            .await;
+        assert_eq!(capped.total, 101);
+        assert_eq!(capped.tasks.len(), 100);
+        assert!(capped.truncated);
+    }
+
+    #[tokio::test]
+    async fn get_task_truncates_and_omits_profile_secrets() {
+        let (db, access, _cfg, _data) = harness(false, true).await;
+        let folder = folder_service::add_folder(&db.conn, "/repo/app")
+            .await
+            .unwrap();
+        let secret = "sk-super-secret-token-xyz-do-not-leak";
+        let long_prompt: String = "你".repeat(TASK_PROMPT_EXCERPT_CHARS + 8);
+        let long_error: String = "E".repeat(TASK_LAST_ERROR_CHARS + 20);
+        let long_event: String = "M".repeat(TASK_EVENT_SUMMARY_CHARS + 20);
+        let created = work_task_service::create(
+            &db.conn,
+            WorkTaskDraft {
+                folder_id: folder.id,
+                title: "Secret card".into(),
+                config: serde_json::json!({
+                    "display_text": long_prompt,
+                    "prompt_blocks": [{ "type": "text", "text": long_prompt }],
+                    "agent_type": "claude_code",
+                    "config_values": {
+                        "__codeg_profile__": "api",
+                        "model": "claude-opus-4",
+                        "authToken": secret,
+                        "baseUrl": "https://evil.example/v1",
+                    }
+                }),
+            },
+        )
+        .await
+        .unwrap();
+        work_task_service::fail(
+            &db.conn,
+            created.id,
+            &[crate::db::entities::work_task::WorkTaskStatus::Todo],
+            None,
+            "agent_error",
+            Some(long_error.clone()),
+        )
+        .await
+        .unwrap();
+        for i in 0..12 {
+            work_task_service::record_event(
+                &db.conn,
+                created.id,
+                "agent_progress",
+                "agent",
+                Some(serde_json::json!({ "message": format!("{long_event}-{i}") })),
+            )
+            .await
+            .unwrap();
+        }
+
+        let out = access.get_task(created.id).await;
+        assert!(out.found, "note: {:?}", out.note);
+        assert_eq!(out.profile.as_deref(), Some("api"));
+        assert_eq!(out.model.as_deref(), Some("claude-opus-4"));
+        assert_eq!(out.agent_type.as_deref(), Some("claude_code"));
+        let excerpt = out.prompt_excerpt.as_ref().unwrap();
+        assert_eq!(excerpt.chars().count(), TASK_PROMPT_EXCERPT_CHARS);
+        let last_error = out.last_error.as_ref().unwrap();
+        assert_eq!(last_error.chars().count(), TASK_LAST_ERROR_CHARS);
+        assert_eq!(out.recent_events.len(), TASK_RECENT_EVENT_LIMIT as usize);
+        for event in &out.recent_events {
+            assert!(event.summary.chars().count() <= TASK_EVENT_SUMMARY_CHARS);
+        }
+        let dumped = serde_json::to_string(&out).unwrap();
+        assert!(!dumped.contains(secret), "{dumped}");
+        assert!(!dumped.contains("authToken"), "{dumped}");
+        assert!(!dumped.contains("baseUrl"), "{dumped}");
+        assert!(!dumped.contains("https://evil.example"), "{dumped}");
+        assert!(!dumped.contains("prompt_blocks"), "{dumped}");
+        assert!(!access.get_task(999_999).await.found);
     }
 }

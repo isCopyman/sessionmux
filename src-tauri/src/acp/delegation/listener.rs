@@ -12,16 +12,18 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::RwLock;
 
 use crate::acp::chat_authoring::{
-    AuthoringContext, AuthoringOutcome, ChatAuthoringAccess, ProfileListOutcome,
+    AuthoringContext, AuthoringOutcome, ChatAuthoringAccess, ListTasksQuery, ProfileListOutcome,
+    TaskDetailOutcome, TaskListOutcome,
 };
 use crate::acp::delegation::transport::{
     read_frame, write_frame, BrokerAskRequest, BrokerCommitFeedbackRequest,
     BrokerCreateAutomationRequest, BrokerCreateWorkTaskRequest, BrokerFeedbackRequest,
-    BrokerHostControlHelpRequest, BrokerHostControlUseRequest, BrokerListInboxRequest,
-    BrokerListProfilesRequest, BrokerListRoomsRequest, BrokerListSessionsRequest, BrokerMessage,
-    BrokerPostRoomRequest, BrokerReadMessageRequest, BrokerReadRoomPostRequest,
-    BrokerReadRoomRequest, BrokerResponse, BrokerSendMessageRequest, BrokerSessionRequest,
-    BrokerTaskCompleteRequest, BrokerTaskProgressRequest,
+    BrokerGetTaskRequest, BrokerHostControlHelpRequest, BrokerHostControlUseRequest,
+    BrokerListInboxRequest, BrokerListProfilesRequest, BrokerListRoomsRequest,
+    BrokerListSessionsRequest, BrokerListTasksRequest, BrokerMessage, BrokerPostRoomRequest,
+    BrokerReadMessageRequest, BrokerReadRoomPostRequest, BrokerReadRoomRequest, BrokerResponse,
+    BrokerSendMessageRequest, BrokerSessionRequest, BrokerTaskCompleteRequest,
+    BrokerTaskProgressRequest,
 };
 use crate::acp::feedback::{PendingFeedback, SessionFeedbackAccess};
 use crate::acp::host_control::{
@@ -364,6 +366,10 @@ impl HostBridgeListener {
             BrokerMessage::ListProfiles(req) => {
                 profile_list_response(self.process_list_profiles(req).await)?
             }
+            BrokerMessage::ListTasks(req) => {
+                task_list_response(self.process_list_tasks(req).await)?
+            }
+            BrokerMessage::GetTask(req) => task_detail_response(self.process_get_task(req).await)?,
         };
         write_frame(conn, &resp).await?;
         Ok(())
@@ -764,6 +770,32 @@ impl HostBridgeListener {
         }
         self.authoring.list_profiles(req.agent_type).await
     }
+
+    /// Validate the token and list board tasks. Needs the authoring context so
+    /// an omitted `folder_path` hops from the caller's worktree to the project.
+    async fn process_list_tasks(&self, req: BrokerListTasksRequest) -> TaskListOutcome {
+        let Some(ctx) = self.authoring_context(&req.token).await else {
+            return TaskListOutcome::rejected("invalid token");
+        };
+        self.authoring
+            .list_tasks(
+                ctx,
+                ListTasksQuery {
+                    folder_path: req.folder_path,
+                    status: req.status,
+                    limit: req.limit,
+                },
+            )
+            .await
+    }
+
+    /// Validate the token and return one card. Invalid token is a soft miss.
+    async fn process_get_task(&self, req: BrokerGetTaskRequest) -> TaskDetailOutcome {
+        if self.tokens.lookup(&req.token).await.is_none() {
+            return TaskDetailOutcome::rejected("invalid token");
+        }
+        self.authoring.get_task(req.task_id).await
+    }
 }
 
 /// Serialize the pending feedback notes into a
@@ -905,6 +937,22 @@ fn authoring_response(outcome: AuthoringOutcome) -> std::io::Result<BrokerRespon
 }
 
 fn profile_list_response(outcome: ProfileListOutcome) -> std::io::Result<BrokerResponse> {
+    Ok(BrokerResponse {
+        outcome: serde_json::to_value(&outcome).map_err(|e| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, format!("encode: {e}"))
+        })?,
+    })
+}
+
+fn task_list_response(outcome: TaskListOutcome) -> std::io::Result<BrokerResponse> {
+    Ok(BrokerResponse {
+        outcome: serde_json::to_value(&outcome).map_err(|e| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, format!("encode: {e}"))
+        })?,
+    })
+}
+
+fn task_detail_response(outcome: TaskDetailOutcome) -> std::io::Result<BrokerResponse> {
     Ok(BrokerResponse {
         outcome: serde_json::to_value(&outcome).map_err(|e| {
             std::io::Error::new(std::io::ErrorKind::InvalidData, format!("encode: {e}"))
@@ -1221,6 +1269,18 @@ mod tests {
             _agent_type: Option<String>,
         ) -> crate::acp::chat_authoring::ProfileListOutcome {
             crate::acp::chat_authoring::ProfileListOutcome::default()
+        }
+
+        async fn list_tasks(
+            &self,
+            _ctx: AuthoringContext,
+            _query: crate::acp::chat_authoring::ListTasksQuery,
+        ) -> crate::acp::chat_authoring::TaskListOutcome {
+            crate::acp::chat_authoring::TaskListOutcome::default()
+        }
+
+        async fn get_task(&self, _task_id: i32) -> crate::acp::chat_authoring::TaskDetailOutcome {
+            crate::acp::chat_authoring::TaskDetailOutcome::default()
         }
     }
 

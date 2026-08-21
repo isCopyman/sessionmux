@@ -50,6 +50,58 @@ pub fn status_str(s: WorkTaskStatus) -> &'static str {
     }
 }
 
+pub fn parse_status(raw: &str) -> Option<WorkTaskStatus> {
+    match raw {
+        "todo" => Some(WorkTaskStatus::Todo),
+        "queued" => Some(WorkTaskStatus::Queued),
+        "preparing" => Some(WorkTaskStatus::Preparing),
+        "running" => Some(WorkTaskStatus::Running),
+        "awaiting_input" => Some(WorkTaskStatus::AwaitingInput),
+        "review" => Some(WorkTaskStatus::Review),
+        "merging" => Some(WorkTaskStatus::Merging),
+        "done" => Some(WorkTaskStatus::Done),
+        "failed" => Some(WorkTaskStatus::Failed),
+        "canceled" => Some(WorkTaskStatus::Canceled),
+        _ => None,
+    }
+}
+
+/// Spec copy of `src/components/tasks/board-columns.ts` `STATUSES_BY_COLUMN`.
+/// The UI's `inProgress` is `in_progress` on the MCP wire. `todo` / `done` are
+/// column names here (they include `queued` / `canceled`); pass a raw status
+/// that is not also a column name (`queued`, `awaiting_input`, …) to select
+/// that status alone.
+///
+/// `board-columns.test.ts` asserts every `WorkTaskStatus` appears in exactly
+/// one column; `board_status_filter_matches_frontend_column_table` below pins
+/// the same table on this copy.
+pub const BOARD_COLUMN_TODO: &[WorkTaskStatus] = &[WorkTaskStatus::Todo, WorkTaskStatus::Queued];
+pub const BOARD_COLUMN_IN_PROGRESS: &[WorkTaskStatus] =
+    &[WorkTaskStatus::Preparing, WorkTaskStatus::Running];
+pub const BOARD_COLUMN_ATTENTION: &[WorkTaskStatus] = &[
+    WorkTaskStatus::AwaitingInput,
+    WorkTaskStatus::Review,
+    WorkTaskStatus::Merging,
+    WorkTaskStatus::Failed,
+];
+pub const BOARD_COLUMN_DONE: &[WorkTaskStatus] = &[WorkTaskStatus::Done, WorkTaskStatus::Canceled];
+
+/// Resolve an MCP `status` argument: a board column name, or a raw
+/// `WorkTaskStatus` wire value. `None` means the string is neither.
+pub fn board_status_filter(raw: &str) -> Option<Vec<WorkTaskStatus>> {
+    let column = match raw {
+        "todo" => Some(BOARD_COLUMN_TODO),
+        "in_progress" => Some(BOARD_COLUMN_IN_PROGRESS),
+        "attention" => Some(BOARD_COLUMN_ATTENTION),
+        "done" => Some(BOARD_COLUMN_DONE),
+        _ => None,
+    };
+    if let Some(statuses) = column {
+        return Some(statuses.to_vec());
+    }
+    parse_status(raw).map(|s| vec![s])
+}
+
 /// Decode the parked merge intent of a row. Tolerant on purpose: the column
 /// once held a different (long-dead) shape, and an undecodable value means
 /// "nothing queued" rather than an error the board would have to render.
@@ -245,6 +297,51 @@ pub async fn list_events(
         .all(conn)
         .await?;
     Ok(rows.into_iter().map(event_to_info).collect())
+}
+
+/// The task's most recent timeline events of any kind, newest first (by
+/// autoincrement id, same order rule as [`recent_events_of_kinds`]).
+pub async fn recent_events(
+    conn: &DatabaseConnection,
+    task_id: i32,
+    limit: u64,
+) -> Result<Vec<WorkTaskEventInfo>, DbError> {
+    let rows = work_task_event::Entity::find()
+        .filter(work_task_event::Column::TaskId.eq(task_id))
+        .order_by_desc(work_task_event::Column::Id)
+        .limit(limit)
+        .all(conn)
+        .await?;
+    Ok(rows.into_iter().map(event_to_info).collect())
+}
+
+/// Compact board listing for the read-only MCP tools. Same live-folder join as
+/// [`list`] (deleted folder → invisible). Newest `updated_at` first; `folder_id
+/// = None` is every live project. Does not write.
+pub async fn list_matching(
+    conn: &DatabaseConnection,
+    folder_id: Option<i32>,
+    statuses: Option<&[WorkTaskStatus]>,
+    limit: u64,
+) -> Result<(Vec<work_task::Model>, u64), DbError> {
+    let mut q = work_task::Entity::find()
+        .filter(work_task::Column::DeletedAt.is_null())
+        .inner_join(folder::Entity)
+        .filter(folder::Column::DeletedAt.is_null());
+    if let Some(fid) = folder_id {
+        q = q.filter(work_task::Column::FolderId.eq(fid));
+    }
+    if let Some(statuses) = statuses {
+        q = q.filter(work_task::Column::Status.is_in(statuses.iter().copied()));
+    }
+    let total = q.clone().count(conn).await?;
+    let rows = q
+        .order_by_desc(work_task::Column::UpdatedAt)
+        .order_by_desc(work_task::Column::Id)
+        .limit(limit)
+        .all(conn)
+        .await?;
+    Ok((rows, total))
 }
 
 /// The task's most recent events of the given kinds, newest first.
@@ -3912,5 +4009,136 @@ mod tests {
         assert!(template_save(&db.conn, &d("  ", "x")).await.is_err());
         template_delete(&db.conn, a.id).await.unwrap();
         assert_eq!(template_list(&db.conn).await.unwrap().len(), 1);
+    }
+
+    #[test]
+    fn board_status_filter_matches_frontend_column_table() {
+        // Spec copy of src/components/tasks/board-columns.ts STATUSES_BY_COLUMN.
+        // The UI's inProgress is in_progress on the MCP wire.
+        assert_eq!(
+            board_status_filter("todo").unwrap(),
+            vec![WorkTaskStatus::Todo, WorkTaskStatus::Queued]
+        );
+        assert_eq!(
+            board_status_filter("in_progress").unwrap(),
+            vec![WorkTaskStatus::Preparing, WorkTaskStatus::Running]
+        );
+        assert_eq!(
+            board_status_filter("attention").unwrap(),
+            vec![
+                WorkTaskStatus::AwaitingInput,
+                WorkTaskStatus::Review,
+                WorkTaskStatus::Merging,
+                WorkTaskStatus::Failed,
+            ]
+        );
+        assert_eq!(
+            board_status_filter("done").unwrap(),
+            vec![WorkTaskStatus::Done, WorkTaskStatus::Canceled]
+        );
+        // Raw status that is not also a column name selects that status alone.
+        assert_eq!(
+            board_status_filter("awaiting_input").unwrap(),
+            vec![WorkTaskStatus::AwaitingInput]
+        );
+        assert_eq!(
+            board_status_filter("queued").unwrap(),
+            vec![WorkTaskStatus::Queued]
+        );
+        assert!(board_status_filter("inProgress").is_none());
+        assert!(board_status_filter("unknown").is_none());
+
+        // Every WorkTaskStatus appears in exactly one column — same pin as
+        // board-columns.test.ts against STATUSES_BY_COLUMN.
+        let mut from_columns = Vec::new();
+        for col in ["todo", "in_progress", "attention", "done"] {
+            from_columns.extend(board_status_filter(col).unwrap());
+        }
+        let all = [
+            WorkTaskStatus::Todo,
+            WorkTaskStatus::Queued,
+            WorkTaskStatus::Preparing,
+            WorkTaskStatus::Running,
+            WorkTaskStatus::AwaitingInput,
+            WorkTaskStatus::Review,
+            WorkTaskStatus::Merging,
+            WorkTaskStatus::Done,
+            WorkTaskStatus::Failed,
+            WorkTaskStatus::Canceled,
+        ];
+        assert_eq!(from_columns.len(), all.len());
+        for status in all {
+            assert_eq!(
+                from_columns.iter().filter(|s| **s == status).count(),
+                1,
+                "{status:?} must appear in exactly one column"
+            );
+        }
+    }
+
+    async fn stamp_status(conn: &DatabaseConnection, id: i32, status: WorkTaskStatus) {
+        work_task::Entity::update_many()
+            .col_expr(work_task::Column::Status, Expr::value(status_str(status)))
+            .col_expr(work_task::Column::UpdatedAt, Expr::value(Utc::now()))
+            .filter(work_task::Column::Id.eq(id))
+            .exec(conn)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn list_matching_filters_and_caps_without_writing() {
+        let db = fresh_in_memory_db().await;
+        let a = seed_folder(&db, "/tmp/wt-list-a").await;
+        let b = seed_folder(&db, "/tmp/wt-list-b").await;
+        let t_todo = create(&db.conn, draft(a, "todo")).await.unwrap();
+        let t_fail = create(&db.conn, draft(a, "fail")).await.unwrap();
+        let t_other = create(&db.conn, draft(b, "other")).await.unwrap();
+        stamp_status(&db.conn, t_fail.id, WorkTaskStatus::Failed).await;
+        stamp_status(&db.conn, t_other.id, WorkTaskStatus::Review).await;
+
+        let attention = board_status_filter("attention").unwrap();
+        let (rows, total) = list_matching(&db.conn, Some(a), Some(attention.as_slice()), 30)
+            .await
+            .unwrap();
+        assert_eq!(total, 1);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].id, t_fail.id);
+        assert_eq!(rows[0].status, WorkTaskStatus::Failed);
+
+        let (all_rows, all_total) = list_matching(&db.conn, None, None, 2).await.unwrap();
+        assert_eq!(all_total, 3);
+        assert_eq!(all_rows.len(), 2, "limit truncates the page, not total");
+
+        // Read-only: statuses we did not stamp stay as created.
+        assert_eq!(
+            get(&db.conn, t_todo.id).await.unwrap().status,
+            WorkTaskStatus::Todo
+        );
+    }
+
+    #[tokio::test]
+    async fn recent_events_are_newest_first_and_capped() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-events").await;
+        let t = create(&db.conn, draft(folder_id, "t")).await.unwrap();
+        for i in 0..5 {
+            record_event(
+                &db.conn,
+                t.id,
+                "agent_progress",
+                "agent",
+                Some(serde_json::json!({ "message": format!("step {i}") })),
+            )
+            .await
+            .unwrap();
+        }
+        let recent = recent_events(&db.conn, t.id, 3).await.unwrap();
+        assert_eq!(recent.len(), 3);
+        let messages: Vec<&str> = recent
+            .iter()
+            .filter_map(|e| e.payload.as_ref()?.get("message")?.as_str())
+            .collect();
+        assert_eq!(messages, vec!["step 4", "step 3", "step 2"]);
     }
 }

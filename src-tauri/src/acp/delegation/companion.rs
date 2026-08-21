@@ -36,20 +36,22 @@ use sha2::{Digest, Sha256};
 use tokio::sync::{oneshot, Mutex};
 
 use crate::acp::chat_authoring::{
-    NewAutomationSpec, NewWorkTaskSpec, MAX_PROMPT_CHARS, MAX_TITLE_CHARS,
+    NewAutomationSpec, NewWorkTaskSpec, DEFAULT_TASK_LIST_LIMIT, MAX_PROMPT_CHARS,
+    MAX_TASK_LIST_LIMIT, MAX_TITLE_CHARS,
 };
 use crate::acp::delegation::transport::{
     client_ask_round_trip, client_commit_feedback, client_create_automation_round_trip,
-    client_create_work_task_round_trip, client_feedback_round_trip,
+    client_create_work_task_round_trip, client_feedback_round_trip, client_get_task_round_trip,
     client_host_control_help_round_trip, client_host_control_use_round_trip,
     client_list_inbox_round_trip, client_list_profiles_round_trip, client_list_rooms_round_trip,
-    client_list_sessions_round_trip, client_post_room_round_trip, client_read_message_round_trip,
-    client_read_room_post_round_trip, client_read_room_round_trip, client_send_message_round_trip,
-    client_session_round_trip, client_task_complete_round_trip, client_task_progress_round_trip,
-    BrokerAskRequest, BrokerCommitFeedbackRequest, BrokerCreateAutomationRequest,
-    BrokerCreateWorkTaskRequest, BrokerFeedbackRequest, BrokerHostControlHelpRequest,
-    BrokerHostControlUseRequest, BrokerListInboxRequest, BrokerListProfilesRequest,
-    BrokerListRoomsRequest, BrokerListSessionsRequest, BrokerPostRoomRequest,
+    client_list_sessions_round_trip, client_list_tasks_round_trip, client_post_room_round_trip,
+    client_read_message_round_trip, client_read_room_post_round_trip, client_read_room_round_trip,
+    client_send_message_round_trip, client_session_round_trip, client_task_complete_round_trip,
+    client_task_progress_round_trip, BrokerAskRequest, BrokerCommitFeedbackRequest,
+    BrokerCreateAutomationRequest, BrokerCreateWorkTaskRequest, BrokerFeedbackRequest,
+    BrokerGetTaskRequest, BrokerHostControlHelpRequest, BrokerHostControlUseRequest,
+    BrokerListInboxRequest, BrokerListProfilesRequest, BrokerListRoomsRequest,
+    BrokerListSessionsRequest, BrokerListTasksRequest, BrokerPostRoomRequest,
     BrokerReadMessageRequest, BrokerReadRoomPostRequest, BrokerReadRoomRequest, BrokerResponse,
     BrokerSendMessageRequest, BrokerSessionRequest, BrokerTaskCompleteRequest,
     BrokerTaskProgressRequest,
@@ -145,8 +147,9 @@ pub struct CompanionFeatures {
     pub tasks: bool,
     /// `create_automation` — save a scheduled/manual automation from chat.
     pub automations: bool,
-    /// `create_work_task` — queue a card on the work-task board from chat.
-    /// `list_profiles` is exposed when either authoring group is on.
+    /// `create_work_task` / `list_tasks` / `get_task` — queue a card on the
+    /// work-task board from chat, and read the board. `list_profiles` is
+    /// exposed when either authoring group is on.
     pub taskboard: bool,
 }
 
@@ -194,7 +197,7 @@ impl CompanionFeatures {
             "list_rooms" | "read_room" | "read_room_post" | "post_room" => self.room,
             "task_progress" | "task_complete" => self.tasks,
             "create_automation" => self.automations,
-            "create_work_task" => self.taskboard,
+            "create_work_task" | "list_tasks" | "get_task" => self.taskboard,
             "list_profiles" => self.automations || self.taskboard,
             _ => false,
         }
@@ -958,6 +961,34 @@ async fn build_tools_call_spawn(
                 Box::pin(async move { client_list_profiles_round_trip(&socket, &req).await });
             register_and_spawn(inflight, id, round_trip, render_profile_list_result).await
         }
+        "list_tasks" => {
+            let req = BrokerListTasksRequest {
+                token: ctx.token.clone(),
+                folder_path: optional_string(&arguments, "folder_path"),
+                status: optional_string(&arguments, "status"),
+                limit: Some(parse_clamped_named_limit(
+                    &arguments,
+                    "limit",
+                    DEFAULT_TASK_LIST_LIMIT,
+                    MAX_TASK_LIST_LIMIT,
+                )),
+            };
+            let round_trip =
+                Box::pin(async move { client_list_tasks_round_trip(&socket, &req).await });
+            register_and_spawn(inflight, id, round_trip, render_task_list_result).await
+        }
+        "get_task" => {
+            let Some(task_id) = parse_task_id(&arguments) else {
+                return LineAction::Respond(err(id, -32602, "get_task requires integer `task_id`"));
+            };
+            let req = BrokerGetTaskRequest {
+                token: ctx.token.clone(),
+                task_id,
+            };
+            let round_trip =
+                Box::pin(async move { client_get_task_round_trip(&socket, &req).await });
+            register_and_spawn(inflight, id, round_trip, render_task_detail_result).await
+        }
         other => LineAction::Respond(err(id, -32602, format!("unknown tool: {other}"))),
     }
 }
@@ -1488,6 +1519,24 @@ fn parse_work_task_spec(arguments: &Value) -> Result<NewWorkTaskSpec, String> {
 /// Character-safe truncation shared by both spec parsers.
 fn truncate_chars(s: &str, cap: usize) -> String {
     crate::acp::chat_authoring::truncate_chars(s, cap)
+}
+
+/// Extract the `task_id` integer from `get_task` arguments. Same host-stringify
+/// tolerance as [`parse_session_id`]. `None` maps to a synchronous `-32602`.
+fn parse_task_id(arguments: &Value) -> Option<i32> {
+    let v = arguments.get("task_id")?;
+    if let Some(n) = v.as_i64() {
+        return i32::try_from(n).ok().filter(|n| *n > 0);
+    }
+    if let Some(f) = v.as_f64() {
+        if f.fract() == 0.0 && f > 0.0 && f <= f64::from(i32::MAX) {
+            return Some(f as i32);
+        }
+        return None;
+    }
+    v.as_str()
+        .and_then(|s| s.trim().parse::<i32>().ok())
+        .filter(|n| *n > 0)
 }
 
 /// Extract the `session_id` integer from the `get_session_info` arguments,
@@ -2320,6 +2369,144 @@ pub fn render_profile_list_result(outcome: &Value) -> Value {
     })
 }
 
+/// Map a `list_tasks` round-trip into an MCP `tools/call` result. Compact rows
+/// only — the host already omitted prompt bodies.
+pub fn render_task_list_result(outcome: &Value) -> Value {
+    let mut lines: Vec<String> = Vec::new();
+    if let Some(note) = outcome.get("note").and_then(Value::as_str) {
+        lines.push(note.to_string());
+    }
+    let total = outcome.get("total").and_then(Value::as_u64).unwrap_or(0);
+    let truncated = outcome
+        .get("truncated")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    match outcome.get("tasks").and_then(Value::as_array) {
+        Some(items) if items.is_empty() => {
+            if lines.is_empty() {
+                lines.push("No tasks matched.".to_string());
+            }
+        }
+        Some(items) => {
+            let shown = items.len();
+            let mut header = format!("Task board ({shown} of {total})");
+            if truncated {
+                header.push_str(" — truncated; raise limit or filter");
+            }
+            header.push(':');
+            lines.push(header);
+            for item in items {
+                let id = item.get("id").and_then(Value::as_i64).unwrap_or(0);
+                let title = item.get("title").and_then(Value::as_str).unwrap_or("?");
+                let status = item.get("status").and_then(Value::as_str).unwrap_or("?");
+                let agent = item
+                    .get("agent_type")
+                    .and_then(Value::as_str)
+                    .unwrap_or("-");
+                let updated = item
+                    .get("updated_at")
+                    .and_then(Value::as_str)
+                    .unwrap_or("-");
+                let wt = item
+                    .get("has_worktree")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                let mut line =
+                    format!("- #{id} [{status}] {title} agent={agent} updated={updated}");
+                if wt {
+                    line.push_str(" worktree");
+                }
+                if let Some(cid) = item.get("conversation_id").and_then(Value::as_i64) {
+                    line.push_str(&format!(" conv={cid}"));
+                }
+                if let Some(reason) = item.get("failure_reason").and_then(Value::as_str) {
+                    line.push_str(&format!(" fail={reason}"));
+                }
+                lines.push(line);
+            }
+        }
+        None => {
+            if lines.is_empty() {
+                lines.push("No tasks matched.".to_string());
+            }
+        }
+    }
+    json!({
+        "content": [{ "type": "text", "text": lines.join("\n") }],
+        "isError": false,
+        "structuredContent": outcome.clone(),
+    })
+}
+
+/// Map a `get_task` round-trip into an MCP `tools/call` result.
+pub fn render_task_detail_result(outcome: &Value) -> Value {
+    let found = outcome
+        .get("found")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let s = |k: &str| outcome.get(k).and_then(Value::as_str);
+    let text = if !found {
+        s("note").unwrap_or("Task not found.").to_string()
+    } else {
+        let id = outcome.get("id").and_then(Value::as_i64).unwrap_or(0);
+        let mut out = format!("Task #{id} [{}]\n", s("status").unwrap_or("?"));
+        if let Some(t) = s("title") {
+            out.push_str(&format!("Title: {t}\n"));
+        }
+        if let Some(a) = s("agent_type") {
+            out.push_str(&format!("Agent: {a}\n"));
+        }
+        if let Some(m) = s("model") {
+            out.push_str(&format!("Model: {m}\n"));
+        }
+        if let Some(p) = s("profile") {
+            out.push_str(&format!("Profile: {p}\n"));
+        }
+        if let Some(b) = s("base_branch") {
+            out.push_str(&format!("Base branch: {b}\n"));
+        }
+        if let Some(b) = s("work_branch") {
+            out.push_str(&format!("Work branch: {b}\n"));
+        }
+        if let Some(wt) = outcome.get("has_worktree").and_then(Value::as_bool) {
+            out.push_str(&format!("Worktree: {wt}\n"));
+        }
+        if let Some(cid) = outcome.get("conversation_id").and_then(Value::as_i64) {
+            out.push_str(&format!("Conversation: {cid}\n"));
+        }
+        if let Some(excerpt) = s("prompt_excerpt") {
+            out.push_str(&format!("Prompt excerpt:\n{excerpt}\n"));
+        }
+        if let Some(err) = s("last_error") {
+            out.push_str(&format!("Last error: {err}\n"));
+        }
+        if let Some(events) = outcome.get("recent_events").and_then(Value::as_array) {
+            if !events.is_empty() {
+                out.push_str("Recent events:\n");
+                for event in events {
+                    let kind = event.get("kind").and_then(Value::as_str).unwrap_or("?");
+                    let at = event.get("at").and_then(Value::as_str).unwrap_or("-");
+                    let summary = event.get("summary").and_then(Value::as_str).unwrap_or("");
+                    if summary.is_empty() {
+                        out.push_str(&format!("- {at} {kind}\n"));
+                    } else {
+                        out.push_str(&format!("- {at} {kind}: {summary}\n"));
+                    }
+                }
+            }
+        }
+        if let Some(note) = s("note") {
+            out.push_str(note);
+        }
+        out
+    };
+    json!({
+        "content": [{ "type": "text", "text": text }],
+        "isError": false,
+        "structuredContent": outcome.clone(),
+    })
+}
+
 /// Build the human-readable summary block for a found session: a metadata header
 /// plus, when present, a "Recent messages" section.
 fn render_session_summary_text(o: &Value) -> String {
@@ -2533,6 +2720,8 @@ mod tests {
                 "list_profiles",
                 "create_automation",
                 "create_work_task",
+                "list_tasks",
+                "get_task",
                 "task_progress",
                 "task_complete",
             ]
@@ -3067,6 +3256,8 @@ mod tests {
         assert!(parsed.automations);
         assert!(parsed.taskboard);
         assert!(parsed.allows_tool("list_profiles"));
+        assert!(parsed.allows_tool("list_tasks"));
+        assert!(parsed.allows_tool("get_task"));
         let mailbox = CompanionFeatures::parse(Some("mailbox"));
         assert!(mailbox.allows_tool("send_message"));
         assert!(!mailbox.allows_tool("post_room"));
@@ -3213,7 +3404,94 @@ mod tests {
         let board = CompanionFeatures::parse(Some("taskboard"));
         assert!(board.allows_tool("list_profiles"));
         assert!(board.allows_tool("create_work_task"));
+        assert!(board.allows_tool("list_tasks"));
+        assert!(board.allows_tool("get_task"));
         assert!(!board.allows_tool("create_automation"));
+        assert!(!autos.allows_tool("list_tasks"));
+        assert!(!autos.allows_tool("get_task"));
+    }
+
+    #[test]
+    fn list_tasks_schema_says_read_only_and_defaults_to_caller_project() {
+        assert!(TOOL_SCHEMA_JSON.contains("\"name\": \"list_tasks\""));
+        assert!(TOOL_SCHEMA_JSON.contains("\"name\": \"get_task\""));
+        let list = TOOL_SCHEMA_JSON
+            .split("\"name\": \"list_tasks\"")
+            .nth(1)
+            .unwrap();
+        let list_desc = list.split("\"name\": \"get_task\"").next().unwrap();
+        assert!(list_desc.contains("Read-only"));
+        assert!(list_desc.contains("Defaults to the project this conversation is in"));
+        let get = TOOL_SCHEMA_JSON
+            .split("\"name\": \"get_task\"")
+            .nth(1)
+            .unwrap();
+        let get_desc = get.split("\"name\": \"task_progress\"").next().unwrap();
+        assert!(get_desc.contains("Read-only"));
+    }
+
+    #[test]
+    fn parse_list_tasks_clamps_limit_to_hard_cap() {
+        let args = json!({ "limit": 150 });
+        assert_eq!(
+            parse_clamped_named_limit(&args, "limit", DEFAULT_TASK_LIST_LIMIT, MAX_TASK_LIST_LIMIT),
+            100
+        );
+        assert_eq!(
+            parse_clamped_named_limit(
+                &json!({}),
+                "limit",
+                DEFAULT_TASK_LIST_LIMIT,
+                MAX_TASK_LIST_LIMIT
+            ),
+            30
+        );
+    }
+
+    #[test]
+    fn parse_get_task_requires_positive_task_id() {
+        assert_eq!(parse_task_id(&json!({ "task_id": 9 })), Some(9));
+        assert_eq!(parse_task_id(&json!({ "task_id": "12" })), Some(12));
+        assert!(parse_task_id(&json!({})).is_none());
+        assert!(parse_task_id(&json!({ "task_id": 0 })).is_none());
+    }
+
+    #[test]
+    fn render_task_list_and_detail_omit_prompt_and_secrets() {
+        let secret = "sk-super-secret-token-xyz-do-not-leak";
+        let listed = render_task_list_result(&json!({
+            "tasks": [{
+                "id": 3,
+                "title": "Fix login",
+                "status": "todo",
+                "updated_at": "2026-08-21T00:00:00Z",
+                "has_worktree": false
+            }],
+            "total": 1,
+            "truncated": false
+        }));
+        let listed_dump = listed.to_string();
+        assert!(!listed_dump.contains("prompt"), "{listed_dump}");
+        assert!(!listed_dump.contains(secret), "{listed_dump}");
+        let listed_row = &listed["structuredContent"]["tasks"][0];
+        assert!(listed_row.get("prompt").is_none());
+        assert!(listed_row.get("display_text").is_none());
+
+        let detail = render_task_detail_result(&json!({
+            "found": true,
+            "id": 3,
+            "title": "Fix login",
+            "status": "failed",
+            "profile": "api",
+            "prompt_excerpt": "do the thing",
+            "has_worktree": false,
+            "recent_events": []
+        }));
+        let dumped = detail.to_string();
+        assert!(!dumped.contains(secret), "{dumped}");
+        assert!(!dumped.contains("authToken"), "{dumped}");
+        assert!(!dumped.contains("baseUrl"), "{dumped}");
+        assert_eq!(detail["structuredContent"]["profile"], "api");
     }
 
     #[test]
