@@ -6,7 +6,7 @@
 >
 > 状态记号：`[ ]` 待办 / `[~]` 进行中 / `[x]` 本批已完成待归档 / `[?]` 等用户拍板
 
-最后更新：2026-08-22（profile 生命周期修复与 selector 隔离实机验收）
+最后更新：2026-08-22（历史 Bug 清单复核：正文搜索与后台任务项已验收）
 
 ## ⚠️ 先读这条：清单会腐烂
 
@@ -129,8 +129,11 @@ Composer。相应跨连接回归测试与 Desktop/CDP 往返验证均已通过�
 
 ## 待办（用户已拍板，不需要再问）
 
-- [ ] **后台任务唤醒：补显示层，不重写 adapter**（实证已完成，见
-      `BACKGROUND-WAKE-RECON-2026-08-21`）。原假设「codeg 收不到官方 wake」**是错的**：
+- [x] **后台任务唤醒与显示链路已经存在，不再重复施工**。原调研见
+      `BACKGROUND-WAKE-RECON-2026-08-21`，当前实现由
+      `src-tauri/src/acp/background_watch.rs`、`AcpEvent::BackgroundActivity`、
+      `conversation-runtime-store` overlay 与 `acp-connections-context` 的系统通知共同组成。
+      原假设「codeg 收不到官方 wake」**是错的**：
 
       1. 适配器 0.69.0 的 `AUTONOMOUS_RESULT_ORIGINS` 里就有 `task-notification`
          （`acp-agent.js:114`），唯一发送口 `sendUpdate`（`:1249`）**没有**
@@ -138,14 +141,12 @@ Composer。相应跨连接回归测试与 Desktop/CDP 往返验证均已通过�
       2. codeg 的 idle 循环一直在读，每条 notification 都过
          `emit_conversation_update`（`connection.rs:7857`）——跟回合内同一个函数
 
-      **所以内容早就进转录了。缺的是回合语义**：没有 `TurnComplete` →
-      系统通知不响（`acp-connections-context.tsx:3952`）、状态不翻「在跑」、
-      不进任何调度器、没有后台任务列表。
-
-      施工点就在 `connection.rs:7857` 那个 idle 分支（它按定义就是「没有活跃回合」）：
-      只认 `agent_message_chunk` / `tool_call*` 这类真活动，发个新事件让 UI 翻状态，
-      静默后走和 `TurnComplete` 同一条通知路径。**Grok 线要单独接**
-      （`task_backgrounded` / `task_completed`，本轮未查）。
+      后续 upstream 提交 `a4f33d98` 已补齐回合外 watcher、未完成任务计数、静默结算、
+      overlay 渲染和系统通知；Grok 的 `task_backgrounded` / `task_completed` 也进入同一
+      `BackgroundActivity` 通道。2026-08-22 复核：前端后台任务相关 5 个测试文件
+      153 个测试全绿；Rust 无桌面依赖形态实际执行 `background_watch` 33 个测试全绿。
+      桌面特性测试也编译成功，但其 exe 仍被本机已知的 Windows
+      `STATUS_ENTRYPOINT_NOT_FOUND (0xc0000139)` 在进入断言前拦住，未包装成绿色结果。
 
 - [x] **换档/换配置后自动重启 ACP** —— 已做，`3691f506` (lane autorestart)。
       空闲直接重启不弹框，忙时弹框写清丢什么。以下为原始记录：
@@ -189,9 +190,12 @@ Composer。相应跨连接回归测试与 Desktop/CDP 往返验证均已通过�
       所以污染只影响 `follow-default`——而那层正是配置模型里说要删掉的。
       顺带考虑把「模型供应商」从第三种认证方式降级成"往 URL/Key 里填值"的快捷方式。
 
-- [ ] **P2 搜索体系**：`SEARCH-SYSTEM-SURVEY-2026-08-20` 已存在，
-      但 handoff 里记着"用户四个子问题待答"。**先读那份调研，确认还剩哪几问没答**，
-      别重新调研一遍。
+- [x] **P2 搜索体系的既定产品裁决已经落地，旧清单过期**：`Ctrl+K` 只做轻量标题
+      跳转并引导到会话中心；会话中心提供标题/正文范围选择并混排 Room 标题结果。
+      正文继续委托外部 `ctx`，不在 Codeg 内另造第二套全文索引。2026-08-22 恢复本机
+      与现有适配器匹配的官方 `ctx 0.25.0` 后，用真实 Tauri WebView2 搜索
+      `profile 切换`，返回 50 条正文命中且无 unavailable 提示。仍可单独改进的是
+      **依赖诊断/安装提示**，不是重做搜索系统。
 
 - [ ] **催办残留问题**（工人在 `REMINDER-PAUSE-REPORT` §4 提问，等我拍板）：
       `newest_due_at` 的未读分支仍未排除 `failed`。若会话同时有 failed 未读 + 有效欠账，
