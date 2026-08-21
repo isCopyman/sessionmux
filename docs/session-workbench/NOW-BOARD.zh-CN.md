@@ -47,21 +47,46 @@ CDP 实机验证的可行路径与三个前提、以及我今晚犯过的判断�
       `BACKGROUND-WAKE-RECON-2026-08-21.zh-CN.md`。**结论跟原假设相反**
 - [x] **遗漏任务盘点**（codex）—— 已交，结论见下
 
+## ⭐ 已实测定位并修复：切 profile 只生效一次（2026-08-22）
+
+**这是用户报的那个 bug 的真正根因，用 CDP 实机三次切换 + 后端日志 + 数据库坐实的，
+不是读代码推的。** 用户原话："第一次加载的时候 model 倒是会跟着变，但是后面的切换都不会。"
+
+`SessionState::conversation_id` 在生产代码里**只由 `ConversationLinked` /
+`ConversationForked` 两个事件赋值**（`session_state.rs:1006/1016`），而这两个事件在
+**会话行被创建**时才发——重连到一个已存在的会话不发。
+
+于是：
+
+1. 第一次切 profile → 原连接有 conversation_id → `mark_conversation_config_stale`
+   （`manager.rs` 扫描 `state.conversation_id`）找得到 → 横幅重启 ✓
+2. `reapplyConfig` 重连出来的新连接 **conversation_id = None**
+3. 第二次及以后每次切 → 找不到 → `affected_running_sessions = 0` →
+   chip 走 `affectedRunningSessions < 1` 分支弹绿色「切换成功」→ **没横幅、没重启**
+4. 会话继续跑旧 profile，而 chip 和数据库都显示已经换了
+
+**实测证据**：三次切换，`tauri-dev.log` 里只有第一次有 `disconnect` + `spawning`；
+数据库每次都正确更新；DOM 里查不到 stale 横幅。
+
+**重要副产品**：模型下拉**一直是诚实的**，它如实反映正在跑的进程。说谎的是 chip 和那句
+「切换成功」。之前"给模型行标注槽位重映射"的方案是修错了对象，`%TEMP%/lane-modelslots.md`
+**作废，不要派**。
+
+**影响面不止 profile**：任何按 conversation 扫描连接的查找在重连后都会失效
+（例如 `acp_get_session_snapshot_by_conversation_core`）。
+
+修复：`ConnectionManager::bind_conversation`，在两条 connect 路径
+（`commands/acp.rs` 与 `web/handlers/acp.rs`，两者本来就手握 `conversation_id`）
+spawn 成功后调用。
+
 ## 未派工的 P0（接手第一件事）
 
 - [ ] **chip 说谎 + conversation pin 缺口** —— 分析已完成、已落库：
       `CHIP-PROFILE-PIN-ANALYSIS-2026-08-22.zh-CN.md`（codex 只读产出，带全套锚点）。
       **任务书还没写。** 两条硬约束必须带进任务书：eslint 禁止 effect 内同步
       `setState`；chip 里不能导入 `useAcpAgents`（会拖垮测试）。
-- [ ] **模型下拉不显示 profile 的槽位重映射** —— **任务书已写好待命**：
-      `%TEMP%/lane-modelslots.md`。**排在 chippin 之后**，因为它要用 chippin 铺的
-      "本会话有效 profile" 那条 prop，而且两者都会碰 `message-input.tsx`。
-      已查明的关键事实全写进任务书了：数据前端已有（`ClaudeProfileInfo.settingsJson`），
-      解析器已有（`claude-settings-projection.ts` 的 `foldEffectiveSettings`），
-      不需要新后端命令；`ANTHROPIC_CUSTOM_MODEL_OPTION` **修不了**（交互式 CLI 特性，
-      ACP 列表是 allowlist 只能收窄），已明确划出范围外。
-      唯一要工人实测的是 ACP 报的 option value 长什么样——**对不上就不标注，
-      标错比不标更糟**。
+- [x] ~~模型下拉不显示 profile 的槽位重映射~~ —— **诊断作废**，见本文件顶部⭐那条。
+      模型列表是诚实的，问题在切换没生效。任务书 `%TEMP%/lane-modelslots.md` 不要派。
 - [ ] **CDP 实机验证** —— 用户明确要求过（原话：不只是只跑 test，要实际 CDP 进 dev 试），
       今晚没做成。**照 `DESKTOP-DEVELOPMENT-AND-VALIDATION-GUIDE` §4.5/§4.6 做**，
       那里有直连真实 Tauri WebView2 的完整流程和可跑的探针，不要自己发明。
