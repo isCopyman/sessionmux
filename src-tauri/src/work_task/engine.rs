@@ -973,6 +973,7 @@ impl TaskEngine {
             agent_type,
             resume_session_id.as_deref(),
             &self.data_dir,
+            task.conversation_id,
         )
         .await
         .map_err(|e| e.to_string())?;

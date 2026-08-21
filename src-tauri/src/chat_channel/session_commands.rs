@@ -496,15 +496,16 @@ pub async fn handle_task(
         }
     };
 
-    let runtime_env = match build_chat_session_runtime_env(db, agent_type, None, data_dir).await {
-        Ok(env) => env,
-        Err(e) => {
-            return CommandMessageResult::current_target(
-                RichMessage::error(format!("{}{e}", i18n::failed_to_start_agent_label(lang))),
-                target,
-            );
-        }
-    };
+    let runtime_env =
+        match build_chat_session_runtime_env(db, agent_type, None, data_dir, None).await {
+            Ok(env) => env,
+            Err(e) => {
+                return CommandMessageResult::current_target(
+                    RichMessage::error(format!("{}{e}", i18n::failed_to_start_agent_label(lang))),
+                    target,
+                );
+            }
+        };
 
     let mut session_target = target.clone();
     if target.is_telegram_general_topic() {
@@ -879,6 +880,7 @@ pub async fn handle_resume(
         conv.agent_type,
         conv.external_id.as_deref(),
         data_dir,
+        Some(conv.id),
     )
     .await
     {
@@ -1508,12 +1510,14 @@ async fn build_chat_session_runtime_env(
     agent_type: AgentType,
     session_id: Option<&str>,
     data_dir: &Path,
+    conversation_id: Option<i32>,
 ) -> Result<BTreeMap<String, String>, crate::acp::error::AcpError> {
     crate::commands::acp::build_session_runtime_env(
         &AppDatabase { conn: db.clone() },
         agent_type,
         session_id,
         data_dir,
+        conversation_id,
     )
     .await
 }
@@ -1533,10 +1537,15 @@ async fn spawn_chat_connection_for_conversation(
         .await
         .map_err(|e| e.to_string())?
         .ok_or_else(|| i18n::folder_not_found(Lang::En).to_string())?;
-    let runtime_env =
-        build_chat_session_runtime_env(db, conv.agent_type, conv.external_id.as_deref(), data_dir)
-            .await
-            .map_err(|e| e.to_string())?;
+    let runtime_env = build_chat_session_runtime_env(
+        db,
+        conv.agent_type,
+        conv.external_id.as_deref(),
+        data_dir,
+        Some(conv.id),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
     let owner_label = owner_label_for(channel_id, sender_id, target);
     let connection_id = conn_mgr
         .spawn_agent(

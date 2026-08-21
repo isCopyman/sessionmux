@@ -194,9 +194,15 @@ impl HostSessionRuntime for ManagedAcpSessionRuntime {
         verify_agent_installed(spec.harness)
             .await
             .map_err(|error| error.to_string())?;
-        let runtime_env = build_session_runtime_env(&self.db, spec.harness, None, &self.data_dir)
-            .await
-            .map_err(|error| error.to_string())?;
+        let runtime_env = build_session_runtime_env(
+            &self.db,
+            spec.harness,
+            None,
+            &self.data_dir,
+            Some(spec.conversation_id),
+        )
+        .await
+        .map_err(|error| error.to_string())?;
 
         let mut preferred_config_values = spec.config_values.clone();
         if let Some(model) = spec.model.as_ref() {

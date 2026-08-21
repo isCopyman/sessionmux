@@ -2,6 +2,7 @@ pub mod agent;
 pub mod automation;
 pub mod background;
 pub mod chat_channel;
+pub mod claude_profile;
 pub mod collaboration;
 pub mod conversation;
 pub mod folder;

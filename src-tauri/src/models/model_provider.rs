@@ -13,7 +13,7 @@ pub struct ModelProviderInfo {
     pub updated_at: String,
 }
 
-fn mask_api_key(key: &str) -> String {
+pub(crate) fn mask_api_key(key: &str) -> String {
     // Operate on Unicode scalar values, not bytes: an API key may contain a
     // multibyte character (e.g. a full-width char typed with a CJK IME), and
     // byte-slicing `&key[..4]` would panic on a non-char-boundary. Such a panic

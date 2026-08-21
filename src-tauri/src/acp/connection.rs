@@ -6070,10 +6070,24 @@ pub(crate) const PREFERRED_MODEL_CONFIG_KEY: &str = "__codeg_host_model__";
 /// fallback below and in `apply_grok_preferred_options`).
 pub(crate) const PREFERRED_THOUGHT_LEVEL_CONFIG_KEY: &str = "__codeg_host_thought_level__";
 
+/// Per-session Claude launch profile id. Stored in preferred_config_values
+/// next to the Host pins; unlike those it is NOT an ACP config option and
+/// must never be forwarded via `session/set_config_option`.
+pub(crate) const PREFERRED_PROFILE_CONFIG_KEY: &str = "__codeg_profile__";
+
 /// Whether a preferred-config key is a Host Control semantic pin rather than
 /// a concrete Harness config id.
 fn is_host_semantic_config_key(key: &str) -> bool {
     key == PREFERRED_MODEL_CONFIG_KEY || key == PREFERRED_THOUGHT_LEVEL_CONFIG_KEY
+}
+
+/// codeg-only keys parked in `preferred_config_values`. They must be skipped
+/// by the reconnect loop that calls `session/set_config_option`: the agent
+/// never advertises them, so forwarding would `tracing::error!` on every
+/// reconnect. Host semantic pins (`__codeg_host_*`) are NOT in this set —
+/// they resolve to a real advertised option and ARE applied.
+pub(crate) fn is_codeg_internal_pin(key: &str) -> bool {
+    key.starts_with("__codeg_") && !is_host_semantic_config_key(key)
 }
 
 fn resolve_preferred_config_id(
@@ -6118,6 +6132,7 @@ fn ordered_preferred_entries(
 ) -> Vec<(&String, &String)> {
     let (semantic, concrete): (Vec<_>, Vec<_>) = preferred_config_values
         .iter()
+        .filter(|(key, _)| !is_codeg_internal_pin(key.as_str()))
         .partition(|(key, _)| is_host_semantic_config_key(key.as_str()));
     concrete.into_iter().chain(semantic).collect()
 }
@@ -6154,6 +6169,9 @@ async fn apply_preferred_session_options(
     let session_id = session.session_id().clone();
     let mut options = initial_config_options;
     for (requested_config_id, value_id) in ordered_preferred_entries(preferred_config_values) {
+        if is_codeg_internal_pin(requested_config_id) {
+            continue;
+        }
         let config_id = match resolve_preferred_config_id(&options, requested_config_id) {
             Some(config_id) => config_id,
             None => {
@@ -11369,6 +11387,32 @@ async fn emit_conversation_update(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn codeg_internal_pins_are_skipped_and_host_pins_are_not() {
+        assert!(is_codeg_internal_pin(PREFERRED_PROFILE_CONFIG_KEY));
+        assert!(is_codeg_internal_pin("__codeg_future_storage__"));
+        assert!(!is_codeg_internal_pin(PREFERRED_MODEL_CONFIG_KEY));
+        assert!(!is_codeg_internal_pin(PREFERRED_THOUGHT_LEVEL_CONFIG_KEY));
+        assert!(!is_codeg_internal_pin("model"));
+        assert!(!is_codeg_internal_pin("thought_level"));
+
+        let mut prefs = BTreeMap::new();
+        prefs.insert(PREFERRED_PROFILE_CONFIG_KEY.to_string(), "api".to_string());
+        prefs.insert(PREFERRED_MODEL_CONFIG_KEY.to_string(), "sonnet".to_string());
+        prefs.insert("model".to_string(), "opus".to_string());
+        let ordered: Vec<&str> = ordered_preferred_entries(&prefs)
+            .into_iter()
+            .map(|(k, _)| k.as_str())
+            .collect();
+        assert!(
+            !ordered.contains(&PREFERRED_PROFILE_CONFIG_KEY),
+            "profile pin must not be forwarded to session/set_config_option: {ordered:?}"
+        );
+        assert!(ordered.contains(&"model"));
+        assert!(ordered.contains(&PREFERRED_MODEL_CONFIG_KEY));
+    }
     use sacp::schema::{Diff, SessionConfigId};
 
     #[test]
