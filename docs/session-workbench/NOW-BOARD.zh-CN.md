@@ -192,3 +192,57 @@ NOW-BOARD 与它重复；MAINTAINABILITY 同时兼计划 / 决策 / 执行日志
 - **P5b `visibleCollectionSessionIds` 死代码** —— 已删，全仓零命中
 - **P6a eslint/prettier 扫尾** —— 本批完成
 - **P6b dev 任务栏角标** —— 已做，`lib.rs:905` `set_icon(icon-dev.png)`
+
+## 2026-08-21 夜：settings 面板收敛 + 连接层三态
+
+### 已落地
+
+- [x] **连接状态是三态不是两态**（`361630c8`）。`--settings` 按键叠加，所以「删掉
+      连接键」= 不表态、项目级接管；「写成 `""`」才是强制官方订阅。旧代码选
+      「官方订阅」执行的是 delete，**产出第三态却贴第二态标签**——在有项目级网关的
+      仓库里，用户选了官方订阅、保存，会话照样在计费网关上。三态：
+      `custom`（有值）/ `official_subscription`（键在、值空）/ `inherit`（键不在）。
+      加 `inherit` 是为了让老档读回来不变——否则任何"什么都没填"的老档一保存
+      就会开始压项目配置
+- [x] **档 = 它的 settings.json，没有别的存储**（`e64f0136`）。删掉 JSON 上面那排
+      重复字段。**关键：字段不只是 UI**，它们喂着三个 record 字段，而
+      `materialize_managed_profile` 的合并顺序是
+      原始 JSON → `record.env` → 三个字段，**后者盖前者**。只删 UI 会让两层变成
+      隐形却仍然生效。所以：打开时按同样顺序折进编辑器（**后层覆盖**，不是
+      "缺失才补"——后者会让"只改名字"的保存把端点从 A 换成 B，codex 抓到的），
+      保存时反推回去并发 `env: {}`。折叠→推导是构造上行为保持的，而且
+      **只在用户按保存时才收敛**，不静默改写已存记录
+- [x] **`stripCredentials` 对齐后端 `is_secret_env_key`**（TOKEN|KEY|SECRET），
+      复制档不会给别家厂商的密钥留一串圆点
+- [x] 十语提示文案改正（原文还在说"上面的 Base URL、密钥和模型会在保存时写进它"，
+      那些字段已经不存在了）
+
+### 今晚实测钉死的事实（都进了 CONFIG-MODEL §11，动工前先读）
+
+- **空串能压掉下层，且被 CLI 读成"未设置"**：项目层指向本地 4711，叠加层不碰
+  → 命中 7 次；叠加层写 `""` → 命中 0 次且 CLI 正常作答。**双向对照**
+- **项目级 settings.json 赢过进程环境变量**：env 指向 4712、项目层指向 4711，
+  七次真实调用全打 4711。**后果：`apply_claude_env_policy`（`connection.rs:162`）
+  和虚拟档 `OfficialDirect`（`claude_profile.rs:734`）都靠改进程环境来"强制官方
+  订阅"，它们都压不住项目配置**——两条独立路径都是坏的，未修
+- **`ANTHROPIC_API_KEY` 与 `ANTHROPIC_AUTH_TOKEN` 是两套 HTTP 认证且互斥**
+  （从 claude.exe 里挖出来的：`withOptions({apiKey: null, authToken: t})`）。
+  前者发 `x-api-key`，后者发 `Authorization: Bearer`。第三方中转要的是后者，
+  所以"一般不设 API_KEY"是对的，不是省略是不需要
+
+### 等签字（改已存数据，不擅自做）
+
+- **一次性迁移收掉 record.env 和三个字段**（codex 推荐）：在 `db/mod.rs:113-119`
+  的启动迁移点，按现有优先级把 env + 三字段压平进 `settingsJson` 并清空，之后
+  `materialize_managed_profile` 只写 `settingsJson`，前端的折叠/推导全部可删。
+  长期最干净、代码最少。代价：改写已存的档记录文件
+
+### 已知仍坏，未修
+
+- **「跟随默认」页签在架构上无法强制官方订阅**：它的两个存储是
+  `configText`→`~/.claude/settings.json`（用户层，**最低**）和
+  `envText`→进程环境（输给 settings 文件）。都够不着项目级之上。
+  可能的修法：给它也发一份只含三个空连接键的 `--settings` 叠加
+- **虚拟档 `OfficialDirect` 同上**：只塞进程环境，被项目配置击穿
+- **session-sync 空转**：`pnpm tauri dev` 日志里 reconciliation 每 ~10 秒一次、
+  每次都报 `updated=1~2`。空闲状态不该一直有更新，要么真在无谓写库、要么计数是假的
