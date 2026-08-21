@@ -35,6 +35,10 @@ CDP 实机验证的可行路径与三个前提、以及我今晚犯过的判断�
       16 文件 −182/+4，门全绿（tsc/eslint 0，vitest 394 文件 4970 测试）。
       工人核实后只删了 2 个 Claude 独有的 i18n 键，另外 4 个是顶层共享、
       codex/gemini/grok/cursor 还在用——**它没照我的任务书删，是对的**
+- [~] **chippin** —— chip 说谎 + conversation pin 缺口（三部分：render 派生显示值 /
+      建行时写 pin / 关掉 profile 被删的绕过路径）。派给 grok，
+      worktree `.cli-delegate/worktrees/chippin`，结果 JSON `%TEMP%/grok-chippin.json`。
+      事实源 `CHIP-PROFILE-PIN-ANALYSIS-2026-08-22.zh-CN.md`
 - [~] **kanban1** —— 看板多回合任务阶段一。派给 grok，
       worktree `.cli-delegate/worktrees/kanban1`，
       结果 JSON `%TEMP%\grok-kanban1.json`，
@@ -49,9 +53,15 @@ CDP 实机验证的可行路径与三个前提、以及我今晚犯过的判断�
       `CHIP-PROFILE-PIN-ANALYSIS-2026-08-22.zh-CN.md`（codex 只读产出，带全套锚点）。
       **任务书还没写。** 两条硬约束必须带进任务书：eslint 禁止 effect 内同步
       `setState`；chip 里不能导入 `useAcpAgents`（会拖垮测试）。
-- [ ] **模型下拉不显示 profile 的槽位重映射** —— 已查清（见交接文档 P0 第二条）。
-      CPA 把「Sonnet」重定向到 `k3[1m]`，下拉却显示官方名字和官方定价，主动误导。
-      codeg 自己写的 settings.json，知道这个映射，应该在行上标注。纯增量 UI。
+- [ ] **模型下拉不显示 profile 的槽位重映射** —— **任务书已写好待命**：
+      `%TEMP%/lane-modelslots.md`。**排在 chippin 之后**，因为它要用 chippin 铺的
+      "本会话有效 profile" 那条 prop，而且两者都会碰 `message-input.tsx`。
+      已查明的关键事实全写进任务书了：数据前端已有（`ClaudeProfileInfo.settingsJson`），
+      解析器已有（`claude-settings-projection.ts` 的 `foldEffectiveSettings`），
+      不需要新后端命令；`ANTHROPIC_CUSTOM_MODEL_OPTION` **修不了**（交互式 CLI 特性，
+      ACP 列表是 allowlist 只能收窄），已明确划出范围外。
+      唯一要工人实测的是 ACP 报的 option value 长什么样——**对不上就不标注，
+      标错比不标更糟**。
 - [ ] **CDP 实机验证** —— 用户明确要求过（原话：不只是只跑 test，要实际 CDP 进 dev 试），
       今晚没做成。**照 `DESKTOP-DEVELOPMENT-AND-VALIDATION-GUIDE` §4.5/§4.6 做**，
       那里有直连真实 Tauri WebView2 的完整流程和可跑的探针，不要自己发明。
