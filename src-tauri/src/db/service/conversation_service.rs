@@ -1272,6 +1272,42 @@ pub async fn merge_selector_config_value(
     Ok(())
 }
 
+/// Drop one selector pin without touching the others. Used to unbind
+/// `__codeg_profile__` (and any future optional pin) back to "not set".
+pub async fn remove_selector_config_value(
+    conn: &DatabaseConnection,
+    conversation_id: i32,
+    config_id: &str,
+) -> Result<(), DbError> {
+    let Some(row) = conversation::Entity::find_by_id(conversation_id)
+        .one(conn)
+        .await?
+    else {
+        return Ok(());
+    };
+    let mut values: std::collections::BTreeMap<String, String> = row
+        .preferred_config_values
+        .as_deref()
+        .and_then(|raw| serde_json::from_str(raw).ok())
+        .unwrap_or_default();
+    if values.remove(config_id).is_none() {
+        return Ok(());
+    }
+    let serialized = if values.is_empty() {
+        None
+    } else {
+        Some(
+            serde_json::to_string(&values)
+                .map_err(|err| DbError::Validation(format!("selector prefs serialize: {err}")))?,
+        )
+    };
+    let mut active: conversation::ActiveModel = row.into();
+    active.preferred_config_values = Set(serialized);
+    active.updated_at = NotSet;
+    active.update(conn).await?;
+    Ok(())
+}
+
 /// Insert a historical child row for compatibility tests. Production releases
 /// after delegation removal never call this path.
 #[cfg(test)]

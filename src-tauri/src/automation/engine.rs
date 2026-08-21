@@ -552,9 +552,10 @@ impl AutomationEngine {
 
         // Recompute env from current settings (never snapshotted); hard-fail
         // visibly if the agent is disabled or not installed.
-        let runtime_env = build_session_runtime_env(&self.db, agent_type, None, &self.data_dir)
-            .await
-            .map_err(|e| e.to_string())?;
+        let runtime_env =
+            build_session_runtime_env(&self.db, agent_type, None, &self.data_dir, None)
+                .await
+                .map_err(|e| e.to_string())?;
         verify_agent_installed(agent_type)
             .await
             .map_err(|e| e.to_string())?;

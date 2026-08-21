@@ -90,6 +90,7 @@ pub async fn acp_connect(
         params.agent_type,
         params.session_id.as_deref(),
         &state.data_dir,
+        params.conversation_id,
     )
     .await
     .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;

@@ -3543,6 +3543,42 @@ impl ConnectionManager {
         None
     }
 
+    /// Mark a live connection bound to `conversation_id` as config-stale so the
+    /// frontend `SessionConfigStaleBanner` can ask for a reconnect. Does not
+    /// rewrite `last_observed_fingerprint`: an agent-level refresh must not
+    /// clear this banner just because the per-conversation `CLAUDE_CONFIG_DIR`
+    /// is excluded from the agent-type fingerprint.
+    ///
+    /// Returns `true` when a live connection was found and notified.
+    pub async fn mark_conversation_config_stale(
+        &self,
+        conversation_id: i32,
+        kind: ConfigStaleKind,
+    ) -> bool {
+        let target = {
+            let connections = self.connections.lock().await;
+            let mut found = None;
+            for conn in connections.values() {
+                let state = conn.state.read().await;
+                if state.conversation_id == Some(conversation_id) {
+                    found = Some((Arc::clone(&conn.state), conn.emitter.clone()));
+                    break;
+                }
+            }
+            found
+        };
+        let Some((state, emitter)) = target else {
+            return false;
+        };
+        emit_with_state(
+            &state,
+            &emitter,
+            AcpEvent::SessionConfigStale { stale: true, kind },
+        )
+        .await;
+        true
+    }
+
     /// The in-flight user prompt for `conversation_id` and the instant its turn
     /// started, if a turn is currently running on its live connection. `Some`
     /// exactly between `UserMessage` and `TurnComplete` (see
@@ -4003,6 +4039,36 @@ mod tests {
         assert!(
             !mgr.get_state("c1").await.unwrap().read().await.config_stale,
             "staleness cleared after revert"
+        );
+    }
+
+    #[tokio::test]
+    async fn mark_conversation_config_stale_flags_only_that_conversation() {
+        let mgr = ConnectionManager::new();
+        insert_fake_connection(&mgr, "c1", AgentType::ClaudeCode, None, EventEmitter::Noop).await;
+        insert_fake_connection(&mgr, "c2", AgentType::ClaudeCode, None, EventEmitter::Noop).await;
+        mgr.get_state("c1")
+            .await
+            .unwrap()
+            .write()
+            .await
+            .conversation_id = Some(42);
+        mgr.get_state("c2")
+            .await
+            .unwrap()
+            .write()
+            .await
+            .conversation_id = Some(99);
+
+        assert!(
+            mgr.mark_conversation_config_stale(42, ConfigStaleKind::AgentConfig)
+                .await
+        );
+        assert!(mgr.get_state("c1").await.unwrap().read().await.config_stale);
+        assert!(!mgr.get_state("c2").await.unwrap().read().await.config_stale);
+        assert!(
+            !mgr.mark_conversation_config_stale(7, ConfigStaleKind::AgentConfig)
+                .await
         );
     }
 

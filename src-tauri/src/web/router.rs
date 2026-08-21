@@ -1199,6 +1199,23 @@ pub fn build_router(
             "/delete_model_provider",
             post(handlers::model_provider::delete_model_provider),
         )
+        // ─── Claude launch profiles ───
+        .route(
+            "/claude_profile_list",
+            post(handlers::claude_profile::claude_profile_list),
+        )
+        .route(
+            "/claude_profile_upsert",
+            post(handlers::claude_profile::claude_profile_upsert),
+        )
+        .route(
+            "/claude_profile_delete",
+            post(handlers::claude_profile::claude_profile_delete),
+        )
+        .route(
+            "/conversation_set_claude_profile",
+            post(handlers::claude_profile::conversation_set_claude_profile),
+        )
         // ─── Quick Messages ───
         .route(
             "/quick_messages_list",

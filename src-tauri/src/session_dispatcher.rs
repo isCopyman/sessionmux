@@ -183,10 +183,15 @@ pub async fn ensure_session_runtime(
         .await
         .map_err(|error| error.to_string())?;
     let working_dir = resolve_working_dir(db, row).await?;
-    let runtime_env =
-        build_session_runtime_env(db, agent_type, Some(session_id.as_str()), data_dir)
-            .await
-            .map_err(|error| error.to_string())?;
+    let runtime_env = build_session_runtime_env(
+        db,
+        agent_type,
+        Some(session_id.as_str()),
+        data_dir,
+        Some(row.id),
+    )
+    .await
+    .map_err(|error| error.to_string())?;
 
     let connection_id = manager
         .resume_agent_for_conversation(

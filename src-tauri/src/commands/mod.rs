@@ -6,6 +6,7 @@ pub mod background;
 pub mod backup;
 pub mod chat_authoring;
 pub mod chat_channel;
+pub mod claude_profile;
 pub mod collaboration;
 pub mod collections;
 pub mod conversations;
