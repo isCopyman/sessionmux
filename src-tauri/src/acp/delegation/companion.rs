@@ -3394,6 +3394,24 @@ mod tests {
     }
 
     #[test]
+    fn create_tools_accept_profile_id_or_name() {
+        for tool in ["create_automation", "create_work_task"] {
+            let chunk = TOOL_SCHEMA_JSON
+                .split(&format!("\"name\": \"{tool}\""))
+                .nth(1)
+                .expect(tool);
+            assert!(
+                chunk.contains("id or name from list_profiles"),
+                "{tool}: {chunk}"
+            );
+            assert!(
+                chunk.contains("Unknown or ambiguous values are rejected"),
+                "{tool}: {chunk}"
+            );
+        }
+    }
+
+    #[test]
     fn list_profiles_is_gated_by_either_authoring_feature() {
         let none = CompanionFeatures::default();
         assert!(!none.allows_tool("list_profiles"));
