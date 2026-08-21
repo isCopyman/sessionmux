@@ -503,6 +503,80 @@ git diff -- <本批文件>
 
 只显式暂存本批文件，提交后检查 commit 内容，再推送到 `sessionmux` 当前分支。
 
+## 7.1 派工给外部 CLI（cli-delegate）时的开发与测试要求
+
+领导会话把编码活派给外部 CLI（grok / codex）时，**工人看不到对话，只看到任务书**。
+所以下面这些要求必须**每次都写进任务书**，不能靠默契。
+
+### 隔离纪律
+
+- **工人绝不写主工作树。** 用 `--worktree-name <lane>` 给它一个独立 checkout
+  （落在 `<repo>/.cli-delegate/worktrees/<lane>`，分支 `cli-delegate-<lane>`）。
+  只在 prompt 里写"请用 worktree"是**没用的**——隔离靠的是子进程的 `--cwd`。
+- 只读调研用 `--read-only`，不开 worktree。
+- 并行车道要在任务书里**点名哪些目录别碰**，否则两条车道改同一个文件必撞。
+- 放**后台 shell** 跑，别在前台阻塞；超时给足（`--timeout 1500000`）。
+- worktree 卫生见 `DISK-WORKTREE-HYGIENE.zh-CN.md`：合过的才删，分支保留以防回溯。
+
+### 任务书里的测试段落（可直接抄）
+
+```markdown
+## Gates
+
+Use the SHARED, already-warm target dir. A worktree-local one starts cold and
+has been producing spurious Windows `0xc0000139` failures:
+
+    CARGO_TARGET_DIR=D:/code/revisiting/work/repo_audit/repos/codeg/src-tauri/target-gate
+
+前端：
+    npx tsc --noEmit
+    npx eslint src/
+    npx vitest run            # 全量。改动碰了共享 store / 类型 / 布局时不许缩窄
+
+Rust 两个运行时都要（本项目同时构建 desktop 与 server）：
+    cargo test --features test-utils --lib
+    cargo clippy --all-targets --features test-utils -- -D warnings
+    cargo check --no-default-features --bin codeg-server
+    cargo clippy --no-default-features --bin codeg-server --lib -- -D warnings
+
+Capture the real exit status of each tool. Do NOT pipe a command into `tail`
+and then read `$?` — that reports tail's status, not the tool's, and it will
+tell you a failing gate passed. If a gate cannot run, say so explicitly rather
+than claiming it passed.
+```
+
+### 任务书里的约束段落（可直接抄）
+
+```markdown
+- DO NOT expand scope. Anything else you notice goes in the report.
+- DO NOT add defensive code without a real failure path. If you cannot name the
+  concrete input that breaks without a guard, leave the guard out. You are
+  reviewed specifically for over-defensive programming.
+- Any new user-facing string needs all TEN locales in `src/i18n/messages/`
+  (en, zh-CN, zh-TW, ja, ko, es, de, fr, pt, ar). Read neighbouring strings for
+  register; do not machine-translate blindly and do not leave English in a
+  non-English file.
+- No new dependencies. No schema migration unless explicitly asked.
+- Do not touch <这一批其他车道正在改的目录>.
+```
+
+### 报告要求
+
+要它交：改了什么、净 diff stat、**每个门的真实退出码**、哪些验收场景有测试及其位置、
+以及"发现了但故意没动"的清单。最后一项最有价值——它是下一批活的输入。
+
+### 验收纪律（领导会话自己做，不许省）
+
+1. **自己重跑门。** 工人报的绿只是一个待验证的声明。
+2. **只看它自己那个提交**：`git show --stat cli-delegate-<lane>`。
+   用 `main..<lane>` 会把整条夜间历史算进来，看不出它到底改了什么。
+3. **承重的机械性声明要机器对拍。** 例如"纯搬运、函数体逐字未变"这种，
+   写个脚本对比行的多重集，比读 diff 可靠得多（2026-08-22 的 splithelpers 就是这么验的）。
+4. **工人卡死的判定**：`cli-delegate sessions --cli <cli> --cwd <worktree>` 看 `updatedAt`。
+   停止推进 20 分钟以上基本就是挂了。**不要 sleep 轮询**，后台任务完成会通知。
+5. UI 改动**不能只看单测**。单测全绿而界面在说谎是本项目反复出现的情况，
+   按 §4.5/§4.6 用 CDP 实机点一遍。
+
 ## 8. 当前还没有的基础设施
 
 截至 2026-08-16，仓库没有一套正式的 Playwright/Tauri 端到端测试脚本。现有稳定方法是：
