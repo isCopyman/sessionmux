@@ -4739,6 +4739,7 @@
     "errorView": "Voir",
     "notifyReview": "Prêt pour révision : {title}",
     "notifyFailed": "La tâche a échoué : {title}",
+    "notifyAwaitingInput": "En attente de votre saisie : {title}",
     "createFromMessage": "Créer une tâche depuis le message",
     "detailTokens": "Total de tokens",
     "editorTitleNew": "Nouvelle tâche",

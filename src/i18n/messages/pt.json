@@ -4739,6 +4739,7 @@
     "errorView": "Ver",
     "notifyReview": "Pronto para revisão: {title}",
     "notifyFailed": "A tarefa falhou: {title}",
+    "notifyAwaitingInput": "Aguardando sua resposta: {title}",
     "createFromMessage": "Criar tarefa a partir da mensagem",
     "detailTokens": "Total de tokens",
     "editorTitleNew": "Nova tarefa",

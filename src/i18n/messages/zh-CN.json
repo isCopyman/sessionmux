@@ -4739,6 +4739,7 @@
     "errorView": "查看",
     "notifyReview": "待验收：{title}",
     "notifyFailed": "任务失败：{title}",
+    "notifyAwaitingInput": "「{title}」在等你回答",
     "createFromMessage": "由此消息创建任务",
     "detailTokens": "总 token 用量",
     "editorTitleNew": "新建任务",

@@ -4739,6 +4739,7 @@
     "errorView": "Ansehen",
     "notifyReview": "Bereit zur Abnahme: {title}",
     "notifyFailed": "Aufgabe fehlgeschlagen: {title}",
+    "notifyAwaitingInput": "Wartet auf Eingabe: {title}",
     "createFromMessage": "Aufgabe aus Nachricht erstellen",
     "detailTokens": "Token insgesamt",
     "editorTitleNew": "Neue Aufgabe",

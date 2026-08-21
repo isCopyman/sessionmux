@@ -4739,6 +4739,7 @@
     "errorView": "보기",
     "notifyReview": "검수 대기: {title}",
     "notifyFailed": "작업 실패: {title}",
+    "notifyAwaitingInput": "입력 대기: {title}",
     "createFromMessage": "이 메시지로 작업 만들기",
     "detailTokens": "총 토큰",
     "editorTitleNew": "새 작업",

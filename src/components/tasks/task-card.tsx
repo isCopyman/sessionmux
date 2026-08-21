@@ -62,8 +62,10 @@ export function statusLabelKey(status: WorkTask["status"]): StatusLabelKey {
 /**
  * Per-status presentation, so the board reads by shape rather than nine
  * same-looking chips: live statuses are primary-colored spinner text,
- * attention statuses an outlined amber pill, `done` a bare green check,
- * `failed` a tinted red pill, the rest a muted pill.
+ * `awaiting_input` an outlined amber pill with a light pulse, `review` a
+ * muted pill (neutral among the attention column), `merging` a muted
+ * spinner, `done` a bare green check, `failed` a tinted red pill, the
+ * rest a muted pill.
  *
  * The label truncates inside whatever width it is given (with the full text on
  * `title`): the list view puts the chip in a fixed status column, and locales
@@ -90,16 +92,28 @@ export function StatusChip({
     case "queued":
     case "preparing":
     case "running":
-    case "merging":
       tone = "gap-1 text-[0.6875rem] text-primary"
       icon = (
         <Loader2 className="size-3 shrink-0 animate-spin" aria-hidden="true" />
       )
       break
+    case "merging":
+      tone = "gap-1 text-[0.6875rem] text-muted-foreground"
+      icon = (
+        <Loader2 className="size-3 shrink-0 animate-spin" aria-hidden="true" />
+      )
+      break
     case "awaiting_input":
-    case "review":
+      // Amber tokens match the attention column marker (`bg-amber-500` /
+      // `text-amber-600` / `dark:text-amber-400` in tasks-page.tsx).
       tone =
-        "rounded-full border border-amber-500/45 bg-amber-500/5 px-2 py-1 text-[0.625rem] text-amber-600 dark:border-amber-400/40 dark:text-amber-400"
+        "gap-1 rounded-full border border-amber-500/45 bg-amber-500/5 px-2 py-1 text-[0.625rem] text-amber-600 dark:border-amber-400/40 dark:text-amber-400"
+      icon = (
+        <span
+          className="size-1.5 shrink-0 animate-pulse rounded-full bg-amber-500"
+          aria-hidden="true"
+        />
+      )
       break
     case "done":
       tone =
@@ -140,11 +154,12 @@ export function StatusChip({
  * The list row's leading accent bar — the board's column markers turned on
  * their side, so the two views speak one colour language.
  *
- * It refines the mapping where a board column lumps two outcomes together:
- * `failed` reads red rather than the attention column's amber, and `canceled`
- * stays neutral instead of inheriting Done's green (a green bar on a row that
- * says "已取消" is a lie the board gets away with only because its column
- * heading says "Done" once, at the top).
+ * It refines the mapping where a board column lumps four outcomes together:
+ * `failed` reads red, `awaiting_input` keeps the attention column's amber
+ * (with a light pulse), `review` is a neutral bar, `merging` is muted, and
+ * `canceled` stays neutral instead of inheriting Done's green (a green bar
+ * on a row that says "已取消" is a lie the board gets away with only because
+ * its column heading says "Done" once, at the top).
  */
 export function statusAccent(task: WorkTask): string {
   if (task.archived_at != null) return "bg-muted-foreground/20"
@@ -156,15 +171,36 @@ export function statusAccent(task: WorkTask): string {
     case "running":
       return "bg-primary"
     case "awaiting_input":
+      return "animate-pulse bg-amber-500"
     case "review":
+      return "bg-muted-foreground/35"
     case "merging":
-      return "bg-amber-500"
+      return "bg-muted-foreground/25"
     case "failed":
       return "bg-destructive"
     case "done":
       return "bg-emerald-500"
     case "canceled":
       return "bg-muted-foreground/25"
+  }
+}
+
+/**
+ * Attention-column surface weight on the card and list row: failed is a red
+ * wash, awaiting_input reuses the board's amber tokens, review stays
+ * unstyled (neutral), merging is faded. Empty for every other status.
+ */
+export function attentionSurfaceClass(task: WorkTask): string {
+  if (task.archived_at != null) return ""
+  switch (task.status) {
+    case "failed":
+      return "border-destructive/50 bg-destructive/5"
+    case "awaiting_input":
+      return "border-amber-500/45 bg-amber-500/5"
+    case "merging":
+      return "opacity-70"
+    default:
+      return ""
   }
 }
 
@@ -392,6 +428,7 @@ export function TaskCard({
         // Hover is a border colour change only — no lift, no shadow.
         "transition-colors hover:border-primary",
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        attentionSurfaceClass(task),
         archived && "opacity-60"
       )}
     >

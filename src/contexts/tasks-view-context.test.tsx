@@ -39,7 +39,11 @@ vi.mock("@/lib/platform", () => ({
   }),
 }))
 
-import { TasksViewProvider, useTasksView } from "./tasks-view-context"
+import {
+  resetAwaitingInputNotifyCooldownForTests,
+  TasksViewProvider,
+  useTasksView,
+} from "./tasks-view-context"
 
 function sample(id: number, status: WorkTask["status"]): WorkTask {
   return {
@@ -91,6 +95,7 @@ beforeEach(() => {
   notifyMock.mockReset()
   changedHandler = null
   reconnectHandler = null
+  resetAwaitingInputNotifyCooldownForTests()
 })
 
 describe("TasksViewProvider", () => {
@@ -164,5 +169,77 @@ describe("TasksViewProvider", () => {
       "proj - Codeg",
       expect.stringContaining("notifyFailed")
     )
+  })
+
+  describe("awaiting_input notify cooldown", () => {
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
+    async function mountRunning(): Promise<void> {
+      listMock.mockResolvedValueOnce([sample(1, "running")])
+      render(
+        <TasksViewProvider>
+          <Probe />
+        </TasksViewProvider>
+      )
+      await waitFor(() =>
+        expect(screen.getByTestId("count").textContent).toBe("1")
+      )
+      expect(notifyMock).not.toHaveBeenCalled()
+    }
+
+    async function flipTo(
+      status: WorkTask["status"],
+      expectedFetches: number
+    ): Promise<void> {
+      listMock.mockResolvedValueOnce([sample(1, status)])
+      await act(async () => {
+        changedHandler?.()
+      })
+      await waitFor(() =>
+        expect(listMock).toHaveBeenCalledTimes(expectedFetches)
+      )
+    }
+
+    it("notifies when a task flips into awaiting_input", async () => {
+      await mountRunning()
+      await flipTo("awaiting_input", 2)
+      expect(notifyMock).toHaveBeenCalledTimes(1)
+      expect(notifyMock).toHaveBeenCalledWith(
+        "proj - Codeg",
+        expect.stringContaining("notifyAwaitingInput")
+      )
+    })
+
+    it("does not notify a second awaiting_input flip within 5 minutes", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] })
+      vi.setSystemTime(new Date("2026-08-21T00:00:00Z"))
+      await mountRunning()
+      await flipTo("awaiting_input", 2)
+      expect(notifyMock).toHaveBeenCalledTimes(1)
+
+      await flipTo("running", 3)
+      vi.setSystemTime(new Date("2026-08-21T00:04:59Z"))
+      await flipTo("awaiting_input", 4)
+      expect(notifyMock).toHaveBeenCalledTimes(1)
+    })
+
+    it("notifies again after the 5-minute cooldown", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] })
+      vi.setSystemTime(new Date("2026-08-21T00:00:00Z"))
+      await mountRunning()
+      await flipTo("awaiting_input", 2)
+      expect(notifyMock).toHaveBeenCalledTimes(1)
+
+      await flipTo("running", 3)
+      vi.setSystemTime(new Date("2026-08-21T00:05:00Z"))
+      await flipTo("awaiting_input", 4)
+      expect(notifyMock).toHaveBeenCalledTimes(2)
+      expect(notifyMock).toHaveBeenLastCalledWith(
+        "proj - Codeg",
+        expect.stringContaining("notifyAwaitingInput")
+      )
+    })
   })
 })

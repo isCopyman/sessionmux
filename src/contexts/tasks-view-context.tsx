@@ -153,22 +153,50 @@ export function TasksViewProvider({ children }: { children: ReactNode }) {
   )
 }
 
+/** Per-task silence for `awaiting_input` flips. `running ⇄ awaiting_input`
+ *  can fire on every Question/Permission/PlanApproval; without this the
+ *  same card would keep summoning. Review/failed stay unthrottled. */
+const AWAITING_INPUT_NOTIFY_COOLDOWN_MS = 5 * 60 * 1000
+const lastAwaitingInputNotifyAt = new Map<number, number>()
+
+/** Test-only: wipe the in-memory cooldown so cases don't leak across tests. */
+export function resetAwaitingInputNotifyCooldownForTests(): void {
+  lastAwaitingInputNotifyAt.clear()
+}
+
+type NotifyFlipKey = "notifyReview" | "notifyFailed" | "notifyAwaitingInput"
+
 /**
- * System notification when a task flips into review (ready for acceptance) or
- * failed. The engine runs headless, so this fetch-to-fetch diff is the only
- * place that sees the transition; `sendSystemNotification` itself stays silent
- * while the window is visible.
+ * System notification when a task flips into awaiting_input (blocked on a
+ * human answer), review (ready for acceptance), or failed. The engine runs
+ * headless, so this fetch-to-fetch diff is the only place that sees the
+ * transition; `sendSystemNotification` itself stays silent while the window
+ * is visible.
  */
 function notifyFlips(
   prev: Map<number, WorkTask["status"]> | null,
   list: WorkTask[],
-  t: (key: "notifyReview" | "notifyFailed", values: { title: string }) => string
+  t: (key: NotifyFlipKey, values: { title: string }) => string
 ) {
   if (prev == null) return
   for (const task of list) {
     if (prev.get(task.id) === task.status) continue
-    if (task.status !== "review" && task.status !== "failed") continue
+    if (
+      task.status !== "review" &&
+      task.status !== "failed" &&
+      task.status !== "awaiting_input"
+    ) {
+      continue
+    }
     if (task.archived_at != null) continue
+    if (task.status === "awaiting_input") {
+      const now = Date.now()
+      const last = lastAwaitingInputNotifyAt.get(task.id)
+      if (last != null && now - last < AWAITING_INPUT_NOTIFY_COOLDOWN_MS) {
+        continue
+      }
+      lastAwaitingInputNotifyAt.set(task.id, now)
+    }
     const folder = useAppWorkspaceStore
       .getState()
       .folders.find((f) => f.id === task.folder_id)
@@ -177,7 +205,9 @@ function notifyFlips(
     const body =
       task.status === "review"
         ? t("notifyReview", { title: task.title })
-        : t("notifyFailed", { title: task.title })
+        : task.status === "awaiting_input"
+          ? t("notifyAwaitingInput", { title: task.title })
+          : t("notifyFailed", { title: task.title })
     void sendSystemNotification(title, body)
   }
 }
