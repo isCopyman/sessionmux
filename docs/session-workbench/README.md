@@ -20,6 +20,10 @@
 
 - **任务看板**：`TASKBOARD-RFC-2026-08-21.zh-CN.md`（设计 RFC，待用户过目）；
   `TASKBOARD-P1-REPORT.zh-CN.md`（第一期施工报告）；
+  `KANBAN-DESIGN-2026-08-21.zh-CN.md`（**看板定稿设计**：一级容器、agent 读写不对称、
+  防退化成群聊的两条对策）；
+  `O63-AGENT-TASK-INTERFACE-RESEARCH.zh-CN.md`（Multica / Backlog.md / Conductor /
+  Taskmaster / Trellis 的 agent 侧任务接口对照）；
   `O46-TASKBOARD-RESEARCH.zh-CN.md`（**组织维度调研**：一级容器＝项目 Folder，
   含容器关系图与两套 status 的区别；内有一条已标注的过时结论）
 - **回合失败重试（O8）**：`O8-TRANSIENT-RETRY-AUDIT.zh-CN.md`（审计）；
