@@ -39,7 +39,18 @@ pub enum ReminderRuntime {
 pub struct ReminderTargetState {
     pub audience: ReminderAudience,
     pub runtime: ReminderRuntime,
-    /// Agent has not yet received the body in a real turn.
+    /// Agent has not acknowledged the letter by calling `read_message` /
+    /// `read_room` (`collaboration_delivery.agent_received_at IS NULL`).
+    ///
+    /// This is NOT "the body never reached a turn". `mark_origin_embedded`
+    /// (`collaboration_service.rs`) sets `state = 'embedded'` when the body
+    /// goes out as a real prompt but deliberately leaves `agent_received_at`
+    /// alone, so a letter the Agent already read and replied to still counts
+    /// as unread here until it calls the read tool. The comment used to claim
+    /// the turn semantics and sent readers looking for a bug that is not
+    /// there; changing the *implementation* to match would move
+    /// `auto_reply_for_completed_turn`'s ground truth too, so it is a separate
+    /// call, not a comment fix.
     pub has_unread: bool,
     /// Agent received the body and still owes a linked reply.
     pub has_awaiting_reply: bool,

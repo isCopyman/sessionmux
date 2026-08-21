@@ -204,54 +204,55 @@ kind 与解析语义保留，已绑定的会话不会炸。
 **还没做**：面板只显示单层，不显示合并后的实际生效值。要做「有效配置」视图的话，
 需要后端按会话 cwd 去读项目层再合并——记为待办，不在本批。
 
-## 8. 提案：档上的「信任本仓库配置」开关（未实现，待实验）
+## 8. 提案：「应用项目自带的 .claude 配置」开关（未实现）
 
-用户 2026-08-21 晚提的问题："不同 settings 位于不同仓库和项目下，我想用项目下的配置怎么办？
-为每个 profile 加一个开关，是否允许项目级的 settings 覆盖？"
+用户 2026-08-21 晚：「如果想用仓库里的 settings.json 怎么办？不同 settings 位于不同仓库下……
+加一个开关？」
 
 **先纠正前提**：「想用项目下的配置」**今天已经是默认行为**——`.claude/settings.json`
-本来就加载，而且压过用户全局（见 §7）。用户不需要做任何事。
+本来就加载，而且压过用户全局（§7）。用户不需要做任何事。缺的是**关掉它**的能力。
 
-**真正缺的是反向能力**，而且它的价值不在覆盖顺序，在**信任**：
-仓库里的 `.claude/settings.json` 能定义 **hooks（任意命令）** 和 permissions。
-克隆别人的仓库、在里面开 Claude，等于替对方执行他写的 hook。
+### 这不是信任闸门（我先走错过一次）
+
+我一度把它改写成安全问题，并提议复用 pi 那套 project-trust
+（`pi-project-trust-banner.tsx` + `acp.rs:5605 pi_project_trust_launch_block`）。
+**用户否决，理由成立**：pi 那套是默认拒绝、拦住启动、逼用户答复的**闸门**，
+因为 `.pi/extensions` 是启动即执行的代码；我们这个是**偏好**，默认开，
+今天本来就是这个行为。做成闸门会改掉默认行为、多一个挡路横幅，比需求大得多。
+
+保留这段是因为 pi 那套确实存在且是按文件夹记忆的——**将来**若真要做仓库信任，
+它是现成样板，但那是另一件事，别和本条混为一谈。
 
 ### 形状
 
-档上一个开关：**「信任本仓库自带的 Claude 配置」，默认开**。
+- 一个普通开关：**「应用项目自带的 .claude 配置」，默认开**。
+- **放会话上**（和档 chip 同排），设置面板里只放"新会话默认值"。
+  理由：它跟着 **cwd** 走，不跟着档走。同一个中转档在自己仓库和 clone 来的仓库
+  该有不同答案；放档上会逼用户为同一个端点建两个档，分类维度是错的。
+- 不拦启动、不弹询问横幅。
 
-| 开关 | `settingSources` | 效果 |
-| --- | --- | --- |
-| 开（默认） | `["user","project","local"]` | 今天的行为，零变化 |
-| 关 | `["user"]` | 仓库的 `.claude/settings.json` / `.local.json` 一概不加载，hooks 不执行 |
+| 开关 | `settingSources` |
+| --- | --- |
+| 开（默认） | `["user","project","local"]`（不传，用适配器默认） |
+| 关 | `["user"]` |
 
-不给「跟随默认」这个开关：它的定义就是零注入，想控制就建档。
+### 时序（用户问到的点）
 
-### 机制（源码上成立，**尚未实测**）
+`settingSources` 和 `--settings` 一样只在 `session/new` 的 `_meta` 里传一次，
+**连接建立后改不了**。所以这个开关必须复用已有的
+`AcpEvent::SessionConfigStale { stale, kind }` → `SessionConfigStaleBanner`
+（`acp/manager.rs:1041`、`src/components/chat/session-config-stale-banner.tsx`），
+和换档走同一条路：标 stale，横幅提供重启。不要另编一套。
 
-适配器 `dist/acp-agent.js`：
+### 机制（源码上成立，**端到端尚未实测**）
 
-```js
-const options = {
-    systemPrompt,
-    settingSources: ["user", "project", "local"],
-    ...(thinking !== undefined && { thinking }),
-    ...userProvidedOptions,     // ← 在后面展开，所以客户端传的会盖掉上面那行
-    ...
-}
-```
+`dist/acp-agent.js`：`...userProvidedOptions` 在写死的
+`settingSources: ["user","project","local"]` **之后**展开，所以客户端传的会盖掉它，
+不需要改适配器。**但这一条还没跑过实验验证**（探针脚本已写好：
+`C:/Users/63036/AppData/Local/Temp/proj-probe/`，做法是项目目录放一份带无效 token 的
+`.claude/settings.json`，加载了就 401，没加载就回 pong）。按 L13，动工前应先跑。
 
-所以 `_meta.claudeCode.options.settingSources` 应该能覆盖写死的三层，
-**不需要改适配器**。和 `extraArgs.settings` 走同一个 `_meta` 入口。
+### 无关但顺带记
 
-### 开工前必须先做的实验（L13）
-
-建一个临时项目目录，放 `.claude/settings.json` 带一个可观测标记
-（例如 `env.CODEG_PROJECT_PROBE`，或一个会打印的 SessionStart hook），
-然后两次 `session/new`：一次不传 `settingSources`，一次传 `["user"]`，
-看标记是否消失。**验完再动工**，不要照着源码就写。
-
-### 顺带
-
-`settingSources` 若真能传，也解释了另一件事：`--settings`（档）和项目层是两个正交的旋钮，
-一个管"加什么内容"，一个管"从哪些地方加"。文案上要分清，别混成一句话。
+档记录是 `claude-profiles/<id>/` 下的 **JSON 文件**（`claude_profile.rs:433 read_record`），
+不是数据库表——给档加字段只是 serde 加 `#[serde(default)]`，**零迁移、不需要用户签字**。
