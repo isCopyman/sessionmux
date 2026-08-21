@@ -1,6 +1,8 @@
 # Session Workbench GitHub Issue 与需求追踪
 
-> 状态：Draft  
+> **历史需求映射，不是当前状态源。** Issue 状态与本地实现都可能已经变化；当前工作只看
+> [`NOW-BOARD.zh-CN.md`](NOW-BOARD.zh-CN.md)、实际代码与实时 GitHub 页面。
+> 状态：Frozen draft
 > 最近核对：2026-08-15  
 > 范围：`xintaofei/codeg` 中由 `isCopyman` 提交、与本 RFC 直接相关的 Issue。
 

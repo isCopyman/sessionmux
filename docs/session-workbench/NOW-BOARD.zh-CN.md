@@ -59,7 +59,11 @@
 - [x] **kanban1** —— 已合 `c8700a57`，31 文件 +925/−49，七个验收场景都点过。
       合并后组合门主会话亲自跑：cargo test 2787 通过 / clippy 0 / server clippy 0 /
       vitest 395 文件 4977 测试通过（第一次挂 1 个，干净重跑全绿，是 CPU 争抢抖动）。
-      设计事实源 `KANBAN-MULTITURN-DESIGN-2026-08-22.zh-CN.md`
+      设计事实源 `KANBAN-MULTITURN-DESIGN-2026-08-22.zh-CN.md`。2026-08-22 又在真实
+      Tauri WebView2 中完成「创建待办 → 编辑标题 → 打开详情 → 删除确认 → 回到空看板」；
+      临时数据已经清理。该轮还发现 Next 开发浮标挡住详情右下角删除按钮，`d7650ed6`
+      关闭无产品价值的浏览器浮标后，按钮中心的命中对象由 `NEXTJS-PORTAL` 恢复为按钮本身，
+      真实鼠标点击复测通过。
 - [x] **后台任务唤醒缺口调研** —— 已交，见
       `BACKGROUND-WAKE-RECON-2026-08-21.zh-CN.md`。**结论跟原假设相反**
 - [x] **遗漏任务盘点**（codex）—— 已交，结论见下
@@ -185,11 +189,10 @@ Composer。相应跨连接回归测试与 Desktop/CDP 往返验证均已通过�
       **只读**——只读就不可能造出第二个写入口。显示合并结果 + 每个键来自哪层 +
       "在编辑器里打开项目那份"的链接。设计见 `CONFIG-MODEL-2026-08-21` §7。
 
-- [ ] **冷启动白屏**。dev 冷编译时 Tauri 窗口先弹出来、前端还在 turbopack 编译
-      （实测 compile 13.5s → 白屏 16 秒），用户以为坏了。
-      **注意**：改窗口背景色**没用**，用户是浅色主题，主题背景本来就是白的。
-      真修法是 splash 窗口或 Rust 侧 `navigate`，都是中等风险改动。生产不受影响
-      （静态文件秒开），所以别为它冒险，挑白天做。
+- [x] **冷启动白屏不再作为当前 Bug**。它只在一次 dev 冷编译现场出现过，用户随后明确
+      表示后面没有再遇到；本轮多次热重载和重启也未复现。生产静态包本来不受影响，当前
+      不为一条无法复现的开发期现象引入 splash / Rust `navigate`。以后若重新出现，先保存
+      启动时间线与截图再立项，不把这条历史观察继续伪装成未修 P0。
 
 - [ ] **`model_provider` 回写清理**。绑定仍会把连接键写回 `agent_setting.env_json`
       （O69-A 报告 §8 提出，O69-C §5 明确没做）。O69-C 之后档已不再注入连接 env，
@@ -224,8 +227,8 @@ MAINTAINABILITY-PROGRAM、release8 handoff、fork-rewind-slices/README、
 已发现的实际冲突：release8 handoff 的 P0/P1/P5/P6 部分早已完成却仍写成未做；
 NOW-BOARD 与它重复；MAINTAINABILITY 同时兼计划 / 决策 / 执行日志，三头重复。
 
-- [ ] **收敛状态源**：NOW-BOARD 是当前状态的**唯一**事实源；handoff 用完即冻结归档；
-      MAINTAINABILITY 只留自己的执行记录；ISSUE-TRACKER 标注「历史存档，勿当现状」。
+- [x] **收敛状态源**：NOW-BOARD 是当前状态的**唯一**事实源；`HANDOFF-2026-08-22`
+      已冻结，MAINTAINABILITY 与 ISSUE-TRACKER 已标注历史用途，不能再据其中的旧状态派工。
 
 ### ⚠️ 唯一的高置信度遗漏
 
