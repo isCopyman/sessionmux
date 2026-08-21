@@ -20,11 +20,13 @@ const h = vi.hoisted(() => ({
   handler: null as null | ((change: unknown) => void),
   folderHandler: null as null | ((change: unknown) => void),
   bulkHandler: null as null | ((change: unknown) => void),
+  queueHandler: null as null | ((change: unknown) => void),
   reconnect: null as null | (() => void),
   folderReconnect: null as null | (() => void),
   disposeSpy: vi.fn(),
   folderDisposeSpy: vi.fn(),
   bulkDisposeSpy: vi.fn(),
+  queueDisposeSpy: vi.fn(),
   reconnectUnsubSpy: vi.fn(),
   folderReconnectUnsubSpy: vi.fn(),
   listAll: vi.fn(async () => [] as unknown[]),
@@ -43,11 +45,11 @@ vi.mock("@/stores/tab-store", () => ({
 }))
 
 vi.mock("@/lib/platform", () => ({
-  // The provider registers three subscriptions — `conversation://changed`,
-  // `conversations://bulk-changed`, and `folder://changed` — so route by exact
-  // channel and capture each handler / dispose spy independently; the
-  // conversation-sync tests keep asserting against `h.handler`/`h.disposeSpy`
-  // unchanged.
+  // The provider registers four subscriptions — `conversation://changed`,
+  // `conversations://bulk-changed`, `folder://changed`, and
+  // `prompt-queue://changed` — so route by exact channel and capture each
+  // handler / dispose spy independently; the conversation-sync tests keep
+  // asserting against `h.handler`/`h.disposeSpy` unchanged.
   subscribe: vi.fn(async (event: string, handler: (c: unknown) => void) => {
     if (event === "folder://changed") {
       h.folderHandler = handler
@@ -56,6 +58,10 @@ vi.mock("@/lib/platform", () => ({
     if (event === "conversations://bulk-changed") {
       h.bulkHandler = handler
       return h.bulkDisposeSpy
+    }
+    if (event === "prompt-queue://changed") {
+      h.queueHandler = handler
+      return h.queueDisposeSpy
     }
     h.handler = handler
     return h.disposeSpy
@@ -200,11 +206,13 @@ beforeEach(() => {
   h.handler = null
   h.folderHandler = null
   h.bulkHandler = null
+  h.queueHandler = null
   h.reconnect = null
   h.folderReconnect = null
   h.disposeSpy.mockClear()
   h.folderDisposeSpy.mockClear()
   h.bulkDisposeSpy.mockClear()
+  h.queueDisposeSpy.mockClear()
   h.reconnectUnsubSpy.mockClear()
   h.folderReconnectUnsubSpy.mockClear()
   h.listAll.mockClear()
@@ -316,6 +324,43 @@ describe("AppWorkspaceProvider conversation://changed sync", () => {
     unmount()
     expect(h.disposeSpy).toHaveBeenCalledTimes(1)
     expect(h.reconnectUnsubSpy).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe("AppWorkspaceProvider prompt-queue://changed sync", () => {
+  it("patches paused_reason on a known row without bumping updated_at", async () => {
+    await mountProvider()
+    emit({ kind: "upsert", summary: makeSummary({ id: 1 }) })
+    const before = useAppWorkspaceStore.getState().conversations[0]?.updated_at
+    act(() => {
+      h.queueHandler?.({
+        conversationId: 1,
+        revision: 2,
+        pausedReason: "cancelled_current_turn",
+        items: [],
+      })
+    })
+    const row = useAppWorkspaceStore.getState().conversations[0]
+    expect(row?.paused_reason).toBe("cancelled_current_turn")
+    expect(row?.updated_at).toBe(before)
+
+    act(() => {
+      h.queueHandler?.({
+        conversationId: 1,
+        revision: 3,
+        pausedReason: null,
+        items: [],
+      })
+    })
+    expect(
+      useAppWorkspaceStore.getState().conversations[0]?.paused_reason
+    ).toBeNull()
+  })
+
+  it("disposes the queue subscription on unmount", async () => {
+    const { unmount } = await mountProvider()
+    unmount()
+    expect(h.queueDisposeSpy).toHaveBeenCalledTimes(1)
   })
 })
 

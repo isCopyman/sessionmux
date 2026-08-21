@@ -2,6 +2,7 @@
 
 import { memo, useState, useCallback, type CSSProperties } from "react"
 import {
+  AlertTriangle,
   AtSign,
   Pencil,
   Trash2,
@@ -193,6 +194,7 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
   const tManage = useTranslations("Folder.sidebar.manageConversations")
   const tStatus = useTranslations("Folder.statusLabels")
   const tDetails = useTranslations("Folder.sessionDetails")
+  const tQueue = useTranslations("Folder.chat.messageQueue")
   const [renameOpen, setRenameOpen] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [detailsOpen, setDetailsOpen] = useState(false)
@@ -282,6 +284,18 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
   const isCancelled = status === "cancelled"
   const isPinned = conversation.pinned_at != null
   const isCompleted = status === "completed"
+  const pausedReason = conversation.paused_reason
+  const pausedReasonLabel = pausedReason
+    ? pausedReason === "cancelled_current_turn"
+      ? tQueue("pauseReasonCancelled")
+      : pausedReason === "dispatch_outcome_unknown"
+        ? tQueue("pauseReasonUnknownDispatch")
+        : pausedReason
+    : null
+  const pausedQueueLabel =
+    pausedReasonLabel != null
+      ? tQueue("paused", { reason: pausedReasonLabel })
+      : null
   // Delegation sub-sessions (a child of another conversation) don't get the
   // hover quick actions: pinning a sub-agent run to the root Pinned section or
   // hand-toggling its status doesn't fit — its lifecycle is the sub-agent's. The
@@ -414,6 +428,18 @@ export const SidebarConversationCard = memo(function SidebarConversationCard({
                   {formatConversationTitle(conversation.title) ||
                     t("untitledConversation")}
                 </span>
+                {pausedQueueLabel ? (
+                  <span
+                    className="inline-flex shrink-0 items-center"
+                    title={pausedQueueLabel}
+                  >
+                    <AlertTriangle
+                      className="h-3 w-3 text-amber-600 dark:text-amber-400"
+                      aria-hidden
+                    />
+                    <span className="sr-only">{pausedQueueLabel}</span>
+                  </span>
+                ) : null}
                 {/* Re-parented out of a removed worktree: history loads fine,
                     but "continue" may need a fresh session (the agent's files
                     were keyed to the old path). */}

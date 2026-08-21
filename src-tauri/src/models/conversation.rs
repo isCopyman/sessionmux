@@ -85,6 +85,12 @@ pub struct DbConversationSummary {
     /// Mirror of `conversation.created_by`: who created this Session — one of
     /// the `CREATED_BY_*` constants ("user" | "agent" | "automation").
     pub created_by: String,
+    /// Session-level prompt-queue freeze, if any. Backfilled by
+    /// `fill_paused_reasons` (one query over the returned set), the same way
+    /// `child_count` is. Not stored on the conversation row. Omitted from JSON
+    /// when unset so existing clients and test fixtures stay valid.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub paused_reason: Option<String>,
 }
 
 /// One full-text hit from an optional local history index. The conversation

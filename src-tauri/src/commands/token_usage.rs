@@ -1343,6 +1343,7 @@ mod tests {
                 origin_cwd: None,
                 harness_internal: false,
                 created_by: "user".into(),
+                paused_reason: None,
             },
             turns,
             session_stats: stats,
