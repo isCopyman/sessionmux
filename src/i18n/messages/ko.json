@@ -1174,7 +1174,16 @@
       "cliGlobalTitle": "Claude CLI 전역 설정",
       "cliGlobalHint": "이 탭은 아무것도 주입하지 않습니다. 아래 항목은 CLI 자체 설정 파일(~/.claude/settings.json)을 수정하며 '기본값 따르기'를 쓰는 모든 세션에 적용됩니다. 다른 탭은 각자의 엔드포인트, 키, 모델을 가집니다.",
       "officialDirect": "공식 직접 연결",
-      "officialDirectBody": "api.anthropic.com을 강제하고 서드파티 토큰을 지웁니다. CLI는 자체 설정 디렉터리에 저장된 구독으로 로그인합니다. 그 외에 설정할 항목은 없습니다."
+      "officialDirectBody": "api.anthropic.com을 강제하고 서드파티 토큰을 지웁니다. CLI는 자체 설정 디렉터리에 저장된 구독으로 로그인합니다. 그 외에 설정할 항목은 없습니다.",
+      "fieldSettingsJson": "settings.json",
+      "settingsJsonHint": "이 프로필의 나머지: 모델 별칭, effortLevel, permissions, hooks 등 settings.json에 담을 수 있는 모든 것. 위의 Base URL, 키, 모델은 저장할 때 여기에 기록됩니다.",
+      "settingsJsonInvalid": "settings.json이 올바른 JSON이 아닙니다: {message}",
+      "settingsJsonNotObject": "settings.json의 최상위는 JSON 객체여야 합니다.",
+      "addImport": "settings.json에서 가져오기…",
+      "importSuccess": "{path}에서 가져왔습니다",
+      "importMissing": "{path}에 settings.json이 없습니다",
+      "importFailed": "해당 settings.json을 읽지 못했습니다",
+      "importDroppedSecrets": "다음 키는 마스킹되어 복사되지 않았습니다. 다시 입력하세요: {keys}"
     },
     "dialogs": {
       "confirmDeleteProvider": "Provider {providerId}를 삭제하시겠습니까?",

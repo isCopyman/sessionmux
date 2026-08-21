@@ -1174,7 +1174,16 @@
       "cliGlobalTitle": "Configurações globais da CLI do Claude",
       "cliGlobalHint": "Esta aba não injeta nada. Os campos abaixo editam o arquivo de configuração da própria CLI (~/.claude/settings.json) e valem para todas as sessões que seguem o padrão. As outras abas têm endpoint, chave e modelos próprios.",
       "officialDirect": "Conexão oficial direta",
-      "officialDirectBody": "Força api.anthropic.com e limpa qualquer token de terceiros, então a CLI entra com a assinatura guardada no próprio diretório de configuração. Não há mais nada para configurar."
+      "officialDirectBody": "Força api.anthropic.com e limpa qualquer token de terceiros, então a CLI entra com a assinatura guardada no próprio diretório de configuração. Não há mais nada para configurar.",
+      "fieldSettingsJson": "settings.json",
+      "settingsJsonHint": "O resto deste perfil: aliases de modelo, effortLevel, permissions, hooks — tudo o que cabe num settings.json. A Base URL, a chave e o modelo acima são escritos aqui ao salvar.",
+      "settingsJsonInvalid": "settings.json não é um JSON válido: {message}",
+      "settingsJsonNotObject": "O nível superior do settings.json precisa ser um objeto JSON.",
+      "addImport": "Importar de settings.json…",
+      "importSuccess": "Importado de {path}",
+      "importMissing": "Não há settings.json em {path}",
+      "importFailed": "Não foi possível ler esse settings.json",
+      "importDroppedSecrets": "Estas chaves voltaram mascaradas e não foram copiadas — digite-as de novo: {keys}"
     },
     "dialogs": {
       "confirmDeleteProvider": "Excluir o provedor {providerId}?",

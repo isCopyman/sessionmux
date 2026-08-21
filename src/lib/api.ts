@@ -22,6 +22,7 @@ import type {
   AgentOptionsSnapshot,
   ClaudeProfileInfo,
   ClaudeProfileUpsert,
+  ClaudeSettingsReadResult,
   ConversationClaudeProfileResult,
   Automation,
   AutomationRun,
@@ -599,6 +600,14 @@ export async function claudeProfileUpsert(
 
 export async function claudeProfileDelete(id: string): Promise<void> {
   return getTransport().call("claude_profile_delete", { id })
+}
+
+/** Read an existing settings.json so it can be copied into a profile. Read
+ *  only — codeg never writes the file it imported from. */
+export async function claudeSettingsRead(
+  path?: string | null
+): Promise<ClaudeSettingsReadResult> {
+  return getTransport().call("claude_settings_read", { path: path ?? null })
 }
 
 export async function conversationSetClaudeProfile(

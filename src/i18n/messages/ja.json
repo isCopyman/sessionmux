@@ -1174,7 +1174,16 @@
       "cliGlobalTitle": "Claude CLI のグローバル設定",
       "cliGlobalHint": "このタブは何も注入しません。以下の項目は CLI 自身の設定ファイル（~/.claude/settings.json）を編集し、「デフォルトに従う」すべてのセッションに適用されます。他のタブはそれぞれ独自のエンドポイント・キー・モデルを持ちます。",
       "officialDirect": "公式に直接接続",
-      "officialDirectBody": "api.anthropic.com を強制し、サードパーティのトークンを消去します。CLI は自身の設定ディレクトリに保存されたサブスクリプションでサインインします。ほかに設定する項目はありません。"
+      "officialDirectBody": "api.anthropic.com を強制し、サードパーティのトークンを消去します。CLI は自身の設定ディレクトリに保存されたサブスクリプションでサインインします。ほかに設定する項目はありません。",
+      "fieldSettingsJson": "settings.json",
+      "settingsJsonHint": "このプロファイルの残り: モデルエイリアス、effortLevel、permissions、hooks など settings.json に書けるものすべて。上の Base URL・キー・モデルは保存時にここへ書き込まれます。",
+      "settingsJsonInvalid": "settings.json が正しい JSON ではありません: {message}",
+      "settingsJsonNotObject": "settings.json の最上位は JSON オブジェクトである必要があります。",
+      "addImport": "settings.json から取り込む…",
+      "importSuccess": "{path} から取り込みました",
+      "importMissing": "{path} に settings.json がありません",
+      "importFailed": "その settings.json を読み込めませんでした",
+      "importDroppedSecrets": "次のキーはマスクされて返るため取り込めませんでした。入力し直してください: {keys}"
     },
     "dialogs": {
       "confirmDeleteProvider": "Provider {providerId} を削除しますか？",

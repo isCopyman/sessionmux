@@ -1174,7 +1174,16 @@
       "cliGlobalTitle": "الإعدادات العامة لواجهة Claude CLI",
       "cliGlobalHint": "لا تحقن هذه العلامة أي شيء. الحقول أدناه تُعدّل ملف إعدادات الـ CLI نفسه (~/.claude/settings.json) وتنطبق على كل جلسة تتبع الوضع الافتراضي. أما العلامات الأخرى فلكل منها نقطة نهاية ومفتاح ونماذج خاصة بها.",
       "officialDirect": "اتصال رسمي مباشر",
-      "officialDirectBody": "يفرض api.anthropic.com ويمسح أي رمز طرف ثالث، فتسجّل الـ CLI الدخول بالاشتراك المحفوظ في مجلد إعداداتها. لا يوجد شيء آخر لضبطه."
+      "officialDirectBody": "يفرض api.anthropic.com ويمسح أي رمز طرف ثالث، فتسجّل الـ CLI الدخول بالاشتراك المحفوظ في مجلد إعداداتها. لا يوجد شيء آخر لضبطه.",
+      "fieldSettingsJson": "settings.json",
+      "settingsJsonHint": "بقية هذا الملف: أسماء النماذج البديلة و effortLevel و permissions و hooks — كل ما يمكن أن يحتويه ملف settings.json. أما Base URL والمفتاح والنموذج أعلاه فتُكتب فيه عند الحفظ.",
+      "settingsJsonInvalid": "ملف settings.json ليس JSON صالحًا: {message}",
+      "settingsJsonNotObject": "يجب أن يكون المستوى الأعلى في settings.json كائن JSON.",
+      "addImport": "استيراد من settings.json…",
+      "importSuccess": "تم الاستيراد من {path}",
+      "importMissing": "لا يوجد settings.json في {path}",
+      "importFailed": "تعذّرت قراءة ملف settings.json هذا",
+      "importDroppedSecrets": "عادت هذه المفاتيح مُقنَّعة ولم تُنسخ — أعد إدخالها: {keys}"
     },
     "dialogs": {
       "confirmDeleteProvider": "حذف المزود {providerId}؟",

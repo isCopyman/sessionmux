@@ -1174,7 +1174,16 @@
       "cliGlobalTitle": "Globale Einstellungen der Claude-CLI",
       "cliGlobalHint": "Dieser Tab injiziert nichts. Die Felder unten bearbeiten die eigene Konfigurationsdatei der CLI (~/.claude/settings.json) und gelten für jede Sitzung, die dem Standard folgt. Andere Tabs bringen eigenen Endpunkt, Schlüssel und eigene Modelle mit.",
       "officialDirect": "Offizielle Direktverbindung",
-      "officialDirectBody": "Erzwingt api.anthropic.com und löscht jeden Drittanbieter-Token, sodass sich die CLI mit dem Abo aus ihrem eigenen Konfigurationsverzeichnis anmeldet. Sonst gibt es nichts einzustellen."
+      "officialDirectBody": "Erzwingt api.anthropic.com und löscht jeden Drittanbieter-Token, sodass sich die CLI mit dem Abo aus ihrem eigenen Konfigurationsverzeichnis anmeldet. Sonst gibt es nichts einzustellen.",
+      "fieldSettingsJson": "settings.json",
+      "settingsJsonHint": "Der Rest dieses Profils: Modell-Aliase, effortLevel, permissions, hooks – alles, was in eine settings.json passt. Base URL, Token und Modell von oben werden beim Speichern hier hineingeschrieben.",
+      "settingsJsonInvalid": "settings.json ist kein gültiges JSON: {message}",
+      "settingsJsonNotObject": "Die oberste Ebene der settings.json muss ein JSON-Objekt sein.",
+      "addImport": "Aus settings.json importieren…",
+      "importSuccess": "Aus {path} importiert",
+      "importMissing": "Unter {path} gibt es keine settings.json",
+      "importFailed": "Diese settings.json konnte nicht gelesen werden",
+      "importDroppedSecrets": "Diese Schlüssel kamen maskiert zurück und wurden nicht übernommen – bitte erneut eingeben: {keys}"
     },
     "dialogs": {
       "confirmDeleteProvider": "Provider {providerId} löschen?",

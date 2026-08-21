@@ -1755,6 +1755,13 @@ export interface ClaudeProfileInfo {
   baseUrl?: string | null
   authTokenMasked: string
   model?: string | null
+  /**
+   * The profile's whole settings.json, as text. This is what a codeg profile
+   * IS — the three fields above are the parts that need masking or their own
+   * input; everything else (effortLevel, hooks, permissions, the rest of the
+   * `env` block) lives here. Secret-looking values inside `env` arrive masked.
+   */
+  settingsJson?: string | null
   /** Extra env the profile injects. Secret-looking values arrive masked. */
   env?: Record<string, string>
   /** File-less profile (`follow-default`, `official-direct`): not editable. */
@@ -1772,8 +1779,24 @@ export interface ClaudeProfileUpsert {
   baseUrl?: string | null
   authToken?: string | null
   model?: string | null
+  /**
+   * Omit or `null` keeps the stored value; `""` clears the base; a JSON
+   * object string replaces it. A value that still equals the mask the API
+   * handed us is read as "unchanged", so saving a masked editor is safe.
+   */
+  settingsJson?: string | null
   /** Whole-table replace. Omit to keep stored; `{}` clears. */
   env?: Record<string, string>
+}
+
+/** `claude_settings_read`: one-way import of an existing settings.json. */
+export interface ClaudeSettingsReadResult {
+  path: string
+  text: string
+  exists: boolean
+  /** Secret-looking `env` keys that were masked, so the UI can say which
+   *  ones the user has to type again. */
+  droppedSecretKeys: string[]
 }
 
 export interface ConversationClaudeProfileResult {

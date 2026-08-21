@@ -22,12 +22,14 @@ const api = vi.hoisted(() => ({
   claudeProfileList: vi.fn(),
   claudeProfileUpsert: vi.fn(),
   claudeProfileDelete: vi.fn(),
+  claudeSettingsRead: vi.fn(),
 }))
 
 vi.mock("@/lib/api", () => ({
   claudeProfileList: (...args: unknown[]) => api.claudeProfileList(...args),
   claudeProfileUpsert: (...args: unknown[]) => api.claudeProfileUpsert(...args),
   claudeProfileDelete: (...args: unknown[]) => api.claudeProfileDelete(...args),
+  claudeSettingsRead: (...args: unknown[]) => api.claudeSettingsRead(...args),
 }))
 
 vi.mock("sonner", () => ({
@@ -116,6 +118,12 @@ describe("ClaudeProfileCatalog", () => {
     api.claudeProfileList.mockResolvedValue([FOLLOW])
     api.claudeProfileUpsert.mockResolvedValue(RELAY)
     api.claudeProfileDelete.mockResolvedValue(undefined)
+    api.claudeSettingsRead.mockResolvedValue({
+      path: "C:/Users/me/.claude/settings.json",
+      text: '{\n  "env": {\n    "ANTHROPIC_API_KEY": "sk-t••••••••7890"\n  }\n}',
+      exists: true,
+      droppedSecretKeys: ["ANTHROPIC_API_KEY"],
+    })
   })
 
   // Adding a profile must not stop to ask for a name or an id first — the
@@ -245,6 +253,51 @@ describe("ClaudeProfileCatalog", () => {
 
     await user.click(screen.getByRole("tab", { name: "Follow default" }))
     expect(onActiveProfileChange).toHaveBeenLastCalledWith("follow-default")
+  })
+
+  // "aren't codeg's settings just a migrated settings.json?" — yes, and this
+  // is the one click that says so. One-way: nothing is written back.
+  it("imports an existing settings.json into a new profile", async () => {
+    const user = userEvent.setup()
+    renderCatalog()
+
+    await user.click(await addProfileButton())
+    await user.click(
+      await screen.findByRole("menuitem", { name: /Import from settings/ })
+    )
+
+    await waitFor(() =>
+      expect(api.claudeSettingsRead).toHaveBeenCalledWith(null)
+    )
+    // `toHaveValue` compares whole values and does not take an asymmetric
+    // matcher, so read the value and substring-check it.
+    const editor =
+      await screen.findByLabelText<HTMLTextAreaElement>("settings.json")
+    expect(editor.value).toContain("ANTHROPIC_API_KEY")
+    // The masked key cannot be saved as-is, so the editor has to say so.
+    // Anchored on the sentence: the key name alone also matches the textarea.
+    expect(
+      screen.getByText(/came back masked.*ANTHROPIC_API_KEY/)
+    ).toBeInTheDocument()
+  })
+
+  it("refuses to save a settings.json that is not a JSON object", async () => {
+    const user = userEvent.setup()
+    renderCatalog()
+    await addBlankProfile(user)
+
+    await user.click(
+      await screen.findByRole("button", { name: "settings.json" })
+    )
+    fireEvent.change(screen.getByLabelText("settings.json"), {
+      target: { value: "[1, 2, 3]" },
+    })
+    fireEvent.click(screen.getByRole("button", { name: "Save" }))
+
+    expect(
+      await screen.findByText(/must be a JSON object at the top level/)
+    ).toBeInTheDocument()
+    expect(api.claudeProfileUpsert).not.toHaveBeenCalled()
   })
 
   it("removes a deleted profile from the tab strip after confirm", async () => {

@@ -1,7 +1,15 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { Copy, Loader2, Plus, Star, Trash2 } from "lucide-react"
+import {
+  ChevronRight,
+  Copy,
+  FileDown,
+  Loader2,
+  Plus,
+  Star,
+  Trash2,
+} from "lucide-react"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 
@@ -23,11 +31,13 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
 import { cn } from "@/lib/utils"
 import {
   claudeProfileDelete,
   claudeProfileList,
   claudeProfileUpsert,
+  claudeSettingsRead,
 } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
 import {
@@ -58,6 +68,8 @@ interface FormState {
   baseUrl: string
   authToken: string
   model: string
+  /** The profile's settings.json, as text. `""` means "no base". */
+  settingsJson: string
 }
 
 /** A tab's edit buffer. `isNew` profiles exist only in the browser until saved. */
@@ -98,6 +110,7 @@ function draftFromProfile(profile: ClaudeProfileInfo): Draft {
     baseUrl: profile.baseUrl ?? "",
     authToken: "",
     model: profile.model ?? "",
+    settingsJson: profile.settingsJson ?? "",
     isNew: false,
   }
 }
@@ -114,6 +127,7 @@ function isDirty(
     draft.configDir !== base.configDir ||
     draft.baseUrl !== base.baseUrl ||
     draft.model !== base.model ||
+    draft.settingsJson !== base.settingsJson ||
     draft.authToken.trim() !== ""
   )
 }
@@ -148,6 +162,10 @@ export function ClaudeProfileCatalog({
   const [deleting, setDeleting] = useState(false)
   const [settingDefaultId, setSettingDefaultId] = useState<string | null>(null)
   const [copiedFrom, setCopiedFrom] = useState<string | null>(null)
+  /** Secret keys the import could not carry, so the editor can name them. */
+  const [droppedSecrets, setDroppedSecrets] = useState<string[]>([])
+  const [importing, setImporting] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
 
   // `t` is a fresh function identity on every render, so it must NOT be a
   // dependency of the load effect: that re-fetches on every render and the
@@ -253,7 +271,7 @@ export function ClaudeProfileCatalog({
    * it would write the literal bullets back as a token.
    */
   const addProfile = useCallback(
-    (source?: Draft) => {
+    (source?: Draft, seedSettingsJson?: string) => {
       const taken = new Set([
         ...profiles.map((profile) => profile.id),
         ...Object.keys(drafts),
@@ -270,15 +288,42 @@ export function ClaudeProfileCatalog({
           baseUrl: source?.baseUrl ?? "",
           authToken: "",
           model: source?.model ?? "",
+          settingsJson: seedSettingsJson ?? source?.settingsJson ?? "",
           isNew: true,
         },
       }))
       setFormError(null)
       setCopiedFrom(source ? source.label : null)
+      setDroppedSecrets([])
       setSelectedId(id)
     },
     [drafts, profiles, t]
   )
+
+  /**
+   * One-way import: read an existing settings.json and open it as a new
+   * profile. codeg never writes back to the file it read, and the API masks
+   * secret-looking `env` values, so those keys have to be retyped — which is
+   * what `droppedSecretKeys` is for.
+   */
+  const importFromSettings = useCallback(async () => {
+    setImporting(true)
+    try {
+      const result = await claudeSettingsRead(null)
+      if (!result.exists) {
+        toast.error(t("importMissing", { path: result.path }))
+        return
+      }
+      addProfile(undefined, result.text)
+      setDroppedSecrets(result.droppedSecretKeys)
+      setSettingsOpen(true)
+      toast.success(t("importSuccess", { path: result.path }))
+    } catch (error: unknown) {
+      toast.error(t("importFailed"), { description: toErrorMessage(error) })
+    } finally {
+      setImporting(false)
+    }
+  }, [addProfile, t])
 
   const discardNew = useCallback(() => {
     setDrafts((prev) => {
@@ -320,6 +365,28 @@ export function ClaudeProfileCatalog({
       payload.model = draft.model.trim() || null
       const token = draft.authToken.trim()
       if (token) payload.authToken = token
+      // Parse before sending so a typo comes back as "line 7", not as an
+      // opaque backend rejection. `""` is legal — it clears the base.
+      const settings = draft.settingsJson.trim()
+      if (settings) {
+        try {
+          const parsed: unknown = JSON.parse(settings)
+          if (
+            typeof parsed !== "object" ||
+            parsed === null ||
+            Array.isArray(parsed)
+          ) {
+            setFormError(t("settingsJsonNotObject"))
+            return
+          }
+        } catch (error: unknown) {
+          setFormError(
+            t("settingsJsonInvalid", { message: toErrorMessage(error) })
+          )
+          return
+        }
+      }
+      payload.settingsJson = settings
     }
 
     setSaving(true)
@@ -472,6 +539,23 @@ export function ClaudeProfileCatalog({
                   <Plus className="h-3.5 w-3.5" />
                   {t("addBlank")}
                 </DropdownMenuItem>
+                {/* The answer to "aren't codeg's settings just a migrated
+                    settings.json?" — yes, so let the user say so in one
+                    click. One-way: the source file is never written back. */}
+                <DropdownMenuItem
+                  disabled={importing}
+                  onSelect={(event) => {
+                    event.preventDefault()
+                    void importFromSettings()
+                  }}
+                >
+                  {importing ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <FileDown className="h-3.5 w-3.5" />
+                  )}
+                  {t("addImport")}
+                </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
           </div>
@@ -612,6 +696,52 @@ export function ClaudeProfileCatalog({
                           patchDraft({ model: event.target.value })
                         }
                       />
+                    </div>
+
+                    {/* Everything else a profile can carry — the rest of the
+                        `env` block, effortLevel, permissions, hooks — is just
+                        settings.json, so it gets one editor instead of a
+                        field per key. Collapsed: the three inputs above are
+                        the whole job for a gateway. */}
+                    <div className="space-y-1.5">
+                      <button
+                        type="button"
+                        className="flex w-full items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
+                        aria-expanded={settingsOpen}
+                        onClick={() => setSettingsOpen((open) => !open)}
+                      >
+                        <ChevronRight
+                          className={cn(
+                            "h-3 w-3 transition-transform",
+                            settingsOpen && "rotate-90"
+                          )}
+                        />
+                        {t("fieldSettingsJson")}
+                      </button>
+                      {settingsOpen ? (
+                        <>
+                          <p className="text-[10px] text-muted-foreground">
+                            {t("settingsJsonHint")}
+                          </p>
+                          {droppedSecrets.length > 0 ? (
+                            <p className="text-[10px] text-amber-600 dark:text-amber-500">
+                              {t("importDroppedSecrets", {
+                                keys: droppedSecrets.join(", "),
+                              })}
+                            </p>
+                          ) : null}
+                          <Textarea
+                            aria-label={t("fieldSettingsJson")}
+                            value={selectedDraft.settingsJson}
+                            onChange={(event) =>
+                              patchDraft({ settingsJson: event.target.value })
+                            }
+                            placeholder={'{\n  "env": {}\n}'}
+                            className="min-h-40 font-mono text-xs"
+                            spellCheck={false}
+                          />
+                        </>
+                      ) : null}
                     </div>
                   </>
                 )}

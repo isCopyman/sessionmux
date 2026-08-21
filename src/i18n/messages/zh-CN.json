@@ -1174,7 +1174,16 @@
       "cliGlobalTitle": "Claude CLI 全局设置",
       "cliGlobalHint": "这一档不注入任何东西。下面这些字段改的是 CLI 自己的配置文件（~/.claude/settings.json），对所有「跟随默认」的会话生效。其它档各自带着自己的接口地址、密钥和模型。",
       "officialDirect": "官方直连",
-      "officialDirectBody": "强制走 api.anthropic.com 并清掉第三方 token，让 CLI 用它配置目录里存的订阅登录。没有别的可配。"
+      "officialDirectBody": "强制走 api.anthropic.com 并清掉第三方 token，让 CLI 用它配置目录里存的订阅登录。没有别的可配。",
+      "fieldSettingsJson": "settings.json",
+      "settingsJsonHint": "这份档的其余内容：模型别名、effortLevel、permissions、hooks——settings.json 能装的都能写。上面的 Base URL、密钥和模型会在保存时写进它。",
+      "settingsJsonInvalid": "settings.json 不是合法 JSON：{message}",
+      "settingsJsonNotObject": "settings.json 顶层必须是一个 JSON 对象。",
+      "addImport": "从 settings.json 导入…",
+      "importSuccess": "已从 {path} 导入",
+      "importMissing": "{path} 没有 settings.json",
+      "importFailed": "读不了那份 settings.json",
+      "importDroppedSecrets": "这几个键回传时是掩码，没有带过来，请重新填写：{keys}"
     },
     "dialogs": {
       "confirmDeleteProvider": "确认删除 Provider {providerId}？",
