@@ -1575,6 +1575,8 @@ mod tauri_app {
                 claude_profile_commands::claude_profile_upsert,
                 claude_profile_commands::claude_profile_delete,
                 claude_profile_commands::conversation_set_claude_profile,
+                claude_profile_commands::conversation_get_project_settings,
+                claude_profile_commands::conversation_set_project_settings,
                 web::start_web_server,
                 web::stop_web_server,
                 web::get_web_server_status,

@@ -3,6 +3,8 @@
 //! Profiles live as files under `<data_dir>/claude-profiles/`, not in SQLite.
 //! Binding a conversation to a profile is stored in
 //! `conversation.preferred_config_values["__codeg_profile__"]`.
+//! Loading the cwd's `.claude/settings.json` is
+//! `preferred_config_values["__codeg_project_settings__"]` (`"off"` or absent).
 //!
 //! `codeg-mcp` is **not** written into a managed profile's `settings.json`.
 //! The companion is injected over the ACP wire (`session/new.mcpServers`) by
@@ -18,7 +20,10 @@ use std::path::{Path, PathBuf};
 use chrono::Utc;
 use serde::Deserialize;
 
-use crate::acp::connection::PREFERRED_PROFILE_CONFIG_KEY;
+use crate::acp::connection::{
+    is_project_settings_enabled, PREFERRED_PROFILE_CONFIG_KEY,
+    PREFERRED_PROJECT_SETTINGS_CONFIG_KEY, PROJECT_SETTINGS_OFF_VALUE,
+};
 use crate::acp::error::AcpError;
 use crate::acp::manager::ConnectionManager;
 use crate::acp::types::ConfigStaleKind;
@@ -28,7 +33,8 @@ use crate::db::AppDatabase;
 use crate::models::agent::AgentType;
 use crate::models::claude_profile::{
     ClaudeProfileInfo, ClaudeProfileKind, ClaudeProfileRecord, ClaudeProfileUpsert,
-    ClaudeSettingsReadResult, ConversationClaudeProfileResult,
+    ClaudeSettingsReadResult, ConversationClaudeProfileResult, ConversationProjectSettings,
+    ConversationProjectSettingsResult,
 };
 use crate::models::model_provider::mask_api_key;
 
@@ -1226,6 +1232,78 @@ pub async fn conversation_set_claude_profile_core(
     })
 }
 
+pub async fn conversation_get_project_settings_core(
+    db: &AppDatabase,
+    conversation_id: i32,
+) -> Result<ConversationProjectSettings, AppCommandError> {
+    conversation_service::get_by_id(&db.conn, conversation_id)
+        .await
+        .map_err(AppCommandError::from)?;
+    let (_mode, current) = conversation_service::selector_prefs(&db.conn, conversation_id)
+        .await
+        .map_err(AppCommandError::from)?;
+    Ok(ConversationProjectSettings {
+        conversation_id,
+        enabled: is_project_settings_enabled(&current),
+    })
+}
+
+pub async fn conversation_set_project_settings_core(
+    db: &AppDatabase,
+    manager: &ConnectionManager,
+    conversation_id: i32,
+    enabled: bool,
+) -> Result<ConversationProjectSettingsResult, AppCommandError> {
+    let row = conversation_service::get_by_id(&db.conn, conversation_id)
+        .await
+        .map_err(AppCommandError::from)?;
+
+    let (_mode, current) = conversation_service::selector_prefs(&db.conn, conversation_id)
+        .await
+        .map_err(AppCommandError::from)?;
+    let previous = is_project_settings_enabled(&current);
+
+    if previous != enabled {
+        if enabled {
+            conversation_service::remove_selector_config_value(
+                &db.conn,
+                conversation_id,
+                PREFERRED_PROJECT_SETTINGS_CONFIG_KEY,
+            )
+            .await
+            .map_err(AppCommandError::from)?;
+        } else {
+            conversation_service::merge_selector_config_value(
+                &db.conn,
+                conversation_id,
+                PREFERRED_PROJECT_SETTINGS_CONFIG_KEY,
+                PROJECT_SETTINGS_OFF_VALUE,
+            )
+            .await
+            .map_err(AppCommandError::from)?;
+        }
+    }
+
+    let mut affected = 0usize;
+    // Only a live Claude session needs the "next turn / reconnect" banner.
+    // Binding is stored regardless of agent type (zero schema change).
+    let is_claude = row.agent_type == AgentType::ClaudeCode;
+    if is_claude
+        && previous != enabled
+        && manager
+            .mark_conversation_config_stale(conversation_id, ConfigStaleKind::AgentConfig)
+            .await
+    {
+        affected = 1;
+    }
+
+    Ok(ConversationProjectSettingsResult {
+        conversation_id,
+        enabled,
+        affected_running_sessions: affected,
+    })
+}
+
 #[cfg(feature = "tauri-runtime")]
 fn tauri_data_dir(app: &tauri::AppHandle) -> PathBuf {
     use tauri::Manager;
@@ -1285,6 +1363,26 @@ pub async fn conversation_set_claude_profile(
     .await
 }
 
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn conversation_get_project_settings(
+    conversation_id: i32,
+    db: tauri::State<'_, AppDatabase>,
+) -> Result<ConversationProjectSettings, AppCommandError> {
+    conversation_get_project_settings_core(&db, conversation_id).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn conversation_set_project_settings(
+    conversation_id: i32,
+    enabled: bool,
+    db: tauri::State<'_, AppDatabase>,
+    manager: tauri::State<'_, ConnectionManager>,
+) -> Result<ConversationProjectSettingsResult, AppCommandError> {
+    conversation_set_project_settings_core(&db, &manager, conversation_id, enabled).await
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ClaudeProfileDeleteParams {
@@ -1302,6 +1400,19 @@ pub struct ClaudeSettingsReadParams {
 pub struct ConversationSetClaudeProfileParams {
     pub conversation_id: i32,
     pub profile_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationGetProjectSettingsParams {
+    pub conversation_id: i32,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationSetProjectSettingsParams {
+    pub conversation_id: i32,
+    pub enabled: bool,
 }
 
 #[cfg(test)]
@@ -2125,6 +2236,140 @@ mod tests {
             .await
             .unwrap();
         assert!(!values.contains_key(PREFERRED_PROFILE_CONFIG_KEY));
+    }
+
+    #[tokio::test]
+    async fn project_settings_default_on_and_round_trips_off() {
+        let db = fresh_in_memory_db().await;
+        let data = tempfile::tempdir().unwrap();
+        seed_claude_agent(&db, None).await;
+        let folder = seed_folder(&db, data.path().to_str().unwrap()).await;
+        let conv = seed_conversation(&db, folder, AgentType::ClaudeCode).await;
+        let mgr = ConnectionManager::new();
+
+        let got = conversation_get_project_settings_core(&db, conv)
+            .await
+            .unwrap();
+        assert!(got.enabled);
+        let (_mode, values) = conversation_service::selector_prefs(&db.conn, conv)
+            .await
+            .unwrap();
+        assert!(!values.contains_key(PREFERRED_PROJECT_SETTINGS_CONFIG_KEY));
+
+        let result = conversation_set_project_settings_core(&db, &mgr, conv, false)
+            .await
+            .unwrap();
+        assert!(!result.enabled);
+        assert_eq!(result.affected_running_sessions, 0);
+        let (_mode, values) = conversation_service::selector_prefs(&db.conn, conv)
+            .await
+            .unwrap();
+        assert_eq!(
+            values
+                .get(PREFERRED_PROJECT_SETTINGS_CONFIG_KEY)
+                .map(String::as_str),
+            Some(PROJECT_SETTINGS_OFF_VALUE)
+        );
+        assert!(
+            !conversation_get_project_settings_core(&db, conv)
+                .await
+                .unwrap()
+                .enabled
+        );
+
+        let result = conversation_set_project_settings_core(&db, &mgr, conv, true)
+            .await
+            .unwrap();
+        assert!(result.enabled);
+        let (_mode, values) = conversation_service::selector_prefs(&db.conn, conv)
+            .await
+            .unwrap();
+        assert!(!values.contains_key(PREFERRED_PROJECT_SETTINGS_CONFIG_KEY));
+        assert!(
+            conversation_get_project_settings_core(&db, conv)
+                .await
+                .unwrap()
+                .enabled
+        );
+    }
+
+    #[tokio::test]
+    async fn project_settings_marks_stale_only_when_claude_value_changes() {
+        use crate::web::event_bridge::EventEmitter;
+
+        let db = fresh_in_memory_db().await;
+        let data = tempfile::tempdir().unwrap();
+        seed_claude_agent(&db, None).await;
+        let folder = seed_folder(&db, data.path().to_str().unwrap()).await;
+        let conv = seed_conversation(&db, folder, AgentType::ClaudeCode).await;
+        let mgr = ConnectionManager::new();
+        mgr.insert_test_connection("c1", AgentType::ClaudeCode, None, EventEmitter::Noop)
+            .await;
+        mgr.get_state("c1")
+            .await
+            .unwrap()
+            .write()
+            .await
+            .conversation_id = Some(conv);
+
+        let unchanged = conversation_set_project_settings_core(&db, &mgr, conv, true)
+            .await
+            .unwrap();
+        assert_eq!(unchanged.affected_running_sessions, 0);
+        assert!(
+            !mgr.get_state("c1").await.unwrap().read().await.config_stale,
+            "same default-on value must not mark stale"
+        );
+
+        let changed = conversation_set_project_settings_core(&db, &mgr, conv, false)
+            .await
+            .unwrap();
+        assert_eq!(changed.affected_running_sessions, 1);
+        assert!(mgr.get_state("c1").await.unwrap().read().await.config_stale);
+
+        let again = conversation_set_project_settings_core(&db, &mgr, conv, false)
+            .await
+            .unwrap();
+        assert_eq!(
+            again.affected_running_sessions, 0,
+            "unchanged off must not re-mark"
+        );
+    }
+
+    #[tokio::test]
+    async fn project_settings_does_not_stale_non_claude() {
+        use crate::web::event_bridge::EventEmitter;
+
+        let db = fresh_in_memory_db().await;
+        let data = tempfile::tempdir().unwrap();
+        seed_claude_agent(&db, None).await;
+        let folder = seed_folder(&db, data.path().to_str().unwrap()).await;
+        let conv = seed_conversation(&db, folder, AgentType::Codex).await;
+        let mgr = ConnectionManager::new();
+        mgr.insert_test_connection("c1", AgentType::Codex, None, EventEmitter::Noop)
+            .await;
+        mgr.get_state("c1")
+            .await
+            .unwrap()
+            .write()
+            .await
+            .conversation_id = Some(conv);
+
+        let result = conversation_set_project_settings_core(&db, &mgr, conv, false)
+            .await
+            .unwrap();
+        assert!(!result.enabled);
+        assert_eq!(result.affected_running_sessions, 0);
+        assert!(!mgr.get_state("c1").await.unwrap().read().await.config_stale);
+        let (_mode, values) = conversation_service::selector_prefs(&db.conn, conv)
+            .await
+            .unwrap();
+        assert_eq!(
+            values
+                .get(PREFERRED_PROJECT_SETTINGS_CONFIG_KEY)
+                .map(String::as_str),
+            Some(PROJECT_SETTINGS_OFF_VALUE)
+        );
     }
 
     #[test]

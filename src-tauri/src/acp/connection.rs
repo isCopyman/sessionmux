@@ -3176,6 +3176,7 @@ fn resolve_working_dir(working_dir: Option<&str>) -> PathBuf {
 fn claude_raw_sdk_session_meta(
     agent_type: AgentType,
     settings_overlay: Option<&Path>,
+    project_settings_enabled: bool,
 ) -> Option<serde_json::Map<String, serde_json::Value>> {
     if agent_type != AgentType::ClaudeCode {
         return None;
@@ -3186,6 +3187,13 @@ fn claude_raw_sdk_session_meta(
         "emitRawSDKMessages".to_string(),
         serde_json::Value::Bool(true),
     );
+
+    let mut options = serde_json::Map::new();
+    // Off: skip project/local layers. On: omit settingSources so the adapter
+    // default (`["user","project","local"]` today) stays in charge.
+    if !project_settings_enabled {
+        options.insert("settingSources".to_string(), serde_json::json!(["user"]));
+    }
     // Managed profiles: `_meta.claudeCode.options.extraArgs.settings` is
     // equivalent to `claude --settings <absolute path>` (adapter extraArgs
     // → SDK argv). Path is stored verbatim; argv is an array, not a shell
@@ -3196,11 +3204,12 @@ fn claude_raw_sdk_session_meta(
             "settings".to_string(),
             serde_json::Value::String(path.to_string_lossy().into_owned()),
         );
-        let mut options = serde_json::Map::new();
         options.insert(
             "extraArgs".to_string(),
             serde_json::Value::Object(extra_args),
         );
+    }
+    if !options.is_empty() {
         claude_code.insert("options".to_string(), serde_json::Value::Object(options));
     }
 
@@ -3351,9 +3360,12 @@ fn build_new_session_request(
     cwd: &Path,
     mcp_servers: Vec<McpServer>,
     settings_overlay: Option<&Path>,
+    project_settings_enabled: bool,
 ) -> NewSessionRequest {
     let mut req = NewSessionRequest::new(session_request_cwd(agent_type, cwd));
-    if let Some(meta) = claude_raw_sdk_session_meta(agent_type, settings_overlay) {
+    if let Some(meta) =
+        claude_raw_sdk_session_meta(agent_type, settings_overlay, project_settings_enabled)
+    {
         req = req.meta(meta);
     }
     if !mcp_servers.is_empty() {
@@ -3368,9 +3380,12 @@ fn build_load_session_request(
     cwd: &Path,
     mcp_servers: Vec<McpServer>,
     settings_overlay: Option<&Path>,
+    project_settings_enabled: bool,
 ) -> LoadSessionRequest {
     let mut req = LoadSessionRequest::new(session_id, session_request_cwd(agent_type, cwd));
-    if let Some(meta) = claude_raw_sdk_session_meta(agent_type, settings_overlay) {
+    if let Some(meta) =
+        claude_raw_sdk_session_meta(agent_type, settings_overlay, project_settings_enabled)
+    {
         req = req.meta(meta);
     }
     if !mcp_servers.is_empty() {
@@ -3395,9 +3410,12 @@ fn build_resume_session_request(
     cwd: &Path,
     mcp_servers: Vec<McpServer>,
     settings_overlay: Option<&Path>,
+    project_settings_enabled: bool,
 ) -> ResumeSessionRequest {
     let mut req = ResumeSessionRequest::new(session_id, session_request_cwd(agent_type, cwd));
-    if let Some(meta) = claude_raw_sdk_session_meta(agent_type, settings_overlay) {
+    if let Some(meta) =
+        claude_raw_sdk_session_meta(agent_type, settings_overlay, project_settings_enabled)
+    {
         req = req.meta(meta);
     }
     if !mcp_servers.is_empty() {
@@ -4686,6 +4704,7 @@ async fn run_connection(
                         &cwd,
                         mcp_servers.clone(),
                         claude_settings_overlay.as_deref(),
+                        is_project_settings_enabled(&preferred_config_values),
                     );
                     match send_resume_session(&cx, resume_req).await {
                         Ok((resume_resp, grok_models_raw)) => {
@@ -4819,6 +4838,7 @@ async fn run_connection(
                         &cwd,
                         mcp_servers.clone(),
                         claude_settings_overlay.as_deref(),
+                        is_project_settings_enabled(&preferred_config_values),
                     );
                     send_load_session(&cx, load_req).await
                 } else {
@@ -5121,6 +5141,7 @@ async fn run_connection(
                                 &cwd,
                                 mcp_servers.clone(),
                                 claude_settings_overlay.as_deref(),
+                                is_project_settings_enabled(&preferred_config_values),
                             ),
                             &companion_servers,
                         )
@@ -5218,6 +5239,7 @@ async fn run_connection(
                         &cwd,
                         mcp_servers.clone(),
                         claude_settings_overlay.as_deref(),
+                        is_project_settings_enabled(&preferred_config_values),
                     ),
                     &companion_servers,
                 )
@@ -6119,6 +6141,26 @@ pub(crate) const PREFERRED_THOUGHT_LEVEL_CONFIG_KEY: &str = "__codeg_host_though
 /// next to the Host pins; unlike those it is NOT an ACP config option and
 /// must never be forwarded via `session/set_config_option`.
 pub(crate) const PREFERRED_PROFILE_CONFIG_KEY: &str = "__codeg_profile__";
+
+/// Per-session Claude preference: load the cwd's `.claude/settings.json` and
+/// `.claude/settings.local.json`. Stored in preferred_config_values. Absent
+/// means on (today's adapter default). Value `"off"` skips those layers.
+pub(crate) const PREFERRED_PROJECT_SETTINGS_CONFIG_KEY: &str = "__codeg_project_settings__";
+
+/// Only this exact value means off. Anything else, including a missing key,
+/// is on — existing conversations keep today's behaviour with no migration.
+pub(crate) const PROJECT_SETTINGS_OFF_VALUE: &str = "off";
+
+/// Read the project-settings preference from a conversation's
+/// `preferred_config_values`. Missing key → true.
+pub(crate) fn is_project_settings_enabled(
+    preferred_config_values: &BTreeMap<String, String>,
+) -> bool {
+    preferred_config_values
+        .get(PREFERRED_PROJECT_SETTINGS_CONFIG_KEY)
+        .map(String::as_str)
+        != Some(PROJECT_SETTINGS_OFF_VALUE)
+}
 
 /// Whether a preferred-config key is a Host Control semantic pin rather than
 /// a concrete Harness config id.
@@ -11437,6 +11479,7 @@ mod tests {
     #[test]
     fn codeg_internal_pins_are_skipped_and_host_pins_are_not() {
         assert!(is_codeg_internal_pin(PREFERRED_PROFILE_CONFIG_KEY));
+        assert!(is_codeg_internal_pin(PREFERRED_PROJECT_SETTINGS_CONFIG_KEY));
         assert!(is_codeg_internal_pin("__codeg_future_storage__"));
         assert!(!is_codeg_internal_pin(PREFERRED_MODEL_CONFIG_KEY));
         assert!(!is_codeg_internal_pin(PREFERRED_THOUGHT_LEVEL_CONFIG_KEY));
@@ -11445,6 +11488,10 @@ mod tests {
 
         let mut prefs = BTreeMap::new();
         prefs.insert(PREFERRED_PROFILE_CONFIG_KEY.to_string(), "api".to_string());
+        prefs.insert(
+            PREFERRED_PROJECT_SETTINGS_CONFIG_KEY.to_string(),
+            PROJECT_SETTINGS_OFF_VALUE.to_string(),
+        );
         prefs.insert(PREFERRED_MODEL_CONFIG_KEY.to_string(), "sonnet".to_string());
         prefs.insert("model".to_string(), "opus".to_string());
         let ordered: Vec<&str> = ordered_preferred_entries(&prefs)
@@ -11454,6 +11501,10 @@ mod tests {
         assert!(
             !ordered.contains(&PREFERRED_PROFILE_CONFIG_KEY),
             "profile pin must not be forwarded to session/set_config_option: {ordered:?}"
+        );
+        assert!(
+            !ordered.contains(&PREFERRED_PROJECT_SETTINGS_CONFIG_KEY),
+            "project-settings pin must not be forwarded to session/set_config_option: {ordered:?}"
         );
         assert!(ordered.contains(&"model"));
         assert!(ordered.contains(&PREFERRED_MODEL_CONFIG_KEY));
@@ -13172,7 +13223,7 @@ mod tests {
 
     #[test]
     fn claude_raw_sdk_meta_enabled_only_for_claude() {
-        let claude_meta = claude_raw_sdk_session_meta(AgentType::ClaudeCode, None)
+        let claude_meta = claude_raw_sdk_session_meta(AgentType::ClaudeCode, None, true)
             .expect("Claude must have raw SDK meta");
         assert_eq!(
             claude_meta
@@ -13182,7 +13233,85 @@ mod tests {
             Some(true)
         );
 
-        assert!(claude_raw_sdk_session_meta(AgentType::Codex, None).is_none());
+        assert!(claude_raw_sdk_session_meta(AgentType::Codex, None, true).is_none());
+    }
+
+    fn claude_options(
+        meta: &serde_json::Map<String, serde_json::Value>,
+    ) -> Option<&serde_json::Map<String, serde_json::Value>> {
+        meta.get("claudeCode")
+            .and_then(|v| v.get("options"))
+            .and_then(|v| v.as_object())
+    }
+
+    #[test]
+    fn project_settings_pref_defaults_on_and_only_off_disables() {
+        let mut values = BTreeMap::new();
+        assert!(is_project_settings_enabled(&values));
+        values.insert(
+            PREFERRED_PROJECT_SETTINGS_CONFIG_KEY.to_string(),
+            "off".to_string(),
+        );
+        assert!(!is_project_settings_enabled(&values));
+        values.insert(
+            PREFERRED_PROJECT_SETTINGS_CONFIG_KEY.to_string(),
+            "on".to_string(),
+        );
+        assert!(is_project_settings_enabled(&values));
+    }
+
+    #[test]
+    fn claude_raw_sdk_meta_omits_setting_sources_when_project_settings_enabled() {
+        let meta = claude_raw_sdk_session_meta(AgentType::ClaudeCode, None, true)
+            .expect("Claude must have raw SDK meta");
+        assert!(
+            claude_options(&meta)
+                .and_then(|o| o.get("settingSources"))
+                .is_none(),
+            "default on must not write settingSources: {:?}",
+            meta
+        );
+        assert!(
+            claude_options(&meta).is_none(),
+            "no overlay and project settings on must omit options: {:?}",
+            meta
+        );
+    }
+
+    #[test]
+    fn claude_raw_sdk_meta_sets_user_setting_sources_when_project_settings_off() {
+        let overlay = std::path::PathBuf::from("/tmp/claude-profiles/hosted/settings.json");
+        let meta =
+            claude_raw_sdk_session_meta(AgentType::ClaudeCode, Some(overlay.as_path()), false)
+                .expect("Claude must have raw SDK meta");
+        let options = claude_options(&meta).expect("off + overlay must set options");
+        assert_eq!(
+            options.get("settingSources"),
+            Some(&serde_json::json!(["user"]))
+        );
+        assert_eq!(
+            options
+                .get("extraArgs")
+                .and_then(|v| v.get("settings"))
+                .and_then(|v| v.as_str()),
+            Some(overlay.to_string_lossy().as_ref()),
+            "settingSources must sit beside extraArgs.settings, not replace it"
+        );
+
+        let off_only = claude_raw_sdk_session_meta(AgentType::ClaudeCode, None, false)
+            .expect("Claude must have raw SDK meta");
+        assert_eq!(
+            claude_options(&off_only).and_then(|o| o.get("settingSources")),
+            Some(&serde_json::json!(["user"]))
+        );
+        assert!(claude_options(&off_only)
+            .and_then(|o| o.get("extraArgs"))
+            .is_none());
+
+        assert!(
+            claude_raw_sdk_session_meta(AgentType::Codex, None, false).is_none(),
+            "non-Claude must stay meta-less even when project settings is off"
+        );
     }
 
     #[test]
@@ -14579,7 +14708,7 @@ mod tests {
     #[test]
     fn build_new_session_request_sets_claude_raw_meta() {
         let cwd = std::path::PathBuf::from("/tmp/codeg");
-        let req = build_new_session_request(AgentType::ClaudeCode, &cwd, Vec::new(), None);
+        let req = build_new_session_request(AgentType::ClaudeCode, &cwd, Vec::new(), None, true);
 
         assert_eq!(
             req.meta
@@ -14625,6 +14754,7 @@ mod tests {
             &cwd,
             Vec::new(),
             Some(overlay.as_path()),
+            true,
         );
         let settings =
             extra_args_settings(&req).expect("managed overlay must set extraArgs.settings");
@@ -14652,8 +14782,13 @@ mod tests {
             "codeg-mcp",
             std::path::PathBuf::from("/usr/bin/codeg-mcp"),
         ))];
-        let req =
-            build_new_session_request(AgentType::ClaudeCode, &cwd, mcp, Some(overlay.as_path()));
+        let req = build_new_session_request(
+            AgentType::ClaudeCode,
+            &cwd,
+            mcp,
+            Some(overlay.as_path()),
+            true,
+        );
         let overlay_str = overlay.to_string_lossy().into_owned();
         assert_eq!(extra_args_settings(&req), Some(overlay_str.as_str()));
         assert_eq!(
@@ -14679,12 +14814,94 @@ mod tests {
     fn config_dir_and_non_claude_do_not_set_extra_args_settings() {
         let cwd = std::path::PathBuf::from("/tmp/codeg");
         let overlay = std::path::PathBuf::from("/tmp/ignored/settings.json");
-        let claude = build_new_session_request(AgentType::ClaudeCode, &cwd, Vec::new(), None);
+        let claude = build_new_session_request(AgentType::ClaudeCode, &cwd, Vec::new(), None, true);
         assert!(extra_args_settings(&claude).is_none());
 
-        let codex =
-            build_new_session_request(AgentType::Codex, &cwd, Vec::new(), Some(overlay.as_path()));
+        let codex = build_new_session_request(
+            AgentType::Codex,
+            &cwd,
+            Vec::new(),
+            Some(overlay.as_path()),
+            true,
+        );
         assert!(codex.meta.is_none(), "Codex must not receive Claude _meta");
+    }
+
+    fn setting_sources(
+        meta: Option<&serde_json::Map<String, serde_json::Value>>,
+    ) -> Option<&serde_json::Value> {
+        meta.and_then(|m| m.get("claudeCode"))
+            .and_then(|v| v.get("options"))
+            .and_then(|v| v.get("settingSources"))
+    }
+
+    #[test]
+    fn spawn_pref_off_feeds_setting_sources_and_keeps_overlay_on_new_and_load() {
+        let cwd = std::path::PathBuf::from("/tmp/codeg");
+        let overlay = std::path::PathBuf::from("/tmp/claude-profiles/hosted/settings.json");
+        let mut prefs = BTreeMap::new();
+        prefs.insert(
+            PREFERRED_PROJECT_SETTINGS_CONFIG_KEY.to_string(),
+            PROJECT_SETTINGS_OFF_VALUE.to_string(),
+        );
+        let enabled = is_project_settings_enabled(&prefs);
+        assert!(!enabled);
+
+        let new_req = build_new_session_request(
+            AgentType::ClaudeCode,
+            &cwd,
+            Vec::new(),
+            Some(overlay.as_path()),
+            enabled,
+        );
+        assert_eq!(
+            setting_sources(new_req.meta.as_ref()),
+            Some(&serde_json::json!(["user"]))
+        );
+        assert_eq!(
+            extra_args_settings(&new_req),
+            Some(overlay.to_string_lossy().as_ref())
+        );
+
+        let load_req = build_load_session_request(
+            AgentType::ClaudeCode,
+            SessionId::new("s".to_string()),
+            &cwd,
+            Vec::new(),
+            Some(overlay.as_path()),
+            enabled,
+        );
+        assert_eq!(
+            setting_sources(load_req.meta.as_ref()),
+            Some(&serde_json::json!(["user"]))
+        );
+        assert_eq!(
+            load_req
+                .meta
+                .as_ref()
+                .and_then(|m| m.get("claudeCode"))
+                .and_then(|v| v.get("options"))
+                .and_then(|v| v.get("extraArgs"))
+                .and_then(|v| v.get("settings"))
+                .and_then(|v| v.as_str()),
+            Some(overlay.to_string_lossy().as_ref())
+        );
+
+        let missing = BTreeMap::new();
+        let on_req = build_new_session_request(
+            AgentType::ClaudeCode,
+            &cwd,
+            Vec::new(),
+            None,
+            is_project_settings_enabled(&missing),
+        );
+        assert!(setting_sources(on_req.meta.as_ref()).is_none());
+        assert!(on_req
+            .meta
+            .as_ref()
+            .and_then(|m| m.get("claudeCode"))
+            .and_then(|v| v.get("options"))
+            .is_none());
     }
 
     /// The `loadSession` capability gate hands the failure ladder a synthetic
@@ -14747,6 +14964,7 @@ mod tests {
             &cwd,
             Vec::new(),
             None,
+            true,
         );
 
         assert!(req.meta.is_none());
@@ -14769,7 +14987,7 @@ mod tests {
         let canonical = std::fs::canonicalize(&cwd).expect("canonicalize");
         assert_ne!(cwd, canonical, "fixture must be non-canonical to be a test");
 
-        let new_req = build_new_session_request(AgentType::Grok, &cwd, Vec::new(), None);
+        let new_req = build_new_session_request(AgentType::Grok, &cwd, Vec::new(), None, true);
         assert_eq!(
             new_req.cwd, canonical,
             "session/new must send canonical cwd"
@@ -14781,6 +14999,7 @@ mod tests {
             &cwd,
             Vec::new(),
             None,
+            true,
         );
         assert_eq!(
             load_req.cwd, canonical,
@@ -14793,6 +15012,7 @@ mod tests {
             &cwd,
             Vec::new(),
             None,
+            true,
         );
         assert_eq!(
             resume_req.cwd, canonical,
@@ -14818,7 +15038,7 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let missing = tmp.path().join("not-created-yet");
 
-        let new_req = build_new_session_request(AgentType::Grok, &missing, Vec::new(), None);
+        let new_req = build_new_session_request(AgentType::Grok, &missing, Vec::new(), None, true);
         assert_eq!(new_req.cwd, missing);
 
         let load_req = build_load_session_request(
@@ -14827,6 +15047,7 @@ mod tests {
             &missing,
             Vec::new(),
             None,
+            true,
         );
         assert_eq!(load_req.cwd, missing);
     }
@@ -14853,7 +15074,7 @@ mod tests {
             AgentType::Custom("my-agent"),
         ] {
             assert_eq!(
-                build_new_session_request(agent, &cwd, Vec::new(), None).cwd,
+                build_new_session_request(agent, &cwd, Vec::new(), None, true).cwd,
                 cwd,
                 "{agent:?} session/new cwd must be untouched"
             );
@@ -14864,6 +15085,7 @@ mod tests {
                     &cwd,
                     Vec::new(),
                     None,
+                    true,
                 )
                 .cwd,
                 cwd,
@@ -14876,6 +15098,7 @@ mod tests {
                     &cwd,
                     Vec::new(),
                     None,
+                    true,
                 )
                 .cwd,
                 cwd,
@@ -14897,7 +15120,7 @@ mod tests {
     fn openclaw_session_requests_carry_no_mcp_servers() {
         let cwd = std::path::PathBuf::from("/tmp/codeg");
 
-        let new_req = build_new_session_request(AgentType::OpenClaw, &cwd, Vec::new(), None);
+        let new_req = build_new_session_request(AgentType::OpenClaw, &cwd, Vec::new(), None, true);
         assert!(
             new_req.mcp_servers.is_empty(),
             "OpenClaw session/new must carry no MCP servers"
@@ -14915,6 +15138,7 @@ mod tests {
             &cwd,
             Vec::new(),
             None,
+            true,
         );
         assert!(
             load_req.mcp_servers.is_empty(),
@@ -15081,6 +15305,7 @@ mod tests {
             &cwd,
             Vec::new(),
             None,
+            true,
         );
 
         assert_eq!(
@@ -15102,6 +15327,7 @@ mod tests {
             &cwd,
             Vec::new(),
             None,
+            true,
         );
 
         assert!(req.meta.is_none());
@@ -15124,6 +15350,7 @@ mod tests {
             &cwd,
             Vec::new(),
             None,
+            true,
         );
         assert!(
             req.mcp_servers.is_empty(),
@@ -17341,7 +17568,7 @@ mod tests {
     #[test]
     fn untyped_new_session_carries_the_typed_request_payload() {
         let cwd = std::path::PathBuf::from("/tmp/codeg");
-        let req = build_new_session_request(AgentType::Cline, &cwd, Vec::new(), None);
+        let req = build_new_session_request(AgentType::Cline, &cwd, Vec::new(), None, true);
         let expected = serde_json::to_value(&req).unwrap();
 
         let untyped = UntypedMessage::new("session/new", req).expect("builds");
