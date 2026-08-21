@@ -66,6 +66,13 @@ const OFFICIAL_DIRECT: ClaudeProfileInfo = {
   updatedAt: "1970-01-01T00:00:00Z",
 }
 
+/** The settings.json editor's raw text. Asymmetric matchers do not work with
+ *  jest-dom's `toHaveValue`, which compares strictly. */
+async function editorText(): Promise<string> {
+  const editor = await screen.findByLabelText("settings.json")
+  return (editor as HTMLTextAreaElement).value
+}
+
 function renderCatalog(
   props?: Partial<ComponentProps<typeof ClaudeProfileCatalog>>
 ) {
@@ -134,23 +141,27 @@ describe("ClaudeProfileCatalog", () => {
       api.claudeProfileList.mockResolvedValue([FOLLOW, RELAY])
     })
 
-    it("shows as its mask, so the field says what is stored", async () => {
+    // The token lives in a dedicated column that this profile's settings.json
+    // never mentions. It is folded into the editor on open so the text really
+    // is the whole profile — otherwise deriving the column back out of it on
+    // save would clear the credential.
+    it("is folded into the editor as its mask", async () => {
       const user = userEvent.setup()
       renderCatalog()
       await user.click(await screen.findByRole("tab", { name: "中转" }))
 
-      expect(await screen.findByLabelText("API Key")).toHaveValue(
-        RELAY.authTokenMasked
-      )
+      const editor = await editorText()
+      expect(editor).toContain(RELAY.authTokenMasked as string)
+      expect(editor).toContain("https://example.test/v1")
     })
 
-    it("is cleared when the field is emptied", async () => {
+    it("is cleared when the key is removed from the editor", async () => {
       const user = userEvent.setup()
       renderCatalog()
       await user.click(await screen.findByRole("tab", { name: "中转" }))
 
-      fireEvent.change(await screen.findByLabelText("API Key"), {
-        target: { value: "" },
+      fireEvent.change(await screen.findByLabelText("settings.json"), {
+        target: { value: JSON.stringify({ env: {} }, null, 2) },
       })
       await user.click(screen.getByRole("button", { name: "Save" }))
 
@@ -158,6 +169,26 @@ describe("ClaudeProfileCatalog", () => {
       expect(api.claudeProfileUpsert.mock.calls[0][0]).toMatchObject({
         id: "api",
         authToken: "",
+        baseUrl: null,
+      })
+    })
+
+    // `record.env` is the third store: it overlays the raw JSON before the
+    // columns do, and it has no editor either. A save that left it populated
+    // would keep an invisible layer beating the text on screen.
+    it("empties the env overlay so the file is the only layer left", async () => {
+      const user = userEvent.setup()
+      renderCatalog()
+      await user.click(await screen.findByRole("tab", { name: "中转" }))
+
+      fireEvent.change(await screen.findByLabelText("Name"), {
+        target: { value: "中转 2" },
+      })
+      await user.click(screen.getByRole("button", { name: "Save" }))
+
+      await waitFor(() => expect(api.claudeProfileUpsert).toHaveBeenCalled())
+      expect(api.claudeProfileUpsert.mock.calls[0][0]).toMatchObject({
+        env: {},
       })
     })
 
@@ -270,37 +301,41 @@ describe("ClaudeProfileCatalog", () => {
     await user.click(screen.getByRole("button", { name: "Add profile" }))
     await user.click(await screen.findByRole("menuitem", { name: /Duplicate/ }))
 
-    // Same form the "Follow default" tab renders, so the connection fields are
-    // labelled the way that tab has always labelled them.
-    expect(screen.getByLabelText("API URL")).toHaveValue(
-      "https://example.test/v1"
-    )
-    expect(screen.getByLabelText("API Key")).toHaveValue("")
+    // The endpoint is worth copying; the secret is not. The API only hands the
+    // browser a mask, so carrying it over would show bullets on a profile that
+    // has no credential at all.
+    const editor = await editorText()
+    expect(editor).toContain("https://example.test/v1")
+    expect(editor).not.toContain(RELAY.authTokenMasked as string)
+    expect(editor).not.toContain("ANTHROPIC_AUTH_TOKEN")
     expect(screen.getByText(/was not copied/)).toBeInTheDocument()
   })
 
-  // The complaint that started this: "why does the new profile look nothing
-  // like Follow default — isn't it also official-vs-API, also models?" It is,
-  // and both tabs now render `ClaudeConfigFields`. This pins the fields a
-  // profile tab must offer so the two cannot drift apart again.
-  it("offers a profile the same auth choice and model fields as the CLI tab", async () => {
+  // The typed form is gone on purpose. It was a second store for settings that
+  // already live in the file: it could not stay in step with the JSON below it,
+  // and it could not keep up with the vendor's env surface either. Anything it
+  // used to offer is now one editor plus a menu that writes into that editor.
+  it("edits a profile through the file alone, with no rival fields", async () => {
     api.claudeProfileList.mockResolvedValue([FOLLOW, RELAY])
     const user = userEvent.setup()
     renderCatalog()
 
     await user.click(await screen.findByRole("tab", { name: "中转" }))
 
-    expect(screen.getByLabelText("Auth Mode")).toBeInTheDocument()
-    expect(screen.getByLabelText("Main Model")).toBeInTheDocument()
-    expect(screen.getByLabelText("Default Haiku Model")).toBeInTheDocument()
-    expect(screen.getByLabelText("Default Sonnet Model")).toBeInTheDocument()
-    expect(screen.getByLabelText("Default Opus Model")).toBeInTheDocument()
-    expect(
-      screen.getByLabelText("Reasoning Model (thinking)")
-    ).toBeInTheDocument()
-    expect(screen.getByLabelText("Reasoning Effort Level")).toBeInTheDocument()
-    // A profile has no provider binding, so that third mode is not offered.
-    expect(screen.queryByLabelText("Select Model Provider")).toBeNull()
+    expect(await screen.findByLabelText("settings.json")).toBeInTheDocument()
+    for (const gone of [
+      "Auth Mode",
+      "API URL",
+      "API Key",
+      "Main Model",
+      "Default Haiku Model",
+      "Default Sonnet Model",
+      "Default Opus Model",
+      "Reasoning Model (thinking)",
+      "Reasoning Effort Level",
+    ]) {
+      expect(screen.queryByLabelText(gone)).toBeNull()
+    }
   })
 
   it("treats Official direct as a read-only tab of its own", async () => {
@@ -366,10 +401,7 @@ describe("ClaudeProfileCatalog", () => {
     renderCatalog()
     await addBlankProfile(user)
 
-    await user.click(
-      await screen.findByRole("button", { name: "settings.json" })
-    )
-    fireEvent.change(screen.getByLabelText("settings.json"), {
+    fireEvent.change(await screen.findByLabelText("settings.json"), {
       target: { value: "[1, 2, 3]" },
     })
     fireEvent.click(screen.getByRole("button", { name: "Save" }))

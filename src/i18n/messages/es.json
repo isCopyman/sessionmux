@@ -1179,7 +1179,7 @@
       "officialDirect": "Conexión oficial directa",
       "officialDirectBody": "Fuerza api.anthropic.com y borra cualquier token de terceros, así la CLI inicia sesión con la suscripción guardada en su propio directorio de configuración. No hay nada más que configurar.",
       "fieldSettingsJson": "settings.json",
-      "settingsJsonHint": "El resto de este perfil: alias de modelos, effortLevel, permissions, hooks… todo lo que quepa en un settings.json. La Base URL, la clave y el modelo de arriba se escriben aquí al guardar.",
+      "settingsJsonHint": "Todo el perfil vive aqui: claves de conexion, alias de modelo, effortLevel, permissions, hooks; cualquier cosa que quepa en un settings.json. Dejar las claves de conexion vacias fuerza la suscripcion oficial; eliminarlas hereda la configuracion del proyecto y del usuario.",
       "settingsJsonInvalid": "settings.json no es JSON válido: {message}",
       "settingsJsonNotObject": "El nivel superior de settings.json debe ser un objeto JSON.",
       "addImport": "Importar desde settings.json…",

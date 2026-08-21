@@ -1179,7 +1179,7 @@
       "officialDirect": "官方直连",
       "officialDirectBody": "强制走 api.anthropic.com 并清掉第三方 token，让 CLI 用它配置目录里存的订阅登录。没有别的可配。",
       "fieldSettingsJson": "settings.json",
-      "settingsJsonHint": "这份档的其余内容：模型别名、effortLevel、permissions、hooks——settings.json 能装的都能写。上面的 Base URL、密钥和模型会在保存时写进它。",
+      "settingsJsonHint": "整份档都在这里：连接键、模型别名、effortLevel、permissions、hooks——settings.json 能装的都能写。连接键留空值会强制走官方订阅；把它们删掉则继承项目级和用户级的配置。",
       "settingsJsonInvalid": "settings.json 不是合法 JSON：{message}",
       "settingsJsonNotObject": "settings.json 顶层必须是一个 JSON 对象。",
       "addImport": "从 settings.json 导入…",

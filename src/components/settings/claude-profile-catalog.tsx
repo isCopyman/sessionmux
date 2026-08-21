@@ -1,15 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import {
-  ChevronRight,
-  Copy,
-  FileDown,
-  Loader2,
-  Plus,
-  Star,
-  Trash2,
-} from "lucide-react"
+import { Copy, FileDown, Loader2, Plus, Star, Trash2 } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 
@@ -47,12 +39,9 @@ import {
   type ClaudeProfileUpsert,
 } from "@/lib/types"
 import {
-  ClaudeConfigFields,
-  type ClaudeConfigValue,
-} from "./claude-config-fields"
-import {
-  applyClaudeConfig,
-  readClaudeConfig,
+  columnsFromSettings,
+  foldEffectiveSettings,
+  stripCredentials,
 } from "./claude-settings-projection"
 
 type EditableKind = ClaudeProfileUpsert["kind"]
@@ -73,10 +62,12 @@ interface FormState {
   label: string
   kind: EditableKind
   configDir: string
-  baseUrl: string
-  authToken: string
-  model: string
-  /** The profile's settings.json, as text. `""` means "no base". */
+  /**
+   * The profile's settings.json, as text, and the only place a Claude setting
+   * is edited. `""` means "no base". The `baseUrl` / `authToken` / `model`
+   * columns are folded in on open and derived back out on save, so they stay a
+   * projection of this rather than a second store that can win at launch.
+   */
   settingsJson: string
 }
 
@@ -108,11 +99,15 @@ function isAbsolutePath(value: string): boolean {
 }
 
 /**
- * Edit buffer seeded from a saved profile. The token seeds as its mask, the
- * same way the settings.json editor below already shows it: the backend maps
- * an unchanged mask back to the stored secret, so the field can mean exactly
- * what it shows. Blank therefore means blank — clear the credential — instead
- * of the old "keep", which left no way to drop a token at all.
+ * Edit buffer seeded from a saved profile.
+ *
+ * The three dedicated columns are folded into the text, because the editor is
+ * now the only thing anyone edits and the save path reads the columns back out
+ * of it. A profile written by the old typed form keeps its endpoint and token
+ * in columns the file never mentions; without folding, opening such a profile
+ * and saving an unrelated change would derive an empty token and clear the
+ * credential. The token folds in as its mask, which the backend maps back to
+ * the stored secret, so it means exactly what it shows.
  */
 function draftFromProfile(profile: ClaudeProfileInfo): Draft {
   return {
@@ -120,10 +115,15 @@ function draftFromProfile(profile: ClaudeProfileInfo): Draft {
     label: profile.label,
     kind: profile.kind === "configDir" ? "configDir" : "managed",
     configDir: profile.configDir ?? "",
-    baseUrl: profile.baseUrl ?? "",
-    authToken: profile.authTokenMasked ?? "",
-    model: profile.model ?? "",
-    settingsJson: profile.settingsJson ?? "",
+    settingsJson: foldEffectiveSettings(
+      profile.settingsJson ?? "",
+      profile.env,
+      {
+        baseUrl: profile.baseUrl ?? "",
+        authToken: profile.authTokenMasked ?? "",
+        model: profile.model ?? "",
+      }
+    ),
     isNew: false,
   }
 }
@@ -138,10 +138,7 @@ function isDirty(
     draft.label !== base.label ||
     draft.kind !== base.kind ||
     draft.configDir !== base.configDir ||
-    draft.baseUrl !== base.baseUrl ||
-    draft.model !== base.model ||
-    draft.settingsJson !== base.settingsJson ||
-    draft.authToken !== base.authToken
+    draft.settingsJson !== base.settingsJson
   )
 }
 
@@ -178,7 +175,6 @@ export function ClaudeProfileCatalog({
   /** Secret keys the import could not carry, so the editor can name them. */
   const [droppedSecrets, setDroppedSecrets] = useState<string[]>([])
   const [importing, setImporting] = useState(false)
-  const [settingsOpen, setSettingsOpen] = useState(false)
 
   // `t` is a fresh function identity on every render, so it must NOT be a
   // dependency of the load effect: that re-fetches on every render and the
@@ -279,51 +275,6 @@ export function ClaudeProfileCatalog({
   )
 
   /**
-   * The shared form's view of this draft. The dedicated columns win over the
-   * file, mirroring what `materialize_managed_profile` does on the way out.
-   */
-  const configValue = useMemo(
-    () =>
-      readClaudeConfig(selectedDraft?.settingsJson ?? "", {
-        baseUrl: selectedDraft?.baseUrl ?? "",
-        authToken: selectedDraft?.authToken ?? "",
-        model: selectedDraft?.model ?? "",
-      }),
-    [selectedDraft]
-  )
-
-  /**
-   * One field edit from the shared form. It lands in `settings.json` and, for
-   * the three keys that have one, the dedicated column too — kept in step so
-   * the JSON editor below never disagrees with the fields above it.
-   */
-  const patchConfig = useCallback(
-    (patch: Partial<ClaudeConfigValue>) => {
-      setDrafts((prev) => {
-        const current = prev[selectedId]
-        if (!current) return prev
-        const written = applyClaudeConfig(current.settingsJson, patch)
-        if (!written) {
-          // The text is not a JSON object, so there is nothing to patch into.
-          // Saying so beats silently discarding whatever is in the editor.
-          setFormError(tRef.current("settingsJsonInvalid"))
-          return prev
-        }
-        setFormError(null)
-        return {
-          ...prev,
-          [selectedId]: {
-            ...current,
-            ...written.columns,
-            settingsJson: written.settingsJson,
-          },
-        }
-      })
-    },
-    [selectedId]
-  )
-
-  /**
    * `source` duplicates an existing profile. The auth token is deliberately
    * NOT carried over: the API only ever hands the browser a mask, so copying
    * it would write the literal bullets back as a token.
@@ -343,11 +294,14 @@ export function ClaudeProfileCatalog({
           label: t("newProfileName", { n: suffix }),
           kind: source?.kind ?? "managed",
           configDir: source?.configDir ?? "",
-          baseUrl: source?.baseUrl ?? "",
-          // A copy never carries the source's secret, so this really is blank.
-          authToken: "",
-          model: source?.model ?? "",
-          settingsJson: seedSettingsJson ?? source?.settingsJson ?? "",
+          // A copy carries the endpoint but never the secret: the API only
+          // hands the browser a mask, so keeping it would show bullets on a
+          // profile that has no credential.
+          settingsJson: seedSettingsJson
+            ? seedSettingsJson
+            : source
+              ? stripCredentials(source.settingsJson)
+              : "",
           isNew: true,
         },
       }))
@@ -375,7 +329,6 @@ export function ClaudeProfileCatalog({
       }
       addProfile(undefined, result.text)
       setDroppedSecrets(result.droppedSecretKeys)
-      setSettingsOpen(true)
       toast.success(t("importSuccess", { path: result.path }))
     } catch (error: unknown) {
       toast.error(t("importFailed"), { description: toErrorMessage(error) })
@@ -420,12 +373,6 @@ export function ClaudeProfileCatalog({
     if (draft.kind === "configDir") {
       payload.configDir = draft.configDir.trim()
     } else {
-      payload.baseUrl = draft.baseUrl.trim() || null
-      payload.model = draft.model.trim() || null
-      // Always sent, because blank is now a real instruction ("no
-      // credential"), not the absence of one. An untouched mask round-trips
-      // to the stored secret on the backend.
-      payload.authToken = draft.authToken.trim()
       // Parse before sending so a typo comes back as "line 7", not as an
       // opaque backend rejection. `""` is legal — it clears the base.
       const settings = draft.settingsJson.trim()
@@ -448,6 +395,25 @@ export function ClaudeProfileCatalog({
         }
       }
       payload.settingsJson = settings
+      // Collapse the profile onto one store, on save.
+      //
+      // The backend merges three layers into the file it hands the CLI: the
+      // raw JSON, then `record.env`, then these three fields, each winning over
+      // the last. Two of those have no editor any more, so anything left in
+      // them would silently beat the text the user is looking at — the same
+      // "two stores, one setting" the typed fields caused, only now invisible.
+      // The editor was seeded with all three folded in, so writing the derived
+      // values back and emptying `env` is behaviour preserving and leaves the
+      // file as the only layer with anything in it.
+      //
+      // `authToken` is always sent, because blank is a real instruction ("no
+      // credential"), not the absence of one; an untouched mask round-trips to
+      // the stored secret on the backend.
+      const derived = columnsFromSettings(settings)
+      payload.baseUrl = derived.baseUrl || null
+      payload.model = derived.model || null
+      payload.authToken = derived.authToken
+      payload.env = {}
     }
 
     setSaving(true)
@@ -692,67 +658,46 @@ export function ClaudeProfileCatalog({
                   </div>
                 ) : (
                   <>
-                    {/* Same form the "Follow default" tab renders. The two
-                        used to be different components against different
-                        stores and looked nothing alike; a field added there
-                        now shows up here by construction. What differs is
-                        only where it lands — see claude-settings-projection. */}
-                    <ClaudeConfigFields
-                      idPrefix="claude-profile"
-                      value={configValue}
-                      onChange={patchConfig}
-                      apiKeyHint={
-                        selectedDraft.isNew && copiedFrom ? (
-                          <p className="text-[10px] text-muted-foreground">
-                            {t("tokenNotCopied")}
-                          </p>
-                        ) : null
-                      }
-                    />
-
-                    {/* Everything the form does not name — permissions, hooks,
-                        statusLine, any env key we have no field for — is just
-                        settings.json, so it gets one editor instead of a field
-                        per key. The fields above write into this same text. */}
+                    {/* One editor, not a field per key.
+                        There used to be a typed form above this box - five
+                        model inputs, an effort picker, two switches - and it
+                        was a second store for settings that already lived in
+                        the file. It could not stay in step (the JSON showed one
+                        default model, the field another) and it could not keep
+                        up either: the real third-party config this was checked
+                        against uses ANTHROPIC_DEFAULT_FABLE_MODEL and
+                        CLAUDE_CODE_MAX_OUTPUT_TOKENS, which had no field, and
+                        neither of the two that did. Curating a field list
+                        against a vendor's env surface is a race you lose. */}
                     <div className="space-y-1.5">
-                      <button
-                        type="button"
-                        className="flex w-full items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
-                        aria-expanded={settingsOpen}
-                        onClick={() => setSettingsOpen((open) => !open)}
-                      >
-                        <ChevronRight
-                          className={cn(
-                            "h-3 w-3 transition-transform",
-                            settingsOpen && "rotate-90"
-                          )}
-                        />
+                      <span className="text-[11px] text-muted-foreground">
                         {t("fieldSettingsJson")}
-                      </button>
-                      {settingsOpen ? (
-                        <>
-                          <p className="text-[10px] text-muted-foreground">
-                            {t("settingsJsonHint")}
-                          </p>
-                          {droppedSecrets.length > 0 ? (
-                            <p className="text-[10px] text-amber-600 dark:text-amber-500">
-                              {t("importDroppedSecrets", {
-                                keys: droppedSecrets.join(", "),
-                              })}
-                            </p>
-                          ) : null}
-                          <Textarea
-                            aria-label={t("fieldSettingsJson")}
-                            value={selectedDraft.settingsJson}
-                            onChange={(event) =>
-                              patchDraft({ settingsJson: event.target.value })
-                            }
-                            placeholder={'{\n  "env": {}\n}'}
-                            className="min-h-40 font-mono text-xs"
-                            spellCheck={false}
-                          />
-                        </>
+                      </span>
+                      <p className="text-[10px] text-muted-foreground">
+                        {t("settingsJsonHint")}
+                      </p>
+                      {selectedDraft.isNew && copiedFrom ? (
+                        <p className="text-[10px] text-muted-foreground">
+                          {t("tokenNotCopied")}
+                        </p>
                       ) : null}
+                      {droppedSecrets.length > 0 ? (
+                        <p className="text-[10px] text-amber-600 dark:text-amber-500">
+                          {t("importDroppedSecrets", {
+                            keys: droppedSecrets.join(", "),
+                          })}
+                        </p>
+                      ) : null}
+                      <Textarea
+                        aria-label={t("fieldSettingsJson")}
+                        value={selectedDraft.settingsJson}
+                        onChange={(event) =>
+                          patchDraft({ settingsJson: event.target.value })
+                        }
+                        placeholder={'{\n  "env": {}\n}'}
+                        className="min-h-64 font-mono text-xs"
+                        spellCheck={false}
+                      />
                     </div>
                   </>
                 )}
