@@ -4877,7 +4877,8 @@
     "settingsWorktreeRoot": "워크트리 위치",
     "settingsWorktreeRootHint": "작업 워크트리를 만들 위치입니다. 비워 두면 저장소 옆 기본 위치를 사용합니다.",
     "settingsWorktreeRootPlaceholder": "기본값: 저장소와 같은 위치",
-    "settingsWorktreeRootBrowse": "찾아보기"
+    "settingsWorktreeRootBrowse": "찾아보기",
+    "reorderNeedsFolder": "프로젝트를 선택하면 순서를 바꿀 수 있습니다"
   },
   "CustomSkillsSettings": {
     "loading": "사용자 지정 스킬 불러오는 중…",

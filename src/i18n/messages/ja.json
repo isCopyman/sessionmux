@@ -4877,7 +4877,8 @@
     "settingsWorktreeRoot": "ワークツリーの場所",
     "settingsWorktreeRootHint": "タスクのワークツリーを作成する場所。空欄の場合はリポジトリの隣の既定の場所を使用します。",
     "settingsWorktreeRootPlaceholder": "既定：リポジトリと同じ階層",
-    "settingsWorktreeRootBrowse": "参照"
+    "settingsWorktreeRootBrowse": "参照",
+    "reorderNeedsFolder": "プロジェクトを選ぶと並べ替えできます"
   },
   "CustomSkillsSettings": {
     "loading": "カスタムスキルを読み込み中…",

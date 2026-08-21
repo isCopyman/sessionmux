@@ -133,9 +133,15 @@ Claude / Codex / Cline / KimiCode 各走各的路）。所以"Claude 用配置�
 | `commands/mcp.rs:686` | 硬编码 `~/.claude/settings.json`（MCP 开关） | 要按档解析；**注意**：换档=换 MCP 清单，codeg 注入的 codeg-mcp 必须跟着进新档目录，否则协作工具在该会话里消失 |
 | `commands/acp.rs:7714` | 硬编码 `~/.claude/skills` | 同上（换档会换 skills 可见性） |
 
-**这是本方案唯一的实质风险**：配置目录是"一整套人格"（settings + 凭据 + MCP +
-skills + agents）。换档不只换钱包，也换工具箱。设计上必须让 codeg 自己的注入
-（codeg-mcp）在每个档里都在场，否则用户会遇到"换了个档，群聊工具没了"。
+~~**这是本方案唯一的实质风险**~~ —— **2026-08-21 已实证推翻，风险不成立**：
+codeg-mcp **不经 settings.json**，它是在 ACP 线缆上注入的
+（`acp/connection.rs:3862 inject_codeg_mcp` → `session/new.mcpServers`，调用点 `:4569`、`:5084`）。
+换 `CLAUDE_CONFIG_DIR` **不会**让群聊/委托工具消失，托管档目录也**不该**再写一份
+`mcpServers`（会双挂）。后端已按此实现并有测试钉住。
+
+仍然会随档改变的是**用户自己的**那部分人格：`~/.claude.json` 的 `mcpServers`、
+`settings.json` 的 `enabledPlugins`、以及 skills / agents 目录。这属于"换档就是换一套
+工作环境"的正常语义，不是缺陷，但设置页要让用户看得见档指向哪个目录。
 
 ## 4. 建议方案（第一期只做 Claude Code）
 
@@ -236,10 +242,20 @@ skills + agents）。换档不只换钱包，也换工具箱。设计上必须�
 也就是说「档 = 这次 spawn 让 agent 看见哪个配置目录」这条抽象**对所有 harness 都成立**，
 差别只在环境变量名，而那张表已经存在且有测试钉住（`agent_data_roots_honor_runtime_env_relocation`）。
 
-**结论**：第一期仍只落 Claude（面小、验证快），但**数据结构从一开始就带 `agentType`**，
-档存储与解析函数按 agent 分组；第二期接 Codex 时只是查表换个 env 名 + 处理它自己的
-`config.toml` 语义，不需要重做上层（绑定、UI、MCP 参数全复用）。反过来，如果第一期把
-`ClaudeProfile` 写死不带 agent 维度，第二期就得推倒重来。
+**结论**：第一期只落 Claude（面小、验证快），已按 `claude_profile` 命名落地。
+给 `ClaudeProfileInfo` 硬塞一个恒等于 `"claudeCode"` 的 `agentType` 字段是假泛化——
+真正的第二期动作是一次**机械改名 + 加一维**，且成本可控（已核实）：
+
+| 第二期要动的 | 现状 | 工作量 |
+| --- | --- | --- |
+| `models/claude_profile.rs`、`commands/claude_profile.rs`、`web/handlers/claude_profile.rs` | 单模块自足 | 改名 `launch_profile`，类型加 `agentType` |
+| 档目录 `<data_dir>/claude-profiles/` | 已是独立目录 | 改成 `launch-profiles/<agent>/`，加一次迁移（文件搬家，非 DB） |
+| 会话绑定键 `__codeg_profile__` | JSON 里的自有键 | 值改成 `"<agent>:<id>"` 或加平行键，**仍无 schema 改动** |
+| 注入 | 只在 Claude 分支产 `CLAUDE_CONFIG_DIR` | 查 `agent_root_slots` 拿 env 名，分支变查表 |
+| UI / MCP 参数 | 已按"选一个档"建模 | 不用重做 |
+
+也就是说"晚一步泛化"的代价是一次改名迁移，不是推倒重来。**第二期接 Codex 时再做**，
+不要现在为了好看先加字段。
 
 ## 6. 未能确定（施工期要实测）
 

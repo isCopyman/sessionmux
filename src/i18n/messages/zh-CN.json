@@ -4877,7 +4877,8 @@
     "settingsWorktreeRoot": "工作树位置",
     "settingsWorktreeRootHint": "任务工作树的创建位置，留空则使用仓库旁的默认目录。",
     "settingsWorktreeRootPlaceholder": "默认：仓库同级目录",
-    "settingsWorktreeRootBrowse": "浏览"
+    "settingsWorktreeRootBrowse": "浏览",
+    "reorderNeedsFolder": "选定项目后可拖拽排序"
   },
   "CustomSkillsSettings": {
     "loading": "正在加载自定义技能…",

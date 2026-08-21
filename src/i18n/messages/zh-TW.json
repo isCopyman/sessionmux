@@ -4877,7 +4877,8 @@
     "settingsWorktreeRoot": "工作樹位置",
     "settingsWorktreeRootHint": "任務工作樹的建立位置，留空則使用儲存庫旁的預設目錄。",
     "settingsWorktreeRootPlaceholder": "預設：儲存庫同層目錄",
-    "settingsWorktreeRootBrowse": "瀏覽"
+    "settingsWorktreeRootBrowse": "瀏覽",
+    "reorderNeedsFolder": "選定專案後可拖曳排序"
   },
   "CustomSkillsSettings": {
     "loading": "正在載入自訂技能…",

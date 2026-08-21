@@ -4877,7 +4877,8 @@
     "settingsWorktreeRoot": "Worktree location",
     "settingsWorktreeRootHint": "Where task worktrees are created. Leave blank for the default next to the repository.",
     "settingsWorktreeRootPlaceholder": "Default: alongside the repository",
-    "settingsWorktreeRootBrowse": "Browse"
+    "settingsWorktreeRootBrowse": "Browse",
+    "reorderNeedsFolder": "Pick a project to reorder"
   },
   "CustomSkillsSettings": {
     "loading": "Loading custom skills…",

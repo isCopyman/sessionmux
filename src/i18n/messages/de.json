@@ -4877,7 +4877,8 @@
     "settingsWorktreeRoot": "Worktree-Speicherort",
     "settingsWorktreeRootHint": "Wo Task-Worktrees erstellt werden. Leer lassen für den Standardort neben dem Repository.",
     "settingsWorktreeRootPlaceholder": "Standard: neben dem Repository",
-    "settingsWorktreeRootBrowse": "Durchsuchen"
+    "settingsWorktreeRootBrowse": "Durchsuchen",
+    "reorderNeedsFolder": "Projekt wählen, um zu sortieren"
   },
   "CustomSkillsSettings": {
     "loading": "Benutzerdefinierte Skills werden geladen…",

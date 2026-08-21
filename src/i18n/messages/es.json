@@ -4877,7 +4877,8 @@
     "settingsWorktreeRoot": "Ubicación del árbol de trabajo",
     "settingsWorktreeRootHint": "Dónde se crean los árboles de trabajo de tareas. Déjalo vacío para usar la ubicación predeterminada junto al repositorio.",
     "settingsWorktreeRootPlaceholder": "Predeterminado: junto al repositorio",
-    "settingsWorktreeRootBrowse": "Examinar"
+    "settingsWorktreeRootBrowse": "Examinar",
+    "reorderNeedsFolder": "Elige un proyecto para reordenar"
   },
   "CustomSkillsSettings": {
     "loading": "Cargando habilidades personalizadas…",

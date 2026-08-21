@@ -836,6 +836,15 @@ export function TasksPage() {
                       </span>
                     )}
                     <div className="flex-1" />
+                    {/* Dragging a To-do card across the all-projects view does
+                        nothing — `sort_order` is per folder, so there is no
+                        order to save. Saying so beats letting the card snap
+                        back with no explanation. */}
+                    {col === "todo" && !dragEnabled && todoTasks.length > 1 ? (
+                      <span className="truncate text-[0.625rem] leading-none text-muted-foreground/70">
+                        {t("reorderNeedsFolder")}
+                      </span>
+                    ) : null}
                     {col === "done" &&
                     columns.done.some((task) => task.archived_at == null) ? (
                       <Button

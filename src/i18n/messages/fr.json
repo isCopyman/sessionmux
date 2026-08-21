@@ -4877,7 +4877,8 @@
     "settingsWorktreeRoot": "Emplacement de l'arbre de travail",
     "settingsWorktreeRootHint": "Où les arbres de travail des tâches sont créés. Laissez vide pour l'emplacement par défaut à côté du dépôt.",
     "settingsWorktreeRootPlaceholder": "Par défaut : à côté du dépôt",
-    "settingsWorktreeRootBrowse": "Parcourir"
+    "settingsWorktreeRootBrowse": "Parcourir",
+    "reorderNeedsFolder": "Choisissez un projet pour réordonner"
   },
   "CustomSkillsSettings": {
     "loading": "Chargement des compétences personnalisées…",

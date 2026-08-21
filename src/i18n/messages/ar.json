@@ -4877,7 +4877,8 @@
     "settingsWorktreeRoot": "موقع شجرة العمل",
     "settingsWorktreeRootHint": "مكان إنشاء أشجار عمل المهام. اتركه فارغًا لاستخدام الموقع الافتراضي بجوار المستودع.",
     "settingsWorktreeRootPlaceholder": "الافتراضي: بجوار المستودع",
-    "settingsWorktreeRootBrowse": "استعراض"
+    "settingsWorktreeRootBrowse": "استعراض",
+    "reorderNeedsFolder": "اختر مشروعًا لإعادة الترتيب"
   },
   "CustomSkillsSettings": {
     "loading": "جارٍ تحميل المهارات المخصّصة…",
