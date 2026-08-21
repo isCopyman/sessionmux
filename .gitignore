@@ -65,3 +65,6 @@ src-tauri/target-gate/
 
 # transient chat-history extraction scratch — never commit
 docs/session-workbench/_extract*
+
+# cli-delegate worktree lanes
+.cli-delegate/
