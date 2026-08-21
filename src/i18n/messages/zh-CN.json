@@ -1167,7 +1167,10 @@
       "unsaved": "有未保存的修改",
       "idHint": "agent 通过这个标识引用该配置（create_work_task 的 profile 参数）。保存后不可更改。",
       "followDefaultBody": "不做任何覆盖：会话直接使用你自己的 ~/.claude 目录及其登录状态。",
-      "newProfileName": "设置 {n}"
+      "newProfileName": "设置 {n}",
+      "addBlank": "空白配置",
+      "addCopy": "复制「{name}」",
+      "tokenNotCopied": "令牌没有被复制——界面只拿得到掩码。请重新填写。"
     },
     "dialogs": {
       "confirmDeleteProvider": "确认删除 Provider {providerId}？",

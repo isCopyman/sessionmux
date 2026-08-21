@@ -1167,7 +1167,10 @@
       "unsaved": "Ungespeicherte Änderungen",
       "idHint": "Agents verweisen über diese ID auf das Profil (Parameter profile von create_work_task). Nach dem Speichern nicht mehr änderbar.",
       "followDefaultBody": "Keine Überschreibung: Die Sitzung nutzt dein eigenes ~/.claude-Verzeichnis samt dessen Anmeldung.",
-      "newProfileName": "Einstellungen {n}"
+      "newProfileName": "Einstellungen {n}",
+      "addBlank": "Leeres Profil",
+      "addCopy": "„{name}“ duplizieren",
+      "tokenNotCopied": "Das Token wurde nicht kopiert – die Oberfläche sieht nur eine Maske. Bitte erneut eingeben."
     },
     "dialogs": {
       "confirmDeleteProvider": "Provider {providerId} löschen?",

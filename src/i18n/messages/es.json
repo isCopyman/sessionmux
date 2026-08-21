@@ -1167,7 +1167,10 @@
       "unsaved": "Cambios sin guardar",
       "idHint": "Los agentes usan este ID para referirse al perfil (parámetro profile de create_work_task). No se puede cambiar tras guardar.",
       "followDefaultBody": "Sin anulación: la sesión usa tu propio directorio ~/.claude y la sesión iniciada en él.",
-      "newProfileName": "Ajustes {n}"
+      "newProfileName": "Ajustes {n}",
+      "addBlank": "Perfil en blanco",
+      "addCopy": "Duplicar «{name}»",
+      "tokenNotCopied": "El token no se copió: la interfaz solo recibe una máscara. Vuelve a introducirlo."
     },
     "dialogs": {
       "confirmDeleteProvider": "¿Eliminar proveedor {providerId}?",

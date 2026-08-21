@@ -1167,7 +1167,10 @@
       "unsaved": "تغييرات غير محفوظة",
       "idHint": "يشير الوكلاء إلى ملف التعريف بهذا المعرّف (وسيط profile في create_work_task). لا يمكن تغييره بعد الحفظ.",
       "followDefaultBody": "دون أي تجاوز: تستخدم الجلسة مجلد ~/.claude الخاص بك وحالة تسجيل الدخول فيه.",
-      "newProfileName": "الإعدادات {n}"
+      "newProfileName": "الإعدادات {n}",
+      "addBlank": "ملف تعريف فارغ",
+      "addCopy": "تكرار «{name}»",
+      "tokenNotCopied": "لم يُنسخ الرمز — الواجهة لا ترى سوى قناع. أعد إدخاله."
     },
     "dialogs": {
       "confirmDeleteProvider": "حذف المزود {providerId}؟",

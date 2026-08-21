@@ -1167,7 +1167,10 @@
       "unsaved": "未保存の変更があります",
       "idHint": "エージェントはこの ID でプロファイルを参照します（create_work_task の profile）。保存後は変更できません。",
       "followDefaultBody": "上書きなし: セッションはあなたの ~/.claude ディレクトリとそのログイン状態をそのまま使います。",
-      "newProfileName": "設定 {n}"
+      "newProfileName": "設定 {n}",
+      "addBlank": "空のプロファイル",
+      "addCopy": "「{name}」を複製",
+      "tokenNotCopied": "認証トークンはコピーされません（画面にはマスクしか届きません）。入力し直してください。"
     },
     "dialogs": {
       "confirmDeleteProvider": "Provider {providerId} を削除しますか？",

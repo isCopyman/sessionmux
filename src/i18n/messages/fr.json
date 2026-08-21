@@ -1167,7 +1167,10 @@
       "unsaved": "Modifications non enregistrées",
       "idHint": "Les agents désignent ce profil par cet identifiant (paramètre profile de create_work_task). Non modifiable après enregistrement.",
       "followDefaultBody": "Aucune substitution : la session utilise votre propre dossier ~/.claude et sa session connectée.",
-      "newProfileName": "Paramètres {n}"
+      "newProfileName": "Paramètres {n}",
+      "addBlank": "Profil vierge",
+      "addCopy": "Dupliquer « {name} »",
+      "tokenNotCopied": "Le jeton n'a pas été copié : l'interface ne reçoit qu'un masque. Saisissez-le à nouveau."
     },
     "dialogs": {
       "confirmDeleteProvider": "Supprimer le provider {providerId} ?",

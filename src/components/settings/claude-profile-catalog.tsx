@@ -1,7 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { Loader2, Plus, Star, Trash2 } from "lucide-react"
+import { Copy, Loader2, Plus, Star, Trash2 } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 
@@ -16,6 +16,12 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Input } from "@/components/ui/input"
 import {
   Select,
@@ -126,6 +132,7 @@ export function ClaudeProfileCatalog({
   )
   const [deleting, setDeleting] = useState(false)
   const [settingDefaultId, setSettingDefaultId] = useState<string | null>(null)
+  const [copiedFrom, setCopiedFrom] = useState<string | null>(null)
 
   // `t` is a fresh function identity on every render, so it must NOT be a
   // dependency of the load effect: that re-fetches on every render and the
@@ -161,7 +168,6 @@ export function ClaudeProfileCatalog({
     return () => {
       cancelled = true
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const profileById = useMemo(
@@ -214,29 +220,38 @@ export function ClaudeProfileCatalog({
     [selectedId]
   )
 
-  const addProfile = useCallback(() => {
-    const taken = new Set([
-      ...profiles.map((profile) => profile.id),
-      ...Object.keys(drafts),
-    ])
-    const suffix = nextFreeSuffix(taken)
-    const id = `settings-${suffix}`
-    setDrafts((prev) => ({
-      ...prev,
-      [id]: {
-        id,
-        label: t("newProfileName", { n: suffix }),
-        kind: "managed",
-        configDir: "",
-        baseUrl: "",
-        authToken: "",
-        model: "",
-        isNew: true,
-      },
-    }))
-    setFormError(null)
-    setSelectedId(id)
-  }, [drafts, profiles, t])
+  /**
+   * `source` duplicates an existing profile. The auth token is deliberately
+   * NOT carried over: the API only ever hands the browser a mask, so copying
+   * it would write the literal bullets back as a token.
+   */
+  const addProfile = useCallback(
+    (source?: Draft) => {
+      const taken = new Set([
+        ...profiles.map((profile) => profile.id),
+        ...Object.keys(drafts),
+      ])
+      const suffix = nextFreeSuffix(taken)
+      const id = `settings-${suffix}`
+      setDrafts((prev) => ({
+        ...prev,
+        [id]: {
+          id,
+          label: t("newProfileName", { n: suffix }),
+          kind: source?.kind ?? "managed",
+          configDir: source?.configDir ?? "",
+          baseUrl: source?.baseUrl ?? "",
+          authToken: "",
+          model: source?.model ?? "",
+          isNew: true,
+        },
+      }))
+      setFormError(null)
+      setCopiedFrom(source ? source.label : null)
+      setSelectedId(id)
+    },
+    [drafts, profiles, t]
+  )
 
   const discardNew = useCallback(() => {
     setDrafts((prev) => {
@@ -382,6 +397,7 @@ export function ClaudeProfileCatalog({
                   aria-selected={active}
                   onClick={() => {
                     setFormError(null)
+                    if (tab.id !== selectedId) setCopiedFrom(null)
                     setSelectedId(tab.id)
                   }}
                   className={cn(
@@ -405,17 +421,32 @@ export function ClaudeProfileCatalog({
                 </button>
               )
             })}
-            <Button
-              type="button"
-              size="icon-xs"
-              variant="ghost"
-              className="shrink-0"
-              onClick={addProfile}
-              title={t("addProfile")}
-              aria-label={t("addProfile")}
-            >
-              <Plus className="h-3.5 w-3.5" />
-            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  type="button"
+                  size="icon-xs"
+                  variant="ghost"
+                  className="shrink-0"
+                  title={t("addProfile")}
+                  aria-label={t("addProfile")}
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="min-w-44">
+                {selectedDraft ? (
+                  <DropdownMenuItem onSelect={() => addProfile(selectedDraft)}>
+                    <Copy className="h-3.5 w-3.5" />
+                    {t("addCopy", { name: selectedDraft.label })}
+                  </DropdownMenuItem>
+                ) : null}
+                <DropdownMenuItem onSelect={() => addProfile()}>
+                  <Plus className="h-3.5 w-3.5" />
+                  {t("addBlank")}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
 
           <div className="space-y-3 p-3">
@@ -462,7 +493,10 @@ export function ClaudeProfileCatalog({
                 </div>
 
                 <div className="space-y-1.5">
-                  <label className="text-[11px] text-muted-foreground">
+                  <label
+                    htmlFor="claude-profile-kind"
+                    className="text-[11px] text-muted-foreground"
+                  >
                     {t("fieldKind")}
                   </label>
                   <Select
@@ -473,7 +507,7 @@ export function ClaudeProfileCatalog({
                       }
                     }}
                   >
-                    <SelectTrigger className="w-full">
+                    <SelectTrigger id="claude-profile-kind" className="w-full">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent align="start">
@@ -489,10 +523,14 @@ export function ClaudeProfileCatalog({
 
                 {selectedDraft.kind === "configDir" ? (
                   <div className="space-y-1.5">
-                    <label className="text-[11px] text-muted-foreground">
+                    <label
+                      htmlFor="claude-profile-config-dir"
+                      className="text-[11px] text-muted-foreground"
+                    >
                       {t("fieldConfigDir")}
                     </label>
                     <Input
+                      id="claude-profile-config-dir"
                       value={selectedDraft.configDir}
                       onChange={(event) =>
                         patchDraft({ configDir: event.target.value })
@@ -503,10 +541,14 @@ export function ClaudeProfileCatalog({
                 ) : (
                   <>
                     <div className="space-y-1.5">
-                      <label className="text-[11px] text-muted-foreground">
+                      <label
+                        htmlFor="claude-profile-base-url"
+                        className="text-[11px] text-muted-foreground"
+                      >
                         {t("fieldBaseUrl")}
                       </label>
                       <Input
+                        id="claude-profile-base-url"
                         value={selectedDraft.baseUrl}
                         onChange={(event) =>
                           patchDraft({ baseUrl: event.target.value })
@@ -515,10 +557,14 @@ export function ClaudeProfileCatalog({
                       />
                     </div>
                     <div className="space-y-1.5">
-                      <label className="text-[11px] text-muted-foreground">
+                      <label
+                        htmlFor="claude-profile-token"
+                        className="text-[11px] text-muted-foreground"
+                      >
                         {t("fieldAuthToken")}
                       </label>
                       <Input
+                        id="claude-profile-token"
                         type="password"
                         value={selectedDraft.authToken}
                         onChange={(event) =>
@@ -529,14 +575,31 @@ export function ClaudeProfileCatalog({
                             ? t("tokenKeepPlaceholder")
                             : undefined
                         }
+                        aria-describedby={
+                          selectedDraft.isNew && copiedFrom
+                            ? "claude-profile-token-hint"
+                            : undefined
+                        }
                         autoComplete="off"
                       />
+                      {selectedDraft.isNew && copiedFrom ? (
+                        <p
+                          id="claude-profile-token-hint"
+                          className="text-[10px] text-muted-foreground"
+                        >
+                          {t("tokenNotCopied")}
+                        </p>
+                      ) : null}
                     </div>
                     <div className="space-y-1.5">
-                      <label className="text-[11px] text-muted-foreground">
+                      <label
+                        htmlFor="claude-profile-model"
+                        className="text-[11px] text-muted-foreground"
+                      >
                         {t("fieldModel")}
                       </label>
                       <Input
+                        id="claude-profile-model"
                         value={selectedDraft.model}
                         onChange={(event) =>
                           patchDraft({ model: event.target.value })

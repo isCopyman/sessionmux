@@ -72,6 +72,12 @@ function addProfileButton() {
   return screen.findByRole("button", { name: "Add profile" })
 }
 
+/** `+` opens a menu (duplicate / blank); every add goes through it. */
+async function addBlankProfile(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(await addProfileButton())
+  await user.click(await screen.findByRole("menuitem", { name: "Blank profile" }))
+}
+
 describe("isValidClaudeProfileId", () => {
   it("rejects illegal values and the reserved id", () => {
     expect(isValidClaudeProfileId("work")).toBe(true)
@@ -104,7 +110,7 @@ describe("ClaudeProfileCatalog", () => {
   it("names a new profile for you and selects its tab", async () => {
     const user = userEvent.setup()
     renderCatalog()
-    await user.click(await addProfileButton())
+    await addBlankProfile(user)
 
     expect(screen.getByRole("tab", { name: /Settings 2/ })).toHaveAttribute(
       "aria-selected",
@@ -117,7 +123,7 @@ describe("ClaudeProfileCatalog", () => {
   it("rejects an illegal id and the reserved follow-default id", async () => {
     const user = userEvent.setup()
     renderCatalog()
-    await user.click(await addProfileButton())
+    await addBlankProfile(user)
 
     const idInput = await screen.findByLabelText("ID")
     const save = screen.getByRole("button", { name: "Save" })
@@ -140,7 +146,7 @@ describe("ClaudeProfileCatalog", () => {
   it("optimistically inserts a saved profile without waiting for another list", async () => {
     const user = userEvent.setup()
     renderCatalog()
-    await user.click(await addProfileButton())
+    await addBlankProfile(user)
 
     fireEvent.change(await screen.findByLabelText("ID"), {
       target: { value: "api" },
@@ -177,6 +183,25 @@ describe("ClaudeProfileCatalog", () => {
     await user.click(screen.getByRole("tab", { name: "Follow default" }))
     await user.click(screen.getByRole("tab", { name: /renamed/ }))
     expect(screen.getByLabelText("Name")).toHaveValue("renamed")
+  })
+
+  // Duplicating is the common way to make "the same endpoint, other model".
+  it("duplicates the active profile but never the token", async () => {
+    api.claudeProfileList.mockResolvedValue([FOLLOW, RELAY])
+    const user = userEvent.setup()
+    renderCatalog()
+
+    await user.click(await screen.findByRole("tab", { name: "中转" }))
+    await user.click(screen.getByRole("button", { name: "Add profile" }))
+    await user.click(
+      await screen.findByRole("menuitem", { name: /Duplicate/ })
+    )
+
+    expect(screen.getByLabelText("Base URL")).toHaveValue(
+      "https://example.test/v1"
+    )
+    expect(screen.getByLabelText("Auth token")).toHaveValue("")
+    expect(screen.getByText(/was not copied/)).toBeInTheDocument()
   })
 
   it("removes a deleted profile from the tab strip after confirm", async () => {

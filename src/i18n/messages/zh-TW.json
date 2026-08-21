@@ -1167,7 +1167,10 @@
       "unsaved": "有未儲存的變更",
       "idHint": "agent 透過這個識別碼引用此設定（create_work_task 的 profile 參數）。儲存後不可變更。",
       "followDefaultBody": "不做任何覆寫：工作階段直接使用你自己的 ~/.claude 目錄及其登入狀態。",
-      "newProfileName": "設定 {n}"
+      "newProfileName": "設定 {n}",
+      "addBlank": "空白設定",
+      "addCopy": "複製「{name}」",
+      "tokenNotCopied": "權杖沒有被複製——介面只取得到遮罩。請重新填寫。"
     },
     "dialogs": {
       "confirmDeleteProvider": "確認刪除 Provider {providerId}？",
