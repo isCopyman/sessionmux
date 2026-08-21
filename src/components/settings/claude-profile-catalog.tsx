@@ -1,19 +1,12 @@
 "use client"
 
-import { useCallback, useEffect, useState } from "react"
-import { Loader2, Pencil, Plus, Star, Trash2 } from "lucide-react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { Loader2, Plus, Star, Trash2 } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog"
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -31,6 +24,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { cn } from "@/lib/utils"
 import {
   claudeProfileDelete,
   claudeProfileList,
@@ -41,7 +35,6 @@ import {
   FOLLOW_DEFAULT_CLAUDE_PROFILE_ID,
   isValidClaudeProfileId,
   type ClaudeProfileInfo,
-  type ClaudeProfileKind,
   type ClaudeProfileUpsert,
 } from "@/lib/types"
 
@@ -62,14 +55,9 @@ interface FormState {
   model: string
 }
 
-const EMPTY_FORM: FormState = {
-  id: "",
-  label: "",
-  kind: "managed",
-  configDir: "",
-  baseUrl: "",
-  authToken: "",
-  model: "",
+/** A tab's edit buffer. `isNew` profiles exist only in the browser until saved. */
+interface Draft extends FormState {
+  isNew: boolean
 }
 
 function isAbsolutePath(value: string): boolean {
@@ -79,24 +67,44 @@ function isAbsolutePath(value: string): boolean {
   return /^[a-zA-Z]:[\\/]/.test(trimmed)
 }
 
-function kindLabel(
-  kind: ClaudeProfileKind,
-  t: (key: "kindConfigDir" | "kindManaged" | "kindFollowDefault") => string
-): string {
-  if (kind === "configDir") return t("kindConfigDir")
-  if (kind === "managed") return t("kindManaged")
-  return t("kindFollowDefault")
+/** Edit buffer seeded from a saved profile. The token is never echoed back
+ *  (the API only returns a mask), so blank means "keep what is stored". */
+function draftFromProfile(profile: ClaudeProfileInfo): Draft {
+  return {
+    id: profile.id,
+    label: profile.label,
+    kind: profile.kind === "configDir" ? "configDir" : "managed",
+    configDir: profile.configDir ?? "",
+    baseUrl: profile.baseUrl ?? "",
+    authToken: "",
+    model: profile.model ?? "",
+    isNew: false,
+  }
 }
 
-function rowDetail(profile: ClaudeProfileInfo): string | null {
-  if (profile.kind === "configDir") {
-    return profile.configDir?.trim() || null
+function isDirty(
+  draft: Draft,
+  profile: ClaudeProfileInfo | undefined
+): boolean {
+  if (draft.isNew || !profile) return true
+  const base = draftFromProfile(profile)
+  return (
+    draft.label !== base.label ||
+    draft.kind !== base.kind ||
+    draft.configDir !== base.configDir ||
+    draft.baseUrl !== base.baseUrl ||
+    draft.model !== base.model ||
+    draft.authToken.trim() !== ""
+  )
+}
+
+/** `Settings 2`, `Settings 3`, … — the first free number, so adding a profile
+ *  never asks the user to invent a name (or an id) before they can type. */
+function nextFreeSuffix(taken: Set<string>): number {
+  for (let n = 2; n < 1000; n += 1) {
+    if (!taken.has(`settings-${n}`)) return n
   }
-  if (profile.kind === "managed") {
-    const parts = [profile.baseUrl?.trim(), profile.authTokenMasked?.trim()]
-    return parts.filter(Boolean).join(" · ") || null
-  }
-  return null
+  return Date.now() % 1000
 }
 
 export function ClaudeProfileCatalog({
@@ -107,10 +115,10 @@ export function ClaudeProfileCatalog({
   const tActions = useTranslations("AcpAgentSettings.actions")
   const [profiles, setProfiles] = useState<ClaudeProfileInfo[]>([])
   const [loading, setLoading] = useState(true)
-  const [editor, setEditor] = useState<"create" | ClaudeProfileInfo | null>(
-    null
+  const [selectedId, setSelectedId] = useState<string>(
+    FOLLOW_DEFAULT_CLAUDE_PROFILE_ID
   )
-  const [form, setForm] = useState<FormState>(EMPTY_FORM)
+  const [drafts, setDrafts] = useState<Record<string, Draft>>({})
   const [formError, setFormError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<ClaudeProfileInfo | null>(
@@ -119,18 +127,31 @@ export function ClaudeProfileCatalog({
   const [deleting, setDeleting] = useState(false)
   const [settingDefaultId, setSettingDefaultId] = useState<string | null>(null)
 
-  const refresh = useCallback(async () => {
-    const list = await claudeProfileList()
-    setProfiles(list)
-  }, [])
+  // `t` is a fresh function identity on every render, so it must NOT be a
+  // dependency of the load effect: that re-fetches on every render and the
+  // late response overwrites a profile the user just saved.
+  const tRef = useRef(t)
+  tRef.current = t
 
   useEffect(() => {
     let cancelled = false
     setLoading(true)
-    void refresh()
+    claudeProfileList()
+      .then((list) => {
+        if (cancelled) return
+        setProfiles(list)
+        setDrafts((prev) => {
+          const next = { ...prev }
+          for (const profile of list) {
+            if (profile.kind === "followDefault") continue
+            if (!next[profile.id]) next[profile.id] = draftFromProfile(profile)
+          }
+          return next
+        })
+      })
       .catch((error: unknown) => {
         if (cancelled) return
-        toast.error(t("listFailed"), {
+        toast.error(tRef.current("listFailed"), {
           description: toErrorMessage(error),
         })
       })
@@ -140,37 +161,98 @@ export function ClaudeProfileCatalog({
     return () => {
       cancelled = true
     }
-  }, [refresh, t])
-
-  const openCreate = useCallback(() => {
-    setForm(EMPTY_FORM)
-    setFormError(null)
-    setEditor("create")
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const openEdit = useCallback((profile: ClaudeProfileInfo) => {
-    setForm({
-      id: profile.id,
-      label: profile.label,
-      kind: profile.kind === "configDir" ? "configDir" : "managed",
-      configDir: profile.configDir ?? "",
-      baseUrl: profile.baseUrl ?? "",
-      authToken: "",
-      model: profile.model ?? "",
+  const profileById = useMemo(
+    () => new Map(profiles.map((profile) => [profile.id, profile])),
+    [profiles]
+  )
+
+  /** Saved profiles first (server order pins Follow default at the head), then
+   *  tabs the user just added and has not saved yet. */
+  const tabs = useMemo(() => {
+    const savedIds = new Set(profiles.map((profile) => profile.id))
+    const pending = Object.values(drafts).filter(
+      (draft) => draft.isNew && !savedIds.has(draft.id)
+    )
+    return [
+      ...profiles.map((profile) => ({
+        id: profile.id,
+        // The draft's name wins so the tab renames as you type, the way a
+        // renamed file tab does.
+        label:
+          profile.kind === "followDefault"
+            ? t("followDefault")
+            : (drafts[profile.id]?.label ?? profile.label),
+        isNew: false,
+      })),
+      ...pending.map((draft) => ({
+        id: draft.id,
+        label: draft.label,
+        isNew: true,
+      })),
+    ]
+  }, [drafts, profiles, t])
+
+  const selectedDraft = drafts[selectedId]
+  const selectedProfile = profileById.get(selectedId)
+  const isFollowDefaultTab = selectedId === FOLLOW_DEFAULT_CLAUDE_PROFILE_ID
+  const currentDefault =
+    defaultProfileId.trim() || FOLLOW_DEFAULT_CLAUDE_PROFILE_ID
+  const dirty = selectedDraft ? isDirty(selectedDraft, selectedProfile) : false
+
+  const patchDraft = useCallback(
+    (patch: Partial<FormState>) => {
+      setFormError(null)
+      setDrafts((prev) => {
+        const current = prev[selectedId]
+        if (!current) return prev
+        return { ...prev, [selectedId]: { ...current, ...patch } }
+      })
+    },
+    [selectedId]
+  )
+
+  const addProfile = useCallback(() => {
+    const taken = new Set([
+      ...profiles.map((profile) => profile.id),
+      ...Object.keys(drafts),
+    ])
+    const suffix = nextFreeSuffix(taken)
+    const id = `settings-${suffix}`
+    setDrafts((prev) => ({
+      ...prev,
+      [id]: {
+        id,
+        label: t("newProfileName", { n: suffix }),
+        kind: "managed",
+        configDir: "",
+        baseUrl: "",
+        authToken: "",
+        model: "",
+        isNew: true,
+      },
+    }))
+    setFormError(null)
+    setSelectedId(id)
+  }, [drafts, profiles, t])
+
+  const discardNew = useCallback(() => {
+    setDrafts((prev) => {
+      const next = { ...prev }
+      delete next[selectedId]
+      return next
     })
     setFormError(null)
-    setEditor(profile)
-  }, [])
-
-  const closeEditor = useCallback(() => {
-    if (saving) return
-    setEditor(null)
-    setFormError(null)
-  }, [saving])
+    setSelectedId(FOLLOW_DEFAULT_CLAUDE_PROFILE_ID)
+  }, [selectedId])
 
   const handleSave = useCallback(async () => {
-    const id = form.id.trim()
-    const label = form.label.trim()
+    const draft = drafts[selectedId]
+    if (!draft) return
+    const id = draft.id.trim()
+    const label = draft.label.trim()
     if (!isValidClaudeProfileId(id)) {
       setFormError(
         id === FOLLOW_DEFAULT_CLAUDE_PROFILE_ID
@@ -183,22 +265,18 @@ export function ClaudeProfileCatalog({
       setFormError(t("labelRequired"))
       return
     }
-    if (form.kind === "configDir" && !isAbsolutePath(form.configDir)) {
+    if (draft.kind === "configDir" && !isAbsolutePath(draft.configDir)) {
       setFormError(t("configDirRequired"))
       return
     }
 
-    const payload: ClaudeProfileUpsert = {
-      id,
-      label,
-      kind: form.kind,
-    }
-    if (form.kind === "configDir") {
-      payload.configDir = form.configDir.trim()
+    const payload: ClaudeProfileUpsert = { id, label, kind: draft.kind }
+    if (draft.kind === "configDir") {
+      payload.configDir = draft.configDir.trim()
     } else {
-      payload.baseUrl = form.baseUrl.trim() || null
-      payload.model = form.model.trim() || null
-      const token = form.authToken.trim()
+      payload.baseUrl = draft.baseUrl.trim() || null
+      payload.model = draft.model.trim() || null
+      const token = draft.authToken.trim()
       if (token) payload.authToken = token
     }
 
@@ -216,14 +294,15 @@ export function ClaudeProfileCatalog({
         const head = prev[0]?.id === FOLLOW_DEFAULT_CLAUDE_PROFILE_ID ? 1 : 0
         return [...prev.slice(0, head), saved, ...prev.slice(head)]
       })
+      setDrafts((prev) => ({ ...prev, [saved.id]: draftFromProfile(saved) }))
+      setSelectedId(saved.id)
       toast.success(t("saveSuccess"))
-      setEditor(null)
     } catch (error: unknown) {
       setFormError(toErrorMessage(error) || t("saveFailed"))
     } finally {
       setSaving(false)
     }
-  }, [form, t])
+  }, [drafts, selectedId, t])
 
   const handleDelete = useCallback(async () => {
     if (!deleteTarget) return
@@ -232,12 +311,16 @@ export function ClaudeProfileCatalog({
       const id = deleteTarget.id
       await claudeProfileDelete(id)
       setProfiles((prev) => prev.filter((item) => item.id !== id))
+      setDrafts((prev) => {
+        const next = { ...prev }
+        delete next[id]
+        return next
+      })
+      setSelectedId(FOLLOW_DEFAULT_CLAUDE_PROFILE_ID)
       toast.success(t("deleteSuccess"))
       setDeleteTarget(null)
     } catch (error: unknown) {
-      toast.error(t("deleteFailed"), {
-        description: toErrorMessage(error),
-      })
+      toast.error(t("deleteFailed"), { description: toErrorMessage(error) })
     } finally {
       setDeleting(false)
     }
@@ -260,23 +343,13 @@ export function ClaudeProfileCatalog({
     [onSetAgentDefault, t]
   )
 
-  const editing = editor !== null && editor !== "create"
-  const currentDefault =
-    defaultProfileId.trim() || FOLLOW_DEFAULT_CLAUDE_PROFILE_ID
-
   return (
     <div className="space-y-2">
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <label className="text-xs font-medium">{t("sectionTitle")}</label>
-          <p className="mt-1 text-[11px] text-muted-foreground">
-            {t("sectionDescription")}
-          </p>
-        </div>
-        <Button type="button" variant="outline" size="sm" onClick={openCreate}>
-          <Plus className="h-3.5 w-3.5" />
-          {t("new")}
-        </Button>
+      <div className="min-w-0">
+        <label className="text-xs font-medium">{t("sectionTitle")}</label>
+        <p className="mt-1 text-[11px] text-muted-foreground">
+          {t("sectionDescription")}
+        </p>
       </div>
 
       {loading ? (
@@ -285,243 +358,263 @@ export function ClaudeProfileCatalog({
           {t("loading")}
         </div>
       ) : (
-        <ul className="divide-y rounded-md border bg-background/50">
-          {profiles.map((profile) => {
-            const isFollowDefault =
-              profile.id === FOLLOW_DEFAULT_CLAUDE_PROFILE_ID
-            const isDefault = profile.id === currentDefault
-            return (
-              <li
-                key={profile.id}
-                className="flex items-start justify-between gap-2 px-3 py-2"
-              >
-                <div className="min-w-0 space-y-1">
-                  <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-                    <span className="truncate text-sm font-medium">
-                      {isFollowDefault ? t("followDefault") : profile.label}
-                    </span>
-                    <Badge variant="outline">
-                      {kindLabel(profile.kind, t)}
-                    </Badge>
-                    {isDefault ? (
-                      <Badge variant="secondary">{t("currentDefault")}</Badge>
-                    ) : null}
-                  </div>
-                  {rowDetail(profile) ? (
-                    <p className="truncate text-[11px] text-muted-foreground">
-                      {rowDetail(profile)}
-                    </p>
+        <div className="rounded-md border bg-background/50">
+          {/* Profiles are tabs across the panel, the way an editor switches
+              between User / Workspace settings — the fields below belong to
+              whichever tab is active. No modal: a profile is a place you go,
+              not a form you summon. */}
+          <div
+            role="tablist"
+            aria-label={t("sectionTitle")}
+            className="flex items-center gap-1 overflow-x-auto overflow-y-hidden border-b px-1.5 py-1.5 scrollbar-thin"
+          >
+            {tabs.map((tab) => {
+              const active = tab.id === selectedId
+              const draft = drafts[tab.id]
+              const unsaved = draft
+                ? isDirty(draft, profileById.get(tab.id))
+                : false
+              return (
+                <button
+                  key={tab.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  onClick={() => {
+                    setFormError(null)
+                    setSelectedId(tab.id)
+                  }}
+                  className={cn(
+                    "flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-xs transition-colors",
+                    active
+                      ? "bg-muted font-medium text-foreground"
+                      : "text-muted-foreground hover:bg-muted/60"
+                  )}
+                >
+                  <span className="max-w-[10rem] truncate">{tab.label}</span>
+                  {tab.id === currentDefault ? (
+                    <Star className="h-3 w-3 fill-current opacity-70" />
                   ) : null}
-                </div>
-                <div className="flex shrink-0 items-center gap-1">
-                  {!isDefault ? (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="xs"
-                      disabled={settingDefaultId === profile.id}
-                      onClick={() => {
-                        void handleSetDefault(profile.id)
-                      }}
-                      title={t("setAsDefault")}
-                    >
-                      {settingDefaultId === profile.id ? (
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                      ) : (
-                        <Star className="h-3.5 w-3.5" />
-                      )}
-                      {t("setAsDefault")}
-                    </Button>
+                  {unsaved ? (
+                    <span
+                      className="h-1.5 w-1.5 rounded-full bg-primary"
+                      title={t("unsaved")}
+                      aria-label={t("unsaved")}
+                    />
                   ) : null}
-                  {!isFollowDefault ? (
-                    <>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon-xs"
-                        onClick={() => openEdit(profile)}
-                        title={t("edit")}
-                        aria-label={t("edit")}
-                      >
-                        <Pencil className="h-3.5 w-3.5" />
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon-xs"
-                        onClick={() => setDeleteTarget(profile)}
-                        title={t("delete")}
-                        aria-label={t("delete")}
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </Button>
-                    </>
-                  ) : null}
-                </div>
-              </li>
-            )
-          })}
-        </ul>
-      )}
+                </button>
+              )
+            })}
+            <Button
+              type="button"
+              size="icon-xs"
+              variant="ghost"
+              className="shrink-0"
+              onClick={addProfile}
+              title={t("addProfile")}
+              aria-label={t("addProfile")}
+            >
+              <Plus className="h-3.5 w-3.5" />
+            </Button>
+          </div>
 
-      <Dialog
-        open={editor !== null}
-        onOpenChange={(open) => {
-          if (!open) closeEditor()
-        }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>
-              {editing ? t("editTitle") : t("newTitle")}
-            </DialogTitle>
-          </DialogHeader>
-          <div className="space-y-3">
-            <div className="space-y-1.5">
-              <label
-                htmlFor="claude-profile-id"
-                className="text-[11px] text-muted-foreground"
-              >
-                {t("fieldId")}
-              </label>
-              <Input
-                id="claude-profile-id"
-                value={form.id}
-                readOnly={editing}
-                onChange={(event) =>
-                  setForm((prev) => ({ ...prev, id: event.target.value }))
-                }
-                placeholder="api"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <label
-                htmlFor="claude-profile-label"
-                className="text-[11px] text-muted-foreground"
-              >
-                {t("fieldLabel")}
-              </label>
-              <Input
-                id="claude-profile-label"
-                value={form.label}
-                onChange={(event) =>
-                  setForm((prev) => ({ ...prev, label: event.target.value }))
-                }
-              />
-            </div>
-            <div className="space-y-1.5">
-              <label className="text-[11px] text-muted-foreground">
-                {t("fieldKind")}
-              </label>
-              <Select
-                value={form.kind}
-                onValueChange={(value) => {
-                  if (value === "configDir" || value === "managed") {
-                    setForm((prev) => ({ ...prev, kind: value }))
-                  }
-                }}
-              >
-                <SelectTrigger className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent align="start">
-                  <SelectItem value="configDir">
-                    {t("kindConfigDir")}
-                  </SelectItem>
-                  <SelectItem value="managed">{t("kindManaged")}</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            {form.kind === "configDir" ? (
-              <div className="space-y-1.5">
-                <label className="text-[11px] text-muted-foreground">
-                  {t("fieldConfigDir")}
-                </label>
-                <Input
-                  value={form.configDir}
-                  onChange={(event) =>
-                    setForm((prev) => ({
-                      ...prev,
-                      configDir: event.target.value,
-                    }))
-                  }
-                  placeholder="/home/user/.claude-work"
-                />
-              </div>
-            ) : (
+          <div className="space-y-3 p-3">
+            {isFollowDefaultTab ? (
+              <p className="text-[11px] text-muted-foreground">
+                {t("followDefaultBody")}
+              </p>
+            ) : selectedDraft ? (
               <>
                 <div className="space-y-1.5">
-                  <label className="text-[11px] text-muted-foreground">
-                    {t("fieldBaseUrl")}
+                  <label
+                    htmlFor="claude-profile-label"
+                    className="text-[11px] text-muted-foreground"
+                  >
+                    {t("fieldLabel")}
                   </label>
                   <Input
-                    value={form.baseUrl}
+                    id="claude-profile-label"
+                    value={selectedDraft.label}
                     onChange={(event) =>
-                      setForm((prev) => ({
-                        ...prev,
-                        baseUrl: event.target.value,
-                      }))
+                      patchDraft({ label: event.target.value })
                     }
-                    placeholder="https://api.example.com"
                   />
                 </div>
+
+                <div className="space-y-1.5">
+                  <label
+                    htmlFor="claude-profile-id"
+                    className="text-[11px] text-muted-foreground"
+                  >
+                    {t("fieldId")}
+                  </label>
+                  <Input
+                    id="claude-profile-id"
+                    value={selectedDraft.id}
+                    readOnly={!selectedDraft.isNew}
+                    onChange={(event) => patchDraft({ id: event.target.value })}
+                  />
+                  {/* The id is not decoration: it is what an agent passes to
+                      `create_work_task(profile: …)`. */}
+                  <p className="text-[10px] text-muted-foreground">
+                    {t("idHint")}
+                  </p>
+                </div>
+
                 <div className="space-y-1.5">
                   <label className="text-[11px] text-muted-foreground">
-                    {t("fieldAuthToken")}
+                    {t("fieldKind")}
                   </label>
-                  <Input
-                    type="password"
-                    value={form.authToken}
-                    onChange={(event) =>
-                      setForm((prev) => ({
-                        ...prev,
-                        authToken: event.target.value,
-                      }))
-                    }
-                    placeholder={t("tokenKeepPlaceholder")}
-                    autoComplete="off"
-                  />
+                  <Select
+                    value={selectedDraft.kind}
+                    onValueChange={(value) => {
+                      if (value === "configDir" || value === "managed") {
+                        patchDraft({ kind: value })
+                      }
+                    }}
+                  >
+                    <SelectTrigger className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent align="start">
+                      <SelectItem value="configDir">
+                        {t("kindConfigDir")}
+                      </SelectItem>
+                      <SelectItem value="managed">
+                        {t("kindManaged")}
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
-                <div className="space-y-1.5">
-                  <label className="text-[11px] text-muted-foreground">
-                    {t("fieldModel")}
-                  </label>
-                  <Input
-                    value={form.model}
-                    onChange={(event) =>
-                      setForm((prev) => ({
-                        ...prev,
-                        model: event.target.value,
-                      }))
-                    }
-                  />
-                </div>
+
+                {selectedDraft.kind === "configDir" ? (
+                  <div className="space-y-1.5">
+                    <label className="text-[11px] text-muted-foreground">
+                      {t("fieldConfigDir")}
+                    </label>
+                    <Input
+                      value={selectedDraft.configDir}
+                      onChange={(event) =>
+                        patchDraft({ configDir: event.target.value })
+                      }
+                      placeholder="/home/user/.claude-work"
+                    />
+                  </div>
+                ) : (
+                  <>
+                    <div className="space-y-1.5">
+                      <label className="text-[11px] text-muted-foreground">
+                        {t("fieldBaseUrl")}
+                      </label>
+                      <Input
+                        value={selectedDraft.baseUrl}
+                        onChange={(event) =>
+                          patchDraft({ baseUrl: event.target.value })
+                        }
+                        placeholder="https://api.example.com"
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-[11px] text-muted-foreground">
+                        {t("fieldAuthToken")}
+                      </label>
+                      <Input
+                        type="password"
+                        value={selectedDraft.authToken}
+                        onChange={(event) =>
+                          patchDraft({ authToken: event.target.value })
+                        }
+                        placeholder={
+                          selectedProfile?.authTokenMasked?.trim()
+                            ? t("tokenKeepPlaceholder")
+                            : undefined
+                        }
+                        autoComplete="off"
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-[11px] text-muted-foreground">
+                        {t("fieldModel")}
+                      </label>
+                      <Input
+                        value={selectedDraft.model}
+                        onChange={(event) =>
+                          patchDraft({ model: event.target.value })
+                        }
+                      />
+                    </div>
+                  </>
+                )}
+
+                {formError ? (
+                  <p className="text-xs text-destructive">{formError}</p>
+                ) : null}
               </>
-            )}
-            {formError ? (
-              <p className="text-xs text-destructive">{formError}</p>
             ) : null}
+
+            <div className="flex flex-wrap items-center gap-1.5 border-t pt-2.5">
+              {selectedId === currentDefault ? (
+                <Badge variant="secondary">{t("currentDefault")}</Badge>
+              ) : (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="xs"
+                  disabled={
+                    settingDefaultId === selectedId ||
+                    (selectedDraft?.isNew ?? false)
+                  }
+                  onClick={() => void handleSetDefault(selectedId)}
+                >
+                  {settingDefaultId === selectedId ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Star className="h-3.5 w-3.5" />
+                  )}
+                  {t("setAsDefault")}
+                </Button>
+              )}
+              <div className="flex-1" />
+              {!isFollowDefaultTab && selectedDraft?.isNew ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="xs"
+                  onClick={discardNew}
+                  disabled={saving}
+                >
+                  {tActions("cancel")}
+                </Button>
+              ) : null}
+              {!isFollowDefaultTab && selectedProfile ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon-xs"
+                  onClick={() => setDeleteTarget(selectedProfile)}
+                  title={t("delete")}
+                  aria-label={t("delete")}
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </Button>
+              ) : null}
+              {!isFollowDefaultTab ? (
+                <Button
+                  type="button"
+                  size="xs"
+                  onClick={() => void handleSave()}
+                  disabled={saving || !dirty}
+                >
+                  {saving ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : null}
+                  {t("save")}
+                </Button>
+              ) : null}
+            </div>
           </div>
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={closeEditor}
-              disabled={saving}
-            >
-              {tActions("cancel")}
-            </Button>
-            <Button
-              type="button"
-              onClick={() => void handleSave()}
-              disabled={saving}
-            >
-              {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
-              {t("save")}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        </div>
+      )}
 
       <AlertDialog
         open={deleteTarget !== null}

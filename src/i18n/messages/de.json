@@ -1162,7 +1162,12 @@
       "saveSuccess": "Startprofil gespeichert",
       "saveFailed": "Startprofil konnte nicht gespeichert werden",
       "deleteSuccess": "Startprofil gelöscht",
-      "deleteFailed": "Startprofil konnte nicht gelöscht werden"
+      "deleteFailed": "Startprofil konnte nicht gelöscht werden",
+      "addProfile": "Profil hinzufügen",
+      "unsaved": "Ungespeicherte Änderungen",
+      "idHint": "Agents verweisen über diese ID auf das Profil (Parameter profile von create_work_task). Nach dem Speichern nicht mehr änderbar.",
+      "followDefaultBody": "Keine Überschreibung: Die Sitzung nutzt dein eigenes ~/.claude-Verzeichnis samt dessen Anmeldung.",
+      "newProfileName": "Einstellungen {n}"
     },
     "dialogs": {
       "confirmDeleteProvider": "Provider {providerId} löschen?",

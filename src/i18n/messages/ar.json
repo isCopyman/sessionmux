@@ -1162,7 +1162,12 @@
       "saveSuccess": "تم حفظ ملف التشغيل",
       "saveFailed": "تعذر حفظ ملف التشغيل",
       "deleteSuccess": "تم حذف ملف التشغيل",
-      "deleteFailed": "تعذر حذف ملف التشغيل"
+      "deleteFailed": "تعذر حذف ملف التشغيل",
+      "addProfile": "إضافة ملف تعريف",
+      "unsaved": "تغييرات غير محفوظة",
+      "idHint": "يشير الوكلاء إلى ملف التعريف بهذا المعرّف (وسيط profile في create_work_task). لا يمكن تغييره بعد الحفظ.",
+      "followDefaultBody": "دون أي تجاوز: تستخدم الجلسة مجلد ~/.claude الخاص بك وحالة تسجيل الدخول فيه.",
+      "newProfileName": "الإعدادات {n}"
     },
     "dialogs": {
       "confirmDeleteProvider": "حذف المزود {providerId}؟",

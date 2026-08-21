@@ -1162,7 +1162,12 @@
       "saveSuccess": "Perfil de inicio guardado",
       "saveFailed": "No se pudo guardar el perfil de inicio",
       "deleteSuccess": "Perfil de inicio eliminado",
-      "deleteFailed": "No se pudo eliminar el perfil de inicio"
+      "deleteFailed": "No se pudo eliminar el perfil de inicio",
+      "addProfile": "Añadir perfil",
+      "unsaved": "Cambios sin guardar",
+      "idHint": "Los agentes usan este ID para referirse al perfil (parámetro profile de create_work_task). No se puede cambiar tras guardar.",
+      "followDefaultBody": "Sin anulación: la sesión usa tu propio directorio ~/.claude y la sesión iniciada en él.",
+      "newProfileName": "Ajustes {n}"
     },
     "dialogs": {
       "confirmDeleteProvider": "¿Eliminar proveedor {providerId}?",

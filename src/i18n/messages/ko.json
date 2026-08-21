@@ -1162,7 +1162,12 @@
       "saveSuccess": "실행 프로필이 저장되었습니다",
       "saveFailed": "실행 프로필을 저장하지 못했습니다",
       "deleteSuccess": "실행 프로필이 삭제되었습니다",
-      "deleteFailed": "실행 프로필을 삭제하지 못했습니다"
+      "deleteFailed": "실행 프로필을 삭제하지 못했습니다",
+      "addProfile": "프로필 추가",
+      "unsaved": "저장되지 않은 변경 사항",
+      "idHint": "에이전트는 이 ID로 프로필을 참조합니다(create_work_task의 profile). 저장 후에는 변경할 수 없습니다.",
+      "followDefaultBody": "재정의 없음: 세션이 사용자의 ~/.claude 디렉터리와 그 로그인 상태를 그대로 사용합니다.",
+      "newProfileName": "설정 {n}"
     },
     "dialogs": {
       "confirmDeleteProvider": "Provider {providerId}를 삭제하시겠습니까?",

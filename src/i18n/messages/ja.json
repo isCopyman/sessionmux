@@ -1162,7 +1162,12 @@
       "saveSuccess": "起動プロファイルを保存しました",
       "saveFailed": "起動プロファイルを保存できませんでした",
       "deleteSuccess": "起動プロファイルを削除しました",
-      "deleteFailed": "起動プロファイルを削除できませんでした"
+      "deleteFailed": "起動プロファイルを削除できませんでした",
+      "addProfile": "プロファイルを追加",
+      "unsaved": "未保存の変更があります",
+      "idHint": "エージェントはこの ID でプロファイルを参照します（create_work_task の profile）。保存後は変更できません。",
+      "followDefaultBody": "上書きなし: セッションはあなたの ~/.claude ディレクトリとそのログイン状態をそのまま使います。",
+      "newProfileName": "設定 {n}"
     },
     "dialogs": {
       "confirmDeleteProvider": "Provider {providerId} を削除しますか？",

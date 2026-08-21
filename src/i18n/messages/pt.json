@@ -1162,7 +1162,12 @@
       "saveSuccess": "Perfil de inicialização salvo",
       "saveFailed": "Não foi possível salvar o perfil de inicialização",
       "deleteSuccess": "Perfil de inicialização excluído",
-      "deleteFailed": "Não foi possível excluir o perfil de inicialização"
+      "deleteFailed": "Não foi possível excluir o perfil de inicialização",
+      "addProfile": "Adicionar perfil",
+      "unsaved": "Alterações não salvas",
+      "idHint": "Os agentes referenciam este perfil por este ID (parâmetro profile de create_work_task). Não pode ser alterado após salvar.",
+      "followDefaultBody": "Sem substituição: a sessão usa o seu próprio diretório ~/.claude e o login dele.",
+      "newProfileName": "Configurações {n}"
     },
     "dialogs": {
       "confirmDeleteProvider": "Excluir o provedor {providerId}?",

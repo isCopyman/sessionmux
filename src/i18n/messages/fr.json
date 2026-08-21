@@ -1162,7 +1162,12 @@
       "saveSuccess": "Profil de lancement enregistré",
       "saveFailed": "Impossible d’enregistrer le profil de lancement",
       "deleteSuccess": "Profil de lancement supprimé",
-      "deleteFailed": "Impossible de supprimer le profil de lancement"
+      "deleteFailed": "Impossible de supprimer le profil de lancement",
+      "addProfile": "Ajouter un profil",
+      "unsaved": "Modifications non enregistrées",
+      "idHint": "Les agents désignent ce profil par cet identifiant (paramètre profile de create_work_task). Non modifiable après enregistrement.",
+      "followDefaultBody": "Aucune substitution : la session utilise votre propre dossier ~/.claude et sa session connectée.",
+      "newProfileName": "Paramètres {n}"
     },
     "dialogs": {
       "confirmDeleteProvider": "Supprimer le provider {providerId} ?",

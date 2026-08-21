@@ -1162,7 +1162,12 @@
       "saveSuccess": "Launch profile saved",
       "saveFailed": "Could not save launch profile",
       "deleteSuccess": "Launch profile deleted",
-      "deleteFailed": "Could not delete launch profile"
+      "deleteFailed": "Could not delete launch profile",
+      "addProfile": "Add profile",
+      "unsaved": "Unsaved changes",
+      "idHint": "Agents reference this profile by this ID (create_work_task profile). It cannot be changed after saving.",
+      "followDefaultBody": "No override: the session launches against your own ~/.claude directory and whatever it is signed in to.",
+      "newProfileName": "Settings {n}"
     },
     "dialogs": {
       "confirmDeleteProvider": "Delete Provider {providerId}?",

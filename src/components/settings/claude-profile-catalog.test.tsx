@@ -67,6 +67,11 @@ function renderCatalog(
   )
 }
 
+/** Wait for the first list to settle: the tab strip replaces the spinner. */
+function addProfileButton() {
+  return screen.findByRole("button", { name: "Add profile" })
+}
+
 describe("isValidClaudeProfileId", () => {
   it("rejects illegal values and the reserved id", () => {
     expect(isValidClaudeProfileId("work")).toBe(true)
@@ -94,18 +99,30 @@ describe("ClaudeProfileCatalog", () => {
     api.claudeProfileDelete.mockResolvedValue(undefined)
   })
 
+  // Adding a profile must not stop to ask for a name or an id first — the
+  // panel names it `Settings 2` and lets the user type over that.
+  it("names a new profile for you and selects its tab", async () => {
+    const user = userEvent.setup()
+    renderCatalog()
+    await user.click(await addProfileButton())
+
+    expect(screen.getByRole("tab", { name: /Settings 2/ })).toHaveAttribute(
+      "aria-selected",
+      "true"
+    )
+    expect(await screen.findByLabelText("Name")).toHaveValue("Settings 2")
+    expect(screen.getByLabelText("ID")).toHaveValue("settings-2")
+  })
+
   it("rejects an illegal id and the reserved follow-default id", async () => {
     const user = userEvent.setup()
     renderCatalog()
-    await screen.findByRole("button", { name: "New" })
+    await user.click(await addProfileButton())
 
-    await user.click(screen.getByRole("button", { name: "New" }))
     const idInput = await screen.findByLabelText("ID")
-    const nameInput = screen.getByLabelText("Name")
     const save = screen.getByRole("button", { name: "Save" })
 
     fireEvent.change(idInput, { target: { value: "Bad Id" } })
-    fireEvent.change(nameInput, { target: { value: "relay" } })
     fireEvent.click(save)
     expect(await screen.findByText(/ID must match/)).toBeInTheDocument()
     expect(api.claudeProfileUpsert).not.toHaveBeenCalled()
@@ -123,9 +140,8 @@ describe("ClaudeProfileCatalog", () => {
   it("optimistically inserts a saved profile without waiting for another list", async () => {
     const user = userEvent.setup()
     renderCatalog()
-    await screen.findByRole("button", { name: "New" })
+    await user.click(await addProfileButton())
 
-    await user.click(screen.getByRole("button", { name: "New" }))
     fireEvent.change(await screen.findByLabelText("ID"), {
       target: { value: "api" },
     })
@@ -135,29 +151,48 @@ describe("ClaudeProfileCatalog", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save" }))
 
     await waitFor(() => expect(api.claudeProfileUpsert).toHaveBeenCalled())
-    expect(await screen.findByText("中转")).toBeInTheDocument()
+    expect(await screen.findByRole("tab", { name: "中转" })).toBeInTheDocument()
     expect(api.claudeProfileList).toHaveBeenCalledTimes(1)
   })
 
-  it("does not offer edit or delete on follow-default", async () => {
+  it("offers no editing controls while Follow default is the active tab", async () => {
     renderCatalog()
-    await screen.findByRole("button", { name: "New" })
-    expect(screen.queryByRole("button", { name: "Edit" })).toBeNull()
+    await addProfileButton()
+    expect(screen.queryByLabelText("Name")).toBeNull()
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull()
     expect(screen.queryByRole("button", { name: "Delete" })).toBeNull()
   })
 
-  it("removes a deleted profile from the list after confirm", async () => {
+  it("keeps an edit buffer per tab while switching between them", async () => {
     api.claudeProfileList.mockResolvedValue([FOLLOW, RELAY])
     const user = userEvent.setup()
     renderCatalog()
-    expect(await screen.findByText("中转")).toBeInTheDocument()
+    await user.click(await screen.findByRole("tab", { name: "中转" }))
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "renamed" },
+    })
+    // The tab renames live, and carries an unsaved marker.
+    expect(screen.getByRole("tab", { name: /renamed/ })).toBeInTheDocument()
+    // Leave and come back: an unsaved edit is not a reason to lose typing.
+    await user.click(screen.getByRole("tab", { name: "Follow default" }))
+    await user.click(screen.getByRole("tab", { name: /renamed/ }))
+    expect(screen.getByLabelText("Name")).toHaveValue("renamed")
+  })
 
+  it("removes a deleted profile from the tab strip after confirm", async () => {
+    api.claudeProfileList.mockResolvedValue([FOLLOW, RELAY])
+    const user = userEvent.setup()
+    renderCatalog()
+
+    await user.click(await screen.findByRole("tab", { name: "中转" }))
     await user.click(screen.getByRole("button", { name: "Delete" }))
     await user.click(screen.getByRole("button", { name: "Confirm Delete" }))
 
     await waitFor(() =>
       expect(api.claudeProfileDelete).toHaveBeenCalledWith("api")
     )
-    await waitFor(() => expect(screen.queryByText("中转")).toBeNull())
+    await waitFor(() =>
+      expect(screen.queryByRole("tab", { name: "中转" })).toBeNull()
+    )
   })
 })
