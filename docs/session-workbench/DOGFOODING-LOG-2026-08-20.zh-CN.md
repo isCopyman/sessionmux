@@ -25,7 +25,7 @@
 | O5 | 徽章/Room 搜索/Ctrl+K 批次验收 | 记录 |
 | O6 | 门禁与 dev 共用 target 打架 | 已解决（target-gate 惯例） |
 | O7 | 协调者体验观察 | 记录 |
-| O8 | 5xx 打断回合无自动重试 | 排队（待立项） |
+| O8 | 5xx 打断回合无自动重试 | **审计完成·根因钉死**（RPC 失败被 `?` 升级成连接死亡；A0+B-lite 方案就绪待拍板，见 O8-TRANSIENT-RETRY-AUDIT 文档） |
 | O9 | Room @ 克隆幽灵会话 | **已修**（已激活） |
 | O10 | dev/release 双实例可见性 | 已定性（文档待写） |
 | O11 | Room 消息卡死芯片 | **已修**（已激活） |
@@ -152,6 +152,17 @@ tauri-build 复制 sidecar（binaries/codeg-mcp-*.exe）时 PermissionDenied—�
 10 分钟才被哨兵发现）。
 方向：对 5xx/临时性错误加有限次自动重试（指数退避）；或至少把"上次回合因临时
 错误中断"变成显式可恢复状态（一键续跑 + 计入待回复徽章）。
+审计结案（2026-08-21，grok 只读审计，报告 `O8-TRANSIENT-RETRY-AUDIT.zh-CN.md`）：
+根因不是"缺一套重试"，而是 **`session/prompt` 的 JSON-RPC 失败被
+connection.rs:8076 的 `?` 升级成整条连接死亡**（Claude 自带重试/AIR/Codex
+willRetry 三套通道都健在，唯独这条裸奔）——503 → 杀连接 → 行 Cancelled →
+队列无泵可用，正是"闲置十分钟"的机理。方案分级已备好：**A0**（RPC 失败改
+非终端回合失败+连接存活）+ **B-lite**（`turn_failed_transient` code + Retry
+按钮，不动状态枚举）= 建议的一刀；**A1** 自动重试默认不做（agent 侧可能已
+持久化 user 消息，静默重发=双份 prompt）；**B-full** 新 ConversationStatus
+不做（跨状态机+migration）。零内容窗口判定用现成 `TurnOutputProbe`。
+两处待拍板：① adapter 在 RPC 失败后是否仍可 prompt（建议按 agent 门控或
+二次失败再拆）；② A1 是否接受双份消息风险。动回合状态机，等用户醒后过目再施工。
 
 ### O9.（严重）Room @ 投递克隆幽灵会话 + session.stop 管不到
 
