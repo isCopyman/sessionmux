@@ -115,6 +115,7 @@ import {
 } from "@/components/collections/collection-tree-dnd"
 
 import { useImeGuard } from "@/hooks/use-ime-guard"
+import { useIsMac } from "@/hooks/use-is-mac"
 import { useSidebarMultiSelect } from "@/hooks/use-sidebar-multi-select"
 import {
   assignConversationsToCollection,
@@ -317,6 +318,7 @@ export const CollectionTree = forwardRef<
   const tRoom = useTranslations("Room")
   const tWorkbench = useTranslations("Folder.workbench")
   const ime = useImeGuard()
+  const isMac = useIsMac()
   const items = useCollectionStore((state) => state.items)
   const hydrated = useCollectionStore((state) => state.hydrated)
   const loading = useCollectionStore((state) => state.loading)
@@ -1537,6 +1539,31 @@ export const CollectionTree = forwardRef<
     </>
   )
 
+  /**
+   * Multi-select has always been ctrl/shift+click and nothing else — an
+   * affordance nobody finds, which left the whole bulk bar (join room, move,
+   * archive) effectively undiscoverable. The row itself is a `<button>`, so a
+   * hover checkbox inside it would nest interactive elements and break
+   * hydration; the context menu is the one place that can both start a
+   * selection and *teach* the shortcut.
+   */
+  const renderSelectMenuItem = (item: SidebarSelectionItem) => (
+    <>
+      <ContextMenuItem
+        onSelect={() =>
+          multiSelect.apply(item, "toggle", visibleItemKeys, lookupVisibleItem)
+        }
+      >
+        <CheckSquare className="h-4 w-4" />
+        {tConversation("selectItem")}
+        <span className="ms-auto text-[10px] text-muted-foreground">
+          {tConversation("selectHint", { mod: isMac ? "⌘" : "Ctrl" })}
+        </span>
+      </ContextMenuItem>
+      <ContextMenuSeparator />
+    </>
+  )
+
   const renderSession = (
     conversation: DbConversationSummary,
     depth: number,
@@ -1706,6 +1733,7 @@ export const CollectionTree = forwardRef<
             bulkSelectionMenuItems
           ) : (
             <>
+              {renderSelectMenuItem({ kind: "session", session: conversation })}
               {onOpenSessionInSplit ? (
                 <>
                   <ContextMenuItem
@@ -1925,6 +1953,7 @@ export const CollectionTree = forwardRef<
             bulkSelectionMenuItems
           ) : (
             <>
+              {renderSelectMenuItem({ kind: "room", room })}
               <ContextMenuItem onSelect={() => void openRoom(room)}>
                 <Users className="h-4 w-4" />
                 {t("openRoom")}

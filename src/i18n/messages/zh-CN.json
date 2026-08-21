@@ -1919,7 +1919,9 @@
       "expandSubsessions": "展开子会话",
       "collapseSubsessions": "折叠子会话",
       "maximize": "最大化",
-      "restore": "还原"
+      "restore": "还原",
+      "selectItem": "选择",
+      "selectHint": "{mod}+点击"
     },
     "search": {
       "dialogTitle": "搜索",

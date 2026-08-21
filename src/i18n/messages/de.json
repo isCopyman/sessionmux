@@ -1919,7 +1919,9 @@
       "expandSubsessions": "Unterkonversationen einblenden",
       "collapseSubsessions": "Unterkonversationen ausblenden",
       "maximize": "Maximieren",
-      "restore": "Wiederherstellen"
+      "restore": "Wiederherstellen",
+      "selectItem": "Auswählen",
+      "selectHint": "{mod}+Klick"
     },
     "search": {
       "dialogTitle": "Suchen",

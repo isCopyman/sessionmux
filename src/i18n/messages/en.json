@@ -1919,7 +1919,9 @@
       "expandSubsessions": "Expand sub-conversations",
       "collapseSubsessions": "Collapse sub-conversations",
       "maximize": "Maximize",
-      "restore": "Restore"
+      "restore": "Restore",
+      "selectItem": "Select",
+      "selectHint": "{mod}+Click"
     },
     "search": {
       "dialogTitle": "Search",

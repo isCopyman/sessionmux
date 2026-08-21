@@ -1919,7 +1919,9 @@
       "expandSubsessions": "Expandir subconversas",
       "collapseSubsessions": "Recolher subconversas",
       "maximize": "Maximizar",
-      "restore": "Restaurar"
+      "restore": "Restaurar",
+      "selectItem": "Selecionar",
+      "selectHint": "{mod}+clique"
     },
     "search": {
       "dialogTitle": "Buscar",

@@ -1919,7 +1919,9 @@
       "expandSubsessions": "サブ会話を展開",
       "collapseSubsessions": "サブ会話を折りたたむ",
       "maximize": "最大化",
-      "restore": "元に戻す"
+      "restore": "元に戻す",
+      "selectItem": "選択",
+      "selectHint": "{mod}+クリック"
     },
     "search": {
       "dialogTitle": "検索",

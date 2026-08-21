@@ -1919,7 +1919,9 @@
       "expandSubsessions": "展開子會話",
       "collapseSubsessions": "摺疊子會話",
       "maximize": "最大化",
-      "restore": "還原"
+      "restore": "還原",
+      "selectItem": "選取",
+      "selectHint": "{mod}+點擊"
     },
     "search": {
       "dialogTitle": "搜尋",

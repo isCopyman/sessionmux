@@ -1919,7 +1919,9 @@
       "expandSubsessions": "توسيع المحادثات الفرعية",
       "collapseSubsessions": "طي المحادثات الفرعية",
       "maximize": "تكبير",
-      "restore": "استعادة"
+      "restore": "استعادة",
+      "selectItem": "تحديد",
+      "selectHint": "{mod}+نقر"
     },
     "search": {
       "dialogTitle": "بحث",

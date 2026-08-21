@@ -802,6 +802,22 @@ describe("CollectionTree", () => {
     )
   })
 
+  // ctrl/shift+click was the only way in, so the bulk bar below the tree was
+  // unreachable for anyone who did not already know the shortcut.
+  it("starts a multi-selection from the Session context menu", async () => {
+    renderTree(vi.fn(), { showSessions: true })
+
+    const looseNotes = await screen.findByText("Loose notes")
+    fireEvent.contextMenu(looseNotes)
+    const select = screen.getByRole("menuitem", { name: /Select/ })
+    // The item teaches the shortcut it replaces.
+    expect(select.textContent).toContain("Click")
+    await userEvent.click(select)
+
+    // One selected Session means the bulk bar is now on screen.
+    expect(await screen.findByText("1 selected")).toBeTruthy()
+  })
+
   it("accepts a Session Collection change without changing its Path", () => {
     expect(
       canDropSessionOnTarget(
