@@ -1068,34 +1068,61 @@ pub fn profile_destination_summary(info: &ClaudeProfileInfo) -> String {
     }
 }
 
-/// Reject unknown ids. Error text lists every currently valid id so the LLM
-/// can retry; never silently fall back to follow-default.
-pub fn require_known_claude_profile(data_dir: &Path, id: &str) -> Result<(), String> {
+fn format_profile_id_label_pairs<'a>(
+    profiles: impl IntoIterator<Item = &'a ClaudeProfileInfo>,
+) -> String {
+    profiles
+        .into_iter()
+        .map(|p| format!("{} ({})", p.id, p.label))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Resolve an MCP `profile` argument to a stored (or virtual) profile id.
+///
+/// Order: exact id, then case-insensitive trimmed label. Ambiguous labels
+/// and unknown values error with `id (label)` pairs so the caller can retry
+/// without a second `list_profiles`. Resolution at this boundary only — the
+/// stored id is unchanged.
+pub fn resolve_claude_profile_ref(data_dir: &Path, reference: &str) -> Result<String, String> {
     let list = claude_profile_list_core(data_dir).map_err(|e| e.to_string())?;
-    if list.iter().any(|p| p.id == id) {
-        return Ok(());
+    if let Some(profile) = list.iter().find(|profile| profile.id == reference) {
+        return Ok(profile.id.clone());
     }
-    let ids: Vec<&str> = list.iter().map(|p| p.id.as_str()).collect();
-    Err(format!(
-        "unknown Claude launch profile '{id}'. Valid ids: {}. \
-         Use list_profiles to inspect them; omitting `profile` uses the default. \
-         Invalid ids are rejected — they do not silently fall back.",
-        ids.join(", ")
-    ))
+    let needle = normalized_profile_label(reference);
+    let matches: Vec<&ClaudeProfileInfo> = list
+        .iter()
+        .filter(|profile| normalized_profile_label(&profile.label) == needle)
+        .collect();
+    match matches.as_slice() {
+        [one] => Ok(one.id.clone()),
+        [] => Err(format!(
+            "unknown Claude launch profile '{reference}'. Valid: {}. \
+             Use list_profiles to inspect them; omitting `profile` uses the default. \
+             Unknown or ambiguous values are rejected — they do not silently fall back.",
+            format_profile_id_label_pairs(&list)
+        )),
+        many => Err(format!(
+            "ambiguous Claude launch profile '{reference}'. Candidates: {}. \
+             Pass an id to disambiguate.",
+            format_profile_id_label_pairs(many.iter().copied())
+        )),
+    }
 }
 
 /// Build the `config_values` map that becomes the new session's
 /// `preferred_config_values`. Both omitted → empty map (today's bytes).
-/// Unknown `profile` → error, nothing inserted.
+/// Unknown `profile` → error, nothing inserted. A label is resolved to its
+/// id before insert; the stored key is always the id.
 pub fn launch_config_values(
     data_dir: &Path,
     profile: Option<&str>,
     model: Option<&str>,
 ) -> Result<BTreeMap<String, String>, String> {
     let mut values = BTreeMap::new();
-    if let Some(id) = profile {
-        require_known_claude_profile(data_dir, id)?;
-        values.insert(PREFERRED_PROFILE_CONFIG_KEY.to_string(), id.to_string());
+    if let Some(reference) = profile {
+        let id = resolve_claude_profile_ref(data_dir, reference)?;
+        values.insert(PREFERRED_PROFILE_CONFIG_KEY.to_string(), id);
     }
     if let Some(model) = model {
         values.insert(LAUNCH_MODEL_CONFIG_KEY.to_string(), model.to_string());
@@ -2641,7 +2668,53 @@ mod tests {
     }
 
     #[test]
-    fn unknown_profile_errors_with_valid_ids_and_writes_nothing() {
+    fn launch_profile_resolves_by_label_and_stores_the_id() {
+        let data = tempfile::tempdir().unwrap();
+        claude_profile_upsert_core(
+            data.path(),
+            ClaudeProfileUpsert {
+                id: "imported".into(),
+                label: "CPA".into(),
+                kind: ClaudeProfileKind::Managed,
+                config_dir: None,
+                base_url: Some("https://example.test/v1".into()),
+                auth_token: None,
+                model: None,
+                settings_json: None,
+                env: None,
+                expect_new: false,
+            },
+        )
+        .unwrap();
+
+        let by_id = launch_config_values(data.path(), Some("imported"), None).unwrap();
+        assert_eq!(
+            by_id.get(PREFERRED_PROFILE_CONFIG_KEY).map(String::as_str),
+            Some("imported")
+        );
+        let by_label = launch_config_values(data.path(), Some("cpa"), None).unwrap();
+        assert_eq!(
+            by_label
+                .get(PREFERRED_PROFILE_CONFIG_KEY)
+                .map(String::as_str),
+            Some("imported")
+        );
+        let trimmed = launch_config_values(data.path(), Some("  CPA  "), None).unwrap();
+        assert_eq!(
+            trimmed
+                .get(PREFERRED_PROFILE_CONFIG_KEY)
+                .map(String::as_str),
+            Some("imported")
+        );
+        let follow = launch_config_values(data.path(), Some("Follow default"), None).unwrap();
+        assert_eq!(
+            follow.get(PREFERRED_PROFILE_CONFIG_KEY).map(String::as_str),
+            Some("follow-default")
+        );
+    }
+
+    #[test]
+    fn unknown_profile_errors_with_id_and_label_pairs() {
         let data = tempfile::tempdir().unwrap();
         upsert_managed(
             data.path(),
@@ -2652,12 +2725,54 @@ mod tests {
         );
         let err = launch_config_values(data.path(), Some("nope"), Some("opus")).unwrap_err();
         assert!(err.contains("nope"), "{err}");
-        assert!(err.contains("follow-default"), "{err}");
+        assert!(err.contains("follow-default (Follow default)"), "{err}");
+        assert!(err.contains("api (Managed api)"), "{err}");
         assert!(!err.contains("official-direct"), "{err}");
-        assert!(err.contains("api"), "{err}");
         // Nothing to persist: the map is never returned.
         let values = launch_config_values(data.path(), None, None).unwrap();
         assert!(values.is_empty());
+    }
+
+    #[test]
+    fn launch_profile_ambiguous_label_against_virtual_lists_candidates() {
+        let data = tempfile::tempdir().unwrap();
+        claude_profile_upsert_core(
+            data.path(),
+            ClaudeProfileUpsert {
+                id: "imported".into(),
+                label: "Follow default".into(),
+                kind: ClaudeProfileKind::Managed,
+                config_dir: None,
+                base_url: None,
+                auth_token: None,
+                model: None,
+                settings_json: None,
+                env: None,
+                expect_new: false,
+            },
+        )
+        .unwrap();
+
+        let by_virtual_id =
+            launch_config_values(data.path(), Some("follow-default"), None).unwrap();
+        assert_eq!(
+            by_virtual_id
+                .get(PREFERRED_PROFILE_CONFIG_KEY)
+                .map(String::as_str),
+            Some("follow-default")
+        );
+        let by_stored_id = launch_config_values(data.path(), Some("imported"), None).unwrap();
+        assert_eq!(
+            by_stored_id
+                .get(PREFERRED_PROFILE_CONFIG_KEY)
+                .map(String::as_str),
+            Some("imported")
+        );
+
+        let err = launch_config_values(data.path(), Some("follow default"), None).unwrap_err();
+        assert!(err.contains("ambiguous"), "{err}");
+        assert!(err.contains("follow-default (Follow default)"), "{err}");
+        assert!(err.contains("imported (Follow default)"), "{err}");
     }
 
     #[test]

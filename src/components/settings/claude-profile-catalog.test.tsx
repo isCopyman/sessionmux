@@ -35,7 +35,11 @@ vi.mock("@monaco-editor/react", async () => {
 
 vi.mock("@/lib/monaco-local", () => ({}))
 
-import { ClaudeProfileCatalog } from "./claude-profile-catalog"
+import {
+  allocateClaudeProfileId,
+  ClaudeProfileCatalog,
+  deriveClaudeProfileIdFromLabel,
+} from "./claude-profile-catalog"
 import { AppearanceProvider } from "@/components/appearance-provider"
 import enMessages from "@/i18n/messages/en.json"
 import {
@@ -140,6 +144,22 @@ describe("isValidClaudeProfileId", () => {
     expect(isValidClaudeProfileId("has/slash")).toBe(false)
     expect(isValidClaudeProfileId("dot.json")).toBe(false)
     expect(isValidClaudeProfileId(FOLLOW_DEFAULT_CLAUDE_PROFILE_ID)).toBe(false)
+  })
+})
+
+describe("deriveClaudeProfileIdFromLabel", () => {
+  it("produces relay from Relay and nothing from 中转", () => {
+    expect(deriveClaudeProfileIdFromLabel("Relay")).toBe("relay")
+    expect(deriveClaudeProfileIdFromLabel("  CPA Prod  ")).toBe("cpa-prod")
+    expect(deriveClaudeProfileIdFromLabel("中转")).toBe("")
+  })
+
+  it("falls back to settings-n when the slug is empty or taken", () => {
+    expect(allocateClaudeProfileId("Relay", new Set())).toBe("relay")
+    expect(allocateClaudeProfileId("中转", new Set())).toBe("settings-2")
+    expect(allocateClaudeProfileId("Relay", new Set(["relay"]))).toBe(
+      "settings-2"
+    )
   })
 })
 
@@ -253,6 +273,30 @@ describe("ClaudeProfileCatalog", () => {
     )
     expect(await screen.findByLabelText("Name")).toHaveValue("Settings 2")
     expect(screen.getByLabelText("ID")).toHaveValue("settings-2")
+  })
+
+  it("derives a new profile's id from the name until the id is edited", async () => {
+    const user = userEvent.setup()
+    renderCatalog()
+    await addBlankProfile(user)
+
+    fireEvent.change(await screen.findByLabelText("Name"), {
+      target: { value: "Relay" },
+    })
+    expect(screen.getByLabelText("ID")).toHaveValue("relay")
+
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "中转" },
+    })
+    expect(screen.getByLabelText("ID")).toHaveValue("settings-2")
+
+    fireEvent.change(screen.getByLabelText("ID"), {
+      target: { value: "custom" },
+    })
+    fireEvent.change(screen.getByLabelText("Name"), {
+      target: { value: "Relay" },
+    })
+    expect(screen.getByLabelText("ID")).toHaveValue("custom")
   })
 
   it("rejects an illegal id and the reserved follow-default id", async () => {

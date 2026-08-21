@@ -406,7 +406,7 @@
         },
         "profile": {
           "type": "string",
-          "description": "Claude launch profile id from list_profiles (e.g. 'follow-default' or 'api'). A profile decides which Claude configuration (subscription login vs API endpoint) the launched session uses. Omit to keep today's default. Unknown ids are rejected with the list of valid ids — they do not silently fall back. Currently Claude Code only."
+          "description": "Claude launch profile id or name from list_profiles (e.g. 'follow-default' or 'CPA'). A profile decides which Claude configuration (subscription login vs API endpoint) the launched session uses. Omit to keep today's default. Unknown or ambiguous values are rejected with the list of valid id (name) pairs — they do not silently fall back. Currently Claude Code only."
         },
         "model": {
           "type": "string",
@@ -444,7 +444,7 @@
         },
         "profile": {
           "type": "string",
-          "description": "Claude launch profile id from list_profiles (e.g. 'follow-default' or 'api'). A profile decides which Claude configuration (subscription login vs API endpoint) the executing session launches with. Omit to keep today's default. Unknown ids are rejected with the list of valid ids — they do not silently fall back. Currently Claude Code only."
+          "description": "Claude launch profile id or name from list_profiles (e.g. 'follow-default' or 'CPA'). A profile decides which Claude configuration (subscription login vs API endpoint) the executing session launches with. Omit to keep today's default. Unknown or ambiguous values are rejected with the list of valid id (name) pairs — they do not silently fall back. Currently Claude Code only."
         },
         "model": {
           "type": "string",

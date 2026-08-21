@@ -74,6 +74,8 @@ interface FormState {
 /** A tab's edit buffer. `isNew` profiles exist only in the browser until saved. */
 interface Draft extends FormState {
   isNew: boolean
+  /** Once the user types in the ID field, the label no longer rewrites it. */
+  idCustom: boolean
 }
 
 /**
@@ -125,6 +127,7 @@ function draftFromProfile(profile: ClaudeProfileInfo): Draft {
       }
     ),
     isNew: false,
+    idCustom: false,
   }
 }
 
@@ -149,6 +152,29 @@ function nextFreeSuffix(taken: Set<string>): number {
     if (!taken.has(`settings-${n}`)) return n
   }
   return Date.now() % 1000
+}
+
+/** Lowercase, keep ASCII letters/digits, collapse other runs to `-`, trim `-`,
+ *  cap at 64. Empty when the label has no ASCII alphanumerics (`中转`). */
+export function deriveClaudeProfileIdFromLabel(label: string): string {
+  return label
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 64)
+}
+
+/** Id for a new draft: derived from the name when that slug is legal and
+ *  free, otherwise the existing `settings-<n>` scheme. */
+export function allocateClaudeProfileId(
+  label: string,
+  taken: Set<string>
+): string {
+  const derived = deriveClaudeProfileIdFromLabel(label)
+  if (derived && isValidClaudeProfileId(derived) && !taken.has(derived)) {
+    return derived
+  }
+  return `settings-${nextFreeSuffix(taken)}`
 }
 
 export function ClaudeProfileCatalog({
@@ -263,7 +289,7 @@ export function ClaudeProfileCatalog({
   const dirty = selectedDraft ? isDirty(selectedDraft, selectedProfile) : false
 
   const patchDraft = useCallback(
-    (patch: Partial<FormState>) => {
+    (patch: Partial<Draft>) => {
       setFormError(null)
       setDrafts((prev) => {
         const current = prev[selectedId]
@@ -272,6 +298,39 @@ export function ClaudeProfileCatalog({
       })
     },
     [selectedId]
+  )
+
+  const patchLabel = useCallback(
+    (label: string) => {
+      setFormError(null)
+      const current = drafts[selectedId]
+      if (!current) return
+      if (!(current.isNew && !current.idCustom)) {
+        patchDraft({ label })
+        return
+      }
+      const taken = new Set<string>()
+      for (const profile of profiles) taken.add(profile.id)
+      for (const [key, draft] of Object.entries(drafts)) {
+        if (key === selectedId) continue
+        taken.add(draft.id)
+      }
+      const nextId = allocateClaudeProfileId(label, taken)
+      setDrafts((prev) => {
+        const cur = prev[selectedId]
+        if (!cur) return prev
+        const updated = { ...cur, label, id: nextId }
+        if (nextId === selectedId) {
+          return { ...prev, [selectedId]: updated }
+        }
+        const rest = { ...prev }
+        delete rest[selectedId]
+        rest[nextId] = updated
+        return rest
+      })
+      if (nextId !== selectedId) setSelectedId(nextId)
+    },
+    [drafts, patchDraft, profiles, selectedId]
   )
 
   /**
@@ -283,15 +342,16 @@ export function ClaudeProfileCatalog({
     (source?: Draft, seedSettingsJson?: string) => {
       const taken = new Set([
         ...profiles.map((profile) => profile.id),
-        ...Object.keys(drafts),
+        ...Object.values(drafts).map((draft) => draft.id),
       ])
       const suffix = nextFreeSuffix(taken)
-      const id = `settings-${suffix}`
+      const label = t("newProfileName", { n: suffix })
+      const id = allocateClaudeProfileId(label, taken)
       setDrafts((prev) => ({
         ...prev,
         [id]: {
           id,
-          label: t("newProfileName", { n: suffix }),
+          label,
           kind: source?.kind ?? "managed",
           configDir: source?.configDir ?? "",
           // A copy carries the endpoint but never the secret: the API only
@@ -303,6 +363,7 @@ export function ClaudeProfileCatalog({
               ? stripCredentials(source.settingsJson)
               : "",
           isNew: true,
+          idCustom: false,
         },
       }))
       setFormError(null)
@@ -609,9 +670,7 @@ export function ClaudeProfileCatalog({
                   <Input
                     id="claude-profile-label"
                     value={selectedDraft.label}
-                    onChange={(event) =>
-                      patchDraft({ label: event.target.value })
-                    }
+                    onChange={(event) => patchLabel(event.target.value)}
                   />
                 </div>
 
@@ -626,7 +685,12 @@ export function ClaudeProfileCatalog({
                     id="claude-profile-id"
                     value={selectedDraft.id}
                     readOnly={!selectedDraft.isNew}
-                    onChange={(event) => patchDraft({ id: event.target.value })}
+                    onChange={(event) =>
+                      patchDraft({
+                        id: event.target.value,
+                        idCustom: true,
+                      })
+                    }
                   />
                   {/* The id is not decoration: it is what an agent passes to
                       `create_work_task(profile: …)`. */}
