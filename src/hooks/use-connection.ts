@@ -108,6 +108,10 @@ export interface UseConnectionReturn {
    *  current agent/model settings. Returns `true` if it actually restarted,
    *  `false` on a no-op (viewer / delegation child / no connection). */
   reapplyConfig: () => Promise<boolean>
+  /** Restart this owned connection with launch-time selector overrides. */
+  restartDraftWithConfigValues: (
+    preferredConfigValues: Record<string, string>
+  ) => Promise<boolean>
   /** Dismiss the stale banner for the current drift without restarting. */
   dismissConfigStale: () => void
   sendPrompt: (
@@ -313,6 +317,12 @@ export function useConnection(contextKey: string): UseConnectionReturn {
     [actions, contextKey]
   )
 
+  const restartDraftWithConfigValues = useCallback(
+    (preferredConfigValues: Record<string, string>) =>
+      actions.restartDraftWithConfigValues(contextKey, preferredConfigValues),
+    [actions, contextKey]
+  )
+
   const dismissConfigStale = useCallback(
     () => actions.dismissConfigStale(contextKey),
     [actions, contextKey]
@@ -352,6 +362,7 @@ export function useConnection(contextKey: string): UseConnectionReturn {
       connect,
       disconnect,
       reapplyConfig,
+      restartDraftWithConfigValues,
       dismissConfigStale,
       sendPrompt,
       setMode,
@@ -393,6 +404,7 @@ export function useConnection(contextKey: string): UseConnectionReturn {
       connect,
       disconnect,
       reapplyConfig,
+      restartDraftWithConfigValues,
       dismissConfigStale,
       sendPrompt,
       setMode,

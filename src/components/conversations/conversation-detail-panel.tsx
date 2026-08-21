@@ -77,7 +77,7 @@ import { AgentDiagnosticsDialog } from "@/components/settings/agent-diagnostics-
 import { useFeedbackEnabled } from "@/hooks/use-feedback-enabled"
 import { useSessionFeedback } from "@/hooks/use-session-feedback"
 import { AgentSelector } from "@/components/chat/agent-selector"
-import { applyPendingClaudeProfileAndRespawn } from "@/components/chat/apply-pending-claude-profile"
+import { persistPendingClaudeProfile } from "@/components/chat/apply-pending-claude-profile"
 import { ChatInput } from "@/components/chat/chat-input"
 import {
   WelcomeHero,
@@ -121,6 +121,8 @@ import {
   getPromptDraftDisplayText,
 } from "@/lib/prompt-draft"
 import {
+  CODEG_CLAUDE_PROFILE_CONFIG_KEY,
+  CODEG_CLAUDE_PROFILE_ENV_KEY,
   type AgentType,
   type ContentBlock,
   type ConversationStatus,
@@ -598,7 +600,14 @@ const ConversationTabView = memo(function ConversationTabView({
   // connect. Rather than firing a doomed (and racy) auto-connect whose only
   // outcome is a transient "not installed" toast, we skip the connect and
   // surface a persistent install prompt instead (see composerBlockedMessage).
-  const { agents: acpAgents } = useAcpAgents()
+  const { agents: acpAgents, fresh: acpAgentsFresh } = useAcpAgents()
+  const agentDefaultProfileId = useMemo((): string | null | undefined => {
+    if (selectedAgent !== "claude_code") return null
+    if (!acpAgentsFresh) return undefined
+    const info = acpAgents.find((a) => a.agent_type === selectedAgent)
+    const raw = info?.env?.[CODEG_CLAUDE_PROFILE_ENV_KEY]?.trim()
+    return raw || null
+  }, [acpAgents, acpAgentsFresh, selectedAgent])
   const selectedAgentNotInstalled = useMemo(() => {
     const info = acpAgents.find((a) => a.agent_type === selectedAgent)
     return (
@@ -688,12 +697,21 @@ const ConversationTabView = memo(function ConversationTabView({
       [tabId, groupId, workbenchId]
     ),
   })
-  const { status: connStatus, sessionId: connSessionId } = conn
-  const connConnect = conn.connect
-  const connDisconnect = conn.disconnect
-  const handlePendingClaudeProfileChange = useCallback((profileId: string) => {
-    pendingClaudeProfileRef.current = profileId
-  }, [])
+  const {
+    status: connStatus,
+    sessionId: connSessionId,
+    restartDraftWithConfigValues: connRestartDraftWithConfigValues,
+  } = conn
+  const handlePendingClaudeProfileChange = useCallback(
+    async (profileId: string) => {
+      const applied = await connRestartDraftWithConfigValues({
+        [CODEG_CLAUDE_PROFILE_CONFIG_KEY]: profileId,
+      })
+      if (applied) pendingClaudeProfileRef.current = profileId
+      return applied
+    },
+    [connRestartDraftWithConfigValues]
+  )
   const messageQueue = useMessageQueue(dbConversationId, {
     onPersistFailure: handleQueuePersistFailure,
   })
@@ -1250,26 +1268,16 @@ const ConversationTabView = memo(function ConversationTabView({
 
       void (async () => {
         const applyPendingProfile = async (conversationId: number) => {
-          // Write then respawn before the picker learns the new id
-          // (`setCreatedConversationId` below). Auto-connect already spawned
-          // without a conversation id; `connect()` no-ops on a live
-          // same-agent/cwd connection, so we disconnect first. Awaited
-          // before `lifecycleSend` so the first prompt cannot land on the
-          // unbound process.
-          await applyPendingClaudeProfileAndRespawn({
+          // The profile picker already restarted the scratch connection with
+          // this launch-time profile. Once the DB row exists, persist that
+          // applied choice before the first prompt so future resume/reconnect
+          // paths resolve the same profile without respawning a second time.
+          await persistPendingClaudeProfile({
             conversationId,
             pendingProfileId:
               selectedAgent === "claude_code"
                 ? pendingClaudeProfileRef.current
                 : null,
-            disconnect: connDisconnect,
-            connect: (id) =>
-              connConnect(
-                selectedAgent,
-                workingDirForConnection,
-                undefined,
-                id
-              ),
           })
           pendingClaudeProfileRef.current = null
         }
@@ -1359,6 +1367,10 @@ const ConversationTabView = memo(function ConversationTabView({
           })
         } catch (e) {
           console.error("[ConversationTabView] create conversation:", e)
+          // A row may have been minted before a launch-profile persistence
+          // failure. Do not let the next send treat that half-created row as a
+          // successfully bound conversation and bypass the pending profile.
+          dbConvIdRef.current = null
           // A failed create (chat OR normal) must fully restore the pre-send
           // state, not strand the user behind a blank panel:
           //   1. drop the optimistic turn (no ghost stuck in awaiting_persist),
@@ -1394,8 +1406,6 @@ const ConversationTabView = memo(function ConversationTabView({
       mqGetQueueLength,
       bindConversationTab,
       canAutoConnect,
-      connConnect,
-      connDisconnect,
       connectionReady,
       effectiveConversationId,
       folderId,
@@ -1413,7 +1423,6 @@ const ConversationTabView = memo(function ConversationTabView({
       tWelcome,
       tabId,
       upsertFolder,
-      workingDirForConnection,
     ]
   )
 
@@ -2190,6 +2199,7 @@ const ConversationTabView = memo(function ConversationTabView({
       draftStorageKey={draftStorageKey}
       sourceConversationId={dbConversationId}
       onPendingClaudeProfileChange={handlePendingClaudeProfileChange}
+      agentDefaultProfileId={agentDefaultProfileId}
       hideInput={isWelcomeMode || Boolean(acpLoadError)}
       composerBanner={acpLoadErrorBanner}
       feedbackList={
@@ -2323,6 +2333,7 @@ const ConversationTabView = memo(function ConversationTabView({
                 draftStorageKey={draftStorageKey}
                 sourceConversationId={dbConversationId}
                 onPendingClaudeProfileChange={handlePendingClaudeProfileChange}
+                agentDefaultProfileId={agentDefaultProfileId}
                 isActive={isActive}
                 showActiveFlow={showActiveFlow}
                 onAddFeedback={

@@ -76,6 +76,11 @@ pub struct AcpConnectParams {
     /// preferences override the agent-level template above.
     #[serde(default)]
     pub conversation_id: Option<i32>,
+    /// Await `SessionStarted` for a fresh scratch launch. Used by explicit
+    /// launch-environment changes that must not acknowledge a profile before
+    /// the replacement provider has accepted `session/new`.
+    #[serde(default)]
+    pub wait_until_ready: bool,
 }
 
 pub async fn acp_connect(
@@ -85,12 +90,22 @@ pub async fn acp_connect(
     let db = &state.db;
     let manager = &state.connection_manager;
 
+    // A profile picked in the composer travels on THIS request, not through a
+    // conversation row: a tab whose conversation does not exist yet still has to
+    // be able to relaunch on the profile the user just chose. Read before
+    // `resolve_connect_selector_prefs` consumes the map.
+    let explicit_claude_profile_id = params
+        .preferred_config_values
+        .as_ref()
+        .and_then(|values| values.get(crate::acp::connection::PREFERRED_PROFILE_CONFIG_KEY))
+        .cloned();
     let runtime_env = acp_commands::build_session_runtime_env(
         db,
         params.agent_type,
         params.session_id.as_deref(),
         &state.data_dir,
         params.conversation_id,
+        explicit_claude_profile_id.as_deref(),
     )
     .await
     .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
@@ -112,19 +127,33 @@ pub async fn acp_connect(
         .await;
 
     let emitter = state.emitter.clone();
-    let connection_id = manager
-        .spawn_agent(
-            params.agent_type,
-            params.working_dir,
-            params.session_id,
-            runtime_env,
-            "web".to_string(),
-            emitter,
-            preferred_mode_id,
-            preferred_config_values,
-        )
-        .await
-        .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    let connection_id = if params.wait_until_ready && params.session_id.is_none() {
+        manager
+            .spawn_agent_wait_ready(
+                params.agent_type,
+                params.working_dir,
+                runtime_env,
+                "web".to_string(),
+                emitter,
+                preferred_mode_id,
+                preferred_config_values,
+            )
+            .await
+    } else {
+        manager
+            .spawn_agent(
+                params.agent_type,
+                params.working_dir,
+                params.session_id,
+                runtime_env,
+                "web".to_string(),
+                emitter,
+                preferred_mode_id,
+                preferred_config_values,
+            )
+            .await
+    }
+    .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
     // Reconnecting to a conversation that already exists emits no
     // `ConversationLinked`, so without this the respawned connection would carry
     // no conversation id and every by-conversation lookup would miss it. See

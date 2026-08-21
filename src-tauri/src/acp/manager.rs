@@ -580,6 +580,39 @@ impl ConnectionManager {
             preferred_mode_id,
             preferred_config_values,
             None,
+            false,
+        )
+        .await
+    }
+
+    /// Spawn a fresh scratch Session and return only after the provider has
+    /// emitted `SessionStarted`. This is intentionally separate from the
+    /// ordinary fire-and-stream UI connect path: callers that are applying a
+    /// launch-time environment change must not report success while
+    /// `session/new` can still fail in the background.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn spawn_agent_wait_ready(
+        &self,
+        agent_type: AgentType,
+        working_dir: Option<String>,
+        runtime_env: BTreeMap<String, String>,
+        owner_window_label: String,
+        emitter: EventEmitter,
+        preferred_mode_id: Option<String>,
+        preferred_config_values: BTreeMap<String, String>,
+    ) -> Result<String, AcpError> {
+        self.spawn_agent_inner(
+            agent_type,
+            working_dir,
+            None,
+            false,
+            runtime_env,
+            owner_window_label,
+            emitter,
+            preferred_mode_id,
+            preferred_config_values,
+            None,
+            true,
         )
         .await
     }
@@ -623,6 +656,7 @@ impl ConnectionManager {
             None,
             BTreeMap::new(),
             Some((conversation_id, folder_id)),
+            false,
         )
         .await
     }
@@ -640,6 +674,7 @@ impl ConnectionManager {
         preferred_mode_id: Option<String>,
         preferred_config_values: BTreeMap<String, String>,
         initial_conversation_binding: Option<(i32, i32)>,
+        wait_until_ready: bool,
     ) -> Result<String, AcpError> {
         // Connection dedup: when resuming an agent session (session_id is
         // Some), look for a live AgentConnection that already represents
@@ -724,18 +759,31 @@ impl ConnectionManager {
         // next waiter), aborted (connection died), or the timeout fires.
         // Logged on every wait so production can audit real-world handshake
         // latencies and tune `CODEG_ACP_SPAWN_HANDSHAKE_TIMEOUT_SECS`.
-        if dedup_lock.is_some() {
+        if dedup_lock.is_some() || wait_until_ready {
             let timeout = self.spawn_handshake_timeout;
             let (outcome, elapsed) = wait_for_session_started(session_started_rx, timeout).await;
+            let wait_label = if wait_until_ready {
+                "spawn_wait"
+            } else {
+                "dedup_wait"
+            };
             tracing::info!(
-                "[ACP] dedup_wait connection_id={} session_id={} outcome={} \
+                "[ACP] {} connection_id={} session_id={} outcome={} \
                  elapsed_ms={} timeout_ms={}",
+                wait_label,
                 connection_id,
                 session_id_for_log.as_deref().unwrap_or(""),
                 outcome.as_str(),
                 elapsed.as_millis(),
                 timeout.as_millis(),
             );
+            if wait_until_ready && outcome != HandshakeWaitOutcome::Ready {
+                let _ = self.disconnect(&connection_id).await;
+                return Err(AcpError::protocol(format!(
+                    "fresh session did not become ready: {}",
+                    outcome.as_str()
+                )));
+            }
         }
         // session_started_rx (in the no-dedup branch) is dropped here. tx
         // staying inside SessionState gets dropped naturally when the

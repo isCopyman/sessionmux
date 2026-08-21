@@ -684,14 +684,29 @@ fn resolve_id_to_profile(
 
 /// Single source of truth for "which Claude profile does this spawn use".
 ///
-/// Order: conversation `__codeg_profile__` → agent `env_json`
-/// `CODEG_CLAUDE_PROFILE` → `follow-default`.
+/// Order: this launch's explicit `__codeg_profile__` → conversation
+/// `__codeg_profile__` → agent `env_json` `CODEG_CLAUDE_PROFILE` →
+/// `follow-default`.
+///
+/// The explicit tier exists because a profile is a property OF A LAUNCH, and
+/// until it was added the only channel for "use this profile" was a conversation
+/// row. A tab whose conversation does not exist yet therefore had nowhere to put
+/// the user's choice: selecting a profile could not relaunch, because the
+/// relaunch would just re-read the agent default and come back on the old
+/// profile. The composer worked around that by creating the row, writing the pin
+/// and only THEN reconnecting — at first send, so the picked profile silently
+/// did not apply until you sent something.
 pub async fn resolve_claude_profile(
     db: &AppDatabase,
     data_dir: &Path,
     conversation_id: Option<i32>,
     claude_agent_env_json: Option<&str>,
+    explicit_profile_id: Option<&str>,
 ) -> Result<ResolvedClaudeProfile, AppCommandError> {
+    if let Some(id) = trim_non_empty(explicit_profile_id) {
+        return resolve_id_to_profile(data_dir, &id);
+    }
+
     if let Some(cid) = conversation_id {
         let (_mode, values) = conversation_service::selector_prefs(&db.conn, cid)
             .await
@@ -761,11 +776,18 @@ pub async fn apply_claude_profile_env(
     data_dir: &Path,
     conversation_id: Option<i32>,
     claude_agent_env_json: Option<&str>,
+    explicit_profile_id: Option<&str>,
     runtime_env: &mut BTreeMap<String, String>,
 ) -> Result<(), AcpError> {
-    let resolved = resolve_claude_profile(db, data_dir, conversation_id, claude_agent_env_json)
-        .await
-        .map_err(|e| AcpError::protocol(e.to_string()))?;
+    let resolved = resolve_claude_profile(
+        db,
+        data_dir,
+        conversation_id,
+        claude_agent_env_json,
+        explicit_profile_id,
+    )
+    .await
+    .map_err(|e| AcpError::protocol(e.to_string()))?;
     if resolved.id == FOLLOW_DEFAULT_PROFILE_ID {
         return Ok(());
     }
@@ -1313,6 +1335,8 @@ pub async fn conversation_get_claude_profile_core(
         data_dir,
         Some(conversation_id),
         setting.as_ref().and_then(|m| m.env_json.as_deref()),
+        // Reading a binding is not a launch: there is no explicit choice.
+        None,
     )
     .await?;
     Ok(ConversationClaudeProfileResult {
@@ -2294,7 +2318,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn resolve_order_session_then_agent_then_follow_default() {
+    async fn resolve_order_explicit_then_session_then_agent_then_follow_default() {
         let db = fresh_in_memory_db().await;
         let data = tempfile::tempdir().unwrap();
         seed_claude_agent(&db, Some(r#"{"CODEG_CLAUDE_PROFILE":"agent-default"}"#)).await;
@@ -2305,12 +2329,15 @@ mod tests {
         fs::create_dir_all(&agent_dir).unwrap();
         let session_dir = data.path().join("session-claude");
         fs::create_dir_all(&session_dir).unwrap();
+        let explicit_dir = data.path().join("explicit-claude");
+        fs::create_dir_all(&explicit_dir).unwrap();
         upsert_config_dir(data.path(), "agent-default", &agent_dir);
         upsert_config_dir(data.path(), "session-bound", &session_dir);
+        upsert_config_dir(data.path(), "explicit-launch", &explicit_dir);
 
         let env_json = r#"{"CODEG_CLAUDE_PROFILE":"agent-default"}"#;
 
-        let resolved = resolve_claude_profile(&db, data.path(), None, Some(env_json))
+        let resolved = resolve_claude_profile(&db, data.path(), None, Some(env_json), None)
             .await
             .unwrap();
         assert_eq!(resolved.id, "agent-default");
@@ -2324,13 +2351,25 @@ mod tests {
         )
         .await
         .unwrap();
-        let resolved = resolve_claude_profile(&db, data.path(), Some(conv), Some(env_json))
+        let resolved = resolve_claude_profile(&db, data.path(), Some(conv), Some(env_json), None)
             .await
             .unwrap();
         assert_eq!(resolved.id, "session-bound");
         assert_eq!(resolved.config_dir.as_deref(), Some(session_dir.as_path()));
 
-        let resolved = resolve_claude_profile(&db, data.path(), None, None)
+        let resolved = resolve_claude_profile(
+            &db,
+            data.path(),
+            Some(conv),
+            Some(env_json),
+            Some("explicit-launch"),
+        )
+        .await
+        .unwrap();
+        assert_eq!(resolved.id, "explicit-launch");
+        assert_eq!(resolved.config_dir.as_deref(), Some(explicit_dir.as_path()));
+
+        let resolved = resolve_claude_profile(&db, data.path(), None, None, None)
             .await
             .unwrap();
         assert_eq!(resolved.id, FOLLOW_DEFAULT_PROFILE_ID);
@@ -2343,9 +2382,10 @@ mod tests {
         let db = fresh_in_memory_db().await;
         let data = tempfile::tempdir().unwrap();
         seed_claude_agent(&db, None).await;
-        let env = build_session_runtime_env(&db, AgentType::ClaudeCode, None, data.path(), None)
-            .await
-            .unwrap();
+        let env =
+            build_session_runtime_env(&db, AgentType::ClaudeCode, None, data.path(), None, None)
+                .await
+                .unwrap();
         assert!(
             !env.contains_key("CLAUDE_CONFIG_DIR"),
             "follow-default must not set CLAUDE_CONFIG_DIR: {env:?}"
@@ -2376,10 +2416,16 @@ mod tests {
         )
         .await
         .unwrap();
-        let env =
-            build_session_runtime_env(&db, AgentType::ClaudeCode, None, data.path(), Some(conv))
-                .await
-                .unwrap();
+        let env = build_session_runtime_env(
+            &db,
+            AgentType::ClaudeCode,
+            None,
+            data.path(),
+            Some(conv),
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(
             env.get("CLAUDE_CONFIG_DIR").map(String::as_str),
             Some(user_dir.to_string_lossy().as_ref())
@@ -2400,10 +2446,16 @@ mod tests {
         )
         .await
         .unwrap();
-        let env =
-            build_session_runtime_env(&db, AgentType::ClaudeCode, None, data.path(), Some(conv))
-                .await
-                .unwrap();
+        let env = build_session_runtime_env(
+            &db,
+            AgentType::ClaudeCode,
+            None,
+            data.path(),
+            Some(conv),
+            None,
+        )
+        .await
+        .unwrap();
         let expected = managed_settings_json_path(data.path(), "hosted");
         assert!(
             !env.contains_key("CLAUDE_CONFIG_DIR"),
@@ -2442,10 +2494,16 @@ mod tests {
         .await
         .unwrap();
 
-        let env =
-            build_session_runtime_env(&db, AgentType::ClaudeCode, None, &data_dir, Some(conv))
-                .await
-                .unwrap();
+        let env = build_session_runtime_env(
+            &db,
+            AgentType::ClaudeCode,
+            None,
+            &data_dir,
+            Some(conv),
+            None,
+        )
+        .await
+        .unwrap();
         let overlay = managed_settings_json_path(&data_dir, "hosted");
         let stored = env
             .get(CLAUDE_SETTINGS_OVERLAY_ENV_KEY)
@@ -2508,9 +2566,10 @@ mod tests {
         )
         .await
         .unwrap();
-        let env = build_session_runtime_env(&db, AgentType::Codex, None, data.path(), Some(conv))
-            .await
-            .unwrap();
+        let env =
+            build_session_runtime_env(&db, AgentType::Codex, None, data.path(), Some(conv), None)
+                .await
+                .unwrap();
         assert!(
             !env.contains_key("CLAUDE_CONFIG_DIR"),
             "Codex must not receive CLAUDE_CONFIG_DIR: {env:?}"
@@ -2547,10 +2606,16 @@ mod tests {
         )
         .await
         .unwrap();
-        let env =
-            build_session_runtime_env(&db, AgentType::ClaudeCode, None, data.path(), Some(conv))
-                .await
-                .unwrap();
+        let env = build_session_runtime_env(
+            &db,
+            AgentType::ClaudeCode,
+            None,
+            data.path(),
+            Some(conv),
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(
             env.get("CLAUDE_CONFIG_DIR").map(String::as_str),
             Some(explicit.to_string_lossy().as_ref())
@@ -3090,9 +3155,10 @@ mod tests {
         let data = tempfile::tempdir().unwrap();
         let (env_json, expected) = connection_and_misc_env_json();
         seed_claude_agent(&db, Some(&env_json)).await;
-        let env = build_session_runtime_env(&db, AgentType::ClaudeCode, None, data.path(), None)
-            .await
-            .unwrap();
+        let env =
+            build_session_runtime_env(&db, AgentType::ClaudeCode, None, data.path(), None, None)
+                .await
+                .unwrap();
         for key in OWNED_SAMPLE_KEYS.iter().chain(MISC_SAMPLE_KEYS) {
             assert_eq!(
                 env.get(*key),
@@ -3125,13 +3191,20 @@ mod tests {
         .await
         .unwrap();
 
-        let follow = build_session_runtime_env(&db, AgentType::ClaudeCode, None, data.path(), None)
-            .await
-            .unwrap();
-        let swept =
-            build_session_runtime_env(&db, AgentType::ClaudeCode, None, data.path(), Some(conv))
+        let follow =
+            build_session_runtime_env(&db, AgentType::ClaudeCode, None, data.path(), None, None)
                 .await
                 .unwrap();
+        let swept = build_session_runtime_env(
+            &db,
+            AgentType::ClaudeCode,
+            None,
+            data.path(),
+            Some(conv),
+            None,
+        )
+        .await
+        .unwrap();
 
         for key in OWNED_SAMPLE_KEYS {
             assert!(
@@ -3185,10 +3258,16 @@ mod tests {
         .await
         .unwrap();
 
-        let env =
-            build_session_runtime_env(&db, AgentType::ClaudeCode, None, data.path(), Some(conv))
-                .await
-                .unwrap();
+        let env = build_session_runtime_env(
+            &db,
+            AgentType::ClaudeCode,
+            None,
+            data.path(),
+            Some(conv),
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(
             env.get("ANTHROPIC_BASE_URL").map(String::as_str),
             Some(OFFICIAL_ANTHROPIC_BASE_URL)
@@ -3299,10 +3378,16 @@ mod tests {
         .await
         .unwrap();
 
-        let runtime =
-            build_session_runtime_env(&db, AgentType::ClaudeCode, None, data.path(), Some(conv))
-                .await
-                .unwrap();
+        let runtime = build_session_runtime_env(
+            &db,
+            AgentType::ClaudeCode,
+            None,
+            data.path(),
+            Some(conv),
+            None,
+        )
+        .await
+        .unwrap();
         let overlay = managed_settings_json_path(data.path(), "gw");
         assert_eq!(
             runtime
@@ -3400,10 +3485,16 @@ mod tests {
         .await
         .unwrap();
 
-        let runtime =
-            build_session_runtime_env(&db, AgentType::ClaudeCode, None, data.path(), Some(conv))
-                .await
-                .unwrap();
+        let runtime = build_session_runtime_env(
+            &db,
+            AgentType::ClaudeCode,
+            None,
+            data.path(),
+            Some(conv),
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(
             runtime
                 .get("ANTHROPIC_DEFAULT_SONNET_MODEL")
@@ -3460,9 +3551,10 @@ mod tests {
         )
         .await
         .unwrap();
-        let env = build_session_runtime_env(&db, AgentType::Codex, None, data.path(), Some(conv))
-            .await
-            .unwrap();
+        let env =
+            build_session_runtime_env(&db, AgentType::Codex, None, data.path(), Some(conv), None)
+                .await
+                .unwrap();
         assert_eq!(
             env.get("ANTHROPIC_AUTH_TOKEN").map(String::as_str),
             Some("sk-codex-should-keep")
@@ -3574,7 +3666,7 @@ mod tests {
         assert!(!effective.contains_key("CLAUDE_AUTH_MODE"));
 
         let runtime =
-            build_session_runtime_env(&db, AgentType::ClaudeCode, None, data.path(), None)
+            build_session_runtime_env(&db, AgentType::ClaudeCode, None, data.path(), None, None)
                 .await
                 .unwrap();
         let overlay = managed_settings_json_path(data.path(), "imported");
@@ -3667,7 +3759,7 @@ mod tests {
         );
 
         let runtime =
-            build_session_runtime_env(&db, AgentType::ClaudeCode, None, data.path(), None)
+            build_session_runtime_env(&db, AgentType::ClaudeCode, None, data.path(), None, None)
                 .await
                 .unwrap();
         assert!(!runtime.contains_key("CLAUDE_AUTH_MODE"));

@@ -9355,6 +9355,7 @@ pub(crate) async fn build_session_runtime_env(
     session_id: Option<&str>,
     data_dir: &Path,
     conversation_id: Option<i32>,
+    explicit_claude_profile_id: Option<&str>,
 ) -> Result<BTreeMap<String, String>, AcpError> {
     let setting = agent_setting_service::get_by_agent_type(&db.conn, agent_type)
         .await
@@ -9397,6 +9398,7 @@ pub(crate) async fn build_session_runtime_env(
             data_dir,
             conversation_id,
             setting.as_ref().and_then(|m| m.env_json.as_deref()),
+            explicit_claude_profile_id,
             &mut runtime_env,
         )
         .await?;
@@ -9495,7 +9497,7 @@ pub(crate) async fn compute_session_config_fingerprint(
     agent_type: AgentType,
     data_dir: &Path,
 ) -> Result<String, AcpError> {
-    let runtime_env = build_session_runtime_env(db, agent_type, None, data_dir, None).await?;
+    let runtime_env = build_session_runtime_env(db, agent_type, None, data_dir, None, None).await?;
     Ok(fingerprint_config(agent_type, &runtime_env))
 }
 
@@ -9690,6 +9692,7 @@ pub async fn acp_connect(
     preferred_mode_id: Option<String>,
     preferred_config_values: Option<BTreeMap<String, String>>,
     conversation_id: Option<i32>,
+    wait_until_ready: Option<bool>,
     manager: State<'_, ConnectionManager>,
     db: State<'_, AppDatabase>,
     app_handle: tauri::AppHandle,
@@ -9705,12 +9708,21 @@ pub async fn acp_connect(
         .app_data_dir()
         .map(|p| crate::paths::resolve_effective_data_dir(&p))
         .unwrap_or_else(|_| std::path::PathBuf::from("."));
+    // A profile picked in the composer travels on THIS request, not through a
+    // conversation row: a tab whose conversation does not exist yet still has to
+    // be able to relaunch on the profile the user just chose. Read before
+    // `resolve_connect_selector_prefs` consumes the map.
+    let explicit_claude_profile_id = preferred_config_values
+        .as_ref()
+        .and_then(|values| values.get(crate::acp::connection::PREFERRED_PROFILE_CONFIG_KEY))
+        .cloned();
     let runtime_env = build_session_runtime_env(
         &db,
         agent_type,
         session_id.as_deref(),
         &app_data_dir,
         conversation_id,
+        explicit_claude_profile_id.as_deref(),
     )
     .await?;
 
@@ -9728,18 +9740,32 @@ pub async fn acp_connect(
     .await;
 
     let emitter = EventEmitter::Tauri(app_handle);
-    let connection_id = manager
-        .spawn_agent(
-            agent_type,
-            working_dir,
-            session_id,
-            runtime_env,
-            window.label().to_string(),
-            emitter,
-            preferred_mode_id,
-            preferred_config_values,
-        )
-        .await?;
+    let connection_id = if wait_until_ready.unwrap_or(false) && session_id.is_none() {
+        manager
+            .spawn_agent_wait_ready(
+                agent_type,
+                working_dir,
+                runtime_env,
+                window.label().to_string(),
+                emitter,
+                preferred_mode_id,
+                preferred_config_values,
+            )
+            .await?
+    } else {
+        manager
+            .spawn_agent(
+                agent_type,
+                working_dir,
+                session_id,
+                runtime_env,
+                window.label().to_string(),
+                emitter,
+                preferred_mode_id,
+                preferred_config_values,
+            )
+            .await?
+    };
     // Reconnecting to a conversation that already exists emits no
     // `ConversationLinked`, so without this the respawned connection would carry
     // no conversation id and every by-conversation lookup would miss it. See
@@ -9838,7 +9864,7 @@ pub async fn acp_describe_agent_options_core(
     // Without this, the settings UI could show options that the agent
     // never advertises in production (settings override an API URL,
     // model_provider injects a different model list, etc.).
-    let runtime_env = build_session_runtime_env(db, agent_type, None, data_dir, None).await?;
+    let runtime_env = build_session_runtime_env(db, agent_type, None, data_dir, None, None).await?;
     manager
         .probe_agent_options(agent_type, working_dir, runtime_env)
         .await

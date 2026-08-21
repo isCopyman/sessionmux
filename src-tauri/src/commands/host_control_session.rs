@@ -200,6 +200,7 @@ impl HostSessionRuntime for ManagedAcpSessionRuntime {
             None,
             &self.data_dir,
             Some(spec.conversation_id),
+            None,
         )
         .await
         .map_err(|error| error.to_string())?;

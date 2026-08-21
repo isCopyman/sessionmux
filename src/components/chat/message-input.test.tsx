@@ -189,7 +189,12 @@ function renderInput(
 ) {
   return render(
     <NextIntlClientProvider locale="en" messages={enMessages}>
-      <MessageInput onSend={vi.fn()} promptCapabilities={CAPS} {...props} />
+      <MessageInput
+        onSend={vi.fn()}
+        promptCapabilities={CAPS}
+        agentDefaultProfileId={null}
+        {...props}
+      />
     </NextIntlClientProvider>
   )
 }
@@ -600,7 +605,7 @@ describe("MessageInput Claude launch profile chip", () => {
   })
 
   it("holds a pending profile locally until a conversation exists", async () => {
-    const onPendingClaudeProfileChange = vi.fn()
+    const onPendingClaudeProfileChange = vi.fn().mockResolvedValue(true)
     const user = userEvent.setup()
     renderInput({
       agentType: "claude_code",
@@ -885,7 +890,12 @@ describe("MessageInput slash menu while the agent connects", () => {
   ) {
     view.rerender(
       <NextIntlClientProvider locale="en" messages={enMessages}>
-        <MessageInput onSend={vi.fn()} promptCapabilities={CAPS} {...props} />
+        <MessageInput
+          onSend={vi.fn()}
+          promptCapabilities={CAPS}
+          agentDefaultProfileId={null}
+          {...props}
+        />
       </NextIntlClientProvider>
     )
   }

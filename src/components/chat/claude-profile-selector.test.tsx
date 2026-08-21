@@ -68,7 +68,11 @@ function renderSelector(
 ) {
   return render(
     <NextIntlClientProvider locale="en" messages={enMessages}>
-      <InlineClaudeProfileSelector conversationId={12} {...props} />
+      <InlineClaudeProfileSelector
+        conversationId={12}
+        agentDefaultProfileId={null}
+        {...props}
+      />
     </NextIntlClientProvider>
   )
 }
@@ -114,7 +118,7 @@ describe("InlineClaudeProfileSelector", () => {
   })
 
   it("calls conversationSetClaudeProfile when a profile is chosen", async () => {
-    const onPendingProfileChange = vi.fn()
+    const onPendingProfileChange = vi.fn().mockResolvedValue(true)
     const user = userEvent.setup()
     renderSelector({ onPendingProfileChange })
 
@@ -146,7 +150,7 @@ describe("InlineClaudeProfileSelector", () => {
   })
 
   it("lets the user pick a profile before a conversation exists", async () => {
-    const onPendingProfileChange = vi.fn()
+    const onPendingProfileChange = vi.fn().mockResolvedValue(true)
     const user = userEvent.setup()
     renderSelector({
       conversationId: null,
@@ -170,6 +174,22 @@ describe("InlineClaudeProfileSelector", () => {
     expect(
       screen.getByRole("button", { name: "Launch profile: 中转" }).textContent
     ).not.toContain(": ")
+
+    await user.click(
+      screen.getByRole("button", { name: "Launch profile: 中转" })
+    )
+    await user.click(
+      await screen.findByRole("menuitemradio", { name: /Follow default/ })
+    )
+    await waitFor(() =>
+      expect(onPendingProfileChange).toHaveBeenNthCalledWith(
+        2,
+        "follow-default"
+      )
+    )
+    expect(
+      screen.getByRole("button", { name: "Launch profile: Follow default" })
+    ).toBeInTheDocument()
   })
 
   it("shows a pending choice the same way a saved binding is shown", async () => {

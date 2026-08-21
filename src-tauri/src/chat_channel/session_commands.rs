@@ -1518,6 +1518,9 @@ async fn build_chat_session_runtime_env(
         session_id,
         data_dir,
         conversation_id,
+        // Chat-channel sessions launch from a stored binding, never from a
+        // composer's in-flight pick.
+        None,
     )
     .await
 }

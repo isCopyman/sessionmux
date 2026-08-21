@@ -339,13 +339,30 @@ type ConnectRequest = {
   // (sessionId already distinguishes), but carried so a re-fired pending
   // request still runs discovery.
   conversationId?: number
+  /** Per-launch selector overrides that must survive reconnects. Codeg-only
+   *  launch pins (for example `__codeg_profile__`) travel through the same
+   *  preferred-config channel but are filtered before ACP set_config calls. */
+  preferredConfigValues?: Record<string, string>
+  waitUntilReady?: boolean
+}
+
+function sameStringRecord(
+  a: Record<string, string> | undefined,
+  b: Record<string, string> | undefined
+): boolean {
+  const aEntries = Object.entries(a ?? {})
+  const bEntries = Object.entries(b ?? {})
+  if (aEntries.length !== bEntries.length) return false
+  return aEntries.every(([key, value]) => b?.[key] === value)
 }
 
 function sameConnectRequest(a: ConnectRequest, b: ConnectRequest) {
   return (
     a.agentType === b.agentType &&
     (a.workingDir ?? null) === (b.workingDir ?? null) &&
-    (a.sessionId ?? null) === (b.sessionId ?? null)
+    (a.sessionId ?? null) === (b.sessionId ?? null) &&
+    sameStringRecord(a.preferredConfigValues, b.preferredConfigValues) &&
+    Boolean(a.waitUntilReady) === Boolean(b.waitUntilReady)
   )
 }
 
@@ -2531,7 +2548,9 @@ export interface AcpActionsValue {
     agentType: AgentType,
     workingDir?: string,
     sessionId?: string,
-    conversationId?: number
+    conversationId?: number,
+    preferredConfigValues?: Record<string, string>,
+    waitUntilReady?: boolean
   ): Promise<void>
   /**
    * Release the connection for `contextKey`. The LOCAL entry always goes away
@@ -2669,6 +2688,14 @@ export interface AcpActionsValue {
    * have no params for (never connected in this session).
    */
   reconnect(contextKey: string): Promise<boolean>
+  /** Restart a not-yet-persisted draft with per-launch config values. The
+   *  previous scratch native session belongs to the old launch environment,
+   *  so the replacement deliberately starts with session/new instead of
+   *  trying to resume it under another profile. */
+  restartDraftWithConfigValues(
+    contextKey: string,
+    preferredConfigValues: Record<string, string>
+  ): Promise<boolean>
   /**
    * The params `reconnect(contextKey)` would use, or `null` when it would be a
    * no-op. Lets the status popover name the agent and enable its button while
@@ -4816,13 +4843,17 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       agentType: AgentType,
       workingDir?: string,
       sessionId?: string,
-      conversationId?: number
+      conversationId?: number,
+      preferredConfigValues?: Record<string, string>,
+      waitUntilReady?: boolean
     ) => {
       const request: ConnectRequest = {
         agentType,
         workingDir,
         sessionId,
         conversationId,
+        preferredConfigValues,
+        waitUntilReady,
       }
       // Remember BEFORE the in-flight early return and before the preflight can
       // throw: a connect that never produced a store entry is precisely when
@@ -5120,17 +5151,24 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
         // re-open (the snapshot frame doesn't carry a `session_modes` event,
         // so the apply-on-event hook never fired).
         const savedPrefs = getSavedPrefsForConnect(agentType)
-        const connectionId = await acpConnect(
+        const connectConfigValues = {
+          ...savedPrefs.configValues,
+          ...preferredConfigValues,
+        }
+        const connectArgs = [
           agentType,
           workingDir,
           sessionId,
           savedPrefs.modeId,
-          savedPrefs.configValues,
+          connectConfigValues,
           // An existing conversation reconnects with its own pinned model /
           // thinking effort / mode; the agent-level template above only fills
           // the keys this Session never chose.
-          conversationId
-        )
+          conversationId,
+        ] as const
+        const connectionId = waitUntilReady
+          ? await acpConnect(...connectArgs, true)
+          : await acpConnect(...connectArgs)
 
         // If disconnect was requested while connect was in flight, tear down
         // immediately instead of registering the connection — but tear down
@@ -5302,7 +5340,9 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
                   pendingRequest.agentType,
                   pendingRequest.workingDir,
                   pendingRequest.sessionId,
-                  pendingRequest.conversationId
+                  pendingRequest.conversationId,
+                  pendingRequest.preferredConfigValues,
+                  pendingRequest.waitUntilReady
                 )
                 .catch(() => {})
             })
@@ -5444,7 +5484,8 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
         agentType,
         workingDir ?? undefined,
         sessionId ?? undefined,
-        conversationId
+        conversationId,
+        lastConnectParamsRef.current.get(contextKey)?.preferredConfigValues
       )
       // Reconnect regardless — the user is left with a working connection
       // either way — but an unconfirmed teardown means the old process may
@@ -5475,6 +5516,8 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
         workingDir: conn?.workingDir ?? remembered?.workingDir ?? undefined,
         sessionId: conn?.sessionId ?? remembered?.sessionId ?? undefined,
         conversationId: remembered?.conversationId,
+        preferredConfigValues: remembered?.preferredConfigValues,
+        waitUntilReady: remembered?.waitUntilReady,
       }
     },
     []
@@ -5570,7 +5613,43 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
         request.agentType,
         request.workingDir,
         request.sessionId,
-        request.conversationId
+        request.conversationId,
+        request.preferredConfigValues,
+        request.waitUntilReady
+      )
+      return true
+    },
+    [connect, disconnect, resolveReconnectRequest, waitForConnectSettled]
+  )
+
+  const restartDraftWithConfigValues = useCallback(
+    async (
+      contextKey: string,
+      preferredConfigValues: Record<string, string>
+    ): Promise<boolean> => {
+      for (let i = 0; i < MAX_RECONNECT_SETTLE_WAITS; i++) {
+        if (!connectingKeysRef.current.has(contextKey)) break
+        if (!(await waitForConnectSettled(contextKey))) return false
+      }
+      const request = resolveReconnectRequest(contextKey)
+      const conn = storeRef.current.connections.get(contextKey)
+      if (!request || !conn || conn.isViewer || conn.isDelegationChild) {
+        return false
+      }
+      const mergedValues = {
+        ...request.preferredConfigValues,
+        ...preferredConfigValues,
+      }
+      const tornDown = await disconnect(contextKey)
+      if (!tornDown) return false
+      await connect(
+        contextKey,
+        request.agentType,
+        request.workingDir,
+        undefined,
+        undefined,
+        mergedValues,
+        true
       )
       return true
     },
@@ -5952,6 +6031,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       detachDelegationChild,
       reapplyConfig,
       reconnect,
+      restartDraftWithConfigValues,
       getReconnectInfo,
       dismissConfigStale,
       dismissSessionFailures: dismissSessionFailuresAction,
@@ -5978,6 +6058,7 @@ export function AcpConnectionsProvider({ children }: { children: ReactNode }) {
       detachDelegationChild,
       reapplyConfig,
       reconnect,
+      restartDraftWithConfigValues,
       getReconnectInfo,
       dismissConfigStale,
       dismissSessionFailuresAction,

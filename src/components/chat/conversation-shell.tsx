@@ -89,7 +89,8 @@ interface ConversationShellProps {
   attachmentTabId?: string | null
   draftStorageKey?: string | null
   sourceConversationId?: number | null
-  onPendingClaudeProfileChange?: (profileId: string) => void
+  onPendingClaudeProfileChange?: (profileId: string) => Promise<boolean>
+  agentDefaultProfileId?: string | null
   hideInput?: boolean
   /** Optional banner rendered in the composer dock, where the input sits.
    *  Used with `hideInput` to explain WHY the composer is unavailable (e.g.
@@ -173,6 +174,7 @@ export function ConversationShell({
   attachmentTabId,
   sourceConversationId = null,
   onPendingClaudeProfileChange,
+  agentDefaultProfileId,
   draftStorageKey,
   hideInput = false,
   composerBanner,
@@ -330,6 +332,7 @@ export function ConversationShell({
               draftStorageKey={draftStorageKey}
               sourceConversationId={sourceConversationId}
               onPendingClaudeProfileChange={onPendingClaudeProfileChange}
+              agentDefaultProfileId={agentDefaultProfileId}
               isActive={isActive}
               showActiveFlow={showActiveFlow}
               queue={queue}

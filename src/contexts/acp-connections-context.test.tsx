@@ -747,6 +747,70 @@ describe("AcpConnectionsProvider reconnect (status-icon button)", () => {
     expect(h.store!.getConnection(TAB)?.connectionId).toBe("respawned-conn")
   })
 
+  it("restarts a draft repeatedly with fresh native sessions and the latest launch-time config", async () => {
+    h.acpFindConnectionForConversation.mockResolvedValue(null)
+    await mountProvider()
+    await act(async () => {
+      await h.actions!.connect(TAB, "claude_code", "/tmp/x")
+    })
+    h.acpConnect.mockResolvedValueOnce("profile-api-conn")
+
+    let first = false
+    await act(async () => {
+      first = await h.actions!.restartDraftWithConfigValues(TAB, {
+        __codeg_profile__: "api",
+      })
+    })
+    expect(first).toBe(true)
+    expect(h.acpConnect).toHaveBeenLastCalledWith(
+      "claude_code",
+      "/tmp/x",
+      undefined,
+      undefined,
+      { __codeg_profile__: "api" },
+      undefined,
+      true
+    )
+
+    h.acpConnect.mockResolvedValueOnce("profile-cpa-conn")
+    let second = false
+    await act(async () => {
+      second = await h.actions!.restartDraftWithConfigValues(TAB, {
+        __codeg_profile__: "cpa",
+      })
+    })
+    expect(second).toBe(true)
+    expect(h.acpConnect).toHaveBeenLastCalledWith(
+      "claude_code",
+      "/tmp/x",
+      undefined,
+      undefined,
+      { __codeg_profile__: "cpa" },
+      undefined,
+      true
+    )
+    expect(h.store!.getConnection(TAB)?.connectionId).toBe("profile-cpa-conn")
+  })
+
+  it("does not start a second draft runtime when teardown is unconfirmed", async () => {
+    await mountProvider()
+    await act(async () => {
+      await h.actions!.connect(TAB, "claude_code", "/tmp/x")
+    })
+    const connectCount = h.acpConnect.mock.calls.length
+    h.acpDisconnect.mockRejectedValue(new Error("request timed out"))
+
+    let applied = true
+    await act(async () => {
+      applied = await h.actions!.restartDraftWithConfigValues(TAB, {
+        __codeg_profile__: "api",
+      })
+    })
+
+    expect(applied).toBe(false)
+    expect(h.acpConnect).toHaveBeenCalledTimes(connectCount)
+  })
+
   it("rebuilds even when the backend no longer knows the connection", async () => {
     await connectOwner()
     // The single most important case for this button: the agent process is

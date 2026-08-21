@@ -222,7 +222,8 @@ export async function acpConnect(
   sessionId?: string,
   preferredModeId?: string | null,
   preferredConfigValues?: Record<string, string> | null,
-  conversationId?: number | null
+  conversationId?: number | null,
+  waitUntilReady = false
 ): Promise<string> {
   return getTransport().call("acp_connect", {
     agentType,
@@ -233,6 +234,7 @@ export async function acpConnect(
     // The conversation's own pinned selector prefs (model, thinking effort,
     // mode) override the agent-level template on the backend.
     conversationId: conversationId ?? null,
+    waitUntilReady,
   })
 }
 

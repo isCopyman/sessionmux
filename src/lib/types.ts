@@ -1742,6 +1742,7 @@ export const OFFICIAL_DIRECT_CLAUDE_PROFILE_ID = "official-direct"
 
 /** Agent-setting `env_json` key for the default Claude launch profile. */
 export const CODEG_CLAUDE_PROFILE_ENV_KEY = "CODEG_CLAUDE_PROFILE"
+export const CODEG_CLAUDE_PROFILE_CONFIG_KEY = "__codeg_profile__"
 
 /**
  * Wire DTO for `claude_profile_list` / `claude_profile_upsert`. Tokens are

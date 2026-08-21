@@ -35,7 +35,10 @@ interface InlineClaudeProfileSelectorProps {
   /** Composer's pending choice while no conversation exists. Shown the same
    *  way a saved binding is. Ignored once `conversationId` is set. */
   pendingProfileId?: string | null
-  onPendingProfileChange?: (profileId: string) => void
+  onPendingProfileChange?: (profileId: string) => Promise<boolean>
+  /** Agent-level launch profile used by the process before a conversation row
+   *  exists. `undefined` means the agent list is still loading. */
+  agentDefaultProfileId?: string | null
 }
 
 function profileDescription(profile: ClaudeProfileInfo): string | null {
@@ -53,25 +56,28 @@ export function InlineClaudeProfileSelector({
   disabled = false,
   pendingProfileId = null,
   onPendingProfileChange,
+  agentDefaultProfileId,
 }: InlineClaudeProfileSelectorProps) {
   const t = useTranslations("AcpAgentSettings.claudeProfile")
   const [profiles, setProfiles] = useState<ClaudeProfileInfo[]>([])
-  const [selectedId, setSelectedId] = useState(
-    pendingProfileId ?? FOLLOW_DEFAULT_CLAUDE_PROFILE_ID
-  )
+  const [profilesReady, setProfilesReady] = useState(false)
+  const [pickedId, setPickedId] = useState<string | null>(null)
+  const [switching, setSwitching] = useState(false)
+  const [boundFetch, setBoundFetch] = useState<{
+    conversationId: number
+    profileId: string | null
+  } | null>(null)
   useEffect(() => {
     let cancelled = false
     void claudeProfileList()
       .then((list) => {
         if (cancelled) return
         setProfiles(list)
-        setSelectedId((current) => {
-          if (list.some((item) => item.id === current)) return current
-          return list[0]?.id ?? FOLLOW_DEFAULT_CLAUDE_PROFILE_ID
-        })
+        setProfilesReady(true)
       })
       .catch((error: unknown) => {
         if (cancelled) return
+        setProfilesReady(true)
         toast.error(t("listFailed"), {
           description: toErrorMessage(error),
         })
@@ -92,42 +98,88 @@ export function InlineClaudeProfileSelector({
     let cancelled = false
     void conversationGetClaudeProfile(conversationId)
       .then((result) => {
-        if (cancelled || !result.profileId) return
-        setSelectedId(result.profileId)
+        if (cancelled) return
+        setBoundFetch({
+          conversationId,
+          profileId: result.profileId || null,
+        })
       })
-      .catch(() => {})
+      .catch(() => {
+        if (cancelled) return
+        setBoundFetch({ conversationId, profileId: null })
+      })
     return () => {
       cancelled = true
     }
   }, [conversationId])
 
+  const displayedId = useMemo(() => {
+    if (!profilesReady) return null
+    const normalize = (id: string) =>
+      profiles.some((item) => item.id === id)
+        ? id
+        : FOLLOW_DEFAULT_CLAUDE_PROFILE_ID
+    if (conversationId == null) {
+      const chosen = pendingProfileId ?? pickedId
+      if (chosen) return normalize(chosen)
+      if (agentDefaultProfileId === undefined) return null
+      return normalize(
+        agentDefaultProfileId ?? FOLLOW_DEFAULT_CLAUDE_PROFILE_ID
+      )
+    }
+    if (pickedId) return normalize(pickedId)
+    if (boundFetch?.conversationId !== conversationId) return null
+    return normalize(boundFetch.profileId ?? FOLLOW_DEFAULT_CLAUDE_PROFILE_ID)
+  }, [
+    agentDefaultProfileId,
+    boundFetch,
+    conversationId,
+    pendingProfileId,
+    pickedId,
+    profiles,
+    profilesReady,
+  ])
   const selected = useMemo(
-    () => profiles.find((item) => item.id === selectedId),
-    [profiles, selectedId]
+    () => profiles.find((item) => item.id === displayedId),
+    [profiles, displayedId]
   )
   const currentLabel =
-    selectedId === FOLLOW_DEFAULT_CLAUDE_PROFILE_ID
-      ? t("followDefault")
-      : (selected?.label ?? selectedId)
+    displayedId == null
+      ? t("loading")
+      : displayedId === FOLLOW_DEFAULT_CLAUDE_PROFILE_ID
+        ? t("followDefault")
+        : (selected?.label ?? displayedId)
   const controlName = t("controlName")
+  const triggerDisabled = disabled || switching || displayedId == null
 
   const handleSelect = useCallback(
     async (profileId: string) => {
-      if (disabled || profileId === selectedId) {
+      if (triggerDisabled || profileId === displayedId) {
         return
       }
       if (conversationId == null) {
-        setSelectedId(profileId)
-        onPendingProfileChange?.(profileId)
+        if (!onPendingProfileChange) return
+        setSwitching(true)
+        try {
+          const applied = await onPendingProfileChange(profileId)
+          if (!applied) throw new Error(t("switchFailed"))
+          setPickedId(profileId)
+        } catch (error: unknown) {
+          toast.error(t("switchFailed"), {
+            description: toErrorMessage(error),
+          })
+        } finally {
+          setSwitching(false)
+        }
         return
       }
-      const previous = selectedId
-      setSelectedId(profileId)
+      const previous = pickedId
       try {
         const result = await conversationSetClaudeProfile(
           conversationId,
           profileId
         )
+        setPickedId(profileId)
         // Nothing running to restart: the next launch reads the new binding.
         if (result.affectedRunningSessions < 1) {
           toast.success(t("switchSuccess"))
@@ -136,13 +188,20 @@ export function InlineClaudeProfileSelector({
         // A live session is restarted by SessionConfigStaleBanner, which owns
         // the turn/queue decision and reports success once the new process is up.
       } catch (error: unknown) {
-        setSelectedId(previous)
+        setPickedId(previous)
         toast.error(t("switchFailed"), {
           description: toErrorMessage(error),
         })
       }
     },
-    [conversationId, disabled, onPendingProfileChange, selectedId, t]
+    [
+      conversationId,
+      displayedId,
+      onPendingProfileChange,
+      pickedId,
+      t,
+      triggerDisabled,
+    ]
   )
 
   const handleManage = useCallback(() => {
@@ -162,7 +221,7 @@ export function InlineClaudeProfileSelector({
           <Button
             variant="ghost"
             size="xs"
-            disabled={disabled}
+            disabled={triggerDisabled}
             title={controlName}
             aria-label={
               currentLabel ? `${controlName}: ${currentLabel}` : controlName
@@ -188,7 +247,7 @@ export function InlineClaudeProfileSelector({
           </DropdownMenuLabel>
           <DropdownMenuSeparator />
           <DropdownMenuRadioGroup
-            value={selectedId}
+            value={displayedId ?? ""}
             onValueChange={(value) => {
               void handleSelect(value)
             }}

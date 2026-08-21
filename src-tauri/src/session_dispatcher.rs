@@ -189,6 +189,7 @@ pub async fn ensure_session_runtime(
         Some(session_id.as_str()),
         data_dir,
         Some(row.id),
+        None,
     )
     .await
     .map_err(|error| error.to_string())?;

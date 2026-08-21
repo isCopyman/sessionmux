@@ -179,7 +179,8 @@ interface MessageInputProps {
   sourceConversationId?: number | null
   /** Pending Claude launch profile while `sourceConversationId` is null.
    *  Applied onto the new row before the first spawn. */
-  onPendingClaudeProfileChange?: (profileId: string) => void
+  onPendingClaudeProfileChange?: (profileId: string) => Promise<boolean>
+  agentDefaultProfileId?: string | null
   isActive?: boolean
   /** Paint the flowing active-session gradient on the composer border. Set only
    *  for the active tab while tiled across multiple sessions; a lone or
@@ -307,6 +308,7 @@ export function MessageInput({
   draftStorageKey,
   sourceConversationId = null,
   onPendingClaudeProfileChange,
+  agentDefaultProfileId,
   isActive = false,
   showActiveFlow = false,
   onEnqueue,
@@ -676,9 +678,11 @@ export function MessageInput({
     string | null
   >(null)
   const handlePendingClaudeProfileChange = useCallback(
-    (profileId: string) => {
-      setPendingClaudeProfileId(profileId)
-      onPendingClaudeProfileChange?.(profileId)
+    async (profileId: string) => {
+      if (!onPendingClaudeProfileChange) return false
+      const applied = await onPendingClaudeProfileChange(profileId)
+      if (applied) setPendingClaudeProfileId(profileId)
+      return applied
     },
     [onPendingClaudeProfileChange]
   )
@@ -1449,6 +1453,7 @@ export function MessageInput({
               ? handlePendingClaudeProfileChange
               : undefined
           }
+          agentDefaultProfileId={agentDefaultProfileId}
         />
       )}
       {hasConfigOptions &&
