@@ -1127,6 +1127,15 @@ export function RoomWorkspace({
           >
             <Users className="h-3.5 w-3.5" />
           </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => setAddOpen(true)}
+          >
+            <UserPlus className="h-3.5 w-3.5" />
+            {t("addMember")}
+          </Button>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
@@ -1195,9 +1204,20 @@ export function RoomWorkspace({
             getItemKey={getTimelineItemKey}
             renderItem={renderTimelineItem}
             emptyState={
-              <p className="px-4 py-8 text-sm text-muted-foreground">
-                {t("timelineEmpty")}
-              </p>
+              detail.members.length <= 1 ? (
+                <div className="flex flex-col items-center gap-3 px-4 py-8 text-center">
+                  <p className="text-sm text-muted-foreground">
+                    {t("emptyInviteHint")}
+                  </p>
+                  <Button onClick={() => setAddOpen(true)}>
+                    {t("emptyInviteAction")}
+                  </Button>
+                </div>
+              ) : (
+                <p className="px-4 py-8 text-sm text-muted-foreground">
+                  {t("timelineEmpty")}
+                </p>
+              )
             }
             scrollApiRef={scrollApiRef}
             hasOlder={truncated}

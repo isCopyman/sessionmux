@@ -269,8 +269,8 @@ async fn touch_room(txn: &DatabaseTransaction, room_id: &str) -> Result<(), DbEr
 
 fn unique_member_ids(ids: &[i32]) -> Result<Vec<i32>, DbError> {
     let unique: BTreeSet<i32> = ids.iter().copied().collect();
-    if unique.len() < 2 {
-        return Err(validation("A Room requires at least two Session members"));
+    if unique.is_empty() {
+        return Err(validation("A Room requires at least one Session member"));
     }
     if unique.len() > MAX_MEMBERS {
         return Err(validation(format!(
@@ -767,8 +767,8 @@ pub async fn remove_member(
         .await?
         .expect("COUNT")
         .try_get("", "count")?;
-    if remaining <= 2 {
-        return Err(validation("A Room requires at least two Session members"));
+    if remaining <= 1 {
+        return Err(validation("A Room requires at least one Session member"));
     }
     let txn = conn.begin().await?;
     txn.execute(statement(
@@ -1489,22 +1489,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_room_requires_two_live_members_and_lists_on_workbench() {
+    async fn create_room_requires_at_least_one_live_member_and_lists_on_workbench() {
         let (db, a, b, _) = seeded().await;
         let err = create(
             &db.conn,
             CreateCollaborationRoomInput {
                 workbench_id: 1,
-                title: "Solo".into(),
-                member_conversation_ids: vec![a],
+                title: "Empty".into(),
+                member_conversation_ids: vec![],
                 created_by_conversation_id: a,
                 collection_id: None,
                 root_folder_id: None,
             },
         )
         .await
-        .expect_err("one member");
-        assert!(err.to_string().contains("at least two"));
+        .expect_err("zero members");
+        assert!(err.to_string().contains("at least one"));
 
         let room = make_room(&db, a, vec![a, b]).await;
         assert_eq!(room.members.len(), 2);
@@ -1514,6 +1514,20 @@ mod tests {
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].id, room.id);
         assert_eq!(listed[0].member_count, 2);
+    }
+
+    #[tokio::test]
+    async fn create_room_accepts_a_single_live_member() {
+        let (db, a, _, _) = seeded().await;
+        let room = make_room(&db, a, vec![a]).await;
+        assert_eq!(room.members.len(), 1);
+        assert_eq!(room.created_by_conversation_id, a);
+        assert_eq!(room.members[0].conversation_id, a);
+        assert_eq!(room.members[0].role, "member");
+        let listed = list_for_workbench(&db.conn, 1).await.unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, room.id);
+        assert_eq!(listed[0].member_count, 1);
     }
 
     #[tokio::test]
@@ -2222,17 +2236,23 @@ mod tests {
         .unwrap();
         remove_member(&db.conn, &room.id, a)
             .await
-            .expect("creator Session can leave while two members remain");
+            .expect("creator Session can leave while other members remain");
         let after = get(&db.conn, &room.id).await.unwrap();
         assert_eq!(after.members.len(), 2);
         assert!(after
             .members
             .iter()
             .all(|member| member.conversation_id != a));
-        let err = remove_member(&db.conn, &room.id, c)
+        remove_member(&db.conn, &room.id, c)
             .await
-            .expect_err("floor is two members");
-        assert!(err.to_string().contains("at least two"));
+            .expect("a Room may shrink to a single Session");
+        let after_one = get(&db.conn, &room.id).await.unwrap();
+        assert_eq!(after_one.members.len(), 1);
+        let last = after_one.members[0].conversation_id;
+        let err = remove_member(&db.conn, &room.id, last)
+            .await
+            .expect_err("floor is one member");
+        assert!(err.to_string().contains("at least one"));
     }
 
     #[tokio::test]

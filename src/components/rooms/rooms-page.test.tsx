@@ -1324,4 +1324,53 @@ describe("RoomWorkspace", () => {
       initialCalls + 1
     )
   })
+
+  it("shows a labeled invite button in the room header", async () => {
+    api.getCollaborationRoomTimeline.mockResolvedValue(timeline([event()]))
+    renderRoom()
+    await screen.findByText("newest post")
+    fireEvent.click(screen.getByRole("button", { name: "Add a Session" }))
+    expect(
+      await screen.findByRole("heading", { name: "Add Sessions to this room" })
+    ).toBeTruthy()
+  })
+
+  it("prompts to invite when the timeline is empty and the room has one member", async () => {
+    api.getCollaborationRoomTimeline.mockResolvedValue(timeline([]))
+    renderRoom()
+    expect(
+      await screen.findByText("Invite another Session to start collaborating.")
+    ).toBeTruthy()
+    expect(screen.queryByText(/No messages yet/)).toBeNull()
+    fireEvent.click(screen.getByRole("button", { name: "Invite a Session" }))
+    expect(
+      await screen.findByRole("heading", { name: "Add Sessions to this room" })
+    ).toBeTruthy()
+  })
+
+  it("keeps the plain empty timeline when the room already has more than one member", async () => {
+    api.getCollaborationRoom.mockResolvedValue({
+      ...roomDetail(),
+      members: [
+        ...roomDetail().members,
+        {
+          conversationId: 202,
+          title: "Session D",
+          agentType: "claude_code",
+          role: "member",
+          joinedAt: "2026-08-01T00:00:00.000Z",
+        },
+      ],
+    })
+    api.getCollaborationRoomTimeline.mockResolvedValue(timeline([]))
+    renderRoom()
+    expect(
+      await screen.findByText(
+        "No messages yet. You speak first; Sessions answer when mentioned."
+      )
+    ).toBeTruthy()
+    expect(
+      screen.queryByText("Invite another Session to start collaborating.")
+    ).toBeNull()
+  })
 })

@@ -52,6 +52,18 @@ describe("roomMemberCandidates", () => {
 })
 
 describe("defaultRoomTitle", () => {
+  it("formats a single member with the solo title", () => {
+    expect(
+      defaultRoomTitle([{ title: "Alpha" }], "Room", (name) => `${name}'s room`)
+    ).toBe("Alpha's room")
+  })
+
+  it("falls back when the solo member has no title", () => {
+    expect(
+      defaultRoomTitle([{ title: null }], "Room", (name) => `${name}'s room`)
+    ).toBe("Room")
+  })
+
   it("joins the first two member titles", () => {
     expect(
       defaultRoomTitle([{ title: "Alpha" }, { title: "Beta" }], "Room")

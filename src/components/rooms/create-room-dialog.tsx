@@ -6,7 +6,6 @@ import { toast } from "sonner"
 
 import { AgentIcon } from "@/components/agent-icon"
 import { Button } from "@/components/ui/button"
-import { Checkbox } from "@/components/ui/checkbox"
 import {
   Dialog,
   DialogContent,
@@ -15,6 +14,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { toErrorMessage } from "@/lib/app-error"
 import { createCollaborationRoom } from "@/lib/api"
@@ -26,9 +27,8 @@ import { useTabStore } from "@/stores/tab-store"
 
 /**
  * Always-visible create-room entry point (the bulk action bar only offers it
- * mid-selection). Picks members from the live Session list, then creates the
- * Room on the active workbench and opens it — the same tail as the bar's
- * create-room flow.
+ * mid-selection). Picks the initiator Session, creates the Room on the active
+ * workbench, and opens it so members can be invited from inside.
  */
 export function CreateRoomDialog({
   open,
@@ -41,9 +41,16 @@ export function CreateRoomDialog({
   const tManage = useTranslations("Folder.sidebar.manageConversations")
   const conversations = useAppWorkspaceStore((state) => state.conversations)
   const activeWorkbenchId = useTabStore((state) => state.activeWorkbenchId)
+  const activeConversationId = useTabStore((state) => {
+    const tab = state.rawTabs.find((item) => item.id === state.activeTabId)
+    if (tab == null || tab.kind !== "conversation") return null
+    return tab.conversationId
+  })
   const openRoom = useOpenRoom()
   const [query, setQuery] = useState("")
-  const [selectedIds, setSelectedIds] = useState<number[]>([])
+  const [selectedId, setSelectedId] = useState<number | null>(
+    activeConversationId
+  )
   const [titleDraft, setTitleDraft] = useState<string | null>(null)
   const [pending, setPending] = useState(false)
 
@@ -58,30 +65,30 @@ export function CreateRoomDialog({
       ),
     [conversations]
   )
-  // Selection order, not list order: the first pick becomes the Room creator.
-  const members = useMemo(
-    () =>
-      selectedIds
-        .map((id) => conversationById.get(id))
-        .filter(
-          (conversation): conversation is NonNullable<typeof conversation> =>
-            conversation != null
-        ),
-    [conversationById, selectedIds]
+  const initiator = useMemo(() => {
+    if (selectedId == null) return undefined
+    const conversation = conversationById.get(selectedId)
+    if (conversation == null || conversation.archived_at != null) {
+      return undefined
+    }
+    return conversation
+  }, [conversationById, selectedId])
+  const members = initiator == null ? [] : [initiator]
+  const autoTitle = defaultRoomTitle(members, t("createTitle"), (name) =>
+    t("createTitleSolo", { name })
   )
-  const autoTitle = defaultRoomTitle(members, t("createTitle"))
 
   const handleOpenChange = (next: boolean) => {
     onOpenChange(next)
     if (!next) {
       setQuery("")
-      setSelectedIds([])
+      setSelectedId(null)
       setTitleDraft(null)
     }
   }
 
   const handleCreate = async () => {
-    if (members.length < 2) {
+    if (initiator == null) {
       toast.error(t("createNeedTwo"))
       return
     }
@@ -90,8 +97,8 @@ export function CreateRoomDialog({
       const created = await createCollaborationRoom({
         workbenchId: activeWorkbenchId,
         title: (titleDraft ?? "").trim() || autoTitle,
-        memberConversationIds: members.map((member) => member.id),
-        createdByConversationId: members[0].id,
+        memberConversationIds: [initiator.id],
+        createdByConversationId: initiator.id,
       })
       toast.success(tManage("toastRoomCreated", { title: created.title }))
       handleOpenChange(false)
@@ -126,36 +133,28 @@ export function CreateRoomDialog({
               {t("createNoCandidates")}
             </p>
           ) : (
-            <ul className="flex flex-col gap-1">
-              {candidates.map((conversation) => {
-                const checked = selectedIds.includes(conversation.id)
-                return (
-                  <li key={conversation.id}>
-                    <button
-                      type="button"
-                      className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs hover:bg-muted/60"
-                      onClick={() =>
-                        setSelectedIds((current) =>
-                          current.includes(conversation.id)
-                            ? current.filter((id) => id !== conversation.id)
-                            : [...current, conversation.id]
-                        )
-                      }
-                    >
-                      <Checkbox checked={checked} />
-                      <AgentIcon
-                        agentType={conversation.agent_type}
-                        className="h-3.5 w-3.5"
-                      />
-                      <span className="min-w-0 flex-1 truncate">
-                        {formatConversationTitle(conversation.title) ||
-                          t("untitled", { id: conversation.id })}
-                      </span>
-                    </button>
-                  </li>
-                )
-              })}
-            </ul>
+            <RadioGroup
+              value={selectedId != null ? String(selectedId) : ""}
+              onValueChange={(value) => setSelectedId(Number(value))}
+              className="flex flex-col gap-1"
+            >
+              {candidates.map((conversation) => (
+                <Label
+                  key={conversation.id}
+                  className="flex w-full cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs font-normal hover:bg-muted/60"
+                >
+                  <RadioGroupItem value={String(conversation.id)} />
+                  <AgentIcon
+                    agentType={conversation.agent_type}
+                    className="h-3.5 w-3.5"
+                  />
+                  <span className="min-w-0 flex-1 truncate">
+                    {formatConversationTitle(conversation.title) ||
+                      t("untitled", { id: conversation.id })}
+                  </span>
+                </Label>
+              ))}
+            </RadioGroup>
           )}
         </ScrollArea>
         <p className="text-[11px] text-muted-foreground">{t("createHint")}</p>
@@ -164,7 +163,7 @@ export function CreateRoomDialog({
             {t("cancel")}
           </Button>
           <Button
-            disabled={selectedIds.length < 2 || pending}
+            disabled={initiator == null || pending}
             onClick={() => void handleCreate()}
           >
             {t("createSubmit")}
