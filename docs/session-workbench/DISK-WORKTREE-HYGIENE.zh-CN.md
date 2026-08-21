@@ -69,3 +69,27 @@ Claude Code 的 isolation:worktree 会在这里建 `agent-*` 树，理论上"无
   未并入）：32G target 已删，树保留。是否还要这条线，待用户定。
 - `.claude/worktrees/agent-a31e3493008230165`：领先主干 41 提交（qoder/chat
   功能线旧提交，非当晚工作），保留待用户定夺。
+
+## 修订（2026-08-21）：常驻车道 vs 一次性树
+
+原来那条「合并即删」是在还没用命名车道之前定的，现在分两种：
+
+**常驻车道（保留）** —— 按子系统各留一条，反复派工进去：
+
+| 车道 | 干什么 | 热缓存 |
+| --- | --- | --- |
+| `ui` | 前端组件 / i18n / vitest | `.next/`、`node_modules/` |
+| `backend` | Rust（acp / commands / db） | `src-tauri/target/`（大头） |
+
+保留的理由**不是省 git IO**（`git worktree add` 共享对象库，本来就便宜），
+而是省**构建产物冷启**：新树 = Rust 全量冷编译 + turbopack 冷编译；
+热车道 = 增量。代价约 20G/棵，所以常驻控制在 2–3 条。
+
+`cli-delegate` 的车道语义配合这条：车道干净且无独有提交时，下一次 `run`
+（不是 `resume`）自动快进到源 HEAD；`resume` 永不快进（会把分支从活着的会话底下抽走）。
+目录删了但 `cli-delegate-<slug>` 分支还在的话，下次同名 `--worktree-name` 会重新挂回来。
+
+**一次性树（合并即删）** —— 匿名 `--worktree`、实验、需要强隔离的改动。原规则不变。
+
+复用车道的隐性收益：CLI 会话可以 `resume`，跟进任务不用重讲背景。
+反过来，**不相关的新活别 resume 老会话**，要 `run --fresh`，否则背一堆无关上下文。
