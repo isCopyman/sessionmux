@@ -114,8 +114,9 @@ describe("InlineClaudeProfileSelector", () => {
   })
 
   it("calls conversationSetClaudeProfile when a profile is chosen", async () => {
+    const onPendingProfileChange = vi.fn()
     const user = userEvent.setup()
-    renderSelector()
+    renderSelector({ onPendingProfileChange })
 
     await user.click(
       await screen.findByRole("button", {
@@ -127,6 +128,7 @@ describe("InlineClaudeProfileSelector", () => {
     await waitFor(() =>
       expect(api.conversationSetClaudeProfile).toHaveBeenCalledWith(12, "api")
     )
+    expect(onPendingProfileChange).not.toHaveBeenCalled()
     expect(
       screen.getByRole("button", { name: "Launch profile: 中转" })
     ).toHaveTextContent("中转")
@@ -141,6 +143,40 @@ describe("InlineClaudeProfileSelector", () => {
       name: "Launch profile: Follow default",
     })
     expect(trigger).toBeDisabled()
+  })
+
+  it("lets the user pick a profile before a conversation exists", async () => {
+    const onPendingProfileChange = vi.fn()
+    const user = userEvent.setup()
+    renderSelector({
+      conversationId: null,
+      onPendingProfileChange,
+    })
+
+    const trigger = await screen.findByRole("button", {
+      name: "Launch profile: Follow default",
+    })
+    expect(trigger).toBeEnabled()
+
+    await user.click(trigger)
+    await user.click(await screen.findByRole("menuitemradio", { name: /中转/ }))
+
+    expect(api.conversationSetClaudeProfile).not.toHaveBeenCalled()
+    expect(api.conversationGetClaudeProfile).not.toHaveBeenCalled()
+    expect(onPendingProfileChange).toHaveBeenCalledWith("api")
+    expect(
+      screen.getByRole("button", { name: "Launch profile: 中转" })
+    ).toHaveTextContent("中转")
+    expect(
+      screen.getByRole("button", { name: "Launch profile: 中转" }).textContent
+    ).not.toContain(": ")
+  })
+
+  it("shows a pending choice the same way a saved binding is shown", async () => {
+    renderSelector({ conversationId: null, pendingProfileId: "api" })
+    expect(
+      await screen.findByRole("button", { name: "Launch profile: 中转" })
+    ).toHaveTextContent("中转")
   })
 
   // It used to read `follow-default` on every mount, so reopening the app made

@@ -42,6 +42,7 @@ interface ChatInputProps {
   attachmentTabId?: string | null
   draftStorageKey?: string | null
   sourceConversationId?: number | null
+  onPendingClaudeProfileChange?: (profileId: string) => void
   isActive?: boolean
   /** Show the composer's flowing active-session border. Set only for the active
    *  tab when tiled across multiple sessions; passed through to MessageInput. */
@@ -112,6 +113,7 @@ export const ChatInput = memo(function ChatInput({
   attachmentTabId,
   draftStorageKey,
   sourceConversationId = null,
+  onPendingClaudeProfileChange,
   isActive,
   showActiveFlow,
   queue,
@@ -222,6 +224,7 @@ export const ChatInput = memo(function ChatInput({
         attachmentTabId={attachmentTabId}
         draftStorageKey={draftStorageKey}
         sourceConversationId={sourceConversationId}
+        onPendingClaudeProfileChange={onPendingClaudeProfileChange}
         isActive={isActive}
         showActiveFlow={showActiveFlow}
         onEnqueue={onEnqueue}
