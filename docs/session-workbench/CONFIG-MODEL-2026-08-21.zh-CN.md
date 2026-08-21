@@ -244,13 +244,23 @@ kind 与解析语义保留，已绑定的会话不会炸。
 （`acp/manager.rs:1041`、`src/components/chat/session-config-stale-banner.tsx`），
 和换档走同一条路：标 stale，横幅提供重启。不要另编一套。
 
-### 机制（源码上成立，**端到端尚未实测**）
+### 机制（2026-08-21 晚**实测通过**）
 
 `dist/acp-agent.js`：`...userProvidedOptions` 在写死的
 `settingSources: ["user","project","local"]` **之后**展开，所以客户端传的会盖掉它，
-不需要改适配器。**但这一条还没跑过实验验证**（探针脚本已写好：
-`C:/Users/63036/AppData/Local/Temp/proj-probe/`，做法是项目目录放一份带无效 token 的
-`.claude/settings.json`，加载了就 401，没加载就回 pong）。按 L13，动工前应先跑。
+**不需要改适配器**。
+
+实测：临时项目目录 `.claude/settings.json` 写一份带无效 token 的 `env`，
+直接驱动适配器（入口是 **`dist/index.js`**，不是 `dist/acp-agent.js`——踩过一次坑），
+同一目录跑两次 `session/new` + `session/prompt`：
+
+| 传的内容 | 结果 |
+| --- | --- |
+| 不传 `settingSources` | **`401 Invalid bearer token`** —— 项目层被加载 |
+| `settingSources: ["user"]` | **`pong`** —— 项目层被跳过 |
+
+正向信号两侧都有，结论确定。探针留在
+`C:/Users/63036/AppData/Local/Temp/proj-probe/`。
 
 ### 无关但顺带记
 
