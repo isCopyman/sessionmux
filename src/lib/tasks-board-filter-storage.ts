@@ -11,6 +11,17 @@ const OWNER_FILTER_KEY = "workspace:tasks-owner-filter"
 const PRIORITY_FILTER_KEY = "workspace:tasks-priority-filter"
 const SORT_KEY = "workspace:tasks-sort"
 
+/**
+ * Filters describe what one concrete Board Tab is looking at, so Workbenches
+ * must not overwrite each other. Keep the historical key for the legacy
+ * standalone global Board; scope every Workbench Tab key.
+ * Presentation preferences such as grouping, sorting and hidden columns stay
+ * global on purpose.
+ */
+function scopedFilterKey(base: string, boardViewKey: string): string {
+  return boardViewKey === "global" ? base : `${base}:${boardViewKey}`
+}
+
 export const TASKS_STATUS_GROUPS = [
   "backlog",
   "todo",
@@ -95,21 +106,29 @@ export function saveTasksViewMode(mode: TasksViewMode): void {
   } catch {}
 }
 
-export function loadTasksStatusFilter(): TasksStatusGroup | null {
+export function loadTasksStatusFilter(
+  boardViewKey = "global"
+): TasksStatusGroup | null {
   if (typeof window === "undefined") return null
   try {
-    const raw = localStorage.getItem(STATUS_FILTER_KEY)
+    const raw = localStorage.getItem(
+      scopedFilterKey(STATUS_FILTER_KEY, boardViewKey)
+    )
     return TASKS_STATUS_GROUPS.find((group) => group === raw) ?? null
   } catch {
     return null
   }
 }
 
-export function saveTasksStatusFilter(group: TasksStatusGroup | null): void {
+export function saveTasksStatusFilter(
+  group: TasksStatusGroup | null,
+  boardViewKey = "global"
+): void {
   if (typeof window === "undefined") return
   try {
-    if (group == null) localStorage.removeItem(STATUS_FILTER_KEY)
-    else localStorage.setItem(STATUS_FILTER_KEY, group)
+    const key = scopedFilterKey(STATUS_FILTER_KEY, boardViewKey)
+    if (group == null) localStorage.removeItem(key)
+    else localStorage.setItem(key, group)
   } catch {}
 }
 
@@ -130,10 +149,12 @@ export function saveTasksBoardGrouping(grouping: TasksBoardGrouping): void {
   } catch {}
 }
 
-export function loadTasksScope(): TasksScope {
+export function loadTasksScope(boardViewKey = "global"): TasksScope {
   if (typeof window === "undefined") return DEFAULT_TASKS_SCOPE
   try {
-    const raw = localStorage.getItem(SCOPE_FILTER_KEY)
+    const raw = localStorage.getItem(
+      scopedFilterKey(SCOPE_FILTER_KEY, boardViewKey)
+    )
     // The first quick-view experiment exposed unassigned/manual as two tabs.
     // Both are execution-mode filters rather than durable top-level views, so
     // old preferences migrate to the neutral overview instead of stranding a
@@ -145,17 +166,22 @@ export function loadTasksScope(): TasksScope {
   }
 }
 
-export function saveTasksScope(scope: TasksScope): void {
+export function saveTasksScope(
+  scope: TasksScope,
+  boardViewKey = "global"
+): void {
   if (typeof window === "undefined") return
   try {
-    localStorage.setItem(SCOPE_FILTER_KEY, scope)
+    localStorage.setItem(scopedFilterKey(SCOPE_FILTER_KEY, boardViewKey), scope)
   } catch {}
 }
 
-export function loadTasksOwnerFilter(): number | null {
+export function loadTasksOwnerFilter(boardViewKey = "global"): number | null {
   if (typeof window === "undefined") return null
   try {
-    const raw = localStorage.getItem(OWNER_FILTER_KEY)
+    const raw = localStorage.getItem(
+      scopedFilterKey(OWNER_FILTER_KEY, boardViewKey)
+    )
     if (raw == null) return null
     const value = Number(raw)
     return Number.isSafeInteger(value) && value > 0 ? value : null
@@ -164,11 +190,15 @@ export function loadTasksOwnerFilter(): number | null {
   }
 }
 
-export function saveTasksOwnerFilter(conversationId: number | null): void {
+export function saveTasksOwnerFilter(
+  conversationId: number | null,
+  boardViewKey = "global"
+): void {
   if (typeof window === "undefined") return
   try {
-    if (conversationId == null) localStorage.removeItem(OWNER_FILTER_KEY)
-    else localStorage.setItem(OWNER_FILTER_KEY, String(conversationId))
+    const key = scopedFilterKey(OWNER_FILTER_KEY, boardViewKey)
+    if (conversationId == null) localStorage.removeItem(key)
+    else localStorage.setItem(key, String(conversationId))
   } catch {}
 }
 
@@ -180,10 +210,14 @@ const TASK_PRIORITIES: WorkTaskPriority[] = [
   "urgent",
 ]
 
-export function loadTasksPriorityFilter(): WorkTaskPriority | null {
+export function loadTasksPriorityFilter(
+  boardViewKey = "global"
+): WorkTaskPriority | null {
   if (typeof window === "undefined") return null
   try {
-    const raw = localStorage.getItem(PRIORITY_FILTER_KEY)
+    const raw = localStorage.getItem(
+      scopedFilterKey(PRIORITY_FILTER_KEY, boardViewKey)
+    )
     return TASK_PRIORITIES.find((priority) => priority === raw) ?? null
   } catch {
     return null
@@ -191,12 +225,14 @@ export function loadTasksPriorityFilter(): WorkTaskPriority | null {
 }
 
 export function saveTasksPriorityFilter(
-  priority: WorkTaskPriority | null
+  priority: WorkTaskPriority | null,
+  boardViewKey = "global"
 ): void {
   if (typeof window === "undefined") return
   try {
-    if (priority == null) localStorage.removeItem(PRIORITY_FILTER_KEY)
-    else localStorage.setItem(PRIORITY_FILTER_KEY, priority)
+    const key = scopedFilterKey(PRIORITY_FILTER_KEY, boardViewKey)
+    if (priority == null) localStorage.removeItem(key)
+    else localStorage.setItem(key, priority)
   } catch {}
 }
 

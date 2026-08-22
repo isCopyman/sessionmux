@@ -2965,7 +2965,12 @@ export function ConversationDetailPanel() {
     const folderPath = allFolders.find((f) => f.id === tab.folderId)?.path
     const view =
       tab.kind === "board" && tab.boardScope ? (
-        <TaskBoardView boardScope={tab.boardScope} isActive={active} />
+        <TaskBoardView
+          key={`workbench:${activeWorkbenchId}:${tab.id}`}
+          boardScope={tab.boardScope}
+          boardViewKey={`workbench:${activeWorkbenchId}:${tab.id}`}
+          isActive={active}
+        />
       ) : tab.kind === "room" && tab.roomId ? (
         <RoomWorkspace roomId={tab.roomId} isActive={active} />
       ) : (

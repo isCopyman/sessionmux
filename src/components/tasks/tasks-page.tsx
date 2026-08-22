@@ -288,9 +288,13 @@ const columnFromDropId = (
  */
 export function TaskBoardView({
   boardScope = GLOBAL_TASK_BOARD_SCOPE,
+  boardViewKey = boardScope,
   isActive = true,
 }: {
   boardScope?: TaskBoardScope
+  /** Stable identity of this concrete Board Tab. Two Workbenches may open the
+   * same Board scope while keeping different working filters. */
+  boardViewKey?: string
   isActive?: boolean
 }) {
   const t = useTranslations("Tasks")
@@ -354,12 +358,12 @@ export function TaskBoardView({
   // status. Restored synchronously for the same reason as the filter above.
   // `viewMode` itself lives in TasksViewProvider so every Board Tab uses the
   // same saved presentation preference.
-  const [statusFilter, setStatusFilter] = useState<BoardColumnId | null>(
-    loadTasksStatusFilter
+  const [statusFilter, setStatusFilter] = useState<BoardColumnId | null>(() =>
+    loadTasksStatusFilter(boardViewKey)
   )
   useEffect(() => {
-    saveTasksStatusFilter(statusFilter)
-  }, [statusFilter])
+    saveTasksStatusFilter(statusFilter, boardViewKey)
+  }, [boardViewKey, statusFilter])
   // Column-internal grouping (none / by project / by agent). Same restore
   // pattern as viewMode: this page never SSR-paints, so a synchronous
   // localStorage read is safe and the board opens already grouped.
@@ -369,10 +373,12 @@ export function TaskBoardView({
   useEffect(() => {
     saveTasksBoardGrouping(grouping)
   }, [grouping])
-  const [scope, setScope] = useState<TasksScope>(loadTasksScope)
+  const [scope, setScope] = useState<TasksScope>(() =>
+    loadTasksScope(boardViewKey)
+  )
   useEffect(() => {
-    saveTasksScope(scope)
-  }, [scope])
+    saveTasksScope(scope, boardViewKey)
+  }, [boardViewKey, scope])
   useEffect(() => {
     if (!isActive) return
     const applyPendingScope = () => {
@@ -391,15 +397,15 @@ export function TaskBoardView({
   useEffect(() => {
     saveTasksSort(sort)
   }, [sort])
-  const [selectedOwnerFilter, setOwnerFilter] = useState<number | null>(
-    loadTasksOwnerFilter
+  const [selectedOwnerFilter, setOwnerFilter] = useState<number | null>(() =>
+    loadTasksOwnerFilter(boardViewKey)
   )
   const [priorityFilter, setPriorityFilter] = useState<WorkTaskPriority | null>(
-    loadTasksPriorityFilter
+    () => loadTasksPriorityFilter(boardViewKey)
   )
   useEffect(() => {
-    saveTasksPriorityFilter(priorityFilter)
-  }, [priorityFilter])
+    saveTasksPriorityFilter(priorityFilter, boardViewKey)
+  }, [boardViewKey, priorityFilter])
   // A drop acts on the LIVE row, not the snapshot the drag started from: the
   // provider refetches throughout a drag, and the engine's auto-processor can
   // claim a pending task while it is in the air.
@@ -521,8 +527,8 @@ export function TaskBoardView({
       ? null
       : selectedOwnerFilter
   useEffect(() => {
-    saveTasksOwnerFilter(ownerFilter)
-  }, [ownerFilter])
+    saveTasksOwnerFilter(ownerFilter, boardViewKey)
+  }, [boardViewKey, ownerFilter])
   const visibleTasks = useMemo(() => {
     const scoped = filterTasksByScope(folderScopedTasks, scope)
     const byOwner =

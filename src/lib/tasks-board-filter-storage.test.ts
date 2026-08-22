@@ -180,6 +180,37 @@ describe("tasks priority filter storage", () => {
   })
 })
 
+describe("per-Board-Tab filter storage", () => {
+  it("keeps concrete Board Tab filters independent", () => {
+    const globalView = "workbench:1:board-global"
+    const projectView = "workbench:2:board-project-7"
+    saveTasksStatusFilter("todo", globalView)
+    saveTasksScope("agent", globalView)
+    saveTasksOwnerFilter(41, globalView)
+    saveTasksPriorityFilter("high", globalView)
+
+    saveTasksStatusFilter("backlog", projectView)
+    saveTasksScope("attention", projectView)
+    saveTasksOwnerFilter(72, projectView)
+    saveTasksPriorityFilter("urgent", projectView)
+
+    expect(loadTasksStatusFilter(globalView)).toBe("todo")
+    expect(loadTasksScope(globalView)).toBe("agent")
+    expect(loadTasksOwnerFilter(globalView)).toBe(41)
+    expect(loadTasksPriorityFilter(globalView)).toBe("high")
+
+    expect(loadTasksStatusFilter(projectView)).toBe("backlog")
+    expect(loadTasksScope(projectView)).toBe("attention")
+    expect(loadTasksOwnerFilter(projectView)).toBe(72)
+    expect(loadTasksPriorityFilter(projectView)).toBe("urgent")
+
+    expect(loadTasksStatusFilter("workbench:3:board-global")).toBeNull()
+    expect(loadTasksScope("workbench:3:board-global")).toBe("all")
+    expect(loadTasksOwnerFilter("workbench:3:board-global")).toBeNull()
+    expect(loadTasksPriorityFilter("workbench:3:board-global")).toBeNull()
+  })
+})
+
 describe("tasks sort storage", () => {
   it("defaults to manual and round-trips the two projected sorts", () => {
     expect(loadTasksSort()).toBe("manual")
