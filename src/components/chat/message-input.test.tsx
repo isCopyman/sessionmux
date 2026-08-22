@@ -709,6 +709,36 @@ describe("MessageInput boolean config options", () => {
 describe("MessageInput collapsed selectors popover", () => {
   afterEach(() => cleanup())
 
+  it("shows and switches the Claude launch profile in the narrow settings panel", async () => {
+    const user = userEvent.setup()
+    const onPendingClaudeProfileChange = vi.fn().mockResolvedValue(true)
+    const { container } = renderInput({
+      agentType: "claude_code",
+      onPendingClaudeProfileChange,
+    })
+    await waitFor(() =>
+      expect(container.querySelector('[role="textbox"]')).not.toBeNull()
+    )
+
+    const settingsLabel = enMessages.Folder.chat.messageInput.agentSettings
+    await user.click(screen.getByRole("button", { name: settingsLabel }))
+    const popover = await screen.findByRole("dialog", { name: settingsLabel })
+
+    // Profile is the same first-class field as Mode/Model/Effort in the
+    // collapsed layout, not a wide-layout-only chip.
+    expect(
+      within(popover).getByRole("button", { name: /Launch profile/ })
+    ).toBeInTheDocument()
+    await user.click(within(popover).getByRole("button", { name: /中转/ }))
+
+    await waitFor(() =>
+      expect(onPendingClaudeProfileChange).toHaveBeenCalledWith("api")
+    )
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: settingsLabel })).toBeNull()
+    )
+  })
+
   it("selects a config option from the cog Popover and closes it", async () => {
     const user = userEvent.setup()
     const onConfigOptionChange = vi.fn()

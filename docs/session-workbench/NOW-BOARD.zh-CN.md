@@ -42,6 +42,12 @@
 > 2026-08-22 复核：本节标题是旧协作流程遗留；当前没有外派代码任务。已完成项保留到
 > 本轮文档收口后归档，`chippin` 只是一份未采用的历史候选，不得直接合并。
 
+- [x] **Composer 宽/窄 Profile 选择器统一** —— 窄 Tab 的 master-detail 设置面板只从
+      ACP config/mode 构造字段，漏掉 Codeg 自有的 Claude Profile；抽取共享 Profile
+      选择模型，让宽布局下拉和窄布局面板显示、切换、失败回滚使用同一事实源，并做
+      前端测试与真实 Tauri WebView2 验证。相关 45 项测试、全量 4981 项测试、TypeScript
+      与 ESLint 均通过；真实窄窗口已验证 Profile 字段、当前值和选项正常显示。
+
 - [x] **authmode** —— 已合。删掉"有人写、没人读"的 `CLAUDE_AUTH_MODE`，
       16 文件 −182/+4，门全绿（tsc/eslint 0，vitest 394 文件 4970 测试）。
       工人核实后只删了 2 个 Claude 独有的 i18n 键，另外 4 个是顶层共享、

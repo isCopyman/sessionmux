@@ -74,7 +74,10 @@ import {
 } from "@/components/chat/conversation-context-bar"
 import { ComposerContextUsage } from "@/components/chat/composer-context-usage"
 import { ComposerConnectionStatus } from "@/components/chat/composer-connection-status"
-import { InlineClaudeProfileSelector } from "@/components/chat/claude-profile-selector"
+import {
+  ClaudeProfileSelectorDropdown,
+  useClaudeProfileSelectorModel,
+} from "@/components/chat/claude-profile-selector"
 import { InlineModeSelector } from "@/components/chat/mode-selector"
 import {
   InlineSessionConfigSelector,
@@ -686,6 +689,18 @@ export function MessageInput({
     },
     [onPendingClaudeProfileChange]
   )
+  const claudeProfileSelector = useClaudeProfileSelectorModel({
+    enabled: showClaudeProfile,
+    conversationId: sourceConversationId ?? null,
+    disabled: isPrompting,
+    pendingProfileId:
+      sourceConversationId == null ? pendingClaudeProfileId : null,
+    onPendingProfileChange:
+      sourceConversationId == null
+        ? handlePendingClaudeProfileChange
+        : undefined,
+    agentDefaultProfileId,
+  })
   useEffect(() => {
     if (agentType === "claude_code") return
     setPendingClaudeProfileId(null)
@@ -1442,19 +1457,7 @@ export function MessageInput({
   const inlineSelectorItems = (
     <>
       {showClaudeProfile && (
-        <InlineClaudeProfileSelector
-          conversationId={sourceConversationId}
-          disabled={isPrompting}
-          pendingProfileId={
-            sourceConversationId == null ? pendingClaudeProfileId : null
-          }
-          onPendingProfileChange={
-            sourceConversationId == null
-              ? handlePendingClaudeProfileChange
-              : undefined
-          }
-          agentDefaultProfileId={agentDefaultProfileId}
-        />
+        <ClaudeProfileSelectorDropdown model={claudeProfileSelector} />
       )}
       {hasConfigOptions &&
         availableConfigOptions.map((option) => {
@@ -1516,6 +1519,32 @@ export function MessageInput({
   // `showModeSelector`), but both are mapped so the panel stays agnostic.
   const collapsedSettings = useMemo<SessionSelectorSetting[]>(() => {
     const result: SessionSelectorSetting[] = []
+    if (
+      showClaudeProfile &&
+      claudeProfileSelector.displayedId != null &&
+      claudeProfileSelector.options.length > 0
+    ) {
+      result.push({
+        key: "claude-profile",
+        title: claudeProfileSelector.controlName,
+        currentValue: claudeProfileSelector.displayedId,
+        currentLabel: claudeProfileSelector.currentLabel,
+        groups: [
+          {
+            key: "__claude_profiles__",
+            name: null,
+            options: claudeProfileSelector.options.map((option) => ({
+              value: option.value,
+              name: option.label,
+              description: option.description,
+            })),
+          },
+        ],
+        onSelect: (value) => {
+          void claudeProfileSelector.select(value)
+        },
+      })
+    }
     if (hasConfigOptions) {
       for (const option of availableConfigOptions) {
         // An on/off option becomes a two-item headerless group — the same shape
@@ -1632,6 +1661,8 @@ export function MessageInput({
     }
     return result
   }, [
+    showClaudeProfile,
+    claudeProfileSelector,
     hasConfigOptions,
     availableConfigOptions,
     showModeSelector,
@@ -2014,6 +2045,11 @@ export function MessageInput({
                           )}
                           {showModeLoading && (
                             <SelectorLoadingChip label={t("loadingMode")} />
+                          )}
+                          {claudeProfileSelector.loading && (
+                            <SelectorLoadingChip
+                              label={claudeProfileSelector.currentLabel}
+                            />
                           )}
                           {collapsedSettings.length > 0 && (
                             <SessionSelectorsPanel

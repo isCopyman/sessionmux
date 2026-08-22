@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { ChevronDown } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
@@ -29,7 +29,9 @@ import {
   type ClaudeProfileInfo,
 } from "@/lib/types"
 
-interface InlineClaudeProfileSelectorProps {
+export interface ClaudeProfileSelectorProps {
+  /** Skip profile I/O when the surrounding composer is not Claude Code. */
+  enabled?: boolean
   conversationId: number | null
   disabled?: boolean
   /** Composer's pending choice while no conversation exists. Shown the same
@@ -39,6 +41,31 @@ interface InlineClaudeProfileSelectorProps {
   /** Agent-level launch profile used by the process before a conversation row
    *  exists. `undefined` means the agent list is still loading. */
   agentDefaultProfileId?: string | null
+}
+
+export interface ClaudeProfileSelectorOption {
+  value: string
+  label: string
+  description: string | null
+}
+
+/**
+ * Shared state and actions for every Claude Profile selector surface.
+ *
+ * The wide composer uses a dropdown while the narrow composer uses the same
+ * master-detail panel as Model/Mode/Effort. Keeping the profile lifecycle here
+ * prevents those two responsive layouts from drifting into different fields
+ * or switching semantics again.
+ */
+export interface ClaudeProfileSelectorModel {
+  controlName: string
+  currentLabel: string
+  displayedId: string | null
+  options: ClaudeProfileSelectorOption[]
+  loading: boolean
+  disabled: boolean
+  select: (profileId: string) => Promise<void>
+  manage: () => void
 }
 
 function profileDescription(profile: ClaudeProfileInfo): string | null {
@@ -51,14 +78,17 @@ function profileDescription(profile: ClaudeProfileInfo): string | null {
   return null
 }
 
-export function InlineClaudeProfileSelector({
+export function useClaudeProfileSelectorModel({
+  enabled = true,
   conversationId,
   disabled = false,
   pendingProfileId = null,
   onPendingProfileChange,
   agentDefaultProfileId,
-}: InlineClaudeProfileSelectorProps) {
+}: ClaudeProfileSelectorProps): ClaudeProfileSelectorModel {
   const t = useTranslations("AcpAgentSettings.claudeProfile")
+  const tRef = useRef(t)
+  tRef.current = t
   const [profiles, setProfiles] = useState<ClaudeProfileInfo[]>([])
   const [profilesReady, setProfilesReady] = useState(false)
   const [pickedId, setPickedId] = useState<string | null>(null)
@@ -68,6 +98,7 @@ export function InlineClaudeProfileSelector({
     profileId: string | null
   } | null>(null)
   useEffect(() => {
+    if (!enabled) return
     let cancelled = false
     void claudeProfileList()
       .then((list) => {
@@ -78,14 +109,14 @@ export function InlineClaudeProfileSelector({
       .catch((error: unknown) => {
         if (cancelled) return
         setProfilesReady(true)
-        toast.error(t("listFailed"), {
+        toast.error(tRef.current("listFailed"), {
           description: toErrorMessage(error),
         })
       })
     return () => {
       cancelled = true
     }
-  }, [t])
+  }, [enabled])
 
   // Which profile this conversation is actually bound to. Without this the chip
   // read `follow-default` on every mount, so reopening the app made every
@@ -94,7 +125,7 @@ export function InlineClaudeProfileSelector({
   // first entry exactly as it did before, and a toast for a label that is only
   // cosmetically wrong would be worse than the wrong label.
   useEffect(() => {
-    if (conversationId == null) return
+    if (!enabled || conversationId == null) return
     let cancelled = false
     void conversationGetClaudeProfile(conversationId)
       .then((result) => {
@@ -111,9 +142,10 @@ export function InlineClaudeProfileSelector({
     return () => {
       cancelled = true
     }
-  }, [conversationId])
+  }, [conversationId, enabled])
 
   const displayedId = useMemo(() => {
+    if (!enabled) return null
     if (!profilesReady) return null
     const normalize = (id: string) =>
       profiles.some((item) => item.id === id)
@@ -138,6 +170,7 @@ export function InlineClaudeProfileSelector({
     pickedId,
     profiles,
     profilesReady,
+    enabled,
   ])
   const selected = useMemo(
     () => profiles.find((item) => item.id === displayedId),
@@ -214,6 +247,51 @@ export function InlineClaudeProfileSelector({
     )
   }, [t])
 
+  const options = useMemo<ClaudeProfileSelectorOption[]>(
+    () =>
+      profiles.map((profile) => ({
+        value: profile.id,
+        label:
+          profile.id === FOLLOW_DEFAULT_CLAUDE_PROFILE_ID
+            ? t("followDefault")
+            : profile.label,
+        description: profileDescription(profile),
+      })),
+    [profiles, t]
+  )
+
+  return useMemo(
+    () => ({
+      controlName,
+      currentLabel,
+      displayedId,
+      options,
+      loading: enabled && !profilesReady,
+      disabled: triggerDisabled,
+      select: handleSelect,
+      manage: handleManage,
+    }),
+    [
+      controlName,
+      currentLabel,
+      displayedId,
+      enabled,
+      handleManage,
+      handleSelect,
+      options,
+      profilesReady,
+      triggerDisabled,
+    ]
+  )
+}
+
+export function ClaudeProfileSelectorDropdown({
+  model,
+}: {
+  model: ClaudeProfileSelectorModel
+}) {
+  const t = useTranslations("AcpAgentSettings.claudeProfile")
+
   return (
     <>
       <DropdownMenu>
@@ -221,14 +299,16 @@ export function InlineClaudeProfileSelector({
           <Button
             variant="ghost"
             size="xs"
-            disabled={triggerDisabled}
-            title={controlName}
+            disabled={model.disabled}
+            title={model.controlName}
             aria-label={
-              currentLabel ? `${controlName}: ${currentLabel}` : controlName
+              model.currentLabel
+                ? `${model.controlName}: ${model.currentLabel}`
+                : model.controlName
             }
             className="min-w-0 gap-0.5 px-1 text-muted-foreground"
           >
-            <span className="max-w-[10rem] truncate">{currentLabel}</span>
+            <span className="max-w-[10rem] truncate">{model.currentLabel}</span>
             <ChevronDown className="size-3 shrink-0 text-muted-foreground" />
           </Button>
         </DropdownMenuTrigger>
@@ -243,43 +323,40 @@ export function InlineClaudeProfileSelector({
           }}
         >
           <DropdownMenuLabel className="text-foreground">
-            {controlName}
+            {model.controlName}
           </DropdownMenuLabel>
           <DropdownMenuSeparator />
           <DropdownMenuRadioGroup
-            value={displayedId ?? ""}
+            value={model.displayedId ?? ""}
             onValueChange={(value) => {
-              void handleSelect(value)
+              void model.select(value)
             }}
           >
-            {profiles.map((profile) => (
+            {model.options.map((option) => (
               <DropdownMenuRadioItem
-                key={profile.id}
-                value={profile.id}
-                title={
-                  profile.id === FOLLOW_DEFAULT_CLAUDE_PROFILE_ID
-                    ? t("followDefault")
-                    : profile.label
-                }
+                key={option.value}
+                value={option.value}
+                title={option.label}
               >
                 <DropdownRadioItemContent
-                  label={
-                    profile.id === FOLLOW_DEFAULT_CLAUDE_PROFILE_ID
-                      ? t("followDefault")
-                      : profile.label
-                  }
-                  description={profileDescription(profile)}
+                  label={option.label}
+                  description={option.description}
                   truncateDescription
                 />
               </DropdownMenuRadioItem>
             ))}
           </DropdownMenuRadioGroup>
           <DropdownMenuSeparator />
-          <DropdownMenuItem onSelect={handleManage}>
+          <DropdownMenuItem onSelect={model.manage}>
             {t("manage")}
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
     </>
   )
+}
+
+export function InlineClaudeProfileSelector(props: ClaudeProfileSelectorProps) {
+  const model = useClaudeProfileSelectorModel(props)
+  return <ClaudeProfileSelectorDropdown model={model} />
 }
