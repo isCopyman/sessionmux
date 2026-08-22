@@ -484,6 +484,24 @@ describe("TasksPage quick views", () => {
     expect(screen.getByText("research task")).toBeInTheDocument()
     expect(screen.queryByText("writing task")).toBeNull()
   })
+
+  it("filters tasks by business priority without changing their status", async () => {
+    h.tasks = [
+      task(1, "todo", { title: "ordinary task", priority: "none" }),
+      task(2, "todo", { title: "urgent task", priority: "urgent" }),
+      task(3, "running", { title: "urgent running", priority: "urgent" }),
+    ]
+    renderPage()
+
+    await userEvent.click(
+      screen.getByRole("combobox", { name: "Priority filter" })
+    )
+    await userEvent.click(screen.getByRole("option", { name: "Urgent" }))
+
+    expect(screen.queryByText("ordinary task")).toBeNull()
+    expect(screen.getByText("urgent task")).toBeInTheDocument()
+    expect(screen.getByText("urgent running")).toBeInTheDocument()
+  })
 })
 
 describe("TasksPage sorting", () => {

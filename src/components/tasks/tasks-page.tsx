@@ -57,12 +57,14 @@ import {
   loadTasksBoardFilter,
   loadTasksBoardGrouping,
   loadTasksOwnerFilter,
+  loadTasksPriorityFilter,
   loadTasksScope,
   loadTasksSort,
   loadTasksStatusFilter,
   saveTasksBoardFilter,
   saveTasksBoardGrouping,
   saveTasksOwnerFilter,
+  saveTasksPriorityFilter,
   saveTasksScope,
   saveTasksSort,
   saveTasksStatusFilter,
@@ -132,12 +134,18 @@ import { TasksSkeleton } from "./tasks-skeleton"
 import { TaskTranscriptDialog } from "./task-transcript-dialog"
 import { TaskSessionLaunchDialog } from "./task-session-launch-dialog"
 import { createTaskSessionAndAssign } from "./task-session-launch"
-import { taskPriorityRank } from "./task-priority"
+import {
+  PRIORITY_LABEL_KEYS,
+  TASK_PRIORITIES,
+  TaskPriorityIcon,
+  taskPriorityRank,
+} from "./task-priority"
 import type {
   DbConversationSummary,
   WorkTask,
   WorkTaskBusinessStatus,
   WorkTaskDraft,
+  WorkTaskPriority,
 } from "@/lib/types"
 
 const COLUMN_LABEL_KEYS = {
@@ -163,6 +171,7 @@ const EMPTY_LABEL_KEYS = {
 /** The status select's "no filter" option — a sentinel, because Radix reserves
  *  the empty string for "no value chosen". */
 const ALL_STATUSES = "__all__"
+const ALL_PRIORITIES = "__all_priorities__"
 
 const GROUPING_LABEL_KEYS = {
   none: "groupByNone",
@@ -355,6 +364,12 @@ export function TasksPage() {
   const [selectedOwnerFilter, setOwnerFilter] = useState<number | null>(
     loadTasksOwnerFilter
   )
+  const [priorityFilter, setPriorityFilter] = useState<WorkTaskPriority | null>(
+    loadTasksPriorityFilter
+  )
+  useEffect(() => {
+    saveTasksPriorityFilter(priorityFilter)
+  }, [priorityFilter])
   // A drop acts on the LIVE row, not the snapshot the drag started from: the
   // provider refetches throughout a drag, and the engine's auto-processor can
   // claim a pending task while it is in the air.
@@ -487,10 +502,14 @@ export function TasksPage() {
   }, [ownerFilter])
   const visibleTasks = useMemo(() => {
     const scoped = filterTasksByScope(folderScopedTasks, scope)
-    return ownerFilter == null
-      ? scoped
-      : scoped.filter((task) => task.conversation_id === ownerFilter)
-  }, [folderScopedTasks, scope, ownerFilter])
+    const byOwner =
+      ownerFilter == null
+        ? scoped
+        : scoped.filter((task) => task.conversation_id === ownerFilter)
+    return priorityFilter == null
+      ? byOwner
+      : byOwner.filter((task) => (task.priority ?? "none") === priorityFilter)
+  }, [folderScopedTasks, scope, ownerFilter, priorityFilter])
   const columns = useMemo(() => {
     const grouped = groupTasksByColumn(visibleTasks, boardFilter.showArchived)
     for (const column of BOARD_COLUMN_IDS) {
@@ -1051,6 +1070,40 @@ export function TasksPage() {
                 </SelectContent>
               </Select>
             ) : null}
+
+            <Select
+              value={priorityFilter ?? ALL_PRIORITIES}
+              onValueChange={(value) =>
+                setPriorityFilter(
+                  value === ALL_PRIORITIES ? null : (value as WorkTaskPriority)
+                )
+              }
+            >
+              <SelectTrigger
+                size="sm"
+                aria-label={t("priorityFilter")}
+                className="h-8 w-auto max-w-48 gap-1.5 rounded-full border-transparent bg-muted/70 px-3 text-[0.8125rem] font-medium shadow-none ws-msg-chip hover:bg-muted"
+              >
+                <TaskPriorityIcon
+                  priority={priorityFilter ?? "none"}
+                  showNone
+                />
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={ALL_PRIORITIES}>
+                  {t("priorityFilterAll")}
+                </SelectItem>
+                {TASK_PRIORITIES.map((priority) => (
+                  <SelectItem key={priority} value={priority}>
+                    <span className="flex items-center gap-2">
+                      <TaskPriorityIcon priority={priority} showNone />
+                      {t(PRIORITY_LABEL_KEYS[priority])}
+                    </span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
 
             {/* Status filter — list-only: the board already sorts by status into
               its seven columns, so there is nothing there for it to narrow.

@@ -19,7 +19,7 @@ export const TASK_PRIORITIES: WorkTaskPriority[] = [
   "urgent",
 ]
 
-const PRIORITY_LABEL_KEYS = {
+export const PRIORITY_LABEL_KEYS = {
   none: "priorityNone",
   low: "priorityLow",
   medium: "priorityMedium",

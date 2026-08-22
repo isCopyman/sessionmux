@@ -3,6 +3,7 @@ import {
   loadTasksBoardFilter,
   loadTasksBoardGrouping,
   loadTasksOwnerFilter,
+  loadTasksPriorityFilter,
   loadTasksScope,
   loadTasksSort,
   loadTasksStatusFilter,
@@ -10,6 +11,7 @@ import {
   saveTasksBoardFilter,
   saveTasksBoardGrouping,
   saveTasksOwnerFilter,
+  saveTasksPriorityFilter,
   saveTasksScope,
   saveTasksSort,
   saveTasksStatusFilter,
@@ -22,6 +24,7 @@ const STATUS_FILTER_KEY = "workspace:tasks-status-filter"
 const GROUPING_KEY = "workspace:tasks-board-grouping"
 const SCOPE_FILTER_KEY = "workspace:tasks-scope-filter"
 const OWNER_FILTER_KEY = "workspace:tasks-owner-filter"
+const PRIORITY_FILTER_KEY = "workspace:tasks-priority-filter"
 const SORT_KEY = "workspace:tasks-sort"
 
 beforeEach(() => {
@@ -157,6 +160,23 @@ describe("tasks owner filter storage", () => {
     expect(loadTasksOwnerFilter()).toBeNull()
     localStorage.setItem(OWNER_FILTER_KEY, "not-a-session")
     expect(loadTasksOwnerFilter()).toBeNull()
+  })
+})
+
+describe("tasks priority filter storage", () => {
+  it("round-trips a priority and clears back to all", () => {
+    expect(loadTasksPriorityFilter()).toBeNull()
+    saveTasksPriorityFilter("urgent")
+    expect(loadTasksPriorityFilter()).toBe("urgent")
+    saveTasksPriorityFilter("none")
+    expect(loadTasksPriorityFilter()).toBe("none")
+    saveTasksPriorityFilter(null)
+    expect(localStorage.getItem(PRIORITY_FILTER_KEY)).toBeNull()
+  })
+
+  it("ignores stale priority values", () => {
+    localStorage.setItem(PRIORITY_FILTER_KEY, "critical")
+    expect(loadTasksPriorityFilter()).toBeNull()
   })
 })
 

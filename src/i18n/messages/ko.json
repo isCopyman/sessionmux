@@ -4732,6 +4732,8 @@
     "sortPriority": "Priority",
     "sortUpdated": "Recently updated",
     "priority": "Priority",
+    "priorityFilter": "Priority filter",
+    "priorityFilterAll": "All priorities",
     "priorityHint": "Business importance only; it never interrupts an Agent or changes prompt order.",
     "priorityNone": "No priority",
     "priorityLow": "Low",

@@ -1,11 +1,14 @@
 "use client"
 
+import type { WorkTaskPriority } from "@/lib/types"
+
 const BOARD_FILTER_KEY = "workspace:tasks-board-filter"
 const VIEW_MODE_KEY = "workspace:tasks-view-mode"
 const STATUS_FILTER_KEY = "workspace:tasks-status-filter"
 const GROUPING_KEY = "workspace:tasks-board-grouping"
 const SCOPE_FILTER_KEY = "workspace:tasks-scope-filter"
 const OWNER_FILTER_KEY = "workspace:tasks-owner-filter"
+const PRIORITY_FILTER_KEY = "workspace:tasks-priority-filter"
 const SORT_KEY = "workspace:tasks-sort"
 
 export const TASKS_STATUS_GROUPS = [
@@ -166,6 +169,34 @@ export function saveTasksOwnerFilter(conversationId: number | null): void {
   try {
     if (conversationId == null) localStorage.removeItem(OWNER_FILTER_KEY)
     else localStorage.setItem(OWNER_FILTER_KEY, String(conversationId))
+  } catch {}
+}
+
+const TASK_PRIORITIES: WorkTaskPriority[] = [
+  "none",
+  "low",
+  "medium",
+  "high",
+  "urgent",
+]
+
+export function loadTasksPriorityFilter(): WorkTaskPriority | null {
+  if (typeof window === "undefined") return null
+  try {
+    const raw = localStorage.getItem(PRIORITY_FILTER_KEY)
+    return TASK_PRIORITIES.find((priority) => priority === raw) ?? null
+  } catch {
+    return null
+  }
+}
+
+export function saveTasksPriorityFilter(
+  priority: WorkTaskPriority | null
+): void {
+  if (typeof window === "undefined") return
+  try {
+    if (priority == null) localStorage.removeItem(PRIORITY_FILTER_KEY)
+    else localStorage.setItem(PRIORITY_FILTER_KEY, priority)
   } catch {}
 }
 

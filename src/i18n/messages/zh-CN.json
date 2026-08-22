@@ -4732,6 +4732,8 @@
     "sortPriority": "按优先级",
     "sortUpdated": "最近更新",
     "priority": "优先级",
+    "priorityFilter": "优先级筛选",
+    "priorityFilterAll": "全部优先级",
     "priorityHint": "仅表示任务重要性，不会打断 Agent 或改变消息队列顺序。",
     "priorityNone": "无优先级",
     "priorityLow": "低",
