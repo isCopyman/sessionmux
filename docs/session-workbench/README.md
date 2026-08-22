@@ -18,7 +18,9 @@
 
 ## 专题文档（按主题）
 
-- **任务看板**：`TASKBOARD-RFC-2026-08-21.zh-CN.md`（设计 RFC，待用户过目）；
+- **任务看板**：`TASK-KANBAN-IMPLEMENTATION-PLAN-2026-08-22.zh-CN.md`（**当前实施定稿**：
+  Task/Execution 双轴、全局/项目看板、Session 指派与 PromptQueue 调度）；
+  `TASKBOARD-RFC-2026-08-21.zh-CN.md`（早期设计 RFC）；
   `TASKBOARD-P1-REPORT.zh-CN.md`（第一期施工报告）；
   `KANBAN-DESIGN-2026-08-21.zh-CN.md`（**看板定稿设计**：一级容器、agent 读写不对称、
   防退化成群聊的两条对策）；
