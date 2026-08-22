@@ -15,6 +15,10 @@ Codeg 的任务系统服务于单 Agent、多 Agent、多项目和多 Harness。
 5. 指派给 Session 的任务可靠排队，不越过用户消息、不隐式打断；
 6. 用户能从卡片看到任务进度和执行状态，并完成、审查、重试或取消。
 
+任务既可以从人类的模糊想法开始，也可以由主 Agent 根据一段需求拆出，还可以从 GitHub
+Issue 等外部条目导入。创建来源不改变任务语义：卡片先成为 Codeg 的独立事实，再决定是否
+关联外部来源、由谁执行以及是否需要 Worktree。
+
 目标是覆盖约 90% 的日常使用，不做 Jira、自定义工作流、无限层级和复杂权限系统。
 
 ## 2. 一句话模型
@@ -98,6 +102,49 @@ execution_mode = null | manual | session | engine
 - Worktree Folder 永不作为任务项目，始终解析到 project root；
 - 删除项目后沿用现有软删除行为，不自动把历史任务倒进未归属桶。
 
+### 3.4 负责人、协作者与外部来源
+
+任务责任关系不塞进标题、描述或 `conversation_id`。S2 引入独立 Assignment：
+
+```text
+TaskAssignment
+├── task_id
+├── conversation_id（稳定 Session ID）
+├── role = owner | collaborator
+├── state = assigned | active | completed | removed
+└── actor / timestamps
+```
+
+- 一张任务同一时间最多一个主要负责人；CAS 领取只竞争 owner；
+- 可以有多个协作者，用于调研、实现、审查等分工；
+- 多个 Session 的进展最终汇总到同一 Task，但各自仍保留自己的 Session 历史；
+- 更换负责人不改 Task ID，也不删除旧 Session；
+- Session 属性面板通过 Assignment 投影“我负责 / 我参与”的任务。
+
+外部 Issue、PR、文档或 Room 帖子使用可选 Source Link，而不是冒充 Task 或强制同步：
+
+```text
+TaskSourceLink
+├── task_id
+├── provider / external_id / url
+├── title_snapshot
+└── sync_policy（第一版只读引用）
+```
+
+因此一个 Issue 可拆成多个 Task，一个 Task 也可引用多个来源。第一版先完成手动关联和审计字段；
+Forge 自动导入在核心闭环稳定后接入，默认不会因为 Issue 变更而静默覆盖人或 Agent 已整理的卡片。
+
+### 3.5 修改与审计
+
+用户和受管 Agent 都可以创建、补全和拆分任务。Agent 修改采用稳定 Task ID、调用者的托管
+Session 身份和乐观 revision：
+
+- 标题、描述、项目、来源和未开始任务的执行建议可修改；
+- 所有创建、编辑、指派、领取和状态变化写入 `work_task_event`；
+- Agent 不可静默删除任务、覆盖已经提交的执行结果或跳过 Engine 合并不变量；
+- 发生并发编辑时返回冲突和最新快照，不使用最后写入者悄悄覆盖；
+- 人类原始描述保留在活动历史中，主 Agent 可以把模糊任务整理成更具体的卡片。
+
 ## 4. 全局与项目看板
 
 只有一个任务事实库，不建立物理上相互复制的“全局板”和“项目板”。
@@ -116,6 +163,9 @@ execution_mode = null | manual | session | engine
 分别记住过滤、分组、排序和板/列表模式，但修改的是同一张任务卡。
 
 第一版不做保存任意复杂 View，不做按 Team/Room/Collection 建立另一套任务归属。
+
+状态语义第一版固定为六类，不允许每个项目创建互不兼容的状态机。项目可在以后自定义列显示名
+或隐藏某列，但底层 `task_status` 仍保持稳定，使全局汇总、Agent 工具和自动化可以可靠工作。
 
 ## 5. 第一版 UI
 
@@ -155,6 +205,15 @@ Merge 区域如实表达。
 Engine 任务继续显示 Worktree、Diff、Preflight、Review 和 Merge。
 
 第一版不提供“只关联但不投递”。它会制造无人负责启动的悬空状态。
+
+### 5.4 列表、Session 与 Room 投影
+
+- 看板视图用于按状态快速推进；列表视图用于密集查看项目、负责人、协作者、来源和最近活动；
+- 全局与项目入口共享视图组件和查询，只改变过滤条件；
+- Session 属性面板显示该 Session 负责和参与的任务，可跳到卡片或看板；
+- Room 可以插入/引用同一张任务卡并显示简洁状态，但不复制任务，也不把 Room 变成第二个任务
+  数据库；Room 中的讨论仍留在共享时间线；
+- 任务详情显示主要负责人和协作者，不把多个 Agent 压成一个含混的“已分配”标签。
 
 ### 5.4 Kanban 拖拽
 
@@ -241,6 +300,19 @@ assign_task(task_id, target_session_id?)
 - 每次指派写事件，记录来源和目标；
 - Agent 第一版不能任意改别人任务状态、解除别人的指派或删除任务。
 
+同时把现有任务工具收敛为可渐进加载的一组领域动作：
+
+```text
+create_task(title, description?, project_id?, source_links?)
+update_task(task_id, expected_revision, patch)
+list_tasks(filters?) / get_task(task_id)
+assign_task(task_id, target_session_id?, role=owner)
+task_progress(...) / task_complete(...)
+```
+
+`create_work_task` 在 Engine 兼容期保留为旧名称/适配层，但新功能不再假设“创建任务就必须创建
+Session 或 Worktree”。Agent 可以先整理看板，再由自己领取、指派别的 Session，或留给人类。
+
 ## 8. 大任务、小任务和 Checklist
 
 第一版不增加 `parent_task_id`。一个主 Agent 可以创建多张普通任务并在自己的计划/任务描述中
@@ -270,6 +342,9 @@ assign_task(task_id, target_session_id?)
 - 目标验证、排队、恢复、取消、暂停和失败；
 - 普通 Session `task_progress/task_complete` 归属；
 - 新建 Session 并指派。
+- Agent `create_task/update_task` 与 revision 冲突保护；
+- 一个 owner + 多 collaborator 的 Assignment 投影；
+- Session 属性面板的“负责 / 参与任务”。
 
 验收：idle/busy/unloaded/stopped/archived/不可恢复、并发领取和取消竞态均有测试。
 
@@ -280,6 +355,8 @@ assign_task(task_id, target_session_id?)
 - 全局快速创建；
 - 跨列 DnD 层和能力矩阵；
 - 保持列内排序与布局拖拽互不干扰。
+- 列表/看板视图共享过滤与排序；
+- Room 中插入同一 Task 的轻量卡片（不复制 Task）。
 
 验收：未归属任务在全局 UI 和 Agent `list_tasks` 同时可见；不可启动 Engine 直到选择项目；
 每个合法/非法 Drop 目标有交互测试。

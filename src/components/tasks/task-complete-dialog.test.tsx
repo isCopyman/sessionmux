@@ -22,6 +22,8 @@ function task(overrides?: Partial<WorkTask>): WorkTask {
     title: "Answer the question",
     config: null,
     status: "review",
+    task_status: overrides?.task_status ?? "review",
+    execution_mode: overrides?.execution_mode ?? "engine",
     failure_reason: null,
     last_error: null,
     run_seq: 1,

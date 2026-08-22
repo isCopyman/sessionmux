@@ -22,7 +22,9 @@ use sea_orm::{
     TransactionTrait,
 };
 
-use crate::db::entities::work_task::WorkTaskStatus;
+use crate::db::entities::work_task::{
+    WorkTaskBusinessStatus, WorkTaskExecutionMode, WorkTaskStatus,
+};
 use crate::db::entities::{
     folder, work_task, work_task_event, work_task_settings, work_task_template,
 };
@@ -75,31 +77,49 @@ pub fn parse_status(raw: &str) -> Option<WorkTaskStatus> {
 /// `board-columns.test.ts` asserts every `WorkTaskStatus` appears in exactly
 /// one column; `board_status_filter_matches_frontend_column_table` below pins
 /// the same table on this copy.
-pub const BOARD_COLUMN_TODO: &[WorkTaskStatus] = &[WorkTaskStatus::Todo, WorkTaskStatus::Queued];
-pub const BOARD_COLUMN_IN_PROGRESS: &[WorkTaskStatus] =
-    &[WorkTaskStatus::Preparing, WorkTaskStatus::Running];
-pub const BOARD_COLUMN_ATTENTION: &[WorkTaskStatus] = &[
-    WorkTaskStatus::AwaitingInput,
-    WorkTaskStatus::Review,
-    WorkTaskStatus::Merging,
-    WorkTaskStatus::Failed,
+pub const BOARD_COLUMN_TODO: &[WorkTaskBusinessStatus] = &[WorkTaskBusinessStatus::Todo];
+pub const BOARD_COLUMN_IN_PROGRESS: &[WorkTaskBusinessStatus] =
+    &[WorkTaskBusinessStatus::InProgress];
+pub const BOARD_COLUMN_ATTENTION: &[WorkTaskBusinessStatus] = &[
+    WorkTaskBusinessStatus::Blocked,
+    WorkTaskBusinessStatus::Review,
 ];
-pub const BOARD_COLUMN_DONE: &[WorkTaskStatus] = &[WorkTaskStatus::Done, WorkTaskStatus::Canceled];
+pub const BOARD_COLUMN_DONE: &[WorkTaskBusinessStatus] = &[
+    WorkTaskBusinessStatus::Done,
+    WorkTaskBusinessStatus::Canceled,
+];
 
 /// Resolve an MCP `status` argument: a board column name, or a raw
 /// `WorkTaskStatus` wire value. `None` means the string is neither.
-pub fn board_status_filter(raw: &str) -> Option<Vec<WorkTaskStatus>> {
+pub fn business_status_for_engine_status(status: WorkTaskStatus) -> WorkTaskBusinessStatus {
+    match status {
+        WorkTaskStatus::Todo | WorkTaskStatus::Queued => WorkTaskBusinessStatus::Todo,
+        WorkTaskStatus::Preparing | WorkTaskStatus::Running => WorkTaskBusinessStatus::InProgress,
+        WorkTaskStatus::AwaitingInput | WorkTaskStatus::Failed => WorkTaskBusinessStatus::Blocked,
+        WorkTaskStatus::Review | WorkTaskStatus::Merging => WorkTaskBusinessStatus::Review,
+        WorkTaskStatus::Done => WorkTaskBusinessStatus::Done,
+        WorkTaskStatus::Canceled => WorkTaskBusinessStatus::Canceled,
+    }
+}
+
+pub fn board_status_filter(raw: &str) -> Option<Vec<WorkTaskBusinessStatus>> {
     let column = match raw {
         "todo" => Some(BOARD_COLUMN_TODO),
         "in_progress" => Some(BOARD_COLUMN_IN_PROGRESS),
         "attention" => Some(BOARD_COLUMN_ATTENTION),
         "done" => Some(BOARD_COLUMN_DONE),
+        "blocked" => return Some(vec![WorkTaskBusinessStatus::Blocked]),
+        "review" => return Some(vec![WorkTaskBusinessStatus::Review]),
+        "canceled" => return Some(vec![WorkTaskBusinessStatus::Canceled]),
         _ => None,
     };
     if let Some(statuses) = column {
         return Some(statuses.to_vec());
     }
-    parse_status(raw).map(|s| vec![s])
+    // Compatibility for callers that still know the old engine lifecycle.
+    // The query is nevertheless executed on task_status, so non-engine tasks
+    // remain visible and the public API does not leak engine ownership.
+    parse_status(raw).map(|s| vec![business_status_for_engine_status(s)])
 }
 
 /// Decode the parked merge intent of a row. Tolerant on purpose: the column
@@ -116,6 +136,8 @@ fn to_info(m: work_task::Model) -> WorkTaskInfo {
         title: m.title,
         config: serde_json::from_str(&m.config).unwrap_or(serde_json::Value::Null),
         status: m.status,
+        task_status: m.task_status,
+        execution_mode: m.execution_mode,
         failure_reason: m.failure_reason,
         last_error: m.last_error,
         run_seq: m.run_seq,
@@ -321,7 +343,7 @@ pub async fn recent_events(
 pub async fn list_matching(
     conn: &DatabaseConnection,
     folder_id: Option<i32>,
-    statuses: Option<&[WorkTaskStatus]>,
+    statuses: Option<&[WorkTaskBusinessStatus]>,
     limit: u64,
 ) -> Result<(Vec<work_task::Model>, u64), DbError> {
     let mut q = work_task::Entity::find()
@@ -332,7 +354,7 @@ pub async fn list_matching(
         q = q.filter(work_task::Column::FolderId.eq(fid));
     }
     if let Some(statuses) = statuses {
-        q = q.filter(work_task::Column::Status.is_in(statuses.iter().copied()));
+        q = q.filter(work_task::Column::TaskStatus.is_in(statuses.iter().copied()));
     }
     let total = q.clone().count(conn).await?;
     let rows = q
@@ -503,19 +525,20 @@ pub async fn attention_count(conn: &DatabaseConnection) -> Result<u64, DbError> 
 
 // ── CRUD ────────────────────────────────────────────────────────────────────
 
-fn parse_config(config: &serde_json::Value) -> WorkTaskConfig {
-    serde_json::from_value(config.clone()).unwrap_or_default()
-}
-
 fn validate_draft(draft: &WorkTaskDraft) -> Result<(), DbError> {
     if draft.title.trim().is_empty() {
         return Err(DbError::Validation("title is required".into()));
     }
-    let cfg = parse_config(&draft.config);
-    if cfg.display_text.trim().is_empty() && cfg.prompt_blocks.is_empty() {
-        return Err(DbError::Validation("prompt is required".into()));
-    }
     Ok(())
+}
+
+/// A neutral card may intentionally contain only a title. The worktree engine
+/// calls this at the execution boundary so creating/backlogging a fuzzy task
+/// stays cheap while launching an empty Agent turn remains impossible.
+pub fn has_runnable_prompt(config: &str) -> bool {
+    serde_json::from_str::<WorkTaskConfig>(config)
+        .map(|cfg| !cfg.prompt_blocks.is_empty())
+        .unwrap_or(false)
 }
 
 pub async fn create(
@@ -553,6 +576,8 @@ pub async fn create(
         title: Set(draft.title.trim().to_string()),
         config: Set(config_str),
         status: Set(WorkTaskStatus::Todo),
+        task_status: Set(WorkTaskBusinessStatus::Todo),
+        execution_mode: Set(None),
         failure_reason: Set(None),
         last_error: Set(None),
         run_seq: Set(0),
@@ -732,6 +757,7 @@ async fn claim_inner(
             work_task::Column::Status,
             Expr::value(status_str(WorkTaskStatus::Queued)),
         )
+        .col_expr(work_task::Column::ExecutionMode, Expr::value("engine"))
         .col_expr(
             work_task::Column::RunSeq,
             Expr::col(work_task::Column::RunSeq).add(1),
@@ -848,6 +874,7 @@ pub async fn auto_claim_next(
             .filter(work_task::Column::DeletedAt.is_null())
             .filter(work_task::Column::FolderId.eq(folder_id))
             .filter(work_task::Column::Status.eq(WorkTaskStatus::Todo))
+            .filter(work_task::Column::ExecutionMode.eq(WorkTaskExecutionMode::Engine))
             .filter(work_task::Column::ScheduledAt.is_null())
             .inner_join(folder::Entity)
             .filter(folder::Column::DeletedAt.is_null())
@@ -887,6 +914,7 @@ pub async fn auto_claim_next(
             .col_expr(work_task::Column::UpdatedAt, Expr::value(now))
             .filter(work_task::Column::Id.eq(head.id))
             .filter(work_task::Column::Status.eq(WorkTaskStatus::Todo))
+            .filter(work_task::Column::ExecutionMode.eq(WorkTaskExecutionMode::Engine))
             .filter(work_task::Column::ScheduledAt.is_null())
             .filter(work_task::Column::DeletedAt.is_null())
             .exec(&txn)
@@ -942,14 +970,16 @@ pub async fn set_schedule(
 ) -> Result<bool, DbError> {
     let now = Utc::now();
     let txn = conn.begin().await?;
-    let res = work_task::Entity::update_many()
+    let mut update = work_task::Entity::update_many()
         .col_expr(work_task::Column::ScheduledAt, Expr::value(at))
         .col_expr(work_task::Column::UpdatedAt, Expr::value(now))
         .filter(work_task::Column::Id.eq(id))
         .filter(work_task::Column::Status.eq(WorkTaskStatus::Todo))
-        .filter(work_task::Column::DeletedAt.is_null())
-        .exec(&txn)
-        .await?;
+        .filter(work_task::Column::DeletedAt.is_null());
+    if at.is_some() {
+        update = update.col_expr(work_task::Column::ExecutionMode, Expr::value("engine"));
+    }
+    let res = update.exec(&txn).await?;
     if res.rows_affected != 1 {
         txn.rollback().await?;
         return Ok(false);
@@ -1001,6 +1031,7 @@ pub async fn claim_due_scheduled(
                 work_task::Column::Status,
                 Expr::value(status_str(WorkTaskStatus::Queued)),
             )
+            .col_expr(work_task::Column::ExecutionMode, Expr::value("engine"))
             .col_expr(
                 work_task::Column::RunSeq,
                 Expr::col(work_task::Column::RunSeq).add(1),
@@ -2395,6 +2426,15 @@ mod tests {
         }
     }
 
+    async fn mark_engine_eligible(conn: &DatabaseConnection, id: i32) {
+        work_task::Entity::update_many()
+            .col_expr(work_task::Column::ExecutionMode, Expr::value("engine"))
+            .filter(work_task::Column::Id.eq(id))
+            .exec(conn)
+            .await
+            .unwrap();
+    }
+
     #[tokio::test]
     async fn create_list_get_roundtrip_and_validation() {
         let db = fresh_in_memory_db().await;
@@ -2403,16 +2443,23 @@ mod tests {
         assert!(create(&db.conn, draft(folder_id, "")).await.is_err());
         let mut no_prompt = draft(folder_id, "x");
         no_prompt.config = serde_json::json!({ "display_text": "", "prompt_blocks": [] });
-        assert!(create(&db.conn, no_prompt).await.is_err());
+        let neutral = create(&db.conn, no_prompt).await.unwrap();
+        assert_eq!(neutral.task_status, WorkTaskBusinessStatus::Todo);
+        assert_eq!(neutral.execution_mode, None);
+        assert!(!has_runnable_prompt(
+            &get_model(&db.conn, neutral.id).await.unwrap().config
+        ));
 
         let t = create(&db.conn, draft(folder_id, "fix login"))
             .await
             .unwrap();
         assert_eq!(t.status, WorkTaskStatus::Todo);
+        assert_eq!(t.task_status, WorkTaskBusinessStatus::Todo);
+        assert_eq!(t.execution_mode, None);
         assert_eq!(t.run_seq, 0);
 
         let listed = list(&db.conn, Some(folder_id)).await.unwrap();
-        assert_eq!(listed.len(), 1);
+        assert_eq!(listed.len(), 2);
         assert_eq!(get(&db.conn, t.id).await.unwrap().id, t.id);
 
         // The created event landed in the same transaction.
@@ -2429,6 +2476,9 @@ mod tests {
         let seq = claim_for_run(&db.conn, t.id, WorkTaskStatus::Todo, "user")
             .await
             .unwrap();
+        let claimed = get(&db.conn, t.id).await.unwrap();
+        assert_eq!(claimed.execution_mode, Some(WorkTaskExecutionMode::Engine));
+        assert_eq!(claimed.task_status, WorkTaskBusinessStatus::Todo);
         assert_eq!(seq, Some(1));
         // Second claim of the same todo loses (status is now queued).
         assert_eq!(
@@ -2440,6 +2490,60 @@ mod tests {
         assert_eq!(
             get(&db.conn, t.id).await.unwrap().status,
             WorkTaskStatus::Queued
+        );
+    }
+
+    #[tokio::test]
+    async fn engine_transitions_project_to_the_business_axis() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-business-axis").await;
+        let task = create(&db.conn, draft(folder_id, "task")).await.unwrap();
+
+        let seq = claim_for_run(&db.conn, task.id, WorkTaskStatus::Todo, "user")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(begin_setup(&db.conn, task.id, seq).await.unwrap());
+        assert_eq!(
+            get(&db.conn, task.id).await.unwrap().task_status,
+            WorkTaskBusinessStatus::InProgress
+        );
+
+        assert!(fail(
+            &db.conn,
+            task.id,
+            &[WorkTaskStatus::Preparing],
+            Some(seq),
+            "agent_error",
+            Some("boom".into()),
+        )
+        .await
+        .unwrap());
+        assert_eq!(
+            get(&db.conn, task.id).await.unwrap().task_status,
+            WorkTaskBusinessStatus::Blocked
+        );
+
+        let next = claim_for_run(&db.conn, task.id, WorkTaskStatus::Failed, "user")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(start_running(&db.conn, task.id, next, 1, "c1")
+            .await
+            .unwrap());
+        assert!(settle_review(&db.conn, task.id, next, None, None)
+            .await
+            .unwrap());
+        assert_eq!(
+            get(&db.conn, task.id).await.unwrap().task_status,
+            WorkTaskBusinessStatus::Review
+        );
+        assert!(complete_without_merge(&db.conn, task.id, "accepted")
+            .await
+            .unwrap());
+        assert_eq!(
+            get(&db.conn, task.id).await.unwrap().task_status,
+            WorkTaskBusinessStatus::Done
         );
     }
 
@@ -2526,6 +2630,7 @@ mod tests {
             .unwrap();
         assert!(begin_setup(&db.conn, busy.id, seq).await.unwrap());
         let next = create(&db.conn, draft(folder_id, "next")).await.unwrap();
+        mark_engine_eligible(&db.conn, next.id).await;
 
         assert_eq!(auto_claim_next(&db.conn, folder_id, 1).await.unwrap(), None);
         assert_eq!(
@@ -2554,6 +2659,7 @@ mod tests {
             .unwrap()
             .unwrap();
         let todo = create(&db.conn, draft(folder_id, "todo")).await.unwrap();
+        mark_engine_eligible(&db.conn, todo.id).await;
 
         assert_eq!(auto_claim_next(&db.conn, folder_id, 2).await.unwrap(), None);
         assert_eq!(
@@ -2589,6 +2695,9 @@ mod tests {
         let a = create(&db.conn, draft(folder_id, "a")).await.unwrap();
         let b = create(&db.conn, draft(folder_id, "b")).await.unwrap();
         let c = create(&db.conn, draft(folder_id, "c")).await.unwrap();
+        for id in [a.id, b.id, c.id] {
+            mark_engine_eligible(&db.conn, id).await;
+        }
 
         assert_eq!(
             auto_claim_next(&db.conn, folder_id, 2).await.unwrap(),
@@ -2752,6 +2861,7 @@ mod tests {
         let folder_id = seed_folder(&db, "/tmp/wt-schedule-bulk").await;
         let planned = create(&db.conn, draft(folder_id, "planned")).await.unwrap();
         let plain = create(&db.conn, draft(folder_id, "plain")).await.unwrap();
+        mark_engine_eligible(&db.conn, plain.id).await;
         assert!(set_schedule(
             &db.conn,
             planned.id,
@@ -4017,54 +4127,52 @@ mod tests {
         // The UI's inProgress is in_progress on the MCP wire.
         assert_eq!(
             board_status_filter("todo").unwrap(),
-            vec![WorkTaskStatus::Todo, WorkTaskStatus::Queued]
+            vec![WorkTaskBusinessStatus::Todo]
         );
         assert_eq!(
             board_status_filter("in_progress").unwrap(),
-            vec![WorkTaskStatus::Preparing, WorkTaskStatus::Running]
+            vec![WorkTaskBusinessStatus::InProgress]
         );
         assert_eq!(
             board_status_filter("attention").unwrap(),
             vec![
-                WorkTaskStatus::AwaitingInput,
-                WorkTaskStatus::Review,
-                WorkTaskStatus::Merging,
-                WorkTaskStatus::Failed,
+                WorkTaskBusinessStatus::Blocked,
+                WorkTaskBusinessStatus::Review,
             ]
         );
         assert_eq!(
             board_status_filter("done").unwrap(),
-            vec![WorkTaskStatus::Done, WorkTaskStatus::Canceled]
+            vec![
+                WorkTaskBusinessStatus::Done,
+                WorkTaskBusinessStatus::Canceled
+            ]
         );
-        // Raw status that is not also a column name selects that status alone.
+        // Legacy engine statuses are accepted but normalized to the public
+        // business axis.
         assert_eq!(
             board_status_filter("awaiting_input").unwrap(),
-            vec![WorkTaskStatus::AwaitingInput]
+            vec![WorkTaskBusinessStatus::Blocked]
         );
         assert_eq!(
             board_status_filter("queued").unwrap(),
-            vec![WorkTaskStatus::Queued]
+            vec![WorkTaskBusinessStatus::Todo]
         );
         assert!(board_status_filter("inProgress").is_none());
         assert!(board_status_filter("unknown").is_none());
 
-        // Every WorkTaskStatus appears in exactly one column — same pin as
+        // Every business status appears in exactly one column — same pin as
         // board-columns.test.ts against STATUSES_BY_COLUMN.
         let mut from_columns = Vec::new();
         for col in ["todo", "in_progress", "attention", "done"] {
             from_columns.extend(board_status_filter(col).unwrap());
         }
         let all = [
-            WorkTaskStatus::Todo,
-            WorkTaskStatus::Queued,
-            WorkTaskStatus::Preparing,
-            WorkTaskStatus::Running,
-            WorkTaskStatus::AwaitingInput,
-            WorkTaskStatus::Review,
-            WorkTaskStatus::Merging,
-            WorkTaskStatus::Done,
-            WorkTaskStatus::Failed,
-            WorkTaskStatus::Canceled,
+            WorkTaskBusinessStatus::Todo,
+            WorkTaskBusinessStatus::InProgress,
+            WorkTaskBusinessStatus::Blocked,
+            WorkTaskBusinessStatus::Review,
+            WorkTaskBusinessStatus::Done,
+            WorkTaskBusinessStatus::Canceled,
         ];
         assert_eq!(from_columns.len(), all.len());
         for status in all {
@@ -4079,6 +4187,7 @@ mod tests {
     async fn stamp_status(conn: &DatabaseConnection, id: i32, status: WorkTaskStatus) {
         work_task::Entity::update_many()
             .col_expr(work_task::Column::Status, Expr::value(status_str(status)))
+            .col_expr(work_task::Column::ExecutionMode, Expr::value("engine"))
             .col_expr(work_task::Column::UpdatedAt, Expr::value(Utc::now()))
             .filter(work_task::Column::Id.eq(id))
             .exec(conn)

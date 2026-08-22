@@ -423,6 +423,9 @@ impl TaskEngine {
         let task = work_task_service::get_model(&self.db.conn, task_id)
             .await
             .map_err(|e| e.to_string())?;
+        if !work_task_service::has_runnable_prompt(&task.config) {
+            return Err("task has no Agent instructions yet; edit it before starting".to_string());
+        }
         self.preflight_folder(task.folder_id).await?;
         match work_task_service::claim_for_run(&self.db.conn, task_id, WorkTaskStatus::Todo, "user")
             .await
@@ -462,6 +465,12 @@ impl TaskEngine {
                 .map_err(|e| e.to_string())?;
             let mut folder_claimed = 0u32;
             for id in ids {
+                let task = work_task_service::get_model(&self.db.conn, id)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                if !work_task_service::has_runnable_prompt(&task.config) {
+                    continue;
+                }
                 // The unplanned-only claim, not the generic one: `ids` is a
                 // snapshot, and a plan set in the meantime must still be
                 // honoured rather than silently overridden by a bulk button.
@@ -4544,6 +4553,8 @@ mod tests {
             title: "Fix the login flow".to_string(),
             config: "{}".to_string(),
             status: WorkTaskStatus::Queued,
+            task_status: crate::db::entities::work_task::WorkTaskBusinessStatus::Todo,
+            execution_mode: Some(crate::db::entities::work_task::WorkTaskExecutionMode::Engine),
             failure_reason: None,
             last_error: None,
             run_seq: 1,

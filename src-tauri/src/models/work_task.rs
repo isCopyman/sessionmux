@@ -1,7 +1,9 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-pub use crate::db::entities::work_task::WorkTaskStatus;
+pub use crate::db::entities::work_task::{
+    WorkTaskBusinessStatus, WorkTaskExecutionMode, WorkTaskStatus,
+};
 
 /// One folder-bound work task. Wire form mirrors `src/lib/types.ts`
 /// (`WorkTask`).
@@ -14,6 +16,8 @@ pub struct WorkTaskInfo {
     /// replayed at launch, never queried.
     pub config: serde_json::Value,
     pub status: WorkTaskStatus,
+    pub task_status: WorkTaskBusinessStatus,
+    pub execution_mode: Option<WorkTaskExecutionMode>,
     pub failure_reason: Option<String>,
     pub last_error: Option<String>,
     pub run_seq: i32,

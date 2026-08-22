@@ -1,6 +1,39 @@
 use sea_orm::entity::prelude::*;
 use serde::{Deserialize, Serialize};
 
+/// The workflow the user sees on the board. This is deliberately independent
+/// from [`WorkTaskStatus`], which remains the worktree engine's lifecycle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "String(StringLen::None)")]
+#[serde(rename_all = "snake_case")]
+pub enum WorkTaskBusinessStatus {
+    #[sea_orm(string_value = "todo")]
+    Todo,
+    #[sea_orm(string_value = "in_progress")]
+    InProgress,
+    #[sea_orm(string_value = "blocked")]
+    Blocked,
+    #[sea_orm(string_value = "review")]
+    Review,
+    #[sea_orm(string_value = "done")]
+    Done,
+    #[sea_orm(string_value = "canceled")]
+    Canceled,
+}
+
+/// How a task is advanced. NULL in the row means the task is still unassigned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize)]
+#[sea_orm(rs_type = "String", db_type = "String(StringLen::None)")]
+#[serde(rename_all = "snake_case")]
+pub enum WorkTaskExecutionMode {
+    #[sea_orm(string_value = "manual")]
+    Manual,
+    #[sea_orm(string_value = "session")]
+    Session,
+    #[sea_orm(string_value = "engine")]
+    Engine,
+}
+
 /// Lifecycle of a work task. The pipeline is
 /// `todo → queued → preparing → running ⇄ awaiting_input → review → merging →
 /// done`, with `failed` / `canceled` as side paths. `running` spans the whole
@@ -63,6 +96,11 @@ pub struct Model {
     #[sea_orm(column_type = "Text")]
     pub config: String,
     pub status: WorkTaskStatus,
+    /// User-facing workflow axis. Board columns and task filters read this;
+    /// the engine continues to own `status` above.
+    pub task_status: WorkTaskBusinessStatus,
+    /// NULL = not assigned yet.
+    pub execution_mode: Option<WorkTaskExecutionMode>,
     /// agent_error | setup_error | verdict_blocked | interrupted
     pub failure_reason: Option<String>,
     pub last_error: Option<String>,

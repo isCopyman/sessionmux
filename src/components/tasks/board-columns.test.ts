@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import {
-  ALL_WORK_TASK_STATUSES,
+  ALL_WORK_TASK_BUSINESS_STATUSES,
   BOARD_COLUMN_IDS,
   columnForStatus,
   filterTasksForList,
@@ -9,7 +9,32 @@ import {
   type BoardColumnId,
 } from "./board-columns"
 import { TASKS_STATUS_GROUPS } from "@/lib/tasks-board-filter-storage"
-import type { WorkTask, WorkTaskStatus } from "@/lib/types"
+import type {
+  WorkTask,
+  WorkTaskBusinessStatus,
+  WorkTaskStatus,
+} from "@/lib/types"
+
+function businessStatus(status: WorkTaskStatus): WorkTaskBusinessStatus {
+  switch (status) {
+    case "todo":
+    case "queued":
+      return "todo"
+    case "preparing":
+    case "running":
+      return "in_progress"
+    case "awaiting_input":
+    case "failed":
+      return "blocked"
+    case "review":
+    case "merging":
+      return "review"
+    case "done":
+      return "done"
+    case "canceled":
+      return "canceled"
+  }
+}
 
 function task(
   id: number,
@@ -22,6 +47,8 @@ function task(
     title: `t${id}`,
     config: null,
     status,
+    task_status: extra?.task_status ?? businessStatus(status),
+    execution_mode: extra?.execution_mode ?? "engine",
     failure_reason: null,
     last_error: null,
     run_seq: 0,
@@ -52,21 +79,11 @@ function task(
 }
 
 describe("columnForStatus", () => {
-  it("maps every DB status to its board column per the spec", () => {
-    // 待办 = todo + queued (queued is still waiting for a slot)
+  it("maps every business status to its board column per the spec", () => {
     expect(columnForStatus("todo")).toBe("todo")
-    expect(columnForStatus("queued")).toBe("todo")
-    // 进行中 = preparing + running — a preparing task already left the queue
-    // and is doing setup work (worktree, init command, agent spawn).
-    expect(columnForStatus("preparing")).toBe("inProgress")
-    expect(columnForStatus("running")).toBe("inProgress")
-    // 等你处理 = awaiting_input + review + merging + failed — a merge is an
-    // agent turn but the card stays in the review column until it lands.
-    expect(columnForStatus("awaiting_input")).toBe("attention")
+    expect(columnForStatus("in_progress")).toBe("inProgress")
+    expect(columnForStatus("blocked")).toBe("attention")
     expect(columnForStatus("review")).toBe("attention")
-    expect(columnForStatus("merging")).toBe("attention")
-    expect(columnForStatus("failed")).toBe("attention")
-    // 已完成 = done (+ canceled behind the toggle)
     expect(columnForStatus("done")).toBe("done")
     expect(columnForStatus("canceled")).toBe("done")
   })
@@ -82,24 +99,22 @@ describe("STATUSES_BY_COLUMN", () => {
         expect(columnForStatus(status)).toBe(col as BoardColumnId)
       }
     }
-    // Exhaustive by construction: adding a WorkTaskStatus without adding it
+    // Exhaustive by construction: adding a business status without adding it
     // here fails this list's own type check, and duplicates fail the Set size.
-    const every: WorkTaskStatus[] = [
+    const every: WorkTaskBusinessStatus[] = [
       "todo",
-      "queued",
-      "preparing",
-      "running",
-      "awaiting_input",
+      "in_progress",
+      "blocked",
       "review",
-      "merging",
       "done",
-      "failed",
       "canceled",
     ]
-    expect(new Set(ALL_WORK_TASK_STATUSES).size).toBe(
-      ALL_WORK_TASK_STATUSES.length
+    expect(new Set(ALL_WORK_TASK_BUSINESS_STATUSES).size).toBe(
+      ALL_WORK_TASK_BUSINESS_STATUSES.length
     )
-    expect([...ALL_WORK_TASK_STATUSES].sort()).toEqual([...every].sort())
+    expect([...ALL_WORK_TASK_BUSINESS_STATUSES].sort()).toEqual(
+      [...every].sort()
+    )
   })
 
   it("agrees with the storage layer's copy of the group ids", () => {

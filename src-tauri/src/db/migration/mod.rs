@@ -66,6 +66,7 @@ mod m20260820_000001_room_additional_path;
 mod m20260820_000002_fork_relation;
 mod m20260820_000003_room_root_folder_backfill;
 mod m20260822_000001_collaboration_source_runtime;
+mod m20260822_000002_work_task_axes;
 pub struct Migrator;
 
 #[async_trait::async_trait]
@@ -138,6 +139,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260820_000002_fork_relation::Migration),
             Box::new(m20260820_000003_room_root_folder_backfill::Migration),
             Box::new(m20260822_000001_collaboration_source_runtime::Migration),
+            Box::new(m20260822_000002_work_task_axes::Migration),
         ]
     }
 }

@@ -9,6 +9,8 @@ function task(overrides?: Partial<WorkTask>): WorkTask {
     title: "Fix the login flow",
     config: null,
     status: "running",
+    task_status: overrides?.task_status ?? "in_progress",
+    execution_mode: overrides?.execution_mode ?? "engine",
     failure_reason: null,
     last_error: null,
     run_seq: 1,

@@ -13,6 +13,8 @@ function task(
     title: `t${id}`,
     config: null,
     status,
+    task_status: extra?.task_status ?? "todo",
+    execution_mode: extra?.execution_mode ?? "engine",
     failure_reason: null,
     last_error: null,
     run_seq: 0,

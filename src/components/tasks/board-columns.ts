@@ -1,7 +1,11 @@
 import { parseTimestamp } from "@/components/conversations/sidebar-conversation-grouping"
-import type { WorkTask, WorkTaskStatus } from "@/lib/types"
+import type {
+  WorkTask,
+  WorkTaskBusinessStatus,
+  WorkTaskStatus,
+} from "@/lib/types"
 
-/** The four board columns (DB statuses are exact; the UI aggregates them). */
+/** Four stable board columns over the user-facing business workflow. */
 export type BoardColumnId = "todo" | "inProgress" | "attention" | "done"
 
 export const BOARD_COLUMN_IDS: BoardColumnId[] = [
@@ -12,47 +16,41 @@ export const BOARD_COLUMN_IDS: BoardColumnId[] = [
 ]
 
 /**
- * The exact statuses behind each column, written out as a table.
+ * The exact business statuses behind each column, written out as a table.
  * `columnForStatus` stays the single source of truth for the mapping; this is
  * its spec copy, and board-columns.test.ts asserts the two agree and that every
  * `WorkTaskStatus` appears here exactly once — which is what makes adding a
  * status without filing it in a column a test failure rather than a silent
  * disappearance from the board.
  */
-export const STATUSES_BY_COLUMN: Record<BoardColumnId, WorkTaskStatus[]> = {
-  todo: ["todo", "queued"],
-  inProgress: ["preparing", "running"],
-  attention: ["awaiting_input", "review", "merging", "failed"],
+export const STATUSES_BY_COLUMN: Record<
+  BoardColumnId,
+  WorkTaskBusinessStatus[]
+> = {
+  todo: ["todo"],
+  inProgress: ["in_progress"],
+  attention: ["blocked", "review"],
   done: ["done", "canceled"],
 }
 
 /** Every status, column order — the flattened spec table (see above). */
-export const ALL_WORK_TASK_STATUSES: WorkTaskStatus[] =
+export const ALL_WORK_TASK_BUSINESS_STATUSES: WorkTaskBusinessStatus[] =
   BOARD_COLUMN_IDS.flatMap((col) => STATUSES_BY_COLUMN[col])
 
 /**
- * DB status → board column. `canceled` lives in the Done column but is hidden
+ * Business status → board column. `canceled` lives in Done but is hidden
  * unless the "show canceled" toggle is on (filtered by `groupTasksByColumn`).
  */
-export function columnForStatus(status: WorkTaskStatus): BoardColumnId {
+export function columnForStatus(
+  status: WorkTaskBusinessStatus
+): BoardColumnId {
   switch (status) {
     case "todo":
-    // Still waiting for a concurrency slot — nothing is happening yet.
-    case "queued":
       return "todo"
-    // Already out of the queue and working (worktree, init command, agent
-    // spawn), just without a session to show yet.
-    case "preparing":
-    // Execution period, including idle gaps between turns — still In Progress.
-    case "running":
+    case "in_progress":
       return "inProgress"
-    case "awaiting_input":
+    case "blocked":
     case "review":
-    // A merge is an agent turn, but the card must not bounce across the
-    // board when the user clicks merge — it stays in the review column and
-    // moves straight to Done when the merge lands.
-    case "merging":
-    case "failed":
       return "attention"
     case "done":
     case "canceled":
@@ -90,9 +88,9 @@ export function groupTasksByColumn(
     done: [],
   }
   for (const task of tasks) {
-    if (task.status === "canceled" && !showCanceled) continue
+    if (task.task_status === "canceled" && !showCanceled) continue
     if (task.archived_at != null && !showArchived) continue
-    grouped[columnForStatus(task.status)].push(task)
+    grouped[columnForStatus(task.task_status)].push(task)
   }
   for (const column of BOARD_COLUMN_IDS) {
     grouped[column].sort(
@@ -109,23 +107,19 @@ function byFreshest(a: WorkTask, b: WorkTask): number {
 }
 
 /** Lower is more urgent. Statuses that cannot land in attention are last. */
-function attentionSeverity(status: WorkTaskStatus): number {
-  switch (status) {
-    case "failed":
-      return 0
-    case "awaiting_input":
-      return 1
-    case "review":
-      return 2
-    case "merging":
-      return 3
-    default:
-      return 4
-  }
+function attentionSeverity(
+  status: WorkTaskBusinessStatus,
+  engineStatus: WorkTaskStatus
+): number {
+  if (status === "blocked") return engineStatus === "failed" ? 0 : 1
+  if (status === "review") return engineStatus === "merging" ? 3 : 2
+  return 4
 }
 
 function byAttentionSeverityThenFreshest(a: WorkTask, b: WorkTask): number {
-  const bySeverity = attentionSeverity(a.status) - attentionSeverity(b.status)
+  const bySeverity =
+    attentionSeverity(a.task_status, a.status) -
+    attentionSeverity(b.task_status, b.status)
   if (bySeverity !== 0) return bySeverity
   return byFreshest(a, b)
 }
@@ -151,9 +145,9 @@ export function filterTasksForList(
   return tasks
     .filter(
       (task) =>
-        (task.status !== "canceled" || showCanceled) &&
+        (task.task_status !== "canceled" || showCanceled) &&
         (task.archived_at == null || showArchived) &&
-        (group == null || columnForStatus(task.status) === group)
+        (group == null || columnForStatus(task.task_status) === group)
     )
     .sort(byFreshest)
 }

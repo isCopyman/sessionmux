@@ -82,6 +82,20 @@ function task(
     title: `t${id}`,
     config: null,
     status,
+    task_status:
+      extra?.task_status ??
+      (status === "done"
+        ? "done"
+        : status === "canceled"
+          ? "canceled"
+          : status === "review" || status === "merging"
+            ? "review"
+            : status === "failed" || status === "awaiting_input"
+              ? "blocked"
+              : status === "running" || status === "preparing"
+                ? "in_progress"
+                : "todo"),
+    execution_mode: extra?.execution_mode ?? "engine",
     failure_reason: null,
     last_error: null,
     run_seq: 0,

@@ -30,6 +30,8 @@ function task(): WorkTask {
     title: "Fix login",
     config: null,
     status: "review",
+    task_status: "review",
+    execution_mode: "engine",
     failure_reason: null,
     last_error: null,
     run_seq: 1,

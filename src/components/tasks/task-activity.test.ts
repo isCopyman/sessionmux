@@ -9,6 +9,8 @@ function task(status: WorkTaskStatus, extra?: Partial<WorkTask>): WorkTask {
     title: "t",
     config: null,
     status,
+    task_status: extra?.task_status ?? "in_progress",
+    execution_mode: extra?.execution_mode ?? "engine",
     failure_reason: null,
     last_error: null,
     run_seq: 0,
