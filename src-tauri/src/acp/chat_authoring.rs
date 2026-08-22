@@ -30,6 +30,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
 use crate::models::claude_profile::ClaudeProfileKind;
+use crate::models::work_task::WorkTaskBusinessStatus;
 use crate::models::AutomationAction;
 
 /// Cap on an automation name / task title. Long enough for a descriptive
@@ -95,6 +96,10 @@ pub struct NewAutomationSpec {
 pub struct NewWorkTaskSpec {
     pub title: String,
     pub prompt: String,
+    /// Where the neutral card first appears. `None` preserves the historical
+    /// Todo default; may target any of the seven fixed board states.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial_status: Option<WorkTaskBusinessStatus>,
     /// Per-task agent override. `None` → inherit the board's settings.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_type: Option<String>,
@@ -180,7 +185,8 @@ pub struct ListTasksQuery {
     /// the caller's own project (worktree cwd hops to the project root).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub folder_path: Option<String>,
-    /// Board column (`todo` / `in_progress` / `attention` / `done`) or a raw
+    /// Board column (`backlog` / `todo` / `in_progress` / `review` / `done` /
+    /// `blocked` / `canceled`) or a raw
     /// `WorkTaskStatus` value (`awaiting_input`, …).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,

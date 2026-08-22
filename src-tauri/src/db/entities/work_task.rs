@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 #[sea_orm(rs_type = "String", db_type = "String(StringLen::None)")]
 #[serde(rename_all = "snake_case")]
 pub enum WorkTaskBusinessStatus {
+    #[sea_orm(string_value = "backlog")]
+    Backlog,
     #[sea_orm(string_value = "todo")]
     Todo,
     #[sea_orm(string_value = "in_progress")]

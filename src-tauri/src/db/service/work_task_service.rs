@@ -56,6 +56,7 @@ pub fn status_str(s: WorkTaskStatus) -> &'static str {
 
 pub fn business_status_str(s: WorkTaskBusinessStatus) -> &'static str {
     match s {
+        WorkTaskBusinessStatus::Backlog => "backlog",
         WorkTaskBusinessStatus::Todo => "todo",
         WorkTaskBusinessStatus::InProgress => "in_progress",
         WorkTaskBusinessStatus::Blocked => "blocked",
@@ -90,6 +91,7 @@ pub fn parse_status(raw: &str) -> Option<WorkTaskStatus> {
 /// `board-columns.test.ts` asserts every `WorkTaskStatus` appears in exactly
 /// one column; `board_status_filter_matches_frontend_column_table` below pins
 /// the same table on this copy.
+pub const BOARD_COLUMN_BACKLOG: &[WorkTaskBusinessStatus] = &[WorkTaskBusinessStatus::Backlog];
 pub const BOARD_COLUMN_TODO: &[WorkTaskBusinessStatus] = &[WorkTaskBusinessStatus::Todo];
 pub const BOARD_COLUMN_IN_PROGRESS: &[WorkTaskBusinessStatus] =
     &[WorkTaskBusinessStatus::InProgress];
@@ -117,6 +119,7 @@ pub fn business_status_for_engine_status(status: WorkTaskStatus) -> WorkTaskBusi
 
 pub fn board_status_filter(raw: &str) -> Option<Vec<WorkTaskBusinessStatus>> {
     let column = match raw {
+        "backlog" => Some(BOARD_COLUMN_BACKLOG),
         "todo" => Some(BOARD_COLUMN_TODO),
         "in_progress" => Some(BOARD_COLUMN_IN_PROGRESS),
         "attention" => Some(BOARD_COLUMN_ATTENTION),
@@ -573,6 +576,7 @@ pub async fn create(
     }
     let config_str = serde_json::to_string(&draft.config)
         .map_err(|e| DbError::Validation(format!("config not serializable: {e}")))?;
+    let initial_status = draft.initial_status.unwrap_or(WorkTaskBusinessStatus::Todo);
     let now = Utc::now();
     let max_order = work_task::Entity::find()
         .filter(work_task::Column::FolderId.eq(draft.folder_id))
@@ -589,7 +593,7 @@ pub async fn create(
         title: Set(draft.title.trim().to_string()),
         config: Set(config_str),
         status: Set(WorkTaskStatus::Todo),
-        task_status: Set(WorkTaskBusinessStatus::Todo),
+        task_status: Set(initial_status),
         execution_mode: Set(None),
         failure_reason: Set(None),
         last_error: Set(None),
@@ -615,13 +619,38 @@ pub async fn create(
         scheduled_at: Set(None),
         created_at: Set(now),
         updated_at: Set(now),
-        started_at: Set(None),
-        settled_at: Set(None),
-        finished_at: Set(None),
+        started_at: Set(matches!(
+            initial_status,
+            WorkTaskBusinessStatus::InProgress
+                | WorkTaskBusinessStatus::Blocked
+                | WorkTaskBusinessStatus::Review
+                | WorkTaskBusinessStatus::Done
+                | WorkTaskBusinessStatus::Canceled
+        )
+        .then_some(now)),
+        settled_at: Set(matches!(
+            initial_status,
+            WorkTaskBusinessStatus::Blocked | WorkTaskBusinessStatus::Review
+        )
+        .then_some(now)),
+        finished_at: Set(matches!(
+            initial_status,
+            WorkTaskBusinessStatus::Done | WorkTaskBusinessStatus::Canceled
+        )
+        .then_some(now)),
         deleted_at: Set(None),
     };
     let row = active.insert(&txn).await?;
-    record_event(&txn, row.id, "created", "user", None).await?;
+    record_event(
+        &txn,
+        row.id,
+        "created",
+        "user",
+        Some(serde_json::json!({
+            "task_status": business_status_str(initial_status)
+        })),
+    )
+    .await?;
     txn.commit().await?;
     Ok(to_info(row))
 }
@@ -778,37 +807,57 @@ pub async fn assign_to_session(
     let now = Utc::now();
     let txn = conn.begin().await?;
 
-    // The CAS is the first write and therefore also serializes concurrent
-    // assignment attempts before either can create a queue item.
-    let claimed = work_task::Entity::update_many()
-        .col_expr(
-            work_task::Column::ExecutionMode,
-            Expr::value(WorkTaskExecutionMode::Session),
-        )
-        .col_expr(
-            work_task::Column::ConversationId,
-            Expr::value(Some(conversation_id)),
-        )
-        .col_expr(
-            work_task::Column::TaskStatus,
-            Expr::value(WorkTaskBusinessStatus::InProgress),
-        )
-        .col_expr(work_task::Column::StartedAt, Expr::value(Some(now)))
-        .col_expr(
-            work_task::Column::ScheduledAt,
-            Expr::value(None::<chrono::DateTime<Utc>>),
-        )
-        .col_expr(work_task::Column::UpdatedAt, Expr::value(now))
-        .filter(work_task::Column::Id.eq(task_id))
-        .filter(work_task::Column::DeletedAt.is_null())
-        .filter(work_task::Column::ArchivedAt.is_null())
-        .filter(work_task::Column::Status.eq(WorkTaskStatus::Todo))
-        .filter(work_task::Column::TaskStatus.eq(WorkTaskBusinessStatus::Todo))
-        .filter(work_task::Column::ExecutionMode.is_null())
-        .exec(&txn)
-        .await?;
+    // Board position is organizational, not an execution gate. Explicitly
+    // assigning any unowned neutral/manual card starts it from its current
+    // column. Trying exact source states keeps the audit origin race-free.
+    let claim_from = |from: WorkTaskBusinessStatus| {
+        work_task::Entity::update_many()
+            .col_expr(
+                work_task::Column::ExecutionMode,
+                Expr::value(WorkTaskExecutionMode::Session),
+            )
+            .col_expr(
+                work_task::Column::ConversationId,
+                Expr::value(Some(conversation_id)),
+            )
+            .col_expr(
+                work_task::Column::TaskStatus,
+                Expr::value(WorkTaskBusinessStatus::InProgress),
+            )
+            .col_expr(work_task::Column::StartedAt, Expr::value(Some(now)))
+            .col_expr(
+                work_task::Column::ScheduledAt,
+                Expr::value(None::<chrono::DateTime<Utc>>),
+            )
+            .col_expr(work_task::Column::UpdatedAt, Expr::value(now))
+            .filter(work_task::Column::Id.eq(task_id))
+            .filter(work_task::Column::DeletedAt.is_null())
+            .filter(work_task::Column::ArchivedAt.is_null())
+            .filter(work_task::Column::Status.eq(WorkTaskStatus::Todo))
+            .filter(work_task::Column::TaskStatus.eq(from))
+            .filter(
+                Condition::any()
+                    .add(work_task::Column::ExecutionMode.is_null())
+                    .add(work_task::Column::ExecutionMode.eq(WorkTaskExecutionMode::Manual)),
+            )
+    };
+    let mut claimed_from = None;
+    for source in [
+        WorkTaskBusinessStatus::Backlog,
+        WorkTaskBusinessStatus::Todo,
+        WorkTaskBusinessStatus::InProgress,
+        WorkTaskBusinessStatus::Review,
+        WorkTaskBusinessStatus::Done,
+        WorkTaskBusinessStatus::Blocked,
+        WorkTaskBusinessStatus::Canceled,
+    ] {
+        if claim_from(source).exec(&txn).await?.rows_affected == 1 {
+            claimed_from = Some(source);
+            break;
+        }
+    }
 
-    if claimed.rows_affected != 1 {
+    let Some(claimed_from) = claimed_from else {
         let existing = work_task::Entity::find_by_id(task_id).one(&txn).await?;
         if let Some(existing) = existing.filter(|task| {
             task.deleted_at.is_none()
@@ -822,9 +871,9 @@ pub async fn assign_to_session(
             });
         }
         return Err(DbError::Validation(
-            "task is no longer an unassigned to-do card".into(),
+            "task is no longer an unowned board card".into(),
         ));
-    }
+    };
 
     let session = conversation::Entity::find_by_id(conversation_id)
         .one(&txn)
@@ -920,7 +969,7 @@ pub async fn assign_to_session(
         "task_status_changed",
         actor,
         Some(serde_json::json!({
-            "from": "todo",
+            "from": business_status_str(claimed_from),
             "to": "in_progress",
             "execution_mode": "session",
         })),
@@ -1192,14 +1241,11 @@ pub(crate) async fn mark_session_dispatch_retry(
 
 fn manual_transition_allowed(from: WorkTaskBusinessStatus, to: WorkTaskBusinessStatus) -> bool {
     use WorkTaskBusinessStatus::*;
-    matches!(
-        (from, to),
-        (Todo, InProgress | Canceled)
-            | (InProgress, Blocked | Review | Done | Canceled)
-            | (Blocked, InProgress | Review | Canceled)
-            | (Review, InProgress | Done | Canceled)
-            | (Done | Canceled, Todo)
-    )
+    from != to
+        && matches!(
+            to,
+            Backlog | Todo | InProgress | Blocked | Review | Done | Canceled
+        )
 }
 
 /// Advance a task that is handled by a person rather than the WorkTask engine.
@@ -1242,7 +1288,7 @@ pub async fn transition_manual_status(
         .filter(work_task::Column::DeletedAt.is_null());
 
     match to {
-        WorkTaskBusinessStatus::Todo => {
+        WorkTaskBusinessStatus::Backlog | WorkTaskBusinessStatus::Todo => {
             update = update
                 .col_expr(
                     work_task::Column::ArchivedAt,
@@ -1347,7 +1393,7 @@ pub async fn transition_session_status(
             ),
         Blocked | Review => update.col_expr(work_task::Column::SettledAt, Expr::value(Some(now))),
         Done | Canceled => update.col_expr(work_task::Column::FinishedAt, Expr::value(Some(now))),
-        Todo => unreachable!("guarded above"),
+        Backlog | Todo => unreachable!("guarded above"),
     };
     let result = update.exec(&txn).await?;
     if result.rows_affected != 1 {
@@ -1390,7 +1436,7 @@ pub async fn transition_session_status(
             ))
             .await?;
         }
-        Blocked | Todo => {}
+        Backlog | Blocked | Todo => {}
     }
     record_event(
         &txn,
@@ -3185,6 +3231,7 @@ mod tests {
         WorkTaskDraft {
             folder_id,
             title: title.to_string(),
+            initial_status: None,
             config: serde_json::json!({
                 "display_text": "do the thing",
                 "prompt_blocks": [{ "type": "text", "text": "do the thing" }],
@@ -3231,6 +3278,26 @@ mod tests {
         // The created event landed in the same transaction.
         let events = list_events(&db.conn, t.id, 100).await.unwrap();
         assert_eq!(events[0].kind, "created");
+        assert_eq!(events[0].payload.as_ref().unwrap()["task_status"], "todo");
+
+        let mut idea = draft(folder_id, "maybe replace the parser");
+        idea.initial_status = Some(WorkTaskBusinessStatus::Backlog);
+        let idea = create(&db.conn, idea).await.unwrap();
+        assert_eq!(idea.status, WorkTaskStatus::Todo);
+        assert_eq!(idea.task_status, WorkTaskBusinessStatus::Backlog);
+        assert_eq!(idea.execution_mode, None);
+
+        for status in [
+            WorkTaskBusinessStatus::InProgress,
+            WorkTaskBusinessStatus::Blocked,
+            WorkTaskBusinessStatus::Review,
+            WorkTaskBusinessStatus::Done,
+            WorkTaskBusinessStatus::Canceled,
+        ] {
+            let mut staged = draft(folder_id, &format!("created in {status:?}"));
+            staged.initial_status = Some(status);
+            assert_eq!(create(&db.conn, staged).await.unwrap().task_status, status);
+        }
     }
 
     #[tokio::test]
@@ -3288,7 +3355,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn manual_workflow_cannot_steal_engine_task_or_skip_states() {
+    async fn manual_workflow_cannot_steal_engine_task() {
         let db = fresh_in_memory_db().await;
         let folder_id = seed_folder(&db, "/tmp/wt-manual-guard").await;
         let task = create(&db.conn, draft(folder_id, "engine owned"))
@@ -3305,15 +3372,41 @@ mod tests {
         )
         .await
         .unwrap());
-        assert!(transition_manual_status(
-            &db.conn,
-            task.id,
-            WorkTaskBusinessStatus::Todo,
-            WorkTaskBusinessStatus::Done,
-            "user",
-        )
-        .await
-        .is_err());
+    }
+
+    #[tokio::test]
+    async fn manual_cards_can_move_directly_between_board_stages() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-manual-free-move").await;
+        let mut draft = draft(folder_id, "move it where it belongs");
+        draft.initial_status = Some(WorkTaskBusinessStatus::Backlog);
+        let task = create(&db.conn, draft).await.unwrap();
+
+        for (from, to) in [
+            (
+                WorkTaskBusinessStatus::Backlog,
+                WorkTaskBusinessStatus::InProgress,
+            ),
+            (
+                WorkTaskBusinessStatus::InProgress,
+                WorkTaskBusinessStatus::Review,
+            ),
+            (WorkTaskBusinessStatus::Review, WorkTaskBusinessStatus::Done),
+            (WorkTaskBusinessStatus::Done, WorkTaskBusinessStatus::Todo),
+            (
+                WorkTaskBusinessStatus::Todo,
+                WorkTaskBusinessStatus::Backlog,
+            ),
+        ] {
+            assert!(
+                transition_manual_status(&db.conn, task.id, from, to, "user")
+                    .await
+                    .unwrap()
+            );
+        }
+        let moved = get(&db.conn, task.id).await.unwrap();
+        assert_eq!(moved.task_status, WorkTaskBusinessStatus::Backlog);
+        assert_eq!(moved.execution_mode, Some(WorkTaskExecutionMode::Manual));
     }
 
     #[tokio::test]
@@ -3410,6 +3503,35 @@ mod tests {
                 .unwrap(),
             None
         );
+    }
+
+    #[tokio::test]
+    async fn backlog_can_be_assigned_directly_and_queues_once() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-session-backlog").await;
+        let conversation_id = seed_conversation(&db, folder_id, AgentType::ClaudeCode).await;
+        let mut idea = draft(folder_id, "an idea that is not ready");
+        idea.initial_status = Some(WorkTaskBusinessStatus::Backlog);
+        let task = create(&db.conn, idea).await.unwrap();
+
+        let assigned = assign_to_session(&db.conn, task.id, conversation_id, "user")
+            .await
+            .unwrap();
+        assert!(assigned.queue_inserted);
+        let running = get(&db.conn, task.id).await.unwrap();
+        assert_eq!(running.task_status, WorkTaskBusinessStatus::InProgress);
+        assert_eq!(running.execution_mode, Some(WorkTaskExecutionMode::Session));
+        assert_eq!(running.conversation_id, Some(conversation_id));
+        let queue = prompt_queue_service::snapshot(&db.conn, conversation_id)
+            .await
+            .unwrap();
+        assert_eq!(queue.items.len(), 1);
+        let events = list_events(&db.conn, task.id, 100).await.unwrap();
+        let transition = events
+            .iter()
+            .find(|event| event.kind == "task_status_changed")
+            .unwrap();
+        assert_eq!(transition.payload.as_ref().unwrap()["from"], "backlog");
     }
 
     #[tokio::test]
@@ -5229,6 +5351,10 @@ mod tests {
         // Spec copy of src/components/tasks/board-columns.ts STATUSES_BY_COLUMN.
         // The UI's inProgress is in_progress on the MCP wire.
         assert_eq!(
+            board_status_filter("backlog").unwrap(),
+            vec![WorkTaskBusinessStatus::Backlog]
+        );
+        assert_eq!(
             board_status_filter("todo").unwrap(),
             vec![WorkTaskBusinessStatus::Todo]
         );
@@ -5266,10 +5392,11 @@ mod tests {
         // Every business status appears in exactly one column — same pin as
         // board-columns.test.ts against STATUSES_BY_COLUMN.
         let mut from_columns = Vec::new();
-        for col in ["todo", "in_progress", "attention", "done"] {
+        for col in ["backlog", "todo", "in_progress", "attention", "done"] {
             from_columns.extend(board_status_filter(col).unwrap());
         }
         let all = [
+            WorkTaskBusinessStatus::Backlog,
             WorkTaskBusinessStatus::Todo,
             WorkTaskBusinessStatus::InProgress,
             WorkTaskBusinessStatus::Blocked,

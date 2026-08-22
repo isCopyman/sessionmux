@@ -1,18 +1,22 @@
 "use client"
 
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react"
-import { createPortal } from "react-dom"
-import { Reorder, type PanInfo } from "motion/react"
+  DndContext,
+  DragOverlay,
+  PointerSensor,
+  pointerWithin,
+  useDraggable,
+  useDroppable,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+  type DragOverEvent,
+  type DragStartEvent,
+} from "@dnd-kit/core"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
-import { Funnel, Layers, Play, Plus, ListTodo, Tag } from "lucide-react"
+import { Funnel, Layers, Plus, ListTodo, Tag } from "lucide-react"
 import { useTasksView } from "@/contexts/tasks-view-context"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import {
@@ -20,10 +24,8 @@ import {
   workTaskAssignSession,
   workTaskCreate,
   workTaskMergeUnqueue,
-  workTaskReorder,
   workTaskRequestReview,
   workTaskSetManualStatus,
-  workTaskStart,
   workTaskStartConfigured,
   workTaskUpdate,
 } from "@/lib/api"
@@ -67,8 +69,10 @@ import {
 import { cn } from "@/lib/utils"
 import {
   BOARD_COLUMN_IDS,
+  columnForStatus,
   filterTasksForList,
   groupTasksByColumn,
+  statusForColumn,
   type BoardColumnId,
 } from "./board-columns"
 import { groupingShowsHeaders, segmentTasksForGrouping } from "./board-grouping"
@@ -105,21 +109,28 @@ import { createRegularTaskSessionAndAssign } from "./task-session-launch"
 import type {
   DbConversationSummary,
   WorkTask,
+  WorkTaskBusinessStatus,
   WorkTaskDraft,
 } from "@/lib/types"
 
 const COLUMN_LABEL_KEYS = {
+  backlog: "colBacklog",
   todo: "colTodo",
   inProgress: "colInProgress",
-  attention: "colAttention",
+  review: "colReview",
   done: "colDone",
+  blocked: "colBlocked",
+  canceled: "colCanceled",
 } as const satisfies Record<BoardColumnId, string>
 
 const EMPTY_LABEL_KEYS = {
+  backlog: "emptyColBacklog",
   todo: "emptyColTodo",
   inProgress: "emptyColInProgress",
-  attention: "emptyColAttention",
+  review: "emptyColReview",
   done: "emptyColDone",
+  blocked: "emptyColBlocked",
+  canceled: "emptyColCanceled",
 } as const satisfies Record<BoardColumnId, string>
 
 /** The status select's "no filter" option — a sentinel, because Radix reserves
@@ -137,6 +148,27 @@ const GROUPING_LABEL_KEYS = {
  *  four sides instead of being packed tighter vertically than horizontally.
  *  pb-1 keeps the last card clear of the scroll area's edge. */
 const CARD_LIST_CLASS = "flex flex-col gap-4 pb-1"
+
+const isBoardDraggable = (task: WorkTask) =>
+  task.archived_at == null &&
+  (task.execution_mode == null || task.execution_mode === "manual")
+
+const taskDragId = (taskId: number) => `task:${taskId}`
+const columnDropId = (column: BoardColumnId) => `column:${column}`
+
+const taskIdFromDragId = (id: string | number): number | null => {
+  const match = /^task:(\d+)$/.exec(String(id))
+  return match ? Number(match[1]) : null
+}
+
+const columnFromDropId = (
+  id: string | number | null | undefined
+): BoardColumnId | null => {
+  const value = String(id ?? "").replace(/^column:/, "")
+  return BOARD_COLUMN_IDS.includes(value as BoardColumnId)
+    ? (value as BoardColumnId)
+    : null
+}
 
 /** Page title rendered into the window-chrome strip above the page (the h-10
  *  band shared with the fixed corner overlays) — the shared breadcrumb header,
@@ -212,41 +244,23 @@ export function TasksPage() {
   useEffect(() => {
     saveTasksBoardGrouping(grouping)
   }, [grouping])
-  // Dragging a pending card is always available: dropping it on In-progress
-  // starts the task and needs no order at all. Only the REORDER half waits on
-  // a folder — sort_order is per folder, so a mixed-folder列 has nothing it
-  // could persist, and the cards simply don't shuffle there.
-  const [dragOrder, setDragOrder] = useState<number[] | null>(null)
-  const dragOrderRef = useRef<number[] | null>(null)
-  dragOrderRef.current = dragOrder
-  const inProgressColRef = useRef<HTMLDivElement | null>(null)
   // A drop acts on the LIVE row, not the snapshot the drag started from: the
   // provider refetches throughout a drag, and the engine's auto-processor can
   // claim a pending task while it is in the air.
   const tasksRef = useRef(tasks)
   tasksRef.current = tasks
-  // The dragged card cannot visually leave its column — the column is a scroll
-  // area, so it clips — which made the drop read as impossible even though it
-  // worked. A fixed-position preview follows the pointer instead, portalled
-  // clear of every clipping and transformed ancestor.
-  const [drag, setDrag] = useState<{ task: WorkTask; width: number } | null>(
-    null
-  )
-  const [dropArmed, setDropArmed] = useState(false)
-  const dropArmedRef = useRef(false)
-  const ghostRef = useRef<HTMLDivElement | null>(null)
-  // Grab offset inside the card and the card's width, both read at pointerdown
-  // (the drag events' native `currentTarget` is gone by the time they fire),
-  // so the preview appears exactly over the card and tracks the pointer 1:1.
-  const grabRef = useRef({ dx: 0, dy: 0, width: 0 })
-  const pointRef = useRef({ x: 0, y: 0 })
+  const [drag, setDrag] = useState<{ task: WorkTask } | null>(null)
+  const [dropTarget, setDropTarget] = useState<BoardColumnId | null>(null)
   // A drag ends with a click on the card underneath; without this latch the
   // detail sheet would open on top of whatever the drop just did.
   const draggedRef = useRef(false)
-  // Set when the gesture ended without a deliberate release (see abortDrag).
-  const dragAbortedRef = useRef(false)
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } })
+  )
   const [editorOpen, setEditorOpen] = useState(false)
   const [editorTask, setEditorTask] = useState<WorkTask | null>(null)
+  const [editorInitialStatus, setEditorInitialStatus] =
+    useState<WorkTaskBusinessStatus>("todo")
   const [editorPrefill, setEditorPrefill] =
     useState<CreateTaskFromTextDetail | null>(null)
 
@@ -265,6 +279,7 @@ export function TasksPage() {
       const draft = consumePendingTaskDraft()
       if (!draft) return
       setEditorTask(null)
+      setEditorInitialStatus("todo")
       setEditorPrefill(draft)
       setEditorOpen(true)
     }
@@ -334,12 +349,7 @@ export function TasksPage() {
     [tasks, folderFilter]
   )
   const columns = useMemo(
-    () =>
-      groupTasksByColumn(
-        visibleTasks,
-        boardFilter.showCanceled,
-        boardFilter.showArchived
-      ),
+    () => groupTasksByColumn(visibleTasks, boardFilter.showArchived),
     [visibleTasks, boardFilter]
   )
   // The list view's rows: one flat, freshest-first sequence, narrowed to a
@@ -347,27 +357,10 @@ export function TasksPage() {
   // on the board — one pair of controls for both views.
   const listTasks = useMemo(
     () =>
-      filterTasksForList(
-        visibleTasks,
-        statusFilter,
-        boardFilter.showCanceled,
-        boardFilter.showArchived
-      ),
+      filterTasksForList(visibleTasks, statusFilter, boardFilter.showArchived),
     [visibleTasks, statusFilter, boardFilter]
   )
 
-  const dragEnabled = folderFilter != null
-  // Optimistic order while a drag is live; server order otherwise.
-  const todoTasks = useMemo(() => {
-    const base = columns.todo
-    if (!dragEnabled || dragOrder == null) return base
-    const byId = new Map(base.map((task) => [task.id, task]))
-    const ordered = dragOrder.flatMap((id) => byId.get(id) ?? [])
-    for (const task of base) {
-      if (!dragOrder.includes(task.id)) ordered.push(task)
-    }
-    return ordered
-  }, [columns.todo, dragEnabled, dragOrder])
   const showGroupHeaders = groupingShowsHeaders(grouping, folderFilter)
   const groupingOpts = useMemo(
     () => ({ folderNames, folderFilter, agentLabel: getAgentLabel }),
@@ -375,20 +368,23 @@ export function TasksPage() {
   )
   const columnSegments = useMemo(
     () => ({
-      todo: segmentTasksForGrouping(todoTasks, grouping, groupingOpts),
+      backlog: segmentTasksForGrouping(columns.backlog, grouping, groupingOpts),
+      todo: segmentTasksForGrouping(columns.todo, grouping, groupingOpts),
       inProgress: segmentTasksForGrouping(
         columns.inProgress,
         grouping,
         groupingOpts
       ),
-      attention: segmentTasksForGrouping(
-        columns.attention,
+      review: segmentTasksForGrouping(columns.review, grouping, groupingOpts),
+      done: segmentTasksForGrouping(columns.done, grouping, groupingOpts),
+      blocked: segmentTasksForGrouping(columns.blocked, grouping, groupingOpts),
+      canceled: segmentTasksForGrouping(
+        columns.canceled,
         grouping,
         groupingOpts
       ),
-      done: segmentTasksForGrouping(columns.done, grouping, groupingOpts),
     }),
-    [todoTasks, columns, grouping, groupingOpts]
+    [columns, grouping, groupingOpts]
   )
   const listSegments = useMemo(
     () => segmentTasksForGrouping(listTasks, grouping, groupingOpts),
@@ -549,6 +545,14 @@ export function TasksPage() {
 
   const openNewTask = useCallback(() => {
     setEditorTask(null)
+    setEditorInitialStatus("todo")
+    setEditorOpen(true)
+  }, [])
+
+  const openNewTaskInColumn = useCallback((column: BoardColumnId) => {
+    setEditorTask(null)
+    setEditorPrefill(null)
+    setEditorInitialStatus(statusForColumn(column))
     setEditorOpen(true)
   }, [])
 
@@ -588,166 +592,54 @@ export function TasksPage() {
     ]
   )
 
-  const positionGhost = useCallback((x: number, y: number) => {
-    const el = ghostRef.current
-    if (!el) return
-    const { dx, dy } = grabRef.current
-    el.style.transform = `translate3d(${x - dx}px, ${y - dy}px, 0)`
+  const handleTaskDragStart = useCallback((event: DragStartEvent) => {
+    const taskId = taskIdFromDragId(event.active.id)
+    const task = tasksRef.current.find((row) => row.id === taskId)
+    if (!task || !isBoardDraggable(task)) return
+    draggedRef.current = true
+    setDrag({ task })
   }, [])
 
-  // Place the preview before its first paint, so it never flashes at the
-  // window's top-left corner on the frame it mounts.
-  useLayoutEffect(() => {
-    if (drag) positionGhost(pointRef.current.x, pointRef.current.y)
-  }, [drag, positionGhost])
+  const handleTaskDragOver = useCallback((event: DragOverEvent) => {
+    setDropTarget(columnFromDropId(event.over?.id))
+  }, [])
 
-  const pointerOverInProgress = (x: number, y: number) => {
-    const rect = inProgressColRef.current?.getBoundingClientRect()
-    return (
-      rect != null &&
-      x >= rect.left &&
-      x <= rect.right &&
-      y >= rect.top &&
-      y <= rect.bottom
-    )
-  }
-
-  // Read the grab geometry here rather than in onDragStart: the drag events
-  // carry a native pointer event whose `currentTarget` is already gone.
-  const handleTodoPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    const rect = e.currentTarget.getBoundingClientRect()
-    grabRef.current = {
-      dx: e.clientX - rect.left,
-      dy: e.clientY - rect.top,
-      width: rect.width,
-    }
-  }
-
-  const handleTodoDragStart = (task: WorkTask, info: PanInfo) => {
-    draggedRef.current = true
-    dragAbortedRef.current = false
-    pointRef.current = { x: info.point.x, y: info.point.y }
-    setDrag({ task, width: grabRef.current.width })
-  }
-
-  // Pointer-rate: the preview moves by direct style mutation and only the
-  // drop-target flip goes through state.
-  const handleTodoDrag = (info: PanInfo) => {
-    pointRef.current = { x: info.point.x, y: info.point.y }
-    positionGhost(info.point.x, info.point.y)
-    // An unassigned card has not answered "human or Agent?" yet. Dragging it
-    // cannot silently make that product decision; the card's two Start actions
-    // do. Reopened manual cards and existing engine cards already have a mode.
-    const over =
-      drag?.task.execution_mode != null &&
-      pointerOverInProgress(info.point.x, info.point.y)
-    if (over !== dropArmedRef.current) {
-      dropArmedRef.current = over
-      setDropArmed(over)
-    }
-  }
-
-  // `latchNow` clears the post-drag click latch immediately instead of after a
-  // frame: only a deliberate release is followed by a click.
-  const clearDrag = useCallback((latchNow: boolean) => {
+  const clearDrag = useCallback((afterDeliberateDrop: boolean) => {
     setDrag(null)
-    setDropArmed(false)
-    dropArmedRef.current = false
-    if (latchNow) {
+    setDropTarget(null)
+    if (!afterDeliberateDrop) {
       draggedRef.current = false
       return
     }
-    // The click that ends the drag lands before the next frame.
     requestAnimationFrame(() => {
       draggedRef.current = false
     })
   }, [])
 
-  // A gesture can end without a deliberate drop: the OS cancels it (touch), the
-  // window loses focus with the button still held, or the card unmounts because
-  // something claimed the task while it was in the air. Motion reports the
-  // first case through the same `onDragEnd` as a real release and the last one
-  // not at all — so the preview and the click latch have to be torn down here,
-  // and the drop itself must not run.
-  const abortDrag = useCallback(() => {
-    dragAbortedRef.current = true
-    setDragOrder(null)
-    clearDrag(true)
-  }, [clearDrag])
-
-  useEffect(() => {
-    if (!drag) return
-    const onVisibility = () => {
-      if (document.hidden) abortDrag()
-    }
-    window.addEventListener("blur", abortDrag)
-    document.addEventListener("visibilitychange", onVisibility)
-    return () => {
-      window.removeEventListener("blur", abortDrag)
-      document.removeEventListener("visibilitychange", onVisibility)
-    }
-  }, [drag, abortDrag])
-
-  // The dragged card left the pending column under us — its Reorder.Item
-  // unmounts with it and Motion never reports an end, which would strand the
-  // preview and leave the latch swallowing every card click.
-  useEffect(() => {
-    if (drag && !todoTasks.some((task) => task.id === drag.task.id)) {
-      abortDrag()
-    }
-  }, [drag, todoTasks, abortDrag])
-
-  // Drop on the In-progress column = start (the card itself drags on the y
-  // axis, but the POINTER is free — droppedness is judged by its position).
-  // Anywhere else = persist the reorder, when there is one to persist.
-  const handleTodoDragEnd = useCallback(
-    (task: WorkTask, event: unknown, info: PanInfo) => {
-      // `pointercancel` routes through Motion's pointer-up handler, so an
-      // abandoned gesture arrives here looking exactly like a release.
-      const aborted =
-        dragAbortedRef.current ||
-        (event as Event | null | undefined)?.type === "pointercancel"
-      clearDrag(aborted)
-      if (aborted) {
-        setDragOrder(null)
-        return
-      }
-      const rect = inProgressColRef.current?.getBoundingClientRect()
-      const droppedOnInProgress =
-        task.execution_mode != null &&
-        rect != null &&
-        info.point.x >= rect.left &&
-        info.point.x <= rect.right &&
-        info.point.y >= rect.top &&
-        info.point.y <= rect.bottom
-      if (droppedOnInProgress) {
-        setDragOrder(null)
-        // The row may have advanced during the drag; the engine would reject
-        // the stale start anyway, so don't spend a request and a toast on it.
-        const live = tasksRef.current.find((row) => row.id === task.id)
-        if (live?.task_status === "todo") {
-          void act(() =>
-            live.execution_mode === "engine"
-              ? workTaskStart(task.id)
-              : workTaskSetManualStatus(task.id, "todo", "in_progress")
+  // Moving a neutral/manual card only changes its board status. Starting or
+  // waking an Agent remains an explicit assign/claim action.
+  const handleTaskDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      const taskId = taskIdFromDragId(event.active.id)
+      const target = columnFromDropId(event.over?.id)
+      const live = tasksRef.current.find((row) => row.id === taskId)
+      clearDrag(true)
+      if (
+        target != null &&
+        live != null &&
+        target !== columnForStatus(live.task_status) &&
+        (live.execution_mode == null || live.execution_mode === "manual")
+      ) {
+        void act(() =>
+          workTaskSetManualStatus(
+            live.id,
+            live.task_status,
+            statusForColumn(target)
           )
-        }
-        return
-      }
-      const order = dragOrderRef.current
-      if (folderFilter != null && order != null) {
-        void (async () => {
-          try {
-            await workTaskReorder(folderFilter, order)
-          } catch (e) {
-            toast.error(toErrorMessage(e))
-          }
-          await refetch()
-          setDragOrder(null)
-        })()
+        )
       }
     },
-    [act, clearDrag, folderFilter, refetch]
+    [act, clearDrag]
   )
 
   // Archives whatever the Done column currently shows unarchived — respects
@@ -760,13 +652,12 @@ export function TasksPage() {
     )
   }, [act, columns.done])
 
-  // The badge counts deviations from the DEFAULT view (canceled shown,
-  // archived hidden), not checked boxes — a pristine board shows no badge.
+  const visibleColumnIds = BOARD_COLUMN_IDS.filter(
+    (column) => !boardFilter.hiddenColumns.includes(column)
+  )
   const isList = viewMode === "list"
   const activeFilters =
-    (boardFilter.showCanceled === DEFAULT_TASKS_BOARD_FILTER.showCanceled
-      ? 0
-      : 1) +
+    boardFilter.hiddenColumns.length +
     (boardFilter.showArchived === DEFAULT_TASKS_BOARD_FILTER.showArchived
       ? 0
       : 1)
@@ -776,8 +667,16 @@ export function TasksPage() {
   const showSkeleton = loading && !hasAnyTask
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      {/* Toolbar (the page title renders in the chrome strip above the page,
+    <DndContext
+      sensors={sensors}
+      collisionDetection={pointerWithin}
+      onDragStart={handleTaskDragStart}
+      onDragOver={handleTaskDragOver}
+      onDragCancel={() => clearDrag(false)}
+      onDragEnd={handleTaskDragEnd}
+    >
+      <div className="flex h-full min-h-0 flex-col">
+        {/* Toolbar (the page title renders in the chrome strip above the page,
           which owns the divider — the toolbar itself is borderless).
           pt-4 / px-4, not py-2: the pills clear the title bar by the same 1rem
           they clear the window's left edge, and pb-2 plus the board's own pt-2
@@ -786,621 +685,612 @@ export function TasksPage() {
           Withheld until the first task exists: on an empty board every control
           here filters or starts nothing, and the only action that does
           anything — "new task" — is already the empty state's own button. */}
-      {hasAnyTask && (
-        <div className="flex shrink-0 flex-wrap items-center gap-2 px-4 pb-2 pt-4">
-          {/* Searchable, and each row shows `alias [ name ]` over the folder's
+        {hasAnyTask && (
+          <div className="flex shrink-0 flex-wrap items-center gap-2 px-4 pb-2 pt-4">
+            {/* Searchable, and each row shows `alias [ name ]` over the folder's
               path — the same list the new-conversation composer opens. Leads
               with a folder glyph like the Automations filter pill: "全部文件夹"
               alone doesn't say WHICH axis the pill filters. */}
-          <FolderSelect
-            folders={projectFolders}
-            value={folderFilter}
-            onChange={setFolderFilter}
-            allLabel={t("allFolders")}
-            onSelectAll={() => setFolderFilter(null)}
-          />
+            <FolderSelect
+              folders={projectFolders}
+              value={folderFilter}
+              onChange={setFolderFilter}
+              allLabel={t("allFolders")}
+              onSelectAll={() => setFolderFilter(null)}
+            />
 
-          {/* Same pill treatment as the folder select so the left cluster reads
+            {/* Same pill treatment as the folder select so the left cluster reads
               as one family of controls (the settings entry lives in the chrome
               strip next to the page title). */}
-          <Popover>
-            <PopoverTrigger asChild>
-              <Button
-                type="button"
-                size="sm"
-                variant="ghost"
-                className="h-8 gap-1.5 rounded-full bg-muted/70 px-3 text-[0.8125rem] font-medium ws-msg-chip hover:bg-muted"
+            <Popover>
+              <PopoverTrigger asChild>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  className="h-8 gap-1.5 rounded-full bg-muted/70 px-3 text-[0.8125rem] font-medium ws-msg-chip hover:bg-muted"
+                >
+                  <Funnel
+                    className="size-3.5 text-muted-foreground"
+                    aria-hidden="true"
+                  />
+                  {t("filter")}
+                  {activeFilters > 0 ? (
+                    <span className="rounded-full bg-primary/10 px-1.5 py-0.5 text-[0.625rem] font-medium leading-none text-primary tabular-nums">
+                      {activeFilters}
+                    </span>
+                  ) : null}
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent
+                align="start"
+                className="w-52 gap-0.5 rounded-xl p-1.5"
               >
-                <Funnel
-                  className="size-3.5 text-muted-foreground"
-                  aria-hidden="true"
-                />
-                {t("filter")}
-                {activeFilters > 0 ? (
-                  <span className="rounded-full bg-primary/10 px-1.5 py-0.5 text-[0.625rem] font-medium leading-none text-primary tabular-nums">
-                    {activeFilters}
-                  </span>
-                ) : null}
-              </Button>
-            </PopoverTrigger>
-            <PopoverContent
-              align="start"
-              className="w-52 gap-0.5 rounded-xl p-1.5"
-            >
-              {/* Both toggles apply to both views: the status filter narrows to
-                  a whole column, so it cannot single out `canceled` (which
-                  lives inside Done) — this is the only control that can. */}
-              <label className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-xs hover:bg-accent/50">
-                <Checkbox
-                  checked={boardFilter.showCanceled}
-                  onCheckedChange={(v) =>
-                    setBoardFilter((f) => ({
-                      ...f,
-                      showCanceled: v === true,
-                    }))
-                  }
-                />
-                {t("showCanceled")}
-              </label>
-              <label className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-xs hover:bg-accent/50">
-                <Checkbox
-                  checked={boardFilter.showArchived}
-                  onCheckedChange={(v) =>
-                    setBoardFilter((f) => ({ ...f, showArchived: v === true }))
-                  }
-                />
-                {t("showArchived")}
-              </label>
-            </PopoverContent>
-          </Popover>
+                <p className="px-2 pb-1 pt-1 text-[0.6875rem] font-medium text-muted-foreground">
+                  {t("showColumns")}
+                </p>
+                {BOARD_COLUMN_IDS.map((column) => (
+                  <label
+                    key={column}
+                    className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-xs hover:bg-accent/50"
+                  >
+                    <Checkbox
+                      checked={!boardFilter.hiddenColumns.includes(column)}
+                      onCheckedChange={(checked) =>
+                        setBoardFilter((filter) => {
+                          if (checked === true) {
+                            return {
+                              ...filter,
+                              hiddenColumns: filter.hiddenColumns.filter(
+                                (item) => item !== column
+                              ),
+                            }
+                          }
+                          if (
+                            filter.hiddenColumns.length >=
+                            BOARD_COLUMN_IDS.length - 1
+                          )
+                            return filter
+                          return {
+                            ...filter,
+                            hiddenColumns: [...filter.hiddenColumns, column],
+                          }
+                        })
+                      }
+                    />
+                    {t(COLUMN_LABEL_KEYS[column])}
+                  </label>
+                ))}
+                <div className="my-1 h-px bg-border" />
+                <label className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-xs hover:bg-accent/50">
+                  <Checkbox
+                    checked={boardFilter.showArchived}
+                    onCheckedChange={(v) =>
+                      setBoardFilter((f) => ({
+                        ...f,
+                        showArchived: v === true,
+                      }))
+                    }
+                  />
+                  {t("showArchived")}
+                </label>
+              </PopoverContent>
+            </Popover>
 
-          {/* Grouping — column-internal segments. Collection / Room are not
+            {/* Grouping — column-internal segments. Collection / Room are not
               options: work_task has no collection_id, and Collection cannot
               cross a folder. Same pill as the status filter. */}
-          <Select
-            value={grouping}
-            onValueChange={(v) => setGrouping(v as TasksBoardGrouping)}
-          >
-            <SelectTrigger
-              size="sm"
-              aria-label={`${t("groupBy")}: ${t(GROUPING_LABEL_KEYS[grouping])}`}
-              className="h-8 w-auto min-w-0 gap-1.5 rounded-full border-transparent bg-muted/70 px-3 text-[0.8125rem] font-medium shadow-none ws-msg-chip hover:bg-muted"
-            >
-              <Layers
-                className="size-3.5 text-muted-foreground"
-                aria-hidden="true"
-              />
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {TASKS_BOARD_GROUPINGS.map((g) => (
-                <SelectItem key={g} value={g}>
-                  {t(GROUPING_LABEL_KEYS[g])}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-
-          {/* Status filter — list-only: the board already sorts by status into
-              its four columns, so there is nothing there for it to narrow.
-              One choice out of five, so a select rather than a checkbox menu;
-              and it offers the board's four COLUMNS, not the ten underlying
-              statuses, because that is the vocabulary the rest of the feature
-              already speaks (same COLUMN_LABEL_KEYS the board headers use). */}
-          {isList ? (
             <Select
-              value={statusFilter ?? ALL_STATUSES}
-              onValueChange={(v) =>
-                setStatusFilter(
-                  v === ALL_STATUSES ? null : (v as BoardColumnId)
-                )
-              }
+              value={grouping}
+              onValueChange={(v) => setGrouping(v as TasksBoardGrouping)}
             >
-              {/* "状态: 等你处理" — the axis AND the value, like the composer's
-                  mode selector: a bare aria-label would replace the value with
-                  the axis name, and no label at all leaves the axis unsaid. */}
               <SelectTrigger
                 size="sm"
-                aria-label={`${t("statusFilter")}: ${
-                  statusFilter == null
-                    ? t("statusFilterAll")
-                    : t(COLUMN_LABEL_KEYS[statusFilter])
-                }`}
+                aria-label={`${t("groupBy")}: ${t(GROUPING_LABEL_KEYS[grouping])}`}
                 className="h-8 w-auto min-w-0 gap-1.5 rounded-full border-transparent bg-muted/70 px-3 text-[0.8125rem] font-medium shadow-none ws-msg-chip hover:bg-muted"
               >
-                <Tag
+                <Layers
                   className="size-3.5 text-muted-foreground"
                   aria-hidden="true"
                 />
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value={ALL_STATUSES}>
-                  {t("statusFilterAll")}
-                </SelectItem>
-                {BOARD_COLUMN_IDS.map((col) => (
-                  <SelectItem key={col} value={col}>
-                    {t(COLUMN_LABEL_KEYS[col])}
+                {TASKS_BOARD_GROUPINGS.map((g) => (
+                  <SelectItem key={g} value={g}>
+                    {t(GROUPING_LABEL_KEYS[g])}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
-          ) : null}
 
-          <div className="flex-1" />
+            {/* Status filter — list-only: the board already sorts by status into
+              its seven columns, so there is nothing there for it to narrow.
+              One choice out of six (including All), so a select rather than a
+              checkbox menu; it offers the same seven columns as the board. */}
+            {isList ? (
+              <Select
+                value={statusFilter ?? ALL_STATUSES}
+                onValueChange={(v) =>
+                  setStatusFilter(
+                    v === ALL_STATUSES ? null : (v as BoardColumnId)
+                  )
+                }
+              >
+                {/* "状态: 等你处理" — the axis AND the value, like the composer's
+                  mode selector: a bare aria-label would replace the value with
+                  the axis name, and no label at all leaves the axis unsaid. */}
+                <SelectTrigger
+                  size="sm"
+                  aria-label={`${t("statusFilter")}: ${
+                    statusFilter == null
+                      ? t("statusFilterAll")
+                      : t(COLUMN_LABEL_KEYS[statusFilter])
+                  }`}
+                  className="h-8 w-auto min-w-0 gap-1.5 rounded-full border-transparent bg-muted/70 px-3 text-[0.8125rem] font-medium shadow-none ws-msg-chip hover:bg-muted"
+                >
+                  <Tag
+                    className="size-3.5 text-muted-foreground"
+                    aria-hidden="true"
+                  />
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={ALL_STATUSES}>
+                    {t("statusFilterAll")}
+                  </SelectItem>
+                  {BOARD_COLUMN_IDS.map((col) => (
+                    <SelectItem key={col} value={col}>
+                      {t(COLUMN_LABEL_KEYS[col])}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            ) : null}
 
-          <Button
-            type="button"
-            size="sm"
-            className="h-8 gap-1 rounded-full px-3.5 text-[0.8125rem]"
-            onClick={openNewTask}
-          >
-            <Plus className="size-4" aria-hidden="true" />
-            {t("new")}
-          </Button>
-        </div>
-      )}
+            <div className="flex-1" />
 
-      {/* Board / list */}
-      {showSkeleton ? (
-        <TasksSkeleton mode={viewMode} />
-      ) : !hasAnyTask ? (
-        <div className="flex flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
-          <ListTodo
-            className="size-10 text-muted-foreground/40"
-            aria-hidden="true"
-          />
-          <div className="flex flex-col gap-1">
-            <p className="text-sm font-medium">{t("empty")}</p>
-            <p className="max-w-sm text-xs text-muted-foreground">
-              {t("emptyHint")}
-            </p>
+            <Button
+              type="button"
+              size="sm"
+              className="h-8 gap-1 rounded-full px-3.5 text-[0.8125rem]"
+              onClick={openNewTask}
+            >
+              <Plus className="size-4" aria-hidden="true" />
+              {t("new")}
+            </Button>
           </div>
-          <Button
-            type="button"
-            size="sm"
-            className="gap-1.5"
-            onClick={openNewTask}
-          >
-            <Plus className="size-3.5" aria-hidden="true" />
-            {t("new")}
-          </Button>
-        </div>
-      ) : isList ? (
-        <TaskList
-          tasks={listTasks}
-          folderNames={folderNames}
-          now={now}
-          mergeQueueRanks={queueRanks}
-          filtered={statusFilter != null}
-          onClearFilter={() => setStatusFilter(null)}
-          onOpen={setDetailTaskId}
-          handlersFor={handlersFor}
-          segments={listSegments}
-          showGroupHeaders={showGroupHeaders}
-          ungroupedLabel={t("groupUngrouped")}
-          activityFor={activityFor}
-        />
-      ) : (
-        <div className="min-h-0 flex-1 overflow-x-auto">
-          {/* pt-2, the same as the list view's card: the two views share this
+        )}
+
+        {/* Board / list */}
+        {showSkeleton ? (
+          <TasksSkeleton mode={viewMode} />
+        ) : !hasAnyTask ? (
+          <div className="flex flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
+            <ListTodo
+              className="size-10 text-muted-foreground/40"
+              aria-hidden="true"
+            />
+            <div className="flex flex-col gap-1">
+              <p className="text-sm font-medium">{t("empty")}</p>
+              <p className="max-w-sm text-xs text-muted-foreground">
+                {t("emptyHint")}
+              </p>
+            </div>
+            <Button
+              type="button"
+              size="sm"
+              className="gap-1.5"
+              onClick={openNewTask}
+            >
+              <Plus className="size-3.5" aria-hidden="true" />
+              {t("new")}
+            </Button>
+          </div>
+        ) : isList ? (
+          <TaskList
+            tasks={listTasks}
+            folderNames={folderNames}
+            now={now}
+            mergeQueueRanks={queueRanks}
+            filtered={statusFilter != null}
+            onClearFilter={() => setStatusFilter(null)}
+            onOpen={setDetailTaskId}
+            handlersFor={handlersFor}
+            segments={listSegments}
+            showGroupHeaders={showGroupHeaders}
+            ungroupedLabel={t("groupUngrouped")}
+            activityFor={activityFor}
+          />
+        ) : (
+          <div className="min-h-0 flex-1 overflow-x-auto">
+            {/* pt-2, the same as the list view's card: the two views share this
               rail, so toggling between them must not nudge the content up or
               down. With the toolbar's pb-2 that is 16px under the pills — the
               pt-4 they keep above themselves. */}
-          <div className="grid h-full min-w-[56rem] grid-cols-4 gap-4 px-4 pb-4 pt-2">
-            {BOARD_COLUMN_IDS.map((col) => {
-              const colTasks = col === "todo" ? todoTasks : columns[col]
-              const segments = columnSegments[col]
-              const cardFor = (task: WorkTask) => (
-                <TaskCard
-                  key={task.id}
-                  task={task}
-                  folderName={folderNames.get(task.folder_id) ?? null}
-                  now={now}
-                  mergeQueueRank={queueRanks.get(task.id)}
-                  activity={activityFor(task)}
-                  onOpen={() => {
-                    // Swallow the click that closes a drag.
-                    if (draggedRef.current) return
-                    setDetailTaskId(task.id)
-                  }}
-                  {...handlersFor(task)}
-                />
-              )
-              return (
-                <div
-                  key={col}
-                  ref={col === "inProgress" ? inProgressColRef : undefined}
-                  className="flex min-h-0 flex-col gap-2"
-                >
-                  <div className="flex h-6 shrink-0 items-center gap-2 px-0.5">
-                    {/* A short upright bar rather than a dot: it echoes the
+            <div
+              className="grid h-full gap-4 px-4 pb-4 pt-2"
+              style={{
+                gridTemplateColumns: `repeat(${visibleColumnIds.length}, minmax(13rem, 1fr))`,
+                minWidth: `${Math.max(1, visibleColumnIds.length) * 14}rem`,
+              }}
+            >
+              {visibleColumnIds.map((col) => {
+                const colTasks = columns[col]
+                const segments = columnSegments[col]
+                const cardFor = (task: WorkTask) => (
+                  <TaskCard
+                    key={task.id}
+                    task={task}
+                    folderName={folderNames.get(task.folder_id) ?? null}
+                    now={now}
+                    mergeQueueRank={queueRanks.get(task.id)}
+                    activity={activityFor(task)}
+                    onOpen={() => {
+                      // Swallow the click that closes a drag.
+                      if (draggedRef.current) return
+                      setDetailTaskId(task.id)
+                    }}
+                    {...handlersFor(task)}
+                  />
+                )
+                return (
+                  <TaskColumnDropZone key={col} column={col}>
+                    <div className="flex h-6 shrink-0 items-center gap-2 px-0.5">
+                      {/* A short upright bar rather than a dot: it echoes the
                         column it heads (and the pill radius of the toolbar
                         above), and it reads as a marker instead of a bullet.
                         Same tones as before. */}
-                    <span
-                      className={cn(
-                        "h-3.5 w-[3px] shrink-0 rounded-full",
-                        col === "todo" && "bg-muted-foreground/50",
-                        col === "inProgress" && "bg-primary",
-                        col === "attention" && "bg-amber-500",
-                        col === "done" && "bg-emerald-500"
-                      )}
-                      aria-hidden="true"
-                    />
-                    <h2 className="text-xs font-semibold">
-                      {t(COLUMN_LABEL_KEYS[col])}
-                    </h2>
-                    {/* The count is a pill in the toolbar's muted-pill
+                      <span
+                        className={cn(
+                          "h-3.5 w-[3px] shrink-0 rounded-full",
+                          col === "backlog" && "bg-slate-400",
+                          col === "todo" && "bg-muted-foreground/50",
+                          col === "inProgress" && "bg-primary",
+                          col === "review" && "bg-violet-500",
+                          col === "done" && "bg-emerald-500",
+                          col === "blocked" && "bg-amber-500",
+                          col === "canceled" && "bg-rose-400"
+                        )}
+                        aria-hidden="true"
+                      />
+                      <h2 className="text-xs font-semibold">
+                        {t(COLUMN_LABEL_KEYS[col])}
+                      </h2>
+                      {/* The count is a pill in the toolbar's muted-pill
                         language, so the two header rows read as one block. */}
-                    {col === "attention" && colTasks.length > 0 ? (
-                      <span className="rounded-full bg-amber-500/15 px-1.5 py-0.5 text-[0.625rem] font-semibold leading-none text-amber-600 tabular-nums dark:text-amber-400">
-                        {colTasks.length}
-                      </span>
-                    ) : (
                       <span className="rounded-full bg-muted/70 px-1.5 py-0.5 text-[0.625rem] font-medium leading-none text-muted-foreground tabular-nums">
                         {colTasks.length}
                       </span>
-                    )}
-                    <div className="flex-1" />
-                    {/* Dragging a To-do card across the all-projects view does
-                        nothing — `sort_order` is per folder, so there is no
-                        order to save. Saying so beats letting the card snap
-                        back with no explanation. */}
-                    {col === "todo" && !dragEnabled && todoTasks.length > 1 ? (
-                      <span className="truncate text-[0.625rem] leading-none text-muted-foreground/70">
-                        {t("reorderNeedsFolder")}
-                      </span>
-                    ) : null}
-                    {col === "done" &&
-                    columns.done.some((task) => task.archived_at == null) ? (
+                      <div className="flex-1" />
+                      {col === "done" &&
+                      columns.done.some((task) => task.archived_at == null) ? (
+                        <Button
+                          type="button"
+                          size="xs"
+                          variant="ghost"
+                          className="px-1.5 font-normal text-muted-foreground hover:text-foreground"
+                          onClick={archiveAllDone}
+                        >
+                          {t("archiveAllDone")}
+                        </Button>
+                      ) : null}
                       <Button
                         type="button"
-                        size="xs"
+                        size="icon-xs"
                         variant="ghost"
-                        className="px-1.5 font-normal text-muted-foreground hover:text-foreground"
-                        onClick={archiveAllDone}
+                        aria-label={`${t("new")} · ${t(COLUMN_LABEL_KEYS[col])}`}
+                        onClick={() => openNewTaskInColumn(col)}
                       >
-                        {t("archiveAllDone")}
+                        <Plus className="size-3.5" aria-hidden="true" />
                       </Button>
-                    ) : null}
-                  </div>
-                  {colTasks.length === 0 ? (
-                    <div
-                      className={cn(
-                        // border-border is near-invisible on the plain canvas —
-                        // dash with a foreground-derived tone instead.
-                        "flex flex-1 flex-col items-center justify-center gap-1.5 rounded-xl border border-dashed border-muted-foreground/30 p-4 text-center",
-                        // Drop target while a pending card is dragged: quiet
-                        // once the drag starts, loud once the pointer is
-                        // actually inside. Otherwise tint like the cards when a
-                        // workspace background image is on (ws-msg-card is
-                        // inert without one) so the cell stays legible over a
-                        // photo.
-                        col === "inProgress" && drag
-                          ? dropArmed
-                            ? "border-primary bg-primary/10"
-                            : "border-primary/40"
-                          : "ws-msg-card"
-                      )}
-                    >
-                      <p className="text-xs text-muted-foreground">
-                        {t(EMPTY_LABEL_KEYS[col])}
-                      </p>
                     </div>
-                  ) : (
-                    <ScrollArea
-                      className={cn(
-                        "min-h-0 flex-1 rounded-xl transition-colors",
-                        col === "inProgress" &&
+                    {colTasks.length === 0 ? (
+                      <div
+                        className={cn(
+                          // border-border is near-invisible on the plain canvas —
+                          // dash with a foreground-derived tone instead.
+                          "flex flex-1 flex-col items-center justify-center gap-1.5 rounded-xl border border-dashed border-muted-foreground/30 p-4 text-center",
+                          // Drop target while a pending card is dragged: quiet
+                          // once the drag starts, loud once the pointer is
+                          // actually inside. Otherwise tint like the cards when a
+                          // workspace background image is on (ws-msg-card is
+                          // inert without one) so the cell stays legible over a
+                          // photo.
+                          drag
+                            ? dropTarget === col
+                              ? "border-primary bg-primary/10"
+                              : "border-primary/40"
+                            : "ws-msg-card"
+                        )}
+                      >
+                        <p className="text-xs text-muted-foreground">
+                          {t(EMPTY_LABEL_KEYS[col])}
+                        </p>
+                      </div>
+                    ) : (
+                      <ScrollArea
+                        className={cn(
+                          "min-h-0 flex-1 rounded-xl transition-colors",
                           drag &&
-                          (dropArmed
-                            ? "bg-primary/5 ring-2 ring-primary"
-                            : "ring-1 ring-primary/25")
-                      )}
-                    >
-                      {showGroupHeaders ? (
-                        <div className={CARD_LIST_CLASS}>
-                          {segments.map((seg) => (
-                            <div key={seg.key} className="flex flex-col gap-2">
-                              <TaskGroupHeader
-                                label={
-                                  seg.ungrouped || !seg.label
-                                    ? t("groupUngrouped")
-                                    : seg.label
-                                }
-                                count={seg.tasks.length}
-                              />
-                              {col === "todo" ? (
-                                <TodoReorderList
+                            (dropTarget === col
+                              ? "bg-primary/5 ring-2 ring-primary"
+                              : "ring-1 ring-primary/25")
+                        )}
+                      >
+                        {showGroupHeaders ? (
+                          <div className={CARD_LIST_CLASS}>
+                            {segments.map((seg) => (
+                              <div
+                                key={seg.key}
+                                className="flex flex-col gap-2"
+                              >
+                                <TaskGroupHeader
+                                  label={
+                                    seg.ungrouped || !seg.label
+                                      ? t("groupUngrouped")
+                                      : seg.label
+                                  }
+                                  count={seg.tasks.length}
+                                />
+                                <DraggableTaskList
                                   tasks={seg.tasks}
                                   dragId={drag?.task.id}
-                                  dragEnabled={dragEnabled}
-                                  onReorder={(ids) =>
-                                    setDragOrder(
-                                      segments.flatMap((s) =>
-                                        s.key === seg.key
-                                          ? ids
-                                          : s.tasks.map((task) => task.id)
-                                      )
-                                    )
-                                  }
-                                  onPointerDown={handleTodoPointerDown}
-                                  onDragStart={handleTodoDragStart}
-                                  onDrag={handleTodoDrag}
-                                  onDragEnd={handleTodoDragEnd}
                                   renderCard={cardFor}
                                   className="flex flex-col gap-4"
                                 />
-                              ) : (
-                                <div className="flex flex-col gap-4">
-                                  {seg.tasks.map(cardFor)}
-                                </div>
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      ) : col === "todo" ? (
-                        <TodoReorderList
-                          tasks={todoTasks}
-                          dragId={drag?.task.id}
-                          dragEnabled={dragEnabled}
-                          onReorder={setDragOrder}
-                          onPointerDown={handleTodoPointerDown}
-                          onDragStart={handleTodoDragStart}
-                          onDrag={handleTodoDrag}
-                          onDragEnd={handleTodoDragEnd}
-                          renderCard={cardFor}
-                          className={CARD_LIST_CLASS}
-                        />
-                      ) : (
-                        <div className={CARD_LIST_CLASS}>
-                          {colTasks.map(cardFor)}
-                        </div>
-                      )}
-                    </ScrollArea>
-                  )}
-                </div>
-              )
-            })}
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <DraggableTaskList
+                            tasks={colTasks}
+                            dragId={drag?.task.id}
+                            renderCard={cardFor}
+                            className={CARD_LIST_CLASS}
+                          />
+                        )}
+                      </ScrollArea>
+                    )}
+                  </TaskColumnDropZone>
+                )
+              })}
+            </div>
           </div>
-        </div>
-      )}
+        )}
 
-      <TaskEditorDialog
-        open={editorOpen}
-        onOpenChange={(o) => {
-          setEditorOpen(o)
-          if (!o) setEditorPrefill(null)
-        }}
-        task={editorTask}
-        defaultFolderId={editorPrefill?.folderId ?? folderFilter}
-        prefillText={editorPrefill?.text ?? null}
-        onSubmit={submitEditor}
-      />
-      <TaskDetailSheet
-        open={detailTaskId != null}
-        onOpenChange={(o) => {
-          if (!o) setDetailTaskId(null)
-        }}
-        task={detailTask}
-        folderName={
-          detailTask ? (folderNames.get(detailTask.folder_id) ?? null) : null
-        }
-        onViewSession={openSession}
-        onMerge={openMerge}
-        onComplete={openComplete}
-        onCancel={openCancel}
-        onEdit={(task) => {
-          setEditorTask(task)
-          setEditorOpen(true)
-        }}
-        onSchedule={openSchedule}
-        onAssignSession={openAssignSession}
-        onStartAgent={openWorktreeSession}
-      />
-      {/* The queue state comes from the live row (a merge that starts while
+        <TaskEditorDialog
+          open={editorOpen}
+          onOpenChange={(o) => {
+            setEditorOpen(o)
+            if (!o) setEditorPrefill(null)
+          }}
+          task={editorTask}
+          defaultInitialStatus={editorInitialStatus}
+          defaultFolderId={editorPrefill?.folderId ?? folderFilter}
+          prefillText={editorPrefill?.text ?? null}
+          onSubmit={submitEditor}
+        />
+        <TaskDetailSheet
+          open={detailTaskId != null}
+          onOpenChange={(o) => {
+            if (!o) setDetailTaskId(null)
+          }}
+          task={detailTask}
+          folderName={
+            detailTask ? (folderNames.get(detailTask.folder_id) ?? null) : null
+          }
+          onViewSession={openSession}
+          onMerge={openMerge}
+          onComplete={openComplete}
+          onCancel={openCancel}
+          onEdit={(task) => {
+            setEditorTask(task)
+            setEditorOpen(true)
+          }}
+          onSchedule={openSchedule}
+          onAssignSession={openAssignSession}
+          onStartAgent={openWorktreeSession}
+        />
+        {/* The queue state comes from the live row (a merge that starts while
           the dialog is open turns "merge" into "queue"), the form from the
           captured one — see `mergeLiveTask`. */}
-      <TaskMergeDialog
-        open={mergeOpen}
-        onOpenChange={setMergeOpen}
-        task={mergeTask}
-        folderMerging={
-          mergeTask != null && isFolderMerging(tasks, mergeTask.folder_id)
-        }
-        alreadyQueued={mergeLiveTask != null && isMergeQueued(mergeLiveTask)}
-      />
-      <TaskCompleteDialog
-        open={completeOpen}
-        onOpenChange={setCompleteOpen}
-        task={completeTask}
-      />
-      {/* Rendered after the sheet, like the transcript viewer: both portal to
+        <TaskMergeDialog
+          open={mergeOpen}
+          onOpenChange={setMergeOpen}
+          task={mergeTask}
+          folderMerging={
+            mergeTask != null && isFolderMerging(tasks, mergeTask.folder_id)
+          }
+          alreadyQueued={mergeLiveTask != null && isMergeQueued(mergeLiveTask)}
+        />
+        <TaskCompleteDialog
+          open={completeOpen}
+          onOpenChange={setCompleteOpen}
+          task={completeTask}
+        />
+        {/* Rendered after the sheet, like the transcript viewer: both portal to
           body and the later mount stacks above, so a cancel / restart asked
           for from inside the drawer lands on top of it. */}
-      <TaskCancelDialog
-        open={cancelOpen}
-        onOpenChange={setCancelOpen}
-        task={cancelTask}
-      />
-      <TaskRestartDialog
-        open={restartOpen}
-        onOpenChange={setRestartOpen}
-        task={restartTask}
-        kind={restartKind}
-      />
-      <TaskScheduleDialog
-        open={scheduleOpen && scheduleTask != null}
-        onOpenChange={setScheduleOpen}
-        task={scheduleTask}
-      />
-      <TaskAssignSessionDialog
-        open={assignOpen && assignTask != null}
-        onOpenChange={setAssignOpen}
-        task={assignTask}
-        sessions={assignableSessions}
-        onCreateSession={() => {
-          if (!assignTask) return
-          setAssignOpen(false)
-          setAssignTaskId(null)
-          openRegularSession(assignTask)
-        }}
-        onSubmit={async (conversationId) => {
-          if (!assignTask) return
-          await workTaskAssignSession(assignTask.id, conversationId)
-          setAssignOpen(false)
-          setAssignTaskId(null)
-          void refetch()
-        }}
-      />
-      <TaskSessionLaunchDialog
-        open={launchOpen && launchTask != null}
-        onOpenChange={(open) => {
-          setLaunchOpen(open)
-          if (!open) setLaunchTaskId(null)
-        }}
-        task={launchTask}
-        kind={launchKind}
-        folderPath={
-          launchTask
-            ? (allFolders.find((folder) => folder.id === launchTask.folder_id)
-                ?.path ?? null)
-            : null
-        }
-        onSubmit={async (config) => {
-          if (!launchTask) return
-          if (launchKind === "worktree") {
-            await workTaskStartConfigured(launchTask.id, config)
-          } else {
-            const folderPath = allFolders.find(
-              (folder) => folder.id === launchTask.folder_id
-            )?.path
-            if (!folderPath) {
-              throw new Error("Task project folder is no longer available")
-            }
-            await createRegularTaskSessionAndAssign({
-              task: launchTask,
-              folderPath,
-              config,
-            })
+        <TaskCancelDialog
+          open={cancelOpen}
+          onOpenChange={setCancelOpen}
+          task={cancelTask}
+        />
+        <TaskRestartDialog
+          open={restartOpen}
+          onOpenChange={setRestartOpen}
+          task={restartTask}
+          kind={restartKind}
+        />
+        <TaskScheduleDialog
+          open={scheduleOpen && scheduleTask != null}
+          onOpenChange={setScheduleOpen}
+          task={scheduleTask}
+        />
+        <TaskAssignSessionDialog
+          open={assignOpen && assignTask != null}
+          onOpenChange={setAssignOpen}
+          task={assignTask}
+          sessions={assignableSessions}
+          onCreateSession={() => {
+            if (!assignTask) return
+            setAssignOpen(false)
+            setAssignTaskId(null)
+            openRegularSession(assignTask)
+          }}
+          onSubmit={async (conversationId) => {
+            if (!assignTask) return
+            await workTaskAssignSession(assignTask.id, conversationId)
+            setAssignOpen(false)
+            setAssignTaskId(null)
+            void refetch()
+          }}
+        />
+        <TaskSessionLaunchDialog
+          open={launchOpen && launchTask != null}
+          onOpenChange={(open) => {
+            setLaunchOpen(open)
+            if (!open) setLaunchTaskId(null)
+          }}
+          task={launchTask}
+          kind={launchKind}
+          folderPath={
+            launchTask
+              ? (allFolders.find((folder) => folder.id === launchTask.folder_id)
+                  ?.path ?? null)
+              : null
           }
-          setLaunchOpen(false)
-          setLaunchTaskId(null)
-          void refetch()
-        }}
-      />
-      {/* Rendered after the sheet so it stacks above it when opened from
+          onSubmit={async (config) => {
+            if (!launchTask) return
+            if (launchKind === "worktree") {
+              await workTaskStartConfigured(launchTask.id, config)
+            } else {
+              const folderPath = allFolders.find(
+                (folder) => folder.id === launchTask.folder_id
+              )?.path
+              if (!folderPath) {
+                throw new Error("Task project folder is no longer available")
+              }
+              await createRegularTaskSessionAndAssign({
+                task: launchTask,
+                folderPath,
+                config,
+              })
+            }
+            setLaunchOpen(false)
+            setLaunchTaskId(null)
+            void refetch()
+          }}
+        />
+        {/* Rendered after the sheet so it stacks above it when opened from
           within (both portal to body; later mount wins). */}
-      <TaskTranscriptDialog
-        open={sessionOpen && sessionTask != null}
-        onOpenChange={setSessionOpen}
-        task={sessionTask}
-      />
-      <TaskSettingsDialog
-        open={settingsOpen}
-        onOpenChange={setSettingsOpen}
-        folderId={folderFilter}
-      />
+        <TaskTranscriptDialog
+          open={sessionOpen && sessionTask != null}
+          onOpenChange={setSessionOpen}
+          task={sessionTask}
+        />
+        <TaskSettingsDialog
+          open={settingsOpen}
+          onOpenChange={setSettingsOpen}
+          folderId={folderFilter}
+        />
 
-      {/* Drag preview. Portalled to the body because a fixed element is
-          positioned against the nearest transformed ancestor otherwise, and
-          the board sits inside several. */}
-      {drag
-        ? createPortal(
+        <DragOverlay dropAnimation={null}>
+          {drag ? (
             <div
-              ref={ghostRef}
-              className="pointer-events-none fixed left-0 top-0 z-50 will-change-transform"
-              style={{ width: drag.width }}
+              className={cn(
+                "pointer-events-none flex w-52 -rotate-1 flex-col gap-2 rounded-xl border bg-card p-3 shadow-lg",
+                dropTarget != null
+                  ? "border-primary ring-2 ring-primary/25"
+                  : "border-foreground/15"
+              )}
               aria-hidden="true"
             >
-              <div
-                className={cn(
-                  "flex -rotate-1 flex-col gap-2 rounded-xl border bg-card p-3 shadow-lg",
-                  dropArmed
-                    ? "border-primary ring-2 ring-primary/25"
-                    : "border-foreground/15"
-                )}
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <span className="min-w-0 break-words text-[0.8125rem] font-medium leading-snug">
-                    {drag.task.title}
-                  </span>
-                  <StatusChip task={drag.task} />
-                </div>
-                {dropArmed ? (
-                  <span className="inline-flex items-center gap-1 text-[0.6875rem] font-medium text-primary">
-                    <Play className="size-3" aria-hidden="true" />
-                    {t("dropToStart")}
-                  </span>
-                ) : null}
+              <div className="flex items-start justify-between gap-2">
+                <span className="min-w-0 break-words text-[0.8125rem] font-medium leading-snug">
+                  {drag.task.title}
+                </span>
+                <StatusChip task={drag.task} />
               </div>
-            </div>,
-            document.body
-          )
-        : null}
+              {dropTarget ? (
+                <span className="inline-flex items-center gap-1 text-[0.6875rem] font-medium text-primary">
+                  {t(COLUMN_LABEL_KEYS[dropTarget])}
+                </span>
+              ) : null}
+            </div>
+          ) : null}
+        </DragOverlay>
+      </div>
+    </DndContext>
+  )
+}
+
+function TaskColumnDropZone({
+  column,
+  children,
+}: {
+  column: BoardColumnId
+  children: React.ReactNode
+}) {
+  const { setNodeRef } = useDroppable({ id: columnDropId(column) })
+  return (
+    <div ref={setNodeRef} className="flex min-h-0 flex-col gap-2">
+      {children}
     </div>
   )
 }
 
-/** The To-do column's drag list. Extracted so grouping=none keeps one
- *  Reorder.Group wrapping the whole column (today's DOM), while grouped
- *  view can mount one group per segment without duplicating the item
- *  handlers. Drop-to-start still rides the same pointer handlers. */
-function TodoReorderList({
+function DraggableTaskList({
   tasks,
   dragId,
-  dragEnabled,
-  onReorder,
-  onPointerDown,
-  onDragStart,
-  onDrag,
-  onDragEnd,
   renderCard,
   className,
 }: {
   tasks: WorkTask[]
   dragId: number | undefined
-  dragEnabled: boolean
-  onReorder: (ids: number[]) => void
-  onPointerDown: (e: React.PointerEvent<HTMLDivElement>) => void
-  onDragStart: (task: WorkTask, info: PanInfo) => void
-  onDrag: (info: PanInfo) => void
-  onDragEnd: (task: WorkTask, event: unknown, info: PanInfo) => void
   renderCard: (task: WorkTask) => React.ReactNode
   className?: string
 }) {
   return (
-    <Reorder.Group
-      as="div"
-      axis="y"
-      values={tasks.map((task) => task.id)}
-      // Without a folder there is no order to save, so the cards stay put
-      // and the drag exists only to start.
-      onReorder={(ids: number[]) => {
-        if (dragEnabled) onReorder(ids)
-      }}
-      className={className}
-    >
+    <div className={className}>
       {tasks.map((task) => (
-        <Reorder.Item
+        <DraggableTaskCard
           key={task.id}
-          value={task.id}
-          as="div"
-          onPointerDown={onPointerDown}
-          onDragStart={(_e: unknown, info: PanInfo) => onDragStart(task, info)}
-          onDrag={(_e: unknown, info: PanInfo) => onDrag(info)}
-          onDragEnd={(e: unknown, info: PanInfo) => onDragEnd(task, e, info)}
-          className={cn(
-            "cursor-grab active:cursor-grabbing",
-            // The preview is the card now; what stays in the list is the
-            // slot it came from.
-            dragId === task.id && "opacity-40"
-          )}
+          task={task}
+          active={dragId === task.id}
         >
           {renderCard(task)}
-        </Reorder.Item>
+        </DraggableTaskCard>
       ))}
-    </Reorder.Group>
+    </div>
+  )
+}
+
+function DraggableTaskCard({
+  task,
+  active,
+  children,
+}: {
+  task: WorkTask
+  active: boolean
+  children: React.ReactNode
+}) {
+  const draggable = isBoardDraggable(task)
+  const { listeners, setNodeRef } = useDraggable({
+    id: taskDragId(task.id),
+    disabled: !draggable,
+  })
+  return (
+    <div
+      ref={setNodeRef}
+      {...(draggable ? listeners : {})}
+      className={cn(
+        draggable && "touch-none cursor-grab active:cursor-grabbing",
+        active && "opacity-40"
+      )}
+    >
+      {children}
+    </div>
   )
 }

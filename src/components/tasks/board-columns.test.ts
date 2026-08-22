@@ -5,50 +5,34 @@ import {
   columnForStatus,
   filterTasksForList,
   groupTasksByColumn,
-  STATUSES_BY_COLUMN,
-  type BoardColumnId,
+  statusForColumn,
 } from "./board-columns"
 import { TASKS_STATUS_GROUPS } from "@/lib/tasks-board-filter-storage"
-import type {
-  WorkTask,
-  WorkTaskBusinessStatus,
-  WorkTaskStatus,
-} from "@/lib/types"
+import type { WorkTask, WorkTaskBusinessStatus } from "@/lib/types"
 
-function businessStatus(status: WorkTaskStatus): WorkTaskBusinessStatus {
-  switch (status) {
-    case "todo":
-    case "queued":
-      return "todo"
-    case "preparing":
-    case "running":
-      return "in_progress"
-    case "awaiting_input":
-    case "failed":
-      return "blocked"
-    case "review":
-    case "merging":
-      return "review"
-    case "done":
-      return "done"
-    case "canceled":
-      return "canceled"
-  }
-}
+const statuses: WorkTaskBusinessStatus[] = [
+  "backlog",
+  "todo",
+  "in_progress",
+  "review",
+  "done",
+  "blocked",
+  "canceled",
+]
 
 function task(
   id: number,
-  status: WorkTaskStatus,
-  extra?: Partial<WorkTask>
+  task_status: WorkTaskBusinessStatus,
+  extra: Partial<WorkTask> = {}
 ): WorkTask {
   return {
     id,
     folder_id: 1,
     title: `t${id}`,
     config: null,
-    status,
-    task_status: extra?.task_status ?? businessStatus(status),
-    execution_mode: extra?.execution_mode ?? "engine",
+    status: "todo",
+    task_status,
+    execution_mode: null,
     failure_reason: null,
     last_error: null,
     run_seq: 0,
@@ -70,7 +54,7 @@ function task(
     archived_at: null,
     scheduled_at: null,
     created_at: "2026-08-01T00:00:00Z",
-    updated_at: "2026-08-01T00:00:00Z",
+    updated_at: `2026-08-01T0${id}:00:00Z`,
     started_at: null,
     settled_at: null,
     finished_at: null,
@@ -78,182 +62,52 @@ function task(
   }
 }
 
-describe("columnForStatus", () => {
-  it("maps every business status to its board column per the spec", () => {
-    expect(columnForStatus("todo")).toBe("todo")
-    expect(columnForStatus("in_progress")).toBe("inProgress")
-    expect(columnForStatus("blocked")).toBe("attention")
-    expect(columnForStatus("review")).toBe("attention")
-    expect(columnForStatus("done")).toBe("done")
-    expect(columnForStatus("canceled")).toBe("done")
-  })
-})
-
-describe("STATUSES_BY_COLUMN", () => {
-  it("agrees with columnForStatus and lists every status exactly once", () => {
-    // The list view's status filter reads this table; the board reads
-    // columnForStatus. A drift between them would put a status in a column of
-    // the filter menu that the board files somewhere else.
-    for (const [col, statuses] of Object.entries(STATUSES_BY_COLUMN)) {
-      for (const status of statuses) {
-        expect(columnForStatus(status)).toBe(col as BoardColumnId)
-      }
+describe("seven-column task board", () => {
+  it("maps every status one-to-one and round-trips", () => {
+    for (const status of statuses) {
+      expect(statusForColumn(columnForStatus(status))).toBe(status)
     }
-    // Exhaustive by construction: adding a business status without adding it
-    // here fails this list's own type check, and duplicates fail the Set size.
-    const every: WorkTaskBusinessStatus[] = [
-      "todo",
-      "in_progress",
-      "blocked",
-      "review",
-      "done",
-      "canceled",
-    ]
-    expect(new Set(ALL_WORK_TASK_BUSINESS_STATUSES).size).toBe(
-      ALL_WORK_TASK_BUSINESS_STATUSES.length
+    expect(ALL_WORK_TASK_BUSINESS_STATUSES).toEqual(statuses)
+    expect(TASKS_STATUS_GROUPS).toEqual(BOARD_COLUMN_IDS)
+  })
+
+  it("puts every card in its own column", () => {
+    const grouped = groupTasksByColumn(
+      statuses.map((status, index) => task(index + 1, status))
     )
-    expect([...ALL_WORK_TASK_BUSINESS_STATUSES].sort()).toEqual(
-      [...every].sort()
-    )
+    for (const status of statuses) {
+      expect(
+        grouped[columnForStatus(status)].map((row) => row.task_status)
+      ).toEqual([status])
+    }
   })
 
-  it("agrees with the storage layer's copy of the group ids", () => {
-    // tasks-board-filter-storage.ts duplicates these ids so it stays free of
-    // component imports; a drift would silently reject a stored selection.
-    expect([...TASKS_STATUS_GROUPS]).toEqual(BOARD_COLUMN_IDS)
-  })
-})
-
-describe("filterTasksForList", () => {
-  it("returns every non-archived task, freshest first, with no group filter", () => {
-    const tasks = [
-      task(1, "todo", { updated_at: "2026-08-01T01:00:00Z" }),
-      task(2, "running", { updated_at: "2026-08-01T03:00:00Z" }),
-      task(3, "canceled", { updated_at: "2026-08-01T02:00:00Z" }),
-      task(4, "done", {
-        updated_at: "2026-08-01T04:00:00Z",
-        archived_at: "2026-08-01T04:00:00Z",
-      }),
+  it("keeps canceled cards visible and archived cards optional", () => {
+    const rows = [
+      task(1, "canceled"),
+      task(2, "done", { archived_at: "2026-08-02T00:00:00Z" }),
     ]
-    expect(
-      filterTasksForList(tasks, null, true, false).map((t) => t.id)
-    ).toEqual([2, 3, 1])
-    // Archived joins the list — still freshest-first — once the toggle is on.
-    expect(
-      filterTasksForList(tasks, null, true, true).map((t) => t.id)
-    ).toEqual([4, 2, 3, 1])
+    expect(groupTasksByColumn(rows).canceled).toHaveLength(1)
+    expect(groupTasksByColumn(rows).done).toHaveLength(0)
+    expect(groupTasksByColumn(rows, true).done).toHaveLength(1)
   })
 
-  it("keeps only the selected column's statuses", () => {
-    const tasks = [
-      task(1, "todo"),
-      task(2, "review"),
-      task(3, "failed"),
-      task(4, "canceled"),
-    ]
-    // 等你处理 aggregates review + failed (+ awaiting_input / merging).
-    expect(
-      filterTasksForList(tasks, "attention", true, false).map((t) => t.id)
-    ).toEqual([2, 3])
-    // 已完成 is done + canceled — the filter narrows to a whole column, so
-    // canceled comes along with it.
-    expect(
-      filterTasksForList(tasks, "done", true, false).map((t) => t.id)
-    ).toEqual([4])
+  it("sorts columns and list freshest first without mutating input", () => {
+    const rows = [task(1, "todo"), task(3, "todo"), task(2, "review")]
+    expect(groupTasksByColumn(rows).todo.map((row) => row.id)).toEqual([3, 1])
+    expect(filterTasksForList(rows, null, false).map((row) => row.id)).toEqual([
+      3, 2, 1,
+    ])
+    expect(rows.map((row) => row.id)).toEqual([1, 3, 2])
   })
 
-  it("hides canceled tasks unless the toggle is on, like the board", () => {
-    // The group filter cannot single `canceled` out (it lives inside Done), so
-    // this toggle is the only control that can — shared with the board.
-    const tasks = [task(1, "done"), task(2, "canceled")]
+  it("filters the list by the exact visible column", () => {
+    const rows = [task(1, "review"), task(2, "blocked"), task(3, "done")]
     expect(
-      filterTasksForList(tasks, null, false, false).map((t) => t.id)
+      filterTasksForList(rows, "review", false).map((row) => row.id)
     ).toEqual([1])
     expect(
-      filterTasksForList(tasks, "done", false, false).map((t) => t.id)
-    ).toEqual([1])
-  })
-
-  it("does not mutate the list it was given", () => {
-    const tasks = [
-      task(1, "todo", { updated_at: "2026-08-01T01:00:00Z" }),
-      task(2, "todo", { updated_at: "2026-08-01T05:00:00Z" }),
-    ]
-    filterTasksForList(tasks, null, true, false)
-    expect(tasks.map((t) => t.id)).toEqual([1, 2])
-  })
-})
-
-describe("groupTasksByColumn", () => {
-  it("hides canceled tasks unless the toggle is on", () => {
-    const tasks = [task(1, "todo"), task(2, "canceled")]
-    const hidden = groupTasksByColumn(tasks, false)
-    expect(hidden.done).toHaveLength(0)
-    const shown = groupTasksByColumn(tasks, true)
-    expect(shown.done.map((t) => t.id)).toEqual([2])
-  })
-
-  it("orders every column by updated_at, freshest first", () => {
-    const tasks = [
-      task(1, "todo", { updated_at: "2026-08-01T01:00:00Z" }),
-      task(2, "queued", { updated_at: "2026-08-01T03:00:00Z" }),
-      task(3, "preparing", { updated_at: "2026-08-01T01:00:00Z" }),
-      task(4, "running", { updated_at: "2026-08-01T04:00:00Z" }),
-      task(5, "review", { updated_at: "2026-08-01T02:00:00Z" }),
-      task(6, "failed", { updated_at: "2026-08-01T05:00:00Z" }),
-      task(7, "done", { updated_at: "2026-08-01T01:00:00Z" }),
-      // Canceled no longer sinks to the bottom — one rule per column.
-      task(8, "canceled", { updated_at: "2026-08-01T06:00:00Z" }),
-    ]
-    const grouped = groupTasksByColumn(tasks, true)
-    expect(grouped.todo.map((t) => t.id)).toEqual([2, 1])
-    expect(grouped.inProgress.map((t) => t.id)).toEqual([4, 3])
-    // failed is both more severe and fresher than review, so this pair
-    // still matches freshest-first; the dedicated test below pins severity.
-    expect(grouped.attention.map((t) => t.id)).toEqual([6, 5])
-    expect(grouped.done.map((t) => t.id)).toEqual([8, 7])
-  })
-
-  it("orders the attention column by severity, then freshest within a tier", () => {
-    const tasks = [
-      task(1, "merging", { updated_at: "2026-08-01T08:00:00Z" }),
-      task(2, "review", { updated_at: "2026-08-01T07:00:00Z" }),
-      task(3, "awaiting_input", { updated_at: "2026-08-01T06:00:00Z" }),
-      task(4, "failed", { updated_at: "2026-08-01T01:00:00Z" }),
-      task(5, "failed", { updated_at: "2026-08-01T02:00:00Z" }),
-      task(6, "awaiting_input", { updated_at: "2026-08-01T03:00:00Z" }),
-      task(7, "review", { updated_at: "2026-08-01T04:00:00Z" }),
-      task(8, "merging", { updated_at: "2026-08-01T05:00:00Z" }),
-    ]
-    const grouped = groupTasksByColumn(tasks, true)
-    // failed > awaiting_input > review > merging; within a tier, freshest.
-    expect(grouped.attention.map((t) => t.id)).toEqual([5, 4, 3, 6, 2, 7, 1, 8])
-  })
-
-  it("keeps board order on equal timestamps, so a drag survives the sort", () => {
-    // `reorder` stamps every id it renumbers with the same `updated_at`, so the
-    // pending column ties and the stable sort falls back to the new sort_order.
-    const stamped = "2026-08-02T00:00:00Z"
-    const tasks = [
-      task(3, "todo", { sort_order: 0, updated_at: stamped }),
-      task(1, "todo", { sort_order: 1, updated_at: stamped }),
-      task(2, "queued", { sort_order: 2, updated_at: stamped }),
-    ]
-    const grouped = groupTasksByColumn(tasks, false)
-    expect(grouped.todo.map((t) => t.id)).toEqual([3, 1, 2])
-  })
-
-  it("hides archived tasks unless the archive toggle is on", () => {
-    const tasks = [
-      task(1, "done", { archived_at: "2026-08-01T01:00:00Z" }),
-      task(2, "failed", { archived_at: "2026-08-01T01:00:00Z" }),
-      task(3, "done"),
-    ]
-    const hidden = groupTasksByColumn(tasks, false)
-    expect(hidden.done.map((t) => t.id)).toEqual([3])
-    expect(hidden.attention).toHaveLength(0)
-    const shown = groupTasksByColumn(tasks, false, true)
-    expect(shown.done.map((t) => t.id)).toEqual([1, 3])
-    expect(shown.attention.map((t) => t.id)).toEqual([2])
+      filterTasksForList(rows, "blocked", false).map((row) => row.id)
+    ).toEqual([2])
   })
 })

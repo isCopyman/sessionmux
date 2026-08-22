@@ -5507,6 +5507,7 @@ mod tests {
             crate::models::WorkTaskDraft {
                 folder_id: root_id,
                 title: "fix login".to_string(),
+                initial_status: None,
                 config: serde_json::json!({
                     "display_text": "fix login",
                     "prompt_blocks": [{ "type": "text", "text": "fix login" }],
@@ -5575,6 +5576,7 @@ mod tests {
             crate::models::WorkTaskDraft {
                 folder_id: root_id,
                 title: "fix login".to_string(),
+                initial_status: None,
                 config: serde_json::json!({
                     "display_text": "fix login",
                     "prompt_blocks": [{ "type": "text", "text": "fix login" }],
@@ -5648,6 +5650,7 @@ mod tests {
         crate::models::WorkTaskDraft {
             folder_id,
             title: title.to_string(),
+            initial_status: None,
             config: serde_json::json!({
                 "display_text": title,
                 "prompt_blocks": [{ "type": "text", "text": title }],

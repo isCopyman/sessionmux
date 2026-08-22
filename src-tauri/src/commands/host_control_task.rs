@@ -50,7 +50,7 @@ impl TaskHostControl {
         vec![
             capability(
                 "task.claim",
-                "Claim an unassigned to-do card for the current persistent Session. The task brief is atomically queued as this Session's next ordinary prompt; another Session cannot claim the same card.",
+                "Claim an unowned board card for the current persistent Session. Its current column is not a gate: the task is moved to in-progress and atomically queued as this Session's next ordinary prompt.",
                 json!({
                     "type": "object",
                     "additionalProperties": false,
@@ -60,7 +60,7 @@ impl TaskHostControl {
             ),
             capability(
                 "task.assign",
-                "Assign an unassigned to-do card to another persistent Session in the current project. Omit target_session_id to claim it for the caller. The task brief is atomically queued to the chosen Session.",
+                "Assign an unowned board card to another persistent Session in the current project. Omit target_session_id to claim it for the caller. The task moves to in-progress and is atomically queued to the chosen Session.",
                 json!({
                     "type": "object",
                     "additionalProperties": false,
@@ -78,7 +78,7 @@ impl TaskHostControl {
             ),
             capability(
                 "task.update",
-                "Edit the title and/or description of an unassigned to-do card, or the calling Session's own active card, in the current project. A Session cannot rewrite another Session's task brief.",
+                "Edit the title and/or description of an unowned board card, or the calling Session's own active card, in the current project. A Session cannot rewrite another Session's task brief.",
                 json!({
                     "type": "object",
                     "additionalProperties": false,
@@ -174,9 +174,9 @@ impl TaskHostControl {
                     Ok(task) => task,
                     Err(note) => return HostControlUseOutcome::rejected(request_id, action, note),
                 };
-                let is_unassigned_todo = current.execution_mode.is_none()
-                    && current.task_status
-                        == crate::db::entities::work_task::WorkTaskBusinessStatus::Todo;
+                let is_unowned_card = current.execution_mode.is_none()
+                    || current.execution_mode
+                        == Some(crate::db::entities::work_task::WorkTaskExecutionMode::Manual);
                 let is_owned_by_caller = current.execution_mode
                     == Some(crate::db::entities::work_task::WorkTaskExecutionMode::Session)
                     && current.conversation_id == Some(caller.current_session_id)
@@ -185,11 +185,11 @@ impl TaskHostControl {
                         crate::db::entities::work_task::WorkTaskBusinessStatus::InProgress
                             | crate::db::entities::work_task::WorkTaskBusinessStatus::Blocked
                     );
-                if !is_unassigned_todo && !is_owned_by_caller {
+                if !is_unowned_card && !is_owned_by_caller {
                     return HostControlUseOutcome::rejected(
                         request_id,
                         action,
-                        "Only an unassigned to-do card or the calling Session's own active card can be edited.",
+                        "Only an unowned board card or the calling Session's own active card can be edited.",
                     );
                 }
                 let title = match params.title {
@@ -246,6 +246,7 @@ impl TaskHostControl {
                             )
                         }
                     },
+                    initial_status: None,
                 };
                 match work_task_service::update(&self.db.conn, params.task_id, draft).await {
                     Ok(task) => {
@@ -385,6 +386,7 @@ mod tests {
             WorkTaskDraft {
                 folder_id,
                 title: "Initial title".to_string(),
+                initial_status: None,
                 config: serde_json::to_value(WorkTaskConfig {
                     display_text: "Initial description".to_string(),
                     prompt_blocks: vec![serde_json::to_value(PromptInputBlock::Text {
@@ -492,5 +494,72 @@ mod tests {
             .await;
         assert!(!denied.accepted);
         assert!(denied.note.unwrap().contains("own active"));
+    }
+
+    #[tokio::test]
+    async fn agent_can_refine_and_directly_claim_backlog() {
+        let (host, caller, _, db) = fixture().await;
+        let session = conversation_service::get_by_id(&db.conn, caller.current_session_id)
+            .await
+            .unwrap();
+        let task_id = work_task_service::create(
+            &db.conn,
+            WorkTaskDraft {
+                folder_id: session.folder_id,
+                title: "Parked idea".into(),
+                initial_status: Some(
+                    crate::db::entities::work_task::WorkTaskBusinessStatus::Backlog,
+                ),
+                config: serde_json::to_value(WorkTaskConfig {
+                    display_text: "Not ready to run".into(),
+                    prompt_blocks: vec![],
+                    ..Default::default()
+                })
+                .unwrap(),
+            },
+        )
+        .await
+        .unwrap()
+        .id;
+
+        let updated = host
+            .use_action(
+                &caller,
+                "update-backlog".into(),
+                "task.update".into(),
+                json!({
+                    "task_id": task_id,
+                    "title": "Refined parked idea",
+                }),
+            )
+            .await;
+        assert!(updated.accepted, "{:?}", updated.note);
+
+        let claimed = host
+            .use_action(
+                &caller,
+                "claim-backlog".into(),
+                "task.claim".into(),
+                json!({ "task_id": task_id }),
+            )
+            .await;
+        assert!(claimed.accepted, "{:?}", claimed.note);
+        let stored = work_task_service::get(&db.conn, task_id).await.unwrap();
+        assert_eq!(
+            stored.task_status,
+            crate::db::entities::work_task::WorkTaskBusinessStatus::InProgress
+        );
+        assert_eq!(
+            stored.execution_mode,
+            Some(crate::db::entities::work_task::WorkTaskExecutionMode::Session)
+        );
+        assert_eq!(
+            prompt_queue_service::snapshot(&db.conn, caller.current_session_id)
+                .await
+                .unwrap()
+                .items
+                .len(),
+            1
+        );
     }
 }

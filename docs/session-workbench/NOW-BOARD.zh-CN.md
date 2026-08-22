@@ -55,12 +55,11 @@
       PromptQueue 事务。Session 对话顶部现有独立“待办任务”入口，显示当前负责的活动任务并
       可精确跳到看板卡片；任务没有塞进低频的“会话详情”元数据。仍待 collaborator。
 
-- [~] **Task 状态列与 Backlog** —— 当前 UI 为“待办 / 进行中 / 等你处理 / 已完成”四列，
-      底层固定 `todo / in_progress / blocked / review / done / canceled` 六个业务状态；
-      `blocked/review` 共享一列但用徽标区分，`canceled` 通过过滤查看。用户复核后决定补充
-      `backlog`：它承担模糊想法和未承诺工作，允许预先归属但不启动 Agent；`todo` 仅表示已
-      梳理好、可领取和执行。该迁移与 parking-lot 调度语义待独立批次实施。侧栏注意力计数与
-      通知已改读业务状态，所以人工/普通 Session 的受阻与待验收不再漏报。
+- [x] **Task 状态列与 Backlog** —— UI 与底层均固定为“想法池 / 待办 / 进行中 / 审核中 /
+      已完成 / 已阻塞 / 已取消”七态，列可隐藏但不允许每个项目另造状态机。SQLite 迁移
+      保留既有卡片 ID、事件和队列引用；人类创建器与 Agent `create_work_task` 都可选择
+      任意状态，默认仍是 Todo。每列可直接新建；中性/人工卡可自由拖动，拖动只改变看板状态。
+      明确“指派/领取”才进入统一 PromptQueue、唤醒 Session 并转为进行中，Backlog 也可直接指派。
 
 - [x] **Composer 宽/窄 Profile 选择器统一** —— 窄 Tab 的 master-detail 设置面板只从
       ACP config/mode 构造字段，漏掉 Codeg 自有的 Claude Profile；抽取共享 Profile

@@ -206,7 +206,7 @@ it("opens a task detail parked before the Tasks route mounted", () => {
 })
 
 describe("TasksPage grouping", () => {
-  it("shows no group headers when grouping is none — four columns still there", () => {
+  it("shows no group headers when grouping is none — seven columns still there", () => {
     h.tasks = [
       task(1, "todo", { folder_id: 1, title: "todo-alpha" }),
       task(2, "todo", { folder_id: 2, title: "todo-bravo" }),
@@ -217,13 +217,12 @@ describe("TasksPage grouping", () => {
     renderPage()
 
     expect(screen.queryByTestId("task-group-header")).toBeNull()
+    expect(screen.getByRole("heading", { name: "Backlog" })).toBeInTheDocument()
     expect(screen.getByRole("heading", { name: "To do" })).toBeInTheDocument()
     expect(
       screen.getByRole("heading", { name: "In progress" })
     ).toBeInTheDocument()
-    expect(
-      screen.getByRole("heading", { name: "Needs you" })
-    ).toBeInTheDocument()
+    expect(screen.getByRole("heading", { name: "Review" })).toBeInTheDocument()
     expect(screen.getByRole("heading", { name: "Done" })).toBeInTheDocument()
     expect(screen.getByText("todo-alpha")).toBeInTheDocument()
     expect(screen.getByText("todo-bravo")).toBeInTheDocument()
@@ -241,13 +240,12 @@ describe("TasksPage grouping", () => {
     ]
     renderPage()
 
+    expect(screen.getByRole("heading", { name: "Backlog" })).toBeInTheDocument()
     expect(screen.getByRole("heading", { name: "To do" })).toBeInTheDocument()
     expect(
       screen.getByRole("heading", { name: "In progress" })
     ).toBeInTheDocument()
-    expect(
-      screen.getByRole("heading", { name: "Needs you" })
-    ).toBeInTheDocument()
+    expect(screen.getByRole("heading", { name: "Review" })).toBeInTheDocument()
     expect(screen.getByRole("heading", { name: "Done" })).toBeInTheDocument()
 
     const todo = columnRoot("To do")
@@ -263,8 +261,7 @@ describe("TasksPage grouping", () => {
         .textContent
     ).toBe("bravo1")
     expect(
-      within(columnRoot("Needs you")).getByTestId("task-group-header")
-        .textContent
+      within(columnRoot("Review")).getByTestId("task-group-header").textContent
     ).toBe("alpha1")
     expect(
       within(columnRoot("Done")).getByTestId("task-group-header").textContent
@@ -356,8 +353,8 @@ describe("TasksPage grouping", () => {
   })
 })
 
-describe("TasksPage attention column", () => {
-  it("renders failed then awaiting_input then review then merging", () => {
+describe("TasksPage review and blocked columns", () => {
+  it("keeps review work separate from blocked work", () => {
     h.tasks = [
       task(1, "merging", {
         title: "Merging one",
@@ -377,12 +374,8 @@ describe("TasksPage attention column", () => {
       }),
     ]
     renderPage()
-    expectTitleOrder(columnRoot("Needs you"), [
-      "Broke",
-      "Ask me",
-      "Review me",
-      "Merging one",
-    ])
+    expectTitleOrder(columnRoot("Blocked"), ["Ask me", "Broke"])
+    expectTitleOrder(columnRoot("Review"), ["Merging one", "Review me"])
   })
 })
 

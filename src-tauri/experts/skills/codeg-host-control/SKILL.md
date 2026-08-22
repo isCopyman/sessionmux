@@ -106,26 +106,30 @@ the idempotency key outside model-controlled arguments.
 ## Available task actions
 
 Task creation and execution choice are separate. `create_work_task` captures an
-unassigned card; it does not select a Harness, Profile, model, Session, or
-worktree. Use `list_tasks` / `get_task` to inspect cards, then Host Control for:
+unassigned card; use `initial_status=backlog` for an uncommitted idea or omit it
+for a ready Todo. Neither starts an Agent, selects a Harness, Profile, model,
+Session, or worktree. Use `list_tasks` / `get_task` to inspect cards, then Host
+Control for:
 
-- `task.update`: refine the title and/or description of an unassigned Todo or
+- `task.update`: refine the title and/or description of an unassigned card or
   the caller's own active card. Editing an active card updates the board record;
   it does not rewrite a Prompt already submitted to the Harness.
-- `task.claim`: atomically assign an unassigned Todo to the token-derived
+- `task.claim`: atomically assign an unassigned board card to the token-derived
   current persistent Session and queue its brief as that Session's next normal
-  prompt. Never pass a Session id. A competing claim is rejected rather than
-  stealing the card.
+  prompt, moving it to In Progress. Never pass a Session id. A competing claim
+  is rejected rather than stealing the card.
 - `task.assign`: the same atomic path, with an optional stable
   `target_session_id` for assigning another Session. Omit it to claim for self.
 
 While working, use `task_progress` at meaningful milestones and
 `task_complete` with `blocked` or a review-ready verdict. An Agent may move its
 work to Blocked or Review; only the human accepts it as Done, cancels it, or
-reopens it. The visible board has four attention-oriented columns but six fixed
-business states: `todo`, `in_progress`, `blocked`, `review`, `done`, and
-`canceled`; Blocked and Review share “Needs you” and remain distinguishable on
-the card.
+reopens it. The visible board has seven fixed, hideable columns and seven
+fixed business states: `backlog`, `todo`, `in_progress`, `blocked`, `review`,
+`done`, and `canceled`. A human may freely move a neutral/manual card between
+these columns; moving a card never starts or wakes an Agent. Keep long-lived
+plans, evidence, and deliverables in project files, and put only a concise
+summary plus stable file paths on the task card or its progress timeline.
 
 ## Room actions live in `codeg-room`
 

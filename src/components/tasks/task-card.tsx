@@ -85,11 +85,13 @@ export function StatusChip({
   const visualStatus = taskVisualStatus(task)
   // An interrupted failure (restart) reads differently from an agent failure.
   const label =
-    visualStatus === "failed" && task.failure_reason === "interrupted"
-      ? t("statusInterrupted")
-      : task.execution_mode !== "engine" && task.task_status === "blocked"
-        ? t("statusBlocked")
-        : t(statusLabelKey(visualStatus))
+    task.execution_mode !== "engine" && task.task_status === "backlog"
+      ? t("statusBacklog")
+      : visualStatus === "failed" && task.failure_reason === "interrupted"
+        ? t("statusInterrupted")
+        : task.execution_mode !== "engine" && task.task_status === "blocked"
+          ? t("statusBlocked")
+          : t(statusLabelKey(visualStatus))
 
   let tone: string
   let icon: React.ReactNode = null
@@ -170,6 +172,8 @@ function taskVisualStatus(task: WorkTask): WorkTask["status"] {
     return task.status
   }
   switch (task.task_status) {
+    case "backlog":
+      return "todo"
     case "todo":
       return "todo"
     case "in_progress":

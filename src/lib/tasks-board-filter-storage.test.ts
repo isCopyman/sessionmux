@@ -1,19 +1,50 @@
 import { beforeEach, describe, expect, it } from "vitest"
 import {
+  loadTasksBoardFilter,
   loadTasksBoardGrouping,
   loadTasksStatusFilter,
   loadTasksViewMode,
+  saveTasksBoardFilter,
   saveTasksBoardGrouping,
   saveTasksStatusFilter,
   saveTasksViewMode,
 } from "./tasks-board-filter-storage"
 
+const BOARD_FILTER_KEY = "workspace:tasks-board-filter"
 const VIEW_MODE_KEY = "workspace:tasks-view-mode"
 const STATUS_FILTER_KEY = "workspace:tasks-status-filter"
 const GROUPING_KEY = "workspace:tasks-board-grouping"
 
 beforeEach(() => {
   localStorage.clear()
+})
+
+describe("tasks board filter storage", () => {
+  it("round-trips hidden columns and archive visibility", () => {
+    expect(loadTasksBoardFilter()).toEqual({
+      hiddenColumns: [],
+      showArchived: false,
+    })
+    saveTasksBoardFilter({
+      hiddenColumns: ["review", "canceled"],
+      showArchived: true,
+    })
+    expect(loadTasksBoardFilter()).toEqual({
+      hiddenColumns: ["review", "canceled"],
+      showArchived: true,
+    })
+  })
+
+  it("migrates the old showCanceled toggle to the hidden-column model", () => {
+    localStorage.setItem(
+      BOARD_FILTER_KEY,
+      JSON.stringify({ showCanceled: false, showArchived: false })
+    )
+    expect(loadTasksBoardFilter()).toEqual({
+      hiddenColumns: ["canceled"],
+      showArchived: false,
+    })
+  })
 })
 
 describe("tasks view mode storage", () => {
@@ -34,8 +65,8 @@ describe("tasks view mode storage", () => {
 describe("tasks status filter storage", () => {
   it("round-trips a group and keeps null meaning every status", () => {
     expect(loadTasksStatusFilter()).toBeNull()
-    saveTasksStatusFilter("attention")
-    expect(loadTasksStatusFilter()).toBe("attention")
+    saveTasksStatusFilter("review")
+    expect(loadTasksStatusFilter()).toBe("review")
     // Clearing removes the entry rather than storing something that would read
     // back as a filter nobody chose.
     saveTasksStatusFilter(null)
@@ -52,8 +83,7 @@ describe("tasks status filter storage", () => {
     )
     expect(loadTasksStatusFilter()).toBeNull()
 
-    // A single status id is not a group either — `review` lives in `attention`.
-    localStorage.setItem(STATUS_FILTER_KEY, "review")
+    localStorage.setItem(STATUS_FILTER_KEY, "awaiting_input")
     expect(loadTasksStatusFilter()).toBeNull()
 
     localStorage.setItem(STATUS_FILTER_KEY, "{not json")

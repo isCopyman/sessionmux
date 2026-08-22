@@ -1505,10 +1505,25 @@ fn parse_automation_spec(arguments: &Value) -> Result<NewAutomationSpec, String>
 /// Validate `create_work_task` arguments into a [`NewWorkTaskSpec`].
 fn parse_work_task_spec(arguments: &Value) -> Result<NewWorkTaskSpec, String> {
     let title = required_string(arguments, "title", "create_work_task")?;
-    let prompt = required_string(arguments, "prompt", "create_work_task")?;
+    let prompt = optional_string(arguments, "prompt").unwrap_or_default();
+    let initial_status = match optional_string(arguments, "initial_status").as_deref() {
+        None | Some("todo") => None,
+        Some("backlog") => Some(crate::models::work_task::WorkTaskBusinessStatus::Backlog),
+        Some("in_progress") => Some(crate::models::work_task::WorkTaskBusinessStatus::InProgress),
+        Some("blocked") => Some(crate::models::work_task::WorkTaskBusinessStatus::Blocked),
+        Some("review") => Some(crate::models::work_task::WorkTaskBusinessStatus::Review),
+        Some("done") => Some(crate::models::work_task::WorkTaskBusinessStatus::Done),
+        Some("canceled") => Some(crate::models::work_task::WorkTaskBusinessStatus::Canceled),
+        Some(other) => {
+            return Err(format!(
+                "create_work_task initial_status must be a task-board status (got '{other}')"
+            ))
+        }
+    };
     Ok(NewWorkTaskSpec {
         title: truncate_chars(&title, MAX_TITLE_CHARS),
         prompt: truncate_chars(&prompt, MAX_PROMPT_CHARS),
+        initial_status,
         // A card is captured before execution is chosen. Harness/Profile/Model
         // belong to the later assignment or Session-launch boundary.
         agent_type: None,
@@ -3352,6 +3367,55 @@ mod tests {
         assert!(spec.model.is_none());
         assert!(spec.agent_type.is_none());
         assert!(spec.folder_path.is_none());
+        assert!(spec.initial_status.is_none());
+    }
+
+    #[test]
+    fn parse_work_task_allows_a_title_only_idea_card() {
+        let spec = parse_work_task_spec(&json!({
+            "title": "Explore a lighter Session cache"
+        }))
+        .unwrap();
+        assert_eq!(spec.title, "Explore a lighter Session cache");
+        assert!(spec.prompt.is_empty());
+    }
+
+    #[test]
+    fn parse_work_task_accepts_any_board_stage() {
+        let backlog = parse_work_task_spec(&json!({
+            "title": "Explore a rewrite",
+            "prompt": "Collect the idea without starting it",
+            "initial_status": "backlog"
+        }))
+        .unwrap();
+        assert_eq!(
+            backlog.initial_status,
+            Some(crate::models::work_task::WorkTaskBusinessStatus::Backlog)
+        );
+
+        let todo = parse_work_task_spec(&json!({
+            "title": "Ready work",
+            "prompt": "Ready to be picked up",
+            "initial_status": "todo"
+        }))
+        .unwrap();
+        assert!(todo.initial_status.is_none(), "todo is the wire default");
+
+        let active = parse_work_task_spec(&json!({
+            "title": "Already under way",
+            "initial_status": "in_progress"
+        }))
+        .unwrap();
+        assert_eq!(
+            active.initial_status,
+            Some(crate::models::work_task::WorkTaskBusinessStatus::InProgress)
+        );
+
+        assert!(parse_work_task_spec(&json!({
+            "title": "Bad stage",
+            "initial_status": "waiting_for_magic"
+        }))
+        .is_err());
     }
 
     #[test]

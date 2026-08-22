@@ -5,41 +5,30 @@ const VIEW_MODE_KEY = "workspace:tasks-view-mode"
 const STATUS_FILTER_KEY = "workspace:tasks-status-filter"
 const GROUPING_KEY = "workspace:tasks-board-grouping"
 
-/** Visibility toggles of the tasks board's filter popover. */
-export interface TasksBoardFilter {
-  showCanceled: boolean
-  showArchived: boolean
-}
-
-/** Default view: canceled tasks visible, archived ones hidden. */
-export const DEFAULT_TASKS_BOARD_FILTER: TasksBoardFilter = {
-  showCanceled: true,
-  showArchived: false,
-}
-
-/** How the tasks page lays its rows out: four-column board, or flat list. */
-export type TasksViewMode = "board" | "list"
-
-export const DEFAULT_TASKS_VIEW_MODE: TasksViewMode = "board"
-
-/** The groups the list view can filter on — the board's four columns. Mirrors
- *  `BOARD_COLUMN_IDS` (board-columns.ts), whose test asserts the two agree —
- *  this copy exists so the storage layer stays free of component imports. */
 export const TASKS_STATUS_GROUPS = [
+  "backlog",
   "todo",
   "inProgress",
-  "attention",
+  "review",
   "done",
+  "blocked",
+  "canceled",
 ] as const
-
 export type TasksStatusGroup = (typeof TASKS_STATUS_GROUPS)[number]
 
-/** Column-internal grouping of the board and list. Default is none — the four
- *  columns (and the list's freshest-first sequence) stay unsegmented. */
+export interface TasksBoardFilter {
+  showArchived: boolean
+  hiddenColumns: TasksStatusGroup[]
+}
+export const DEFAULT_TASKS_BOARD_FILTER: TasksBoardFilter = {
+  showArchived: false,
+  hiddenColumns: [],
+}
+
+export type TasksViewMode = "board" | "list"
+export const DEFAULT_TASKS_VIEW_MODE: TasksViewMode = "board"
 export const TASKS_BOARD_GROUPINGS = ["none", "folder", "agent"] as const
-
 export type TasksBoardGrouping = (typeof TASKS_BOARD_GROUPINGS)[number]
-
 export const DEFAULT_TASKS_BOARD_GROUPING: TasksBoardGrouping = "none"
 
 export function loadTasksBoardFilter(): TasksBoardFilter {
@@ -47,18 +36,18 @@ export function loadTasksBoardFilter(): TasksBoardFilter {
   try {
     const raw = localStorage.getItem(BOARD_FILTER_KEY)
     if (!raw) return DEFAULT_TASKS_BOARD_FILTER
-    const parsed = JSON.parse(raw) as unknown
-    if (!parsed || typeof parsed !== "object") return DEFAULT_TASKS_BOARD_FILTER
-    const obj = parsed as Record<string, unknown>
+    const value = JSON.parse(raw) as Record<string, unknown>
+    const hiddenColumns = Array.isArray(value.hiddenColumns)
+      ? value.hiddenColumns.filter((column): column is TasksStatusGroup =>
+          TASKS_STATUS_GROUPS.includes(column as TasksStatusGroup)
+        )
+      : value.showCanceled === false
+        ? ["canceled" as const]
+        : []
     return {
-      showCanceled:
-        typeof obj.showCanceled === "boolean"
-          ? obj.showCanceled
-          : DEFAULT_TASKS_BOARD_FILTER.showCanceled,
+      hiddenColumns: [...new Set(hiddenColumns)],
       showArchived:
-        typeof obj.showArchived === "boolean"
-          ? obj.showArchived
-          : DEFAULT_TASKS_BOARD_FILTER.showArchived,
+        typeof value.showArchived === "boolean" ? value.showArchived : false,
     }
   } catch {
     return DEFAULT_TASKS_BOARD_FILTER
@@ -69,9 +58,7 @@ export function saveTasksBoardFilter(filter: TasksBoardFilter): void {
   if (typeof window === "undefined") return
   try {
     localStorage.setItem(BOARD_FILTER_KEY, JSON.stringify(filter))
-  } catch {
-    /* ignore */
-  }
+  } catch {}
 }
 
 export function loadTasksViewMode(): TasksViewMode {
@@ -88,20 +75,9 @@ export function saveTasksViewMode(mode: TasksViewMode): void {
   if (typeof window === "undefined") return
   try {
     localStorage.setItem(VIEW_MODE_KEY, mode)
-  } catch {
-    /* ignore */
-  }
+  } catch {}
 }
 
-/**
- * The list view's status selection. `null` means "every status" — the default,
- * and what anything unrecognized falls back to rather than an empty list.
- *
- * Stored as the bare group id (like the view mode above). That also migrates
- * the entry this key used to hold — a JSON array of individual statuses, from
- * when the filter was a checkbox menu: it matches no group, so it reads back as
- * "every status" and the next save overwrites it.
- */
 export function loadTasksStatusFilter(): TasksStatusGroup | null {
   if (typeof window === "undefined") return null
   try {
@@ -117,21 +93,16 @@ export function saveTasksStatusFilter(group: TasksStatusGroup | null): void {
   try {
     if (group == null) localStorage.removeItem(STATUS_FILTER_KEY)
     else localStorage.setItem(STATUS_FILTER_KEY, group)
-  } catch {
-    /* ignore */
-  }
+  } catch {}
 }
 
 export function loadTasksBoardGrouping(): TasksBoardGrouping {
   if (typeof window === "undefined") return DEFAULT_TASKS_BOARD_GROUPING
   try {
     const raw = localStorage.getItem(GROUPING_KEY)
-    return (
-      TASKS_BOARD_GROUPINGS.find((g) => g === raw) ??
-      DEFAULT_TASKS_BOARD_GROUPING
-    )
+    return TASKS_BOARD_GROUPINGS.find((group) => group === raw) ?? "none"
   } catch {
-    return DEFAULT_TASKS_BOARD_GROUPING
+    return "none"
   }
 }
 
@@ -139,7 +110,5 @@ export function saveTasksBoardGrouping(grouping: TasksBoardGrouping): void {
   if (typeof window === "undefined") return
   try {
     localStorage.setItem(GROUPING_KEY, grouping)
-  } catch {
-    /* ignore */
-  }
+  } catch {}
 }

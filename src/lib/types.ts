@@ -1970,6 +1970,7 @@ export type WorkTaskStatus =
 /** Stable user-facing workflow. Unlike WorkTaskStatus, these values do not
  * expose worktree setup/merge implementation details. */
 export type WorkTaskBusinessStatus =
+  | "backlog"
   | "todo"
   | "in_progress"
   | "blocked"
@@ -2085,6 +2086,8 @@ export interface WorkTaskDraft {
   folder_id: number
   title: string
   config: WorkTaskConfig
+  /** Creation-only placement; omitted remains Todo for older callers. */
+  initial_status?: WorkTaskBusinessStatus
 }
 
 /** A saved task blueprint (global; the folder is picked at creation time).

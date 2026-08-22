@@ -403,6 +403,7 @@ impl AutomationEngine {
             folder_id,
             title: first_chars(&auto.name, 80),
             config: serde_json::to_value(&task_cfg).map_err(|e| e.to_string())?,
+            initial_status: None,
         };
         // The command core (not the bare service) so the task board gets its
         // `task://changed` broadcast and the work-task pump its nudge for free.

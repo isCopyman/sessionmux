@@ -94,6 +94,30 @@ describe("buildTaskActions submit-for-review", () => {
 })
 
 describe("buildTaskActions manual workflow", () => {
+  it("can start or assign an idea directly", () => {
+    const h = handlers()
+    const { primary, secondaries } = buildTaskActions(
+      task({
+        status: "todo",
+        task_status: "backlog",
+        execution_mode: null,
+        conversation_id: null,
+        connection_id: null,
+      }),
+      (key) => key,
+      h
+    )
+    expect(primary?.label).toBe("actionStart")
+    expect(
+      secondaries.some((action) => action.label === "actionRunWithAgent")
+    ).toBe(true)
+    expect(
+      secondaries.some((action) => action.label === "actionAssignSession")
+    ).toBe(true)
+    primary?.onClick()
+    expect(h.onManualStatus).toHaveBeenCalledWith("in_progress")
+  })
+
   it("keeps manual start separate from running an Agent", () => {
     const h = handlers()
     const { primary, secondaries } = buildTaskActions(
@@ -109,6 +133,10 @@ describe("buildTaskActions manual workflow", () => {
     )
     primary?.onClick()
     expect(h.onManualStatus).toHaveBeenCalledWith("in_progress")
+    secondaries
+      .find((action) => action.label === "actionMoveToBacklog")
+      ?.onClick()
+    expect(h.onManualStatus).toHaveBeenCalledWith("backlog")
     const agent = secondaries.find(
       (action) => action.label === "actionRunWithAgent"
     )

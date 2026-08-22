@@ -95,6 +95,11 @@ pub struct WorkTaskDraft {
     pub folder_id: i32,
     pub title: String,
     pub config: serde_json::Value,
+    /// Creation-only workflow placement. Omitted payloads keep the historical
+    /// `todo` default; updates deliberately ignore this field and use the
+    /// explicit status-transition API instead.
+    #[serde(default)]
+    pub initial_status: Option<WorkTaskBusinessStatus>,
 }
 
 /// Wire DTO for a saved task template: a display name plus the title seed and

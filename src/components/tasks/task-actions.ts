@@ -7,6 +7,7 @@ import {
   CircleCheck,
   ClipboardCheck,
   GitMerge,
+  ListTodo,
   ListX,
   MessageSquarePlus,
   MessageSquareText,
@@ -72,6 +73,8 @@ type ActionLabelKey =
   | "actionUnarchive"
   | "actionEdit"
   | "actionSchedule"
+  | "actionMoveToBacklog"
+  | "actionMoveToTodo"
 
 /**
  * The action set a task offers, shared by the board card and the list row so
@@ -180,6 +183,33 @@ export function buildTaskActions(
 
     if (task.execution_mode === null || task.execution_mode === "manual") {
       switch (task.task_status) {
+        case "backlog":
+          primary = {
+            icon: Play,
+            label: t("actionStart"),
+            onClick: () => handlers.onManualStatus("in_progress"),
+          }
+          secondaries.push({
+            icon: Bot,
+            label: t("actionRunWithAgent"),
+            onClick: handlers.onStart,
+          })
+          secondaries.push({
+            icon: MessageSquarePlus,
+            label: t("actionAssignSession"),
+            onClick: handlers.onAssignSession,
+          })
+          secondaries.push({
+            icon: Pencil,
+            label: t("actionEdit"),
+            onClick: handlers.onEdit,
+          })
+          secondaries.push({
+            icon: Ban,
+            label: t("actionCancel"),
+            onClick: () => handlers.onManualStatus("canceled"),
+          })
+          break
         case "todo":
           primary = {
             icon: Play,
@@ -200,6 +230,11 @@ export function buildTaskActions(
             icon: Pencil,
             label: t("actionEdit"),
             onClick: handlers.onEdit,
+          })
+          secondaries.push({
+            icon: ListTodo,
+            label: t("actionMoveToBacklog"),
+            onClick: () => handlers.onManualStatus("backlog"),
           })
           break
         case "in_progress":

@@ -21,6 +21,13 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover"
 import { FolderSelect } from "@/components/shared/folder-select"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { useScrollbarSafeDismiss } from "@/hooks/use-scrollbar-safe-dismiss"
 import {
   workTaskTemplateDelete,
@@ -29,10 +36,21 @@ import {
 } from "@/lib/api"
 import type {
   WorkTask,
+  WorkTaskBusinessStatus,
   WorkTaskConfig,
   WorkTaskDraft,
   WorkTaskTemplate,
 } from "@/lib/types"
+
+const TASK_INITIAL_STATUSES = [
+  ["backlog", "colBacklog"],
+  ["todo", "colTodo"],
+  ["in_progress", "colInProgress"],
+  ["review", "colReview"],
+  ["done", "colDone"],
+  ["blocked", "colBlocked"],
+  ["canceled", "colCanceled"],
+] as const satisfies ReadonlyArray<readonly [WorkTaskBusinessStatus, string]>
 
 interface TaskEditorDialogProps {
   open: boolean
@@ -41,6 +59,8 @@ interface TaskEditorDialogProps {
   task: WorkTask | null
   /** Preselected folder for a create (the board's folder filter). */
   defaultFolderId: number | null
+  /** Initial board column when creating from a column's + button. */
+  defaultInitialStatus?: WorkTaskBusinessStatus
   /** Seed text for a create (the "task from message" hand-off). */
   prefillText?: string | null
   onSubmit: (draft: WorkTaskDraft) => Promise<void>
@@ -58,6 +78,7 @@ export function TaskEditorDialog({
   onOpenChange,
   task,
   defaultFolderId,
+  defaultInitialStatus = "todo",
   prefillText,
   onSubmit,
 }: TaskEditorDialogProps) {
@@ -69,6 +90,7 @@ export function TaskEditorDialog({
           <TaskEditorBody
             task={task}
             defaultFolderId={defaultFolderId}
+            defaultInitialStatus={defaultInitialStatus}
             prefillText={prefillText ?? null}
             onSubmit={onSubmit}
             onCancel={() => onOpenChange(false)}
@@ -82,12 +104,14 @@ export function TaskEditorDialog({
 function TaskEditorBody({
   task,
   defaultFolderId,
+  defaultInitialStatus,
   prefillText,
   onSubmit,
   onCancel,
 }: {
   task: WorkTask | null
   defaultFolderId: number | null
+  defaultInitialStatus: WorkTaskBusinessStatus
   prefillText: string | null
   onSubmit: (draft: WorkTaskDraft) => Promise<void>
   onCancel: () => void
@@ -112,6 +136,8 @@ function TaskEditorBody({
   const [folderId, setFolderId] = useState<number | null>(
     task?.folder_id ?? defaultFolderId ?? projectFolders[0]?.id ?? null
   )
+  const [initialStatus, setInitialStatus] =
+    useState<WorkTaskBusinessStatus>(defaultInitialStatus)
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
 
@@ -195,6 +221,7 @@ function TaskEditorBody({
         folder_id: folderId,
         title: title.trim(),
         config: buildConfig(true),
+        ...(task == null ? { initial_status: initialStatus } : {}),
       }
       await onSubmit(draft)
     } catch (e) {
@@ -288,6 +315,34 @@ function TaskEditorBody({
           onAttachmentsChange={setAttachmentCount}
           editorClassName="max-h-[14rem] min-h-[6rem]"
         />
+
+        {task == null ? (
+          <div className="flex flex-col gap-2">
+            <h3 className="text-[0.6875rem] font-medium uppercase tracking-wide text-muted-foreground">
+              {t("sectionInitialStage")}
+            </h3>
+            <Select
+              value={initialStatus}
+              onValueChange={(value) =>
+                setInitialStatus(value as WorkTaskBusinessStatus)
+              }
+            >
+              <SelectTrigger className="w-48">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {TASK_INITIAL_STATUSES.map(([status, label]) => (
+                  <SelectItem key={status} value={status}>
+                    {t(label)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              {t("initialStageHint")}
+            </p>
+          </div>
+        ) : null}
 
         {/* Target — which project board the task lives on. */}
         <div className="flex flex-col gap-2">

@@ -6,21 +6,27 @@ import { BOARD_COLUMN_IDS, type BoardColumnId } from "./board-columns"
 import { TASK_LIST_CELLS, TASK_LIST_LINE } from "./task-row"
 import type { TasksViewMode } from "@/lib/tasks-board-filter-storage"
 
-/** The column marker's tone — the same four the real board headers use. */
+/** The column marker's tone — the same seven the real board headers use. */
 const COLUMN_TONE: Record<BoardColumnId, string> = {
+  backlog: "bg-slate-400",
   todo: "bg-muted-foreground/50",
   inProgress: "bg-primary",
-  attention: "bg-amber-500",
+  review: "bg-violet-500",
   done: "bg-emerald-500",
+  blocked: "bg-amber-500",
+  canceled: "bg-rose-400",
 }
 
 /** Ghost cards per column, and the title width of each — uneven on purpose, so
  *  the placeholder reads as a board being filled rather than a grey grid. */
 const GHOST_CARDS: Record<BoardColumnId, string[]> = {
+  backlog: ["w-2/3", "w-1/2"],
   todo: ["w-4/5", "w-3/5", "w-2/3"],
   inProgress: ["w-3/4", "w-1/2"],
-  attention: ["w-2/3"],
+  review: ["w-2/3"],
   done: ["w-3/5", "w-4/5"],
+  blocked: ["w-1/2"],
+  canceled: ["w-2/3"],
 }
 
 /** Title widths of the list-view ghost rows. */
@@ -112,7 +118,7 @@ export function TasksSkeleton({ mode }: { mode: TasksViewMode }) {
           </div>
         </div>
       ) : (
-        <div className="grid min-h-0 flex-1 grid-cols-4 gap-4 px-4 pb-4 pt-2">
+        <div className="grid min-h-0 flex-1 grid-cols-7 gap-4 px-4 pb-4 pt-2">
           {BOARD_COLUMN_IDS.map((col) => (
             <div key={col} className="flex min-h-0 flex-col gap-2">
               {/* The header is drawn for real — its marker and metrics are

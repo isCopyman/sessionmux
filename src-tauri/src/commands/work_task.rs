@@ -1183,6 +1183,7 @@ mod tests {
         WorkTaskDraft {
             folder_id,
             title: title.to_string(),
+            initial_status: None,
             config: serde_json::json!({
                 "display_text": "do the thing",
                 "prompt_blocks": [{ "type": "text", "text": "do the thing" }],
