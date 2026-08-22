@@ -218,6 +218,7 @@ fn compact_task_row(row: crate::db::entities::work_task::Model) -> TaskListRow {
         id: row.id,
         title: row.title,
         task_status: work_task_service::business_status_str(row.task_status).to_string(),
+        priority: row.priority,
         status: work_task_service::status_str(row.status).to_string(),
         agent_type: nonempty(cfg.agent_type),
         updated_at: row.updated_at,
@@ -287,6 +288,7 @@ fn task_detail_from_info(info: WorkTaskInfo, events: Vec<WorkTaskEventInfo>) -> 
         id: Some(info.id),
         title: Some(info.title),
         status: Some(work_task_service::status_str(info.status).to_string()),
+        priority: Some(info.priority),
         agent_type: nonempty(cfg.agent_type),
         model,
         profile,
@@ -531,6 +533,7 @@ impl ChatAuthoringAccess for DbChatAuthoring {
             title: spec.title.clone(),
             config,
             initial_status: spec.initial_status,
+            priority: spec.priority,
         };
         match crate::commands::work_task::work_task_create_core(&self.emitter, &self.db, draft)
             .await
@@ -910,6 +913,7 @@ mod tests {
             title: "Fix the flake".into(),
             prompt: "the retry test is flaky".into(),
             initial_status: None,
+            priority: None,
             agent_type: None,
             folder_path: None,
             profile: None,
@@ -1541,6 +1545,7 @@ mod tests {
                     folder_id: work_task_service::list(&db.conn, None).await.unwrap()[0].folder_id,
                     title: format!("extra {i}"),
                     initial_status: None,
+                    priority: None,
                     config: serde_json::json!({
                         "display_text": "x",
                         "prompt_blocks": [{ "type": "text", "text": "x" }],
@@ -1580,6 +1585,7 @@ mod tests {
                 folder_id: folder.id,
                 title: "Secret card".into(),
                 initial_status: None,
+                priority: None,
                 config: serde_json::json!({
                     "display_text": long_prompt,
                     "prompt_blocks": [{ "type": "text", "text": long_prompt }],

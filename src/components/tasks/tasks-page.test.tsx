@@ -486,6 +486,37 @@ describe("TasksPage quick views", () => {
   })
 })
 
+describe("TasksPage sorting", () => {
+  it("projects business priority without changing the manual task order", () => {
+    localStorage.setItem("workspace:tasks-sort", "priority")
+    h.tasks = [
+      task(1, "todo", {
+        title: "ordinary first manually",
+        sort_order: 1,
+        priority: "none",
+      }),
+      task(2, "todo", {
+        title: "urgent second manually",
+        sort_order: 2,
+        priority: "urgent",
+      }),
+      task(3, "todo", {
+        title: "medium third manually",
+        sort_order: 3,
+        priority: "medium",
+      }),
+    ]
+    renderPage()
+
+    expectTitleOrder(columnRoot("To do"), [
+      "urgent second manually",
+      "medium third manually",
+      "ordinary first manually",
+    ])
+    expect(h.tasks.map((item) => item.sort_order)).toEqual([1, 2, 3])
+  })
+})
+
 describe("TasksPage review and blocked columns", () => {
   it("keeps review work separate from blocked work", () => {
     h.tasks = [

@@ -30,6 +30,7 @@ import { buildTaskActions, type TaskActionItem } from "./task-actions"
 import type { TaskActionHandlers } from "./task-actions"
 import type { TaskActivityDot } from "./task-activity"
 import type { WorkTask } from "@/lib/types"
+import { TaskPriorityIcon } from "./task-priority"
 
 type StatusLabelKey =
   | "statusTodo"
@@ -197,7 +198,13 @@ function taskVisualStatus(task: WorkTask): WorkTask["status"] {
   }
 }
 
-export function ExecutionModeChip({ task }: { task: WorkTask }) {
+export function ExecutionModeChip({
+  task,
+  ownerLabel,
+}: {
+  task: WorkTask
+  ownerLabel?: string | null
+}) {
   const t = useTranslations("Tasks")
   const label =
     task.execution_mode === null
@@ -205,7 +212,7 @@ export function ExecutionModeChip({ task }: { task: WorkTask }) {
       : task.execution_mode === "manual"
         ? t("executionManual")
         : task.execution_mode === "session"
-          ? t("executionSession")
+          ? (ownerLabel ?? t("executionSession"))
           : t("executionAgent")
   return (
     <span className="rounded-full bg-muted px-1.5 py-0.5 text-[0.625rem] text-muted-foreground">
@@ -273,6 +280,7 @@ export function attentionSurfaceClass(task: WorkTask): string {
 interface TaskCardProps extends TaskActionHandlers {
   task: WorkTask
   folderName: string | null
+  ownerLabel?: string | null
   /** Shared render-tick timestamp for relative times (refreshed by the page). */
   now: number
   /** Place in line when this task is waiting to merge (see `mergeQueueRanks`);
@@ -482,6 +490,7 @@ export function ScheduleChip({ task }: { task: WorkTask }) {
 export function TaskCard({
   task,
   folderName,
+  ownerLabel,
   now,
   mergeQueueRank,
   activity,
@@ -507,6 +516,14 @@ export function TaskCard({
   const when = formatRelative(
     task.finished_at ?? task.settled_at ?? task.started_at ?? task.created_at,
     now
+  )
+  const description = task.config?.display_text?.trim() ?? ""
+  const showDescription =
+    description.length > 0 && description !== task.title.trim()
+  // The backlog badge only repeats the column heading. Runtime chips remain
+  // useful for Agent-owned cards (preparing, waiting for input, merging, …).
+  const showStatusChip = !(
+    task.execution_mode !== "engine" && task.task_status === "backlog"
   )
 
   const { primary, secondaries } = buildTaskActions(task, t, handlers)
@@ -551,11 +568,21 @@ export function TaskCard({
               activity={activity}
               className="mt-[0.125rem]"
             />
+            <TaskPriorityIcon
+              priority={task.priority}
+              className="mt-[0.125rem]"
+            />
             <span className="min-w-0 flex-1 break-words text-[0.8125rem] font-medium leading-snug">
               {task.title}
             </span>
-            <StatusChip task={task} />
+            {showStatusChip ? <StatusChip task={task} /> : null}
           </div>
+
+          {showDescription ? (
+            <p className="mt-1.5 line-clamp-2 text-[0.6875rem] leading-snug text-muted-foreground">
+              {description}
+            </p>
+          ) : null}
 
           <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-[0.6875rem] text-muted-foreground">
             {folderName ? (
@@ -577,7 +604,7 @@ export function TaskCard({
               <span className="text-muted-foreground/40">·</span>
             ) : null}
             {when ? <span className="shrink-0">{when}</span> : null}
-            <ExecutionModeChip task={task} />
+            <ExecutionModeChip task={task} ownerLabel={ownerLabel} />
             <ScheduleChip task={task} />
             <MergeQueuedChip task={task} rank={mergeQueueRank} />
             <PreflightChip task={task} />

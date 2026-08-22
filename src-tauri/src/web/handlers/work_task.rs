@@ -59,6 +59,13 @@ pub struct UpdateParams {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SetPriorityParams {
+    pub id: i32,
+    pub priority: crate::models::work_task::WorkTaskPriority,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AssignSessionParams {
     pub id: i32,
     pub conversation_id: i32,
@@ -271,6 +278,17 @@ pub async fn work_task_update(
     )
     .await
     .map_err(AppCommandError::from)?;
+    Ok(Json(result))
+}
+
+pub async fn work_task_set_priority(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<SetPriorityParams>,
+) -> Result<Json<WorkTaskInfo>, AppCommandError> {
+    let result =
+        core::work_task_set_priority_core(&state.emitter, &state.db, params.id, params.priority)
+            .await
+            .map_err(AppCommandError::from)?;
     Ok(Json(result))
 }
 

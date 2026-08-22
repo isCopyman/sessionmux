@@ -28,6 +28,7 @@ import {
   WorktreeRemovedChip,
 } from "./task-card"
 import type { TaskActivityDot } from "./task-activity"
+import { TaskPriorityIcon } from "./task-priority"
 import {
   buildTaskActions,
   type TaskActionHandlers,
@@ -66,6 +67,7 @@ export const TASK_LIST_LINE = "flex items-center gap-3 px-3"
 interface TaskRowProps extends TaskActionHandlers {
   task: WorkTask
   folderName: string | null
+  ownerLabel?: string | null
   /** Shared render-tick timestamp for relative times (refreshed by the page). */
   now: number
   /** Place in line when this task is waiting to merge (see `mergeQueueRanks`). */
@@ -99,6 +101,7 @@ interface TaskRowProps extends TaskActionHandlers {
 export function TaskRow({
   task,
   folderName,
+  ownerLabel,
   now,
   mergeQueueRank,
   activity,
@@ -188,6 +191,10 @@ export function TaskRow({
               activity={activity}
               className="mt-[0.125rem]"
             />
+            <TaskPriorityIcon
+              priority={task.priority}
+              className="mt-[0.125rem]"
+            />
             <div className="flex min-w-0 flex-1 flex-col gap-0.5">
               <div className="flex min-w-0 items-center gap-1.5">
                 <span className="truncate text-[0.8125rem] font-medium leading-snug">
@@ -197,7 +204,7 @@ export function TaskRow({
                 rare, and a dedicated column would cost every row its alignment
                 to serve a handful. Renders nothing when there is no plan. */}
                 <ScheduleChip task={task} />
-                <ExecutionModeChip task={task} />
+                <ExecutionModeChip task={task} ownerLabel={ownerLabel} />
                 {/* Same reasoning: a queued merge and a deleted worktree are the
                 exception, and the row must say so wherever the board card
                 would. */}

@@ -4712,6 +4712,7 @@ mod tests {
             config: "{}".to_string(),
             status: WorkTaskStatus::Queued,
             task_status: crate::db::entities::work_task::WorkTaskBusinessStatus::Todo,
+            priority: crate::db::entities::work_task::WorkTaskPriority::None,
             execution_mode: Some(crate::db::entities::work_task::WorkTaskExecutionMode::Engine),
             failure_reason: None,
             last_error: None,
@@ -5508,6 +5509,7 @@ mod tests {
                 folder_id: root_id,
                 title: "fix login".to_string(),
                 initial_status: None,
+                priority: None,
                 config: serde_json::json!({
                     "display_text": "fix login",
                     "prompt_blocks": [{ "type": "text", "text": "fix login" }],
@@ -5577,6 +5579,7 @@ mod tests {
                 folder_id: root_id,
                 title: "fix login".to_string(),
                 initial_status: None,
+                priority: None,
                 config: serde_json::json!({
                     "display_text": "fix login",
                     "prompt_blocks": [{ "type": "text", "text": "fix login" }],
@@ -5651,6 +5654,7 @@ mod tests {
             folder_id,
             title: title.to_string(),
             initial_status: None,
+            priority: None,
             config: serde_json::json!({
                 "display_text": title,
                 "prompt_blocks": [{ "type": "text", "text": title }],

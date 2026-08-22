@@ -13,12 +13,14 @@ business state. A task is not a Session, Room, chat transcript, or project file.
 - `create_work_task` creates an unassigned card. Use `initial_status=backlog`
   for an uncommitted idea; omit it for a ready Todo. Creating a card never
   starts an Agent, chooses a Harness/Profile/model, or creates a worktree.
+- Use `priority=none|low|medium|high|urgent` for business importance. Priority
+  never grants interrupt authority and does not reorder a Session's prompts.
 - Use `list_tasks` to avoid duplicates and `get_task` before changing or
   accepting a card. The default scope is the caller's project; request the
   global scope only when the work genuinely spans projects.
-- `task.update` through `codeg_help` / `codeg_use` refines the title or
-  description of an unassigned card or the caller's own active card. It does
-  not rewrite a Prompt that already entered a Harness.
+- `task.update` through `codeg_help` / `codeg_use` refines the title,
+  description, or priority of an unassigned card or the caller's own active
+  card. It does not rewrite a Prompt that already entered a Harness.
 
 ## Choose execution explicitly
 

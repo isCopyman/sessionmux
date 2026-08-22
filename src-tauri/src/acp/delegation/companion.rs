@@ -1520,10 +1520,21 @@ fn parse_work_task_spec(arguments: &Value) -> Result<NewWorkTaskSpec, String> {
             ))
         }
     };
+    let priority = match optional_string(arguments, "priority").as_deref() {
+        None | Some("none") => None,
+        Some("low") => Some(crate::models::work_task::WorkTaskPriority::Low),
+        Some("medium") => Some(crate::models::work_task::WorkTaskPriority::Medium),
+        Some("high") => Some(crate::models::work_task::WorkTaskPriority::High),
+        Some("urgent") => Some(crate::models::work_task::WorkTaskPriority::Urgent),
+        Some(other) => return Err(format!(
+            "create_work_task priority must be none, low, medium, high, or urgent (got '{other}')"
+        )),
+    };
     Ok(NewWorkTaskSpec {
         title: truncate_chars(&title, MAX_TITLE_CHARS),
         prompt: truncate_chars(&prompt, MAX_PROMPT_CHARS),
         initial_status,
+        priority,
         // A card is captured before execution is chosen. Harness/Profile/Model
         // belong to the later assignment or Session-launch boundary.
         agent_type: None,
@@ -3368,6 +3379,7 @@ mod tests {
         assert!(spec.agent_type.is_none());
         assert!(spec.folder_path.is_none());
         assert!(spec.initial_status.is_none());
+        assert!(spec.priority.is_none());
     }
 
     #[test]
@@ -3414,6 +3426,25 @@ mod tests {
         assert!(parse_work_task_spec(&json!({
             "title": "Bad stage",
             "initial_status": "waiting_for_magic"
+        }))
+        .is_err());
+    }
+
+    #[test]
+    fn parse_work_task_accepts_business_priority_without_execution_semantics() {
+        let spec = parse_work_task_spec(&json!({
+            "title": "Fix the release blocker",
+            "priority": "urgent"
+        }))
+        .unwrap();
+        assert_eq!(
+            spec.priority,
+            Some(crate::models::work_task::WorkTaskPriority::Urgent)
+        );
+        assert!(spec.agent_type.is_none());
+        assert!(parse_work_task_spec(&json!({
+            "title": "Bad priority",
+            "priority": "interrupt-now"
         }))
         .is_err());
     }

@@ -17,6 +17,7 @@ interface TaskListProps {
   tasks: WorkTask[]
   /** folder id → display name, for the location column. */
   folderNames: Map<number, string>
+  conversationNames: Map<number, string>
   /** Shared render-tick timestamp for relative times (refreshed by the page). */
   now: number
   /** task id → place in its project's merge queue (see `mergeQueueRanks`). */
@@ -48,6 +49,7 @@ interface TaskListProps {
 export function TaskList({
   tasks,
   folderNames,
+  conversationNames,
   now,
   mergeQueueRanks,
   filtered,
@@ -137,6 +139,13 @@ export function TaskList({
                             key={task.id}
                             task={task}
                             folderName={folderNames.get(task.folder_id) ?? null}
+                            ownerLabel={
+                              task.conversation_id == null
+                                ? null
+                                : (conversationNames.get(
+                                    task.conversation_id
+                                  ) ?? `Session #${task.conversation_id}`)
+                            }
                             now={now}
                             mergeQueueRank={mergeQueueRanks.get(task.id)}
                             activity={activityFor?.(task) ?? null}
@@ -155,6 +164,12 @@ export function TaskList({
                       key={task.id}
                       task={task}
                       folderName={folderNames.get(task.folder_id) ?? null}
+                      ownerLabel={
+                        task.conversation_id == null
+                          ? null
+                          : (conversationNames.get(task.conversation_id) ??
+                            `Session #${task.conversation_id}`)
+                      }
                       now={now}
                       mergeQueueRank={mergeQueueRanks.get(task.id)}
                       activity={activityFor?.(task) ?? null}

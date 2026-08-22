@@ -203,6 +203,49 @@ describe("TaskCard running submit-for-review", () => {
   })
 })
 
+describe("TaskCard board summary", () => {
+  it("shows a two-line task brief without repeating the backlog column", () => {
+    renderCard(
+      task({
+        title: "Investigate the failure",
+        config: {
+          display_text:
+            "Trace the startup path and explain why the profile is only applied once.",
+          prompt_blocks: [],
+          config_values: {},
+        },
+        status: "todo",
+        task_status: "backlog",
+        execution_mode: null,
+        worktree_folder_id: null,
+        work_branch: null,
+      })
+    )
+
+    expect(
+      screen.getByText(
+        "Trace the startup path and explain why the profile is only applied once."
+      )
+    ).toHaveClass("line-clamp-2")
+    expect(screen.queryByText("Backlog")).toBeNull()
+  })
+
+  it("does not repeat a brief that is identical to the title", () => {
+    renderCard(
+      task({
+        title: "Same text",
+        config: {
+          display_text: "Same text",
+          prompt_blocks: [],
+          config_values: {},
+        },
+      })
+    )
+
+    expect(screen.getAllByText("Same text")).toHaveLength(1)
+  })
+})
+
 describe("TaskCard secondaries", () => {
   it("exposes the same task actions from the card context menu", async () => {
     const user = userEvent.setup()

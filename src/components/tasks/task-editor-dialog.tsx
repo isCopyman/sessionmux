@@ -39,8 +39,10 @@ import type {
   WorkTaskBusinessStatus,
   WorkTaskConfig,
   WorkTaskDraft,
+  WorkTaskPriority,
   WorkTaskTemplate,
 } from "@/lib/types"
+import { TaskPrioritySelect } from "./task-priority"
 
 const TASK_INITIAL_STATUSES = [
   ["backlog", "colBacklog"],
@@ -138,6 +140,9 @@ function TaskEditorBody({
   )
   const [initialStatus, setInitialStatus] =
     useState<WorkTaskBusinessStatus>(defaultInitialStatus)
+  const [priority, setPriority] = useState<WorkTaskPriority>(
+    task?.priority ?? "none"
+  )
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
 
@@ -221,6 +226,7 @@ function TaskEditorBody({
         folder_id: folderId,
         title: title.trim(),
         config: buildConfig(true),
+        priority,
         ...(task == null ? { initial_status: initialStatus } : {}),
       }
       await onSubmit(draft)
@@ -343,6 +349,18 @@ function TaskEditorBody({
             </p>
           </div>
         ) : null}
+
+        <div className="flex flex-col gap-2">
+          <h3 className="text-[0.6875rem] font-medium uppercase tracking-wide text-muted-foreground">
+            {t("priority")}
+          </h3>
+          <TaskPrioritySelect
+            value={priority}
+            onValueChange={setPriority}
+            className="w-48"
+          />
+          <p className="text-xs text-muted-foreground">{t("priorityHint")}</p>
+        </div>
 
         {/* Target — which project board the task lives on. */}
         <div className="flex flex-col gap-2">

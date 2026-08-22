@@ -30,7 +30,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
 use crate::models::claude_profile::ClaudeProfileKind;
-use crate::models::work_task::WorkTaskBusinessStatus;
+use crate::models::work_task::{WorkTaskBusinessStatus, WorkTaskPriority};
 use crate::models::AutomationAction;
 
 /// Cap on an automation name / task title. Long enough for a descriptive
@@ -100,6 +100,9 @@ pub struct NewWorkTaskSpec {
     /// Todo default; may target any of the seven fixed board states.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initial_status: Option<WorkTaskBusinessStatus>,
+    /// Business importance only; does not alter execution or interrupt order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority: Option<WorkTaskPriority>,
     /// Per-task agent override. `None` → inherit the board's settings.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_type: Option<String>,
@@ -203,6 +206,8 @@ pub struct TaskListRow {
     /// Six-state user workflow (`todo` / `in_progress` / `blocked` / `review`
     /// / `done` / `canceled`).
     pub task_status: String,
+    /// Business importance only. It never changes dispatcher order by itself.
+    pub priority: crate::models::work_task::WorkTaskPriority,
     /// Lower-level execution lifecycle retained for diagnostics.
     pub status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -245,6 +250,8 @@ pub struct TaskDetailOutcome {
     pub title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub priority: Option<crate::models::work_task::WorkTaskPriority>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_type: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -53,6 +53,7 @@ import {
   workTaskRetry,
   workTaskReturn,
   workTaskSetManualStatus,
+  workTaskSetPriority,
 } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
 import {
@@ -73,6 +74,7 @@ import { useShortcutSettings } from "@/hooks/use-shortcut-settings"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { hasNothingToMerge, isMergeQueued } from "./task-acceptance"
 import { StatusChip, statusLabelKey } from "./task-card"
+import { TaskPrioritySelect } from "./task-priority"
 import { buildTaskActions } from "./task-actions"
 import {
   TaskMessageComposer,
@@ -119,6 +121,7 @@ import type {
   WorkTask,
   WorkTaskChangedFile,
   WorkTaskEvent,
+  WorkTaskPriority,
 } from "@/lib/types"
 
 const WORK_TASK_CHANGED_EVENT = "task://changed"
@@ -245,10 +248,14 @@ export function TaskDetailSheet({
   // detail fetch as the token total (a task row carries an agent only when it
   // overrides the folder's default).
   const [convAgentType, setConvAgentType] = useState<AgentType | null>(null)
+  const [conversationTitle, setConversationTitle] = useState<string | null>(
+    null
+  )
   useEffect(() => {
     if (!open || conversationId == null) {
       setTokenTotal(null)
       setConvAgentType(null)
+      setConversationTitle(null)
       return
     }
     let cancelled = false
@@ -256,6 +263,9 @@ export function TaskDetailSheet({
       .then((detail) => {
         if (cancelled) return
         setConvAgentType(detail.summary.agent_type ?? null)
+        setConversationTitle(
+          detail.summary.title?.trim() || `Session #${detail.summary.id}`
+        )
         const stats = detail.session_stats
         const usage = stats?.total_usage ?? null
         const total =
@@ -1014,6 +1024,28 @@ export function TaskDetailSheet({
                     <span className="font-mono text-[0.6875rem]">
                       #{task.id}
                     </span>
+                  </InfoRow>
+                  <InfoRow label={t("priority")}>
+                    <TaskPrioritySelect
+                      value={task.priority ?? "none"}
+                      onValueChange={(priority: WorkTaskPriority) =>
+                        void run(() => workTaskSetPriority(task.id, priority))
+                      }
+                      className="h-7 w-40 border-0 bg-transparent px-1 shadow-none"
+                      ariaLabel={t("priority")}
+                    />
+                  </InfoRow>
+                  <InfoRow label={t("owner")}>
+                    {task.execution_mode === "session"
+                      ? (conversationTitle ??
+                        (task.conversation_id == null
+                          ? t("executionSession")
+                          : `Session #${task.conversation_id}`))
+                      : task.execution_mode === "manual"
+                        ? t("executionManual")
+                        : task.execution_mode === "engine"
+                          ? t("executionAgent")
+                          : t("executionUnassigned")}
                   </InfoRow>
                   {projectPath ? (
                     <InfoRow label={t("detailProjectDirectory")}>

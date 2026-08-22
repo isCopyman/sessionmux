@@ -7999,6 +7999,7 @@ mod tests {
                 folder_id: project_folder_id,
                 title: "fix login".to_string(),
                 initial_status: None,
+                priority: None,
                 config: serde_json::json!({
                     "display_text": "fix login",
                     "prompt_blocks": [{ "type": "text", "text": "fix login" }],

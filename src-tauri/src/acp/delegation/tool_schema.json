@@ -424,6 +424,7 @@
     "description": "Create an unassigned card on codeg's task board. Use it when the user wants work captured, organized, or split into visible pieces. Creating the card does not choose a Harness, start an Agent, or create a worktree. A human may later assign it, or the current persistent Session may claim it with Host Control action task.claim. Do not create a card for every trivial step. The description should preserve enough context for a later assignee.",
     "inputSchema": {
       "type": "object",
+      "additionalProperties": false,
       "required": ["title"],
       "properties": {
         "title": {
@@ -439,6 +440,11 @@
           "enum": ["backlog", "todo", "in_progress", "review", "done", "blocked", "canceled"],
           "description": "Board column for the new card. Defaults to todo. Creating a card in any column never starts an Agent by itself."
         },
+        "priority": {
+          "type": "string",
+          "enum": ["none", "low", "medium", "high", "urgent"],
+          "description": "Business importance only. Defaults to none and never interrupts an Agent or reorders its prompt queue."
+        },
         "folder_path": {
           "type": "string",
           "description": "Absolute path of the target project. Defaults to the project this conversation is in; pass it only to target a different project already open in codeg."
@@ -448,7 +454,7 @@
   },
   {
     "name": "list_tasks",
-    "description": "Read-only: list cards on codeg's task board. Does not create, claim, or change any task. Defaults to the project this conversation is in (a worktree working directory is resolved to that project). Pass folder_path=\"all\" to list every live project, newest updated_at first. Optional status accepts one of the seven board states: backlog, todo, in_progress, review, done, blocked, canceled. Returns compact rows; use get_task for the description. A card may already be owned by another Session: do not create a duplicate.",
+    "description": "Read-only: list cards on codeg's task board, including each card's business priority. Does not create, claim, or change any task. Defaults to the project this conversation is in (a worktree working directory is resolved to that project). Pass folder_path=\"all\" to list every live project, newest updated_at first. Optional status accepts one of the seven board states: backlog, todo, in_progress, review, done, blocked, canceled. Returns compact rows; use get_task for the description. A card may already be owned by another Session: do not create a duplicate.",
     "inputSchema": {
       "type": "object",
       "additionalProperties": false,
@@ -472,7 +478,7 @@
   },
   {
     "name": "get_task",
-    "description": "Read-only: load one task-board card by id. Does not change status or claim the task. Returns title, status, agent, optional model/profile ids, a prompt excerpt (at most 1000 characters), branch/worktree pointers, the 10 most recent timeline events, and a truncated last_error. Never returns credentials or a profile token/baseUrl. Use list_tasks to discover ids.",
+    "description": "Read-only: load one task-board card by id. Does not change status or claim the task. Returns title, status, business priority, agent, optional model/profile ids, a prompt excerpt (at most 1000 characters), branch/worktree pointers, the 10 most recent timeline events, and a truncated last_error. Never returns credentials or a profile token/baseUrl. Use list_tasks to discover ids.",
     "inputSchema": {
       "type": "object",
       "additionalProperties": false,

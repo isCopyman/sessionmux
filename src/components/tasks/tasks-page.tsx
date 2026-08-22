@@ -17,6 +17,7 @@ import {
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 import {
+  ArrowDownWideNarrow,
   Circle,
   CircleCheckBig,
   CircleDashed,
@@ -57,16 +58,20 @@ import {
   loadTasksBoardGrouping,
   loadTasksOwnerFilter,
   loadTasksScope,
+  loadTasksSort,
   loadTasksStatusFilter,
   saveTasksBoardFilter,
   saveTasksBoardGrouping,
   saveTasksOwnerFilter,
   saveTasksScope,
+  saveTasksSort,
   saveTasksStatusFilter,
   TASKS_BOARD_GROUPINGS,
   TASKS_SCOPES,
+  TASKS_SORTS,
   type TasksBoardGrouping,
   type TasksScope,
+  type TasksSort,
 } from "@/lib/tasks-board-filter-storage"
 import { WorkbenchPageTitle } from "@/components/workbench/workbench-page-title"
 import { FolderSelect } from "@/components/shared/folder-select"
@@ -127,6 +132,7 @@ import { TasksSkeleton } from "./tasks-skeleton"
 import { TaskTranscriptDialog } from "./task-transcript-dialog"
 import { TaskSessionLaunchDialog } from "./task-session-launch-dialog"
 import { createTaskSessionAndAssign } from "./task-session-launch"
+import { taskPriorityRank } from "./task-priority"
 import type {
   DbConversationSummary,
   WorkTask,
@@ -170,6 +176,24 @@ const SCOPE_LABEL_KEYS = {
   agent: "scopeAgent",
   attention: "scopeAttention",
 } as const satisfies Record<TasksScope, string>
+
+const SORT_LABEL_KEYS = {
+  manual: "sortManual",
+  priority: "sortPriority",
+  updated: "sortUpdated",
+} as const satisfies Record<TasksSort, string>
+
+function compareTasks(a: WorkTask, b: WorkTask, sort: TasksSort): number {
+  if (sort === "priority") {
+    const byPriority =
+      taskPriorityRank(b.priority) - taskPriorityRank(a.priority)
+    if (byPriority !== 0) return byPriority
+  } else if (sort === "updated") {
+    const byUpdated = b.updated_at.localeCompare(a.updated_at)
+    if (byUpdated !== 0) return byUpdated
+  }
+  return a.sort_order - b.sort_order || a.id - b.id
+}
 
 /** Multica-style status glyphs, shared by headers and every status picker. */
 const COLUMN_ICONS = {
@@ -324,6 +348,10 @@ export function TasksPage() {
   useEffect(() => {
     saveTasksScope(scope)
   }, [scope])
+  const [sort, setSort] = useState<TasksSort>(loadTasksSort)
+  useEffect(() => {
+    saveTasksSort(sort)
+  }, [sort])
   const [selectedOwnerFilter, setOwnerFilter] = useState<number | null>(
     loadTasksOwnerFilter
   )
@@ -463,17 +491,24 @@ export function TasksPage() {
       ? scoped
       : scoped.filter((task) => task.conversation_id === ownerFilter)
   }, [folderScopedTasks, scope, ownerFilter])
-  const columns = useMemo(
-    () => groupTasksByColumn(visibleTasks, boardFilter.showArchived),
-    [visibleTasks, boardFilter]
-  )
+  const columns = useMemo(() => {
+    const grouped = groupTasksByColumn(visibleTasks, boardFilter.showArchived)
+    for (const column of BOARD_COLUMN_IDS) {
+      grouped[column].sort((a, b) => compareTasks(a, b, sort))
+    }
+    return grouped
+  }, [visibleTasks, boardFilter, sort])
   // The list view's rows: one flat, freshest-first sequence, narrowed to a
   // single board column. The visibility toggles apply here exactly as they do
   // on the board — one pair of controls for both views.
   const listTasks = useMemo(
     () =>
-      filterTasksForList(visibleTasks, statusFilter, boardFilter.showArchived),
-    [visibleTasks, statusFilter, boardFilter]
+      filterTasksForList(
+        visibleTasks,
+        statusFilter,
+        boardFilter.showArchived
+      ).sort((a, b) => compareTasks(a, b, sort)),
+    [visibleTasks, statusFilter, boardFilter, sort]
   )
 
   const showGroupHeaders = groupingShowsHeaders(grouping, folderFilter)
@@ -894,6 +929,29 @@ export function TasksPage() {
                 </RadioGroup>
                 <div className="my-1 h-px bg-border" />
                 <p className="px-2 pb-1 pt-1 text-[0.6875rem] font-medium text-muted-foreground">
+                  {t("sortBy")}
+                </p>
+                <RadioGroup
+                  value={sort}
+                  onValueChange={(value) => setSort(value as TasksSort)}
+                  className="gap-0.5"
+                >
+                  {TASKS_SORTS.map((item) => (
+                    <label
+                      key={item}
+                      className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-xs hover:bg-accent/50"
+                    >
+                      <RadioGroupItem value={item} className="size-3.5" />
+                      <ArrowDownWideNarrow
+                        className="size-3.5 text-muted-foreground"
+                        aria-hidden="true"
+                      />
+                      {t(SORT_LABEL_KEYS[item])}
+                    </label>
+                  ))}
+                </RadioGroup>
+                <div className="my-1 h-px bg-border" />
+                <p className="px-2 pb-1 pt-1 text-[0.6875rem] font-medium text-muted-foreground">
                   {t("showColumns")}
                 </p>
                 {BOARD_COLUMN_IDS.map((column) => {
@@ -1084,6 +1142,7 @@ export function TasksPage() {
           <TaskList
             tasks={listTasks}
             folderNames={folderNames}
+            conversationNames={conversationNames}
             now={now}
             mergeQueueRanks={queueRanks}
             filtered={statusFilter != null}
@@ -1116,6 +1175,12 @@ export function TasksPage() {
                     key={task.id}
                     task={task}
                     folderName={folderNames.get(task.folder_id) ?? null}
+                    ownerLabel={
+                      task.conversation_id == null
+                        ? null
+                        : (conversationNames.get(task.conversation_id) ??
+                          `Session #${task.conversation_id}`)
+                    }
                     now={now}
                     mergeQueueRank={queueRanks.get(task.id)}
                     activity={activityFor(task)}

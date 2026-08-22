@@ -1527,6 +1527,10 @@ pub fn build_router(
             post(handlers::work_task::work_task_update),
         )
         .route(
+            "/work_task_set_priority",
+            post(handlers::work_task::work_task_set_priority),
+        )
+        .route(
             "/work_task_reorder",
             post(handlers::work_task::work_task_reorder),
         )

@@ -302,6 +302,21 @@ pub async fn work_task_update_core(
     Ok(info)
 }
 
+pub async fn work_task_set_priority_core(
+    emitter: &EventEmitter,
+    db: &AppDatabase,
+    id: i32,
+    priority: crate::models::work_task::WorkTaskPriority,
+) -> Result<WorkTaskInfo, DbError> {
+    let info = work_task_service::set_priority(&db.conn, id, priority).await?;
+    emit_event(
+        emitter,
+        WORK_TASK_CHANGED_EVENT,
+        WorkTaskChange::Upsert { id },
+    );
+    Ok(info)
+}
+
 /// Carry a card's rename over to the session it produced. Only reachable from
 /// the editable statuses (`todo` / `failed` / `canceled`), so in practice this
 /// fires for a task the user is re-shaping after a failed or canceled run.
@@ -917,6 +932,17 @@ pub async fn work_task_update(
 
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn work_task_set_priority(
+    app: tauri::AppHandle,
+    db: tauri::State<'_, AppDatabase>,
+    id: i32,
+    priority: crate::models::work_task::WorkTaskPriority,
+) -> Result<WorkTaskInfo, DbError> {
+    work_task_set_priority_core(&EventEmitter::Tauri(app), &db, id, priority).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn work_task_reorder(
     app: tauri::AppHandle,
     db: tauri::State<'_, AppDatabase>,
@@ -1184,6 +1210,7 @@ mod tests {
             folder_id,
             title: title.to_string(),
             initial_status: None,
+            priority: None,
             config: serde_json::json!({
                 "display_text": "do the thing",
                 "prompt_blocks": [{ "type": "text", "text": "do the thing" }],

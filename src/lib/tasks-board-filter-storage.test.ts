@@ -4,12 +4,14 @@ import {
   loadTasksBoardGrouping,
   loadTasksOwnerFilter,
   loadTasksScope,
+  loadTasksSort,
   loadTasksStatusFilter,
   loadTasksViewMode,
   saveTasksBoardFilter,
   saveTasksBoardGrouping,
   saveTasksOwnerFilter,
   saveTasksScope,
+  saveTasksSort,
   saveTasksStatusFilter,
   saveTasksViewMode,
 } from "./tasks-board-filter-storage"
@@ -20,6 +22,7 @@ const STATUS_FILTER_KEY = "workspace:tasks-status-filter"
 const GROUPING_KEY = "workspace:tasks-board-grouping"
 const SCOPE_FILTER_KEY = "workspace:tasks-scope-filter"
 const OWNER_FILTER_KEY = "workspace:tasks-owner-filter"
+const SORT_KEY = "workspace:tasks-sort"
 
 beforeEach(() => {
   localStorage.clear()
@@ -154,5 +157,20 @@ describe("tasks owner filter storage", () => {
     expect(loadTasksOwnerFilter()).toBeNull()
     localStorage.setItem(OWNER_FILTER_KEY, "not-a-session")
     expect(loadTasksOwnerFilter()).toBeNull()
+  })
+})
+
+describe("tasks sort storage", () => {
+  it("defaults to manual and round-trips the two projected sorts", () => {
+    expect(loadTasksSort()).toBe("manual")
+    saveTasksSort("priority")
+    expect(loadTasksSort()).toBe("priority")
+    saveTasksSort("updated")
+    expect(loadTasksSort()).toBe("updated")
+  })
+
+  it("falls back to manual on stale values", () => {
+    localStorage.setItem(SORT_KEY, "deadline")
+    expect(loadTasksSort()).toBe("manual")
   })
 })

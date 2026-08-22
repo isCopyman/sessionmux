@@ -6,6 +6,7 @@ const STATUS_FILTER_KEY = "workspace:tasks-status-filter"
 const GROUPING_KEY = "workspace:tasks-board-grouping"
 const SCOPE_FILTER_KEY = "workspace:tasks-scope-filter"
 const OWNER_FILTER_KEY = "workspace:tasks-owner-filter"
+const SORT_KEY = "workspace:tasks-sort"
 
 export const TASKS_STATUS_GROUPS = [
   "backlog",
@@ -40,6 +41,9 @@ export const DEFAULT_TASKS_BOARD_GROUPING: TasksBoardGrouping = "none"
 export const TASKS_SCOPES = ["all", "agent", "attention"] as const
 export type TasksScope = (typeof TASKS_SCOPES)[number]
 export const DEFAULT_TASKS_SCOPE: TasksScope = "all"
+export const TASKS_SORTS = ["manual", "priority", "updated"] as const
+export type TasksSort = (typeof TASKS_SORTS)[number]
+export const DEFAULT_TASKS_SORT: TasksSort = "manual"
 
 export function loadTasksBoardFilter(): TasksBoardFilter {
   if (typeof window === "undefined") return DEFAULT_TASKS_BOARD_FILTER
@@ -162,5 +166,22 @@ export function saveTasksOwnerFilter(conversationId: number | null): void {
   try {
     if (conversationId == null) localStorage.removeItem(OWNER_FILTER_KEY)
     else localStorage.setItem(OWNER_FILTER_KEY, String(conversationId))
+  } catch {}
+}
+
+export function loadTasksSort(): TasksSort {
+  if (typeof window === "undefined") return DEFAULT_TASKS_SORT
+  try {
+    const raw = localStorage.getItem(SORT_KEY)
+    return TASKS_SORTS.find((sort) => sort === raw) ?? DEFAULT_TASKS_SORT
+  } catch {
+    return DEFAULT_TASKS_SORT
+  }
+}
+
+export function saveTasksSort(sort: TasksSort): void {
+  if (typeof window === "undefined") return
+  try {
+    localStorage.setItem(SORT_KEY, sort)
   } catch {}
 }

@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 pub use crate::db::entities::work_task::{
-    WorkTaskBusinessStatus, WorkTaskExecutionMode, WorkTaskStatus,
+    WorkTaskBusinessStatus, WorkTaskExecutionMode, WorkTaskPriority, WorkTaskStatus,
 };
 
 /// One folder-bound work task. Wire form mirrors `src/lib/types.ts`
@@ -17,6 +17,7 @@ pub struct WorkTaskInfo {
     pub config: serde_json::Value,
     pub status: WorkTaskStatus,
     pub task_status: WorkTaskBusinessStatus,
+    pub priority: WorkTaskPriority,
     pub execution_mode: Option<WorkTaskExecutionMode>,
     pub failure_reason: Option<String>,
     pub last_error: Option<String>,
@@ -100,6 +101,10 @@ pub struct WorkTaskDraft {
     /// explicit status-transition API instead.
     #[serde(default)]
     pub initial_status: Option<WorkTaskBusinessStatus>,
+    /// Business importance. Omitted creates default to `none`; omitted updates
+    /// preserve the stored value for compatibility with older clients.
+    #[serde(default)]
+    pub priority: Option<WorkTaskPriority>,
 }
 
 /// Wire DTO for a saved task template: a display name plus the title seed and

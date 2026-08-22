@@ -78,7 +78,7 @@ impl TaskHostControl {
             ),
             capability(
                 "task.update",
-                "Edit the title and/or description of an unowned board card, or the calling Session's own active card, in the current project. A Session cannot rewrite another Session's task brief.",
+                "Edit the title, description, and/or business priority of an unowned board card, or the calling Session's own active card, in the current project. Priority does not change dispatcher order. A Session cannot rewrite another Session's task brief.",
                 json!({
                     "type": "object",
                     "additionalProperties": false,
@@ -93,11 +93,17 @@ impl TaskHostControl {
                         "description": {
                             "type": "string",
                             "maxLength": MAX_DESCRIPTION_CHARS
+                        },
+                        "priority": {
+                            "type": "string",
+                            "enum": ["none", "low", "medium", "high", "urgent"],
+                            "description": "Business importance only; never interrupts or reorders Session prompts."
                         }
                     },
                     "anyOf": [
                         { "required": ["title"] },
-                        { "required": ["description"] }
+                        { "required": ["description"] },
+                        { "required": ["priority"] }
                     ]
                 }),
             ),
@@ -163,11 +169,14 @@ impl TaskHostControl {
                     Ok(params) => params,
                     Err(note) => return HostControlUseOutcome::rejected(request_id, action, note),
                 };
-                if params.title.is_none() && params.description.is_none() {
+                if params.title.is_none()
+                    && params.description.is_none()
+                    && params.priority.is_none()
+                {
                     return HostControlUseOutcome::rejected(
                         request_id,
                         action,
-                        "Provide title and/or description.",
+                        "Provide title, description, and/or priority.",
                     );
                 }
                 let current = match self.ensure_same_project(caller, params.task_id).await {
@@ -192,6 +201,45 @@ impl TaskHostControl {
                         "Only an unowned board card or the calling Session's own active card can be edited.",
                     );
                 }
+                // Priority is board metadata, not an execution transition. Allow an
+                // owned active card to change it without forcing the legacy task
+                // editor through its todo-only lifecycle guard.
+                if params.title.is_none() && params.description.is_none() {
+                    if let Some(priority) = params.priority {
+                        return match work_task_service::set_priority(
+                            &self.db.conn,
+                            params.task_id,
+                            priority,
+                        )
+                        .await
+                        {
+                            Ok(task) => {
+                                emit_event(
+                                    &self.emitter,
+                                    WORK_TASK_CHANGED_EVENT,
+                                    WorkTaskChange::Upsert { id: task.id },
+                                );
+                                accepted(
+                                    request_id,
+                                    action,
+                                    "persisted",
+                                    json!({
+                                        "task_id": task.id,
+                                        "title": task.title,
+                                        "priority": task.priority,
+                                        "task_status": task.task_status,
+                                        "updated_at": task.updated_at,
+                                    }),
+                                )
+                            }
+                            Err(error) => HostControlUseOutcome::rejected(
+                                request_id,
+                                action,
+                                format!("Could not update task priority: {error}"),
+                            ),
+                        };
+                    }
+                }
                 let title = match params.title {
                     Some(value) => match normalized(&value, MAX_TITLE_CHARS, "title", false) {
                         Ok(value) => value,
@@ -201,16 +249,17 @@ impl TaskHostControl {
                     },
                     None => current.title.clone(),
                 };
-                let mut config: WorkTaskConfig = match serde_json::from_value(current.config) {
-                    Ok(config) => config,
-                    Err(error) => {
-                        return HostControlUseOutcome::rejected(
-                            request_id,
-                            action,
-                            format!("Task brief is invalid: {error}"),
-                        )
-                    }
-                };
+                let mut config: WorkTaskConfig =
+                    match serde_json::from_value(current.config.clone()) {
+                        Ok(config) => config,
+                        Err(error) => {
+                            return HostControlUseOutcome::rejected(
+                                request_id,
+                                action,
+                                format!("Task brief is invalid: {error}"),
+                            )
+                        }
+                    };
                 if let Some(description) = params.description {
                     let description = match normalized(
                         &description,
@@ -247,6 +296,7 @@ impl TaskHostControl {
                         }
                     },
                     initial_status: None,
+                    priority: Some(params.priority.unwrap_or(current.priority)),
                 };
                 match work_task_service::update(&self.db.conn, params.task_id, draft).await {
                     Ok(task) => {
@@ -322,6 +372,8 @@ struct TaskUpdateInput {
     title: Option<String>,
     #[serde(default)]
     description: Option<String>,
+    #[serde(default)]
+    priority: Option<crate::models::work_task::WorkTaskPriority>,
 }
 
 fn parse_input<T: DeserializeOwned>(action: &str, input: Value) -> Result<T, String> {
@@ -387,6 +439,7 @@ mod tests {
                 folder_id,
                 title: "Initial title".to_string(),
                 initial_status: None,
+                priority: None,
                 config: serde_json::to_value(WorkTaskConfig {
                     display_text: "Initial description".to_string(),
                     prompt_blocks: vec![serde_json::to_value(PromptInputBlock::Text {
@@ -497,6 +550,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn owner_can_change_priority_without_requeueing_the_active_task() {
+        let (host, caller, task_id, db) = fixture().await;
+        assert!(
+            host.use_action(
+                &caller,
+                "claim-priority".into(),
+                "task.claim".into(),
+                json!({ "task_id": task_id }),
+            )
+            .await
+            .accepted
+        );
+        let before = work_task_service::get(&db.conn, task_id).await.unwrap();
+        let queue_before = prompt_queue_service::snapshot(&db.conn, caller.current_session_id)
+            .await
+            .unwrap();
+
+        let updated = host
+            .use_action(
+                &caller,
+                "priority-1".into(),
+                "task.update".into(),
+                json!({ "task_id": task_id, "priority": "urgent" }),
+            )
+            .await;
+        assert!(updated.accepted, "{:?}", updated.note);
+        let after = work_task_service::get(&db.conn, task_id).await.unwrap();
+        assert_eq!(
+            after.priority,
+            crate::models::work_task::WorkTaskPriority::Urgent
+        );
+        assert_eq!(after.status, before.status);
+        assert_eq!(after.task_status, before.task_status);
+        assert_eq!(after.conversation_id, before.conversation_id);
+        let queue_after = prompt_queue_service::snapshot(&db.conn, caller.current_session_id)
+            .await
+            .unwrap();
+        assert_eq!(queue_after.items.len(), queue_before.items.len());
+    }
+
+    #[tokio::test]
     async fn agent_can_refine_and_directly_claim_backlog() {
         let (host, caller, _, db) = fixture().await;
         let session = conversation_service::get_by_id(&db.conn, caller.current_session_id)
@@ -510,6 +604,7 @@ mod tests {
                 initial_status: Some(
                     crate::db::entities::work_task::WorkTaskBusinessStatus::Backlog,
                 ),
+                priority: None,
                 config: serde_json::to_value(WorkTaskConfig {
                     display_text: "Not ready to run".into(),
                     prompt_blocks: vec![],

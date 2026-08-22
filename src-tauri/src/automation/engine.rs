@@ -400,6 +400,7 @@ impl AutomationEngine {
             label_snapshot: cfg.label_snapshot.clone(),
         };
         let draft = crate::models::WorkTaskDraft {
+            priority: None,
             folder_id,
             title: first_chars(&auto.name, 80),
             config: serde_json::to_value(&task_cfg).map_err(|e| e.to_string())?,

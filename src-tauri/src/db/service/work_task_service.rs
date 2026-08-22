@@ -153,6 +153,7 @@ fn to_info(m: work_task::Model) -> WorkTaskInfo {
         config: serde_json::from_str(&m.config).unwrap_or(serde_json::Value::Null),
         status: m.status,
         task_status: m.task_status,
+        priority: m.priority,
         execution_mode: m.execution_mode,
         failure_reason: m.failure_reason,
         last_error: m.last_error,
@@ -594,6 +595,7 @@ pub async fn create(
         config: Set(config_str),
         status: Set(WorkTaskStatus::Todo),
         task_status: Set(initial_status),
+        priority: Set(draft.priority.unwrap_or_default()),
         execution_mode: Set(None),
         failure_reason: Set(None),
         last_error: Set(None),
@@ -686,6 +688,23 @@ pub async fn update(
     active.folder_id = Set(draft.folder_id);
     active.title = Set(draft.title.trim().to_string());
     active.config = Set(config_str);
+    if let Some(priority) = draft.priority {
+        active.priority = Set(priority);
+    }
+    active.updated_at = Set(Utc::now());
+    Ok(to_info(active.update(conn).await?))
+}
+
+/// Update planning importance without touching ownership, execution state, or
+/// dispatcher order. Priority remains editable throughout the task lifecycle.
+pub async fn set_priority(
+    conn: &DatabaseConnection,
+    id: i32,
+    priority: crate::models::work_task::WorkTaskPriority,
+) -> Result<WorkTaskInfo, DbError> {
+    let row = get_model(conn, id).await?;
+    let mut active = row.into_active_model();
+    active.priority = Set(priority);
     active.updated_at = Set(Utc::now());
     Ok(to_info(active.update(conn).await?))
 }
@@ -3224,6 +3243,7 @@ pub async fn template_delete(conn: &DatabaseConnection, id: i32) -> Result<(), D
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::entities::work_task::WorkTaskPriority;
     use crate::db::test_helpers::{fresh_in_memory_db, seed_conversation, seed_folder};
     use crate::models::AgentType;
 
@@ -3232,6 +3252,7 @@ mod tests {
             folder_id,
             title: title.to_string(),
             initial_status: None,
+            priority: None,
             config: serde_json::json!({
                 "display_text": "do the thing",
                 "prompt_blocks": [{ "type": "text", "text": "do the thing" }],
@@ -3268,6 +3289,7 @@ mod tests {
             .unwrap();
         assert_eq!(t.status, WorkTaskStatus::Todo);
         assert_eq!(t.task_status, WorkTaskBusinessStatus::Todo);
+        assert_eq!(t.priority, WorkTaskPriority::None);
         assert_eq!(t.execution_mode, None);
         assert_eq!(t.run_seq, 0);
 
@@ -3298,6 +3320,30 @@ mod tests {
             staged.initial_status = Some(status);
             assert_eq!(create(&db.conn, staged).await.unwrap().task_status, status);
         }
+    }
+
+    #[tokio::test]
+    async fn priority_is_persisted_and_does_not_change_execution_state() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-priority").await;
+        let mut urgent = draft(folder_id, "investigate the regression");
+        urgent.priority = Some(WorkTaskPriority::Urgent);
+        let task = create(&db.conn, urgent).await.unwrap();
+        assert_eq!(task.priority, WorkTaskPriority::Urgent);
+        assert_eq!(task.status, WorkTaskStatus::Todo);
+        assert_eq!(task.task_status, WorkTaskBusinessStatus::Todo);
+        assert_eq!(task.execution_mode, None);
+
+        mark_engine_eligible(&db.conn, task.id).await;
+        let before = get(&db.conn, task.id).await.unwrap();
+        let changed = set_priority(&db.conn, task.id, WorkTaskPriority::Low)
+            .await
+            .unwrap();
+        assert_eq!(changed.priority, WorkTaskPriority::Low);
+        assert_eq!(changed.status, before.status);
+        assert_eq!(changed.task_status, before.task_status);
+        assert_eq!(changed.execution_mode, before.execution_mode);
+        assert_eq!(changed.conversation_id, before.conversation_id);
     }
 
     #[tokio::test]

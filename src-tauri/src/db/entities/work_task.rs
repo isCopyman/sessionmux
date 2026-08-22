@@ -36,6 +36,27 @@ pub enum WorkTaskExecutionMode {
     Engine,
 }
 
+/// Business importance of a task. This is deliberately display/planning
+/// metadata only: it never grants scheduler priority or interrupt authority.
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, EnumIter, DeriveActiveEnum, Serialize, Deserialize,
+)]
+#[sea_orm(rs_type = "String", db_type = "String(StringLen::None)")]
+#[serde(rename_all = "snake_case")]
+pub enum WorkTaskPriority {
+    #[default]
+    #[sea_orm(string_value = "none")]
+    None,
+    #[sea_orm(string_value = "low")]
+    Low,
+    #[sea_orm(string_value = "medium")]
+    Medium,
+    #[sea_orm(string_value = "high")]
+    High,
+    #[sea_orm(string_value = "urgent")]
+    Urgent,
+}
+
 /// Lifecycle of a work task. The pipeline is
 /// `todo → queued → preparing → running ⇄ awaiting_input → review → merging →
 /// done`, with `failed` / `canceled` as side paths. `running` spans the whole
@@ -101,6 +122,7 @@ pub struct Model {
     /// User-facing workflow axis. Board columns and task filters read this;
     /// the engine continues to own `status` above.
     pub task_status: WorkTaskBusinessStatus,
+    pub priority: WorkTaskPriority,
     /// NULL = not assigned yet.
     pub execution_mode: Option<WorkTaskExecutionMode>,
     /// agent_error | setup_error | verdict_blocked | interrupted

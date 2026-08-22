@@ -1996,6 +1996,7 @@ export type WorkTaskBusinessStatus =
   | "canceled"
 
 export type WorkTaskExecutionMode = "manual" | "session" | "engine"
+export type WorkTaskPriority = "none" | "low" | "medium" | "high" | "urgent"
 
 /** The captured composer snapshot stored in `work_task.config`. Optional
  *  agent/mode/config fields are per-task overrides; empty = inherit the
@@ -2017,6 +2018,8 @@ export interface WorkTask {
   config: WorkTaskConfig | null
   status: WorkTaskStatus
   task_status: WorkTaskBusinessStatus
+  /** Business importance only; does not change dispatcher or interrupt order. */
+  priority?: WorkTaskPriority
   /** null means the task has not been assigned yet. */
   execution_mode: WorkTaskExecutionMode | null
   /** agent_error | setup_error | verdict_blocked | interrupted */
@@ -2105,6 +2108,7 @@ export interface WorkTaskDraft {
   config: WorkTaskConfig
   /** Creation-only placement; omitted remains Todo for older callers. */
   initial_status?: WorkTaskBusinessStatus
+  priority?: WorkTaskPriority
 }
 
 /** A saved task blueprint (global; the folder is picked at creation time).

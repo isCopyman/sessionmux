@@ -32,6 +32,7 @@ import type {
   WorkTaskChangedFile,
   WorkTaskConfig,
   WorkTaskDraft,
+  WorkTaskPriority,
   WorkTaskEvent,
   WorkTaskFolderSettings,
   WorkTaskTemplate,
@@ -3697,6 +3698,13 @@ export async function workTaskUpdate(
     id,
     draft: { ...draft, config: stripUploadedTaskConfig(draft.config) },
   })
+}
+
+export async function workTaskSetPriority(
+  id: number,
+  priority: WorkTaskPriority
+): Promise<WorkTask> {
+  return getTransport().call("work_task_set_priority", { id, priority })
 }
 
 /** Persist the pending column's drag order (index → sort_order). */
