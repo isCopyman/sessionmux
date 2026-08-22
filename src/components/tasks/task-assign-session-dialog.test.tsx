@@ -23,6 +23,7 @@ const session = {
 describe("TaskAssignSessionDialog", () => {
   it("requires an explicit persistent Session before assigning", async () => {
     const onSubmit = vi.fn(async () => {})
+    const onCreateSession = vi.fn()
     render(
       <NextIntlClientProvider locale="en" messages={enMessages}>
         <TaskAssignSessionDialog
@@ -31,6 +32,7 @@ describe("TaskAssignSessionDialog", () => {
           task={task}
           sessions={[session]}
           onSubmit={onSubmit}
+          onCreateSession={onCreateSession}
         />
       </NextIntlClientProvider>
     )
@@ -44,5 +46,26 @@ describe("TaskAssignSessionDialog", () => {
     expect(submit).toBeEnabled()
     await userEvent.click(submit)
     expect(onSubmit).toHaveBeenCalledWith(42)
+  })
+
+  it("can continue into the shared new-session launcher", async () => {
+    const onCreateSession = vi.fn()
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <TaskAssignSessionDialog
+          open
+          onOpenChange={() => {}}
+          task={task}
+          sessions={[]}
+          onSubmit={async () => {}}
+          onCreateSession={onCreateSession}
+        />
+      </NextIntlClientProvider>
+    )
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Create new session" })
+    )
+    expect(onCreateSession).toHaveBeenCalledTimes(1)
   })
 })

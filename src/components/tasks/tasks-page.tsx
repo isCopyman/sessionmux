@@ -98,7 +98,8 @@ import { TaskSettingsDialog } from "./task-settings-dialog"
 import { OPEN_TASK_SETTINGS_EVENT } from "./tasks-chrome-actions"
 import { TasksSkeleton } from "./tasks-skeleton"
 import { TaskTranscriptDialog } from "./task-transcript-dialog"
-import { TaskWorktreeSessionDialog } from "./task-worktree-session-dialog"
+import { TaskSessionLaunchDialog } from "./task-worktree-session-dialog"
+import { createRegularTaskSessionAndAssign } from "./task-session-launch"
 import type {
   DbConversationSummary,
   WorkTask,
@@ -293,6 +294,9 @@ export function TasksPage() {
   const [assignOpen, setAssignOpen] = useState(false)
   const [launchTaskId, setLaunchTaskId] = useState<number | null>(null)
   const [launchOpen, setLaunchOpen] = useState(false)
+  const [launchKind, setLaunchKind] = useState<"regular" | "worktree">(
+    "worktree"
+  )
   // Read-only live session viewer ("查看会话") — tracked by id so the dialog
   // header's status chip follows the live row (like the detail sheet).
   const [sessionTaskId, setSessionTaskId] = useState<number | null>(null)
@@ -518,6 +522,13 @@ export function TasksPage() {
 
   const openWorktreeSession = useCallback((task: WorkTask) => {
     setLaunchTaskId(task.id)
+    setLaunchKind("worktree")
+    setLaunchOpen(true)
+  }, [])
+
+  const openRegularSession = useCallback((task: WorkTask) => {
+    setLaunchTaskId(task.id)
+    setLaunchKind("regular")
     setLaunchOpen(true)
   }, [])
 
@@ -1214,6 +1225,12 @@ export function TasksPage() {
         onOpenChange={setAssignOpen}
         task={assignTask}
         sessions={assignableSessions}
+        onCreateSession={() => {
+          if (!assignTask) return
+          setAssignOpen(false)
+          setAssignTaskId(null)
+          openRegularSession(assignTask)
+        }}
         onSubmit={async (conversationId) => {
           if (!assignTask) return
           await workTaskAssignSession(assignTask.id, conversationId)
@@ -1222,13 +1239,14 @@ export function TasksPage() {
           void refetch()
         }}
       />
-      <TaskWorktreeSessionDialog
+      <TaskSessionLaunchDialog
         open={launchOpen && launchTask != null}
         onOpenChange={(open) => {
           setLaunchOpen(open)
           if (!open) setLaunchTaskId(null)
         }}
         task={launchTask}
+        kind={launchKind}
         folderPath={
           launchTask
             ? (allFolders.find((folder) => folder.id === launchTask.folder_id)
@@ -1237,7 +1255,21 @@ export function TasksPage() {
         }
         onSubmit={async (config) => {
           if (!launchTask) return
-          await workTaskStartConfigured(launchTask.id, config)
+          if (launchKind === "worktree") {
+            await workTaskStartConfigured(launchTask.id, config)
+          } else {
+            const folderPath = allFolders.find(
+              (folder) => folder.id === launchTask.folder_id
+            )?.path
+            if (!folderPath) {
+              throw new Error("Task project folder is no longer available")
+            }
+            await createRegularTaskSessionAndAssign({
+              task: launchTask,
+              folderPath,
+              config,
+            })
+          }
           setLaunchOpen(false)
           setLaunchTaskId(null)
           void refetch()

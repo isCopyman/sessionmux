@@ -47,9 +47,10 @@
       单 owner、取消/删除回收、普通 Session 进度回写已实现并通过相关测试及真实 WebView2
       验证。“新建 Worktree Session 执行”现已变成建卡后的显式动作，并复用普通 Composer
       的 Harness/Profile/Mode/Model/Effort 控件；后端在 ACP 建连前创建稳定
-      `conversation_id`，原子冻结启动快照与 claim。相关 Rust/前端测试、Desktop CDP
-      “中性建卡 → 显式打开 Worktree Session 配置”已通过，临时数据已清理。仍待普通新建
-      Session 并指派、Agent 创建/领取/修改任务、collaborator 与 Session 属性投影。
+      `conversation_id`，原子冻结启动快照与 claim。已有 Session 指派弹窗也已接入“新建普通
+      Session”，复用同一套 Harness/Profile/Mode/Model/Effort 启动面板；普通路径按“稳定
+      Session → Profile → ACP → 指派”顺序执行。相关测试与 Desktop CDP 已通过，临时数据已
+      清理。仍待 Agent 创建/领取/修改任务、collaborator 与 Session 属性投影。
 
 - [x] **Task 状态列收敛** —— 默认 UI 保持“待办 / 进行中 / 等你处理 / 已完成”四列，底层
       固定 `todo / in_progress / blocked / review / done / canceled` 六个业务状态；

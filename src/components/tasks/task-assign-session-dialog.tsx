@@ -22,6 +22,7 @@ interface TaskAssignSessionDialogProps {
   task: WorkTask | null
   sessions: readonly DbConversationSummary[]
   onSubmit: (conversationId: number) => Promise<void>
+  onCreateSession: () => void
 }
 
 /**
@@ -35,6 +36,7 @@ export function TaskAssignSessionDialog({
   task,
   sessions,
   onSubmit,
+  onCreateSession,
 }: TaskAssignSessionDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -43,6 +45,7 @@ export function TaskAssignSessionDialog({
           task={task}
           sessions={sessions}
           onSubmit={onSubmit}
+          onCreateSession={onCreateSession}
           onCancel={() => onOpenChange(false)}
         />
       ) : null}
@@ -58,11 +61,13 @@ function TaskAssignSessionBody({
   task,
   sessions,
   onSubmit,
+  onCreateSession,
   onCancel,
 }: {
   task: WorkTask | null
   sessions: readonly DbConversationSummary[]
   onSubmit: (conversationId: number) => Promise<void>
+  onCreateSession: () => void
   onCancel: () => void
 }) {
   const t = useTranslations("Tasks")
@@ -110,6 +115,14 @@ function TaskAssignSessionBody({
       </div>
 
       <DialogFooter>
+        <Button
+          type="button"
+          variant="secondary"
+          onClick={onCreateSession}
+          disabled={submitting}
+        >
+          {t("assignSessionCreateNew")}
+        </Button>
         <Button
           type="button"
           variant="outline"

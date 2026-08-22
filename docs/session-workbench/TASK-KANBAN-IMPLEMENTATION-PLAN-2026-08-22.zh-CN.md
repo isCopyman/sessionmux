@@ -2,7 +2,7 @@
 
 > 状态：已裁决，分批实施中。S1 的双状态轴、人工车道、标题即可建卡、执行方式徽标和
 > 非 Engine 动作裁剪已经落地；S2 已完成“中性任务卡 → 已有 Session”的可靠指派主链，
-> 并补齐“中性任务卡 → 新 Worktree Session”的显式启动配置；普通新建 Session、Agent
+> 并补齐“中性任务卡 → 新普通 Session / 新 Worktree Session”的显式启动配置；Agent
 > 领取与属性投影仍待实施。本文覆盖
 > `KANBAN-DESIGN-2026-08-21` 中“任务天然等于 Worktree 执行”的旧边界；现有 WorkTask
 > Engine、看板 UI 和多轮生命周期继续保留。
@@ -418,7 +418,14 @@ Session 收到 → 卡片进入进行中”已通过。
 WebView2 已验证“只填任务内容建卡 → 卡片保持未分配 → 显式打开新 Worktree Session →
 出现同一套 Profile/Mode/Model/Effort 控件”，未启动昂贵的真实 Agent 回合，临时任务随后清理。
 
-仍未完成：普通“新建 Session 并指派”、Agent `create_task/assign_task/update_task`、
+**补充实现状态（同日）**：已有 Session 指派弹窗现可继续进入“新建普通 Session”。普通与
+Worktree 两条路径复用同一个 Harness / Claude Profile / Mode / Model / Effort 启动面板；普通
+路径先创建稳定 Codeg Session、持久化 Profile，再建立 ACP 连接，Harness ready 后才执行同一
+`work_task_assign_session` 事务。启动或指派失败时保留已经创建的普通 Session，便于修复和再次
+指派，不生成隐藏的半条 Task Runtime。相关编排测试和真实 Desktop CDP 验证已通过，CDP 临时
+任务已清理；验证未点击最终“创建并指派”，避免启动真实计费回合。
+
+仍未完成：Agent `create_task/assign_task/update_task`、
 collaborator、Session 属性投影及其余恢复边界。Worktree Engine 继续作为一种明确执行模式，
 不再冒充所有任务的默认创建方式。
 

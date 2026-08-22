@@ -33,11 +33,12 @@ import {
   type WorkTaskConfig,
 } from "@/lib/types"
 
-interface TaskWorktreeSessionDialogProps {
+interface TaskSessionLaunchDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   task: WorkTask | null
   folderPath: string | null
+  kind: "regular" | "worktree"
   onSubmit: (config: WorkTaskConfig) => Promise<void>
 }
 
@@ -47,19 +48,21 @@ interface TaskWorktreeSessionDialogProps {
  * It deliberately reuses the same Agent/Profile/options components as normal
  * Session creation instead of growing a task-specific ACP form.
  */
-export function TaskWorktreeSessionDialog({
+export function TaskSessionLaunchDialog({
   open,
   onOpenChange,
   task,
   folderPath,
+  kind,
   onSubmit,
-}: TaskWorktreeSessionDialogProps) {
+}: TaskSessionLaunchDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       {open && task ? (
         <TaskWorktreeSessionBody
           task={task}
           folderPath={folderPath}
+          kind={kind}
           onSubmit={onSubmit}
           onCancel={() => onOpenChange(false)}
         />
@@ -71,11 +74,13 @@ export function TaskWorktreeSessionDialog({
 function TaskWorktreeSessionBody({
   task,
   folderPath,
+  kind,
   onSubmit,
   onCancel,
 }: {
   task: WorkTask
   folderPath: string | null
+  kind: "regular" | "worktree"
   onSubmit: (config: WorkTaskConfig) => Promise<void>
   onCancel: () => void
 }) {
@@ -164,9 +169,18 @@ function TaskWorktreeSessionBody({
   return (
     <DialogContent className="sm:max-w-[36rem]">
       <DialogHeader>
-        <DialogTitle>{t("worktreeSessionTitle")}</DialogTitle>
+        <DialogTitle>
+          {t(
+            kind === "worktree" ? "worktreeSessionTitle" : "regularSessionTitle"
+          )}
+        </DialogTitle>
         <DialogDescription>
-          {t("worktreeSessionDescription", { title: task.title })}
+          {t(
+            kind === "worktree"
+              ? "worktreeSessionDescription"
+              : "regularSessionDescription",
+            { title: task.title }
+          )}
         </DialogDescription>
       </DialogHeader>
 
@@ -216,7 +230,9 @@ function TaskWorktreeSessionBody({
           />
         </div>
         <p className="text-xs leading-5 text-muted-foreground">
-          {t("worktreeSessionHint")}
+          {t(
+            kind === "worktree" ? "worktreeSessionHint" : "regularSessionHint"
+          )}
         </p>
         {error ? (
           <p className="text-sm text-destructive" role="alert">
@@ -234,10 +250,25 @@ function TaskWorktreeSessionBody({
           disabled={!loaded || submitting || agentOptions.loading}
         >
           {submitting
-            ? t("worktreeSessionStarting")
-            : t("worktreeSessionStart")}
+            ? t(
+                kind === "worktree"
+                  ? "worktreeSessionStarting"
+                  : "regularSessionStarting"
+              )
+            : t(
+                kind === "worktree"
+                  ? "worktreeSessionStart"
+                  : "regularSessionStart"
+              )}
         </Button>
       </DialogFooter>
     </DialogContent>
   )
+}
+
+/** Compatibility wrapper for the existing Worktree-specific call sites. */
+export function TaskWorktreeSessionDialog(
+  props: Omit<TaskSessionLaunchDialogProps, "kind">
+) {
+  return <TaskSessionLaunchDialog {...props} kind="worktree" />
 }
