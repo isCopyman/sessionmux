@@ -34,6 +34,7 @@ import { useSearchDialog } from "@/contexts/search-dialog-context"
 import { useAutomationsView } from "@/contexts/automations-view-context"
 import { useTasksView } from "@/contexts/tasks-view-context"
 import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
+import { useOpenTaskBoard } from "@/lib/open-task-board"
 import { openImportSessionsWindow, openProjectBootWindow } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
 import { openPetWindow } from "@/lib/pet/api"
@@ -76,6 +77,7 @@ export function QuickActionsDropdown() {
   const { unseenFailures } = useAutomationsView()
   const { attentionCount } = useTasksView()
   const { setRoute } = useWorkbenchRoute()
+  const openTaskBoard = useOpenTaskBoard()
 
   const [folderDialogOpen, setFolderDialogOpen] = useState(false)
   const [cloneOpen, setCloneOpen] = useState(false)
@@ -260,7 +262,7 @@ export function QuickActionsDropdown() {
               </span>
             )}
           </DropdownMenuItem>
-          <DropdownMenuItem onSelect={() => setRoute("tasks")}>
+          <DropdownMenuItem onSelect={() => openTaskBoard()}>
             <ListTodo />
             <span className="min-w-0 flex-1 truncate">{tSidebar("tasks")}</span>
             {attentionCount > 0 && (

@@ -60,8 +60,9 @@
       同一任务事实源的投影，没有新增第二套看板或状态机。任务模块只保留一个“新建 Session”
       动作并使用项目目录；需要 Worktree 时复用标准新建会话入口，再指派已有 Session。Agent
       同样组合 `session.create → task.assign`，没有任务专属创建工具。卡片/列表右键菜单直接复用
-      同一动作注册表，任务详情显示项目与 Worktree 实际目录。下一独立 UI 批次再把当前全页
-      Route 迁为可分屏的单例 Workbench 内容 Tab；右侧 Sheet 继续承担快速详情。仍待 collaborator。
+      同一动作注册表，任务详情显示项目与 Worktree 实际目录。看板现已迁为可分屏、可持久恢复的
+      Workbench 内容 Tab；全局看板与项目看板只是同一 `work_task` 事实源的不同过滤视图，右侧
+      Sheet 继续承担快速详情。仍待 collaborator。
 
 - [x] **Task 状态列与 Backlog** —— UI 与底层均固定为“想法池 / 待办 / 进行中 / 审核中 /
       已完成 / 已阻塞 / 已取消”七态，列可隐藏但不允许每个项目另造状态机。SQLite 迁移

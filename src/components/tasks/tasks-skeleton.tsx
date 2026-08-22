@@ -36,17 +36,16 @@ const GHOST_ROWS = ["w-2/5", "w-1/3", "w-1/2", "w-1/4", "w-2/5", "w-1/3"]
  * First-paint placeholder for the tasks page.
  *
  * It mirrors the real layout rather than dropping slabs at the top of the
- * window: the toolbar row is reserved (the live toolbar is withheld until the
+ * tab: the toolbar row is reserved (the live toolbar is withheld until the
  * first task exists, so without this the content would start flush against the
- * chrome strip), and below it the ghosts sit on the board's own insets in
+ * Board Tab header), and below it the ghosts sit on the board's own insets in
  * whichever mode is about to render.
  */
 export function TasksSkeleton({ mode }: { mode: TasksViewMode }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden" aria-hidden>
       {/* Toolbar: same metrics as the live one (h-8 pills, px-4 pb-2 pt-4) —
-          filters on the left, "new task" alone on the right (the view switch
-          and the settings entry live in the window's chrome cluster). The
+          filters on the left and the remaining actions in the Board Tab header. The
           status select is list-only, exactly as in the live toolbar. */}
       <div className="flex shrink-0 items-center gap-2 px-4 pb-2 pt-4">
         <Skeleton className="h-8 w-36 rounded-full" />

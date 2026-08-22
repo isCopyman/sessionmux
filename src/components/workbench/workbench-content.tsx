@@ -9,8 +9,6 @@ import {
   AutomationsPage,
   AutomationsPageTitle,
 } from "@/components/automations/automations-page"
-import { TasksChromeActions } from "@/components/tasks/tasks-chrome-actions"
-import { TasksPage, TasksPageTitle } from "@/components/tasks/tasks-page"
 import {
   TokenUsagePage,
   TokenUsagePageTitle,
@@ -25,7 +23,6 @@ import {
  */
 const WORKBENCH_ROUTES: Partial<Record<WorkbenchRouteId, ComponentType>> = {
   automations: AutomationsPage,
-  tasks: TasksPage,
   tokenUsage: TokenUsagePage,
 }
 
@@ -34,7 +31,6 @@ const WORKBENCH_ROUTES: Partial<Record<WorkbenchRouteId, ComponentType>> = {
 const WORKBENCH_ROUTE_STRIPS: Partial<Record<WorkbenchRouteId, ComponentType>> =
   {
     automations: AutomationsPageTitle,
-    tasks: TasksPageTitle,
     tokenUsage: TokenUsagePageTitle,
   }
 
@@ -52,9 +48,7 @@ export interface WorkbenchChromeActionsProps {
  *  controls take that space instead of crowding the page. */
 const WORKBENCH_ROUTE_CHROME_ACTIONS: Partial<
   Record<WorkbenchRouteId, ComponentType<WorkbenchChromeActionsProps>>
-> = {
-  tasks: TasksChromeActions,
-}
+> = {}
 
 /**
  * Renders the active non-conversation route page, or nothing when the

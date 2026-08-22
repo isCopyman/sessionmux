@@ -13,6 +13,7 @@ import {
   ChevronRight,
   Copy,
   Loader2,
+  ListTodo,
   MoreHorizontal,
   PanelsTopLeft,
   Pencil,
@@ -80,6 +81,11 @@ import type {
 } from "@/lib/types"
 import { useOpenRoom } from "@/lib/open-room"
 import {
+  isTaskBoardScope,
+  taskBoardProjectId,
+  type TaskBoardScope,
+} from "@/lib/task-board-scope"
+import {
   appendConversationsToWorkbench,
   SIDEBAR_BULK_TAB_ORIGIN,
 } from "@/lib/workbench-session-tabs"
@@ -105,7 +111,8 @@ type EditorState =
 
 interface TreeSession {
   key: string
-  kind: "conversation" | "room"
+  kind: "conversation" | "room" | "board"
+  boardScope?: TaskBoardScope
   roomId?: string
   room?: CollaborationRoomSummary
   conversationId: number | null
@@ -179,10 +186,32 @@ async function fetchWorkbenchTabs(workbenchId: number) {
 function persistedSessions(
   tabs: OpenedTab[],
   conversations: Map<number, DbConversationSummary>,
-  untitled: string
+  untitled: string,
+  taskBoardTitle: string,
+  folderNames: ReadonlyMap<number, string>
 ): TreeSession[] {
   return sortTreeSessions(
-    tabs.flatMap((tab, tabOrder) => {
+    tabs.flatMap<TreeSession>((tab, tabOrder) => {
+      if (isTaskBoardScope(tab.board_scope)) {
+        const projectId = taskBoardProjectId(tab.board_scope)
+        const projectName =
+          projectId == null ? null : folderNames.get(projectId)
+        return [
+          {
+            key: `board:${tab.board_scope}`,
+            kind: "board",
+            boardScope: tab.board_scope,
+            conversationId: null,
+            folderId: tab.folder_id,
+            agentType: tab.agent_type,
+            title: projectName
+              ? `${projectName} · ${taskBoardTitle}`
+              : taskBoardTitle,
+            updatedAt: null,
+            tabOrder,
+          },
+        ]
+      }
       if (tab.conversation_id == null) return []
       const conversation = conversations.get(tab.conversation_id)
       return [
@@ -254,6 +283,7 @@ export function sortTreeSessions(sessions: TreeSession[]): TreeSession[] {
 export function WorkbenchTree() {
   const t = useTranslations("Folder.workbench")
   const tConversation = useTranslations("Folder.conversationCard")
+  const tTasks = useTranslations("Tasks")
   const items = useWorkbenchStore((state) => state.items)
   const hydrated = useWorkbenchStore((state) => state.hydrated)
   const loading = useWorkbenchStore((state) => state.loading)
@@ -277,8 +307,10 @@ export function WorkbenchTree() {
   const switchWorkbench = useTabStore((state) => state.switchWorkbench)
   const switchTab = useTabStore((state) => state.switchTab)
   const openTab = useTabStore((state) => state.openTab)
+  const openBoardTab = useTabStore((state) => state.openBoardTab)
   const closeTab = useTabStore((state) => state.closeTab)
   const conversations = useAppWorkspaceStore((state) => state.conversations)
+  const allFolders = useAppWorkspaceStore((state) => state.allFolders)
   const { openConversations } = useWorkbenchRoute()
   const openRoom = useOpenRoom()
   const catalogRooms = useRoomCatalogStore((state) => state.rooms)
@@ -361,6 +393,14 @@ export function WorkbenchTree() {
     [conversations]
   )
 
+  const folderNames = useMemo(
+    () =>
+      new Map(
+        allFolders.map((folder) => [folder.id, folder.alias ?? folder.name])
+      ),
+    [allFolders]
+  )
+
   const sessionsFor = useCallback(
     (workbenchId: number): TreeSession[] => {
       const workbenchRooms = catalogRooms.filter(
@@ -368,6 +408,20 @@ export function WorkbenchTree() {
       )
       if (workbenchId === activeWorkbenchId) {
         const fromTabs = liveTabs.map((tab, tabOrder): TreeSession => {
+          if (tab.kind === "board" && tab.boardScope) {
+            return {
+              key: tab.id,
+              kind: "board",
+              boardScope: tab.boardScope,
+              conversationId: null,
+              folderId: tab.folderId,
+              agentType: tab.agentType,
+              title: tab.title,
+              liveTabId: tab.id,
+              updatedAt: null,
+              tabOrder,
+            }
+          }
           if (tab.kind === "room" && tab.roomId) {
             const room = workbenchRooms.find((item) => item.id === tab.roomId)
             return room
@@ -418,14 +472,25 @@ export function WorkbenchTree() {
         ...persistedSessions(
           snapshots.get(workbenchId) ?? [],
           conversationById,
-          t("untitledSession")
+          t("untitledSession"),
+          tTasks("title"),
+          folderNames
         ),
         ...workbenchRooms.map((room, index) =>
           roomToTreeSession(room, conversationById, 1000 + index)
         ),
       ])
     },
-    [activeWorkbenchId, catalogRooms, conversationById, liveTabs, snapshots, t]
+    [
+      activeWorkbenchId,
+      catalogRooms,
+      conversationById,
+      folderNames,
+      liveTabs,
+      snapshots,
+      t,
+      tTasks,
+    ]
   )
 
   const activityInput = useMemo(() => {
@@ -647,6 +712,19 @@ export function WorkbenchTree() {
         await switchWorkbench(workbenchId)
       }
       openConversations()
+      if (session.kind === "board" && session.boardScope) {
+        if (session.liveTabId && workbenchId === activeWorkbenchId) {
+          switchTab(session.liveTabId)
+        } else {
+          openBoardTab({
+            scope: session.boardScope,
+            title: session.title,
+            folderId: session.folderId,
+            agentType: session.agentType,
+          })
+        }
+        return
+      }
       if (session.liveTabId && workbenchId === activeWorkbenchId) {
         switchTab(session.liveTabId)
       } else if (session.conversationId != null) {
@@ -907,6 +985,7 @@ export function WorkbenchTree() {
                                 session.conversationId ?? undefined
                               }
                               data-room-id={session.roomId}
+                              data-board-scope={session.boardScope}
                               title={session.title}
                               aria-current={selected ? "page" : undefined}
                               className={cn(
@@ -925,6 +1004,8 @@ export function WorkbenchTree() {
                               >
                                 {session.kind === "room" ? (
                                   <Users className="h-3 w-3" />
+                                ) : session.kind === "board" ? (
+                                  <ListTodo className="h-3 w-3" />
                                 ) : (
                                   <AgentIcon
                                     agentType={session.agentType}

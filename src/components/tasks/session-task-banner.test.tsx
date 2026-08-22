@@ -9,15 +9,15 @@ import { SessionTaskBanner } from "./session-task-banner"
 
 const projection = vi.hoisted(() => ({
   tasks: [] as WorkTask[],
-  setRoute: vi.fn(),
+  openTaskBoard: vi.fn(() => true),
 }))
 
 vi.mock("@/contexts/tasks-view-context", () => ({
   useOptionalTasksView: () => ({ tasks: projection.tasks }),
 }))
 
-vi.mock("@/contexts/workbench-route-context", () => ({
-  useOptionalWorkbenchRoute: () => ({ setRoute: projection.setRoute }),
+vi.mock("@/lib/open-task-board", () => ({
+  useOpenTaskBoard: () => projection.openTaskBoard,
 }))
 
 function task(overrides: Partial<WorkTask> = {}): WorkTask {
@@ -69,7 +69,7 @@ function renderBanner(conversationId: number | null = 7) {
 describe("SessionTaskBanner", () => {
   beforeEach(() => {
     projection.tasks = []
-    projection.setRoute.mockReset()
+    projection.openTaskBoard.mockReset()
     consumePendingTaskDetail()
   })
 
@@ -96,7 +96,7 @@ describe("SessionTaskBanner", () => {
     expect(screen.queryByText("Another Session")).toBeNull()
 
     fireEvent.click(screen.getByRole("button", { name: /Waiting for review/ }))
-    expect(projection.setRoute).toHaveBeenCalledWith("tasks")
+    expect(projection.openTaskBoard).toHaveBeenCalledWith("project:1")
     expect(consumePendingTaskDetail()).toBe(22)
   })
 })

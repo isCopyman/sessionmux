@@ -13,7 +13,7 @@ import {
   consumePendingTaskDetail,
   requestOpenTaskDetail,
 } from "@/lib/task-compose-events"
-import { TasksPage } from "./tasks-page"
+import { TaskBoardView, TasksPage } from "./tasks-page"
 
 const h = vi.hoisted(() => ({
   tasks: [] as WorkTask[],
@@ -42,12 +42,14 @@ vi.mock("@/stores/app-workspace-store", () => {
       folders: FolderDetail[]
       allFolders: FolderDetail[]
       conversations: DbConversationSummary[]
+      activeFolderId: number | null
     }) => unknown
   ) =>
     selector({
       folders: h.folders,
       allFolders: h.folders,
       conversations: h.conversations,
+      activeFolderId: h.folders[0]?.id ?? null,
     })
   useAppWorkspaceStore.getState = () => ({
     folders: h.folders,
@@ -194,6 +196,28 @@ function renderPage() {
   )
 }
 
+function renderProjectBoard(folderId: number) {
+  return render(
+    <NextIntlClientProvider locale="en" messages={enMessages}>
+      <TaskBoardView boardScope={`project:${folderId}`} />
+    </NextIntlClientProvider>
+  )
+}
+
+describe("TaskBoardView project scope", () => {
+  it("is a filtered view over the shared task store", () => {
+    h.folders = [folder(1, "alpha"), folder(2, "bravo")]
+    h.tasks = [
+      task(1, "todo", { folder_id: 1, title: "alpha task" }),
+      task(2, "todo", { folder_id: 2, title: "bravo task" }),
+    ]
+    renderProjectBoard(2)
+    expect(screen.getByText("bravo task")).toBeInTheDocument()
+    expect(screen.queryByText("alpha task")).toBeNull()
+    expect(screen.getByText(/bravo · To-dos/i)).toBeInTheDocument()
+  })
+})
+
 function columnRoot(name: string) {
   const heading = screen.getByRole("heading", { name })
   const root = heading.parentElement?.parentElement
@@ -223,7 +247,7 @@ beforeEach(() => {
   h.refetch.mockReset()
 })
 
-it("opens a task detail parked before the Tasks route mounted", () => {
+it("opens a task detail parked before the Board Tab mounted", () => {
   h.tasks = [task(9, "todo")]
   requestOpenTaskDetail(9)
   renderPage()

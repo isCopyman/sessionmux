@@ -25,8 +25,11 @@ import {
   CircleSlash2,
   CircleX,
   Clock3,
+  Kanban,
+  List,
   ListTodo,
   Plus,
+  Settings2,
   SlidersHorizontal,
   Tag,
   UserRound,
@@ -75,7 +78,6 @@ import {
   type TasksScope,
   type TasksSort,
 } from "@/lib/tasks-board-filter-storage"
-import { WorkbenchPageTitle } from "@/components/workbench/workbench-page-title"
 import { FolderSelect } from "@/components/shared/folder-select"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -129,7 +131,6 @@ import { TaskMergeDialog } from "./task-merge-dialog"
 import { TaskRestartDialog, type TaskRestartKind } from "./task-restart-dialog"
 import { TaskScheduleDialog } from "./task-schedule-dialog"
 import { TaskSettingsDialog } from "./task-settings-dialog"
-import { OPEN_TASK_SETTINGS_EVENT } from "./tasks-chrome-actions"
 import { TasksSkeleton } from "./tasks-skeleton"
 import { TaskTranscriptDialog } from "./task-transcript-dialog"
 import { TaskSessionLaunchDialog } from "./task-session-launch-dialog"
@@ -147,6 +148,11 @@ import type {
   WorkTaskDraft,
   WorkTaskPriority,
 } from "@/lib/types"
+import {
+  GLOBAL_TASK_BOARD_SCOPE,
+  taskBoardProjectId,
+  type TaskBoardScope,
+} from "@/lib/task-board-scope"
 
 const COLUMN_LABEL_KEYS = {
   backlog: "colBacklog",
@@ -268,31 +274,26 @@ const columnFromDropId = (
     : null
 }
 
-/** Page title rendered into the window-chrome strip above the page (the h-10
- *  band shared with the fixed corner overlays) — the shared breadcrumb header,
- *  nothing else. The page-level controls (view switch, task settings) sit in
- *  the window's top-right chrome cluster instead, next to the settings gear —
- *  see TasksChromeActions. */
-export function TasksPageTitle() {
-  const t = useTranslations("Tasks")
-  return <WorkbenchPageTitle title={t("title")} />
-}
-
 /**
- * The Tasks route page: toolbar (folder scope, stable views, display settings,
- * owner/status filters, new task) plus the board or the list. The page title
- * lives in the chrome strip above (TasksPageTitle); the view switch + settings
- * entry live in the window's top-right cluster (TasksChromeActions), so the
- * toolbar is purely "narrow what you see" + "add one".
+ * A persistent Workbench content tab over the single work_task store. Global
+ * and project Boards differ only by this view scope; neither creates a second
+ * task model or copies rows.
  * Data comes from the always-mounted TasksViewProvider;
  * every mutation is fire-and-refetch — the engine's `task://changed` nudges
  * keep all clients converged.
  */
-export function TasksPage() {
+export function TaskBoardView({
+  boardScope = GLOBAL_TASK_BOARD_SCOPE,
+  isActive = true,
+}: {
+  boardScope?: TaskBoardScope
+  isActive?: boolean
+}) {
   const t = useTranslations("Tasks")
-  const { tasks, loading, refetch, viewMode } = useTasksView()
+  const { tasks, loading, refetch, viewMode, setViewMode } = useTasksView()
   const folders = useAppWorkspaceStore((s) => s.folders)
   const allFolders = useAppWorkspaceStore((s) => s.allFolders)
+  const activeFolderId = useAppWorkspaceStore((s) => s.activeFolderId)
   const conversations = useAppWorkspaceStore((s) => s.conversations)
   const projectFolders = useMemo(
     () => folders.filter((f) => f.parent_id == null && f.kind === "regular"),
@@ -315,6 +316,7 @@ export function TasksPage() {
     return map
   }, [conversations])
 
+  const projectScopeFolderId = taskBoardProjectId(boardScope)
   const [selectedFolderFilter, setFolderFilter] = useState<number | null>(null)
   // A folder can leave the workspace (closed, or removed) while it is the active
   // filter. Fall back to "all" by derivation — no effect, the same guard the
@@ -323,21 +325,31 @@ export function TasksPage() {
   // effect: without it the pill would read "all folders" while everything below
   // it still scoped to the folder that vanished.
   const folderFilter =
-    selectedFolderFilter != null &&
-    !projectFolders.some((f) => f.id === selectedFolderFilter)
-      ? null
-      : selectedFolderFilter
-  // Restored synchronously from localStorage: this page mounts only after a
-  // client-side route switch (never prerendered), so there is no SSR markup to
-  // mismatch — and the board paints with the remembered filter right away.
+    projectScopeFolderId != null
+      ? projectScopeFolderId
+      : selectedFolderFilter != null &&
+          !projectFolders.some((f) => f.id === selectedFolderFilter)
+        ? null
+        : selectedFolderFilter
+  const activeRootFolderId = useMemo(() => {
+    const active = allFolders.find((folder) => folder.id === activeFolderId)
+    const rootId = active?.parent_id ?? active?.id ?? null
+    return rootId != null &&
+      projectFolders.some((folder) => folder.id === rootId)
+      ? rootId
+      : null
+  }, [activeFolderId, allFolders, projectFolders])
+  const defaultTaskFolderId = folderFilter ?? activeRootFolderId
+  // Restored synchronously from localStorage so each Board Tab paints with the
+  // remembered filter immediately.
   const [boardFilter, setBoardFilter] = useState(loadTasksBoardFilter)
   useEffect(() => {
     saveTasksBoardFilter(boardFilter)
   }, [boardFilter])
   // The list's own status selection — one board COLUMN, or `null` for every
   // status. Restored synchronously for the same reason as the filter above.
-  // `viewMode` itself lives in TasksViewProvider — its switch renders in the
-  // window's chrome cluster.
+  // `viewMode` itself lives in TasksViewProvider so every Board Tab uses the
+  // same saved presentation preference.
   const [statusFilter, setStatusFilter] = useState<BoardColumnId | null>(
     loadTasksStatusFilter
   )
@@ -398,9 +410,10 @@ export function TasksPage() {
     return () => window.clearInterval(id)
   }, [])
 
-  // "Task from message" hand-off: consume the parked draft on mount (this page
-  // is unmounted while other routes are active) and on the live event.
+  // "Task from message" hand-off: consume the parked draft when this is the
+  // active Board Tab and on the live event.
   useEffect(() => {
+    if (!isActive) return
     const consume = () => {
       const draft = consumePendingTaskDraft()
       if (!draft) return
@@ -413,13 +426,14 @@ export function TasksPage() {
     window.addEventListener(CREATE_TASK_FROM_TEXT_EVENT, consume)
     return () =>
       window.removeEventListener(CREATE_TASK_FROM_TEXT_EVENT, consume)
-  }, [])
+  }, [isActive])
   const [detailTaskId, setDetailTaskId] = useState<number | null>(null)
 
-  // Session details and other projections can point at a task while this route
-  // is unmounted. Consume the parked id on mount; the event is the already-open
+  // Session details and other projections can point at a task before its Board
+  // Tab is mounted. Consume the parked id on mount; the event is the already-open
   // fast path. The detail sheet still reads the live row from TasksViewProvider.
   useEffect(() => {
+    if (!isActive) return
     const consume = () => {
       const taskId = consumePendingTaskDetail()
       if (taskId != null) setDetailTaskId(taskId)
@@ -427,7 +441,7 @@ export function TasksPage() {
     consume()
     window.addEventListener(OPEN_TASK_DETAIL_EVENT, consume)
     return () => window.removeEventListener(OPEN_TASK_DETAIL_EVENT, consume)
-  }, [])
+  }, [isActive])
   const [mergeTask, setMergeTask] = useState<WorkTask | null>(null)
   const [mergeOpen, setMergeOpen] = useState(false)
   // The merge dialog's counterpart for a task that changed nothing.
@@ -454,15 +468,6 @@ export function TasksPage() {
   // header's status chip follows the live row (like the detail sheet).
   const [sessionTaskId, setSessionTaskId] = useState<number | null>(null)
   const [sessionOpen, setSessionOpen] = useState(false)
-
-  // The settings entry lives in the chrome strip (TasksPageTitle), a separate
-  // tree branch — it asks this page (which owns the dialog + folder scope) to
-  // open via a window event, like the "task from message" hand-off above.
-  useEffect(() => {
-    const open = () => setSettingsOpen(true)
-    window.addEventListener(OPEN_TASK_SETTINGS_EVENT, open)
-    return () => window.removeEventListener(OPEN_TASK_SETTINGS_EVENT, open)
-  }, [])
 
   const folderScopedTasks = useMemo(
     () =>
@@ -850,11 +855,56 @@ export function TasksPage() {
       onDragEnd={handleTaskDragEnd}
     >
       <div className="flex h-full min-h-0 flex-col">
-        {/* Toolbar (the page title renders in the chrome strip above the page,
-          which owns the divider — the toolbar itself is borderless).
-          pt-4 / px-4, not py-2: the pills clear the title bar by the same 1rem
-          they clear the window's left edge, and pb-2 plus the board's own pt-2
-          makes the gap underneath 1rem too — the row sits on one inset.
+        <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border/60 px-3">
+          <ListTodo
+            className="size-4 text-muted-foreground"
+            aria-hidden="true"
+          />
+          <span className="truncate text-sm font-semibold">
+            {projectScopeFolderId == null
+              ? t("title")
+              : `${folderNames.get(projectScopeFolderId) ?? `#${projectScopeFolderId}`} · ${t("title")}`}
+          </span>
+          <div className="flex-1" />
+          {hasAnyTask ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-xs"
+              onClick={() => setViewMode(isList ? "board" : "list")}
+              title={t(isList ? "viewSwitchToBoard" : "viewSwitchToList")}
+              aria-label={t(isList ? "viewSwitchToBoard" : "viewSwitchToList")}
+            >
+              {isList ? (
+                <Kanban className="size-4" />
+              ) : (
+                <List className="size-4" />
+              )}
+            </Button>
+          ) : null}
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            onClick={() => setSettingsOpen(true)}
+            title={t("settingsTitle")}
+            aria-label={t("settingsTitle")}
+          >
+            <Settings2 className="size-4" />
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            className="h-7 gap-1 rounded-full px-3 text-xs"
+            onClick={openNewTask}
+          >
+            <Plus className="size-3.5" aria-hidden="true" />
+            {t("new")}
+          </Button>
+        </div>
+        {/* Toolbar. pt-4 / px-4, not py-2: the pills clear the Board Tab header
+          by the same 1rem they clear the window's left edge, and pb-2 plus the
+          board's own pt-2 makes the gap underneath 1rem too.
 
           Withheld until the first task exists: on an empty board every control
           here filters or starts nothing, and the only action that does
@@ -865,13 +915,15 @@ export function TasksPage() {
               path — the same list the new-conversation composer opens. Leads
               with a folder glyph like the Automations filter pill: "全部文件夹"
               alone doesn't say WHICH axis the pill filters. */}
-            <FolderSelect
-              folders={projectFolders}
-              value={folderFilter}
-              onChange={setFolderFilter}
-              allLabel={t("allFolders")}
-              onSelectAll={() => setFolderFilter(null)}
-            />
+            {projectScopeFolderId == null ? (
+              <FolderSelect
+                folders={projectFolders}
+                value={folderFilter}
+                onChange={setFolderFilter}
+                allLabel={t("allFolders")}
+                onSelectAll={() => setFolderFilter(null)}
+              />
+            ) : null}
 
             <div
               className="flex items-center gap-0.5"
@@ -905,8 +957,7 @@ export function TasksPage() {
             </div>
 
             {/* Same pill treatment as the folder select so the left cluster reads
-              as one family of controls (the settings entry lives in the chrome
-              strip next to the page title). */}
+              as one family of controls. */}
             <Popover>
               <PopoverTrigger asChild>
                 <Button
@@ -1153,16 +1204,6 @@ export function TasksPage() {
             ) : null}
 
             <div className="flex-1" />
-
-            <Button
-              type="button"
-              size="sm"
-              className="h-8 gap-1 rounded-full px-3.5 text-[0.8125rem]"
-              onClick={openNewTask}
-            >
-              <Plus className="size-4" aria-hidden="true" />
-              {t("new")}
-            </Button>
           </div>
         )}
 
@@ -1181,15 +1222,6 @@ export function TasksPage() {
                 {t("emptyHint")}
               </p>
             </div>
-            <Button
-              type="button"
-              size="sm"
-              className="gap-1.5"
-              onClick={openNewTask}
-            >
-              <Plus className="size-3.5" aria-hidden="true" />
-              {t("new")}
-            </Button>
           </div>
         ) : isList ? (
           <TaskList
@@ -1362,7 +1394,7 @@ export function TasksPage() {
           }}
           task={editorTask}
           defaultInitialStatus={editorInitialStatus}
-          defaultFolderId={editorPrefill?.folderId ?? folderFilter}
+          defaultFolderId={editorPrefill?.folderId ?? defaultTaskFolderId}
           prefillText={editorPrefill?.text ?? null}
           onSubmit={submitEditor}
         />
@@ -1514,6 +1546,12 @@ export function TasksPage() {
       </div>
     </DndContext>
   )
+}
+
+/** Test/story compatibility wrapper. Product entrypoints open a persistent
+ * Board Tab and render TaskBoardView directly. */
+export function TasksPage() {
+  return <TaskBoardView />
 }
 
 function TaskColumnDropZone({

@@ -13,7 +13,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { useOptionalTasksView } from "@/contexts/tasks-view-context"
-import { useOptionalWorkbenchRoute } from "@/contexts/workbench-route-context"
+import { useOpenTaskBoard } from "@/lib/open-task-board"
+import { projectTaskBoardScope } from "@/lib/task-board-scope"
 import { requestOpenTaskDetail } from "@/lib/task-compose-events"
 import type { WorkTask } from "@/lib/types"
 
@@ -43,7 +44,7 @@ function sortResponsibleTasks(tasks: readonly WorkTask[]): WorkTask[] {
 export function SessionTaskBanner({ conversationId }: SessionTaskBannerProps) {
   const t = useTranslations("Tasks")
   const tasksView = useOptionalTasksView()
-  const workbenchRoute = useOptionalWorkbenchRoute()
+  const openTaskBoard = useOpenTaskBoard()
   const [open, setOpen] = useState(false)
 
   const responsibleTasks = useMemo(
@@ -62,10 +63,10 @@ export function SessionTaskBanner({ conversationId }: SessionTaskBannerProps) {
 
   if (conversationId == null || responsibleTasks.length === 0) return null
 
-  const openTask = (taskId: number) => {
-    requestOpenTaskDetail(taskId)
+  const openTask = (task: WorkTask) => {
+    openTaskBoard(projectTaskBoardScope(task.folder_id))
+    requestOpenTaskDetail(task.id)
     setOpen(false)
-    workbenchRoute?.setRoute("tasks")
   }
 
   return (
@@ -103,7 +104,7 @@ export function SessionTaskBanner({ conversationId }: SessionTaskBannerProps) {
               <button
                 key={task.id}
                 type="button"
-                onClick={() => openTask(task.id)}
+                onClick={() => openTask(task)}
                 className="flex w-full min-w-0 items-center gap-2 rounded-lg border border-transparent px-3 py-2 text-left transition-colors hover:border-border hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 <span className="min-w-0 flex-1 truncate text-sm font-medium">

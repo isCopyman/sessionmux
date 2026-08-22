@@ -46,9 +46,8 @@ interface TasksViewContextValue {
    *  update an already-painted board. */
   loading: boolean
   refetch: () => Promise<void>
-  /** Board ⇄ list. Lifted here rather than owned by TasksPage because the
-   *  switch renders in the window-chrome strip (TasksPageTitle) — a different
-   *  branch of the tree — while the layout it drives renders in the page. */
+  /** Board ⇄ list. Lifted here so every Board Tab projects the same saved
+   *  preference instead of maintaining a second view-mode state per mount. */
   viewMode: TasksViewMode
   setViewMode: (mode: TasksViewMode) => void
 }
@@ -58,8 +57,8 @@ const TasksViewContext = createContext<TasksViewContextValue | null>(null)
 /**
  * Data layer for the Tasks feature: the full task list + a realtime
  * subscription, kept always-mounted so the sidebar's attention badge stays
- * live. Single source for both the badge and the Tasks route page (the board
- * filters per folder client-side). Mirrors AutomationsViewProvider: the engine
+ * live. Single source for both the badge and every Board Tab (each board
+ * filters its global task projection client-side). Mirrors AutomationsViewProvider: the engine
  * runs headless, so `task://changed` nudges + refetch are the only way an open
  * board learns a task advanced.
  */
@@ -93,9 +92,8 @@ export function TasksViewProvider({ children }: { children: ReactNode }) {
   }, [t])
   const [tasks, setTasks] = useState<WorkTask[]>([])
   const [loading, setLoading] = useState(true)
-  // Restored synchronously from localStorage: the Tasks route mounts only after
-  // a client-side route switch (never prerendered), so there is no SSR markup to
-  // mismatch — and the page paints in the remembered mode right away.
+  // Restored synchronously from localStorage so a newly mounted Board Tab paints
+  // in the remembered mode immediately.
   const [viewMode, setViewMode] = useState<TasksViewMode>(loadTasksViewMode)
   useEffect(() => {
     saveTasksViewMode(viewMode)

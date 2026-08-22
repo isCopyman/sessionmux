@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => {
     listRemoteWorkspaceConnections: vi.fn(() => Promise.resolve(connections)),
     setSearchOpen: vi.fn(),
     setRoute: vi.fn(),
+    openTaskBoard: vi.fn(() => true),
   }
 })
 
@@ -64,6 +65,9 @@ vi.mock("@/contexts/workbench-route-context", () => ({
     routeId: "conversations",
     setRoute: mocks.setRoute,
   }),
+}))
+vi.mock("@/lib/open-task-board", () => ({
+  useOpenTaskBoard: () => mocks.openTaskBoard,
 }))
 
 // Dialogs render nothing until opened and drag in large trees; the menu only
@@ -188,7 +192,7 @@ describe("QuickActionsDropdown", () => {
 
     await reopen()
     await clickItem("To-dos")
-    expect(mocks.setRoute).toHaveBeenCalledWith("tasks")
+    expect(mocks.openTaskBoard).toHaveBeenCalledWith()
 
     await reopen()
     await clickItem("Show pet")

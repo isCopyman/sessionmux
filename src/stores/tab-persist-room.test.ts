@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest"
 import {
   buildPersistItems,
   isDraftTab,
+  makeBoardTabId,
   makeRoomTabId,
   resetTabStore,
   useTabStore,
@@ -51,6 +52,19 @@ function roomTab(roomId: string): TabItemInternal {
   }
 }
 
+function boardTab(scope: "global" | `project:${number}`): TabItemInternal {
+  return {
+    id: makeBoardTabId(scope),
+    kind: "board",
+    boardScope: scope,
+    folderId: 1,
+    conversationId: null,
+    agentType: "claude_code",
+    title: "Tasks",
+    isPinned: true,
+  }
+}
+
 describe("Room tab persistence payload", () => {
   it("persists Room tabs with Session tabs and drops drafts", () => {
     const room = roomTab("rm_plan")
@@ -61,6 +75,7 @@ describe("Room tab persistence payload", () => {
         folder_id: 1,
         conversation_id: 11,
         room_id: null,
+        board_scope: null,
         agent_type: "codex",
         position: 0,
         is_active: false,
@@ -71,12 +86,31 @@ describe("Room tab persistence payload", () => {
         folder_id: 1,
         conversation_id: null,
         room_id: "rm_plan",
+        board_scope: null,
         agent_type: "claude_code",
         position: 1,
         is_active: true,
         is_pinned: true,
       },
     ])
+  })
+
+  it("persists one Board scope without treating it as a draft", () => {
+    const board = boardTab("project:1")
+    expect(buildPersistItems([board], board.id)).toEqual([
+      {
+        id: 0,
+        folder_id: 1,
+        conversation_id: null,
+        room_id: null,
+        board_scope: "project:1",
+        agent_type: "claude_code",
+        position: 0,
+        is_active: true,
+        is_pinned: true,
+      },
+    ])
+    expect(isDraftTab(board)).toBe(false)
   })
 
   it("does not treat a Room tab as a composer draft", () => {
@@ -113,5 +147,49 @@ describe("New conversation with a Room tab in the group", () => {
     expect(draft?.kind).toBe("conversation")
     expect(draft?.conversationId).toBeNull()
     expect(st.activeTabId).toBe(draft?.id)
+  })
+})
+
+describe("Board tab identity", () => {
+  it("focuses an existing scope and lets global and project Boards coexist", () => {
+    resetAppWorkspaceStore()
+    const folder = {
+      id: 1,
+      path: "/w",
+      name: "w",
+      kind: "regular",
+      parent_id: null,
+    } as unknown as FolderDetail
+    useAppWorkspaceStore.setState({
+      folders: [folder],
+      allFolders: [folder],
+      foldersHydrated: true,
+    })
+    localStorage.clear()
+    resetTabStore()
+
+    const open = useTabStore.getState().openBoardTab
+    open({
+      scope: "global",
+      title: "Tasks",
+      folderId: 1,
+      agentType: "claude_code",
+    })
+    open({
+      scope: "project:1",
+      title: "w · Tasks",
+      folderId: 1,
+      agentType: "claude_code",
+    })
+    open({
+      scope: "global",
+      title: "Tasks",
+      folderId: 1,
+      agentType: "claude_code",
+    })
+
+    const state = useTabStore.getState()
+    expect(state.rawTabs.filter((tab) => tab.kind === "board")).toHaveLength(2)
+    expect(state.activeTabId).toBe(makeBoardTabId("global"))
   })
 })

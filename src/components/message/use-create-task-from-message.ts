@@ -1,7 +1,8 @@
 "use client"
 
 import { useCallback } from "react"
-import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
+import { useOpenTaskBoard } from "@/lib/open-task-board"
+import { projectTaskBoardScope } from "@/lib/task-board-scope"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { useTabStore } from "@/stores/tab-store"
 import { requestCreateTaskFromText } from "@/lib/task-compose-events"
@@ -14,7 +15,7 @@ import { requestCreateTaskFromText } from "@/lib/task-compose-events"
  * the board's own default.
  */
 export function useCreateTaskFromMessage(getText: () => string) {
-  const { setRoute } = useWorkbenchRoute()
+  const openTaskBoard = useOpenTaskBoard()
   const tabFolderId = useTabStore((s) => {
     const tab = s.rawTabs.find((t) => t.id === s.activeTabId)
     return tab?.folderId ?? null
@@ -36,6 +37,8 @@ export function useCreateTaskFromMessage(getText: () => string) {
         ? folder.id
         : null
     requestCreateTaskFromText({ text, folderId })
-    setRoute("tasks")
-  }, [getText, tabFolderId, setRoute])
+    openTaskBoard(
+      folderId == null ? undefined : projectTaskBoardScope(folderId)
+    )
+  }, [getText, tabFolderId, openTaskBoard])
 }

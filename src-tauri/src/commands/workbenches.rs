@@ -166,6 +166,7 @@ mod tests {
             folder_id,
             conversation_id: Some(conversation_id),
             room_id: None,
+            board_scope: None,
             agent_type: AgentType::Codex,
             position: 0,
             is_active: true,

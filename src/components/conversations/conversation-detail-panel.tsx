@@ -58,6 +58,7 @@ import {
 import { useAdvertisedGoalActions } from "@/hooks/use-goal-actions"
 import { ConversationShell } from "@/components/chat/conversation-shell"
 import { RoomWorkspace } from "@/components/rooms/rooms-page"
+import { TaskBoardView } from "@/components/tasks/tasks-page"
 
 import { SessionConfigStaleBanner } from "@/components/chat/session-config-stale-banner"
 import {
@@ -2963,7 +2964,9 @@ export function ConversationDetailPanel() {
     const visible = canTileG || tab.id === groupSelection[groupId]
     const folderPath = allFolders.find((f) => f.id === tab.folderId)?.path
     const view =
-      tab.kind === "room" && tab.roomId ? (
+      tab.kind === "board" && tab.boardScope ? (
+        <TaskBoardView boardScope={tab.boardScope} isActive={active} />
+      ) : tab.kind === "room" && tab.roomId ? (
         <RoomWorkspace roomId={tab.roomId} isActive={active} />
       ) : (
         <ConversationTabView

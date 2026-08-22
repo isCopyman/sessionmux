@@ -211,6 +211,7 @@ pub async fn duplicate(
             folder_id: Set(tab.folder_id),
             conversation_id: Set(tab.conversation_id),
             room_id: Set(tab.room_id),
+            board_scope: Set(tab.board_scope),
             agent_type: Set(tab.agent_type),
             position: Set(tab.position),
             is_active: Set(tab.is_active),

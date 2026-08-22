@@ -45,6 +45,7 @@ interface TabProviderProps {
  */
 export function TabProvider({ children }: TabProviderProps) {
   const t = useTranslations("Folder.tabContext")
+  const tTasks = useTranslations("Tasks")
   const { activateConversationPane } = useWorkspaceActions()
   const { disconnect } = useAcpActions()
   // Tab teardown closes the surface either way, so the store's side effect
@@ -86,8 +87,9 @@ export function TabProvider({ children }: TabProviderProps) {
       loadingConversation: t("loadingConversation"),
       newConversation: t("newConversation"),
       untitledConversation: t("untitledConversation"),
+      taskBoard: tTasks("title"),
     })
-  }, [t])
+  }, [t, tTasks])
 
   useEffect(() => {
     useTabStore

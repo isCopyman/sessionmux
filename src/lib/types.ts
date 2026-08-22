@@ -383,6 +383,9 @@ export interface OpenedTab {
   /** Set when this row is a Room tab. Mutually exclusive with
    * `conversation_id`; drafts have neither and are never persisted. */
   room_id?: string | null
+  /** Set when this row is a task Board tab. `global` and `project:<folderId>`
+   * are views over the same work_task store, not separate task databases. */
+  board_scope?: string | null
   agent_type: AgentType
   position: number
   is_active: boolean

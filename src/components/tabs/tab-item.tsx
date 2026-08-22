@@ -3,7 +3,7 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react"
 import { Reorder } from "motion/react"
 import type { PanInfo } from "motion/react"
-import { Users, X } from "lucide-react"
+import { ListTodo, Users, X } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { cn, handleMiddleClickClose } from "@/lib/utils"
 import {
@@ -142,9 +142,12 @@ export const TabItem = memo(function TabItem({
   const [isDragging, setIsDragging] = useState(false)
 
   const resolvedFolderName = folderName ?? String(tab.folderId)
-  const tooltip = folderBranch
-    ? `${resolvedFolderName} · ${folderBranch}  —  ${tab.title}`
-    : `${resolvedFolderName}  —  ${tab.title}`
+  const tooltip =
+    tab.kind === "board"
+      ? tab.title
+      : folderBranch
+        ? `${resolvedFolderName} · ${folderBranch}  —  ${tab.title}`
+        : `${resolvedFolderName}  —  ${tab.title}`
 
   const clearResidualStyles = useCallback(() => {
     const el = itemRef.current
@@ -388,7 +391,9 @@ export const TabItem = memo(function TabItem({
                   ]
             )}
           >
-            {tab.kind === "room" ? (
+            {tab.kind === "board" ? (
+              <ListTodo className="h-3 w-3 shrink-0 text-muted-foreground" />
+            ) : tab.kind === "room" ? (
               <Users className="h-3 w-3 shrink-0 text-muted-foreground" />
             ) : (
               <ConversationStatusDot

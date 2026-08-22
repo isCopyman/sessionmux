@@ -74,6 +74,7 @@ pub async fn list_tabs_for_workbench<C: ConnectionTrait>(
                 folder_id: r.folder_id,
                 conversation_id: r.conversation_id,
                 room_id: r.room_id,
+                board_scope: r.board_scope,
                 agent_type,
                 position: r.position,
                 is_active: r.is_active,
@@ -105,11 +106,11 @@ pub async fn snapshot_tabs_for_workbench(
 
 /// Replace all tabs with the given list (full replacement).
 ///
-/// Draft tabs (`conversation_id` and `room_id` both empty) are **never
+/// Draft tabs (`conversation_id`, `room_id`, and `board_scope` all empty) are **never
 /// persisted** — a draft is a device-local working surface (volatile id,
 /// provisional agent, live ACP connection) and must not leak across clients
-/// via this shared table. Room tabs persist by `room_id` the same way Session
-/// tabs persist by `conversation_id`. This is the single persistence
+/// via this shared table. Room and Board tabs persist by their own stable
+/// identities. This is the single persistence
 /// chokepoint, so the invariant holds for every caller.
 ///
 /// Ensures at most one `is_active = true` (first active wins; others forced
@@ -136,17 +137,24 @@ pub async fn save_tabs_for_workbench<C: ConnectionTrait>(
     let mut active_seen = false;
 
     for item in items {
+        let board_scope = item
+            .board_scope
+            .as_ref()
+            .map(|scope| scope.trim())
+            .filter(|scope| !scope.is_empty())
+            .map(|scope| scope.to_string());
         let room_id = item
             .room_id
             .as_ref()
             .map(|id| id.trim())
             .filter(|id| !id.is_empty())
             .map(|id| id.to_string());
-        // Skip drafts — never persist a tab with neither a Session nor a Room.
-        if item.conversation_id.is_none() && room_id.is_none() {
+        // Skip drafts — never persist a tab with no stable content identity.
+        if item.conversation_id.is_none() && room_id.is_none() && board_scope.is_none() {
             continue;
         }
-        let conversation_id = if room_id.is_some() {
+        let room_id = if board_scope.is_some() { None } else { room_id };
+        let conversation_id = if room_id.is_some() || board_scope.is_some() {
             None
         } else {
             item.conversation_id
@@ -170,6 +178,7 @@ pub async fn save_tabs_for_workbench<C: ConnectionTrait>(
             folder_id: Set(item.folder_id),
             conversation_id: Set(conversation_id),
             room_id: Set(room_id),
+            board_scope: Set(board_scope),
             agent_type: Set(agent_str),
             position: Set(item.position),
             is_active: Set(is_active),
@@ -331,6 +340,7 @@ pub async fn delete_folder_tabs_and_bump(
     let removed = opened_tab::Entity::delete_many()
         .filter(opened_tab::Column::FolderId.eq(folder_id))
         .filter(opened_tab::Column::RoomId.is_null())
+        .filter(opened_tab::Column::BoardScope.is_null())
         .exec(&txn)
         .await?;
     let next = get_tabs_version(&txn).await? + 1;
@@ -360,6 +370,7 @@ mod tests {
             folder_id,
             conversation_id: Some(conversation_id),
             room_id: None,
+            board_scope: None,
             agent_type: AgentType::Codex,
             position: 0,
             is_active: false,
@@ -373,11 +384,59 @@ mod tests {
             folder_id,
             conversation_id: None,
             room_id: Some(room_id.to_string()),
+            board_scope: None,
             agent_type: AgentType::ClaudeCode,
             position: 1,
             is_active: true,
             is_pinned: true,
         }
+    }
+
+    fn board_tab(folder_id: i32, scope: &str) -> OpenedTab {
+        OpenedTab {
+            id: 0,
+            folder_id,
+            conversation_id: None,
+            room_id: None,
+            board_scope: Some(scope.to_string()),
+            agent_type: AgentType::ClaudeCode,
+            position: 2,
+            is_active: false,
+            is_pinned: true,
+        }
+    }
+
+    #[tokio::test]
+    async fn persists_board_scope_and_folder_close_does_not_drop_the_view() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/codeg-board-tabs").await;
+        let session_id = seed_conversation(&db, folder_id, AgentType::Codex).await;
+        save_tabs_for_workbench(
+            &db.conn,
+            1,
+            vec![
+                conv_tab(folder_id, session_id),
+                board_tab(folder_id, &format!("project:{folder_id}")),
+            ],
+        )
+        .await
+        .expect("save");
+
+        let listed = list_tabs_for_workbench(&db.conn, 1).await.expect("list");
+        assert_eq!(listed.len(), 2);
+        let expected_project_scope = format!("project:{folder_id}");
+        assert_eq!(
+            listed[1].board_scope.as_deref(),
+            Some(expected_project_scope.as_str())
+        );
+        assert_eq!(listed[1].conversation_id, None);
+
+        delete_folder_tabs_and_bump(&db.conn, folder_id)
+            .await
+            .expect("close folder tabs");
+        let remaining = list_tabs_for_workbench(&db.conn, 1).await.expect("list");
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].board_scope, listed[1].board_scope);
     }
 
     #[tokio::test]
@@ -411,6 +470,7 @@ mod tests {
                     folder_id,
                     conversation_id: None,
                     room_id: None,
+                    board_scope: None,
                     agent_type: AgentType::Gemini,
                     position: 2,
                     is_active: false,

@@ -136,7 +136,7 @@ function TaskEditorBody({
   )
   const [prompt, setPrompt] = useState(task?.config?.display_text ?? seededText)
   const [folderId, setFolderId] = useState<number | null>(
-    task?.folder_id ?? defaultFolderId ?? projectFolders[0]?.id ?? null
+    task?.folder_id ?? defaultFolderId ?? null
   )
   const [initialStatus, setInitialStatus] =
     useState<WorkTaskBusinessStatus>(defaultInitialStatus)

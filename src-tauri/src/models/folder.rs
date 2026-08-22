@@ -90,6 +90,9 @@ pub struct OpenedTab {
     /// `conversation_id`; drafts have neither and are never persisted.
     #[serde(default)]
     pub room_id: Option<String>,
+    /// Set when this row is a task Board tab (`global` or `project:<id>`).
+    #[serde(default)]
+    pub board_scope: Option<String>,
     pub agent_type: AgentType,
     pub position: i32,
     pub is_active: bool,

@@ -18,6 +18,7 @@ const spies = vi.hoisted(() => ({
   setCreateRoomOpen: vi.fn(),
   setRoute: vi.fn(),
   openConversations: vi.fn(),
+  openTaskBoard: vi.fn(() => true),
   // Latest props the (stubbed) conversation list was rendered with, so tests can
   // assert what the sidebar threads down (e.g. showWorktrees / showCompleted).
   listProps: null as {
@@ -205,6 +206,9 @@ vi.mock("@/contexts/workbench-route-context", () => ({
     setRoute: spies.setRoute,
     openConversations: spies.openConversations,
   }),
+}))
+vi.mock("@/lib/open-task-board", () => ({
+  useOpenTaskBoard: () => spies.openTaskBoard,
 }))
 vi.mock("@/hooks/use-is-mac", () => ({ useIsMac: () => false }))
 vi.mock("@/hooks/use-shortcut-settings", () => ({

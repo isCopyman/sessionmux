@@ -21,6 +21,7 @@ const h = vi.hoisted(() => ({
   switchWorkbench: vi.fn(),
   switchTab: vi.fn(),
   openTab: vi.fn(),
+  openBoardTab: vi.fn(),
   openConversations: vi.fn(),
   openRoom: vi.fn(),
   appendConversationsToWorkbench: vi.fn(),
@@ -59,7 +60,7 @@ const h = vi.hoisted(() => ({
     tabs: [
       {
         id: "conversation:101",
-        kind: "conversation" as "conversation" | "room",
+        kind: "conversation" as "conversation" | "room" | "board",
         folderId: 7,
         conversationId: 101 as number | null,
         agentType: "codex",
@@ -67,10 +68,11 @@ const h = vi.hoisted(() => ({
         isPinned: true,
         status: "in_progress" as string | undefined,
         roomId: undefined as string | undefined,
+        boardScope: undefined as "global" | `project:${number}` | undefined,
       },
       {
         id: "conversation:103",
-        kind: "conversation" as "conversation" | "room",
+        kind: "conversation" as "conversation" | "room" | "board",
         folderId: 7,
         conversationId: 103 as number | null,
         agentType: "codex",
@@ -78,12 +80,14 @@ const h = vi.hoisted(() => ({
         isPinned: true,
         status: "completed" as string | undefined,
         roomId: undefined as string | undefined,
+        boardScope: undefined as "global" | `project:${number}` | undefined,
       },
     ],
     activeTabId: "conversation:101",
     switchWorkbench: vi.fn(),
     switchTab: vi.fn(),
     openTab: vi.fn(),
+    openBoardTab: vi.fn(),
     closeTab: vi.fn(),
   },
   connections: new Map<string, { status: string }>(),
@@ -198,7 +202,21 @@ vi.mock("@/contexts/tab-context", () => ({
 
 vi.mock("@/stores/app-workspace-store", () => ({
   useAppWorkspaceStore: (selector: (state: unknown) => unknown) =>
-    selector({ conversations: h.conversations }),
+    selector({
+      conversations: h.conversations,
+      allFolders: [
+        {
+          id: 7,
+          name: "Research",
+          alias: null,
+        },
+        {
+          id: 9,
+          name: "Review project",
+          alias: null,
+        },
+      ],
+    }),
 }))
 
 vi.mock("@/contexts/workbench-route-context", () => ({
@@ -219,7 +237,9 @@ describe("WorkbenchTree", () => {
     vi.clearAllMocks()
     h.connections.clear()
     h.rooms.length = 0
-    h.tabState.tabs = h.tabState.tabs.filter((tab) => tab.kind !== "room")
+    h.tabState.tabs = h.tabState.tabs.filter(
+      (tab) => tab.kind === "conversation"
+    )
     h.setRoomWorkbench.mockResolvedValue({ id: "rm_plan" })
     h.appendConversationsToWorkbench.mockResolvedValue({ added: 1, skipped: 0 })
     h.createOnly.mockResolvedValue({
@@ -260,6 +280,55 @@ describe("WorkbenchTree", () => {
     await waitFor(() => expect(h.listWorkbenchTabs).toHaveBeenCalledWith(2))
     fireEvent.click(screen.getByRole("button", { name: "Expand workbench" }))
     expect(await screen.findByText("Reviewer session")).toBeTruthy()
+  })
+
+  it("projects persisted and live Boards as Board rows", async () => {
+    h.tabState.tabs.push({
+      id: "board:global",
+      kind: "board",
+      boardScope: "global",
+      folderId: 7,
+      conversationId: null,
+      agentType: "claude_code",
+      title: "To-dos",
+      isPinned: true,
+      status: undefined,
+      roomId: undefined,
+    })
+    h.listWorkbenchTabs.mockResolvedValue({
+      items: [
+        {
+          id: 23,
+          folder_id: 9,
+          conversation_id: null,
+          board_scope: "project:9",
+          agent_type: "claude_code",
+          position: 0,
+          is_active: true,
+          is_pinned: true,
+        },
+      ],
+      version: 3,
+    })
+
+    const { container } = render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <WorkbenchTree />
+      </NextIntlClientProvider>
+    )
+
+    expect(
+      await waitFor(() =>
+        container.querySelector('[data-board-scope="global"]')
+      )
+    ).toHaveTextContent("To-dos")
+    await waitFor(() => expect(h.listWorkbenchTabs).toHaveBeenCalledWith(2))
+    fireEvent.click(screen.getByRole("button", { name: "Expand workbench" }))
+    expect(
+      await waitFor(() =>
+        container.querySelector('[data-board-scope="project:9"]')
+      )
+    ).toHaveTextContent("Review project · To-dos")
   })
 
   it("orders Workbench navigation by Session activity, not pane tab order", async () => {
@@ -505,6 +574,7 @@ describe("WorkbenchTree", () => {
       title: "Plan room",
       isPinned: false,
       status: undefined,
+      boardScope: undefined,
     })
     render(
       <NextIntlClientProvider locale="en" messages={enMessages}>
@@ -550,6 +620,7 @@ describe("WorkbenchTree", () => {
       title: "Plan room",
       isPinned: false,
       status: undefined,
+      boardScope: undefined,
     })
     render(
       <NextIntlClientProvider locale="en" messages={enMessages}>

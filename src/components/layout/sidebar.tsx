@@ -26,6 +26,8 @@ import { useSessionCenter } from "@/contexts/session-center-context"
 import { useAutomationsView } from "@/contexts/automations-view-context"
 import { useTasksView } from "@/contexts/tasks-view-context"
 import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
+import { useOpenTaskBoard } from "@/lib/open-task-board"
+import { GLOBAL_TASK_BOARD_SCOPE } from "@/lib/task-board-scope"
 import {
   SidebarConversationList,
   type SidebarConversationListHandle,
@@ -215,6 +217,7 @@ export function Sidebar() {
   const { unseenFailures } = useAutomationsView()
   const { attentionCount } = useTasksView()
   const { routeId, setRoute, openConversations } = useWorkbenchRoute()
+  const openTaskBoard = useOpenTaskBoard()
   const isMac = useIsMac()
   const { isMac: platformIsMac } = usePlatform()
   const { zoomLevel } = useZoomLevel()
@@ -223,10 +226,11 @@ export function Sidebar() {
   const listRef = useRef<SidebarConversationListHandle>(null)
   const collectionTreeRef = useRef<CollectionTreeHandle>(null)
   const pendingLocateRef = useRef(false)
-  const activeTabKind = useTabStore((state) => {
+  const activeTab = useTabStore((state) => {
     const tab = state.tabs.find((item) => item.id === state.activeTabId)
-    return tab?.kind ?? null
+    return tab ?? null
   })
+  const activeTabKind = activeTab?.kind ?? null
   // On desktop the header's top-left is owned by the fixed window-chrome overlay
   // (sidebar toggle + remote); reserve exactly its width so the view controls
   // and drag region clear it. The reserve scales with the app zoom to track the
@@ -765,10 +769,14 @@ export function Sidebar() {
         <SidebarNavButton
           icon={ListTodo}
           label={t("tasks")}
-          active={routeId === "tasks"}
+          active={
+            routeId === "conversations" &&
+            activeTab?.kind === "board" &&
+            activeTab.boardScope === GLOBAL_TASK_BOARD_SCOPE
+          }
           onClick={() => {
             if (isMobile) toggle()
-            setRoute("tasks")
+            openTaskBoard(GLOBAL_TASK_BOARD_SCOPE)
           }}
           trailing={
             attentionCount > 0 ? (
