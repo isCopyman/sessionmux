@@ -10,6 +10,10 @@ import type {
   WorkTaskStatus,
 } from "@/lib/types"
 import {
+  consumePendingTaskBoardScope,
+  requestTaskBoardScope,
+} from "@/lib/task-board-scope-request"
+import {
   consumePendingTaskDetail,
   requestOpenTaskDetail,
 } from "@/lib/task-compose-events"
@@ -238,6 +242,7 @@ function headerLabels() {
 
 beforeEach(() => {
   consumePendingTaskDetail()
+  consumePendingTaskBoardScope()
   localStorage.clear()
   h.tasks = []
   h.viewMode = "board"
@@ -434,6 +439,17 @@ describe("TasksPage grouping", () => {
 })
 
 describe("TasksPage quick views", () => {
+  it("applies a pending attention request after the Board mounts", async () => {
+    h.tasks = [task(1, "review", { title: "review this" })]
+    requestTaskBoardScope("attention")
+    renderPage()
+
+    expect(
+      screen.getByRole("tab", { name: /Needs attention/ })
+    ).toHaveAttribute("aria-selected", "true")
+    expect(screen.getByText("review this")).toBeInTheDocument()
+  })
+
   it("keeps three stable views and forces the two attention columns visible", async () => {
     localStorage.setItem(
       "workspace:tasks-board-filter",

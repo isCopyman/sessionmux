@@ -29,6 +29,8 @@
   `O46-TASKBOARD-RESEARCH.zh-CN.md`（**组织维度调研**：一级容器＝项目 Folder，
   含容器关系图、两套 status 的区别，以及 Agent Orchestrator 的 Session/PR/CI 注意力投影
   审计；内有已标注的过时结论）
+- **人类待处理入口**：`HUMAN-ATTENTION-PROJECTION-ADR-2026-08-23.zh-CN.md`
+  （“待我处理”只是通信义务与任务关注的轻量投影，不新建 Human Inbox 或“我的任务”）
 - **回合失败重试（O8）**：`O8-TRANSIENT-RETRY-AUDIT.zh-CN.md`（审计）；
   `O8-RETRY-REPORT.zh-CN.md`（施工报告）
 - **群聊/协作**：`ROOM-READ-REPORT.zh-CN.md`（逐步披露接口）；

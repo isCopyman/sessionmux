@@ -1882,7 +1882,14 @@
       "loadingSubsessions": "Cargando subconversaciones…",
       "rooms": "Salas",
       "newRoom": "Nueva sala",
-      "needsReply": "Debe responder"
+      "needsReply": "Debe responder",
+      "needsYou": "Requiere tu acción",
+      "needsYouDescription": "Solo elementos que requieren tu intervención.",
+      "nothingNeedsYou": "No hay nada que requiera tu atención ahora.",
+      "needsYouReplies": "Respuestas pendientes",
+      "needsYouRepliesHint": "Abrir respuestas pendientes en el centro de sesiones",
+      "needsYouTasks": "Tareas que requieren acción",
+      "needsYouTasksHint": "Abrir tareas que esperan información o revisión"
     },
     "conversation": {
       "reloadFailed": "No se pudo recargar la conversación: {message}",

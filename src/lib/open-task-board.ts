@@ -10,6 +10,8 @@ import {
   taskBoardProjectId,
   type TaskBoardScope,
 } from "@/lib/task-board-scope"
+import { type TasksScope } from "@/lib/tasks-board-filter-storage"
+import { requestTaskBoardScope } from "@/lib/task-board-scope-request"
 import type { AgentType } from "@/lib/types"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 
@@ -22,7 +24,10 @@ export function useOpenTaskBoard() {
   const { openConversations } = useWorkbenchRoute()
 
   return useCallback(
-    (scope: TaskBoardScope = GLOBAL_TASK_BOARD_SCOPE): boolean => {
+    (
+      scope: TaskBoardScope = GLOBAL_TASK_BOARD_SCOPE,
+      options?: { taskScope?: TasksScope }
+    ): boolean => {
       const { folders, allFolders, activeFolderId } =
         useAppWorkspaceStore.getState()
       const projects = folders.filter(
@@ -40,6 +45,7 @@ export function useOpenTaskBoard() {
       if (anchorId == null) return false
 
       const project = allFolders.find((folder) => folder.id === projectId)
+      if (options?.taskScope) requestTaskBoardScope(options.taskScope)
       openConversations()
       openBoardTab({
         scope,

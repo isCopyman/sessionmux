@@ -1882,7 +1882,14 @@
       "loadingSubsessions": "Chargement des sous-conversations…",
       "rooms": "Salles",
       "newRoom": "Nouvelle salle",
-      "needsReply": "Doit répondre"
+      "needsReply": "Doit répondre",
+      "needsYou": "Action requise",
+      "needsYouDescription": "Uniquement les éléments nécessitant votre intervention.",
+      "nothingNeedsYou": "Rien ne nécessite votre attention pour le moment.",
+      "needsYouReplies": "Réponses attendues",
+      "needsYouRepliesHint": "Ouvrir les réponses en attente dans le centre de sessions",
+      "needsYouTasks": "Tâches à traiter",
+      "needsYouTasksHint": "Ouvrir les tâches en attente d'une saisie ou d'une révision"
     },
     "conversation": {
       "reloadFailed": "Échec du rechargement de la conversation : {message}",

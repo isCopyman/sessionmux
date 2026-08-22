@@ -1882,7 +1882,14 @@
       "loadingSubsessions": "하위 대화 로드 중…",
       "rooms": "룸",
       "newRoom": "새 룸",
-      "needsReply": "수신·미답장"
+      "needsReply": "수신·미답장",
+      "needsYou": "내 조치 필요",
+      "needsYouDescription": "사용자의 조치가 필요한 항목만 모아 봅니다.",
+      "nothingNeedsYou": "지금 처리할 항목이 없습니다.",
+      "needsYouReplies": "답장 필요",
+      "needsYouRepliesHint": "세션 센터에서 미응답 메시지 열기",
+      "needsYouTasks": "조치가 필요한 작업",
+      "needsYouTasksHint": "입력, 검토 또는 문제 처리를 기다리는 작업 열기"
     },
     "conversation": {
       "reloadFailed": "대화 다시 불러오기 실패: {message}",

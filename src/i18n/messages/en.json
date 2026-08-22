@@ -1882,7 +1882,14 @@
       "tasks": "To-dos",
       "loadingSubsessions": "Loading sub-conversations…",
       "newRoom": "New room",
-      "needsReply": "Owes a reply"
+      "needsReply": "Owes a reply",
+      "needsYou": "Needs you",
+      "needsYouDescription": "Only items that require your action.",
+      "nothingNeedsYou": "Nothing needs your attention right now.",
+      "needsYouReplies": "Replies needed",
+      "needsYouRepliesHint": "Open outstanding replies in Session Center",
+      "needsYouTasks": "Tasks need action",
+      "needsYouTasksHint": "Open tasks waiting for input or review"
     },
     "conversation": {
       "reloadFailed": "Failed to reload conversation: {message}",

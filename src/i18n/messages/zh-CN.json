@@ -1882,7 +1882,14 @@
       "loadingSubsessions": "正在加载子会话…",
       "rooms": "群聊",
       "newRoom": "新建群聊",
-      "needsReply": "收到未回"
+      "needsReply": "收到未回",
+      "needsYou": "待我处理",
+      "needsYouDescription": "这里只汇总必须由你介入的事项。",
+      "nothingNeedsYou": "现在没有需要你处理的事项。",
+      "needsYouReplies": "等待回复",
+      "needsYouRepliesHint": "在会话中心查看尚未回复的消息",
+      "needsYouTasks": "任务需要处理",
+      "needsYouTasksHint": "查看等待输入、审核或处理异常的任务"
     },
     "conversation": {
       "reloadFailed": "会话重新加载失败：{message}",

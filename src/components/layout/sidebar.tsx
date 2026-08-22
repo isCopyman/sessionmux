@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import {
   Crosshair,
+  CircleAlert,
   FolderTree,
   Funnel,
   LibraryBig,
@@ -10,6 +11,7 @@ import {
   ListChevronsUpDown,
   Search,
   ListTodo,
+  MessageCircleReply,
   SquarePen,
   Users,
   Zap,
@@ -33,6 +35,14 @@ import {
   type SidebarConversationListHandle,
 } from "@/components/conversations/sidebar-conversation-list"
 import { Button } from "@/components/ui/button"
+import {
+  Popover,
+  PopoverContent,
+  PopoverDescription,
+  PopoverHeader,
+  PopoverTitle,
+  PopoverTrigger,
+} from "@/components/ui/popover"
 import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
@@ -255,6 +265,7 @@ export function Sidebar() {
     DEFAULT_SECTION_ORDER
   )
   const [allExpanded, setAllExpanded] = useState(true)
+  const [needsYouOpen, setNeedsYouOpen] = useState(false)
   // Shared with the welcome page's secondary entry; the dialog itself is
   // mounted by WorkspaceChromeController so it survives a collapsed sidebar.
   const { setOpen: setCreateRoomOpen } = useCreateRoomDialog()
@@ -272,6 +283,7 @@ export function Sidebar() {
     t("needsReply"),
     tCollaboration("needsReplyHint"),
   ].join(" — ")
+  const needsYouCount = needsReplyBadge + attentionCount
   const searchShortcutLabel = formatShortcutLabel(
     shortcuts.toggle_search,
     isMac
@@ -716,35 +728,91 @@ export function Sidebar() {
             ) : null
           }
         />
-        {/* One entry, two destinations. The row opens the Session Center
-            unfiltered; the amber badge — outstanding reply obligations across
-            direct mail and Rooms — opens it pre-filtered to what owes a reply.
-            "Owes a reply" is a facet of the Session Center, so it gets a badge
-            on this row rather than a row of its own. The hover text appends
-            the direction hint — the label alone never says which side owes. */}
         <SidebarNavButton
           icon={LibraryBig}
           label={t("sessionCenter")}
           onClick={() => openSessionCenter()}
-          trailingAction={
-            needsReplyBadge > 0 ? (
+        />
+        <Popover open={needsYouOpen} onOpenChange={setNeedsYouOpen}>
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              className={NAV_ROW_SURFACE_CLASS}
+              aria-label={t("needsYou")}
+            >
+              <span className={cn(NAV_ROW_MAIN_CLASS, "h-full flex-1")}>
+                <CircleAlert className="h-[0.875rem] w-[0.875rem] shrink-0 text-muted-foreground" />
+                <span className="truncate">{t("needsYou")}</span>
+              </span>
+              {needsYouCount > 0 ? (
+                <span className={NEEDS_REPLY_BADGE_CLASS}>{needsYouCount}</span>
+              ) : null}
+            </button>
+          </PopoverTrigger>
+          <PopoverContent side="right" align="start" className="w-80 gap-2 p-3">
+            <PopoverHeader className="px-1 pb-1">
+              <PopoverTitle>{t("needsYou")}</PopoverTitle>
+              <PopoverDescription>
+                {t("needsYouDescription")}
+              </PopoverDescription>
+            </PopoverHeader>
+            {needsYouCount === 0 ? (
+              <p className="px-1 py-3 text-sm text-muted-foreground">
+                {t("nothingNeedsYou")}
+              </p>
+            ) : null}
+            {needsReplyBadge > 0 ? (
               <button
                 type="button"
-                onClick={() =>
-                  openSessionCenter({ collabFilter: "needs_reply" })
-                }
+                className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-start hover:bg-accent"
                 title={needsReplyBadgeTitle}
-                className={NEEDS_REPLY_BADGE_CLASS}
+                onClick={() => {
+                  setNeedsYouOpen(false)
+                  openSessionCenter({ collabFilter: "needs_reply" })
+                }}
               >
-                {/* Names the button "Owes a reply <count>" for assistive tech.
-                    An aria-label would REPLACE the count instead of prefixing
-                    it, dropping the one thing the badge is there to say. */}
-                <span className="sr-only">{t("needsReply")}</span>
-                {needsReplyBadge}
+                <MessageCircleReply className="size-4 shrink-0 text-amber-600 dark:text-amber-400" />
+                <span className="min-w-0 flex-1">
+                  <span className="block text-sm font-medium">
+                    {t("needsYouReplies")}
+                  </span>
+                  <span className="block truncate text-xs text-muted-foreground">
+                    {t("needsYouRepliesHint")}
+                  </span>
+                </span>
+                <span className={NEEDS_REPLY_BADGE_CLASS}>
+                  {needsReplyBadge}
+                </span>
               </button>
-            ) : null
-          }
-        />
+            ) : null}
+            {attentionCount > 0 ? (
+              <button
+                type="button"
+                className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-start hover:bg-accent"
+                onClick={() => {
+                  setNeedsYouOpen(false)
+                  if (isMobile) toggle()
+                  openTaskBoard(GLOBAL_TASK_BOARD_SCOPE, {
+                    taskScope: "attention",
+                  })
+                }}
+              >
+                <ListTodo className="size-4 shrink-0 text-primary" />
+                <span className="min-w-0 flex-1">
+                  <span className="block text-sm font-medium">
+                    {t("needsYouTasks")}
+                  </span>
+                  <span className="block truncate text-xs text-muted-foreground">
+                    {t("needsYouTasksHint")}
+                  </span>
+                </span>
+                <span className="inline-flex h-[0.9375rem] min-w-[0.9375rem] items-center justify-center rounded-full bg-primary/10 px-1 font-mono text-[0.625rem] font-medium leading-none text-primary">
+                  {attentionCount}
+                </span>
+              </button>
+            ) : null}
+          </PopoverContent>
+        </Popover>
         {/* Both route rows close the mobile Sheet on the way out, like tapping a
             conversation card (handled by the list wrapper below) — otherwise the
             page they just opened stays hidden behind the sidebar. "Search" above
@@ -778,15 +846,6 @@ export function Sidebar() {
             if (isMobile) toggle()
             openTaskBoard(GLOBAL_TASK_BOARD_SCOPE)
           }}
-          trailing={
-            attentionCount > 0 ? (
-              // Attention (not failure): tasks waiting on the user — primary
-              // tint like the shortcut chips, not destructive.
-              <span className="ml-auto inline-flex h-[0.9375rem] min-w-[0.9375rem] shrink-0 items-center justify-center rounded-full bg-primary/10 px-1 font-mono text-[0.625rem] font-medium leading-none text-primary">
-                {attentionCount}
-              </span>
-            ) : null
-          }
         />
       </div>
 

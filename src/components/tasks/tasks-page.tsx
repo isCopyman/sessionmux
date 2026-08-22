@@ -36,6 +36,10 @@ import {
   type LucideIcon,
 } from "lucide-react"
 import { useTasksView } from "@/contexts/tasks-view-context"
+import {
+  consumePendingTaskBoardScope,
+  TASK_BOARD_SCOPE_REQUEST_EVENT,
+} from "@/lib/task-board-scope-request"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import {
   workTaskArchive,
@@ -369,6 +373,20 @@ export function TaskBoardView({
   useEffect(() => {
     saveTasksScope(scope)
   }, [scope])
+  useEffect(() => {
+    if (!isActive) return
+    const applyPendingScope = () => {
+      const requested = consumePendingTaskBoardScope()
+      if (requested) setScope(requested)
+    }
+    applyPendingScope()
+    window.addEventListener(TASK_BOARD_SCOPE_REQUEST_EVENT, applyPendingScope)
+    return () =>
+      window.removeEventListener(
+        TASK_BOARD_SCOPE_REQUEST_EVENT,
+        applyPendingScope
+      )
+  }, [isActive])
   const [sort, setSort] = useState<TasksSort>(loadTasksSort)
   useEffect(() => {
     saveTasksSort(sort)

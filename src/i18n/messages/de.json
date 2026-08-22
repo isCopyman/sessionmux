@@ -1882,7 +1882,14 @@
       "loadingSubsessions": "Unterkonversationen werden geladen…",
       "rooms": "Räume",
       "newRoom": "Neuer Raum",
-      "needsReply": "Muss antworten"
+      "needsReply": "Muss antworten",
+      "needsYou": "Deine Aktion nötig",
+      "needsYouDescription": "Nur Punkte, die dein Eingreifen erfordern.",
+      "nothingNeedsYou": "Derzeit ist keine Aktion erforderlich.",
+      "needsYouReplies": "Antworten erforderlich",
+      "needsYouRepliesHint": "Offene Antworten im Sitzungscenter öffnen",
+      "needsYouTasks": "Aufgaben erfordern Aktion",
+      "needsYouTasksHint": "Aufgaben öffnen, die auf Eingabe oder Prüfung warten"
     },
     "conversation": {
       "reloadFailed": "Konversation konnte nicht neu geladen werden: {message}",

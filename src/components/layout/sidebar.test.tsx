@@ -51,6 +51,7 @@ const mockState = vi.hoisted(() => ({
   needsReplyCount: 0,
   roomNeedsReplyCount: 0,
   unseenFailures: 0,
+  taskAttentionCount: 0,
 }))
 
 // The conversation list is irrelevant here — stub it so the test exercises only
@@ -195,7 +196,7 @@ vi.mock("@/contexts/automations-view-context", () => ({
 vi.mock("@/contexts/tasks-view-context", () => ({
   useTasksView: () => ({
     tasks: [],
-    attentionCount: 0,
+    attentionCount: mockState.taskAttentionCount,
     refetch: async () => {},
   }),
 }))
@@ -278,56 +279,57 @@ describe("Sidebar — fixed New chat / Search region", () => {
     mockState.needsReplyCount = 0
     mockState.roomNeedsReplyCount = 0
     mockState.unseenFailures = 0
+    mockState.taskAttentionCount = 0
   })
 
-  it("counts Room reply debt in the Session Center row's badge", () => {
+  it("aggregates reply debt and task attention under Needs you", async () => {
+    const user = userEvent.setup()
     mockState.needsReplyCount = 2
     mockState.roomNeedsReplyCount = 3
+    mockState.taskAttentionCount = 4
     renderSidebar()
 
-    // Direct mail + Rooms on one badge. The sr-only label rides along so the
-    // count is not the badge's whole name for a screen reader.
-    const badge = screen.getByTitle(NEEDS_REPLY_TITLE)
-    expect(badge.textContent).toBe("Owes a reply5")
-    // The hover text adds the direction — "Owes a reply" alone never says
-    // which side of the exchange is on the hook.
-    expect(badge.getAttribute("title")).toContain(
-      "Someone messaged this session and it has not replied yet."
-    )
-    // It hangs off the Session Center row rather than a row of its own.
-    expect(badge.parentElement?.textContent).toContain("Session Center")
+    const trigger = screen.getByRole("button", { name: "Needs you" })
+    expect(trigger.textContent).toContain("9")
+    await user.click(trigger)
+    expect(screen.getByText("Replies needed")).toBeInTheDocument()
+    expect(screen.getByText("Tasks need action")).toBeInTheDocument()
+    expect(screen.getByTitle(NEEDS_REPLY_TITLE).textContent).toContain("5")
   })
 
-  it("drops the badge, and the standalone row, when nothing is owed", () => {
+  it("keeps one quiet Needs you entry when nothing is pending", async () => {
+    const user = userEvent.setup()
     renderSidebar()
-    expect(screen.queryByTitle(NEEDS_REPLY_TITLE)).toBeNull()
-    // The retired row was a nav button named exactly "Owes a reply"; only the
-    // badge may carry that name now, and it is gone at zero.
-    expect(screen.queryByRole("button", { name: "Owes a reply" })).toBeNull()
+    const trigger = screen.getByRole("button", { name: "Needs you" })
+    expect(trigger.textContent).toBe("Needs you")
+    await user.click(trigger)
+    expect(
+      screen.getByText("Nothing needs your attention right now.")
+    ).toBeInTheDocument()
   })
 
-  it("opens the Session Center pre-filtered from the badge", async () => {
+  it("opens the Session Center pre-filtered from Needs you", async () => {
     const user = userEvent.setup()
     mockState.needsReplyCount = 1
     renderSidebar()
 
-    await user.click(screen.getByTitle(NEEDS_REPLY_TITLE))
+    await user.click(screen.getByRole("button", { name: "Needs you" }))
+    await user.click(screen.getByText("Replies needed"))
     expect(spies.sessionCenterOpen).toBe(true)
     expect(spies.sessionCenterCollabFilter).toBe("needs_reply")
     expect(spies.sessionCenterCollection).toBeNull()
   })
 
-  it("activates the badge from the keyboard", async () => {
+  it("opens task attention from Needs you", async () => {
     const user = userEvent.setup()
-    mockState.needsReplyCount = 4
+    mockState.taskAttentionCount = 4
     renderSidebar()
 
-    // A real <button> beside the row's button, not a clickable span inside it:
-    // focus + Enter has to reach it.
-    const badge = screen.getByTitle(NEEDS_REPLY_TITLE)
-    act(() => badge.focus())
-    await user.keyboard("{Enter}")
-    expect(spies.sessionCenterCollabFilter).toBe("needs_reply")
+    await user.click(screen.getByRole("button", { name: "Needs you" }))
+    await user.click(screen.getByText("Tasks need action"))
+    expect(spies.openTaskBoard).toHaveBeenCalledWith("global", {
+      taskScope: "attention",
+    })
   })
 
   it("refreshes the Collection tree once the Session Center closes", async () => {

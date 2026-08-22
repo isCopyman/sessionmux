@@ -1882,7 +1882,14 @@
       "loadingSubsessions": "サブ会話を読み込み中…",
       "rooms": "ルーム",
       "newRoom": "新しいルーム",
-      "needsReply": "受信・未返信"
+      "needsReply": "受信・未返信",
+      "needsYou": "対応が必要",
+      "needsYouDescription": "あなたの対応が必要な項目だけをまとめます。",
+      "nothingNeedsYou": "現在、対応が必要な項目はありません。",
+      "needsYouReplies": "返信が必要",
+      "needsYouRepliesHint": "セッションセンターで未返信のメッセージを開く",
+      "needsYouTasks": "対応が必要なタスク",
+      "needsYouTasksHint": "入力、レビュー、問題対応を待つタスクを開く"
     },
     "conversation": {
       "reloadFailed": "会話の再読み込みに失敗しました: {message}",

@@ -1882,7 +1882,14 @@
       "loadingSubsessions": "جارٍ تحميل المحادثات الفرعية…",
       "rooms": "الغرف",
       "newRoom": "غرفة جديدة",
-      "needsReply": "عليها الرد"
+      "needsReply": "عليها الرد",
+      "needsYou": "يتطلب تدخلك",
+      "needsYouDescription": "يعرض فقط العناصر التي تتطلب إجراءً منك.",
+      "nothingNeedsYou": "لا يوجد ما يتطلب تدخلك الآن.",
+      "needsYouReplies": "ردود مطلوبة",
+      "needsYouRepliesHint": "افتح الردود المعلقة في مركز الجلسات",
+      "needsYouTasks": "مهام تتطلب إجراءً",
+      "needsYouTasksHint": "افتح المهام التي تنتظر إدخالاً أو مراجعة"
     },
     "conversation": {
       "reloadFailed": "فشل إعادة تحميل المحادثة: {message}",
