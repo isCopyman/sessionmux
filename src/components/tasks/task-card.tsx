@@ -87,8 +87,7 @@ export function StatusChip({
   const label =
     visualStatus === "failed" && task.failure_reason === "interrupted"
       ? t("statusInterrupted")
-      : (task.execution_mode === null || task.execution_mode === "manual") &&
-          task.task_status === "blocked"
+      : task.execution_mode !== "engine" && task.task_status === "blocked"
         ? t("statusBlocked")
         : t(statusLabelKey(visualStatus))
 
@@ -99,11 +98,11 @@ export function StatusChip({
     case "preparing":
     case "running":
       tone =
-        task.execution_mode !== null && task.execution_mode !== "manual"
+        task.execution_mode === "engine"
           ? "gap-1 text-[0.6875rem] text-primary"
           : "text-[0.6875rem] text-primary"
       icon =
-        task.execution_mode !== null && task.execution_mode !== "manual" ? (
+        task.execution_mode === "engine" ? (
           <Loader2
             className="size-3 shrink-0 animate-spin"
             aria-hidden="true"
@@ -122,7 +121,7 @@ export function StatusChip({
       tone =
         "gap-1 rounded-full border border-amber-500/45 bg-amber-500/5 px-2 py-1 text-[0.625rem] text-amber-600 dark:border-amber-400/40 dark:text-amber-400"
       icon =
-        task.execution_mode !== null && task.execution_mode !== "manual" ? (
+        task.execution_mode === "engine" ? (
           <span
             className="size-1.5 shrink-0 animate-pulse rounded-full bg-amber-500"
             aria-hidden="true"
@@ -165,7 +164,9 @@ export function StatusChip({
 }
 
 function taskVisualStatus(task: WorkTask): WorkTask["status"] {
-  if (task.execution_mode !== null && task.execution_mode !== "manual") {
+  // Only the WorkTask engine owns the legacy execution status axis. Manual,
+  // unassigned, and persistent-Session cards all render their business state.
+  if (task.execution_mode === "engine") {
     return task.status
   }
   switch (task.task_status) {
@@ -222,7 +223,7 @@ export function statusAccent(task: WorkTask): string {
     case "running":
       return "bg-primary"
     case "awaiting_input":
-      return task.execution_mode !== null && task.execution_mode !== "manual"
+      return task.execution_mode === "engine"
         ? "animate-pulse bg-amber-500"
         : "bg-amber-500"
     case "review":

@@ -143,7 +143,7 @@ pub struct CompanionFeatures {
     /// next to mailbox tools.
     pub room: bool,
     /// Work-task reporting tools (`task_progress` / `task_complete`) — injected
-    /// only into spawns launched by the task engine.
+    /// into engine-launched tasks and ordinary Sessions with taskboard access.
     pub tasks: bool,
     /// `create_automation` — save a scheduled/manual automation from chat.
     pub automations: bool,
@@ -195,7 +195,7 @@ impl CompanionFeatures {
             "get_session_info" => self.sessions,
             "list_sessions" | "send_message" | "list_inbox" | "read_message" => self.mailbox,
             "list_rooms" | "read_room" | "read_room_post" | "post_room" => self.room,
-            "task_progress" | "task_complete" => self.tasks,
+            "task_progress" | "task_complete" => self.tasks || self.taskboard,
             "create_automation" => self.automations,
             "create_work_task" | "list_tasks" | "get_task" => self.taskboard,
             "list_profiles" => self.automations || self.taskboard,

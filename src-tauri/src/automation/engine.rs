@@ -482,6 +482,7 @@ impl AutomationEngine {
             },
             mode_id: cfg.mode_id.clone(),
             source: PromptQueueSource::Automation,
+            task_id: None,
         };
         // The command core (not the bare service) so every client gets its
         // `prompt_queue://changed` snapshot and the queue worker its wake.

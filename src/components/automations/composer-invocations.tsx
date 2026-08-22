@@ -40,7 +40,8 @@ const useIsomorphicLayoutEffect =
 
 interface UseComposerInvocationsArgs {
   editorRef: RefObject<RichComposerHandle | null>
-  agentType: AgentType
+  /** Null while a task is only a board card and has no execution owner yet. */
+  agentType: AgentType | null
   /** Folder path for project-scoped Codex skills (global skills load regardless). */
   folderPath: string | null
   /** Slash commands from the agent-options probe (empty if none / not yet ready). */

@@ -2972,7 +2972,8 @@
         "sourceCollaboration": "메일",
         "sourceReminder": "리마인더",
         "sourceAutomation": "자동화",
-        "sourceTimer": "타이머"
+        "sourceTimer": "타이머",
+        "sourceTask": "작업"
       },
       "welcomeInputPanel": {
         "agentsSettingsPath": "설정 > 에이전트",
@@ -4762,6 +4763,15 @@
     "filesChanged": "{count}개 파일",
     "actionStart": "시작",
     "actionRunWithAgent": "Run with Agent",
+    "actionAssignSession": "기존 세션에 할당",
+    "assignSessionTitle": "기존 세션에 할당",
+    "assignSessionDescription": "“{title}”을 이 프로젝트의 영구 세션으로 보냅니다.",
+    "assignSessionField": "대상 세션",
+    "assignSessionPlaceholder": "세션 선택",
+    "assignSessionSearch": "세션 검색…",
+    "assignSessionEmpty": "할당 가능한 세션이 없습니다",
+    "assignSessionSubmit": "할당하고 보내기",
+    "assignSessionSubmitting": "할당 중…",
     "actionMarkBlocked": "Mark blocked",
     "actionResume": "Resume",
     "actionSchedule": "예약 실행",

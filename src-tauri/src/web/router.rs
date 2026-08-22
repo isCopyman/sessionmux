@@ -1515,6 +1515,10 @@ pub fn build_router(
             post(handlers::work_task::work_task_create),
         )
         .route(
+            "/work_task_assign_session",
+            post(handlers::work_task::work_task_assign_session),
+        )
+        .route(
             "/work_task_update",
             post(handlers::work_task::work_task_update),
         )

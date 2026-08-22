@@ -18,20 +18,22 @@ use chrono::Utc;
 use sea_orm::sea_query::Expr;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::NotSet, ColumnTrait, Condition, ConnectionTrait,
-    DatabaseConnection, EntityTrait, IntoActiveModel, PaginatorTrait, QueryFilter, QueryOrder,
-    QuerySelect, Set, TransactionTrait,
+    DatabaseConnection, DatabaseTransaction, DbBackend, EntityTrait, IntoActiveModel,
+    PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Set, Statement, TransactionTrait,
 };
 
 use crate::db::entities::work_task::{
     WorkTaskBusinessStatus, WorkTaskExecutionMode, WorkTaskStatus,
 };
 use crate::db::entities::{
-    folder, work_task, work_task_event, work_task_settings, work_task_template,
+    conversation, folder, work_task, work_task_event, work_task_settings, work_task_template,
 };
 use crate::db::error::DbError;
+use crate::db::service::prompt_queue_service;
 use crate::models::{
-    WorkTaskConfig, WorkTaskDraft, WorkTaskEventInfo, WorkTaskFolderSettings, WorkTaskInfo,
-    WorkTaskMergeState, WorkTaskQueuedMerge,
+    EnqueuePromptQueueItem, PromptQueueDraft, PromptQueueSource, WorkTaskConfig, WorkTaskDraft,
+    WorkTaskEventInfo, WorkTaskFolderSettings, WorkTaskInfo, WorkTaskMergeState,
+    WorkTaskQueuedMerge,
 };
 
 // `WorkTaskPreflight` is referenced via `crate::models::` in its fns to keep
@@ -694,8 +696,496 @@ pub async fn soft_delete(
         Some(serde_json::json!({ "action": "delete" })),
     )
     .await?;
+    // A Session assignment is a responsibility lease, not history ownership.
+    // Deleting the card releases that lease and retracts any first brief that
+    // has not crossed the dispatch boundary. A submitted prompt is never
+    // silently replayed or recalled; the Session simply loses its active card.
+    txn.execute(Statement::from_sql_and_values(
+        DbBackend::Sqlite,
+        "UPDATE work_task_assignment SET state = 'removed', removed_at = ?, updated_at = ? \
+         WHERE task_id = ? AND state IN ('assigned', 'active')",
+        vec![now.into(), now.into(), id.into()],
+    ))
+    .await?;
+    txn.execute(Statement::from_sql_and_values(
+        DbBackend::Sqlite,
+        "DELETE FROM conversation_prompt_queue_item \
+         WHERE task_id = ? AND dispatch_started_at IS NULL",
+        vec![id.into()],
+    ))
+    .await?;
     txn.commit().await?;
     Ok(true)
+}
+
+/// Result of assigning one ordinary persistent Session as the task owner.
+/// `queue_inserted=false` is the idempotent retry path after a caller lost the
+/// first response: the durable assignment already exists and is returned
+/// without adding a second prompt.
+pub struct SessionTaskAssignment {
+    pub task: WorkTaskInfo,
+    pub queue_inserted: bool,
+}
+
+fn task_assignment_prompt(
+    task: &work_task::Model,
+    cfg: &WorkTaskConfig,
+) -> Result<PromptQueueDraft, DbError> {
+    let mut blocks = Vec::with_capacity(cfg.prompt_blocks.len() + 1);
+    let description = cfg.display_text.trim();
+    let mut envelope = format!(
+        "[Codeg task #{} assigned]\nTitle: {}\n",
+        task.id, task.title
+    );
+    // `display_text` is the readable projection of the prompt blocks. Do not
+    // send both copies: only use it as a fallback for legacy text-only cards.
+    if cfg.prompt_blocks.is_empty() && !description.is_empty() {
+        envelope.push_str("Description: ");
+        envelope.push_str(description);
+        envelope.push('\n');
+    }
+    envelope.push_str(
+        "Work on this task in the current persistent Session. Report meaningful milestones with task_progress. Call task_complete only when the whole task is ready for review or is blocked.",
+    );
+    blocks.push(crate::acp::types::PromptInputBlock::Text { text: envelope });
+    for value in &cfg.prompt_blocks {
+        let block = serde_json::from_value::<crate::acp::types::PromptInputBlock>(value.clone())
+            .map_err(|e| DbError::Validation(format!("invalid task prompt block: {e}")))?;
+        blocks.push(block);
+    }
+    Ok(PromptQueueDraft {
+        blocks,
+        display_text: format!("Task #{}: {}", task.id, task.title),
+    })
+}
+
+/// Assign an unclaimed board card to an existing Session and queue its first
+/// brief atomically. The Session must belong to the task's project (or one of
+/// that project's worktrees), and one Session may own only one active task in
+/// V1 so `task_complete` never has to guess which card it settles.
+pub async fn assign_to_session(
+    conn: &DatabaseConnection,
+    task_id: i32,
+    conversation_id: i32,
+    assigned_by: &str,
+) -> Result<SessionTaskAssignment, DbError> {
+    let actor = assigned_by.trim();
+    if actor.is_empty() {
+        return Err(DbError::Validation(
+            "task assignment actor is required".into(),
+        ));
+    }
+    let now = Utc::now();
+    let txn = conn.begin().await?;
+
+    // The CAS is the first write and therefore also serializes concurrent
+    // assignment attempts before either can create a queue item.
+    let claimed = work_task::Entity::update_many()
+        .col_expr(
+            work_task::Column::ExecutionMode,
+            Expr::value(WorkTaskExecutionMode::Session),
+        )
+        .col_expr(
+            work_task::Column::ConversationId,
+            Expr::value(Some(conversation_id)),
+        )
+        .col_expr(
+            work_task::Column::TaskStatus,
+            Expr::value(WorkTaskBusinessStatus::InProgress),
+        )
+        .col_expr(work_task::Column::StartedAt, Expr::value(Some(now)))
+        .col_expr(
+            work_task::Column::ScheduledAt,
+            Expr::value(None::<chrono::DateTime<Utc>>),
+        )
+        .col_expr(work_task::Column::UpdatedAt, Expr::value(now))
+        .filter(work_task::Column::Id.eq(task_id))
+        .filter(work_task::Column::DeletedAt.is_null())
+        .filter(work_task::Column::ArchivedAt.is_null())
+        .filter(work_task::Column::Status.eq(WorkTaskStatus::Todo))
+        .filter(work_task::Column::TaskStatus.eq(WorkTaskBusinessStatus::Todo))
+        .filter(work_task::Column::ExecutionMode.is_null())
+        .exec(&txn)
+        .await?;
+
+    if claimed.rows_affected != 1 {
+        let existing = work_task::Entity::find_by_id(task_id).one(&txn).await?;
+        if let Some(existing) = existing.filter(|task| {
+            task.deleted_at.is_none()
+                && task.execution_mode == Some(WorkTaskExecutionMode::Session)
+                && task.conversation_id == Some(conversation_id)
+        }) {
+            txn.commit().await?;
+            return Ok(SessionTaskAssignment {
+                task: to_info(existing),
+                queue_inserted: false,
+            });
+        }
+        return Err(DbError::Validation(
+            "task is no longer an unassigned to-do card".into(),
+        ));
+    }
+
+    let session = conversation::Entity::find_by_id(conversation_id)
+        .one(&txn)
+        .await?
+        .filter(|row| {
+            row.deleted_at.is_none()
+                && row.archived_at.is_none()
+                && !row.harness_internal
+                && row.kind == conversation::ConversationKind::Regular
+        })
+        .ok_or_else(|| DbError::Validation("target Session is not assignable".into()))?;
+    let session_folder = folder::Entity::find_by_id(session.folder_id)
+        .one(&txn)
+        .await?
+        .filter(|row| row.deleted_at.is_none())
+        .ok_or_else(|| DbError::Validation("target Session folder is unavailable".into()))?;
+    let task = work_task::Entity::find_by_id(task_id)
+        .one(&txn)
+        .await?
+        .ok_or_else(|| DbError::NotFound(format!("work task {task_id}")))?;
+    if session_folder.id != task.folder_id && session_folder.parent_id != Some(task.folder_id) {
+        return Err(DbError::Validation(
+            "target Session must run in the task project or one of its worktrees".into(),
+        ));
+    }
+
+    let other = txn
+        .query_one(Statement::from_sql_and_values(
+            DbBackend::Sqlite,
+            "SELECT task_id FROM work_task_assignment \
+             WHERE conversation_id = ? AND role = 'owner' AND state IN ('assigned', 'active') \
+               AND task_id <> ? LIMIT 1",
+            vec![conversation_id.into(), task_id.into()],
+        ))
+        .await?;
+    if let Some(other) = other {
+        let other_id: i32 = other.try_get("", "task_id")?;
+        return Err(DbError::Validation(format!(
+            "target Session already owns active task #{other_id}"
+        )));
+    }
+
+    txn.execute(Statement::from_sql_and_values(
+        DbBackend::Sqlite,
+        "INSERT INTO work_task_assignment \
+         (task_id, conversation_id, role, state, assigned_by, created_at, updated_at) \
+         VALUES (?, ?, 'owner', 'assigned', ?, ?, ?)",
+        vec![
+            task_id.into(),
+            conversation_id.into(),
+            actor.into(),
+            now.into(),
+            now.into(),
+        ],
+    ))
+    .await?;
+
+    let config: WorkTaskConfig = serde_json::from_str(&task.config)
+        .map_err(|e| DbError::Validation(format!("invalid task prompt configuration: {e}")))?;
+    let queue_id = format!("task-{task_id}-assignment-{conversation_id}");
+    let queue_inserted = prompt_queue_service::enqueue_draft_in_transaction(
+        &txn,
+        &EnqueuePromptQueueItem {
+            conversation_id,
+            id: queue_id.clone(),
+            client_dedupe_id: queue_id.clone(),
+            draft: task_assignment_prompt(&task, &config)?,
+            mode_id: config.mode_id,
+            source: PromptQueueSource::Task,
+            task_id: Some(task_id),
+        },
+    )
+    .await?;
+    if !queue_inserted {
+        return Err(DbError::Validation(
+            "task assignment queue identity already exists".into(),
+        ));
+    }
+    record_event(
+        &txn,
+        task_id,
+        "session_assigned",
+        actor,
+        Some(serde_json::json!({
+            "conversation_id": conversation_id,
+            "queue_item_id": queue_id,
+        })),
+    )
+    .await?;
+    record_event(
+        &txn,
+        task_id,
+        "task_status_changed",
+        actor,
+        Some(serde_json::json!({
+            "from": "todo",
+            "to": "in_progress",
+            "execution_mode": "session",
+        })),
+    )
+    .await?;
+    txn.commit().await?;
+    Ok(SessionTaskAssignment {
+        task: to_info(task),
+        queue_inserted: true,
+    })
+}
+
+async fn active_session_task_id<C: ConnectionTrait>(
+    conn: &C,
+    conversation_id: i32,
+) -> Result<Option<i32>, DbError> {
+    let row = conn
+        .query_one(Statement::from_sql_and_values(
+            DbBackend::Sqlite,
+            "SELECT a.task_id FROM work_task_assignment a \
+             JOIN work_task t ON t.id = a.task_id \
+             WHERE a.conversation_id = ? AND a.role = 'owner' \
+               AND a.state IN ('assigned', 'active') \
+               AND t.execution_mode = 'session' AND t.deleted_at IS NULL \
+               AND t.task_status IN ('in_progress', 'blocked') \
+             ORDER BY a.id DESC LIMIT 1",
+            vec![conversation_id.into()],
+        ))
+        .await?;
+    row.map(|row| row.try_get("", "task_id").map_err(DbError::from))
+        .transpose()
+}
+
+pub async fn record_session_progress(
+    conn: &DatabaseConnection,
+    conversation_id: i32,
+    message: &str,
+) -> Result<Option<i32>, DbError> {
+    let message = message.trim();
+    if message.is_empty() {
+        return Err(DbError::Validation(
+            "task progress message is required".into(),
+        ));
+    }
+    let Some(task_id) = active_session_task_id(conn, conversation_id).await? else {
+        return Ok(None);
+    };
+    record_event(
+        conn,
+        task_id,
+        "agent_progress",
+        "agent",
+        Some(serde_json::json!({ "message": message, "conversation_id": conversation_id })),
+    )
+    .await?;
+    Ok(Some(task_id))
+}
+
+pub async fn complete_session_task(
+    conn: &DatabaseConnection,
+    conversation_id: i32,
+    verdict: &str,
+    summary: Option<&str>,
+) -> Result<Option<i32>, DbError> {
+    if !matches!(verdict, "success" | "needs_review" | "blocked") {
+        return Err(DbError::Validation(
+            "task verdict must be success, needs_review, or blocked".into(),
+        ));
+    }
+    let txn = conn.begin().await?;
+    let Some(task_id) = active_session_task_id(&txn, conversation_id).await? else {
+        txn.commit().await?;
+        return Ok(None);
+    };
+    let now = Utc::now();
+    let next = if verdict == "blocked" {
+        WorkTaskBusinessStatus::Blocked
+    } else {
+        WorkTaskBusinessStatus::Review
+    };
+    let updated = work_task::Entity::update_many()
+        .col_expr(work_task::Column::TaskStatus, Expr::value(next))
+        .col_expr(
+            work_task::Column::Verdict,
+            Expr::value(Some(verdict.to_string())),
+        )
+        .col_expr(
+            work_task::Column::ResultSummary,
+            Expr::value(
+                summary
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string),
+            ),
+        )
+        .col_expr(work_task::Column::SettledAt, Expr::value(Some(now)))
+        .col_expr(work_task::Column::UpdatedAt, Expr::value(now))
+        .filter(work_task::Column::Id.eq(task_id))
+        .filter(work_task::Column::ExecutionMode.eq(WorkTaskExecutionMode::Session))
+        .filter(work_task::Column::ConversationId.eq(conversation_id))
+        .filter(work_task::Column::TaskStatus.is_in([
+            WorkTaskBusinessStatus::InProgress,
+            WorkTaskBusinessStatus::Blocked,
+        ]))
+        .filter(work_task::Column::DeletedAt.is_null())
+        .exec(&txn)
+        .await?;
+    if updated.rows_affected != 1 {
+        return Ok(None);
+    }
+    if next == WorkTaskBusinessStatus::Review {
+        txn.execute(Statement::from_sql_and_values(
+            DbBackend::Sqlite,
+            "UPDATE work_task_assignment SET state = 'completed', completed_at = ?, updated_at = ? \
+             WHERE task_id = ? AND conversation_id = ? AND role = 'owner' \
+               AND state IN ('assigned', 'active')",
+            vec![now.into(), now.into(), task_id.into(), conversation_id.into()],
+        ))
+        .await?;
+    }
+    record_event(
+        &txn,
+        task_id,
+        "agent_complete",
+        "agent",
+        Some(serde_json::json!({
+            "verdict": verdict,
+            "summary": summary,
+            "conversation_id": conversation_id,
+        })),
+    )
+    .await?;
+    record_event(
+        &txn,
+        task_id,
+        "task_status_changed",
+        "agent",
+        Some(serde_json::json!({
+            "from": "in_progress",
+            "to": business_status_str(next),
+            "execution_mode": "session",
+        })),
+    )
+    .await?;
+    txn.commit().await?;
+    Ok(Some(task_id))
+}
+
+pub(crate) async fn mark_session_prompt_embedded(
+    txn: &DatabaseTransaction,
+    task_id: i32,
+    conversation_id: i32,
+    queue_item_id: &str,
+) -> Result<(), DbError> {
+    let changed = txn
+        .execute(Statement::from_sql_and_values(
+            DbBackend::Sqlite,
+            "UPDATE work_task_assignment SET state = 'active', updated_at = ? \
+             WHERE task_id = ? AND conversation_id = ? AND role = 'owner' AND state = 'assigned'",
+            vec![Utc::now().into(), task_id.into(), conversation_id.into()],
+        ))
+        .await?;
+    if changed.rows_affected() == 1 {
+        record_event(
+            txn,
+            task_id,
+            "session_prompt_submitted",
+            "system",
+            Some(serde_json::json!({
+                "conversation_id": conversation_id,
+                "queue_item_id": queue_item_id,
+            })),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+pub(crate) async fn mark_session_dispatch_failed(
+    txn: &DatabaseTransaction,
+    task_id: i32,
+    conversation_id: i32,
+    reason: &str,
+) -> Result<(), DbError> {
+    let now = Utc::now();
+    let changed = work_task::Entity::update_many()
+        .col_expr(
+            work_task::Column::TaskStatus,
+            Expr::value(WorkTaskBusinessStatus::Blocked),
+        )
+        .col_expr(
+            work_task::Column::FailureReason,
+            Expr::value("dispatch_error"),
+        )
+        .col_expr(work_task::Column::LastError, Expr::value(Some(reason)))
+        .col_expr(work_task::Column::SettledAt, Expr::value(Some(now)))
+        .col_expr(work_task::Column::UpdatedAt, Expr::value(now))
+        .filter(work_task::Column::Id.eq(task_id))
+        .filter(work_task::Column::ConversationId.eq(conversation_id))
+        .filter(work_task::Column::ExecutionMode.eq(WorkTaskExecutionMode::Session))
+        .filter(work_task::Column::TaskStatus.eq(WorkTaskBusinessStatus::InProgress))
+        .exec(txn)
+        .await?;
+    if changed.rows_affected == 1 {
+        record_event(
+            txn,
+            task_id,
+            "session_dispatch_failed",
+            "system",
+            Some(serde_json::json!({
+                "conversation_id": conversation_id,
+                "reason": reason,
+            })),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+pub(crate) async fn mark_session_dispatch_retry(
+    txn: &DatabaseTransaction,
+    task_id: i32,
+    conversation_id: i32,
+) -> Result<(), DbError> {
+    let now = Utc::now();
+    let changed = work_task::Entity::update_many()
+        .col_expr(
+            work_task::Column::TaskStatus,
+            Expr::value(WorkTaskBusinessStatus::InProgress),
+        )
+        .col_expr(
+            work_task::Column::FailureReason,
+            Expr::value(None::<String>),
+        )
+        .col_expr(work_task::Column::LastError, Expr::value(None::<String>))
+        .col_expr(
+            work_task::Column::SettledAt,
+            Expr::value(None::<chrono::DateTime<Utc>>),
+        )
+        .col_expr(work_task::Column::UpdatedAt, Expr::value(now))
+        .filter(work_task::Column::Id.eq(task_id))
+        .filter(work_task::Column::ConversationId.eq(conversation_id))
+        .filter(work_task::Column::ExecutionMode.eq(WorkTaskExecutionMode::Session))
+        .filter(work_task::Column::TaskStatus.eq(WorkTaskBusinessStatus::Blocked))
+        .exec(txn)
+        .await?;
+    if changed.rows_affected == 1 {
+        txn.execute(Statement::from_sql_and_values(
+            DbBackend::Sqlite,
+            "UPDATE work_task_assignment SET state = 'assigned', updated_at = ? \
+             WHERE task_id = ? AND conversation_id = ? AND role = 'owner' \
+               AND state IN ('assigned', 'active')",
+            vec![now.into(), task_id.into(), conversation_id.into()],
+        ))
+        .await?;
+        record_event(
+            txn,
+            task_id,
+            "session_dispatch_retried",
+            "user",
+            Some(serde_json::json!({ "conversation_id": conversation_id })),
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 // ── state machine (all CAS; event in the same transaction) ─────────────────
@@ -801,6 +1291,116 @@ pub async fn transition_manual_status(
             "from": business_status_str(from),
             "to": business_status_str(to),
             "execution_mode": "manual",
+        })),
+    )
+    .await?;
+    txn.commit().await?;
+    Ok(true)
+}
+
+/// User-controlled transitions for a card already owned by a persistent
+/// Session. The execution binding stays `session`; only the business axis and
+/// responsibility lease move. Returning a reviewed task to work is omitted in
+/// V1 because the Session may already own a newer card by then.
+pub async fn transition_session_status(
+    conn: &DatabaseConnection,
+    id: i32,
+    from: WorkTaskBusinessStatus,
+    to: WorkTaskBusinessStatus,
+    actor: &str,
+) -> Result<bool, DbError> {
+    use WorkTaskBusinessStatus::*;
+    if !matches!(
+        (from, to),
+        (InProgress, Blocked | Review | Done | Canceled)
+            | (Blocked, InProgress | Review | Done | Canceled)
+            | (Review, Done | Canceled)
+    ) {
+        return Err(DbError::Validation(format!(
+            "invalid Session task transition: {} -> {}",
+            business_status_str(from),
+            business_status_str(to)
+        )));
+    }
+
+    let now = Utc::now();
+    let txn = conn.begin().await?;
+    let mut update = work_task::Entity::update_many()
+        .col_expr(
+            work_task::Column::TaskStatus,
+            Expr::value(business_status_str(to)),
+        )
+        .col_expr(work_task::Column::UpdatedAt, Expr::value(now))
+        .filter(work_task::Column::Id.eq(id))
+        .filter(work_task::Column::TaskStatus.eq(from))
+        .filter(work_task::Column::ExecutionMode.eq(WorkTaskExecutionMode::Session))
+        .filter(work_task::Column::DeletedAt.is_null());
+    update = match to {
+        InProgress => update
+            .col_expr(
+                work_task::Column::SettledAt,
+                Expr::value(None::<chrono::DateTime<Utc>>),
+            )
+            .col_expr(
+                work_task::Column::FinishedAt,
+                Expr::value(None::<chrono::DateTime<Utc>>),
+            ),
+        Blocked | Review => update.col_expr(work_task::Column::SettledAt, Expr::value(Some(now))),
+        Done | Canceled => update.col_expr(work_task::Column::FinishedAt, Expr::value(Some(now))),
+        Todo => unreachable!("guarded above"),
+    };
+    let result = update.exec(&txn).await?;
+    if result.rows_affected != 1 {
+        txn.rollback().await?;
+        return Ok(false);
+    }
+
+    match to {
+        Review | Done => {
+            txn.execute(Statement::from_sql_and_values(
+                DbBackend::Sqlite,
+                "UPDATE work_task_assignment SET state = 'completed', completed_at = ?, updated_at = ? \
+                 WHERE task_id = ? AND role = 'owner' AND state IN ('assigned', 'active')",
+                vec![now.into(), now.into(), id.into()],
+            ))
+            .await?;
+        }
+        Canceled => {
+            txn.execute(Statement::from_sql_and_values(
+                DbBackend::Sqlite,
+                "UPDATE work_task_assignment SET state = 'removed', removed_at = ?, updated_at = ? \
+                 WHERE task_id = ? AND role = 'owner' AND state IN ('assigned', 'active')",
+                vec![now.into(), now.into(), id.into()],
+            ))
+            .await?;
+            txn.execute(Statement::from_sql_and_values(
+                DbBackend::Sqlite,
+                "DELETE FROM conversation_prompt_queue_item \
+                 WHERE task_id = ? AND dispatch_started_at IS NULL",
+                vec![id.into()],
+            ))
+            .await?;
+        }
+        InProgress => {
+            txn.execute(Statement::from_sql_and_values(
+                DbBackend::Sqlite,
+                "UPDATE work_task_assignment SET state = 'active', updated_at = ? \
+                 WHERE task_id = ? AND role = 'owner' AND state IN ('assigned', 'active')",
+                vec![now.into(), id.into()],
+            ))
+            .await?;
+        }
+        Blocked | Todo => {}
+    }
+    record_event(
+        &txn,
+        id,
+        "task_status_changed",
+        actor,
+        Some(serde_json::json!({
+            "from": business_status_str(from),
+            "to": business_status_str(to),
+            "execution_mode": "session",
         })),
     )
     .await?;
@@ -2558,7 +3158,8 @@ pub async fn template_delete(conn: &DatabaseConnection, id: i32) -> Result<(), D
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::test_helpers::{fresh_in_memory_db, seed_folder};
+    use crate::db::test_helpers::{fresh_in_memory_db, seed_conversation, seed_folder};
+    use crate::models::AgentType;
 
     fn draft(folder_id: i32, title: &str) -> WorkTaskDraft {
         WorkTaskDraft {
@@ -2693,6 +3294,197 @@ mod tests {
         )
         .await
         .is_err());
+    }
+
+    #[tokio::test]
+    async fn existing_session_assignment_is_atomic_and_reportable() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-session-task").await;
+        let conversation_id = seed_conversation(&db, folder_id, AgentType::ClaudeCode).await;
+        let task = create(&db.conn, draft(folder_id, "audit the result"))
+            .await
+            .unwrap();
+
+        let assigned = assign_to_session(&db.conn, task.id, conversation_id, "user")
+            .await
+            .unwrap();
+        assert!(assigned.queue_inserted);
+        assert_eq!(
+            assigned.task.execution_mode,
+            Some(WorkTaskExecutionMode::Session)
+        );
+        assert_eq!(assigned.task.conversation_id, Some(conversation_id));
+        assert_eq!(
+            assigned.task.task_status,
+            WorkTaskBusinessStatus::InProgress
+        );
+
+        let queue = prompt_queue_service::snapshot(&db.conn, conversation_id)
+            .await
+            .unwrap();
+        assert_eq!(queue.items.len(), 1);
+        assert_eq!(queue.items[0].source, PromptQueueSource::Task);
+        assert_eq!(queue.items[0].task_id, Some(task.id));
+        assert!(queue.items[0]
+            .draft
+            .as_ref()
+            .unwrap()
+            .display_text
+            .contains("audit the result"));
+        let blocks = &queue.items[0].draft.as_ref().unwrap().blocks;
+        assert_eq!(blocks.len(), 2, "task text must not be duplicated");
+        assert!(matches!(
+            &blocks[0],
+            crate::acp::types::PromptInputBlock::Text { text }
+                if text.contains("Codeg task") && !text.contains("do the thing")
+        ));
+        assert!(matches!(
+            &blocks[1],
+            crate::acp::types::PromptInputBlock::Text { text } if text == "do the thing"
+        ));
+        assert!(prompt_queue_service::edit(
+            &db.conn,
+            conversation_id,
+            &queue.items[0].id,
+            queue.items[0].draft.clone().unwrap(),
+            queue.revision,
+        )
+        .await
+        .is_err());
+        assert!(prompt_queue_service::delete(
+            &db.conn,
+            conversation_id,
+            &queue.items[0].id,
+            queue.revision,
+        )
+        .await
+        .is_err());
+
+        assert_eq!(
+            record_session_progress(&db.conn, conversation_id, "evidence collected")
+                .await
+                .unwrap(),
+            Some(task.id)
+        );
+        assert_eq!(
+            complete_session_task(
+                &db.conn,
+                conversation_id,
+                "needs_review",
+                Some("ready for a human check"),
+            )
+            .await
+            .unwrap(),
+            Some(task.id)
+        );
+        let completed = get(&db.conn, task.id).await.unwrap();
+        assert_eq!(completed.task_status, WorkTaskBusinessStatus::Review);
+        assert_eq!(completed.verdict.as_deref(), Some("needs_review"));
+        assert_eq!(
+            completed.result_summary.as_deref(),
+            Some("ready for a human check")
+        );
+        assert_eq!(
+            record_session_progress(&db.conn, conversation_id, "too late")
+                .await
+                .unwrap(),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn one_session_cannot_own_two_tasks_and_failed_assignment_rolls_back() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-session-task-one-owner").await;
+        let other_folder = seed_folder(&db, "/tmp/wt-session-task-other").await;
+        let conversation_id = seed_conversation(&db, folder_id, AgentType::Codex).await;
+        let wrong_conversation = seed_conversation(&db, other_folder, AgentType::ClaudeCode).await;
+        let first = create(&db.conn, draft(folder_id, "first")).await.unwrap();
+        let second = create(&db.conn, draft(folder_id, "second")).await.unwrap();
+
+        assign_to_session(&db.conn, first.id, conversation_id, "user")
+            .await
+            .unwrap();
+        assert!(
+            assign_to_session(&db.conn, second.id, conversation_id, "user")
+                .await
+                .is_err()
+        );
+        let untouched = get(&db.conn, second.id).await.unwrap();
+        assert_eq!(untouched.execution_mode, None);
+        assert_eq!(untouched.task_status, WorkTaskBusinessStatus::Todo);
+
+        assert!(
+            assign_to_session(&db.conn, second.id, wrong_conversation, "user")
+                .await
+                .is_err()
+        );
+        let still_untouched = get(&db.conn, second.id).await.unwrap();
+        assert_eq!(still_untouched.execution_mode, None);
+        assert_eq!(still_untouched.conversation_id, None);
+        assert!(prompt_queue_service::snapshot(&db.conn, wrong_conversation)
+            .await
+            .unwrap()
+            .items
+            .is_empty());
+    }
+
+    #[tokio::test]
+    async fn reviewed_session_task_releases_owner_for_the_next_card() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-session-review-release").await;
+        let conversation_id = seed_conversation(&db, folder_id, AgentType::Codex).await;
+        let first = create(&db.conn, draft(folder_id, "first")).await.unwrap();
+        let second = create(&db.conn, draft(folder_id, "second")).await.unwrap();
+
+        assign_to_session(&db.conn, first.id, conversation_id, "user")
+            .await
+            .unwrap();
+        assert!(transition_session_status(
+            &db.conn,
+            first.id,
+            WorkTaskBusinessStatus::InProgress,
+            WorkTaskBusinessStatus::Review,
+            "user",
+        )
+        .await
+        .unwrap());
+        assert_eq!(
+            get(&db.conn, first.id).await.unwrap().task_status,
+            WorkTaskBusinessStatus::Review
+        );
+
+        let assigned = assign_to_session(&db.conn, second.id, conversation_id, "user")
+            .await
+            .unwrap();
+        assert!(assigned.queue_inserted);
+        assert_eq!(assigned.task.conversation_id, Some(conversation_id));
+    }
+
+    #[tokio::test]
+    async fn deleting_session_task_retracts_unsent_brief_and_releases_owner() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-session-delete-release").await;
+        let conversation_id = seed_conversation(&db, folder_id, AgentType::ClaudeCode).await;
+        let first = create(&db.conn, draft(folder_id, "first")).await.unwrap();
+        let second = create(&db.conn, draft(folder_id, "second")).await.unwrap();
+
+        assign_to_session(&db.conn, first.id, conversation_id, "user")
+            .await
+            .unwrap();
+        assert!(soft_delete(&db.conn, first.id, WorkTaskStatus::Todo)
+            .await
+            .unwrap());
+        assert!(prompt_queue_service::snapshot(&db.conn, conversation_id)
+            .await
+            .unwrap()
+            .items
+            .is_empty());
+
+        let assigned = assign_to_session(&db.conn, second.id, conversation_id, "user")
+            .await
+            .unwrap();
+        assert!(assigned.queue_inserted);
     }
 
     #[tokio::test]

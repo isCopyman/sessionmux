@@ -2972,7 +2972,8 @@
         "sourceCollaboration": "メール",
         "sourceReminder": "リマインダー",
         "sourceAutomation": "自動化",
-        "sourceTimer": "タイマー"
+        "sourceTimer": "タイマー",
+        "sourceTask": "タスク"
       },
       "welcomeInputPanel": {
         "agentsSettingsPath": "設定 > エージェント",
@@ -4762,6 +4763,15 @@
     "filesChanged": "{count} ファイル",
     "actionStart": "開始",
     "actionRunWithAgent": "Run with Agent",
+    "actionAssignSession": "既存セッションに割り当て",
+    "assignSessionTitle": "既存セッションに割り当て",
+    "assignSessionDescription": "「{title}」をこのプロジェクトの永続セッションに送信します。",
+    "assignSessionField": "対象セッション",
+    "assignSessionPlaceholder": "セッションを選択",
+    "assignSessionSearch": "セッションを検索…",
+    "assignSessionEmpty": "割り当て可能なセッションがありません",
+    "assignSessionSubmit": "割り当てて送信",
+    "assignSessionSubmitting": "割り当て中…",
     "actionMarkBlocked": "Mark blocked",
     "actionResume": "Resume",
     "actionSchedule": "予約実行",

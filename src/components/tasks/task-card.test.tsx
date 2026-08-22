@@ -56,6 +56,7 @@ function renderCard(
     onOpen: noop,
     onManualStatus: noop,
     onStart: noop,
+    onAssignSession: noop,
     onCancel: noop,
     onSubmitReview: noop,
     onRetry: noop,
@@ -151,6 +152,25 @@ describe("TaskCard review primary", () => {
 })
 
 describe("TaskCard running submit-for-review", () => {
+  it("renders persistent Session cards from business status, not legacy engine status", () => {
+    renderCard(
+      task({
+        status: "todo",
+        task_status: "in_progress",
+        execution_mode: "session",
+        conversation_id: 3,
+        connection_id: null,
+        files_changed: null,
+      })
+    )
+    expect(screen.getByText("Running")).toBeInTheDocument()
+    expect(screen.queryByText("To do")).toBeNull()
+    expect(
+      screen.getByRole("button", { name: "View session" })
+    ).toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: "Run with Agent" })).toBeNull()
+  })
+
   it("offers submit-for-review on a running card with a live connection", async () => {
     const onSubmitReview = vi.fn()
     renderCard(

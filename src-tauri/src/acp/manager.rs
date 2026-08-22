@@ -4797,6 +4797,7 @@ mod tests {
                 },
                 mode_id: None,
                 source: crate::models::PromptQueueSource::User,
+                task_id: None,
             },
         )
         .await
@@ -7066,6 +7067,7 @@ mod tests {
                 },
                 mode_id: None,
                 source: crate::models::PromptQueueSource::User,
+                task_id: None,
             },
         )
         .await

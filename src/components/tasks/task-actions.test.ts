@@ -44,6 +44,7 @@ function handlers(): TaskActionHandlers {
   return {
     onManualStatus: vi.fn(),
     onStart: vi.fn(),
+    onAssignSession: vi.fn(),
     onCancel: vi.fn(),
     onSubmitReview: vi.fn(),
     onRetry: vi.fn(),
@@ -113,6 +114,11 @@ describe("buildTaskActions manual workflow", () => {
     )
     agent?.onClick()
     expect(h.onStart).toHaveBeenCalledTimes(1)
+    const existing = secondaries.find(
+      (action) => action.label === "actionAssignSession"
+    )
+    existing?.onClick()
+    expect(h.onAssignSession).toHaveBeenCalledTimes(1)
   })
 
   it("never offers engine merge controls for a manual review", () => {
@@ -124,6 +130,48 @@ describe("buildTaskActions manual workflow", () => {
         execution_mode: "manual",
         conversation_id: null,
         connection_id: null,
+      }),
+      (key) => key,
+      h
+    )
+    expect(primary?.label).toBe("actionComplete")
+    expect(secondaries.some((action) => action.label === "actionMerge")).toBe(
+      false
+    )
+    primary?.onClick()
+    expect(h.onManualStatus).toHaveBeenCalledWith("done")
+  })
+})
+
+describe("buildTaskActions persistent Session workflow", () => {
+  it("opens the owning Session and never offers another engine run", () => {
+    const h = handlers()
+    const { primary, secondaries } = buildTaskActions(
+      task({
+        status: "todo",
+        task_status: "in_progress",
+        execution_mode: "session",
+      }),
+      (key) => key,
+      h
+    )
+    expect(primary?.label).toBe("actionViewSession")
+    expect(
+      secondaries.some((action) => action.label === "actionRunWithAgent")
+    ).toBe(false)
+    secondaries
+      .find((action) => action.label === "actionSubmitReview")
+      ?.onClick()
+    expect(h.onManualStatus).toHaveBeenCalledWith("review")
+  })
+
+  it("completes a reviewed Session task without engine merge controls", () => {
+    const h = handlers()
+    const { primary, secondaries } = buildTaskActions(
+      task({
+        status: "todo",
+        task_status: "review",
+        execution_mode: "session",
       }),
       (key) => key,
       h

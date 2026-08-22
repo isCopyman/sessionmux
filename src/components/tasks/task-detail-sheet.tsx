@@ -159,6 +159,8 @@ interface TaskDetailSheetProps {
   onEdit: (task: WorkTask) => void
   /** Opens the page-owned schedule dialog (to-do tasks only). */
   onSchedule: (task: WorkTask) => void
+  /** Opens the page-owned existing-Session assignment dialog. */
+  onAssignSession: (task: WorkTask) => void
 }
 
 /** One button of the sheet's action panel (see below). */
@@ -193,6 +195,7 @@ export function TaskDetailSheet({
   onCancel,
   onEdit,
   onSchedule,
+  onAssignSession,
 }: TaskDetailSheetProps) {
   const t = useTranslations("Tasks")
   // The upload-in-flight toast is the conversation composer's own message —
@@ -374,11 +377,10 @@ export function TaskDetailSheet({
   const archived = task.archived_at != null
 
   const canEdit =
-    ((task.execution_mode === null || task.execution_mode === "manual") &&
-      task.task_status !== "done" &&
-      task.task_status !== "canceled") ||
-    task.status === "todo" ||
-    task.status === "failed"
+    task.execution_mode === null || task.execution_mode === "manual"
+      ? task.task_status !== "done" && task.task_status !== "canceled"
+      : task.execution_mode === "engine" &&
+        (task.status === "todo" || task.status === "failed")
 
   // The next-step panel's buttons — ONE list for every status, review
   // included, so the panel never changes shape from one status to the next.
@@ -386,13 +388,15 @@ export function TaskDetailSheet({
   // that advances the task's state. "查看会话" and "编辑" don't advance
   // anything, so they sit in the bottom bar instead.
   const zoneActions: ZoneAction[] = []
-  const manualWorkflow =
-    task.execution_mode === null || task.execution_mode === "manual"
-  const isReview = !manualWorkflow && task.status === "review" && !archived
+  const businessWorkflow = task.execution_mode !== "engine"
+  const isReview =
+    task.execution_mode === "engine" && task.status === "review" && !archived
   /** Accepted already, waiting for the project's one merge slot. */
   const mergeQueued = isReview && isMergeQueued(task)
   const isRestart =
-    !archived && (task.status === "failed" || task.status === "canceled")
+    task.execution_mode === "engine" &&
+    !archived &&
+    (task.status === "failed" || task.status === "canceled")
   // A note for a restart (failed / canceled): both stopped for a reason the
   // user usually knows and the agent doesn't. The restart button itself opens
   // the box and the box sends — the same shape as "follow up", instead of a
@@ -410,11 +414,12 @@ export function TaskDetailSheet({
   /** Images / pasted bytes attached to the open box, as their own blocks. */
   const composerBlocks = (): PromptInputBlock[] =>
     composerOpen ? (composerRef.current?.getAttachmentBlocks() ?? []) : []
-  if (manualWorkflow) {
+  if (businessWorkflow) {
     const actions = buildTaskActions(task, t, {
       onManualStatus: (to) =>
         run(() => workTaskSetManualStatus(task.id, task.task_status, to)),
       onStart: () => run(() => workTaskStart(task.id)),
+      onAssignSession: () => onAssignSession(task),
       onCancel: () => onCancel(task),
       onSubmitReview: () => run(() => workTaskRequestReview(task.id)),
       onRetry: () => {},

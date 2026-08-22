@@ -4,18 +4,10 @@ import { useEffect, useMemo, useRef, useState } from "react"
 import { useTranslations } from "next-intl"
 import { BookmarkPlus, LayoutTemplate, Trash2 } from "lucide-react"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
-import { AgentSelector } from "@/components/chat/agent-selector"
 import {
   TaskMessageComposer,
   type TaskMessageComposerHandle,
 } from "./task-message-composer"
-import {
-  AgentConfigSection,
-  effectiveSelections,
-  snapshotLabels,
-} from "@/components/automations/agent-config-section"
-import { useAgentOptions } from "@/components/automations/use-agent-options"
-import { getAgentLabel } from "@/lib/custom-agents"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -31,13 +23,11 @@ import {
 import { FolderSelect } from "@/components/shared/folder-select"
 import { useScrollbarSafeDismiss } from "@/hooks/use-scrollbar-safe-dismiss"
 import {
-  workTaskSettingsEffective,
   workTaskTemplateDelete,
   workTaskTemplateList,
   workTaskTemplateSave,
 } from "@/lib/api"
 import type {
-  AgentType,
   WorkTask,
   WorkTaskConfig,
   WorkTaskDraft,
@@ -57,12 +47,11 @@ interface TaskEditorDialogProps {
 }
 
 /**
- * Create/edit a task, laid out like the automation editor: borderless title,
- * the agent pill above the real conversation composer (rich text +
- * @-mentions) with the ACP-probed mode/model bar inside the box, and a Target
- * section for the folder. The agent controls prefill from the folder's
- * EFFECTIVE task settings; untouched they keep inheriting (nothing is frozen
- * into the task), and only an explicit change is saved as a per-task override.
+ * Create/edit the task card itself: title, brief, attachments and project.
+ * Execution is deliberately absent. A new card is unassigned; choosing an
+ * existing Session or creating a new (possibly worktree) Session is a separate
+ * action after save. This keeps task identity independent from ACP lifecycle and
+ * prevents this dialog from becoming a third Session/profile configuration UI.
  */
 export function TaskEditorDialog({
   open,
@@ -123,19 +112,6 @@ function TaskEditorBody({
   const [folderId, setFolderId] = useState<number | null>(
     task?.folder_id ?? defaultFolderId ?? projectFolders[0]?.id ?? null
   )
-  // `agentDirty` = the user explicitly chose agent/mode/config for THIS task.
-  // While clean, the controls display the folder's effective task settings and
-  // the draft keeps inheriting (agent_type null) — nothing is frozen.
-  const [agentDirty, setAgentDirty] = useState(task?.config?.agent_type != null)
-  const [agentType, setAgentType] = useState<AgentType>(
-    task?.config?.agent_type ?? "claude_code"
-  )
-  const [modeId, setModeId] = useState<string | null>(
-    task?.config?.mode_id ?? null
-  )
-  const [configValues, setConfigValues] = useState<Record<string, string>>(
-    task?.config?.config_values ?? {}
-  )
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
 
@@ -172,42 +148,16 @@ function TaskEditorBody({
     }
   }, [])
 
-  const folderDefaultAgent = useMemo(
-    () => folders.find((f) => f.id === folderId)?.default_agent_type ?? null,
-    [folders, folderId]
-  )
-
-  // Prefill the agent controls from the folder's effective settings while the
-  // user hasn't touched them; follows folder switches and template resets
-  // (the effect re-runs when `agentDirty` flips back to false).
-  useEffect(() => {
-    if (agentDirty || folderId == null) return
-    let cancelled = false
-    workTaskSettingsEffective(folderId)
-      .then((s) => {
-        if (cancelled) return
-        setAgentType(
-          s.default_agent_type ?? folderDefaultAgent ?? "claude_code"
-        )
-        setModeId(s.mode_id ?? null)
-        setConfigValues(s.config_values ?? {})
-      })
-      .catch(() => {})
-    return () => {
-      cancelled = true
-    }
-  }, [agentDirty, folderId, folderDefaultAgent])
-
   const folderPath = useMemo(
     () => folders.find((f) => f.id === folderId)?.path ?? null,
     [folders, folderId]
   )
 
-  const agentOptions = useAgentOptions(agentType, folderPath, true)
-
-  // The captured composer + agent state as a `WorkTaskConfig` — the shared
-  // payload of both the task draft and a saved template.
-  const buildConfig = async (): Promise<WorkTaskConfig> => {
+  // A task template is a content blueprint, not a hidden Agent launch preset.
+  // When editing a legacy engine-owned task, preserve its existing execution
+  // snapshot verbatim; a content edit must not silently retune a live/history
+  // Session. New cards always remain neutral until an explicit assignment.
+  const buildConfig = (preserveLegacyExecution: boolean): WorkTaskConfig => {
     const displayText = (composerRef.current?.getText() ?? prompt).trim()
     const hasAttachments = composerRef.current?.hasAttachments() ?? false
     // Prose + inline references + attached images, exactly as a chat send
@@ -218,31 +168,14 @@ function TaskEditorBody({
         : (composerRef.current?.getPromptBlocks() ?? [
             { type: "text", text: displayText },
           ])
-    if (!agentDirty) {
-      return {
-        prompt_blocks: blocks,
-        display_text: displayText,
-        agent_type: null,
-        mode_id: null,
-        config_values: {},
-      }
-    }
-    const snapshot = await agentOptions.ensure()
-    const { mode_id, config_values } = effectiveSelections(
-      snapshot,
-      modeId,
-      configValues
-    )
+    const previous = preserveLegacyExecution ? task?.config : null
     return {
       prompt_blocks: blocks,
       display_text: displayText,
-      agent_type: agentType,
-      mode_id,
-      config_values,
-      label_snapshot: {
-        agent_label: getAgentLabel(agentType) ?? agentType,
-        ...snapshotLabels(snapshot, mode_id, config_values),
-      },
+      agent_type: previous?.agent_type ?? null,
+      mode_id: previous?.mode_id ?? null,
+      config_values: previous?.config_values ?? {},
+      label_snapshot: previous?.label_snapshot ?? null,
     }
   }
 
@@ -261,7 +194,7 @@ function TaskEditorBody({
       const draft: WorkTaskDraft = {
         folder_id: folderId,
         title: title.trim(),
-        config: await buildConfig(),
+        config: buildConfig(true),
       }
       await onSubmit(draft)
     } catch (e) {
@@ -281,15 +214,6 @@ function TaskEditorBody({
       text,
       blocks: cfg?.prompt_blocks ?? null,
     }))
-    if (cfg?.agent_type != null) {
-      setAgentDirty(true)
-      setAgentType(cfg.agent_type)
-      setModeId(cfg.mode_id ?? null)
-      setConfigValues(cfg.config_values ?? {})
-    } else {
-      // Back to inheriting — the prefill effect reseeds from settings.
-      setAgentDirty(false)
-    }
     setTemplatesOpen(false)
   }
 
@@ -313,7 +237,7 @@ function TaskEditorBody({
       await workTaskTemplateSave({
         name: title.trim(),
         title: title.trim(),
-        config: await buildConfig(),
+        config: buildConfig(false),
       })
       setTemplates(await workTaskTemplateList())
     } catch (e) {
@@ -349,44 +273,12 @@ function TaskEditorBody({
           className="w-full bg-transparent text-lg font-semibold tracking-tight outline-none placeholder:font-normal placeholder:text-muted-foreground/50"
         />
 
-        {/* Agent pill above the composer, as in the automation editor. While
-            untouched it mirrors the folder's effective task settings. */}
-        <div className="flex flex-wrap items-center gap-2">
-          <AgentSelector
-            defaultAgentType={agentType}
-            onSelect={(a) => {
-              setAgentDirty(true)
-              setAgentType(a)
-              setModeId(null)
-              setConfigValues({})
-            }}
-            // A system substitution (agent unavailable) must not count as a
-            // user override choice.
-            onFallback={setAgentType}
-          />
-          {agentDirty ? (
-            <button
-              type="button"
-              onClick={() => setAgentDirty(false)}
-              className="text-xs text-muted-foreground underline-offset-2 transition-colors hover:text-foreground hover:underline"
-            >
-              {t("agentOverrideReset")}
-            </button>
-          ) : (
-            <span className="text-xs text-muted-foreground">
-              {t("agentInheritedHint")}
-            </span>
-          )}
-        </div>
-
-        {/* The conversation composer, whole: `@` references, `/` commands, the
-            "+" shortcuts menu and image attachments, with the ACP-probed
-            mode/model bar sharing its bottom row. Keyed by the template seed —
-            applying a blueprint replaces the draft, attachments included. */}
+        {/* Content composer only. It keeps references and attachments, but an
+            unassigned card must not probe or choose an arbitrary harness. */}
         <TaskMessageComposer
           key={composerSeed.key}
           ref={composerRef}
-          agentType={agentType}
+          agentType={null}
           folderPath={folderPath}
           defaultText={composerSeed.text}
           defaultBlocks={composerSeed.blocks}
@@ -395,30 +287,6 @@ function TaskEditorBody({
           onChange={setPrompt}
           onAttachmentsChange={setAttachmentCount}
           editorClassName="max-h-[14rem] min-h-[6rem]"
-          bottomBarExtra={
-            <AgentConfigSection
-              snapshot={agentOptions.snapshot}
-              loading={agentOptions.loading}
-              error={agentOptions.error}
-              onReload={agentOptions.reload}
-              modeId={modeId}
-              configValues={configValues}
-              layout="inline"
-              onModeChange={(m) => {
-                setAgentDirty(true)
-                setModeId(m)
-              }}
-              onConfigChange={(optionId, valueId) => {
-                setAgentDirty(true)
-                setConfigValues((prev) => {
-                  const next = { ...prev }
-                  if (valueId === null) delete next[optionId]
-                  else next[optionId] = valueId
-                  return next
-                })
-              }}
-            />
-          }
         />
 
         {/* Target — which project board the task lives on. */}

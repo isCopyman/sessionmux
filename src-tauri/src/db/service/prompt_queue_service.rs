@@ -21,11 +21,13 @@ const MAX_QUEUE_ITEMS: usize = 1_000;
 /// and claim must share.
 const CLASS_ORDER_SQL: &str = "CASE source \
      WHEN 'user' THEN 0 WHEN 'collaboration' THEN 1 WHEN 'reminder' THEN 1 \
-     WHEN 'automation' THEN 1 ELSE 2 END ASC, position ASC, created_at ASC, id ASC";
+     WHEN 'automation' THEN 1 WHEN 'task' THEN 1 \
+     ELSE 2 END ASC, position ASC, created_at ASC, id ASC";
 /// Same ordering with the `q.` alias for queries that join other tables.
 const CLASS_ORDER_SQL_Q: &str = "CASE q.source \
      WHEN 'user' THEN 0 WHEN 'collaboration' THEN 1 WHEN 'reminder' THEN 1 \
-     WHEN 'automation' THEN 1 ELSE 2 END ASC, q.position ASC, q.created_at ASC, q.id ASC";
+     WHEN 'automation' THEN 1 WHEN 'task' THEN 1 \
+     ELSE 2 END ASC, q.position ASC, q.created_at ASC, q.id ASC";
 /// Idle flush and busy steer both merge consecutive collaboration origins
 /// into one prompt. Buzz's FlushBatch: one round, several envelopes.
 const MAX_COLLABORATION_FLUSH_BATCH: usize = 16;
@@ -92,6 +94,7 @@ fn parse_item(row: &QueryResult) -> Result<PromptQueueItem, DbError> {
         position: row.try_get("", "position")?,
         draft,
         origin_event_id: row.try_get("", "origin_event_id")?,
+        task_id: row.try_get("", "task_id")?,
         mode_id: row.try_get("", "mode_id")?,
         state,
         source,
@@ -204,7 +207,7 @@ async fn snapshot_on<C: ConnectionTrait>(
     let rows = conn
         .query_all(statement(
             &format!(
-                "SELECT id, conversation_id, position, draft_json, origin_event_id, mode_id, \
+                "SELECT id, conversation_id, position, draft_json, origin_event_id, task_id, mode_id, \
                         state, source, client_dedupe_id, attempts, paused_reason, \
                         created_at, updated_at \
                  FROM conversation_prompt_queue_item WHERE conversation_id = ? \
@@ -359,15 +362,28 @@ pub async fn enqueue(
     conn: &DatabaseConnection,
     input: EnqueuePromptQueueItem,
 ) -> Result<PromptQueueSnapshot, DbError> {
+    let txn = conn.begin().await?;
+    enqueue_draft_in_transaction(&txn, &input).await?;
+    txn.commit().await?;
+    snapshot_on(conn, input.conversation_id).await
+}
+
+/// Insert a concrete prompt draft while a caller-owned transaction is open.
+/// Task assignment uses this so the responsibility record, task projection,
+/// and first Session brief either all commit or none do. The ordinary enqueue
+/// command delegates here as well; there is still only one queue admission
+/// implementation and one revision source.
+pub(crate) async fn enqueue_draft_in_transaction(
+    txn: &DatabaseTransaction,
+    input: &EnqueuePromptQueueItem,
+) -> Result<bool, DbError> {
     validate_id("Queue item id", &input.id)?;
     validate_id("Queue dedupe id", &input.client_dedupe_id)?;
     validate_draft(&input.draft)?;
-    ensure_conversation(conn, input.conversation_id).await?;
+    ensure_conversation(txn, input.conversation_id).await?;
     let draft_json = serde_json::to_string(&input.draft)
         .map_err(|err| validation(format!("Could not serialize queued prompt: {err}")))?;
-
-    let txn = conn.begin().await?;
-    ensure_state(&txn, input.conversation_id).await?;
+    ensure_state(txn, input.conversation_id).await?;
 
     // A client may retry after losing the response. The dedupe key makes that
     // retry a read, not a second queued prompt and not a revision bump.
@@ -382,8 +398,7 @@ pub async fn enqueue(
         ))
         .await?;
     if duplicate.is_some() {
-        txn.commit().await?;
-        return snapshot_on(conn, input.conversation_id).await;
+        return Ok(false);
     }
 
     let count: i64 = txn
@@ -415,22 +430,23 @@ pub async fn enqueue(
         .try_get("", "next_position")?;
     txn.execute(statement(
         "INSERT INTO conversation_prompt_queue_item \
-         (id, conversation_id, position, draft_json, origin_event_id, mode_id, state, \
+         (id, conversation_id, position, draft_json, origin_event_id, task_id, mode_id, state, \
           source, client_dedupe_id, attempts, created_at, updated_at) \
-         VALUES (?, ?, ?, ?, NULL, ?, 'queued', ?, ?, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+         VALUES (?, ?, ?, ?, NULL, ?, ?, 'queued', ?, ?, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
         vec![
-            input.id.into(),
+            input.id.clone().into(),
             input.conversation_id.into(),
             position.into(),
             draft_json.into(),
-            input.mode_id.into(),
+            input.task_id.into(),
+            input.mode_id.clone().into(),
             input.source.as_str().into(),
-            input.client_dedupe_id.into(),
+            input.client_dedupe_id.clone().into(),
         ],
     ))
     .await?;
     if input.source == PromptQueueSource::User {
-        let (_, paused_reason) = state_row(&txn, input.conversation_id).await?;
+        let (_, paused_reason) = state_row(txn, input.conversation_id).await?;
         if paused_reason.as_deref().is_some_and(user_send_clears_pause) {
             txn.execute(statement(
                 "UPDATE conversation_prompt_queue_state \
@@ -441,8 +457,7 @@ pub async fn enqueue(
             .await?;
         }
     }
-    txn.commit().await?;
-    snapshot_on(conn, input.conversation_id).await
+    Ok(true)
 }
 
 /// Materialize one cross-Session delivery into the same durable FIFO used by
@@ -542,13 +557,13 @@ pub async fn edit(
             "UPDATE conversation_prompt_queue_item \
              SET draft_json = ?, updated_at = CURRENT_TIMESTAMP \
              WHERE id = ? AND conversation_id = ? AND state <> 'claimed' \
-               AND draft_json IS NOT NULL",
+               AND draft_json IS NOT NULL AND task_id IS NULL",
             vec![draft_json.into(), id.into(), conversation_id.into()],
         ))
         .await?;
     if result.rows_affected() != 1 {
         return Err(validation(
-            "Queued prompt is missing or currently being dispatched",
+            "Queued prompt is missing, host-owned, or currently being dispatched",
         ));
     }
     bump_revision(&txn, conversation_id).await?;
@@ -569,13 +584,13 @@ pub async fn delete(
         .execute(statement(
             "DELETE FROM conversation_prompt_queue_item \
              WHERE id = ? AND conversation_id = ? AND state <> 'claimed' \
-               AND draft_json IS NOT NULL",
+               AND draft_json IS NOT NULL AND task_id IS NULL",
             vec![id.into(), conversation_id.into()],
         ))
         .await?;
     if result.rows_affected() != 1 {
         return Err(validation(
-            "Queued prompt is missing or currently being dispatched",
+            "Queued prompt is missing, host-owned, or currently being dispatched",
         ));
     }
     bump_revision(&txn, conversation_id).await?;
@@ -754,7 +769,7 @@ pub async fn retry_item(
     verify_revision(&txn, conversation_id, expected_revision).await?;
     let row = txn
         .query_one(statement(
-            "SELECT origin_event_id, paused_reason \
+            "SELECT origin_event_id, task_id, paused_reason \
              FROM conversation_prompt_queue_item \
              WHERE id = ? AND conversation_id = ? AND state = 'paused'",
             vec![id.into(), conversation_id.into()],
@@ -764,6 +779,7 @@ pub async fn retry_item(
         return Err(validation("Queued prompt is not paused"));
     };
     let origin_event_id: Option<String> = row.try_get("", "origin_event_id")?;
+    let task_id: Option<i32> = row.try_get("", "task_id")?;
     let paused_reason: Option<String> = row.try_get("", "paused_reason")?;
     let (next_id, next_dedupe_id) = if let Some(event_id) = origin_event_id.as_deref() {
         let allow_queued = paused_reason.as_deref()
@@ -808,6 +824,14 @@ pub async fn retry_item(
         vec![conversation_id.into()],
     ))
     .await?;
+    if let Some(task_id) = task_id {
+        crate::db::service::work_task_service::mark_session_dispatch_retry(
+            &txn,
+            task_id,
+            conversation_id,
+        )
+        .await?;
+    }
     bump_revision(&txn, conversation_id).await?;
     txn.commit().await?;
     snapshot_on(conn, conversation_id).await
@@ -931,7 +955,7 @@ async fn claim_queue_row(
                  dispatch_started_at = NULL, attempts = attempts + 1, \
                  updated_at = CURRENT_TIMESTAMP \
              WHERE id = ({id_selector}) AND conversation_id = ? AND state = 'queued' \
-             RETURNING id, conversation_id, draft_json, origin_event_id, mode_id"
+             RETURNING id, conversation_id, draft_json, origin_event_id, task_id, mode_id"
         ),
         values,
     ))
@@ -1101,6 +1125,7 @@ async fn claim_by_selector(
         conversation_id,
         draft,
         origin_event_id,
+        task_id: row.try_get("", "task_id")?,
         delivery_hint,
         mode_id: row.try_get("", "mode_id")?,
         claimed_by: worker_id.to_string(),
@@ -1253,6 +1278,15 @@ pub(crate) async fn accept_claim(
         )
         .await?;
     }
+    if let Some(task_id) = item.task_id {
+        crate::db::service::work_task_service::mark_session_prompt_embedded(
+            &txn,
+            task_id,
+            item.conversation_id,
+            &item.id,
+        )
+        .await?;
+    }
     bump_revision(&txn, item.conversation_id).await?;
     txn.commit().await?;
     snapshot_on(conn, item.conversation_id).await
@@ -1351,6 +1385,15 @@ pub(crate) async fn pause_dispatch_unknown(
             )
             .await?;
         }
+        if let Some(task_id) = item.task_id {
+            crate::db::service::work_task_service::mark_session_dispatch_failed(
+                &txn,
+                task_id,
+                item.conversation_id,
+                UNKNOWN_DISPATCH_REASON,
+            )
+            .await?;
+        }
         txn.execute(statement(
             "UPDATE conversation_prompt_queue_state \
              SET paused_reason = ?, updated_at = CURRENT_TIMESTAMP WHERE conversation_id = ?",
@@ -1406,6 +1449,15 @@ pub(crate) async fn fail_claim(
         )
         .await?;
     }
+    if let Some(task_id) = item.task_id {
+        crate::db::service::work_task_service::mark_session_dispatch_failed(
+            &txn,
+            task_id,
+            item.conversation_id,
+            reason,
+        )
+        .await?;
+    }
     txn.execute(statement(
         "UPDATE conversation_prompt_queue_state \
          SET paused_reason = ?, updated_at = CURRENT_TIMESTAMP WHERE conversation_id = ?",
@@ -1448,6 +1500,18 @@ pub(crate) async fn recover_expired_claims(
             .into_iter()
             .map(|row| row.try_get::<String>("", "origin_event_id"))
             .collect::<Result<Vec<_>, _>>()?;
+        let uncertain_tasks = txn
+            .query_all(statement(
+                "SELECT DISTINCT task_id FROM conversation_prompt_queue_item \
+                 WHERE conversation_id = ? AND state = 'claimed' \
+                   AND claim_expires_at <= ? AND dispatch_started_at IS NOT NULL \
+                   AND task_id IS NOT NULL",
+                vec![conversation_id.into(), now.into()],
+            ))
+            .await?
+            .into_iter()
+            .map(|row| row.try_get::<i32>("", "task_id"))
+            .collect::<Result<Vec<_>, _>>()?;
         let safe_to_retry = txn
             .execute(statement(
                 "UPDATE conversation_prompt_queue_item \
@@ -1484,6 +1548,15 @@ pub(crate) async fn recover_expired_claims(
                 &txn,
                 conversation_id,
                 event_id,
+                UNKNOWN_DISPATCH_REASON,
+            )
+            .await?;
+        }
+        for task_id in uncertain_tasks {
+            crate::db::service::work_task_service::mark_session_dispatch_failed(
+                &txn,
+                task_id,
+                conversation_id,
                 UNKNOWN_DISPATCH_REASON,
             )
             .await?;
@@ -1645,6 +1718,7 @@ mod tests {
             draft: draft(text),
             mode_id: None,
             source: PromptQueueSource::User,
+            task_id: None,
         }
     }
 

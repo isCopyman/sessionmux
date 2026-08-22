@@ -41,6 +41,7 @@ const SOURCE_LABEL_KEY = {
   collaboration: "sourceCollaboration",
   reminder: "sourceReminder",
   automation: "sourceAutomation",
+  task: "sourceTask",
   timer: "sourceTimer",
 } as const
 
@@ -56,6 +57,7 @@ function QueueItem({
   const dragControls = useDragControls()
   const isClaimed = item.state === "claimed"
   const isPaused = item.state === "paused"
+  const isHostOwned = item.taskId != null
 
   const startDrag = useCallback(
     (event: PointerEvent<HTMLButtonElement>) => {
@@ -120,24 +122,28 @@ function QueueItem({
           <RotateCcw className="h-2.5 w-2.5" />
         </button>
       ) : null}
-      <button
-        type="button"
-        onClick={() => onEdit(item.id)}
-        className="shrink-0 rounded-sm p-0.5 hover:bg-muted-foreground/15 text-muted-foreground"
-        title={t("editItem")}
-        disabled={isClaimed}
-      >
-        <Pencil className="h-2.5 w-2.5" />
-      </button>
-      <button
-        type="button"
-        onClick={() => onDelete(item.id)}
-        className="shrink-0 rounded-sm p-0.5 hover:bg-muted-foreground/15 text-muted-foreground"
-        title={t("deleteItem")}
-        disabled={isClaimed}
-      >
-        <X className="h-2.5 w-2.5" />
-      </button>
+      {!isHostOwned ? (
+        <>
+          <button
+            type="button"
+            onClick={() => onEdit(item.id)}
+            className="shrink-0 rounded-sm p-0.5 hover:bg-muted-foreground/15 text-muted-foreground"
+            title={t("editItem")}
+            disabled={isClaimed}
+          >
+            <Pencil className="h-2.5 w-2.5" />
+          </button>
+          <button
+            type="button"
+            onClick={() => onDelete(item.id)}
+            className="shrink-0 rounded-sm p-0.5 hover:bg-muted-foreground/15 text-muted-foreground"
+            title={t("deleteItem")}
+            disabled={isClaimed}
+          >
+            <X className="h-2.5 w-2.5" />
+          </button>
+        </>
+      ) : null}
     </Reorder.Item>
   )
 }

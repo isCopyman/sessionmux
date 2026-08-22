@@ -3671,6 +3671,16 @@ export async function workTaskCreate(draft: WorkTaskDraft): Promise<WorkTask> {
   })
 }
 
+export async function workTaskAssignSession(
+  id: number,
+  conversationId: number
+): Promise<WorkTask> {
+  return getTransport().call("work_task_assign_session", {
+    id,
+    conversationId,
+  })
+}
+
 /** {@link stripUploadedTaskBlocks} over a whole task config. */
 function stripUploadedTaskConfig(config: WorkTaskConfig): WorkTaskConfig {
   return {

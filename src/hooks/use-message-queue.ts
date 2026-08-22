@@ -23,6 +23,7 @@ import { randomUUID } from "@/lib/utils"
 export interface QueuedMessage {
   id: string
   draft: PromptDraft
+  taskId: number | null
   modeId: string | null
   state: "queued" | "claimed" | "paused"
   source: PromptQueueSource
@@ -56,6 +57,7 @@ function fromWire(item: PromptQueueItem): QueuedMessage | null {
   return {
     id: item.id,
     draft: item.draft,
+    taskId: item.taskId ?? null,
     modeId: item.modeId ?? null,
     state: item.state,
     // A dev-mode HMR frontend can outlive the backend it talks to; snapshots
@@ -218,6 +220,7 @@ export function useMessageQueue(
       const item: QueuedMessage = {
         id: randomUUID(),
         draft,
+        taskId: null,
         modeId,
         state: "queued",
         source: "user",

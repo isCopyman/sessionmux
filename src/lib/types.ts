@@ -1234,6 +1234,7 @@ export type PromptQueueSource =
   | "collaboration"
   | "reminder"
   | "automation"
+  | "task"
   | "timer"
 
 export interface PromptQueueItem {
@@ -1242,6 +1243,7 @@ export interface PromptQueueItem {
   position: number
   draft?: PromptDraft | null
   originEventId?: string | null
+  taskId?: number | null
   modeId?: string | null
   state: PromptQueueItemState
   source: PromptQueueSource

@@ -2972,7 +2972,8 @@
         "sourceCollaboration": "رسالة",
         "sourceReminder": "تذكير",
         "sourceAutomation": "الأتمتة",
-        "sourceTimer": "مؤقت"
+        "sourceTimer": "مؤقت",
+        "sourceTask": "مهمة"
       },
       "welcomeInputPanel": {
         "agentsSettingsPath": "الإعدادات > الوكلاء",
@@ -4762,6 +4763,15 @@
     "filesChanged": "{count} ملفات",
     "actionStart": "بدء",
     "actionRunWithAgent": "Run with Agent",
+    "actionAssignSession": "إسناد إلى جلسة موجودة",
+    "assignSessionTitle": "إسناد إلى جلسة موجودة",
+    "assignSessionDescription": "إرسال «{title}» إلى جلسة دائمة في هذا المشروع.",
+    "assignSessionField": "الجلسة المستهدفة",
+    "assignSessionPlaceholder": "اختر جلسة",
+    "assignSessionSearch": "البحث في الجلسات…",
+    "assignSessionEmpty": "لا توجد جلسات مؤهلة في هذا المشروع",
+    "assignSessionSubmit": "إسناد وإرسال",
+    "assignSessionSubmitting": "جارٍ الإسناد…",
     "actionMarkBlocked": "Mark blocked",
     "actionResume": "Resume",
     "actionSchedule": "جدولة",

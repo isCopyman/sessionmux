@@ -17,6 +17,7 @@ import { useTasksView } from "@/contexts/tasks-view-context"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import {
   workTaskArchive,
+  workTaskAssignSession,
   workTaskCreate,
   workTaskMergeUnqueue,
   workTaskReorder,
@@ -82,6 +83,7 @@ import {
   mergeQueueRanks,
 } from "./task-acceptance"
 import { TaskCancelDialog } from "./task-cancel-dialog"
+import { TaskAssignSessionDialog } from "./task-assign-session-dialog"
 import { StatusChip, TaskCard } from "./task-card"
 import type { TaskActionHandlers } from "./task-actions"
 import { TaskCompleteDialog } from "./task-complete-dialog"
@@ -95,7 +97,11 @@ import { TaskSettingsDialog } from "./task-settings-dialog"
 import { OPEN_TASK_SETTINGS_EVENT } from "./tasks-chrome-actions"
 import { TasksSkeleton } from "./tasks-skeleton"
 import { TaskTranscriptDialog } from "./task-transcript-dialog"
-import type { WorkTask, WorkTaskDraft } from "@/lib/types"
+import type {
+  DbConversationSummary,
+  WorkTask,
+  WorkTaskDraft,
+} from "@/lib/types"
 
 const COLUMN_LABEL_KEYS = {
   todo: "colTodo",
@@ -151,6 +157,8 @@ export function TasksPage() {
   const t = useTranslations("Tasks")
   const { tasks, loading, refetch, viewMode } = useTasksView()
   const folders = useAppWorkspaceStore((s) => s.folders)
+  const allFolders = useAppWorkspaceStore((s) => s.allFolders)
+  const conversations = useAppWorkspaceStore((s) => s.conversations)
   const projectFolders = useMemo(
     () => folders.filter((f) => f.parent_id == null && f.kind === "regular"),
     [folders]
@@ -279,6 +287,8 @@ export function TasksPage() {
   const [scheduleTaskId, setScheduleTaskId] = useState<number | null>(null)
   const [scheduleOpen, setScheduleOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [assignTaskId, setAssignTaskId] = useState<number | null>(null)
+  const [assignOpen, setAssignOpen] = useState(false)
   // Read-only live session viewer ("查看会话") — tracked by id so the dialog
   // header's status chip follows the live row (like the detail sheet).
   const [sessionTaskId, setSessionTaskId] = useState<number | null>(null)
@@ -414,6 +424,28 @@ export function TasksPage() {
     () => tasks.find((task) => task.id === scheduleTaskId) ?? null,
     [tasks, scheduleTaskId]
   )
+  const assignTask = useMemo(
+    () => tasks.find((task) => task.id === assignTaskId) ?? null,
+    [tasks, assignTaskId]
+  )
+  const assignableSessions = useMemo<DbConversationSummary[]>(() => {
+    if (!assignTask) return []
+    const eligibleFolderIds = new Set<number>([assignTask.folder_id])
+    for (const folder of allFolders) {
+      if (folder.parent_id === assignTask.folder_id) {
+        eligibleFolderIds.add(folder.id)
+      }
+    }
+    return conversations
+      .filter(
+        (session) =>
+          eligibleFolderIds.has(session.folder_id) &&
+          session.kind === "regular" &&
+          session.archived_at == null &&
+          session.harness_internal !== true
+      )
+      .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
+  }, [allFolders, assignTask, conversations])
 
   const act = useCallback(
     async (fn: () => Promise<unknown>) => {
@@ -471,6 +503,11 @@ export function TasksPage() {
     setScheduleOpen(true)
   }, [])
 
+  const openAssignSession = useCallback((task: WorkTask) => {
+    setAssignTaskId(task.id)
+    setAssignOpen(true)
+  }, [])
+
   const openNewTask = useCallback(() => {
     setEditorTask(null)
     setEditorOpen(true)
@@ -482,6 +519,7 @@ export function TasksPage() {
       onManualStatus: (to) =>
         void act(() => workTaskSetManualStatus(task.id, task.task_status, to)),
       onStart: () => void act(() => workTaskStart(task.id)),
+      onAssignSession: () => openAssignSession(task),
       onCancel: () => openCancel(task),
       onSubmitReview: () => void act(() => workTaskRequestReview(task.id)),
       onRetry: () => openRestart(task, "retry"),
@@ -501,6 +539,7 @@ export function TasksPage() {
     [
       act,
       openCancel,
+      openAssignSession,
       openComplete,
       openMerge,
       openRestart,
@@ -1117,6 +1156,7 @@ export function TasksPage() {
           setEditorOpen(true)
         }}
         onSchedule={openSchedule}
+        onAssignSession={openAssignSession}
       />
       {/* The queue state comes from the live row (a merge that starts while
           the dialog is open turns "merge" into "queue"), the form from the
@@ -1153,6 +1193,19 @@ export function TasksPage() {
         open={scheduleOpen && scheduleTask != null}
         onOpenChange={setScheduleOpen}
         task={scheduleTask}
+      />
+      <TaskAssignSessionDialog
+        open={assignOpen && assignTask != null}
+        onOpenChange={setAssignOpen}
+        task={assignTask}
+        sessions={assignableSessions}
+        onSubmit={async (conversationId) => {
+          if (!assignTask) return
+          await workTaskAssignSession(assignTask.id, conversationId)
+          setAssignOpen(false)
+          setAssignTaskId(null)
+          void refetch()
+        }}
       />
       {/* Rendered after the sheet so it stacks above it when opened from
           within (both portal to body; later mount wins). */}

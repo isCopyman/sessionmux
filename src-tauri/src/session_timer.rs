@@ -297,6 +297,7 @@ impl SessionTimerRuntime {
                 },
                 mode_id: None,
                 source: PromptQueueSource::Timer,
+                task_id: None,
             },
         )
         .await
@@ -734,6 +735,7 @@ mod tests {
                 },
                 mode_id: None,
                 source: PromptQueueSource::User,
+                task_id: None,
             },
         )
         .await

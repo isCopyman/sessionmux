@@ -31,7 +31,8 @@ use crate::session_dispatcher::{
     connection_is_live, conversation_can_auto_start, EnsureGate, SessionDispatchConfig,
 };
 use crate::web::event_bridge::{
-    emit_event, EventEmitter, COLLABORATION_CHANGED_EVENT, PROMPT_QUEUE_CHANGED_EVENT,
+    emit_event, EventEmitter, WorkTaskChange, COLLABORATION_CHANGED_EVENT,
+    PROMPT_QUEUE_CHANGED_EVENT, WORK_TASK_CHANGED_EVENT,
 };
 
 const CLAIM_LEASE_SECS: i64 = 30;
@@ -289,6 +290,16 @@ impl PromptQueueRuntime {
                 CollaborationChanged {
                     conversation_ids: conversation_ids.into_iter().collect(),
                 },
+            );
+        }
+    }
+
+    fn emit_task_change(&self, item: &crate::models::prompt_queue::ClaimedPromptQueueItem) {
+        if let Some(id) = item.task_id {
+            emit_event(
+                &self.emitter,
+                WORK_TASK_CHANGED_EVENT,
+                WorkTaskChange::Upsert { id },
             );
         }
     }
@@ -778,6 +789,7 @@ impl PromptQueueRuntime {
                     Ok(snapshot) => {
                         emit_snapshot(&self.emitter, snapshot);
                         self.emit_origin_change(&claimed).await;
+                        self.emit_task_change(&claimed);
                     }
                     Err(err) => tracing::error!(
                         "[prompt-queue] could not pause uncertain prompt {}: {err}",
@@ -969,6 +981,7 @@ impl PromptQueueRuntime {
                     Ok(snapshot) => {
                         emit_snapshot(&self.emitter, snapshot);
                         self.emit_origin_change(&claimed).await;
+                        self.emit_task_change(&claimed);
                     }
                     Err(pause_err) => tracing::error!(
                         "[prompt-queue] could not pause uncertain steer {}: {pause_err}",
@@ -989,6 +1002,7 @@ impl PromptQueueRuntime {
                 Ok(snapshot) => {
                     emit_snapshot(&self.emitter, snapshot);
                     self.emit_origin_change(item).await;
+                    self.emit_task_change(item);
                     return;
                 }
                 Err(err) => {
@@ -1009,6 +1023,7 @@ impl PromptQueueRuntime {
             Ok(snapshot) => {
                 emit_snapshot(&self.emitter, snapshot);
                 self.emit_origin_change(item).await;
+                self.emit_task_change(item);
             }
             Err(err) => tracing::error!(
                 "[prompt-queue] could not persist unknown dispatch state for {}: {err}",
@@ -1032,6 +1047,7 @@ impl PromptQueueRuntime {
             Ok(snapshot) => {
                 emit_snapshot(&self.emitter, snapshot);
                 self.emit_origin_change(item).await;
+                self.emit_task_change(item);
             }
             Err(err) => tracing::error!("[prompt-queue] pause failed: {err}"),
         }
@@ -1069,6 +1085,7 @@ mod tests {
             },
             mode_id: None,
             source: crate::models::PromptQueueSource::User,
+            task_id: None,
         }
     }
 

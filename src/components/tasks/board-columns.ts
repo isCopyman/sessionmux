@@ -41,9 +41,7 @@ export const ALL_WORK_TASK_BUSINESS_STATUSES: WorkTaskBusinessStatus[] =
  * Business status → board column. `canceled` lives in Done but is hidden
  * unless the "show canceled" toggle is on (filtered by `groupTasksByColumn`).
  */
-export function columnForStatus(
-  status: WorkTaskBusinessStatus
-): BoardColumnId {
+export function columnForStatus(status: WorkTaskBusinessStatus): BoardColumnId {
   switch (status) {
     case "todo":
       return "todo"

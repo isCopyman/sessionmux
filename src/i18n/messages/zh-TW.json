@@ -2972,7 +2972,8 @@
         "sourceCollaboration": "信件",
         "sourceReminder": "催辦",
         "sourceAutomation": "自動化",
-        "sourceTimer": "定時續跑"
+        "sourceTimer": "定時續跑",
+        "sourceTask": "任務"
       },
       "welcomeInputPanel": {
         "agentsSettingsPath": "設定 > Agents",
@@ -4762,6 +4763,15 @@
     "filesChanged": "{count} 個檔案",
     "actionStart": "開始",
     "actionRunWithAgent": "交給 Agent 執行",
+    "actionAssignSession": "指派既有工作階段",
+    "assignSessionTitle": "指派給既有工作階段",
+    "assignSessionDescription": "把「{title}」傳送給目前專案中的持久工作階段。",
+    "assignSessionField": "目標工作階段",
+    "assignSessionPlaceholder": "選擇工作階段",
+    "assignSessionSearch": "搜尋工作階段…",
+    "assignSessionEmpty": "目前專案中沒有可指派的工作階段",
+    "assignSessionSubmit": "指派並傳送",
+    "assignSessionSubmitting": "正在指派…",
     "actionMarkBlocked": "標記受阻",
     "actionResume": "繼續處理",
     "actionSchedule": "定時執行",

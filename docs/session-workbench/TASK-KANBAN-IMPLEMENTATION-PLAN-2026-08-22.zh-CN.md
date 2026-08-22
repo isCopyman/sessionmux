@@ -1,7 +1,8 @@
 # Task / Kanban 实施定稿（2026-08-22）
 
 > 状态：已裁决，分批实施中。S1 的双状态轴、人工车道、标题即可建卡、执行方式徽标和
-> 非 Engine 动作裁剪已经落地；S2 Session 指派闭环尚未开始。本文覆盖
+> 非 Engine 动作裁剪已经落地；S2 已完成“中性任务卡 → 已有 Session”的可靠指派主链，
+> 新建 Session/Worktree Session、Agent 领取与属性投影仍待实施。本文覆盖
 > `KANBAN-DESIGN-2026-08-21` 中“任务天然等于 Worktree 执行”的旧边界；现有 WorkTask
 > Engine、看板 UI 和多轮生命周期继续保留。
 
@@ -187,6 +188,12 @@ Session 身份和乐观 revision：
 创建框不默认展开模型/Profile/Worktree 设置。选择 Engine 执行时才展示 Harness、Profile、
 模型和项目要求；选择已有 Session 时复用目标 Session 的运行配置。
 
+这里的边界是产品不变量，不只是界面取舍：Profile 属于 Session 启动身份，不属于 Task。
+因此“保存任务”永远不会顺手启动一个 ACP Harness；“指派已有 Session”也不能借任务卡改写
+该 Session 的 Profile/模型。只有“新建 Session 处理”和“新建 Worktree Session”进入共享的
+Session Launch 配置页，并复用普通新建会话相同的 Harness、Profile、Model、Mode 数据源和
+稳定 `conversation_id` 建连顺序，禁止在任务模块复制第三套选择器或 ACP 探测状态机。
+
 ### 5.2 卡片
 
 保留现有卡片、活动点、注意力层级和列表视图，增加：
@@ -356,6 +363,19 @@ Agent”；人工卡和 Engine 卡分别展示自己的合法动作。桌面端�
 - Session 属性面板的“负责 / 参与任务”。
 
 验收：idle/busy/unloaded/stopped/archived/不可恢复、并发领取和取消竞态均有测试。
+
+**实现状态（2026-08-22）**：已完成第一段主链。新建/编辑弹窗只维护标题、说明、附件和项目，
+默认落为未分配卡；旧 Engine 卡在编辑正文时只保留历史执行快照，不会被任务编辑器重新探测或
+改写 Harness。用户可从卡片/详情选择同项目（含项目 Worktree）的已有持久 Session；后端在
+同一事务中建立稳定 Assignment，并把带 `task_id` 的任务简报放入后端权威 PromptQueue。
+用户 follow-up 仍优先，busy 时排队，idle/unloaded 时由现有 Dispatcher 恢复并发送；取消/删除
+会撤回尚未提交的简报并释放 owner。普通 Session 的 `task_progress/task_complete` 已能按稳定
+`conversation_id` 回写任务。Rust 事务/队列测试和真实 Tauri WebView2 的“建卡 → 指派 →
+Session 收到 → 卡片进入进行中”已通过。
+
+尚未完成：新建 Session / 新建 Worktree Session 的统一 LaunchSpec 与 Profile UI、Agent
+`create_task/assign_task/update_task`、collaborator、Session 属性投影及其余恢复边界。旧的
+“交给 Agent 执行”仍是 WorkTask Engine 兼容入口，不能被误当成已经统一的新 Session 流程。
 
 ### S3：无项目与 Kanban 拖拽
 

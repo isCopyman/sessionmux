@@ -13,9 +13,13 @@ import {
   type TaskMessageComposerHandle,
 } from "./task-message-composer"
 
+const { useAgentOptionsMock } = vi.hoisted(() => ({
+  useAgentOptionsMock: vi.fn(),
+}))
+
 // The `/` menu's source: the agent-options probe (a transient CLI session).
 vi.mock("@/components/automations/use-agent-options", () => ({
-  useAgentOptions: () => ({
+  useAgentOptions: useAgentOptionsMock.mockImplementation(() => ({
     snapshot: {
       available_commands: [
         { name: "review", description: "Review the working diff" },
@@ -26,7 +30,7 @@ vi.mock("@/components/automations/use-agent-options", () => ({
     error: null,
     reload: vi.fn(),
     ensure: () => Promise.resolve(null),
-  }),
+  })),
 }))
 
 // Codex's `$` skills: a filesystem scan in production.
@@ -115,6 +119,22 @@ async function mount(
 }
 
 describe("TaskMessageComposer", () => {
+  it("does not probe an ACP harness for an unassigned task card", async () => {
+    useAgentOptionsMock.mockClear()
+    const { editor } = await mount({ agentType: null })
+
+    expect(useAgentOptionsMock).toHaveBeenCalledWith(
+      "claude_code",
+      "/repo-task-7",
+      false
+    )
+
+    act(() => {
+      editor.commands.insertContent("/rev")
+    })
+    expect(screen.queryByText("/review")).toBeNull()
+  })
+
   it("offers the agent's slash commands and inserts the invocation token", async () => {
     const { editor, onChange } = await mount()
     act(() => {

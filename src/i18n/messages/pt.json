@@ -2972,7 +2972,8 @@
         "sourceCollaboration": "Carta",
         "sourceReminder": "Lembrete",
         "sourceAutomation": "Automação",
-        "sourceTimer": "Temporizador"
+        "sourceTimer": "Temporizador",
+        "sourceTask": "Tarefa"
       },
       "welcomeInputPanel": {
         "agentsSettingsPath": "Configurações > Agentes",
@@ -4762,6 +4763,15 @@
     "filesChanged": "{count} arquivos",
     "actionStart": "Iniciar",
     "actionRunWithAgent": "Run with Agent",
+    "actionAssignSession": "Atribuir sessão existente",
+    "assignSessionTitle": "Atribuir uma sessão existente",
+    "assignSessionDescription": "Enviar “{title}” para uma sessão persistente deste projeto.",
+    "assignSessionField": "Sessão de destino",
+    "assignSessionPlaceholder": "Escolher uma sessão",
+    "assignSessionSearch": "Pesquisar sessões…",
+    "assignSessionEmpty": "Nenhuma sessão disponível neste projeto",
+    "assignSessionSubmit": "Atribuir e enviar",
+    "assignSessionSubmitting": "Atribuindo…",
     "actionMarkBlocked": "Mark blocked",
     "actionResume": "Resume",
     "actionSchedule": "Agendar",

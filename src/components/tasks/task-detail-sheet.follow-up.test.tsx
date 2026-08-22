@@ -98,6 +98,8 @@ function task(overrides: Partial<WorkTask> = {}): WorkTask {
     title: "Fix the retry path",
     config: null,
     status: "review",
+    task_status: "review",
+    execution_mode: "engine",
     worktree_folder_id: null,
     conversation_id: null,
     archived_at: null,
@@ -123,6 +125,7 @@ function mount(row: WorkTask) {
         onCancel={() => {}}
         onEdit={() => {}}
         onSchedule={() => {}}
+        onAssignSession={() => {}}
       />
     </NextIntlClientProvider>
   )

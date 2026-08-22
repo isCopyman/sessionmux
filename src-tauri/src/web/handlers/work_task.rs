@@ -52,6 +52,13 @@ pub struct UpdateParams {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct AssignSessionParams {
+    pub id: i32,
+    pub conversation_id: i32,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ReorderParams {
     pub folder_id: i32,
     pub ordered_ids: Vec<i32>,
@@ -225,6 +232,22 @@ pub async fn work_task_create(
     let result = core::work_task_create_core(&state.emitter, &state.db, params.draft)
         .await
         .map_err(AppCommandError::from)?;
+    Ok(Json(result))
+}
+
+pub async fn work_task_assign_session(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<AssignSessionParams>,
+) -> Result<Json<WorkTaskInfo>, AppCommandError> {
+    let result = core::work_task_assign_session_core(
+        &state.emitter,
+        &state.db,
+        &state.prompt_queue,
+        params.id,
+        params.conversation_id,
+    )
+    .await
+    .map_err(AppCommandError::from)?;
     Ok(Json(result))
 }
 

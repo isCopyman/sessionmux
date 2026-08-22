@@ -1498,6 +1498,7 @@ mod tauri_app {
                 work_task_commands::work_task_events,
                 work_task_commands::work_task_attention_count,
                 work_task_commands::work_task_create,
+                work_task_commands::work_task_assign_session,
                 work_task_commands::work_task_update,
                 work_task_commands::work_task_reorder,
                 work_task_commands::work_task_delete,

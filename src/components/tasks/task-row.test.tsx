@@ -54,6 +54,7 @@ function renderRow(
     onOpen: noop,
     onManualStatus: noop,
     onStart: noop,
+    onAssignSession: noop,
     onCancel: noop,
     onSubmitReview: noop,
     onRetry: noop,

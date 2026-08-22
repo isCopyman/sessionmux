@@ -2972,7 +2972,8 @@
         "sourceCollaboration": "Lettre",
         "sourceReminder": "Rappel",
         "sourceAutomation": "Automatisation",
-        "sourceTimer": "Minuteur"
+        "sourceTimer": "Minuteur",
+        "sourceTask": "Tâche"
       },
       "welcomeInputPanel": {
         "agentsSettingsPath": "Paramètres > Agents",
@@ -4762,6 +4763,15 @@
     "filesChanged": "{count} fichiers",
     "actionStart": "Démarrer",
     "actionRunWithAgent": "Run with Agent",
+    "actionAssignSession": "Affecter une session existante",
+    "assignSessionTitle": "Affecter une session existante",
+    "assignSessionDescription": "Envoyer « {title} » à une session persistante de ce projet.",
+    "assignSessionField": "Session cible",
+    "assignSessionPlaceholder": "Choisir une session",
+    "assignSessionSearch": "Rechercher des sessions…",
+    "assignSessionEmpty": "Aucune session disponible dans ce projet",
+    "assignSessionSubmit": "Affecter et envoyer",
+    "assignSessionSubmitting": "Affectation…",
     "actionMarkBlocked": "Mark blocked",
     "actionResume": "Resume",
     "actionSchedule": "Planifier",

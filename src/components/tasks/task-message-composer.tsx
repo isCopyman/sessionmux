@@ -78,9 +78,10 @@ export interface TaskMessageComposerHandle {
 
 export interface TaskMessageComposerProps {
   ref?: Ref<TaskMessageComposerHandle>
-  /** Agent the task runs as — decides the skill trigger, the probed CLI, and
-   *  how attached images are encoded. */
-  agentType: AgentType
+  /** Agent that will consume this message. Null for an unassigned board card:
+   *  content editing still supports references and attachments, but must not
+   *  spawn an arbitrary ACP harness just to discover commands/options. */
+  agentType: AgentType | null
   /** Working directory the references, commands and file pickers resolve in. */
   folderPath: string | null
   /** Content on mount; read once (the editor is uncontrolled afterwards). */
@@ -157,11 +158,16 @@ export function TaskMessageComposer({
   // One transient probe backs the `/` menu (the snapshot carries
   // available_commands) and the image encoding (prompt_capabilities); `$`
   // skills are a filesystem scan inside `useComposerInvocations`.
-  const agentOptions = useAgentOptions(agentType, folderPath)
+  const agentOptions = useAgentOptions(
+    agentType ?? "claude_code",
+    folderPath,
+    agentType != null
+  )
   const availableCommands: AvailableCommandInfo[] =
-    agentOptions.snapshot?.available_commands ?? []
+    agentType == null ? [] : (agentOptions.snapshot?.available_commands ?? [])
   const promptCapabilities =
-    agentOptions.snapshot?.prompt_capabilities ?? ASSUMED_PROMPT_CAPABILITIES
+    (agentType == null ? null : agentOptions.snapshot?.prompt_capabilities) ??
+    ASSUMED_PROMPT_CAPABILITIES
 
   const invocations = useComposerInvocations({
     editorRef,
@@ -188,7 +194,9 @@ export function TaskMessageComposer({
   // Codex's; everyone else invokes skills as `/`).
   useEffect(() => {
     const editor = editorRef.current?.getEditor()
-    if (editor) restampSkillPrefixes(editor, agentType === "codex" ? "$" : "/")
+    if (editor && agentType != null) {
+      restampSkillPrefixes(editor, agentType === "codex" ? "$" : "/")
+    }
   }, [agentType])
 
   /** The bytes-bearing block behind every embedded badge still in the document,

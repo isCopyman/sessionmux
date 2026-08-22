@@ -3,13 +3,19 @@ import userEvent from "@testing-library/user-event"
 import { NextIntlClientProvider } from "next-intl"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import enMessages from "@/i18n/messages/en.json"
-import type { FolderDetail, WorkTask, WorkTaskStatus } from "@/lib/types"
+import type {
+  DbConversationSummary,
+  FolderDetail,
+  WorkTask,
+  WorkTaskStatus,
+} from "@/lib/types"
 import { TasksPage } from "./tasks-page"
 
 const h = vi.hoisted(() => ({
   tasks: [] as WorkTask[],
   viewMode: "board" as "board" | "list",
   folders: [] as FolderDetail[],
+  conversations: [] as DbConversationSummary[],
   connections: new Map<string, { status: string }>(),
   refetch: vi.fn(),
 }))
@@ -28,9 +34,22 @@ vi.mock("@/contexts/tasks-view-context", () => ({
 
 vi.mock("@/stores/app-workspace-store", () => {
   const useAppWorkspaceStore = (
-    selector: (state: { folders: FolderDetail[] }) => unknown
-  ) => selector({ folders: h.folders })
-  useAppWorkspaceStore.getState = () => ({ folders: h.folders })
+    selector: (state: {
+      folders: FolderDetail[]
+      allFolders: FolderDetail[]
+      conversations: DbConversationSummary[]
+    }) => unknown
+  ) =>
+    selector({
+      folders: h.folders,
+      allFolders: h.folders,
+      conversations: h.conversations,
+    })
+  useAppWorkspaceStore.getState = () => ({
+    folders: h.folders,
+    allFolders: h.folders,
+    conversations: h.conversations,
+  })
   return { useAppWorkspaceStore }
 })
 
@@ -53,6 +72,9 @@ vi.mock("./task-schedule-dialog", () => ({ TaskScheduleDialog: () => null }))
 vi.mock("./task-settings-dialog", () => ({ TaskSettingsDialog: () => null }))
 vi.mock("./task-transcript-dialog", () => ({
   TaskTranscriptDialog: () => null,
+}))
+vi.mock("./task-assign-session-dialog", () => ({
+  TaskAssignSessionDialog: () => null,
 }))
 
 function folder(id: number, name: string): FolderDetail {

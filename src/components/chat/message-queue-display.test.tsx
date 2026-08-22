@@ -32,6 +32,7 @@ function item(
       blocks: [{ type: "text", text: id }],
       displayText: id,
     },
+    taskId: null,
     modeId: null,
     state,
     source,
@@ -102,5 +103,26 @@ describe("MessageQueueDisplay", () => {
     const deleteButtons = screen.getAllByTitle("deleteItem")
     expect(editButtons[1]).toBeDisabled()
     expect(deleteButtons[1]).toBeDisabled()
+  })
+
+  it("keeps a task-owned brief immutable from the generic queue controls", () => {
+    const taskItem = item("task", "queued", "task")
+    taskItem.taskId = 42
+    render(
+      <MessageQueueDisplay
+        queue={[taskItem]}
+        pausedReason={null}
+        onResume={() => {}}
+        onRetry={() => {}}
+        onReorder={() => {}}
+        onEdit={() => {}}
+        onDelete={() => {}}
+        editingItemId={null}
+      />
+    )
+
+    expect(screen.getByText("sourceTask")).toBeInTheDocument()
+    expect(screen.queryByTitle("editItem")).toBeNull()
+    expect(screen.queryByTitle("deleteItem")).toBeNull()
   })
 })

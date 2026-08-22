@@ -250,6 +250,7 @@ async fn enqueue_mailbox_attention(
         },
         mode_id: None,
         source: crate::models::PromptQueueSource::Reminder,
+        task_id: None,
     };
     prompt_queue_enqueue_core(conn, emitter, prompt_queue, item)
         .await

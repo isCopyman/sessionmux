@@ -6,7 +6,7 @@
 >
 > 状态记号：`[ ]` 待办 / `[~]` 进行中 / `[x]` 本批已完成待归档 / `[?]` 等用户拍板
 
-最后更新：2026-08-22（profile 身份不变量与看板当前事实复核）
+最后更新：2026-08-22（Task / Session 指派主链与 Launch Profile 边界）
 
 ## ⚠️ 先读这条：清单会腐烂
 
@@ -41,6 +41,13 @@
 
 > 2026-08-22 复核：本节标题是旧协作流程遗留；当前没有外派代码任务。已完成项保留到
 > 本轮文档收口后归档，`chippin` 只是一份未采用的历史候选，不得直接合并。
+
+- [~] **Task / Kanban S2** —— 已把新建任务收敛为纯任务卡（标题、说明、附件、项目），
+      不再在建卡时选择或探测 ACP Harness。已有 Session 指派、后端权威 Task PromptQueue、
+      单 owner、取消/删除回收、普通 Session 进度回写已实现并通过相关测试及真实 WebView2
+      验证。下一批是统一“新建 Session / 新建 Worktree Session”启动配置：Profile 属于
+      Session Launch，不属于 Task；必须复用普通会话的稳定 `conversation_id` 与同一套
+      Harness/Profile/Model/Mode 数据源，不能再复制第四套 UI。
 
 - [x] **Composer 宽/窄 Profile 选择器统一** —— 窄 Tab 的 master-detail 设置面板只从
       ACP config/mode 构造字段，漏掉 Codeg 自有的 Claude Profile；抽取共享 Profile

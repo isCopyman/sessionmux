@@ -1837,7 +1837,26 @@ impl TaskEngine {
     pub async fn record_progress(&self, conn_id: &str, message: &str) -> TaskReportAck {
         let entry = { self.index.lock().await.get(conn_id).copied() };
         let Some((task_id, run_seq)) = entry else {
-            return TaskReportAck::rejected("this session is not executing a work task");
+            let Some(state) = self.manager.get_state(conn_id).await else {
+                return TaskReportAck::rejected("this session is not executing a work task");
+            };
+            let Some(conversation_id) = state.read().await.conversation_id else {
+                return TaskReportAck::rejected("this session is not linked to a task card");
+            };
+            return match work_task_service::record_session_progress(
+                &self.db.conn,
+                conversation_id,
+                message,
+            )
+            .await
+            {
+                Ok(Some(task_id)) => {
+                    self.emit_upsert(task_id);
+                    TaskReportAck::recorded()
+                }
+                Ok(None) => TaskReportAck::rejected("this session is not assigned an active task"),
+                Err(e) => TaskReportAck::rejected(&format!("could not record progress: {e}")),
+            };
         };
         // Generation guard: a stale connection's report is a no-op.
         match work_task_service::get_model(&self.db.conn, task_id).await {
@@ -1870,7 +1889,27 @@ impl TaskEngine {
     ) -> TaskReportAck {
         let entry = { self.index.lock().await.get(conn_id).copied() };
         let Some((task_id, run_seq)) = entry else {
-            return TaskReportAck::rejected("this session is not executing a work task");
+            let Some(state) = self.manager.get_state(conn_id).await else {
+                return TaskReportAck::rejected("this session is not executing a work task");
+            };
+            let Some(conversation_id) = state.read().await.conversation_id else {
+                return TaskReportAck::rejected("this session is not linked to a task card");
+            };
+            return match work_task_service::complete_session_task(
+                &self.db.conn,
+                conversation_id,
+                verdict,
+                summary,
+            )
+            .await
+            {
+                Ok(Some(task_id)) => {
+                    self.emit_upsert(task_id);
+                    TaskReportAck::recorded()
+                }
+                Ok(None) => TaskReportAck::rejected("this session is not assigned an active task"),
+                Err(e) => TaskReportAck::rejected(&format!("could not record verdict: {e}")),
+            };
         };
         match work_task_service::set_verdict(&self.db.conn, task_id, run_seq, verdict, summary)
             .await
@@ -3038,9 +3077,10 @@ impl TaskEngine {
                     // looks. Without a verdict that is only a turn boundary,
                     // not a request to review — same rule as on_turn_complete.
                     if task.verdict.as_deref() == Some("blocked") {
-                        let error = task.result_summary.clone().unwrap_or_else(|| {
-                            "agent reported the task as blocked".to_string()
-                        });
+                        let error = task
+                            .result_summary
+                            .clone()
+                            .unwrap_or_else(|| "agent reported the task as blocked".to_string());
                         work_task_service::fail(
                             &self.db.conn,
                             task.id,
@@ -5529,17 +5569,15 @@ mod tests {
                 .expect("setup")
         );
         let conv_id = seed_conversation(&engine.db, folder_id, AgentType::ClaudeCode).await;
-        assert!(
-            work_task_service::mark_running(
-                &engine.db.conn,
-                created.id,
-                run_seq,
-                conv_id,
-                conn_id,
-            )
-            .await
-            .expect("mark running")
-        );
+        assert!(work_task_service::mark_running(
+            &engine.db.conn,
+            created.id,
+            run_seq,
+            conv_id,
+            conn_id,
+        )
+        .await
+        .expect("mark running"));
         let rx = engine
             .manager
             .insert_test_connection_live(
@@ -5793,8 +5831,8 @@ mod tests {
     /// card to review just because the conversation reads Completed.
     #[tokio::test]
     async fn connection_loss_without_a_verdict_does_not_auto_review() {
-        use crate::db::test_helpers::{fresh_in_memory_db, seed_folder};
         use crate::db::service::conversation_service;
+        use crate::db::test_helpers::{fresh_in_memory_db, seed_folder};
 
         let db = fresh_in_memory_db().await;
         let folder_id = seed_folder(&db, "/tmp/wt-multiturn-6").await;
@@ -5830,26 +5868,16 @@ mod tests {
         let created = work_task_service::create(&db2.conn, task_draft(folder2, "boot"))
             .await
             .expect("create");
-        let seq = work_task_service::claim_for_run(
-            &db2.conn,
-            created.id,
-            WorkTaskStatus::Todo,
-            "user",
-        )
-        .await
-        .expect("claim")
-        .expect("claimed");
-        assert!(
-            work_task_service::begin_setup(&db2.conn, created.id, seq)
+        let seq =
+            work_task_service::claim_for_run(&db2.conn, created.id, WorkTaskStatus::Todo, "user")
                 .await
-                .expect("setup")
-        );
-        let conv2 = crate::db::test_helpers::seed_conversation(
-            &db2,
-            folder2,
-            AgentType::ClaudeCode,
-        )
-        .await;
+                .expect("claim")
+                .expect("claimed");
+        assert!(work_task_service::begin_setup(&db2.conn, created.id, seq)
+            .await
+            .expect("setup"));
+        let conv2 =
+            crate::db::test_helpers::seed_conversation(&db2, folder2, AgentType::ClaudeCode).await;
         assert!(
             work_task_service::mark_running(&db2.conn, created.id, seq, conv2, "gone")
                 .await
@@ -5875,8 +5903,8 @@ mod tests {
     /// still settles to review — we only stopped the no-verdict auto-review.
     #[tokio::test]
     async fn connection_loss_with_a_verdict_still_settles_review() {
-        use crate::db::test_helpers::{fresh_in_memory_db, seed_folder};
         use crate::db::service::conversation_service;
+        use crate::db::test_helpers::{fresh_in_memory_db, seed_folder};
 
         let db = fresh_in_memory_db().await;
         let folder_id = seed_folder(&db, "/tmp/wt-multiturn-6c").await;

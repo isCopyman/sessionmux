@@ -8,6 +8,7 @@ import {
   ClipboardCheck,
   GitMerge,
   ListX,
+  MessageSquarePlus,
   MessageSquareText,
   Pencil,
   Play,
@@ -29,6 +30,8 @@ export interface TaskActionHandlers {
   onManualStatus: (to: WorkTask["task_status"]) => void
   /** Start the WorkTask engine for an unassigned task. */
   onStart: () => void
+  /** Assign this card to an existing persistent Session. */
+  onAssignSession: () => void
   onCancel: () => void
   /** Submit a running, idle card for review. The engine rejects it mid-turn. */
   onSubmitReview: () => void
@@ -54,6 +57,7 @@ export interface TaskActionHandlers {
 type ActionLabelKey =
   | "actionStart"
   | "actionRunWithAgent"
+  | "actionAssignSession"
   | "actionMarkBlocked"
   | "actionResume"
   | "actionCancel"
@@ -92,6 +96,88 @@ export function buildTaskActions(
       onClick: handlers.onArchive,
     }
   } else {
+    if (task.execution_mode === "session") {
+      switch (task.task_status) {
+        case "todo":
+        case "in_progress":
+          primary = {
+            icon: MessageSquareText,
+            label: t("actionViewSession"),
+            onClick: handlers.onViewSession,
+          }
+          secondaries.push({
+            icon: ClipboardCheck,
+            label: t("actionSubmitReview"),
+            onClick: () => handlers.onManualStatus("review"),
+          })
+          secondaries.push({
+            icon: Ban,
+            label: t("actionMarkBlocked"),
+            onClick: () => handlers.onManualStatus("blocked"),
+          })
+          secondaries.push({
+            icon: Ban,
+            label: t("actionCancel"),
+            onClick: () => handlers.onManualStatus("canceled"),
+          })
+          break
+        case "blocked":
+          primary = {
+            icon: MessageSquareText,
+            label: t("actionViewSession"),
+            onClick: handlers.onViewSession,
+          }
+          secondaries.push({
+            icon: RotateCw,
+            label: t("actionResume"),
+            onClick: () => handlers.onManualStatus("in_progress"),
+          })
+          secondaries.push({
+            icon: ClipboardCheck,
+            label: t("actionSubmitReview"),
+            onClick: () => handlers.onManualStatus("review"),
+          })
+          secondaries.push({
+            icon: Ban,
+            label: t("actionCancel"),
+            onClick: () => handlers.onManualStatus("canceled"),
+          })
+          break
+        case "review":
+          primary = {
+            icon: CircleCheck,
+            label: t("actionComplete"),
+            onClick: () => handlers.onManualStatus("done"),
+          }
+          secondaries.push({
+            icon: Ban,
+            label: t("actionCancel"),
+            onClick: () => handlers.onManualStatus("canceled"),
+          })
+          break
+        case "done":
+        case "canceled":
+          primary = {
+            icon: Archive,
+            label: t("actionArchive"),
+            onClick: handlers.onArchive,
+          }
+          break
+      }
+      // The primary action already opens the Session while work is active.
+      if (
+        task.conversation_id != null &&
+        primary?.label !== t("actionViewSession")
+      ) {
+        secondaries.push({
+          icon: MessageSquareText,
+          label: t("actionViewSession"),
+          onClick: handlers.onViewSession,
+        })
+      }
+      return { primary, secondaries }
+    }
+
     if (task.execution_mode === null || task.execution_mode === "manual") {
       switch (task.task_status) {
         case "todo":
@@ -104,6 +190,11 @@ export function buildTaskActions(
             icon: Bot,
             label: t("actionRunWithAgent"),
             onClick: handlers.onStart,
+          })
+          secondaries.push({
+            icon: MessageSquarePlus,
+            label: t("actionAssignSession"),
+            onClick: handlers.onAssignSession,
           })
           secondaries.push({
             icon: Pencil,

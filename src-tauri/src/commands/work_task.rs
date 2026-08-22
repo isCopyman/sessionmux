@@ -15,7 +15,10 @@ use crate::models::{
     FollowUpIntent, WorkTaskChangedFile, WorkTaskDraft, WorkTaskEventInfo, WorkTaskFolderSettings,
     WorkTaskInfo, WorkTaskTemplateDraft, WorkTaskTemplateInfo,
 };
-use crate::web::event_bridge::{emit_event, EventEmitter, WorkTaskChange, WORK_TASK_CHANGED_EVENT};
+use crate::prompt_queue::PromptQueueHandle;
+use crate::web::event_bridge::{
+    emit_event, EventEmitter, WorkTaskChange, PROMPT_QUEUE_CHANGED_EVENT, WORK_TASK_CHANGED_EVENT,
+};
 
 fn engine() -> Result<std::sync::Arc<crate::work_task::TaskEngine>, DbError> {
     crate::work_task::engine()
@@ -233,6 +236,34 @@ pub async fn work_task_create_core(
     Ok(info)
 }
 
+/// Bind an unassigned card to an existing persistent Session and admit its
+/// first brief to that Session's authoritative prompt queue. The service owns
+/// the transaction; this layer only publishes both projections and wakes the
+/// shared dispatcher after the commit is visible.
+pub async fn work_task_assign_session_core(
+    emitter: &EventEmitter,
+    db: &AppDatabase,
+    prompt_queue: &PromptQueueHandle,
+    id: i32,
+    conversation_id: i32,
+) -> Result<WorkTaskInfo, DbError> {
+    let assigned =
+        work_task_service::assign_to_session(&db.conn, id, conversation_id, "user").await?;
+    emit_event(
+        emitter,
+        WORK_TASK_CHANGED_EVENT,
+        WorkTaskChange::Upsert { id },
+    );
+    // Publish and wake even on an idempotent retry. A process can die after
+    // the transaction commits but before the first wake; replaying the same
+    // command must recover that edge without inserting another brief.
+    let snapshot =
+        crate::db::service::prompt_queue_service::snapshot(&db.conn, conversation_id).await?;
+    emit_event(emitter, PROMPT_QUEUE_CHANGED_EVENT, snapshot);
+    prompt_queue.wake(conversation_id);
+    Ok(assigned.task)
+}
+
 pub async fn work_task_update_core(
     emitter: &EventEmitter,
     db: &AppDatabase,
@@ -419,8 +450,9 @@ pub async fn work_task_start_core(id: i32) -> Result<(), DbError> {
     engine()?.start(id).await.map_err(DbError::Validation)
 }
 
-/// Move an unassigned/manual card through the human workflow without starting
-/// an ACP Session or creating a worktree.
+/// Move a business-status card through the human workflow. Neutral/manual
+/// cards keep the manual state machine; Session-owned cards preserve their
+/// assignment and use the narrower Session transition set.
 pub async fn work_task_set_manual_status_core(
     emitter: &EventEmitter,
     db: &AppDatabase,
@@ -428,7 +460,15 @@ pub async fn work_task_set_manual_status_core(
     from: WorkTaskBusinessStatus,
     to: WorkTaskBusinessStatus,
 ) -> Result<(), DbError> {
-    if !work_task_service::transition_manual_status(&db.conn, id, from, to, "user").await? {
+    let task = work_task_service::get_model(&db.conn, id).await?;
+    let changed = if task.execution_mode
+        == Some(crate::db::entities::work_task::WorkTaskExecutionMode::Session)
+    {
+        work_task_service::transition_session_status(&db.conn, id, from, to, "user").await?
+    } else {
+        work_task_service::transition_manual_status(&db.conn, id, from, to, "user").await?
+    };
+    if !changed {
         return Err(DbError::Validation(
             "task changed, was deleted, or is owned by another execution mode".to_string(),
         ));
@@ -812,6 +852,25 @@ pub async fn work_task_create(
     draft: WorkTaskDraft,
 ) -> Result<WorkTaskInfo, DbError> {
     work_task_create_core(&EventEmitter::Tauri(app), &db, draft).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn work_task_assign_session(
+    app: tauri::AppHandle,
+    db: tauri::State<'_, AppDatabase>,
+    prompt_queue: tauri::State<'_, PromptQueueHandle>,
+    id: i32,
+    conversation_id: i32,
+) -> Result<WorkTaskInfo, DbError> {
+    work_task_assign_session_core(
+        &EventEmitter::Tauri(app),
+        &db,
+        &prompt_queue,
+        id,
+        conversation_id,
+    )
+    .await
 }
 
 #[cfg(feature = "tauri-runtime")]

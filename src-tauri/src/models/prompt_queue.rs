@@ -12,7 +12,7 @@ pub struct PromptQueueDraft {
 }
 
 /// Who put this item into the execution queue. The scheduler claims by
-/// class first (user > collaboration/reminder/automation > timer), FIFO
+/// class first (user > collaboration/reminder/automation/task > timer), FIFO
 /// inside a class: a person's own follow-ups always run before automation,
 /// and automation can never jump a letter the user is expecting the Agent
 /// to read.
@@ -27,6 +27,9 @@ pub enum PromptQueueSource {
     /// Shares the middle class with letters and reminders: behind the user's
     /// own typing, ahead of idle-continuation timers.
     Automation,
+    /// A task-board assignment delivered to an ordinary persistent Session.
+    /// It shares the middle scheduling class and never jumps user follow-ups.
+    Task,
     Timer,
 }
 
@@ -37,6 +40,7 @@ impl PromptQueueSource {
             Self::Collaboration => "collaboration",
             Self::Reminder => "reminder",
             Self::Automation => "automation",
+            Self::Task => "task",
             Self::Timer => "timer",
         }
     }
@@ -47,6 +51,7 @@ impl PromptQueueSource {
             "collaboration" => Some(Self::Collaboration),
             "reminder" => Some(Self::Reminder),
             "automation" => Some(Self::Automation),
+            "task" => Some(Self::Task),
             "timer" => Some(Self::Timer),
             _ => None,
         }
@@ -91,6 +96,8 @@ pub struct PromptQueueItem {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub origin_event_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub mode_id: Option<String>,
     pub state: PromptQueueItemState,
     pub source: PromptQueueSource,
@@ -125,6 +132,10 @@ pub struct EnqueuePromptQueueItem {
     /// 'user', and only host runtimes (timer, reminder) submit other values.
     #[serde(default, skip_deserializing)]
     pub source: PromptQueueSource,
+    /// Set only by the trusted task assignment command. Ordinary queue clients
+    /// cannot attach an arbitrary task to their message.
+    #[serde(default, skip_deserializing)]
+    pub task_id: Option<i32>,
 }
 
 #[derive(Debug, Clone)]
@@ -135,6 +146,7 @@ pub(crate) struct ClaimedPromptQueueItem {
     /// Cross-Session collaboration event materialized into this execution
     /// queue item. `None` keeps ordinary same-Session follow-ups unchanged.
     pub origin_event_id: Option<String>,
+    pub task_id: Option<i32>,
     /// Present only for cross-Session deliveries. The queue remains the owner;
     /// this hint merely allows a best-effort native steer while the target is
     /// busy and never changes ordinary same-Session follow-up behavior.
