@@ -15,10 +15,6 @@ export function taskMatchesScope(task: WorkTask, scope: TasksScope): boolean {
   switch (scope) {
     case "all":
       return true
-    case "unassigned":
-      return task.execution_mode == null
-    case "manual":
-      return task.execution_mode === "manual"
     case "agent":
       return (
         task.execution_mode === "session" || task.execution_mode === "engine"

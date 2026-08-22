@@ -121,10 +121,17 @@ describe("tasks board grouping storage", () => {
 describe("tasks quick scope storage", () => {
   it("round-trips a scope and defaults to all", () => {
     expect(loadTasksScope()).toBe("all")
-    saveTasksScope("unassigned")
-    expect(loadTasksScope()).toBe("unassigned")
+    saveTasksScope("agent")
+    expect(loadTasksScope()).toBe("agent")
     saveTasksScope("attention")
     expect(loadTasksScope()).toBe("attention")
+  })
+
+  it("migrates the retired unassigned/manual tabs to all", () => {
+    localStorage.setItem(SCOPE_FILTER_KEY, "unassigned")
+    expect(loadTasksScope()).toBe("all")
+    localStorage.setItem(SCOPE_FILTER_KEY, "manual")
+    expect(loadTasksScope()).toBe("all")
   })
 
   it("falls back to all on a stale scope", () => {

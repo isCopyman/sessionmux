@@ -16,7 +16,21 @@ import {
 } from "@dnd-kit/core"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
-import { Funnel, Layers, Plus, ListTodo, Tag } from "lucide-react"
+import {
+  Circle,
+  CircleCheckBig,
+  CircleDashed,
+  CircleGauge,
+  CircleSlash2,
+  CircleX,
+  Clock3,
+  ListTodo,
+  Plus,
+  SlidersHorizontal,
+  Tag,
+  UserRound,
+  type LucideIcon,
+} from "lucide-react"
 import { useTasksView } from "@/contexts/tasks-view-context"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import {
@@ -39,7 +53,6 @@ import {
 } from "@/lib/task-compose-events"
 import { getAgentLabel } from "@/lib/custom-agents"
 import {
-  DEFAULT_TASKS_BOARD_FILTER,
   loadTasksBoardFilter,
   loadTasksBoardGrouping,
   loadTasksOwnerFilter,
@@ -65,6 +78,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import {
   Select,
   SelectContent,
@@ -153,11 +167,46 @@ const GROUPING_LABEL_KEYS = {
 
 const SCOPE_LABEL_KEYS = {
   all: "scopeAll",
-  unassigned: "scopeUnassigned",
-  manual: "scopeManual",
   agent: "scopeAgent",
   attention: "scopeAttention",
 } as const satisfies Record<TasksScope, string>
+
+/** Multica-style status glyphs, shared by headers and every status picker. */
+const COLUMN_ICONS = {
+  backlog: CircleDashed,
+  todo: Circle,
+  inProgress: CircleGauge,
+  review: Clock3,
+  done: CircleCheckBig,
+  blocked: CircleSlash2,
+  canceled: CircleX,
+} as const satisfies Record<BoardColumnId, LucideIcon>
+
+const COLUMN_ICON_CLASSES = {
+  backlog: "text-muted-foreground/70",
+  todo: "text-muted-foreground",
+  inProgress: "text-amber-500",
+  review: "text-emerald-600 dark:text-emerald-400",
+  done: "text-blue-600 dark:text-blue-400",
+  blocked: "text-rose-500",
+  canceled: "text-muted-foreground/70",
+} as const satisfies Record<BoardColumnId, string>
+
+function TaskColumnIcon({
+  column,
+  className,
+}: {
+  column: BoardColumnId
+  className?: string
+}) {
+  const Icon = COLUMN_ICONS[column]
+  return (
+    <Icon
+      className={cn("size-4 shrink-0", COLUMN_ICON_CLASSES[column], className)}
+      aria-hidden="true"
+    />
+  )
+}
 
 /** The cards inside a column. gap-4 — the same gutter the columns keep from
  *  each other and from the window edge — so a card is inset by 1rem on all
@@ -197,11 +246,11 @@ export function TasksPageTitle() {
 }
 
 /**
- * The Tasks route page: toolbar (folder filter, filter popover, status filter,
- * new task) plus the board or the list. The page title lives in the chrome
- * strip above (TasksPageTitle) and the view switch + settings entry in the
- * window's top-right cluster (TasksChromeActions), so the toolbar is purely
- * "narrow what you see" + "add one".
+ * The Tasks route page: toolbar (folder scope, stable views, display settings,
+ * owner/status filters, new task) plus the board or the list. The page title
+ * lives in the chrome strip above (TasksPageTitle); the view switch + settings
+ * entry live in the window's top-right cluster (TasksChromeActions), so the
+ * toolbar is purely "narrow what you see" + "add one".
  * Data comes from the always-mounted TasksViewProvider;
  * every mutation is fire-and-refetch — the engine's `task://changed` nudges
  * keep all clients converged.
@@ -381,6 +430,15 @@ export function TasksPage() {
         ? tasks
         : tasks.filter((task) => task.folder_id === folderFilter),
     [tasks, folderFilter]
+  )
+  const attentionCount = useMemo(
+    () =>
+      folderScopedTasks.filter(
+        (task) =>
+          task.archived_at == null &&
+          (task.task_status === "review" || task.task_status === "blocked")
+      ).length,
+    [folderScopedTasks]
   )
   const ownerOptions = useMemo(() => {
     const ids = new Set<number>()
@@ -717,15 +775,16 @@ export function TasksPage() {
     )
   }, [act, columns.done])
 
-  const visibleColumnIds = BOARD_COLUMN_IDS.filter(
-    (column) => !boardFilter.hiddenColumns.includes(column)
-  )
+  // Attention is a focused triage view, not another status filter layered on
+  // top of seven empty columns. Its two relevant columns stay visible even if
+  // the user's ordinary board display settings hide either one.
+  const visibleColumnIds: BoardColumnId[] =
+    scope === "attention"
+      ? ["review", "blocked"]
+      : BOARD_COLUMN_IDS.filter(
+          (column) => !boardFilter.hiddenColumns.includes(column)
+        )
   const isList = viewMode === "list"
-  const activeFilters =
-    boardFilter.hiddenColumns.length +
-    (boardFilter.showArchived === DEFAULT_TASKS_BOARD_FILTER.showArchived
-      ? 0
-      : 1)
   const hasAnyTask = tasks.length > 0
   // Nothing has arrived yet: draw the page's own shape instead of flashing the
   // "no tasks yet" empty state at someone who has plenty.
@@ -765,8 +824,8 @@ export function TasksPage() {
             />
 
             <div
-              className="flex items-center rounded-full bg-muted/70 p-0.5"
-              role="group"
+              className="flex items-center gap-0.5"
+              role="tablist"
               aria-label={t("scopeFilter")}
             >
               {TASKS_SCOPES.map((item) => (
@@ -775,16 +834,22 @@ export function TasksPage() {
                   type="button"
                   size="sm"
                   variant="ghost"
-                  aria-pressed={scope === item}
+                  role="tab"
+                  aria-selected={scope === item}
                   className={cn(
-                    "h-7 rounded-full px-2.5 text-[0.75rem] font-medium",
+                    "h-8 gap-1.5 rounded-lg px-3 text-[0.8125rem] font-medium",
                     scope === item
-                      ? "bg-background text-foreground shadow-sm hover:bg-background"
+                      ? "bg-muted text-foreground hover:bg-muted"
                       : "text-muted-foreground hover:text-foreground"
                   )}
                   onClick={() => setScope(item)}
                 >
                   {t(SCOPE_LABEL_KEYS[item])}
+                  {item === "attention" && attentionCount > 0 ? (
+                    <span className="rounded-full bg-amber-500/12 px-1.5 py-0.5 text-[0.625rem] font-semibold leading-none text-amber-700 tabular-nums dark:text-amber-300">
+                      {attentionCount}
+                    </span>
+                  ) : null}
                 </Button>
               ))}
             </div>
@@ -800,57 +865,88 @@ export function TasksPage() {
                   variant="ghost"
                   className="h-8 gap-1.5 rounded-full bg-muted/70 px-3 text-[0.8125rem] font-medium ws-msg-chip hover:bg-muted"
                 >
-                  <Funnel
+                  <SlidersHorizontal
                     className="size-3.5 text-muted-foreground"
                     aria-hidden="true"
                   />
-                  {t("filter")}
-                  {activeFilters > 0 ? (
-                    <span className="rounded-full bg-primary/10 px-1.5 py-0.5 text-[0.625rem] font-medium leading-none text-primary tabular-nums">
-                      {activeFilters}
-                    </span>
-                  ) : null}
+                  {t("display")}
                 </Button>
               </PopoverTrigger>
               <PopoverContent
                 align="start"
-                className="w-52 gap-0.5 rounded-xl p-1.5"
+                className="w-64 gap-0.5 rounded-xl p-1.5"
               >
+                <p className="px-2 pb-1 pt-1 text-[0.6875rem] font-medium text-muted-foreground">
+                  {t("groupBy")}
+                </p>
+                <RadioGroup
+                  value={grouping}
+                  onValueChange={(value) =>
+                    setGrouping(value as TasksBoardGrouping)
+                  }
+                  className="gap-0.5"
+                >
+                  {TASKS_BOARD_GROUPINGS.map((item) => (
+                    <label
+                      key={item}
+                      className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-xs hover:bg-accent/50"
+                    >
+                      <RadioGroupItem value={item} className="size-3.5" />
+                      {t(GROUPING_LABEL_KEYS[item])}
+                    </label>
+                  ))}
+                </RadioGroup>
+                <div className="my-1 h-px bg-border" />
                 <p className="px-2 pb-1 pt-1 text-[0.6875rem] font-medium text-muted-foreground">
                   {t("showColumns")}
                 </p>
-                {BOARD_COLUMN_IDS.map((column) => (
-                  <label
-                    key={column}
-                    className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-xs hover:bg-accent/50"
-                  >
-                    <Checkbox
-                      checked={!boardFilter.hiddenColumns.includes(column)}
-                      onCheckedChange={(checked) =>
-                        setBoardFilter((filter) => {
-                          if (checked === true) {
+                {BOARD_COLUMN_IDS.map((column) => {
+                  const forcedByAttention =
+                    scope === "attention" &&
+                    (column === "review" || column === "blocked")
+                  return (
+                    <label
+                      key={column}
+                      className={cn(
+                        "flex items-center gap-2 rounded-lg px-2 py-1.5 text-xs",
+                        forcedByAttention
+                          ? "cursor-default text-muted-foreground"
+                          : "cursor-pointer hover:bg-accent/50"
+                      )}
+                    >
+                      <Checkbox
+                        checked={
+                          forcedByAttention ||
+                          !boardFilter.hiddenColumns.includes(column)
+                        }
+                        disabled={forcedByAttention}
+                        onCheckedChange={(checked) =>
+                          setBoardFilter((filter) => {
+                            if (checked === true) {
+                              return {
+                                ...filter,
+                                hiddenColumns: filter.hiddenColumns.filter(
+                                  (item) => item !== column
+                                ),
+                              }
+                            }
+                            if (
+                              filter.hiddenColumns.length >=
+                              BOARD_COLUMN_IDS.length - 1
+                            )
+                              return filter
                             return {
                               ...filter,
-                              hiddenColumns: filter.hiddenColumns.filter(
-                                (item) => item !== column
-                              ),
+                              hiddenColumns: [...filter.hiddenColumns, column],
                             }
-                          }
-                          if (
-                            filter.hiddenColumns.length >=
-                            BOARD_COLUMN_IDS.length - 1
-                          )
-                            return filter
-                          return {
-                            ...filter,
-                            hiddenColumns: [...filter.hiddenColumns, column],
-                          }
-                        })
-                      }
-                    />
-                    {t(COLUMN_LABEL_KEYS[column])}
-                  </label>
-                ))}
+                          })
+                        }
+                      />
+                      <TaskColumnIcon column={column} />
+                      {t(COLUMN_LABEL_KEYS[column])}
+                    </label>
+                  )
+                })}
                 <div className="my-1 h-px bg-border" />
                 <label className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-xs hover:bg-accent/50">
                   <Checkbox
@@ -866,33 +962,6 @@ export function TasksPage() {
                 </label>
               </PopoverContent>
             </Popover>
-
-            {/* Grouping — column-internal segments. Collection / Room are not
-              options: work_task has no collection_id, and Collection cannot
-              cross a folder. Same pill as the status filter. */}
-            <Select
-              value={grouping}
-              onValueChange={(v) => setGrouping(v as TasksBoardGrouping)}
-            >
-              <SelectTrigger
-                size="sm"
-                aria-label={`${t("groupBy")}: ${t(GROUPING_LABEL_KEYS[grouping])}`}
-                className="h-8 w-auto min-w-0 gap-1.5 rounded-full border-transparent bg-muted/70 px-3 text-[0.8125rem] font-medium shadow-none ws-msg-chip hover:bg-muted"
-              >
-                <Layers
-                  className="size-3.5 text-muted-foreground"
-                  aria-hidden="true"
-                />
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {TASKS_BOARD_GROUPINGS.map((g) => (
-                  <SelectItem key={g} value={g}>
-                    {t(GROUPING_LABEL_KEYS[g])}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
 
             {ownerOptions.length > 0 ? (
               <Select
@@ -910,6 +979,10 @@ export function TasksPage() {
                   aria-label={t("ownerFilter")}
                   className="h-8 w-auto max-w-48 gap-1.5 rounded-full border-transparent bg-muted/70 px-3 text-[0.8125rem] font-medium shadow-none ws-msg-chip hover:bg-muted"
                 >
+                  <UserRound
+                    className="size-3.5 shrink-0 text-muted-foreground"
+                    aria-hidden="true"
+                  />
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -962,7 +1035,10 @@ export function TasksPage() {
                   </SelectItem>
                   {BOARD_COLUMN_IDS.map((col) => (
                     <SelectItem key={col} value={col}>
-                      {t(COLUMN_LABEL_KEYS[col])}
+                      <span className="flex items-center gap-2">
+                        <TaskColumnIcon column={col} />
+                        {t(COLUMN_LABEL_KEYS[col])}
+                      </span>
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -1058,23 +1134,7 @@ export function TasksPage() {
                 return (
                   <TaskColumnDropZone key={col} column={col}>
                     <div className="flex h-6 shrink-0 items-center gap-2 px-0.5">
-                      {/* A short upright bar rather than a dot: it echoes the
-                        column it heads (and the pill radius of the toolbar
-                        above), and it reads as a marker instead of a bullet.
-                        Same tones as before. */}
-                      <span
-                        className={cn(
-                          "h-3.5 w-[3px] shrink-0 rounded-full",
-                          col === "backlog" && "bg-slate-400",
-                          col === "todo" && "bg-muted-foreground/50",
-                          col === "inProgress" && "bg-primary",
-                          col === "review" && "bg-violet-500",
-                          col === "done" && "bg-emerald-500",
-                          col === "blocked" && "bg-amber-500",
-                          col === "canceled" && "bg-rose-400"
-                        )}
-                        aria-hidden="true"
-                      />
+                      <TaskColumnIcon column={col} className="size-3.5" />
                       <h2 className="text-xs font-semibold">
                         {t(COLUMN_LABEL_KEYS[col])}
                       </h2>

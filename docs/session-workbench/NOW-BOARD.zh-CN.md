@@ -54,9 +54,10 @@
       `task.update / task.claim / task.assign` 修改、自领或指派；领取复用同一 Assignment +
       PromptQueue 事务。Session 对话顶部现有独立“待办任务”入口，显示当前负责的活动任务并
       可精确跳到看板卡片；任务没有塞进低频的“会话详情”元数据。任务工作流现已从通用
-      Host Control 说明中拆成独立 `codeg-task` Skill；看板补充全部、未分配、人工处理、
-      Agent 执行、需关注五个快捷视图，以及按具体负责 Session 分组/筛选。它们都只是同一
-      任务事实源的投影，没有新增第二套看板或状态机。仍待 collaborator。
+      Host Control 说明中拆成独立 `codeg-task` Skill；看板补充全部、Agent、需关注三个稳定
+      视图，以及按具体负责 Session 筛选。原先混合执行方式和状态的五项横排已撤下；分组、
+      列显隐和归档集中进“显示”菜单，七种状态复用 Multica 风格的圆形语义图标。它们都只是
+      同一任务事实源的投影，没有新增第二套看板或状态机。仍待 collaborator。
 
 - [x] **Task 状态列与 Backlog** —— UI 与底层均固定为“想法池 / 待办 / 进行中 / 审核中 /
       已完成 / 已阻塞 / 已取消”七态，列可隐藏但不允许每个项目另造状态机。SQLite 迁移

@@ -53,12 +53,10 @@ const rows = [
 ]
 
 describe("filterTasksByScope", () => {
-  it("keeps the five quick views as overlapping projections", () => {
+  it("keeps the three stable views as overlapping projections", () => {
     expect(filterTasksByScope(rows, "all").map((t) => t.id)).toEqual([
       1, 2, 3, 4, 5, 6,
     ])
-    expect(filterTasksByScope(rows, "unassigned").map((t) => t.id)).toEqual([1])
-    expect(filterTasksByScope(rows, "manual").map((t) => t.id)).toEqual([2, 6])
     expect(filterTasksByScope(rows, "agent").map((t) => t.id)).toEqual([
       3, 4, 5,
     ])

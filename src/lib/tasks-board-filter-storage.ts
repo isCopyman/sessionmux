@@ -37,13 +37,7 @@ export const TASKS_BOARD_GROUPINGS = [
 ] as const
 export type TasksBoardGrouping = (typeof TASKS_BOARD_GROUPINGS)[number]
 export const DEFAULT_TASKS_BOARD_GROUPING: TasksBoardGrouping = "none"
-export const TASKS_SCOPES = [
-  "all",
-  "unassigned",
-  "manual",
-  "agent",
-  "attention",
-] as const
+export const TASKS_SCOPES = ["all", "agent", "attention"] as const
 export type TasksScope = (typeof TASKS_SCOPES)[number]
 export const DEFAULT_TASKS_SCOPE: TasksScope = "all"
 
@@ -133,6 +127,11 @@ export function loadTasksScope(): TasksScope {
   if (typeof window === "undefined") return DEFAULT_TASKS_SCOPE
   try {
     const raw = localStorage.getItem(SCOPE_FILTER_KEY)
+    // The first quick-view experiment exposed unassigned/manual as two tabs.
+    // Both are execution-mode filters rather than durable top-level views, so
+    // old preferences migrate to the neutral overview instead of stranding a
+    // user on a tab that no longer exists.
+    if (raw === "unassigned" || raw === "manual") return DEFAULT_TASKS_SCOPE
     return TASKS_SCOPES.find((scope) => scope === raw) ?? DEFAULT_TASKS_SCOPE
   } catch {
     return DEFAULT_TASKS_SCOPE

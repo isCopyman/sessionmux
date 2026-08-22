@@ -368,8 +368,8 @@ describe("TasksPage grouping", () => {
     const { unmount } = renderPage()
     expect(screen.queryByTestId("task-group-header")).toBeNull()
 
-    await userEvent.click(screen.getByRole("combobox", { name: /^Group:/ }))
-    await userEvent.click(screen.getByRole("option", { name: "By project" }))
+    await userEvent.click(screen.getByRole("button", { name: "Display" }))
+    await userEvent.click(screen.getByRole("radio", { name: "By project" }))
 
     expect(localStorage.getItem("workspace:tasks-board-grouping")).toBe(
       "folder"
@@ -379,9 +379,8 @@ describe("TasksPage grouping", () => {
     unmount()
     renderPage()
     expect(headerLabels().length).toBeGreaterThan(0)
-    expect(screen.getByRole("combobox", { name: /^Group:/ })).toHaveTextContent(
-      "By project"
-    )
+    await userEvent.click(screen.getByRole("button", { name: "Display" }))
+    expect(screen.getByRole("radio", { name: "By project" })).toBeChecked()
   })
 
   it("adds the same group headers in list view", () => {
@@ -411,7 +410,14 @@ describe("TasksPage grouping", () => {
 })
 
 describe("TasksPage quick views", () => {
-  it("switches between unassigned, manual, Agent, and attention projections", async () => {
+  it("keeps three stable views and forces the two attention columns visible", async () => {
+    localStorage.setItem(
+      "workspace:tasks-board-filter",
+      JSON.stringify({
+        hiddenColumns: ["review", "blocked"],
+        showArchived: false,
+      })
+    )
     h.tasks = [
       task(1, "todo", { title: "unassigned", execution_mode: null }),
       task(2, "todo", { title: "manual", execution_mode: "manual" }),
@@ -433,24 +439,20 @@ describe("TasksPage quick views", () => {
     h.conversations = [conversation(101, "Research GPT", "codex")]
     renderPage()
 
-    await userEvent.click(screen.getByRole("button", { name: "Unassigned" }))
-    expect(screen.getByText("unassigned")).toBeInTheDocument()
-    expect(screen.queryByText("manual")).toBeNull()
+    expect(screen.queryByRole("tab", { name: "Unassigned" })).toBeNull()
+    expect(screen.queryByRole("tab", { name: "Manual" })).toBeNull()
 
-    await userEvent.click(screen.getByRole("button", { name: "Manual" }))
-    expect(screen.getByText("manual")).toBeInTheDocument()
-    expect(screen.getByText("blocked manual")).toBeInTheDocument()
-    expect(screen.queryByText("session work")).toBeNull()
-
-    await userEvent.click(screen.getByRole("button", { name: "Agent" }))
+    await userEvent.click(screen.getByRole("tab", { name: "Agent" }))
     expect(screen.getByText("session work")).toBeInTheDocument()
-    expect(screen.getByText("review this")).toBeInTheDocument()
     expect(screen.queryByText("blocked manual")).toBeNull()
 
-    await userEvent.click(screen.getByRole("button", { name: "Needs review" }))
+    await userEvent.click(screen.getByRole("tab", { name: /Needs attention/ }))
     expect(screen.getByText("review this")).toBeInTheDocument()
     expect(screen.getByText("blocked manual")).toBeInTheDocument()
     expect(screen.queryByText("session work")).toBeNull()
+    expect(screen.getByRole("heading", { name: "Review" })).toBeInTheDocument()
+    expect(screen.getByRole("heading", { name: "Blocked" })).toBeInTheDocument()
+    expect(screen.queryByRole("heading", { name: "To do" })).toBeNull()
     expect(localStorage.getItem("workspace:tasks-scope-filter")).toBe(
       "attention"
     )
