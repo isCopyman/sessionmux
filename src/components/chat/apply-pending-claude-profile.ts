@@ -1,4 +1,4 @@
-import { conversationSetClaudeProfile } from "@/lib/api"
+import { persistPendingAgentProfile } from "@/components/chat/apply-pending-agent-profile"
 
 /**
  * Persist the launch profile that already succeeded on the draft connection.
@@ -9,10 +9,8 @@ export async function persistPendingClaudeProfile(options: {
   conversationId: number
   pendingProfileId: string | null
 }): Promise<boolean> {
-  if (options.pendingProfileId == null) return false
-  await conversationSetClaudeProfile(
-    options.conversationId,
-    options.pendingProfileId
-  )
-  return true
+  return persistPendingAgentProfile({
+    agentType: "claude_code",
+    ...options,
+  })
 }

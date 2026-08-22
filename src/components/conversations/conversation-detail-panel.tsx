@@ -74,7 +74,7 @@ import { AgentDiagnosticsDialog } from "@/components/settings/agent-diagnostics-
 import { useFeedbackEnabled } from "@/hooks/use-feedback-enabled"
 import { useSessionFeedback } from "@/hooks/use-session-feedback"
 import { AgentSelector } from "@/components/chat/agent-selector"
-import { persistPendingClaudeProfile } from "@/components/chat/apply-pending-claude-profile"
+import { persistPendingAgentProfile } from "@/components/chat/apply-pending-agent-profile"
 import { ChatInput } from "@/components/chat/chat-input"
 import {
   WelcomeHero,
@@ -90,6 +90,7 @@ import { TabBar } from "@/components/tabs/tab-bar"
 import { TabDragGhost } from "@/components/tabs/tab-drag-ghost"
 import {
   acpFork,
+  conversationSetLaunchPreferences,
   createChatConversation,
   createChatDir,
   createConversation,
@@ -118,8 +119,7 @@ import {
   getPromptDraftDisplayText,
 } from "@/lib/prompt-draft"
 import {
-  CODEG_CLAUDE_PROFILE_CONFIG_KEY,
-  CODEG_CLAUDE_PROFILE_ENV_KEY,
+  CODEG_AGENT_PROFILE_CONFIG_KEY,
   type AgentType,
   type ContentBlock,
   type ConversationStatus,
@@ -131,6 +131,7 @@ import {
   type QuestionAnswer,
   type UserMessageBlock,
 } from "@/lib/types"
+import { getAgentProfileAdapter } from "@/lib/agent-profile"
 import { useRouter } from "next/navigation"
 import {
   lastUserPromptText,
@@ -438,7 +439,7 @@ const ConversationTabView = memo(function ConversationTabView({
   const mountedRef = useRef(true)
   const selectedAgentRef = useRef(selectedAgent)
   const createConversationPendingRef = useRef(false)
-  const pendingClaudeProfileRef = useRef<string | null>(null)
+  const pendingAgentProfileRef = useRef<string | null>(null)
   // Single-flight guard for the eager scratch-dir prepare (on chat-mode select).
   const prepareChatDirPendingRef = useRef(false)
   const sessionIdRef = useRef<string | null>(null)
@@ -484,8 +485,8 @@ const ConversationTabView = memo(function ConversationTabView({
   }, [selectedAgent])
 
   useEffect(() => {
-    if (selectedAgent === "claude_code") return
-    pendingClaudeProfileRef.current = null
+    if (getAgentProfileAdapter(selectedAgent)) return
+    pendingAgentProfileRef.current = null
   }, [selectedAgent])
 
   // Eagerly create the chat-mode scratch dir the moment this becomes an unbound
@@ -599,10 +600,13 @@ const ConversationTabView = memo(function ConversationTabView({
   // surface a persistent install prompt instead (see composerBlockedMessage).
   const { agents: acpAgents, fresh: acpAgentsFresh } = useAcpAgents()
   const agentDefaultProfileId = useMemo((): string | null | undefined => {
-    if (selectedAgent !== "claude_code") return null
+    const adapter = getAgentProfileAdapter(selectedAgent)
+    if (!adapter) return null
     if (!acpAgentsFresh) return undefined
     const info = acpAgents.find((a) => a.agent_type === selectedAgent)
-    const raw = info?.env?.[CODEG_CLAUDE_PROFILE_ENV_KEY]?.trim()
+    const raw = adapter.defaultProfileEnvKey
+      ? info?.env?.[adapter.defaultProfileEnvKey]?.trim()
+      : null
     return raw || null
   }, [acpAgents, acpAgentsFresh, selectedAgent])
   const selectedAgentNotInstalled = useMemo(() => {
@@ -699,12 +703,12 @@ const ConversationTabView = memo(function ConversationTabView({
     sessionId: connSessionId,
     restartDraftWithConfigValues: connRestartDraftWithConfigValues,
   } = conn
-  const handlePendingClaudeProfileChange = useCallback(
+  const handlePendingAgentProfileChange = useCallback(
     async (profileId: string) => {
       const applied = await connRestartDraftWithConfigValues({
-        [CODEG_CLAUDE_PROFILE_CONFIG_KEY]: profileId,
+        [CODEG_AGENT_PROFILE_CONFIG_KEY]: profileId,
       })
-      if (applied) pendingClaudeProfileRef.current = profileId
+      if (applied) pendingAgentProfileRef.current = profileId
       return applied
     },
     [connRestartDraftWithConfigValues]
@@ -1149,6 +1153,14 @@ const ConversationTabView = memo(function ConversationTabView({
       // on `connected` for chat drafts too, so by the time we get here the agent
       // is live and the prompt is delivered inline — never parked in the queue.
       const sendOwnTab = ownTab
+      const launchConfigValues = Object.fromEntries(
+        connectionConfigOptions.map((option) => [
+          option.id,
+          option.kind.type === "select"
+            ? option.kind.current_value
+            : String(option.kind.current_value),
+        ])
+      )
 
       if (!hasPersistedConversation && !canAutoConnect) {
         setAgentConnectError(tWelcome("enableAgentFirstPlaceholder"))
@@ -1265,14 +1277,17 @@ const ConversationTabView = memo(function ConversationTabView({
           // this launch-time profile. Once the DB row exists, persist that
           // applied choice before the first prompt so future resume/reconnect
           // paths resolve the same profile without respawning a second time.
-          await persistPendingClaudeProfile({
+          await persistPendingAgentProfile({
+            agentType: selectedAgent,
             conversationId,
-            pendingProfileId:
-              selectedAgent === "claude_code"
-                ? pendingClaudeProfileRef.current
-                : null,
+            pendingProfileId: pendingAgentProfileRef.current,
           })
-          pendingClaudeProfileRef.current = null
+          pendingAgentProfileRef.current = null
+          await conversationSetLaunchPreferences(
+            conversationId,
+            selectedModeIdArg ?? selectedModeId,
+            launchConfigValues
+          )
         }
         try {
           let newConversationId: number
@@ -1400,6 +1415,7 @@ const ConversationTabView = memo(function ConversationTabView({
       bindConversationTab,
       canAutoConnect,
       connectionReady,
+      connectionConfigOptions,
       effectiveConversationId,
       folderId,
       hasPersistedConversation,
@@ -1407,6 +1423,7 @@ const ConversationTabView = memo(function ConversationTabView({
       pinTab,
       refreshConversations,
       selectedAgent,
+      selectedModeId,
       setDbConversationId,
       setExternalId,
       setPendingCleanup,
@@ -2194,7 +2211,7 @@ const ConversationTabView = memo(function ConversationTabView({
       attachmentTabId={tabId}
       draftStorageKey={draftStorageKey}
       sourceConversationId={dbConversationId}
-      onPendingClaudeProfileChange={handlePendingClaudeProfileChange}
+      onPendingAgentProfileChange={handlePendingAgentProfileChange}
       agentDefaultProfileId={agentDefaultProfileId}
       hideInput={isWelcomeMode || Boolean(acpLoadError)}
       composerBanner={acpLoadErrorBanner}
@@ -2328,7 +2345,7 @@ const ConversationTabView = memo(function ConversationTabView({
                 attachmentTabId={tabId}
                 draftStorageKey={draftStorageKey}
                 sourceConversationId={dbConversationId}
-                onPendingClaudeProfileChange={handlePendingClaudeProfileChange}
+                onPendingAgentProfileChange={handlePendingAgentProfileChange}
                 agentDefaultProfileId={agentDefaultProfileId}
                 isActive={isActive}
                 showActiveFlow={showActiveFlow}

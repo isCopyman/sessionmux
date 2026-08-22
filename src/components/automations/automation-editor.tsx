@@ -6,6 +6,7 @@ import { ArrowLeft, Globe, Wand2 } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { AgentSelector } from "@/components/chat/agent-selector"
+import { InlineAgentProfileSelector } from "@/components/chat/agent-profile-selector"
 import {
   RichComposer,
   type RichComposerHandle,
@@ -33,6 +34,7 @@ import { Label } from "@/components/ui/label"
 import { FolderSelect } from "@/components/shared/folder-select"
 import { SessionSelect } from "@/components/shared/session-select"
 import { cn } from "@/lib/utils"
+import { agentSupportsProfiles } from "@/lib/agent-profile"
 import { automationComputeNextRun, listAllConversations } from "@/lib/api"
 import type {
   AgentType,
@@ -43,6 +45,10 @@ import type {
   AutomationTriggerKind,
   DbConversationSummary,
   PromptInputBlock,
+} from "@/lib/types"
+import {
+  CODEG_AGENT_PROFILE_CONFIG_KEY,
+  FOLLOW_DEFAULT_AGENT_PROFILE_ID,
 } from "@/lib/types"
 
 interface AutomationEditorProps {
@@ -170,7 +176,16 @@ export function AutomationEditor({
   // One transient probe feeds both the config selectors and the `/` command menu
   // (the snapshot carries available_commands). `$` Codex skills load separately
   // (filesystem scan) inside the invocations hook.
-  const agentOptions = useAgentOptions(agentType, folderPath)
+  const profileSupported = agentSupportsProfiles(agentType)
+  const profileId =
+    configValues[CODEG_AGENT_PROFILE_CONFIG_KEY] ??
+    FOLLOW_DEFAULT_AGENT_PROFILE_ID
+  const agentOptions = useAgentOptions(
+    agentType,
+    folderPath,
+    true,
+    profileSupported ? profileId : null
+  )
   const invocations = useComposerInvocations({
     editorRef,
     agentType,
@@ -271,6 +286,9 @@ export function AutomationEditor({
         modeId,
         configValues
       )
+      if (profileSupported) {
+        config_values[CODEG_AGENT_PROFILE_CONFIG_KEY] = profileId
+      }
       // Capture friendly labels for the chosen agent/folder/mode/options so the
       // detail page renders names, not raw value ids — and keeps doing so if the
       // agent is later uninstalled or the folder removed.
@@ -429,7 +447,21 @@ export function AutomationEditor({
           onExternalMenuKeyDown={invocations.onKeyDown}
           className="max-h-[18rem] min-h-[7.5rem]"
         />
-        <div className="px-2 pb-2 pt-1">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-2 pb-2 pt-1">
+          {profileSupported ? (
+            <InlineAgentProfileSelector
+              agentType={agentType}
+              conversationId={null}
+              pendingProfileId={profileId}
+              onPendingProfileChange={async (next) => {
+                setConfigValues((previous) => ({
+                  ...previous,
+                  [CODEG_AGENT_PROFILE_CONFIG_KEY]: next,
+                }))
+                return true
+              }}
+            />
+          ) : null}
           <AgentConfigSection
             snapshot={agentOptions.snapshot}
             loading={agentOptions.loading}

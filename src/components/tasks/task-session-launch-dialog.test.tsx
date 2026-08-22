@@ -4,6 +4,7 @@ import { NextIntlClientProvider } from "next-intl"
 import { describe, expect, it, vi } from "vitest"
 
 import enMessages from "@/i18n/messages/en.json"
+import { describeAgentOptions } from "@/lib/api"
 import type { WorkTask, WorkTaskConfig } from "@/lib/types"
 import { TaskSessionLaunchDialog } from "./task-session-launch-dialog"
 
@@ -11,8 +12,8 @@ vi.mock("@/components/chat/agent-selector", () => ({
   AgentSelector: () => <div>Claude Code</div>,
 }))
 
-vi.mock("@/components/chat/claude-profile-selector", () => ({
-  InlineClaudeProfileSelector: ({
+vi.mock("@/components/chat/agent-profile-selector", () => ({
+  InlineAgentProfileSelector: ({
     onPendingProfileChange,
   }: {
     onPendingProfileChange?: (id: string) => Promise<boolean>
@@ -134,5 +135,37 @@ describe("TaskSessionLaunchDialog", () => {
       agent_type: "claude_code",
       config_values: { __codeg_profile__: "cpa" },
     })
+  })
+
+  it("re-probes ACP selectors in the selected launch Profile", async () => {
+    const user = userEvent.setup()
+    vi.mocked(describeAgentOptions).mockClear()
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <TaskSessionLaunchDialog
+          open
+          onOpenChange={() => {}}
+          task={task}
+          folderPath="/repo-profile-reprobe"
+          onSubmit={async () => {}}
+        />
+      </NextIntlClientProvider>
+    )
+
+    await waitFor(() =>
+      expect(describeAgentOptions).toHaveBeenCalledWith(
+        "claude_code",
+        "/repo-profile-reprobe",
+        "follow-default"
+      )
+    )
+    await user.click(screen.getByRole("button", { name: /Profile:/ }))
+    await waitFor(() =>
+      expect(describeAgentOptions).toHaveBeenCalledWith(
+        "claude_code",
+        "/repo-profile-reprobe",
+        "cpa"
+      )
+    )
   })
 })

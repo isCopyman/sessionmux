@@ -404,10 +404,37 @@ pub async fn acp_goal_control(
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ConversationSetLaunchPreferencesParams {
+    pub conversation_id: i32,
+    #[serde(default)]
+    pub mode_id: Option<String>,
+    #[serde(default)]
+    pub config_values: BTreeMap<String, String>,
+}
+
+pub async fn conversation_set_launch_preferences(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<ConversationSetLaunchPreferencesParams>,
+) -> Result<Json<()>, AppCommandError> {
+    acp_commands::conversation_set_launch_preferences_core(
+        &state.db,
+        params.conversation_id,
+        params.mode_id,
+        params.config_values,
+    )
+    .await
+    .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;
+    Ok(Json(()))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AcpDescribeAgentOptionsParams {
     pub agent_type: crate::models::AgentType,
     #[serde(default)]
     pub working_dir: Option<String>,
+    #[serde(default)]
+    pub profile_id: Option<String>,
 }
 
 pub async fn acp_describe_agent_options(
@@ -420,6 +447,7 @@ pub async fn acp_describe_agent_options(
         &state.data_dir,
         params.agent_type,
         params.working_dir,
+        params.profile_id,
     )
     .await
     .map_err(|e| AppCommandError::task_execution_failed(e.to_string()))?;

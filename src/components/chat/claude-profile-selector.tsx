@@ -18,19 +18,16 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { DropdownRadioItemContent } from "@/components/chat/dropdown-radio-item-content"
 import {
-  claudeProfileList,
-  conversationGetClaudeProfile,
-  conversationSetClaudeProfile,
-  openSettingsWindow,
-} from "@/lib/api"
+  getAgentProfileAdapter,
+  type AgentLaunchProfileInfo,
+} from "@/lib/agent-profile"
 import { toErrorMessage } from "@/lib/app-error"
-import {
-  FOLLOW_DEFAULT_CLAUDE_PROFILE_ID,
-  type ClaudeProfileInfo,
-} from "@/lib/types"
+import { FOLLOW_DEFAULT_AGENT_PROFILE_ID, type AgentType } from "@/lib/types"
 
-export interface ClaudeProfileSelectorProps {
-  /** Skip profile I/O when the surrounding composer is not Claude Code. */
+export interface AgentProfileSelectorProps {
+  /** The Harness whose launch-profile adapter owns this selector. */
+  agentType?: AgentType
+  /** Skip profile I/O when the surrounding composer has no profile capability. */
   enabled?: boolean
   conversationId: number | null
   disabled?: boolean
@@ -43,53 +40,51 @@ export interface ClaudeProfileSelectorProps {
   agentDefaultProfileId?: string | null
 }
 
-export interface ClaudeProfileSelectorOption {
+/** Compatibility name for existing call sites while the selector is generic. */
+export type ClaudeProfileSelectorProps = AgentProfileSelectorProps
+
+export interface AgentProfileSelectorOption {
   value: string
   label: string
   description: string | null
 }
+export type ClaudeProfileSelectorOption = AgentProfileSelectorOption
 
 /**
- * Shared state and actions for every Claude Profile selector surface.
+ * Shared state and actions for every Harness Profile selector surface.
  *
  * The wide composer uses a dropdown while the narrow composer uses the same
  * master-detail panel as Model/Mode/Effort. Keeping the profile lifecycle here
  * prevents those two responsive layouts from drifting into different fields
  * or switching semantics again.
  */
-export interface ClaudeProfileSelectorModel {
+export interface AgentProfileSelectorModel {
   controlName: string
   currentLabel: string
   displayedId: string | null
-  options: ClaudeProfileSelectorOption[]
+  options: AgentProfileSelectorOption[]
   loading: boolean
   disabled: boolean
   select: (profileId: string) => Promise<void>
   manage: () => void
 }
+export type ClaudeProfileSelectorModel = AgentProfileSelectorModel
 
-function profileDescription(profile: ClaudeProfileInfo): string | null {
-  if (profile.kind === "configDir") {
-    return profile.configDir?.trim() || null
-  }
-  if (profile.kind === "managed") {
-    return profile.baseUrl?.trim() || null
-  }
-  return null
-}
-
-export function useClaudeProfileSelectorModel({
+export function useAgentProfileSelectorModel({
+  agentType = "claude_code",
   enabled = true,
   conversationId,
   disabled = false,
   pendingProfileId = null,
   onPendingProfileChange,
   agentDefaultProfileId,
-}: ClaudeProfileSelectorProps): ClaudeProfileSelectorModel {
+}: AgentProfileSelectorProps): AgentProfileSelectorModel {
   const t = useTranslations("AcpAgentSettings.claudeProfile")
+  const adapter = useMemo(() => getAgentProfileAdapter(agentType), [agentType])
+  const profileEnabled = enabled && adapter != null
   const tRef = useRef(t)
   tRef.current = t
-  const [profiles, setProfiles] = useState<ClaudeProfileInfo[]>([])
+  const [profiles, setProfiles] = useState<AgentLaunchProfileInfo[]>([])
   const [profilesReady, setProfilesReady] = useState(false)
   const [pickedId, setPickedId] = useState<string | null>(null)
   const [switching, setSwitching] = useState(false)
@@ -98,9 +93,15 @@ export function useClaudeProfileSelectorModel({
     profileId: string | null
   } | null>(null)
   useEffect(() => {
-    if (!enabled) return
+    if (!profileEnabled || !adapter) {
+      setProfiles([])
+      setProfilesReady(true)
+      return
+    }
     let cancelled = false
-    void claudeProfileList()
+    setProfilesReady(false)
+    void adapter
+      .list()
       .then((list) => {
         if (cancelled) return
         setProfiles(list)
@@ -116,7 +117,7 @@ export function useClaudeProfileSelectorModel({
     return () => {
       cancelled = true
     }
-  }, [enabled])
+  }, [adapter, profileEnabled])
 
   // Which profile this conversation is actually bound to. Without this the chip
   // read `follow-default` on every mount, so reopening the app made every
@@ -125,9 +126,10 @@ export function useClaudeProfileSelectorModel({
   // first entry exactly as it did before, and a toast for a label that is only
   // cosmetically wrong would be worse than the wrong label.
   useEffect(() => {
-    if (!enabled || conversationId == null) return
+    if (!profileEnabled || !adapter || conversationId == null) return
     let cancelled = false
-    void conversationGetClaudeProfile(conversationId)
+    void adapter
+      .getConversationProfile(conversationId)
       .then((result) => {
         if (cancelled) return
         setBoundFetch({
@@ -142,26 +144,24 @@ export function useClaudeProfileSelectorModel({
     return () => {
       cancelled = true
     }
-  }, [conversationId, enabled])
+  }, [adapter, conversationId, profileEnabled])
 
   const displayedId = useMemo(() => {
-    if (!enabled) return null
+    if (!profileEnabled) return null
     if (!profilesReady) return null
     const normalize = (id: string) =>
       profiles.some((item) => item.id === id)
         ? id
-        : FOLLOW_DEFAULT_CLAUDE_PROFILE_ID
+        : FOLLOW_DEFAULT_AGENT_PROFILE_ID
     if (conversationId == null) {
       const chosen = pendingProfileId ?? pickedId
       if (chosen) return normalize(chosen)
       if (agentDefaultProfileId === undefined) return null
-      return normalize(
-        agentDefaultProfileId ?? FOLLOW_DEFAULT_CLAUDE_PROFILE_ID
-      )
+      return normalize(agentDefaultProfileId ?? FOLLOW_DEFAULT_AGENT_PROFILE_ID)
     }
     if (pickedId) return normalize(pickedId)
     if (boundFetch?.conversationId !== conversationId) return null
-    return normalize(boundFetch.profileId ?? FOLLOW_DEFAULT_CLAUDE_PROFILE_ID)
+    return normalize(boundFetch.profileId ?? FOLLOW_DEFAULT_AGENT_PROFILE_ID)
   }, [
     agentDefaultProfileId,
     boundFetch,
@@ -170,7 +170,7 @@ export function useClaudeProfileSelectorModel({
     pickedId,
     profiles,
     profilesReady,
-    enabled,
+    profileEnabled,
   ])
   const selected = useMemo(
     () => profiles.find((item) => item.id === displayedId),
@@ -179,7 +179,7 @@ export function useClaudeProfileSelectorModel({
   const currentLabel =
     displayedId == null
       ? t("loading")
-      : displayedId === FOLLOW_DEFAULT_CLAUDE_PROFILE_ID
+      : displayedId === FOLLOW_DEFAULT_AGENT_PROFILE_ID
         ? t("followDefault")
         : (selected?.label ?? displayedId)
   const controlName = t("controlName")
@@ -208,7 +208,8 @@ export function useClaudeProfileSelectorModel({
       }
       const previous = pickedId
       try {
-        const result = await conversationSetClaudeProfile(
+        if (!adapter) return
+        const result = await adapter.setConversationProfile(
           conversationId,
           profileId
         )
@@ -229,6 +230,7 @@ export function useClaudeProfileSelectorModel({
     },
     [
       conversationId,
+      adapter,
       displayedId,
       onPendingProfileChange,
       pickedId,
@@ -238,24 +240,23 @@ export function useClaudeProfileSelectorModel({
   )
 
   const handleManage = useCallback(() => {
-    void openSettingsWindow("agents", { agentType: "claude_code" }).catch(
-      (error: unknown) => {
-        toast.error(t("openSettingsFailed"), {
-          description: toErrorMessage(error),
-        })
-      }
-    )
-  }, [t])
+    if (!adapter) return
+    void adapter.manage().catch((error: unknown) => {
+      toast.error(t("openSettingsFailed"), {
+        description: toErrorMessage(error),
+      })
+    })
+  }, [adapter, t])
 
-  const options = useMemo<ClaudeProfileSelectorOption[]>(
+  const options = useMemo<AgentProfileSelectorOption[]>(
     () =>
       profiles.map((profile) => ({
         value: profile.id,
         label:
-          profile.id === FOLLOW_DEFAULT_CLAUDE_PROFILE_ID
+          profile.id === FOLLOW_DEFAULT_AGENT_PROFILE_ID
             ? t("followDefault")
             : profile.label,
-        description: profileDescription(profile),
+        description: profile.description,
       })),
     [profiles, t]
   )
@@ -266,7 +267,7 @@ export function useClaudeProfileSelectorModel({
       currentLabel,
       displayedId,
       options,
-      loading: enabled && !profilesReady,
+      loading: profileEnabled && !profilesReady,
       disabled: triggerDisabled,
       select: handleSelect,
       manage: handleManage,
@@ -275,7 +276,7 @@ export function useClaudeProfileSelectorModel({
       controlName,
       currentLabel,
       displayedId,
-      enabled,
+      profileEnabled,
       handleManage,
       handleSelect,
       options,
@@ -285,10 +286,13 @@ export function useClaudeProfileSelectorModel({
   )
 }
 
-export function ClaudeProfileSelectorDropdown({
+/** Compatibility hook; all lifecycle logic now lives in the generic model. */
+export const useClaudeProfileSelectorModel = useAgentProfileSelectorModel
+
+export function AgentProfileSelectorDropdown({
   model,
 }: {
-  model: ClaudeProfileSelectorModel
+  model: AgentProfileSelectorModel
 }) {
   const t = useTranslations("AcpAgentSettings.claudeProfile")
 
@@ -357,6 +361,14 @@ export function ClaudeProfileSelectorDropdown({
 }
 
 export function InlineClaudeProfileSelector(props: ClaudeProfileSelectorProps) {
-  const model = useClaudeProfileSelectorModel(props)
-  return <ClaudeProfileSelectorDropdown model={model} />
+  const model = useAgentProfileSelectorModel(props)
+  return <AgentProfileSelectorDropdown model={model} />
 }
+
+export function InlineAgentProfileSelector(props: AgentProfileSelectorProps) {
+  const model = useAgentProfileSelectorModel(props)
+  return <AgentProfileSelectorDropdown model={model} />
+}
+
+/** Compatibility export for older callers. */
+export const ClaudeProfileSelectorDropdown = AgentProfileSelectorDropdown

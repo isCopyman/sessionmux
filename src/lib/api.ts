@@ -5148,7 +5148,8 @@ export async function setChatAuthoringSettings(
  * Does NOT touch chat-side `localStorage` preferences. */
 export async function describeAgentOptions(
   agentType: AgentType,
-  workingDir?: string | null
+  workingDir?: string | null,
+  profileId?: string | null
 ): Promise<AgentOptionsSnapshot> {
   // The backend probe has its own 60s timeout (`ConnectionManager::
   // probe_agent_options`) plus 500ms grace + poll/serialization
@@ -5161,9 +5162,23 @@ export async function describeAgentOptions(
     {
       agentType,
       workingDir: workingDir ?? null,
+      profileId: profileId ?? null,
     },
     { timeoutMs: 70_000 }
   )
+}
+
+/** Persist a complete Session launch snapshot before ACP starts. */
+export async function conversationSetLaunchPreferences(
+  conversationId: number,
+  modeId: string | null,
+  configValues: Record<string, string>
+): Promise<void> {
+  return getTransport().call("conversation_set_launch_preferences", {
+    conversationId,
+    modeId,
+    configValues,
+  })
 }
 
 // ───────────────────────────────────────────────────────────────────────────

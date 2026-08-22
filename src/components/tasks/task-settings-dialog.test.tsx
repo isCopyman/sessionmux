@@ -22,6 +22,9 @@ vi.mock("@/lib/api", () => ({
 vi.mock("@/components/chat/agent-selector", () => ({
   AgentSelector: () => <div data-testid="agent-selector" />,
 }))
+vi.mock("@/components/chat/agent-profile-selector", () => ({
+  InlineAgentProfileSelector: () => <div data-testid="profile-selector" />,
+}))
 vi.mock("@/components/automations/agent-config-section", () => ({
   AgentConfigSection: () => <div data-testid="agent-config" />,
   effectiveSelections: (

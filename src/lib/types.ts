@@ -1738,6 +1738,8 @@ export interface SessionConfigOptionInfo {
 
 /** Virtual Claude launch profile: do not set `CLAUDE_CONFIG_DIR`. */
 export const FOLLOW_DEFAULT_CLAUDE_PROFILE_ID = "follow-default"
+/** Harness-agnostic name for the shared virtual inheritance choice. */
+export const FOLLOW_DEFAULT_AGENT_PROFILE_ID = FOLLOW_DEFAULT_CLAUDE_PROFILE_ID
 
 /**
  * Virtual Claude launch profile: force the official endpoint and clear the
@@ -1746,9 +1748,21 @@ export const FOLLOW_DEFAULT_CLAUDE_PROFILE_ID = "follow-default"
  */
 export const OFFICIAL_DIRECT_CLAUDE_PROFILE_ID = "official-direct"
 
+/**
+ * Host-owned launch-profile pin shared by every Harness adapter.
+ *
+ * A launch profile is deliberately not an ACP config option: it selects the
+ * environment/configuration used to start the ACP process, so it must be
+ * resolved before the Harness can advertise Model / Effort / Mode selectors.
+ * Claude is the first adapter; future Codex/Grok adapters reuse this key and
+ * the same Session persistence/UI lifecycle.
+ */
+export const CODEG_AGENT_PROFILE_CONFIG_KEY = "__codeg_profile__"
+
 /** Agent-setting `env_json` key for the default Claude launch profile. */
 export const CODEG_CLAUDE_PROFILE_ENV_KEY = "CODEG_CLAUDE_PROFILE"
-export const CODEG_CLAUDE_PROFILE_CONFIG_KEY = "__codeg_profile__"
+/** @deprecated Use the Harness-agnostic launch-profile key. */
+export const CODEG_CLAUDE_PROFILE_CONFIG_KEY = CODEG_AGENT_PROFILE_CONFIG_KEY
 
 /**
  * Wire DTO for `claude_profile_list` / `claude_profile_upsert`. Tokens are
@@ -1817,11 +1831,14 @@ export interface ClaudeSettingsReadResult {
   droppedSecretKeys: string[]
 }
 
-export interface ConversationClaudeProfileResult {
+export interface ConversationAgentProfileResult {
   conversationId: number
   profileId?: string | null
   affectedRunningSessions: number
 }
+
+/** @deprecated Use the Harness-agnostic result type. */
+export type ConversationClaudeProfileResult = ConversationAgentProfileResult
 
 /** Frontend gate matching backend `is_valid_profile_id` plus reserved ids. */
 export function isValidClaudeProfileId(id: string): boolean {

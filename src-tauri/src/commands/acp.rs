@@ -9353,13 +9353,41 @@ pub async fn acp_preflight(
 /// Diverging any of these from the others reintroduces the
 /// "[UI shows options] != [delegation gets options]" inconsistency that
 /// the multi-agent settings panel was designed to prevent.
+async fn apply_agent_launch_profile_env(
+    db: &AppDatabase,
+    data_dir: &Path,
+    agent_type: AgentType,
+    conversation_id: Option<i32>,
+    agent_env_json: Option<&str>,
+    explicit_profile_id: Option<&str>,
+    runtime_env: &mut BTreeMap<String, String>,
+) -> Result<(), AcpError> {
+    match agent_type {
+        AgentType::ClaudeCode => {
+            crate::commands::claude_profile::apply_claude_profile_env(
+                db,
+                data_dir,
+                conversation_id,
+                agent_env_json,
+                explicit_profile_id,
+                runtime_env,
+            )
+            .await
+        }
+        _ if explicit_profile_id.is_some() => Err(AcpError::protocol(format!(
+            "{agent_type} does not provide a launch-profile adapter"
+        ))),
+        _ => Ok(()),
+    }
+}
+
 pub(crate) async fn build_session_runtime_env(
     db: &AppDatabase,
     agent_type: AgentType,
     session_id: Option<&str>,
     data_dir: &Path,
     conversation_id: Option<i32>,
-    explicit_claude_profile_id: Option<&str>,
+    explicit_profile_id: Option<&str>,
 ) -> Result<BTreeMap<String, String>, AcpError> {
     let setting = agent_setting_service::get_by_agent_type(&db.conn, agent_type)
         .await
@@ -9396,17 +9424,16 @@ pub(crate) async fn build_session_runtime_env(
         runtime_env.insert("OPENCLAW_RESET_SESSION".into(), "1".into());
     }
 
-    if agent_type == AgentType::ClaudeCode {
-        crate::commands::claude_profile::apply_claude_profile_env(
-            db,
-            data_dir,
-            conversation_id,
-            setting.as_ref().and_then(|m| m.env_json.as_deref()),
-            explicit_claude_profile_id,
-            &mut runtime_env,
-        )
-        .await?;
-    }
+    apply_agent_launch_profile_env(
+        db,
+        data_dir,
+        agent_type,
+        conversation_id,
+        setting.as_ref().and_then(|m| m.env_json.as_deref()),
+        explicit_profile_id,
+        &mut runtime_env,
+    )
+    .await?;
 
     Ok(runtime_env)
 }
@@ -9686,6 +9713,43 @@ pub(crate) async fn persist_config_choice_for_connection(
     }
 }
 
+/// Persist the complete launch snapshot after a stable Session id is allocated
+/// and before its ACP runtime starts. This is transport- and Harness-agnostic;
+/// provider-only launch keys (currently `__codeg_profile__`) remain Host-owned
+/// and are filtered before ACP selector calls.
+pub async fn conversation_set_launch_preferences_core(
+    db: &AppDatabase,
+    conversation_id: i32,
+    mode_id: Option<String>,
+    config_values: BTreeMap<String, String>,
+) -> Result<(), AcpError> {
+    crate::db::service::conversation_service::merge_launch_selector_prefs(
+        &db.conn,
+        conversation_id,
+        mode_id.as_deref(),
+        &config_values,
+    )
+    .await
+    .map_err(|error| AcpError::protocol(error.to_string()))
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn conversation_set_launch_preferences(
+    conversation_id: i32,
+    mode_id: Option<String>,
+    config_values: Option<BTreeMap<String, String>>,
+    db: State<'_, AppDatabase>,
+) -> Result<(), AcpError> {
+    conversation_set_launch_preferences_core(
+        &db,
+        conversation_id,
+        mode_id,
+        config_values.unwrap_or_default(),
+    )
+    .await
+}
+
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 #[allow(clippy::too_many_arguments)]
@@ -9812,6 +9876,7 @@ pub async fn acp_describe_agent_options_core(
     data_dir: &Path,
     agent_type: AgentType,
     working_dir: Option<String>,
+    profile_id: Option<String>,
 ) -> Result<crate::acp::types::AgentOptionsSnapshot, AcpError> {
     verify_agent_installed(agent_type).await?;
     // Build the same runtime env delegation/acp_connect would build so
@@ -9819,7 +9884,9 @@ pub async fn acp_describe_agent_options_core(
     // Without this, the settings UI could show options that the agent
     // never advertises in production (settings override an API URL,
     // model_provider injects a different model list, etc.).
-    let runtime_env = build_session_runtime_env(db, agent_type, None, data_dir, None, None).await?;
+    let runtime_env =
+        build_session_runtime_env(db, agent_type, None, data_dir, None, profile_id.as_deref())
+            .await?;
     manager
         .probe_agent_options(agent_type, working_dir, runtime_env)
         .await
@@ -9830,6 +9897,7 @@ pub async fn acp_describe_agent_options_core(
 pub async fn acp_describe_agent_options(
     agent_type: AgentType,
     working_dir: Option<String>,
+    profile_id: Option<String>,
     manager: State<'_, ConnectionManager>,
     db: State<'_, AppDatabase>,
     app_handle: tauri::AppHandle,
@@ -9839,7 +9907,15 @@ pub async fn acp_describe_agent_options(
         .app_data_dir()
         .map(|p| crate::paths::resolve_effective_data_dir(&p))
         .unwrap_or_else(|_| PathBuf::from("."));
-    acp_describe_agent_options_core(&manager, &db, &app_data_dir, agent_type, working_dir).await
+    acp_describe_agent_options_core(
+        &manager,
+        &db,
+        &app_data_dir,
+        agent_type,
+        working_dir,
+        profile_id,
+    )
+    .await
 }
 
 /// Cancel the running turn and freeze any later follow-ups for the same

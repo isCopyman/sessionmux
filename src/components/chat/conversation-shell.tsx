@@ -89,7 +89,7 @@ interface ConversationShellProps {
   attachmentTabId?: string | null
   draftStorageKey?: string | null
   sourceConversationId?: number | null
-  onPendingClaudeProfileChange?: (profileId: string) => Promise<boolean>
+  onPendingAgentProfileChange?: (profileId: string) => Promise<boolean>
   agentDefaultProfileId?: string | null
   hideInput?: boolean
   /** Optional banner rendered in the composer dock, where the input sits.
@@ -173,7 +173,7 @@ export function ConversationShell({
   availableCommands,
   attachmentTabId,
   sourceConversationId = null,
-  onPendingClaudeProfileChange,
+  onPendingAgentProfileChange,
   agentDefaultProfileId,
   draftStorageKey,
   hideInput = false,
@@ -331,7 +331,7 @@ export function ConversationShell({
               attachmentTabId={attachmentTabId}
               draftStorageKey={draftStorageKey}
               sourceConversationId={sourceConversationId}
-              onPendingClaudeProfileChange={onPendingClaudeProfileChange}
+              onPendingAgentProfileChange={onPendingAgentProfileChange}
               agentDefaultProfileId={agentDefaultProfileId}
               isActive={isActive}
               showActiveFlow={showActiveFlow}

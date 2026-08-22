@@ -1,11 +1,12 @@
-import { persistPendingClaudeProfile } from "@/components/chat/apply-pending-claude-profile"
+import { persistPendingAgentProfile } from "@/components/chat/apply-pending-agent-profile"
 import {
   acpConnect,
+  conversationSetLaunchPreferences,
   createConversation,
   workTaskAssignSession,
 } from "@/lib/api"
 import {
-  CODEG_CLAUDE_PROFILE_CONFIG_KEY,
+  CODEG_AGENT_PROFILE_CONFIG_KEY,
   type AgentType,
   type WorkTask,
   type WorkTaskConfig,
@@ -37,14 +38,18 @@ export async function createTaskSessionAndAssign(options: {
     task.title
   )
   const launchValues = { ...(config.config_values ?? {}) }
-  const profileId = launchValues[CODEG_CLAUDE_PROFILE_CONFIG_KEY] ?? null
-  delete launchValues[CODEG_CLAUDE_PROFILE_CONFIG_KEY]
-  if (agentType === "claude_code") {
-    await persistPendingClaudeProfile({
-      conversationId,
-      pendingProfileId: profileId,
-    })
-  }
+  const profileId = launchValues[CODEG_AGENT_PROFILE_CONFIG_KEY] ?? null
+  delete launchValues[CODEG_AGENT_PROFILE_CONFIG_KEY]
+  await persistPendingAgentProfile({
+    agentType,
+    conversationId,
+    pendingProfileId: profileId,
+  })
+  await conversationSetLaunchPreferences(
+    conversationId,
+    config.mode_id ?? null,
+    launchValues
+  )
   await acpConnect(
     agentType,
     folderPath,

@@ -75,9 +75,10 @@ import {
 import { ComposerContextUsage } from "@/components/chat/composer-context-usage"
 import { ComposerConnectionStatus } from "@/components/chat/composer-connection-status"
 import {
-  ClaudeProfileSelectorDropdown,
-  useClaudeProfileSelectorModel,
-} from "@/components/chat/claude-profile-selector"
+  AgentProfileSelectorDropdown,
+  useAgentProfileSelectorModel,
+} from "@/components/chat/agent-profile-selector"
+import { agentSupportsProfiles } from "@/lib/agent-profile"
 import { InlineModeSelector } from "@/components/chat/mode-selector"
 import {
   InlineSessionConfigSelector,
@@ -182,7 +183,7 @@ interface MessageInputProps {
   sourceConversationId?: number | null
   /** Pending Claude launch profile while `sourceConversationId` is null.
    *  Applied onto the new row before the first spawn. */
-  onPendingClaudeProfileChange?: (profileId: string) => Promise<boolean>
+  onPendingAgentProfileChange?: (profileId: string) => Promise<boolean>
   agentDefaultProfileId?: string | null
   isActive?: boolean
   /** Paint the flowing active-session gradient on the composer border. Set only
@@ -310,7 +311,7 @@ export function MessageInput({
   attachmentTabId,
   draftStorageKey,
   sourceConversationId = null,
-  onPendingClaudeProfileChange,
+  onPendingAgentProfileChange,
   agentDefaultProfileId,
   isActive = false,
   showActiveFlow = false,
@@ -676,43 +677,46 @@ export function MessageInput({
     hasModes && Boolean(effectiveModeId) && !hasConfigOptions
   const showModeLoading = modeLoading && !hasConfigOptions && !showModeSelector
   const showConfigLoading = configOptionsLoading && !hasConfigOptions
-  const showClaudeProfile = agentType === "claude_code"
-  const [pendingClaudeProfileId, setPendingClaudeProfileId] = useState<
+  const profileAgentType = agentType ?? "claude_code"
+  const showAgentProfile =
+    agentType != null && agentSupportsProfiles(profileAgentType)
+  const [pendingAgentProfileId, setPendingAgentProfileId] = useState<
     string | null
   >(null)
-  const handlePendingClaudeProfileChange = useCallback(
+  const handlePendingAgentProfileChange = useCallback(
     async (profileId: string) => {
-      if (!onPendingClaudeProfileChange) return false
-      const applied = await onPendingClaudeProfileChange(profileId)
-      if (applied) setPendingClaudeProfileId(profileId)
+      if (!onPendingAgentProfileChange) return false
+      const applied = await onPendingAgentProfileChange(profileId)
+      if (applied) setPendingAgentProfileId(profileId)
       return applied
     },
-    [onPendingClaudeProfileChange]
+    [onPendingAgentProfileChange]
   )
-  const claudeProfileSelector = useClaudeProfileSelectorModel({
-    enabled: showClaudeProfile,
+  const agentProfileSelector = useAgentProfileSelectorModel({
+    agentType: profileAgentType,
+    enabled: showAgentProfile,
     conversationId: sourceConversationId ?? null,
     disabled: isPrompting,
     pendingProfileId:
-      sourceConversationId == null ? pendingClaudeProfileId : null,
+      sourceConversationId == null ? pendingAgentProfileId : null,
     onPendingProfileChange:
       sourceConversationId == null
-        ? handlePendingClaudeProfileChange
+        ? handlePendingAgentProfileChange
         : undefined,
     agentDefaultProfileId,
   })
   useEffect(() => {
     if (agentType === "claude_code") return
-    setPendingClaudeProfileId(null)
+    setPendingAgentProfileId(null)
   }, [agentType])
   const hasAnySelector =
     showConfigLoading ||
     hasConfigOptions ||
     showModeLoading ||
     showModeSelector ||
-    showClaudeProfile
+    showAgentProfile
   const hasInlineSelectors =
-    hasConfigOptions || showModeSelector || showClaudeProfile
+    hasConfigOptions || showModeSelector || showAgentProfile
   const hasFolderBranchPicker =
     useConversationFolderBranchPickerVisible(attachmentTabId)
   const folderBranchPickerAttached = hasFolderBranchPicker
@@ -1456,8 +1460,8 @@ export function MessageInput({
 
   const inlineSelectorItems = (
     <>
-      {showClaudeProfile && (
-        <ClaudeProfileSelectorDropdown model={claudeProfileSelector} />
+      {showAgentProfile && (
+        <AgentProfileSelectorDropdown model={agentProfileSelector} />
       )}
       {hasConfigOptions &&
         availableConfigOptions.map((option) => {
@@ -1520,20 +1524,20 @@ export function MessageInput({
   const collapsedSettings = useMemo<SessionSelectorSetting[]>(() => {
     const result: SessionSelectorSetting[] = []
     if (
-      showClaudeProfile &&
-      claudeProfileSelector.displayedId != null &&
-      claudeProfileSelector.options.length > 0
+      showAgentProfile &&
+      agentProfileSelector.displayedId != null &&
+      agentProfileSelector.options.length > 0
     ) {
       result.push({
         key: "claude-profile",
-        title: claudeProfileSelector.controlName,
-        currentValue: claudeProfileSelector.displayedId,
-        currentLabel: claudeProfileSelector.currentLabel,
+        title: agentProfileSelector.controlName,
+        currentValue: agentProfileSelector.displayedId,
+        currentLabel: agentProfileSelector.currentLabel,
         groups: [
           {
             key: "__claude_profiles__",
             name: null,
-            options: claudeProfileSelector.options.map((option) => ({
+            options: agentProfileSelector.options.map((option) => ({
               value: option.value,
               name: option.label,
               description: option.description,
@@ -1541,7 +1545,7 @@ export function MessageInput({
           },
         ],
         onSelect: (value) => {
-          void claudeProfileSelector.select(value)
+          void agentProfileSelector.select(value)
         },
       })
     }
@@ -1661,8 +1665,8 @@ export function MessageInput({
     }
     return result
   }, [
-    showClaudeProfile,
-    claudeProfileSelector,
+    showAgentProfile,
+    agentProfileSelector,
     hasConfigOptions,
     availableConfigOptions,
     showModeSelector,
@@ -2046,9 +2050,9 @@ export function MessageInput({
                           {showModeLoading && (
                             <SelectorLoadingChip label={t("loadingMode")} />
                           )}
-                          {claudeProfileSelector.loading && (
+                          {agentProfileSelector.loading && (
                             <SelectorLoadingChip
-                              label={claudeProfileSelector.currentLabel}
+                              label={agentProfileSelector.currentLabel}
                             />
                           )}
                           {collapsedSettings.length > 0 && (

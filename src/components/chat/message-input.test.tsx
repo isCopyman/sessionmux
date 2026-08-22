@@ -605,11 +605,11 @@ describe("MessageInput Claude launch profile chip", () => {
   })
 
   it("holds a pending profile locally until a conversation exists", async () => {
-    const onPendingClaudeProfileChange = vi.fn().mockResolvedValue(true)
+    const onPendingAgentProfileChange = vi.fn().mockResolvedValue(true)
     const user = userEvent.setup()
     renderInput({
       agentType: "claude_code",
-      onPendingClaudeProfileChange,
+      onPendingAgentProfileChange,
     })
 
     await user.click(
@@ -620,14 +620,14 @@ describe("MessageInput Claude launch profile chip", () => {
     await user.click(await screen.findByRole("menuitemradio", { name: /中转/ }))
 
     expect(claudeProfileApi.conversationSetClaudeProfile).not.toHaveBeenCalled()
-    expect(onPendingClaudeProfileChange).toHaveBeenCalledWith("api")
+    expect(onPendingAgentProfileChange).toHaveBeenCalledWith("api")
     expect(
       screen.getByRole("button", { name: "Launch profile: 中转" })
     ).toBeInTheDocument()
   })
 
   it("writes a profile through immediately on an existing conversation", async () => {
-    const onPendingClaudeProfileChange = vi.fn()
+    const onPendingAgentProfileChange = vi.fn()
     const user = userEvent.setup()
     claudeProfileApi.conversationSetClaudeProfile.mockResolvedValue({
       conversationId: 9,
@@ -637,7 +637,7 @@ describe("MessageInput Claude launch profile chip", () => {
     renderInput({
       agentType: "claude_code",
       sourceConversationId: 9,
-      onPendingClaudeProfileChange,
+      onPendingAgentProfileChange,
     })
 
     await user.click(
@@ -652,7 +652,7 @@ describe("MessageInput Claude launch profile chip", () => {
         claudeProfileApi.conversationSetClaudeProfile
       ).toHaveBeenCalledWith(9, "api")
     )
-    expect(onPendingClaudeProfileChange).not.toHaveBeenCalled()
+    expect(onPendingAgentProfileChange).not.toHaveBeenCalled()
   })
 })
 
@@ -711,10 +711,10 @@ describe("MessageInput collapsed selectors popover", () => {
 
   it("shows and switches the Claude launch profile in the narrow settings panel", async () => {
     const user = userEvent.setup()
-    const onPendingClaudeProfileChange = vi.fn().mockResolvedValue(true)
+    const onPendingAgentProfileChange = vi.fn().mockResolvedValue(true)
     const { container } = renderInput({
       agentType: "claude_code",
-      onPendingClaudeProfileChange,
+      onPendingAgentProfileChange,
     })
     await waitFor(() =>
       expect(container.querySelector('[role="textbox"]')).not.toBeNull()
@@ -732,7 +732,7 @@ describe("MessageInput collapsed selectors popover", () => {
     await user.click(within(popover).getByRole("button", { name: /中转/ }))
 
     await waitFor(() =>
-      expect(onPendingClaudeProfileChange).toHaveBeenCalledWith("api")
+      expect(onPendingAgentProfileChange).toHaveBeenCalledWith("api")
     )
     await waitFor(() =>
       expect(screen.queryByRole("dialog", { name: settingsLabel })).toBeNull()

@@ -77,7 +77,7 @@ pub(crate) async fn acp_connect_core(
     // A profile picked in the composer travels on THIS request, not through a
     // conversation row: a tab whose conversation does not exist yet still has
     // to relaunch on the profile the user just chose.
-    let explicit_claude_profile_id = preferred_config_values
+    let explicit_profile_id = preferred_config_values
         .as_ref()
         .and_then(|values| values.get(crate::acp::connection::PREFERRED_PROFILE_CONFIG_KEY))
         .cloned();
@@ -87,7 +87,7 @@ pub(crate) async fn acp_connect_core(
         session_id.as_deref(),
         data_dir,
         conversation_id,
-        explicit_claude_profile_id.as_deref(),
+        explicit_profile_id.as_deref(),
     )
     .await?;
 

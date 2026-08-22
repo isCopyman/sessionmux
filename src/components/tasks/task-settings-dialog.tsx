@@ -18,6 +18,7 @@ import {
 } from "lucide-react"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { AgentSelector } from "@/components/chat/agent-selector"
+import { InlineAgentProfileSelector } from "@/components/chat/agent-profile-selector"
 import {
   AgentConfigSection,
   effectiveSelections,
@@ -34,6 +35,7 @@ import {
 } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
 import { cn } from "@/lib/utils"
+import { agentSupportsProfiles } from "@/lib/agent-profile"
 import {
   SettingCard,
   SettingNote,
@@ -54,7 +56,12 @@ import { DirectoryPathInput } from "@/components/shared/directory-path-input"
 import { FolderSelect } from "@/components/shared/folder-select"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Textarea } from "@/components/ui/textarea"
-import type { AgentType, WorkTaskFolderSettings } from "@/lib/types"
+import {
+  CODEG_AGENT_PROFILE_CONFIG_KEY,
+  FOLLOW_DEFAULT_AGENT_PROFILE_ID,
+  type AgentType,
+  type WorkTaskFolderSettings,
+} from "@/lib/types"
 
 /** Sentinel folder id of the global-defaults settings row (backend contract). */
 const GLOBAL_SCOPE = 0
@@ -282,11 +289,16 @@ function TaskSettingsBody({
   // for a folder editing its own settings; while a folder follows the global
   // defaults the form is hidden and the agent probe is skipped.
   const editing = isGlobal || source === "custom"
+  const profileSupported = agentSupportsProfiles(agentType)
+  const profileId =
+    configValues[CODEG_AGENT_PROFILE_CONFIG_KEY] ??
+    FOLLOW_DEFAULT_AGENT_PROFILE_ID
 
   const agentOptions = useAgentOptions(
     agentType,
     folder?.path ?? null,
-    loaded != null && editing
+    loaded != null && editing,
+    profileSupported ? profileId : null
   )
 
   const save = async () => {
@@ -304,6 +316,9 @@ function TaskSettingsBody({
         modeId,
         configValues
       )
+      if (profileSupported) {
+        config_values[CODEG_AGENT_PROFILE_CONFIG_KEY] = profileId
+      }
       const parsed = Number.parseInt(maxConcurrent, 10)
       const settings: WorkTaskFolderSettings = {
         default_agent_type: agentType,
@@ -456,24 +471,40 @@ function TaskSettingsBody({
                         onFallback={setAgentType}
                       />
                     </div>
-                    <AgentConfigSection
-                      snapshot={agentOptions.snapshot}
-                      loading={agentOptions.loading}
-                      error={agentOptions.error}
-                      onReload={agentOptions.reload}
-                      modeId={modeId}
-                      configValues={configValues}
-                      layout="inline"
-                      onModeChange={setModeId}
-                      onConfigChange={(optionId, valueId) =>
-                        setConfigValues((prev) => {
-                          const next = { ...prev }
-                          if (valueId === null) delete next[optionId]
-                          else next[optionId] = valueId
-                          return next
-                        })
-                      }
-                    />
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+                      {profileSupported ? (
+                        <InlineAgentProfileSelector
+                          agentType={agentType}
+                          conversationId={null}
+                          pendingProfileId={profileId}
+                          onPendingProfileChange={async (next) => {
+                            setConfigValues((previous) => ({
+                              ...previous,
+                              [CODEG_AGENT_PROFILE_CONFIG_KEY]: next,
+                            }))
+                            return true
+                          }}
+                        />
+                      ) : null}
+                      <AgentConfigSection
+                        snapshot={agentOptions.snapshot}
+                        loading={agentOptions.loading}
+                        error={agentOptions.error}
+                        onReload={agentOptions.reload}
+                        modeId={modeId}
+                        configValues={configValues}
+                        layout="inline"
+                        onModeChange={setModeId}
+                        onConfigChange={(optionId, valueId) =>
+                          setConfigValues((prev) => {
+                            const next = { ...prev }
+                            if (valueId === null) delete next[optionId]
+                            else next[optionId] = valueId
+                            return next
+                          })
+                        }
+                      />
+                    </div>
                   </div>
                 </SettingRow>
               </SettingCard>

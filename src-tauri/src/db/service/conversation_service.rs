@@ -1269,6 +1269,46 @@ pub async fn selector_prefs(
     Ok((row.preferred_mode_id, values))
 }
 
+/// Merge a launch snapshot into one Session's selector pins in one database
+/// update. Used when a draft/Task allocates its stable Session id before ACP
+/// starts: the first launch and every later resume then share the same Profile,
+/// Mode, Model and Effort choices.
+pub async fn merge_launch_selector_prefs(
+    conn: &DatabaseConnection,
+    conversation_id: i32,
+    mode_id: Option<&str>,
+    config_values: &std::collections::BTreeMap<String, String>,
+) -> Result<(), DbError> {
+    let Some(row) = conversation::Entity::find_by_id(conversation_id)
+        .one(conn)
+        .await?
+    else {
+        return Ok(());
+    };
+    let mut values: std::collections::BTreeMap<String, String> = row
+        .preferred_config_values
+        .as_deref()
+        .and_then(|raw| serde_json::from_str(raw).ok())
+        .unwrap_or_default();
+    values.extend(config_values.clone());
+    let serialized = if values.is_empty() {
+        None
+    } else {
+        Some(
+            serde_json::to_string(&values)
+                .map_err(|err| DbError::Validation(format!("selector prefs serialize: {err}")))?,
+        )
+    };
+    let mut active: conversation::ActiveModel = row.into();
+    if let Some(mode_id) = mode_id {
+        active.preferred_mode_id = Set(Some(mode_id.to_string()));
+    }
+    active.preferred_config_values = Set(serialized);
+    active.updated_at = NotSet;
+    active.update(conn).await?;
+    Ok(())
+}
+
 /// Pin the Session's ACP mode. Like pinning, this is a view/launch preference:
 /// it never bumps `updated_at`.
 pub async fn set_selector_mode(
@@ -1470,6 +1510,52 @@ mod tests {
         assert_eq!(summary.created_by, CREATED_BY_AGENT);
         let summary = get_by_id(&db.conn, user_row.id).await.expect("summary");
         assert_eq!(summary.created_by, CREATED_BY_USER);
+    }
+
+    #[tokio::test]
+    async fn launch_snapshot_pins_mode_and_merges_profile_model_and_effort() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/codeg-launch-prefs").await;
+        let row = create(
+            &db.conn,
+            folder_id,
+            AgentType::ClaudeCode,
+            Some("launch prefs".into()),
+            None,
+        )
+        .await
+        .expect("create");
+
+        merge_selector_config_value(
+            &db.conn,
+            row.id,
+            crate::acp::connection::PREFERRED_PROFILE_CONFIG_KEY,
+            "cpa",
+        )
+        .await
+        .expect("profile");
+        let launch = std::collections::BTreeMap::from([
+            ("model".to_string(), "opus".to_string()),
+            ("thought_level".to_string(), "high".to_string()),
+        ]);
+        merge_launch_selector_prefs(&db.conn, row.id, Some("plan"), &launch)
+            .await
+            .expect("launch snapshot");
+
+        let (mode, values) = selector_prefs(&db.conn, row.id).await.expect("read");
+        assert_eq!(mode.as_deref(), Some("plan"));
+        assert_eq!(values.get("model").map(String::as_str), Some("opus"));
+        assert_eq!(
+            values.get("thought_level").map(String::as_str),
+            Some("high")
+        );
+        assert_eq!(
+            values
+                .get(crate::acp::connection::PREFERRED_PROFILE_CONFIG_KEY)
+                .map(String::as_str),
+            Some("cpa"),
+            "batch selector persistence must not erase the launch-profile pin"
+        );
     }
 
     #[tokio::test]

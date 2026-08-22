@@ -1320,6 +1320,7 @@ mod tauri_app {
                 acp_commands::acp_prompt,
                 acp_commands::acp_set_mode,
                 acp_commands::acp_set_config_option,
+                acp_commands::conversation_set_launch_preferences,
                 acp_commands::acp_goal_control,
                 session_timer_commands::session_timer_list,
                 session_timer_commands::session_timer_create,

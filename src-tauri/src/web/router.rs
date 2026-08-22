@@ -675,6 +675,10 @@ pub fn build_router(
             "/acp_set_config_option",
             post(handlers::acp::acp_set_config_option),
         )
+        .route(
+            "/conversation_set_launch_preferences",
+            post(handlers::acp::conversation_set_launch_preferences),
+        )
         .route("/acp_goal_control", post(handlers::acp::acp_goal_control))
         .route(
             "/acp_describe_agent_options",

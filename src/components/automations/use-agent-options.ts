@@ -23,15 +23,20 @@ interface CachedSnapshot {
 const snapshotCache = new Map<string, CachedSnapshot>()
 const inflight = new Map<string, Promise<AgentOptionsSnapshot>>()
 
-function cacheKey(agent: AgentType, folderPath: string | null): string {
-  return JSON.stringify([agent, folderPath ?? null])
+function cacheKey(
+  agent: AgentType,
+  folderPath: string | null,
+  profileId: string | null
+): string {
+  return JSON.stringify([agent, folderPath ?? null, profileId ?? null])
 }
 
 function readCache(
   agent: AgentType,
-  folderPath: string | null
+  folderPath: string | null,
+  profileId: string | null
 ): AgentOptionsSnapshot | null {
-  const key = cacheKey(agent, folderPath)
+  const key = cacheKey(agent, folderPath, profileId)
   const entry = snapshotCache.get(key)
   if (!entry) return null
   if (Date.now() - entry.ts > CACHE_TTL_MS) {
@@ -43,12 +48,13 @@ function readCache(
 
 function fetchOptions(
   agent: AgentType,
-  folderPath: string | null
+  folderPath: string | null,
+  profileId: string | null
 ): Promise<AgentOptionsSnapshot> {
-  const key = cacheKey(agent, folderPath)
+  const key = cacheKey(agent, folderPath, profileId)
   let promise = inflight.get(key)
   if (!promise) {
-    promise = describeAgentOptions(agent, folderPath)
+    promise = describeAgentOptions(agent, folderPath, profileId)
       .then((snapshot) => {
         snapshotCache.set(key, { snapshot, ts: Date.now() })
         inflight.delete(key)
@@ -88,7 +94,10 @@ export function useAgentOptions(
   /** When false, the automatic probe is suppressed (no transient CLI spawn) —
    *  for editors whose agent-override section is collapsed. `ensure()` still
    *  probes on demand at save time. */
-  enabled: boolean = true
+  enabled: boolean = true,
+  /** Host launch profile used by the transient probe. A profile can change the
+   *  endpoint/model catalog, so it is part of the cache identity. */
+  profileId: string | null = null
 ): AgentOptionsState {
   const [snapshot, setSnapshot] = useState<AgentOptionsSnapshot | null>(null)
   const [loading, setLoading] = useState(false)
@@ -96,17 +105,22 @@ export function useAgentOptions(
   const reqRef = useRef(0)
 
   const load = useCallback(
-    (agent: AgentType, folder: string | null, force: boolean) => {
+    (
+      agent: AgentType,
+      folder: string | null,
+      profile: string | null,
+      force: boolean
+    ) => {
       // Bump FIRST so a cache hit also invalidates any still-in-flight probe for a
       // previously-selected (agent, folder) — otherwise that slow probe's late
       // result would overwrite the snapshot for the now-current one.
       const id = ++reqRef.current
-      const key = cacheKey(agent, folder)
+      const key = cacheKey(agent, folder, profile)
       if (force) {
         snapshotCache.delete(key)
         inflight.delete(key)
       } else {
-        const cached = readCache(agent, folder)
+        const cached = readCache(agent, folder, profile)
         if (cached) {
           setSnapshot(cached)
           setError(null)
@@ -117,7 +131,7 @@ export function useAgentOptions(
       setLoading(true)
       setError(null)
       setSnapshot(null)
-      fetchOptions(agent, folder)
+      fetchOptions(agent, folder, profile)
         .then((fresh) => {
           if (reqRef.current !== id) return
           setSnapshot(fresh)
@@ -137,14 +151,14 @@ export function useAgentOptions(
     // Debounce so switching agents/folders quickly doesn't fire a probe (CLI
     // spawn) per click; the last (agent, folder) landed on wins.
     const handle = window.setTimeout(() => {
-      void load(agentType, folderPath, false)
+      void load(agentType, folderPath, profileId, false)
     }, 250)
     return () => window.clearTimeout(handle)
-  }, [agentType, folderPath, load, enabled])
+  }, [agentType, folderPath, load, enabled, profileId])
 
   const reload = useCallback(
-    () => load(agentType, folderPath, true),
-    [agentType, folderPath, load]
+    () => load(agentType, folderPath, profileId, true),
+    [agentType, folderPath, load, profileId]
   )
 
   const ensure = useCallback(async (): Promise<AgentOptionsSnapshot | null> => {
@@ -154,7 +168,7 @@ export function useAgentOptions(
     // agent's/folder's defaults into the save. The module cache + inflight map are
     // keyed by (agent, folder), so a hit is instant and a switch rides the
     // effect's in-flight probe (no double spawn).
-    const cached = readCache(agentType, folderPath)
+    const cached = readCache(agentType, folderPath, profileId)
     if (cached) return cached
     // Bound the wait so a wedged probe degrades to "save with raw overrides"
     // rather than hanging the save.
@@ -164,13 +178,13 @@ export function useAgentOptions(
     })
     try {
       return await Promise.race([
-        fetchOptions(agentType, folderPath).catch(() => null),
+        fetchOptions(agentType, folderPath, profileId).catch(() => null),
         timeout,
       ])
     } finally {
       if (timer !== undefined) window.clearTimeout(timer)
     }
-  }, [agentType, folderPath])
+  }, [agentType, folderPath, profileId])
 
   return { snapshot, loading, error, reload, ensure }
 }

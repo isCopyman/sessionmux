@@ -10,7 +10,7 @@ import {
 } from "@/components/automations/agent-config-section"
 import { useAgentOptions } from "@/components/automations/use-agent-options"
 import { AgentSelector } from "@/components/chat/agent-selector"
-import { InlineClaudeProfileSelector } from "@/components/chat/claude-profile-selector"
+import { InlineAgentProfileSelector } from "@/components/chat/agent-profile-selector"
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -24,9 +24,12 @@ import { toErrorMessage } from "@/lib/app-error"
 import { workTaskSettingsEffective } from "@/lib/api"
 import { getAgentLabel } from "@/lib/custom-agents"
 import {
-  CODEG_CLAUDE_PROFILE_CONFIG_KEY,
-  CODEG_CLAUDE_PROFILE_ENV_KEY,
-  FOLLOW_DEFAULT_CLAUDE_PROFILE_ID,
+  agentSupportsProfiles,
+  getAgentProfileAdapter,
+} from "@/lib/agent-profile"
+import {
+  CODEG_AGENT_PROFILE_CONFIG_KEY,
+  FOLLOW_DEFAULT_AGENT_PROFILE_ID,
   type AcpAgentInfo,
   type AgentType,
   type WorkTask,
@@ -86,7 +89,7 @@ function TaskSessionLaunchBody({
   const [agentType, setAgentType] = useState<AgentType>("claude_code")
   const [modeId, setModeId] = useState<string | null>(null)
   const [configValues, setConfigValues] = useState<Record<string, string>>({})
-  const [profileId, setProfileId] = useState(FOLLOW_DEFAULT_CLAUDE_PROFILE_ID)
+  const [profileId, setProfileId] = useState(FOLLOW_DEFAULT_AGENT_PROFILE_ID)
   const [agents, setAgents] = useState<AcpAgentInfo[]>([])
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
@@ -110,10 +113,10 @@ function TaskSessionLaunchBody({
             : (settings.mode_id ?? null)
         )
         setProfileId(
-          nextConfig[CODEG_CLAUDE_PROFILE_CONFIG_KEY] ??
-            FOLLOW_DEFAULT_CLAUDE_PROFILE_ID
+          nextConfig[CODEG_AGENT_PROFILE_CONFIG_KEY] ??
+            FOLLOW_DEFAULT_AGENT_PROFILE_ID
         )
-        delete nextConfig[CODEG_CLAUDE_PROFILE_CONFIG_KEY]
+        delete nextConfig[CODEG_AGENT_PROFILE_CONFIG_KEY]
         setConfigValues(nextConfig)
         setLoaded(true)
       })
@@ -123,14 +126,21 @@ function TaskSessionLaunchBody({
     }
   }, [task])
 
-  const agentOptions = useAgentOptions(agentType, folderPath, loaded)
+  const profileSupported = agentSupportsProfiles(agentType)
+  const agentOptions = useAgentOptions(
+    agentType,
+    folderPath,
+    loaded,
+    profileSupported ? profileId : null
+  )
   const agentDefaultProfileId = useMemo(() => {
-    if (agentType !== "claude_code") return null
-    const claude = agents.find((agent) => agent.agent_type === "claude_code")
-    if (!claude) return undefined
+    const adapter = getAgentProfileAdapter(agentType)
+    if (!adapter) return null
+    const agent = agents.find((item) => item.agent_type === agentType)
+    if (!agent) return undefined
+    if (!adapter.defaultProfileEnvKey) return FOLLOW_DEFAULT_AGENT_PROFILE_ID
     return (
-      claude.env[CODEG_CLAUDE_PROFILE_ENV_KEY] ??
-      FOLLOW_DEFAULT_CLAUDE_PROFILE_ID
+      agent.env[adapter.defaultProfileEnvKey] ?? FOLLOW_DEFAULT_AGENT_PROFILE_ID
     )
   }, [agentType, agents])
 
@@ -142,8 +152,8 @@ function TaskSessionLaunchBody({
       const snapshot = await agentOptions.ensure()
       const effective = effectiveSelections(snapshot, modeId, configValues)
       const launchValues = { ...effective.config_values }
-      if (agentType === "claude_code") {
-        launchValues[CODEG_CLAUDE_PROFILE_CONFIG_KEY] = profileId
+      if (profileSupported) {
+        launchValues[CODEG_AGENT_PROFILE_CONFIG_KEY] = profileId
       }
       const previous = task.config
       await onSubmit({
@@ -179,15 +189,16 @@ function TaskSessionLaunchBody({
             setAgentType(next)
             setModeId(null)
             setConfigValues({})
-            setProfileId(FOLLOW_DEFAULT_CLAUDE_PROFILE_ID)
+            setProfileId(FOLLOW_DEFAULT_AGENT_PROFILE_ID)
           }}
           onFallback={setAgentType}
           onAgentsLoaded={setAgents}
           disabled={!loaded || submitting}
         />
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-          {agentType === "claude_code" ? (
-            <InlineClaudeProfileSelector
+          {profileSupported ? (
+            <InlineAgentProfileSelector
+              agentType={agentType}
               conversationId={null}
               pendingProfileId={profileId}
               onPendingProfileChange={async (next) => {

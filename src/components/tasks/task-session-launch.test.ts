@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import {
   acpConnect,
+  conversationSetLaunchPreferences,
   createConversation,
   workTaskAssignSession,
 } from "@/lib/api"
@@ -13,6 +14,7 @@ vi.mock("@/lib/api", () => ({
   acpConnect: vi.fn(),
   createConversation: vi.fn(),
   conversationSetClaudeProfile: vi.fn(),
+  conversationSetLaunchPreferences: vi.fn(),
   workTaskAssignSession: vi.fn(),
 }))
 
@@ -43,6 +45,7 @@ describe("createTaskSessionAndAssign", () => {
       affectedRunningSessions: 0,
     })
     vi.mocked(acpConnect).mockReset().mockResolvedValue("connection-42")
+    vi.mocked(conversationSetLaunchPreferences).mockReset().mockResolvedValue()
     vi.mocked(workTaskAssignSession)
       .mockReset()
       .mockResolvedValue({} as never)
@@ -66,6 +69,9 @@ describe("createTaskSessionAndAssign", () => {
       order.push("acp")
       return "connection-42"
     })
+    vi.mocked(conversationSetLaunchPreferences).mockImplementation(async () => {
+      order.push("selectors")
+    })
     vi.mocked(workTaskAssignSession).mockImplementation(async () => {
       order.push("assign")
       return {} as never
@@ -79,7 +85,10 @@ describe("createTaskSessionAndAssign", () => {
       })
     ).resolves.toBe(42)
 
-    expect(order).toEqual(["identity", "profile", "acp", "assign"])
+    expect(order).toEqual(["identity", "profile", "selectors", "acp", "assign"])
+    expect(conversationSetLaunchPreferences).toHaveBeenCalledWith(42, "plan", {
+      model: "fable",
+    })
     expect(acpConnect).toHaveBeenCalledWith(
       "claude_code",
       "/repo",
