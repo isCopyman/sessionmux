@@ -4,7 +4,11 @@
 
 # 任务看板组织维度调研（只读）
 
-**结论先说：** codeg **已经有一张 work_task 看板**（四泳道 + 列表，按 folder 过滤）。一级容器应继续是 **项目 Folder（仓库根 / Path）**；Collection 只适合做列内二级分组。不要按 Workbench / Room / agent 当一级泳道。列应继续用 `WorkTaskStatus` 的现成 10 态→4 列，不要用 `ConversationStatus`。
+**结论先说：** codeg **已经有一张 work_task 看板**（看板 + 列表，按 folder 过滤）。一级容器应继续是 **项目 Folder（仓库根 / Path）**；Collection 只适合做列内二级分组。不要按 Workbench / Room / agent 当一级泳道。列读取独立 `task_status` 业务轴，Engine 10 态只作为执行事实输入，不要用 `ConversationStatus`。
+
+> 2026-08-22 修订：实施后已形成独立 `task_status` 业务轴；用户又明确要求区分
+> `backlog`（未承诺想法）与 `todo`（ready）。本文早期“四列 / todo 兼任 backlog”的描述是
+> 当时事实，不再是产品裁决；当前定稿以 `TASK-KANBAN-IMPLEMENTATION-PLAN-2026-08-22` 为准。
 
 ---
 
@@ -179,3 +183,43 @@ Cloud 另有 Organization、assignee、tag、sub-issue、多 workspace/issue。�
 2. **两套「任务」叠在一张板上。** 看板卡片是 work_task；侧栏「会话」是 Conversation + 4 态库标签；催办还漏掉 `awaiting_input` 通知（`:170`），而 badge（`:28`）和 attention 列又把它算进去。用户会在「会话 pending_review / 任务 review / 任务 awaiting_input 不响」三套语义里迷路——看板看起来有了，真正等人的时刻却对不上。
 
 （次级风险，不占两个名额：attention 列把「问你一句 / 请你验收 / 正在 merge / 已经失败」挤在一起，vibe-kanban 的 In review 没有这个问题。）
+
+---
+
+## 6. Agent Orchestrator 对照审计（2026-08-22）
+
+本地审计对象：`Untrivial-ai/agent-orchestrator`。它值得参考，但它不是 Codeg 要复制的 Task
+领域模型。
+
+### 6.1 它的“任务”与看板到底是什么
+
+Agent Orchestrator 没有独立的本地 Task 表。最接近任务的是 GitHub / Linear 等外部 Tracker
+Issue，`Session.issueId` 只是把一个 worker Session 关联到 Issue。它的 Dashboard 列由
+`getAttentionLevel()` 根据 Session runtime、Agent activity、PR、CI、Review、mergeability
+等事实推导：Working / Pending / In review / Needs you / Ready to merge；拖动列不是修改业务
+任务状态。
+
+它也有 Backlog，但语义是带 `agent:backlog` 标签的外部 Issue。轮询器会自动抢取并启动
+worker，随后把标签改成 `agent:in-progress`。这与 Codeg 的停车场语义相反：Codeg Backlog
+必须允许整理、预先归属，却不能自动启动或消耗额度。
+
+### 6.2 借鉴什么
+
+- 把 activity、业务状态和“需要人关注”三者分开；
+- 将 runtime、CI、Review、未解决评论、mergeability 作为卡片的事实投影输入；
+- 外部事实暂不可用时显示 stale / unknown，不伪造成失败；
+- Project/Folder 是运行边界，Workspace/Worktree 是执行产物，不是任务容器；
+- Session detail 适合调查运行、日志、PR 与 Review，而任务责任入口应独立、醒目。
+
+### 6.3 不借鉴什么
+
+- 不把 Issue 等同于 Task，也不假设一张 Issue 只有一个 worker；
+- 不让 Backlog 标签触发自动 pickup；
+- 不用 runtime / PR 状态替代可编辑的 Task 业务状态；
+- 不假设每张任务都需要 branch / worktree / PR / CI；
+- 不采用 flat metadata 或进程内 Set 作为任务权威与并发 claim；
+- 不把 orchestrator Session 变成任务数据库的所有者。
+
+因此 AO 对 Codeg 的价值是“Session Execution + 工程事实投影”的参考实现；Multica 对
+Backlog/Todo 分界更接近 Codeg，Codeg 自己的 SQLite、CAS、Task 事件和 PromptQueue 仍是唯一
+事实源。

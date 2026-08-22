@@ -1,4 +1,4 @@
-# codeg 看板设计（定稿，2026-08-21）
+# codeg 看板设计（历史定稿，2026-08-21；Backlog 边界于 2026-08-22 修订）
 
 依据：`O46-TASKBOARD-RESEARCH.zh-CN.md`（组织维度）、`O63-AGENT-TASK-INTERFACE-RESEARCH.zh-CN.md`
 （别人怎么让人和 agent 共用任务系统）、`TASKBOARD-RFC-2026-08-21.zh-CN.md`（缺口清单）。
@@ -22,13 +22,18 @@
 
 对照物 vibe-kanban / Multica 的一级也都是 Project。**Collection 只能做项目内的二级分段。**
 
-### ② 卡片是"要执行的活"，`todo` 列就是 backlog
+### ② 卡片既能保存想法，也能承诺执行；Backlog 与 Todo 分开
 
-不需要第二种"只记不跑"的卡：`engine.rs:414` 的 `start()` 注释写得很清楚——
-**任务建好停在 todo，人点开始才 claim 成 queued**。引擎不会自动开火。
+用户复核实际用法后推翻了“`todo` 就是 backlog”的旧裁决。两者仍是同一张 `work_task` 卡，
+不是第二套任务系统，但拥有两个稳定业务状态：
 
-所以"计划板"和"执行队列"本来就是同一张板的两段。之前让人误解的是空状态文案
-（"添加待办后即刻处理"），已改（O63）。
+```text
+backlog = 原始想法 / 未承诺；可预先归属，但绝不启动
+todo    = 已梳理、可执行；仍需显式开始
+```
+
+`engine.rs` 的显式 start/claim 边界继续保留。Backlog 指派不得创建 PromptQueue 项；Todo 也
+不允许后台自动 pickup。人或 Agent 必须通过可审计的“开始/指派并开始”动作才进入执行队列。
 
 ### ③ agent 侧读写不对称，必须补"读"
 
@@ -74,4 +79,5 @@ Multica 允许 agent 任意改别人的卡——**这条不抄**。
 - 不引入外部任务系统（Trellis / Multica / Taskmaster）：我们的状态机更细，缺的是仪表盘器官不是引擎。
 - 不把卡片改成仓库 markdown。
 - 不做 Room 编队进 work_task：两者生命周期语义不同，硬统一会造出第二个"双时间线"问题。
-- 不改 10 态状态机、不改 CAS 转移不变量、不动四列地基。
+- 不改 Engine 10 态状态机、不改 CAS 转移不变量；业务看板在其上增加独立 `backlog`，形成
+  五列稳定投影，不把 Backlog 变成后台自动抢活队列。

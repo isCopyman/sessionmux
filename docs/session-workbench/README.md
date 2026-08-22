@@ -27,7 +27,8 @@
   `O63-AGENT-TASK-INTERFACE-RESEARCH.zh-CN.md`（Multica / Backlog.md / Conductor /
   Taskmaster / Trellis 的 agent 侧任务接口对照）；
   `O46-TASKBOARD-RESEARCH.zh-CN.md`（**组织维度调研**：一级容器＝项目 Folder，
-  含容器关系图与两套 status 的区别；内有一条已标注的过时结论）
+  含容器关系图、两套 status 的区别，以及 Agent Orchestrator 的 Session/PR/CI 注意力投影
+  审计；内有已标注的过时结论）
 - **回合失败重试（O8）**：`O8-TRANSIENT-RETRY-AUDIT.zh-CN.md`（审计）；
   `O8-RETRY-REPORT.zh-CN.md`（施工报告）
 - **群聊/协作**：`ROOM-READ-REPORT.zh-CN.md`（逐步披露接口）；
