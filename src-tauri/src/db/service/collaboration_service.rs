@@ -6,6 +6,7 @@ use sea_orm::{
     TransactionTrait,
 };
 
+use crate::acp::connection::{PREFERRED_MODEL_CONFIG_KEY, PREFERRED_PROFILE_CONFIG_KEY};
 use crate::acp::types::PromptInputBlock;
 use crate::db::error::DbError;
 use crate::db::service::collaboration_mention;
@@ -99,6 +100,8 @@ struct LiveSession {
     agent_type: String,
     folder_path: Option<String>,
     archived: bool,
+    model: Option<String>,
+    profile: Option<String>,
 }
 
 impl LiveSession {
@@ -109,8 +112,21 @@ impl LiveSession {
             agent_type: Some(self.agent_type.clone()),
             folder_path: self.folder_path.clone(),
             backend: "current".to_string(),
+            model: self.model.clone(),
+            profile: self.profile.clone(),
         }
     }
+}
+
+fn selector_value(raw: Option<&str>, key: &str) -> Option<String> {
+    raw.and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok())
+        .and_then(|value| {
+            value
+                .get(key)
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        })
+        .filter(|value| !value.trim().is_empty())
 }
 
 async fn live_session<C: ConnectionTrait>(
@@ -119,20 +135,37 @@ async fn live_session<C: ConnectionTrait>(
 ) -> Result<Option<LiveSession>, DbError> {
     let row = conn
         .query_one(statement(
-            "SELECT c.id, c.title, c.agent_type, \
+            "SELECT c.id, c.title, c.agent_type, c.model, c.preferred_config_values, \
+             a.env_json AS agent_env_json, \
              (c.archived_at IS NOT NULL) AS archived, f.path AS folder_path \
              FROM conversation c LEFT JOIN folder f ON f.id = c.folder_id \
+             LEFT JOIN agent_setting a ON a.agent_type = c.agent_type \
              WHERE c.id = ? AND c.deleted_at IS NULL",
             vec![conversation_id.into()],
         ))
         .await?;
     row.map(|row| {
+        let agent_type: String = row.try_get("", "agent_type")?;
+        let selector_json: Option<String> = row.try_get("", "preferred_config_values")?;
+        let agent_env_json: Option<String> = row.try_get("", "agent_env_json")?;
+        let model = selector_value(selector_json.as_deref(), PREFERRED_MODEL_CONFIG_KEY)
+            .or_else(|| selector_value(selector_json.as_deref(), "model"))
+            .or(row.try_get("", "model")?);
+        let profile = if agent_type == "claude_code" {
+            selector_value(selector_json.as_deref(), PREFERRED_PROFILE_CONFIG_KEY)
+                .or_else(|| selector_value(agent_env_json.as_deref(), PREFERRED_PROFILE_CONFIG_KEY))
+                .or_else(|| Some("follow-default".to_string()))
+        } else {
+            None
+        };
         Ok(LiveSession {
             id: row.try_get("", "id")?,
             title: row.try_get("", "title")?,
-            agent_type: row.try_get("", "agent_type")?,
+            agent_type,
             folder_path: row.try_get("", "folder_path")?,
             archived: row.try_get::<i64>("", "archived")? != 0,
+            model,
+            profile,
         })
     })
     .transpose()
@@ -205,6 +238,7 @@ const DELIVERY_SELECT: &str = "SELECT d.id, d.event_id, d.target_conversation_id
             d.created_at, d.updated_at, e.source_conversation_id, \
             e.source_title_snapshot, e.source_agent_type_snapshot, \
             e.source_folder_path_snapshot, e.source_backend_snapshot, \
+            e.source_model_snapshot, e.source_profile_snapshot, \
             e.subject, e.body, \
             e.reply_to_event_id, e.expects_reply, \
             EXISTS (SELECT 1 FROM collaboration_event reply \
@@ -273,6 +307,8 @@ fn parse_delivery(row: &QueryResult) -> Result<CollaborationDeliveryView, DbErro
             agent_type: Some(row.try_get("", "source_agent_type_snapshot")?),
             folder_path: row.try_get("", "source_folder_path_snapshot")?,
             backend: row.try_get("", "source_backend_snapshot")?,
+            model: row.try_get("", "source_model_snapshot")?,
+            profile: row.try_get("", "source_profile_snapshot")?,
         },
         target: CollaborationSessionSnapshot {
             conversation_id: row.try_get("", "target_conversation_id")?,
@@ -280,6 +316,8 @@ fn parse_delivery(row: &QueryResult) -> Result<CollaborationDeliveryView, DbErro
             agent_type: row.try_get("", "target_agent_type_snapshot")?,
             folder_path: row.try_get("", "target_folder_path_snapshot")?,
             backend: "current".to_string(),
+            model: None,
+            profile: None,
         },
         subject: row
             .try_get::<Option<String>>("", "subject")?
@@ -1394,9 +1432,10 @@ async fn send_with_initially_inactive_targets_guarded(
         txn.execute(statement(
             "INSERT OR IGNORE INTO collaboration_event \
              (id, source_conversation_id, source_title_snapshot, source_agent_type_snapshot, \
-              source_folder_path_snapshot, source_backend_snapshot, subject, body, reply_to_event_id, \
+              source_folder_path_snapshot, source_backend_snapshot, source_model_snapshot, \
+              source_profile_snapshot, subject, body, reply_to_event_id, \
               expects_reply, urgency, client_dedupe_id, chain_depth, created_at) \
-             SELECT ?, ?, ?, ?, ?, 'current', ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP \
+             SELECT ?, ?, ?, ?, ?, 'current', ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP \
              WHERE NOT EXISTS ( \
                  SELECT 1 FROM collaboration_event reply \
                  WHERE reply.reply_to_event_id = ? \
@@ -1408,6 +1447,8 @@ async fn send_with_initially_inactive_targets_guarded(
                 source.title.clone().into(),
                 source.agent_type.clone().into(),
                 source.folder_path.clone().into(),
+                source.model.clone().into(),
+                source.profile.clone().into(),
                 subject.clone().into(),
                 input.body.clone().into(),
                 input.reply_to_event_id.clone().into(),
@@ -1424,15 +1465,18 @@ async fn send_with_initially_inactive_targets_guarded(
         txn.execute(statement(
             "INSERT OR IGNORE INTO collaboration_event \
          (id, source_conversation_id, source_title_snapshot, source_agent_type_snapshot, \
-          source_folder_path_snapshot, source_backend_snapshot, subject, body, reply_to_event_id, \
+          source_folder_path_snapshot, source_backend_snapshot, source_model_snapshot, \
+          source_profile_snapshot, subject, body, reply_to_event_id, \
           expects_reply, urgency, client_dedupe_id, chain_depth, created_at) \
-         VALUES (?, ?, ?, ?, ?, 'current', ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
+         VALUES (?, ?, ?, ?, ?, 'current', ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
             vec![
                 event_id.clone().into(),
                 source.id.into(),
                 source.title.clone().into(),
                 source.agent_type.clone().into(),
                 source.folder_path.clone().into(),
+                source.model.clone().into(),
+                source.profile.clone().into(),
                 subject.clone().into(),
                 input.body.clone().into(),
                 input.reply_to_event_id.clone().into(),
@@ -1510,6 +1554,8 @@ async fn send_with_initially_inactive_targets_guarded(
                     agent_type: None,
                     folder_path: None,
                     backend: "current".to_string(),
+                    model: None,
+                    profile: None,
                 },
                 "failed",
                 Some("target_not_found".to_string()),
@@ -1792,16 +1838,25 @@ pub async fn post_room(
         .execute(statement(
             "INSERT OR IGNORE INTO collaboration_event \
              (id, source_conversation_id, source_title_snapshot, source_agent_type_snapshot, \
-              source_folder_path_snapshot, source_backend_snapshot, subject, body, reply_to_event_id, \
+              source_folder_path_snapshot, source_backend_snapshot, source_model_snapshot, \
+              source_profile_snapshot, subject, body, reply_to_event_id, \
               expects_reply, urgency, client_dedupe_id, chain_depth, visibility, room_id, \
               author_kind, mention_human, created_at) \
-             VALUES (?, ?, ?, ?, ?, 'current', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
+             VALUES (?, ?, ?, ?, ?, 'current', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
             vec![
                 event_id.clone().into(),
                 source.id.into(),
                 title_snapshot.into(),
                 agent_snapshot.into(),
                 source.folder_path.clone().into(),
+                (input.author_kind == CollaborationAuthorKind::Session)
+                    .then(|| source.model.clone())
+                    .flatten()
+                    .into(),
+                (input.author_kind == CollaborationAuthorKind::Session)
+                    .then(|| source.profile.clone())
+                    .flatten()
+                    .into(),
                 subject.into(),
                 input.body.clone().into(),
                 input.reply_to_event_id.clone().into(),
@@ -1892,6 +1947,8 @@ pub async fn post_room(
                     agent_type: None,
                     folder_path: None,
                     backend: "current".to_string(),
+                    model: None,
+                    profile: None,
                 },
                 "failed",
                 Some("target_not_found".to_string()),

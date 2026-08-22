@@ -97,6 +97,7 @@ import {
   resolveCollaborationTimelineId,
   useCollaborationTimeline,
 } from "@/hooks/use-collaboration-timeline"
+import { useConversationClaudeProfile } from "@/hooks/use-conversation-claude-profile"
 
 interface MessageListViewProps {
   conversationId: number
@@ -809,6 +810,7 @@ const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
   isResponseComplete = true,
   sourceTurns,
   agentType,
+  profile,
   onForkAtMessage,
 }: {
   group: ResolvedMessageGroup
@@ -818,6 +820,7 @@ const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
   isResponseComplete?: boolean
   sourceTurns?: MessageTurn[]
   agentType?: AgentType
+  profile?: string | null
   onForkAtMessage?: (anchor: string) => void
 }) {
   const focusedEventId = useSessionLetterUiStore(
@@ -946,6 +949,7 @@ const HistoricalMessageGroup = memo(function HistoricalMessageGroup({
           duration_ms={group.duration_ms}
           model={group.model}
           models={group.models}
+          profile={profile}
           previousUserIndex={previousUserIndex}
           isResponseComplete={isResponseComplete}
           copyText={extractTextFromParts(group.parts)}
@@ -998,6 +1002,10 @@ export function MessageListView({
 }: MessageListViewProps) {
   const t = useTranslations("Folder.chat.messageList")
   const sharedT = useTranslations("Folder.chat.shared")
+  const claudeProfile = useConversationClaudeProfile(
+    conversationId,
+    agentType === "claude_code"
+  )
   // Subscribe to only this conversation's session + derived timeline. Another
   // conversation's streaming token no longer re-renders this view; the timeline
   // selector returns a reference-stable array (memoized per session object) so
@@ -1240,6 +1248,7 @@ export function MessageListView({
                 isResponseComplete={item.phase === "persisted"}
                 sourceTurns={item.sourceTurns}
                 agentType={agentType}
+                profile={claudeProfile}
                 onForkAtMessage={onForkAtMessage}
               />
             </div>
@@ -1260,7 +1269,7 @@ export function MessageListView({
           return null
       }
     },
-    [agentType, onForkAtMessage, userTurnHeader]
+    [agentType, claudeProfile, onForkAtMessage, userTurnHeader]
   )
 
   const emptyState = useMemo(

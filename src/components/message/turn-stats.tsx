@@ -1,15 +1,7 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import {
-  ArrowUpToLine,
-  BrainCog,
-  CheckIcon,
-  Coins,
-  CopyIcon,
-  ListTodo,
-  Timer,
-} from "lucide-react"
+import { useCallback, useMemo } from "react"
+import { ArrowUpToLine, Coins, Timer } from "lucide-react"
 import { useLocale, useTranslations } from "next-intl"
 import {
   Tooltip,
@@ -18,10 +10,14 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import { useMessageScroll } from "@/components/message/message-scroll-context"
-import { useCreateTaskFromMessage } from "./use-create-task-from-message"
+import {
+  MessageCommonActions,
+  messageActionButtonClass,
+} from "@/components/message/message-common-actions"
+import { useCreateTaskFromMessage } from "@/components/message/use-create-task-from-message"
 import { formatElapsedLabel } from "@/lib/format-elapsed"
 import { formatTokenCount } from "@/lib/token-format"
-import { cn, copyTextToClipboard } from "@/lib/utils"
+import { cn } from "@/lib/utils"
 import type { TurnUsage } from "@/lib/types"
 
 interface TurnStatsProps {
@@ -29,6 +25,7 @@ interface TurnStatsProps {
   duration_ms?: number | null
   model?: string | null
   models?: string[]
+  profile?: string | null
   previousUserIndex?: number | null
   isResponseComplete?: boolean
   copyText?: string
@@ -36,14 +33,12 @@ interface TurnStatsProps {
   completedAt?: string | null
 }
 
-const iconButtonClass =
-  "inline-flex h-6 w-6 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
-
 export function TurnStats({
   usage,
   duration_ms,
   model,
   models,
+  profile,
   previousUserIndex,
   isResponseComplete = true,
   copyText = "",
@@ -54,10 +49,7 @@ export function TurnStats({
   // Reuse the live timer's elapsed-unit strings so the per-turn duration
   // tooltip renders the exact same localized "Xh Ym Zs" format.
   const tLive = useTranslations("Folder.chat.liveTurnStats")
-  const tTasks = useTranslations("Tasks")
   const scroll = useMessageScroll()
-  const [isCopied, setIsCopied] = useState(false)
-  const timeoutRef = useRef<number>(0)
   const shortTimeFormatter = useMemo(
     () =>
       new Intl.DateTimeFormat(locale, {
@@ -89,8 +81,9 @@ export function TurnStats({
     ? fullTimeFormatter.format(completedAtDate)
     : null
 
-  const displayModels = models?.length ? models : model ? [model] : []
   const hasCopy = copyText.trim().length > 0
+  const hasCommonActions =
+    hasCopy || Boolean(profile) || Boolean(models?.length) || Boolean(model)
   const hasUsage = Boolean(usage)
   const hasDuration = typeof duration_ms === "number" && duration_ms > 0
   const hasCompletedAt = Boolean(completedLabel)
@@ -107,95 +100,35 @@ export function TurnStats({
     if (typeof previousUserIndex !== "number") return
     scroll?.scrollToIndex(previousUserIndex, { align: "start", smooth: true })
   }, [previousUserIndex, scroll])
-
-  const getTaskText = useCallback(() => copyText ?? "", [copyText])
+  const getTaskText = useCallback(() => copyText, [copyText])
   const handleCreateTask = useCreateTaskFromMessage(getTaskText)
 
-  const handleCopy = useCallback(async () => {
-    if (isCopied || !hasCopy) return
-    window.clearTimeout(timeoutRef.current)
-    const ok = await copyTextToClipboard(copyText)
-    if (!ok) return
-    setIsCopied(true)
-    timeoutRef.current = window.setTimeout(() => setIsCopied(false), 2000)
-  }, [copyText, hasCopy, isCopied])
-
-  useEffect(
-    () => () => {
-      window.clearTimeout(timeoutRef.current)
-    },
-    []
-  )
-
   if (!isResponseComplete) return null
-  if (!hasCopy && !hasUsage && !hasDuration && !hasCompletedAt && !hasJump)
+  if (
+    !hasCommonActions &&
+    !hasUsage &&
+    !hasDuration &&
+    !hasCompletedAt &&
+    !hasJump
+  )
     return null
 
   return (
     <div className="mt-2 -ms-[0.3125rem] flex items-center justify-start gap-1 text-xs text-muted-foreground">
       <TooltipProvider delayDuration={150}>
-        {hasCopy && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                onClick={handleCopy}
-                className={iconButtonClass}
-                aria-label={isCopied ? t("copied") : t("copyMessage")}
-              >
-                {isCopied ? (
-                  <CheckIcon aria-hidden="true" className="h-3.5 w-3.5" />
-                ) : (
-                  <CopyIcon aria-hidden="true" className="h-3.5 w-3.5" />
-                )}
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="top">
-              {isCopied ? t("copied") : t("copyMessage")}
-            </TooltipContent>
-          </Tooltip>
-        )}
-        {hasCopy && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                onClick={handleCreateTask}
-                className={iconButtonClass}
-                aria-label={tTasks("createFromMessage")}
-              >
-                <ListTodo aria-hidden="true" className="h-3.5 w-3.5" />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="top">
-              {tTasks("createFromMessage")}
-            </TooltipContent>
-          </Tooltip>
-        )}
-        {displayModels.length > 0 && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button
-                type="button"
-                className={cn(iconButtonClass, "cursor-default")}
-                aria-label={t("model")}
-              >
-                <BrainCog aria-hidden="true" className="h-3.5 w-3.5" />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent side="top" className="max-w-xs break-words">
-              <span className="font-medium" translate="no">
-                {displayModels.join(", ")}
-              </span>
-            </TooltipContent>
-          </Tooltip>
-        )}
+        <MessageCommonActions
+          copyText={copyText}
+          model={model}
+          models={models}
+          profile={profile}
+          onCreateTask={handleCreateTask}
+        />
         {hasUsage && usage && (
           <Tooltip>
             <TooltipTrigger asChild>
               <button
                 type="button"
-                className={cn(iconButtonClass, "cursor-default")}
+                className={cn(messageActionButtonClass, "cursor-default")}
                 aria-label={t("tokenStats")}
               >
                 <Coins aria-hidden="true" className="h-3.5 w-3.5" />
@@ -245,7 +178,7 @@ export function TurnStats({
             <TooltipTrigger asChild>
               <button
                 type="button"
-                className={cn(iconButtonClass, "cursor-default")}
+                className={cn(messageActionButtonClass, "cursor-default")}
                 aria-label={t("duration")}
               >
                 <Timer aria-hidden="true" className="h-3.5 w-3.5" />
@@ -264,7 +197,7 @@ export function TurnStats({
               <button
                 type="button"
                 onClick={handleJump}
-                className={iconButtonClass}
+                className={messageActionButtonClass}
                 aria-label={t("jumpToPreviousUserMessage")}
               >
                 <ArrowUpToLine aria-hidden="true" className="h-3.5 w-3.5" />

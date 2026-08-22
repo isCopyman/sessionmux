@@ -375,6 +375,33 @@ describe("RoomWorkspace", () => {
     })
   })
 
+  it("renders the shared copy, model and profile actions on a Session post", async () => {
+    api.getCollaborationRoomTimeline.mockResolvedValue(
+      timeline([
+        event({
+          source: {
+            conversationId: 101,
+            title: "Planner",
+            agentType: "claude_code",
+            folderPath: "/repo",
+            backend: "current",
+            model: "claude-opus-5",
+            profile: "cpa",
+          },
+        }),
+      ])
+    )
+
+    renderRoom()
+
+    expect(await screen.findByText("newest post")).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Copy" })).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Model" })).toBeInTheDocument()
+    expect(
+      screen.getByRole("button", { name: "Launch profile" })
+    ).toBeInTheDocument()
+  })
+
   it("pages older posts without marking the room seen again", async () => {
     api.getCollaborationRoomTimeline.mockImplementation(
       async (_id: string, _limit?: number, beforeEventId?: string | null) => {

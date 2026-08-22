@@ -1330,6 +1330,10 @@ export interface CollaborationSessionSnapshot {
   agentType?: string | null
   folderPath?: string | null
   backend: string
+  /** Model frozen when the collaboration event was authored. */
+  model?: string | null
+  /** Claude launch-profile id frozen when the event was authored. */
+  profile?: string | null
 }
 
 export interface CollaborationDelivery {

@@ -220,6 +220,10 @@ pub struct CollaborationSessionSnapshot {
     pub agent_type: Option<String>,
     pub folder_path: Option<String>,
     pub backend: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

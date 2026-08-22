@@ -48,6 +48,12 @@
       前端测试与真实 Tauri WebView2 验证。相关 45 项测试、全量 4981 项测试、TypeScript
       与 ESLint 均通过；真实窄窗口已验证 Profile 字段、当前值和选项正常显示。
 
+- [x] **Session / Room 消息操作与运行配置统一** —— 抽取共享消息操作栏，Session 回复
+      与 Room 帖子共用复制、模型和 Claude Profile 展示；Room 仍独占回复、引用和义务
+      语义。新 Room 帖子在事件上冻结发送时的模型/Profile，后续切换不会改写历史。
+      相关 71 项、全量 4984 项前端测试和两项 Rust 快照/迁移测试通过；真实 WebView2
+      已同时看到 Session 与 Room 的复制、模型、接入配置按钮。
+
 - [x] **authmode** —— 已合。删掉"有人写、没人读"的 `CLAUDE_AUTH_MODE`，
       16 文件 −182/+4，门全绿（tsc/eslint 0，vitest 394 文件 4970 测试）。
       工人核实后只删了 2 个 Claude 独有的 i18n 键，另外 4 个是顶层共享、

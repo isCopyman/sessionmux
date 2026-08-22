@@ -26,6 +26,13 @@ function renderStats(ui: ReactNode) {
 const jumpLabel = enMessages.Folder.chat.messageList.jumpToPreviousUserMessage
 
 describe("TurnStats jump-to-previous-user gating", () => {
+  it("shows a launch profile even when the native turn has no usage metadata", () => {
+    renderStats(<TurnStats profile="cpa" />)
+    expect(
+      screen.getByRole("button", { name: "Launch profile" })
+    ).toBeInTheDocument()
+  })
+
   it("shows the jump button for a duration-only turn (no token usage)", () => {
     // Cursor never reports per-turn token usage; a turn that still carries a
     // duration is a substantial reply and must keep the jump affordance.

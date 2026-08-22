@@ -1061,6 +1061,7 @@ pub enum RoomTimelineMode<'a> {
 const EVENT_SELECT: &str =
     "SELECT e.id, e.room_id, e.source_conversation_id, e.source_title_snapshot, \
                     e.source_agent_type_snapshot, e.source_folder_path_snapshot, \
+                    e.source_model_snapshot, e.source_profile_snapshot, \
                     e.subject, e.body, e.reply_to_event_id, e.expects_reply, e.urgency, \
                     COALESCE(e.author_kind, 'session') AS author_kind, \
                     COALESCE(e.mention_human, 0) AS mention_human, \
@@ -1372,6 +1373,8 @@ async fn timeline_event_from_row(
             agent_type: Some(row.try_get("", "source_agent_type_snapshot")?),
             folder_path: row.try_get("", "source_folder_path_snapshot")?,
             backend: "current".to_string(),
+            model: row.try_get("", "source_model_snapshot")?,
+            profile: row.try_get("", "source_profile_snapshot")?,
         },
         subject: row
             .try_get::<Option<String>>("", "subject")?
@@ -1548,6 +1551,63 @@ mod tests {
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].id, room.id);
         assert_eq!(listed[0].member_count, 1);
+    }
+
+    #[tokio::test]
+    async fn room_post_freezes_the_source_model_and_profile() {
+        let (db, a, claude, _) = seeded().await;
+        db.conn
+            .execute(Statement::from_sql_and_values(
+                DbBackend::Sqlite,
+                "UPDATE conversation SET model = ?, preferred_config_values = ? WHERE id = ?",
+                vec![
+                    "claude-opus-5".into(),
+                    r#"{"__codeg_profile__":"cpa"}"#.into(),
+                    claude.into(),
+                ],
+            ))
+            .await
+            .expect("bind runtime selectors");
+        let room = make_room(&db, a, vec![a, claude]).await;
+
+        crate::db::service::collaboration_service::post_room(
+            &db.conn,
+            ask_post(
+                room.id.clone(),
+                claude,
+                vec![a],
+                "runtime-snapshot",
+                crate::models::CollaborationAuthorKind::Session,
+            ),
+        )
+        .await
+        .expect("post");
+
+        let posts = timeline(&db.conn, &room.id, None).await.expect("timeline");
+        assert_eq!(
+            posts.events[0].source.model.as_deref(),
+            Some("claude-opus-5")
+        );
+        assert_eq!(posts.events[0].source.profile.as_deref(), Some("cpa"));
+
+        db.conn
+            .execute(Statement::from_sql_and_values(
+                DbBackend::Sqlite,
+                "UPDATE conversation SET model = ?, preferred_config_values = ? WHERE id = ?",
+                vec![
+                    "claude-sonnet-5".into(),
+                    r#"{"__codeg_profile__":"official"}"#.into(),
+                    claude.into(),
+                ],
+            ))
+            .await
+            .expect("change selectors later");
+        let posts = timeline(&db.conn, &room.id, None).await.expect("timeline");
+        assert_eq!(
+            posts.events[0].source.model.as_deref(),
+            Some("claude-opus-5")
+        );
+        assert_eq!(posts.events[0].source.profile.as_deref(), Some("cpa"));
     }
 
     #[tokio::test]

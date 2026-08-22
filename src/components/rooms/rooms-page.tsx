@@ -113,6 +113,7 @@ import {
 } from "@/lib/room-message-body"
 import { buildRoomMentionSearch } from "@/components/rooms/room-mention-search"
 import { RoomPostBody } from "@/components/rooms/room-post-body"
+import { MessageCommonActions } from "@/components/message/message-common-actions"
 import { SessionPicker } from "@/components/rooms/session-picker"
 import { useRoomFind } from "@/components/rooms/use-room-find"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
@@ -213,6 +214,15 @@ function RoomTimelinePost({
     ) < GROUP_MS
   )
   const markdown = roomMessageMarkdown({
+    body: event.body,
+    members,
+    mentionConversationIds: event.mentionConversationIds,
+    mentionHuman: Boolean(event.mentionHuman),
+    allLabel: t("mentionAll"),
+    humanLabel: t("mentionHuman"),
+    untitled: (id) => t("untitled", { id }),
+  })
+  const copyText = roomMessagePlainText({
     body: event.body,
     members,
     mentionConversationIds: event.mentionConversationIds,
@@ -328,6 +338,13 @@ function RoomTimelinePost({
           />
         ) : null}
         <RoomPostBody source={markdown} onOpenSession={onOpenSession} />
+        <div className="mt-1 -ms-1 flex items-center gap-1 text-xs text-muted-foreground">
+          <MessageCommonActions
+            copyText={copyText}
+            model={fromYou ? null : event.source.model}
+            profile={fromYou ? null : event.source.profile}
+          />
+        </div>
       </div>
     </article>
   )
