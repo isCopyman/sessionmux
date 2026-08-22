@@ -1,6 +1,6 @@
 ---
 name: codeg-host-control
-description: Use when a managed Codeg Agent needs to create, inspect, rename or retune Codeg Sessions, organize Sessions into Collections or Workbenches, or claim/refine task-board cards through Codeg's progressive Host Control MCP. Room create/add-member and posting belong to the codeg-room skill. Private mail belongs to codeg-mailbox. Team playbooks belong to codeg-multi-agent.
+description: Use when a managed Codeg Agent needs to create, inspect, rename or retune Codeg Sessions, or organize Sessions into Collections or Workbenches through Codeg's progressive Host Control MCP. Task-board work belongs to codeg-task; Rooms, private mail, and team playbooks have their own Codeg skills.
 ---
 
 # Codeg Host Control
@@ -103,33 +103,13 @@ the idempotency key outside model-controlled arguments.
   Use this UI-affecting action only when the user asked to open or arrange the
   Workbench. `ui_requested` is not proof that a disconnected View applied it.
 
-## Available task actions
+## Task actions live in `codeg-task`
 
-Task creation and execution choice are separate. `create_work_task` captures an
-unassigned card; use `initial_status=backlog` for an uncommitted idea or omit it
-for a ready Todo. Neither starts an Agent, selects a Harness, Profile, model,
-Session, or worktree. Use `list_tasks` / `get_task` to inspect cards, then Host
-Control for:
-
-- `task.update`: refine the title and/or description of an unassigned card or
-  the caller's own active card. Editing an active card updates the board record;
-  it does not rewrite a Prompt already submitted to the Harness.
-- `task.claim`: atomically assign an unassigned board card to the token-derived
-  current persistent Session and queue its brief as that Session's next normal
-  prompt, moving it to In Progress. Never pass a Session id. A competing claim
-  is rejected rather than stealing the card.
-- `task.assign`: the same atomic path, with an optional stable
-  `target_session_id` for assigning another Session. Omit it to claim for self.
-
-While working, use `task_progress` at meaningful milestones and
-`task_complete` with `blocked` or a review-ready verdict. An Agent may move its
-work to Blocked or Review; only the human accepts it as Done, cancels it, or
-reopens it. The visible board has seven fixed, hideable columns and seven
-fixed business states: `backlog`, `todo`, `in_progress`, `blocked`, `review`,
-`done`, and `canceled`. A human may freely move a neutral/manual card between
-these columns; moving a card never starts or wakes an Agent. Keep long-lived
-plans, evidence, and deliverables in project files, and put only a concise
-summary plus stable file paths on the task card or its progress timeline.
+Task capture, board state, assignment, claiming, progress, and completion have
+their own workflow in `codeg-task`. Load that skill instead of treating a task
+as a generic Host Control write. Its `task.update`, `task.claim`, and
+`task.assign` actions still use `codeg_help` / `codeg_use`; the separate skill
+explains when those actions belong in the task lifecycle.
 
 ## Room actions live in `codeg-room`
 

@@ -440,6 +440,37 @@ ar = "يدير جلسات Codeg عبر بوابة MCP التدريجية الخ�
 
 
 [[expert]]
+id = "codeg-task"
+category = "execution"
+icon = "ListChecks"
+sort_order = 135
+
+[expert.display_name]
+en = "Codeg Task Board"
+"zh-CN" = "Codeg 任务看板"
+"zh-TW" = "Codeg 任務看板"
+ja = "Codeg タスクボード"
+ko = "Codeg 작업 보드"
+es = "Tablero de tareas de Codeg"
+de = "Codeg-Aufgabenboard"
+fr = "Tableau des tâches Codeg"
+pt = "Quadro de tarefas do Codeg"
+ar = "لوحة مهام Codeg"
+
+[expert.description]
+en = "Captures, assigns, progresses, and completes work on Codeg's task board."
+"zh-CN" = "在 Codeg 任务看板中创建、分配、推进和完成工作。"
+"zh-TW" = "在 Codeg 任務看板中建立、分配、推進和完成工作。"
+ja = "Codeg のタスクボードで作業を作成、割り当て、進行、完了します。"
+ko = "Codeg 작업 보드에서 작업을 만들고 할당하고 진행하고 완료합니다."
+es = "Crea, asigna, progresa y completa trabajo en el tablero de Codeg."
+de = "Erfasst, weist zu, bearbeitet und erledigt Arbeit im Codeg-Aufgabenboard."
+fr = "Crée, assigne, fait progresser et termine le travail dans Codeg."
+pt = "Cria, atribui, acompanha e conclui trabalho no quadro do Codeg."
+ar = "ينشئ العمل ويُسنده ويتابع تقدمه ويُكمله في لوحة مهام Codeg."
+
+
+[[expert]]
 id = "codeg-mailbox"
 category = "execution"
 icon = "MessagesSquare"

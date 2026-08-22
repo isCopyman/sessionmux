@@ -1185,6 +1185,7 @@ mod tests {
             "codeg-mailbox",
             "codeg-room",
             "codeg-host-control",
+            "codeg-task",
             "codeg-multi-agent",
         ] {
             assert!(
