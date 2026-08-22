@@ -538,6 +538,19 @@ describe("CollectionTree", () => {
     expect(await screen.findByText("Loose notes")).toBeTruthy()
     expect(await screen.findByText("Worktree experiment")).toBeTruthy()
     expect(
+      document.querySelector('[data-session-worktree-badge=""]')?.textContent
+    ).toContain("experiment")
+    expect(
+      screen
+        .getByRole("button", { name: "Worktree experiment" })
+        .getAttribute("title")
+    ).toContain("/tmp/project-worktrees/experiment")
+    expect(
+      screen
+        .getByRole("button", { name: "Loose notes" })
+        .querySelector('[data-session-worktree-badge=""]')
+    ).toBeNull()
+    expect(
       document.querySelector('[data-focused-session="true"]')?.textContent
     ).toContain("Loose notes")
     expect(document.querySelectorAll("[data-collection-path]")).toHaveLength(2)

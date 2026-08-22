@@ -2,11 +2,11 @@ use chrono::Utc;
 use sea_orm::DatabaseConnection;
 use sea_orm::{
     ActiveModelTrait, ActiveValue::NotSet, ColumnTrait, ConnectionTrait, DbBackend, EntityTrait,
-    IntoActiveModel, QueryFilter, QueryOrder, Set, Statement,
+    IntoActiveModel, QueryFilter, QueryOrder, Set, Statement, TransactionTrait,
 };
 
-use crate::db::entities::folder;
 use crate::db::entities::folder::FolderKind;
+use crate::db::entities::{collection, folder};
 use crate::db::error::DbError;
 use crate::models::agent::AgentType;
 use crate::models::{FolderDetail, FolderHistoryEntry};
@@ -410,15 +410,43 @@ pub async fn seed_folder_parent(
     if parent_id == folder_id {
         return Ok(false);
     }
+    let txn = conn.begin().await?;
+    let now = Utc::now();
     let res = folder::Entity::update_many()
         .col_expr(folder::Column::ParentId, Expr::value(parent_id))
-        .col_expr(folder::Column::UpdatedAt, Expr::value(Utc::now()))
+        .col_expr(folder::Column::UpdatedAt, Expr::value(now))
         .filter(folder::Column::Id.eq(folder_id))
         .filter(folder::Column::DeletedAt.is_null())
         .filter(folder::Column::ParentId.is_null())
-        .exec(conn)
+        .exec(&txn)
         .await?;
-    Ok(res.rows_affected > 0)
+    if res.rows_affected == 0 {
+        txn.commit().await?;
+        return Ok(false);
+    }
+
+    // A worktree may have been opened before its repository root. During that
+    // interval it was a legitimate top-level Path, so Collections and Rooms
+    // created there stored the worktree id as their semantic root. Re-homing
+    // only `folder.parent_id` would strand those objects under a Path that the
+    // UI no longer renders as a root. Move all three facts atomically.
+    collection::Entity::update_many()
+        .col_expr(collection::Column::RootFolderId, Expr::value(parent_id))
+        .col_expr(collection::Column::UpdatedAt, Expr::value(now))
+        .filter(collection::Column::RootFolderId.eq(folder_id))
+        .exec(&txn)
+        .await?;
+    txn.execute(Statement::from_sql_and_values(
+        DbBackend::Sqlite,
+        "UPDATE collaboration_room \
+         SET root_folder_id = ?, updated_at = CURRENT_TIMESTAMP \
+         WHERE root_folder_id = ?",
+        vec![parent_id.into(), folder_id.into()],
+    ))
+    .await?;
+
+    txn.commit().await?;
+    Ok(true)
 }
 
 /// Like [`get_folder_by_id`], but `None` unless the folder is currently in the
@@ -634,7 +662,11 @@ pub async fn reorder_folders(conn: &DatabaseConnection, ids: Vec<i32>) -> Result
 #[cfg(test)]
 mod worktree_parent_tests {
     use super::*;
+    use crate::db::service::{
+        collaboration_room_service, collection_service, conversation_service, workbench_service,
+    };
     use crate::db::test_helpers::fresh_in_memory_db;
+    use crate::models::{AgentType, CreateCollaborationRoomInput};
 
     /// `(tempdir, repo_path, worktree_path)` for the layout this fix is about:
     /// a linked worktree that does NOT live inside its repository, so nothing
@@ -832,6 +864,73 @@ mod worktree_parent_tests {
             "a folder can never be its own root"
         );
         assert_eq!(parent_of(&db, wt.id).await, Some(a.id));
+    }
+
+    /// If the worktree was opened first, semantic objects could legitimately
+    /// choose it as their root before the repository appeared. Filing the
+    /// worktree later must move those roots in the same operation; otherwise
+    /// the Collection/Room disappears from the canonical Path tree.
+    #[tokio::test]
+    async fn seeding_a_root_rehomes_worktree_collections_and_rooms() {
+        let db = fresh_in_memory_db().await;
+        let root = add_folder(&db.conn, "/tmp/codeg-rehome-root")
+            .await
+            .expect("root");
+        let wt = add_folder(&db.conn, "/tmp/codeg-rehome-worktree")
+            .await
+            .expect("worktree opened before it was recognized");
+        let collection =
+            collection_service::create(&db.conn, "Worktree ideas".into(), None, Some(wt.id))
+                .await
+                .expect("collection rooted at the temporary top-level worktree");
+        let creator = conversation_service::create(
+            &db.conn,
+            wt.id,
+            AgentType::ClaudeCode,
+            Some("Worktree session".into()),
+            Some("experiment".into()),
+        )
+        .await
+        .expect("creator session");
+        let workbench = workbench_service::create(&db.conn, Some("Main".into()))
+            .await
+            .expect("workbench");
+        let room = collaboration_room_service::create(
+            &db.conn,
+            CreateCollaborationRoomInput {
+                workbench_id: workbench.id,
+                title: "Worktree room".into(),
+                member_conversation_ids: vec![creator.id],
+                created_by_conversation_id: creator.id,
+                collection_id: None,
+                root_folder_id: Some(wt.id),
+            },
+        )
+        .await
+        .expect("room rooted at the temporary top-level worktree");
+
+        assert!(seed_folder_parent(&db.conn, wt.id, root.id)
+            .await
+            .expect("seed root"));
+
+        let collections = collection_service::list(&db.conn)
+            .await
+            .expect("list collections");
+        assert_eq!(
+            collections
+                .iter()
+                .find(|item| item.id == collection.id)
+                .and_then(|item| item.root_folder_id),
+            Some(root.id)
+        );
+        assert_eq!(
+            collaboration_room_service::get(&db.conn, &room.id)
+                .await
+                .expect("reload room")
+                .root_folder_id,
+            Some(root.id)
+        );
+        assert_eq!(parent_of(&db, wt.id).await, Some(root.id));
     }
 
     /// The backfill work list: everything still top-level, minus the hidden chat

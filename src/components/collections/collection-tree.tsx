@@ -35,6 +35,7 @@ import {
   FolderOpen,
   FolderPlus,
   FolderTree,
+  GitBranch,
   Inbox,
   Info,
   Loader2,
@@ -1580,6 +1581,18 @@ export const CollectionTree = forwardRef<
     const title =
       formatConversationTitle(conversation.title) ||
       tConversation("untitledConversation")
+    const executionFolder = folderById.get(conversation.folder_id)
+    const worktreeLabel =
+      executionFolder?.parent_id != null
+        ? (conversation.git_branch ??
+          executionFolder.git_branch ??
+          executionFolder.alias ??
+          executionFolder.name)
+        : null
+    const rowTitle =
+      worktreeLabel && executionFolder
+        ? `${title} — ${worktreeLabel} (${executionFolder.path})`
+        : title
     const dragPayload =
       rootId == null
         ? null
@@ -1688,7 +1701,7 @@ export const CollectionTree = forwardRef<
                 dropKey != null && dropTarget === dropKey ? "true" : undefined
               }
               aria-current={selected ? "page" : undefined}
-              title={title}
+              title={rowTitle}
               className={cn(
                 "flex h-7 min-w-0 flex-1 cursor-grab touch-none items-center gap-1.5 pe-2 text-start text-xs active:cursor-grabbing focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
                 (multiSelectActive || checked) && "ps-1",
@@ -1718,6 +1731,17 @@ export const CollectionTree = forwardRef<
                 />
               </span>
               <span className="min-w-0 flex-1 truncate">{title}</span>
+              {worktreeLabel ? (
+                <span
+                  aria-hidden="true"
+                  data-session-worktree-badge=""
+                  className="flex max-w-24 shrink-0 items-center gap-0.5 rounded bg-muted px-1 py-0.5 text-[9px] leading-none text-muted-foreground"
+                  title={executionFolder?.path}
+                >
+                  <GitBranch className="h-2.5 w-2.5 shrink-0" />
+                  <span className="truncate">{worktreeLabel}</span>
+                </span>
+              ) : null}
             </button>
           </div>
         )}
