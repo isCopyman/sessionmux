@@ -1509,10 +1509,12 @@ fn parse_work_task_spec(arguments: &Value) -> Result<NewWorkTaskSpec, String> {
     Ok(NewWorkTaskSpec {
         title: truncate_chars(&title, MAX_TITLE_CHARS),
         prompt: truncate_chars(&prompt, MAX_PROMPT_CHARS),
-        agent_type: optional_string(arguments, "agent_type"),
+        // A card is captured before execution is chosen. Harness/Profile/Model
+        // belong to the later assignment or Session-launch boundary.
+        agent_type: None,
         folder_path: optional_string(arguments, "folder_path"),
-        profile: optional_string(arguments, "profile"),
-        model: optional_string(arguments, "model"),
+        profile: None,
+        model: None,
     })
 }
 
@@ -3353,7 +3355,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_work_task_reads_optional_profile_and_model() {
+    fn parse_work_task_ignores_execution_selectors() {
         let spec = parse_work_task_spec(&json!({
             "title": "Fix the flake",
             "prompt": "the retry test is flaky",
@@ -3361,8 +3363,8 @@ mod tests {
             "model": "claude-opus-4"
         }))
         .unwrap();
-        assert_eq!(spec.profile.as_deref(), Some("api"));
-        assert_eq!(spec.model.as_deref(), Some("claude-opus-4"));
+        assert!(spec.profile.is_none());
+        assert!(spec.model.is_none());
     }
 
     #[test]
@@ -3394,21 +3396,28 @@ mod tests {
     }
 
     #[test]
-    fn create_tools_accept_profile_id_or_name() {
-        for tool in ["create_automation", "create_work_task"] {
-            let chunk = TOOL_SCHEMA_JSON
-                .split(&format!("\"name\": \"{tool}\""))
-                .nth(1)
-                .expect(tool);
-            assert!(
-                chunk.contains("id or name from list_profiles"),
-                "{tool}: {chunk}"
-            );
-            assert!(
-                chunk.contains("Unknown or ambiguous values are rejected"),
-                "{tool}: {chunk}"
-            );
-        }
+    fn automation_accepts_profiles_but_task_capture_stays_neutral() {
+        let automation = TOOL_SCHEMA_JSON
+            .split("\"name\": \"create_automation\"")
+            .nth(1)
+            .unwrap()
+            .split("\"name\": \"create_work_task\"")
+            .next()
+            .unwrap();
+        assert!(automation.contains("id or name from list_profiles"));
+        assert!(automation.contains("Unknown or ambiguous values are rejected"));
+
+        let task = TOOL_SCHEMA_JSON
+            .split("\"name\": \"create_work_task\"")
+            .nth(1)
+            .unwrap()
+            .split("\"name\": \"list_tasks\"")
+            .next()
+            .unwrap();
+        assert!(task.contains("does not choose a Harness"));
+        assert!(!task.contains("\"profile\""));
+        assert!(!task.contains("\"model\""));
+        assert!(!task.contains("\"agent_type\""));
     }
 
     #[test]

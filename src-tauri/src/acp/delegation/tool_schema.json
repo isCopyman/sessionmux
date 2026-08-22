@@ -421,7 +421,7 @@
   },
   {
     "name": "create_work_task",
-    "description": "Queue a card on codeg's to-dos. A task is a unit of work an agent later executes on its own branch/worktree, then hands back for the user to review and merge. Use it when the user wants work PARKED rather than done now — 'add a task to…', 'put this on the board', 'we should also fix X later' — or when you are splitting a large request into reviewable pieces and the user asked for that. Do NOT use it to do the thing the user just asked you to do in this conversation, and do NOT queue a task per trivial step. The executing agent starts cold with no view of this chat, so `prompt` must carry the full briefing. The tool returns the task id; the user tracks it in their to-dos.",
+    "description": "Create an unassigned card on codeg's task board. Use it when the user wants work captured, organized, or split into visible pieces. Creating the card does not choose a Harness, start an Agent, or create a worktree. A human may later assign it, or the current persistent Session may claim it with Host Control action task.claim. Do not create a card for every trivial step. The description should preserve enough context for a later assignee.",
     "inputSchema": {
       "type": "object",
       "required": ["title", "prompt"],
@@ -432,30 +432,18 @@
         },
         "prompt": {
           "type": "string",
-          "description": "The self-contained instruction the executing agent receives: the goal, the relevant files/paths, constraints, and what done looks like."
-        },
-        "agent_type": {
-          "type": "string",
-          "description": "Which local agent should run this task (e.g. 'claude_code', 'codex'). Omit to inherit the board's configured default."
+          "description": "Task description: goal, relevant context, constraints, and what done looks like. It may remain intentionally fuzzy until somebody refines the card."
         },
         "folder_path": {
           "type": "string",
           "description": "Absolute path of the target project. Defaults to the project this conversation is in; pass it only to target a different project already open in codeg."
-        },
-        "profile": {
-          "type": "string",
-          "description": "Claude launch profile id or name from list_profiles (e.g. 'follow-default' or 'CPA'). A profile decides which Claude configuration (subscription login vs API endpoint) the executing session launches with. Omit to keep today's default. Unknown or ambiguous values are rejected with the list of valid id (name) pairs — they do not silently fall back. Currently Claude Code only."
-        },
-        "model": {
-          "type": "string",
-          "description": "Model id to pin on the executing session (the existing config_values 'model' key). Omit to inherit the agent's default."
         }
       }
     }
   },
   {
     "name": "list_tasks",
-    "description": "Read-only: list cards on codeg's task board. Does not create, claim, or change any task. Defaults to the project this conversation is in (a worktree working directory is resolved to that project). Pass folder_path=\"all\" to list every live project, newest updated_at first. Optional status accepts a board column (todo, in_progress, attention, done) or a raw status such as awaiting_input. Returns compact rows (id, title, status, agent, updated_at) — never the prompt body. total is the filtered count; truncated is true when limit hid the rest (default 30, hard cap 100). A card you see here may already be owned by another session (check status and conversation_id): do not create a duplicate for work that is already on the board.",
+    "description": "Read-only: list cards on codeg's task board. Does not create, claim, or change any task. Defaults to the project this conversation is in (a worktree working directory is resolved to that project). Pass folder_path=\"all\" to list every live project, newest updated_at first. Optional status accepts a board column (todo, in_progress, attention, done) or one of the six business states (todo, in_progress, blocked, review, done, canceled). Returns compact rows; use get_task for the description. A card may already be owned by another Session: do not create a duplicate.",
     "inputSchema": {
       "type": "object",
       "additionalProperties": false,
@@ -466,7 +454,7 @@
         },
         "status": {
           "type": "string",
-          "description": "Optional filter. Board columns: todo, in_progress, attention, done. Raw statuses also work (queued, preparing, running, awaiting_input, review, merging, failed, canceled)."
+          "description": "Optional filter. Board columns: todo, in_progress, attention, done. Six business states also work: todo, in_progress, blocked, review, done, canceled."
         },
         "limit": {
           "type": "integer",

@@ -247,8 +247,21 @@ pub async fn work_task_assign_session_core(
     id: i32,
     conversation_id: i32,
 ) -> Result<WorkTaskInfo, DbError> {
+    work_task_assign_session_as_core(emitter, db, prompt_queue, id, conversation_id, "user").await
+}
+
+/// Shared assignment path for the UI and token-authenticated Host Control.
+/// The trusted caller decides the audit actor; model input never does.
+pub async fn work_task_assign_session_as_core(
+    emitter: &EventEmitter,
+    db: &AppDatabase,
+    prompt_queue: &PromptQueueHandle,
+    id: i32,
+    conversation_id: i32,
+    actor: &str,
+) -> Result<WorkTaskInfo, DbError> {
     let assigned =
-        work_task_service::assign_to_session(&db.conn, id, conversation_id, "user").await?;
+        work_task_service::assign_to_session(&db.conn, id, conversation_id, actor).await?;
     emit_event(
         emitter,
         WORK_TASK_CHANGED_EVENT,

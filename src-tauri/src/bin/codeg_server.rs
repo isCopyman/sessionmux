@@ -390,6 +390,7 @@ async fn async_main() -> ExitCode {
                     state.chat_channel_manager.clone_ref(),
                     host_control_config.clone(),
                     state.connection_manager.clone_ref(),
+                    state.prompt_queue.clone(),
                     state.data_dir.clone(),
                 ),
             ),

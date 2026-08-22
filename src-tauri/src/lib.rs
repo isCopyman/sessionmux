@@ -708,6 +708,9 @@ mod tauri_app {
                                     .clone_ref(),
                                 host_control_config.clone(),
                                 cm_state.clone_ref(),
+                                app.state::<crate::prompt_queue::PromptQueueHandle>()
+                                    .inner()
+                                    .clone(),
                                 effective_data_dir.clone(),
                             ),
                         ),

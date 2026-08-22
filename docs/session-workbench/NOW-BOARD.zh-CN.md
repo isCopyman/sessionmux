@@ -50,7 +50,9 @@
       `conversation_id`，原子冻结启动快照与 claim。已有 Session 指派弹窗也已接入“新建普通
       Session”，复用同一套 Harness/Profile/Mode/Model/Effort 启动面板；普通路径按“稳定
       Session → Profile → ACP → 指派”顺序执行。相关测试与 Desktop CDP 已通过，临时数据已
-      清理。仍待 Agent 创建/领取/修改任务、collaborator 与 Session 属性投影。
+      清理。Agent 现可用中性 `create_work_task` 建卡，并通过渐进式 Host Control 的
+      `task.update / task.claim / task.assign` 修改、自领或指派；领取复用同一 Assignment +
+      PromptQueue 事务。仍待 collaborator 与 Session 属性投影。
 
 - [x] **Task 状态列收敛** —— 默认 UI 保持“待办 / 进行中 / 等你处理 / 已完成”四列，底层
       固定 `todo / in_progress / blocked / review / done / canceled` 六个业务状态；

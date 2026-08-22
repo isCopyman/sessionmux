@@ -194,6 +194,10 @@ pub struct ListTasksQuery {
 pub struct TaskListRow {
     pub id: i32,
     pub title: String,
+    /// Six-state user workflow (`todo` / `in_progress` / `blocked` / `review`
+    /// / `done` / `canceled`).
+    pub task_status: String,
+    /// Lower-level execution lifecycle retained for diagnostics.
     pub status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_type: Option<String>,

@@ -217,6 +217,7 @@ fn compact_task_row(row: crate::db::entities::work_task::Model) -> TaskListRow {
     TaskListRow {
         id: row.id,
         title: row.title,
+        task_status: work_task_service::business_status_str(row.task_status).to_string(),
         status: work_task_service::status_str(row.status).to_string(),
         agent_type: nonempty(cfg.agent_type),
         updated_at: row.updated_at,
@@ -311,9 +312,8 @@ fn task_detail_from_info(info: WorkTaskInfo, events: Vec<WorkTaskEventInfo>) -> 
 }
 
 const UNKNOWN_STATUS_NOTE: &str = "unknown status filter. Use a board column \
-     (todo, in_progress, attention, done) or a raw status \
-     (todo, queued, preparing, running, awaiting_input, review, merging, \
-     done, failed, canceled).";
+     (todo, in_progress, attention, done) or a business status \
+     (todo, in_progress, blocked, review, done, canceled).";
 
 /// Wrap a plain prompt string as the single text block both editors produce for
 /// a text-only prompt.
@@ -1330,6 +1330,7 @@ mod tests {
             .unwrap();
         let mut am = row.into_active_model();
         am.status = Set(status);
+        am.task_status = Set(work_task_service::business_status_for_engine_status(status));
         am.updated_at = Set(chrono::Utc::now());
         am.update(conn).await.unwrap();
     }
@@ -1458,8 +1459,8 @@ mod tests {
             stamp_status(&db.conn, *id, status).await;
         }
 
-        // Pin: src/components/tasks/board-columns.ts STATUSES_BY_COLUMN.attention
-        // = awaiting_input, review, merging, failed.
+        // Pin: src/components/tasks/board-columns.ts maps the business states
+        // blocked + review into the shared attention / "Needs you" column.
         let out = access
             .list_tasks(
                 ctx_at("/repo/app"),
@@ -1478,17 +1479,20 @@ mod tests {
         );
         assert_eq!(out.total, 4);
 
-        let raw = access
+        let blocked = access
             .list_tasks(
                 ctx_at("/repo/app"),
                 ListTasksQuery {
-                    status: Some("awaiting_input".into()),
+                    status: Some("blocked".into()),
                     ..Default::default()
                 },
             )
             .await;
-        assert_eq!(raw.total, 1);
-        assert_eq!(raw.tasks[0].status, "awaiting_input");
+        assert_eq!(blocked.total, 2);
+        assert!(blocked
+            .tasks
+            .iter()
+            .all(|task| task.task_status == "blocked"));
     }
 
     #[tokio::test]

@@ -3,7 +3,7 @@
 > 状态：已裁决，分批实施中。S1 的双状态轴、人工车道、标题即可建卡、执行方式徽标和
 > 非 Engine 动作裁剪已经落地；S2 已完成“中性任务卡 → 已有 Session”的可靠指派主链，
 > 并补齐“中性任务卡 → 新普通 Session / 新 Worktree Session”的显式启动配置；Agent
-> 领取与属性投影仍待实施。本文覆盖
+> 建卡、修改、自领和指派已经落地，collaborator 与 Session 属性投影仍待实施。本文覆盖
 > `KANBAN-DESIGN-2026-08-21` 中“任务天然等于 Worktree 执行”的旧边界；现有 WorkTask
 > Engine、看板 UI 和多轮生命周期继续保留。
 
@@ -319,10 +319,11 @@ Timer / Automation background  最后
 - `task_progress`；
 - `task_complete`。
 
-新增一个最小工具：
+通过渐进式 Host Control 增加两个最小动作：
 
 ```text
-assign_task(task_id, target_session_id?)
+task.claim(task_id)
+task.assign(task_id, target_session_id?)
 ```
 
 - 不传目标：原子领取给调用者自己；
@@ -335,18 +336,19 @@ assign_task(task_id, target_session_id?)
 - 每次指派写事件，记录来源和目标；
 - Agent 第一版不能任意改别人任务状态、解除别人的指派或删除任务。
 
-同时把现有任务工具收敛为可渐进加载的一组领域动作：
+同时把现有任务工具收敛为一组领域动作：
 
 ```text
 create_task(title, description?, project_id?, source_links?)
-update_task(task_id, expected_revision, patch)
+task.update(task_id, title?, description?)
 list_tasks(filters?) / get_task(task_id)
 assign_task(task_id, target_session_id?, role=owner)
 task_progress(...) / task_complete(...)
 ```
 
-`create_work_task` 在 Engine 兼容期保留为旧名称/适配层，但新功能不再假设“创建任务就必须创建
-Session 或 Worktree”。Agent 可以先整理看板，再由自己领取、指派别的 Session，或留给人类。
+`create_work_task` 在 Engine 兼容期保留旧名称，但工具契约现已只创建中性卡，不再接受
+Harness / Profile / Model；这些配置只在新建 Session 或 Worktree Session 并指派时出现。Agent
+可以先整理看板，再由自己领取、指派别的 Session，或留给人类。
 
 ## 8. 大任务、小任务和 Checklist
 
@@ -400,8 +402,7 @@ Agent”；人工卡和 Engine 卡分别展示自己的合法动作。桌面端�
 Session 收到 → 卡片进入进行中”已通过。
 
 该段主链完成时尚未补齐新建 Session / 新建 Worktree Session 的统一启动配置；其后续状态
-以下面的补充记录为准。Agent `create_task/assign_task/update_task`、collaborator、Session
-属性投影及其余恢复边界仍未完成。
+以下面的补充记录为准。collaborator、Session 属性投影及其余恢复边界仍未完成。
 
 **补充实现状态（2026-08-22）**：已完成新 Worktree Session 的显式启动边界。任务创建仍只
 创建中性卡；用户随后选择“新建 Worktree Session 执行”时，才进入复用普通 Composer
@@ -425,8 +426,14 @@ Worktree 两条路径复用同一个 Harness / Claude Profile / Mode / Model / E
 指派，不生成隐藏的半条 Task Runtime。相关编排测试和真实 Desktop CDP 验证已通过，CDP 临时
 任务已清理；验证未点击最终“创建并指派”，避免启动真实计费回合。
 
-仍未完成：Agent `create_task/assign_task/update_task`、
-collaborator、Session 属性投影及其余恢复边界。Worktree Engine 继续作为一种明确执行模式，
+**补充实现状态（同日，Agent 闭环）**：`create_work_task` 已收敛为中性建卡，建卡时不再向
+Agent 暴露 Harness / Profile / Model。渐进式 Host Control 新增 `task.update / task.claim /
+task.assign`：受管 Session 可在领取前整理卡片，也可修改自己正在负责的卡片；可用稳定 Task ID
+原子自领或指派同项目的另一个持久 Session。领取复用 UI 的 Assignment + 后端 PromptQueue
+事务，竞争者不会偷走同一张卡。Agent 仍不能删除、取消或把卡片直接置为 done；执行后通过
+`task_progress/task_complete` 进入 blocked/review，由人类验收或取消。
+
+仍未完成：collaborator、Session 属性投影及其余恢复边界。Worktree Engine 继续作为一种明确执行模式，
 不再冒充所有任务的默认创建方式。
 
 ### S3：无项目与 Kanban 拖拽

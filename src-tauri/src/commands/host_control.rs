@@ -31,6 +31,7 @@ use crate::commands::host_control_organization::OrganizationHostControl;
 use crate::commands::host_control_room::RoomHostControl;
 use crate::commands::host_control_selectors::SelectorHostControl;
 use crate::commands::host_control_session::SessionHostControlProvider;
+use crate::commands::host_control_task::TaskHostControl;
 use crate::commands::host_control_timer::TimerHostControl;
 use crate::db::entities::conversation::ConversationKind;
 use crate::db::service::conversation_service;
@@ -78,6 +79,7 @@ pub struct DbSessionHostControl {
     session_lifecycle: SessionHostControlProvider,
     selectors: SelectorHostControl,
     organization: OrganizationHostControl,
+    task: TaskHostControl,
     timer: TimerHostControl,
     room: RoomHostControl,
     /// Held across a write so concurrent replays cannot both pass the lookup.
@@ -91,6 +93,7 @@ impl DbSessionHostControl {
         chat_channel_manager: ChatChannelManager,
         config: HostControlRuntimeConfig,
         connection_manager: ConnectionManager,
+        prompt_queue: crate::prompt_queue::PromptQueueHandle,
         data_dir: PathBuf,
     ) -> Self {
         let session_lifecycle = SessionHostControlProvider::new(
@@ -101,6 +104,7 @@ impl DbSessionHostControl {
         );
         let selectors = SelectorHostControl::new(db.clone(), connection_manager);
         let organization = OrganizationHostControl::new(db.clone(), emitter.clone());
+        let task = TaskHostControl::new(db.clone(), emitter.clone(), prompt_queue);
         let timer = TimerHostControl::new(db.clone(), emitter.clone());
         let room = RoomHostControl::new(db.clone(), emitter.clone());
         Self {
@@ -111,6 +115,7 @@ impl DbSessionHostControl {
             session_lifecycle,
             selectors,
             organization,
+            task,
             timer,
             room,
             writes: Mutex::new(IdempotencyCache::default()),
@@ -125,6 +130,11 @@ impl DbSessionHostControl {
             SessionHostControlProvider::isolated_for_tests(Arc::clone(&db), emitter.clone());
         let selectors = SelectorHostControl::isolated_for_tests(db.clone());
         let organization = OrganizationHostControl::new(db.clone(), emitter.clone());
+        let task = TaskHostControl::new(
+            db.clone(),
+            emitter.clone(),
+            crate::prompt_queue::PromptQueueHandle::disconnected_for_test(),
+        );
         let timer = TimerHostControl::new(db.clone(), emitter.clone());
         let room = RoomHostControl::new(db.clone(), emitter.clone());
         Self {
@@ -135,6 +145,7 @@ impl DbSessionHostControl {
             session_lifecycle,
             selectors,
             organization,
+            task,
             timer,
             room,
             writes: Mutex::new(IdempotencyCache::default()),
@@ -314,6 +325,7 @@ impl DbSessionHostControl {
         }
         capabilities.extend(SelectorHostControl::capabilities(writes_allowed));
         capabilities.extend(OrganizationHostControl::capabilities(writes_allowed));
+        capabilities.extend(TaskHostControl::capabilities(writes_allowed));
         capabilities.extend(TimerHostControl::capabilities(writes_allowed));
         capabilities.extend(RoomHostControl::capabilities(writes_allowed));
         capabilities
@@ -821,6 +833,19 @@ impl HostControlAccess for DbSessionHostControl {
                         .await
                 }
             }
+            _ if TaskHostControl::access_for(&action).is_some() => {
+                if !config.writes_enabled || !caller.writes_allowed {
+                    HostControlUseOutcome::rejected(
+                        request_id,
+                        action,
+                        "This Session's live Host policy does not allow Host Control writes.",
+                    )
+                } else {
+                    self.task
+                        .use_action(&caller, request_id, action, input)
+                        .await
+                }
+            }
             _ if TimerHostControl::access_for(&action).is_some() => {
                 if matches!(
                     TimerHostControl::access_for(&action),
@@ -942,6 +967,7 @@ mod tests {
             ChatChannelManager::new(),
             config.clone(),
             ConnectionManager::new(),
+            crate::prompt_queue::PromptQueueHandle::disconnected_for_test(),
             std::env::temp_dir(),
         );
         (host, config, caller, target)
@@ -1011,6 +1037,18 @@ mod tests {
             .capabilities
             .iter()
             .any(|capability| capability.action == "workbench.add_session"));
+        assert!(writable
+            .capabilities
+            .iter()
+            .any(|capability| capability.action == "task.claim"));
+        assert!(writable
+            .capabilities
+            .iter()
+            .any(|capability| capability.action == "task.assign"));
+        assert!(writable
+            .capabilities
+            .iter()
+            .any(|capability| capability.action == "task.update"));
         assert!(writable
             .capabilities
             .iter()
