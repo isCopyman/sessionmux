@@ -47,7 +47,6 @@ import {
   Pin,
   PinOff,
   Plus,
-  Square,
   SquarePen,
   Trash2,
   Users,
@@ -96,6 +95,7 @@ import {
 } from "@/components/ui/select"
 import { AgentIcon } from "@/components/agent-icon"
 import { CollaborationUnreadBadge } from "@/components/collaboration/collaboration-unread-badge"
+import { ConversationTreeRow } from "@/components/conversations/conversation-tree-row"
 import { ConversationStatusDot } from "@/components/conversations/conversation-status-dot"
 import { SessionBulkActionBar } from "@/components/conversations/session-bulk-action-bar"
 import { SessionDetailsDialog } from "@/components/conversations/session-details-dialog"
@@ -1632,13 +1632,25 @@ export const CollectionTree = forwardRef<
         }
       >
         {({ setNodeRef, attributes, listeners, isDragging }) => (
-          <div
-            className={cn(
-              "group flex min-w-0 items-center rounded-md hover:bg-sidebar-accent",
-              selected &&
-                "bg-primary/8 text-primary ring-1 ring-inset ring-primary/30",
-              checked &&
-                "bg-sidebar-primary/12 ring-1 ring-inset ring-primary/25",
+          <ConversationTreeRow
+            depth={depth}
+            selected={selected}
+            checked={checked}
+            selectionActive={multiSelectActive}
+            selectAriaLabel={tManage("selectConversation", { title })}
+            selectButtonProps={{
+              "data-session-select": conversation.id,
+            }}
+            onToggleSelection={() =>
+              multiSelect.apply(
+                { kind: "session", session: conversation },
+                "toggle",
+                visibleItemKeys,
+                lookupVisibleItem
+              )
+            }
+            mainRef={setNodeRef}
+            rowClassName={cn(
               dropKey != null &&
                 dropTarget === dropKey &&
                 "bg-primary/10 ring-1 ring-inset ring-primary/45",
@@ -1648,73 +1660,32 @@ export const CollectionTree = forwardRef<
                   dragIds.includes(conversation.id))) &&
                 "pointer-events-none opacity-55"
             )}
-            style={{ paddingInlineStart: `${0.75 + depth * 0.75}rem` }}
-          >
-            <button
-              type="button"
-              tabIndex={-1}
-              data-session-select={conversation.id}
-              aria-pressed={checked}
-              aria-label={tManage("selectConversation", { title })}
-              className={cn(
-                "flex h-4 w-0 shrink-0 items-center justify-center overflow-hidden rounded-sm text-muted-foreground hover:text-foreground",
-                "opacity-0 pointer-events-none",
-                "group-hover:h-4 group-hover:w-4 group-hover:opacity-100 group-hover:pointer-events-auto",
-                (multiSelectActive || checked) &&
-                  "h-4 w-4 opacity-100 pointer-events-auto"
-              )}
-              onPointerDown={(event) => event.stopPropagation()}
-              onClick={(event) => {
-                event.preventDefault()
-                event.stopPropagation()
-                multiSelect.apply(
-                  { kind: "session", session: conversation },
-                  "toggle",
-                  visibleItemKeys,
-                  lookupVisibleItem
-                )
-              }}
-            >
-              {checked ? (
-                <CheckSquare className="h-3.5 w-3.5 text-primary" />
-              ) : (
-                <Square className="h-3.5 w-3.5" />
-              )}
-            </button>
-            <button
-              ref={setNodeRef}
-              type="button"
-              {...attributes}
-              {...listeners}
-              data-conversation-id={conversation.id}
-              data-session-root-id={rootId ?? undefined}
-              data-session-collection-id={
-                collectionId == null ? "" : String(collectionId)
-              }
-              data-focused-session={selected ? "true" : undefined}
-              data-session-checked={checked ? "true" : undefined}
-              data-session-drag-ids={
-                dragIds.length > 0 ? dragIds.join(",") : undefined
-              }
-              data-session-dragging={isDragging ? "true" : undefined}
-              data-session-drop-target={
-                dropKey != null && dropTarget === dropKey ? "true" : undefined
-              }
-              aria-current={selected ? "page" : undefined}
-              title={rowTitle}
-              className={cn(
-                "flex h-7 min-w-0 flex-1 cursor-grab touch-none items-center gap-1.5 pe-2 text-start text-xs active:cursor-grabbing focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
-                (multiSelectActive || checked) && "ps-1",
-                "group-hover:ps-1"
-              )}
-              onClick={(event) => handleSessionActivate(conversation, event)}
-              onKeyDown={(event) => {
+            mainClassName="cursor-grab touch-none active:cursor-grabbing"
+            mainButtonProps={{
+              ...attributes,
+              ...listeners,
+              "data-conversation-id": conversation.id,
+              "data-session-root-id": rootId ?? undefined,
+              "data-session-collection-id":
+                collectionId == null ? "" : String(collectionId),
+              "data-focused-session": selected ? "true" : undefined,
+              "data-session-checked": checked ? "true" : undefined,
+              "data-session-drag-ids":
+                dragIds.length > 0 ? dragIds.join(",") : undefined,
+              "data-session-dragging": isDragging ? "true" : undefined,
+              "data-session-drop-target":
+                dropKey != null && dropTarget === dropKey ? "true" : undefined,
+              "aria-current": selected ? "page" : undefined,
+              title: rowTitle,
+              onClick: (event) => handleSessionActivate(conversation, event),
+              onKeyDown: (event) => {
                 listeners?.onKeyDown?.(event)
                 if (!event.defaultPrevented) {
                   handleSessionTreeKey(event, conversation)
                 }
-              }}
-            >
+              },
+            }}
+            leading={
               <span
                 aria-hidden
                 data-session-agent-icon=""
@@ -1730,8 +1701,10 @@ export const CollectionTree = forwardRef<
                   className="absolute -bottom-0.5 -right-0.5 ring-1 ring-sidebar"
                 />
               </span>
-              <span className="min-w-0 flex-1 truncate">{title}</span>
-              {worktreeLabel ? (
+            }
+            title={title}
+            trailing={
+              worktreeLabel ? (
                 <span
                   aria-hidden="true"
                   data-session-worktree-badge=""
@@ -1741,9 +1714,9 @@ export const CollectionTree = forwardRef<
                   <GitBranch className="h-2.5 w-2.5 shrink-0" />
                   <span className="truncate">{worktreeLabel}</span>
                 </span>
-              ) : null}
-            </button>
-          </div>
+              ) : null
+            }
+          />
         )}
       </TreeDndBindings>
     )
@@ -1895,61 +1868,28 @@ export const CollectionTree = forwardRef<
       <ContextMenu key={`room:${room.id}`}>
         <ContextMenuTrigger asChild>
           <div className="min-w-0">
-            <div
-              className={cn(
-                "group flex min-w-0 items-center rounded-md hover:bg-sidebar-accent",
-                selected &&
-                  "bg-primary/8 text-primary ring-1 ring-inset ring-primary/30",
-                checked &&
-                  "bg-sidebar-primary/12 ring-1 ring-inset ring-primary/25"
-              )}
-              style={{ paddingInlineStart: `${0.75 + depth * 0.75}rem` }}
-            >
-              <button
-                type="button"
-                tabIndex={-1}
-                data-room-select={room.id}
-                aria-pressed={checked}
-                aria-label={tManage("selectRoom", { title: room.title })}
-                className={cn(
-                  "flex h-4 w-0 shrink-0 items-center justify-center overflow-hidden rounded-sm text-muted-foreground hover:text-foreground",
-                  "opacity-0 pointer-events-none",
-                  "group-hover:h-4 group-hover:w-4 group-hover:opacity-100 group-hover:pointer-events-auto",
-                  (multiSelectActive || checked) &&
-                    "h-4 w-4 opacity-100 pointer-events-auto"
-                )}
-                onPointerDown={(event) => event.stopPropagation()}
-                onClick={(event) => {
-                  event.preventDefault()
-                  event.stopPropagation()
-                  multiSelect.apply(
-                    { kind: "room", room },
-                    "toggle",
-                    visibleItemKeys,
-                    lookupVisibleItem
-                  )
-                }}
-              >
-                {checked ? (
-                  <CheckSquare className="h-3.5 w-3.5 text-primary" />
-                ) : (
-                  <Square className="h-3.5 w-3.5" />
-                )}
-              </button>
-              <button
-                type="button"
-                data-room-id={room.id}
-                data-focused-session={selected ? "true" : undefined}
-                title={room.title}
-                aria-current={selected ? "page" : undefined}
-                className={cn(
-                  "flex h-7 min-w-0 flex-1 items-center gap-1.5 pe-2 text-start text-xs",
-                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
-                  (multiSelectActive || checked) && "ps-1",
-                  "group-hover:ps-1"
-                )}
-                onClick={(event) => handleRoomActivate(room, event)}
-                onKeyDown={(event) => {
+            <ConversationTreeRow
+              depth={depth}
+              selected={selected}
+              checked={checked}
+              selectionActive={multiSelectActive}
+              selectAriaLabel={tManage("selectRoom", { title: room.title })}
+              selectButtonProps={{ "data-room-select": room.id }}
+              onToggleSelection={() =>
+                multiSelect.apply(
+                  { kind: "room", room },
+                  "toggle",
+                  visibleItemKeys,
+                  lookupVisibleItem
+                )
+              }
+              mainButtonProps={{
+                "data-room-id": room.id,
+                "data-focused-session": selected ? "true" : undefined,
+                title: room.title,
+                "aria-current": selected ? "page" : undefined,
+                onClick: (event) => handleRoomActivate(room, event),
+                onKeyDown: (event) => {
                   if (event.key !== "Delete") return
                   event.preventDefault()
                   if (
@@ -1960,16 +1900,17 @@ export const CollectionTree = forwardRef<
                     return
                   }
                   setRoomDelete(room)
-                }}
-              >
-                <Users className="h-3 w-3 shrink-0" />
-                <span className="min-w-0 flex-1 truncate">{room.title}</span>
+                },
+              }}
+              leading={<Users className="h-3 w-3 shrink-0" />}
+              title={room.title}
+              trailing={
                 <CollaborationUnreadBadge
                   count={room.unreadCount}
                   className="ms-auto"
                 />
-              </button>
-            </div>
+              }
+            />
           </div>
         </ContextMenuTrigger>
         <ContextMenuContent>
