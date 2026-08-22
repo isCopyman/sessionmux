@@ -273,14 +273,19 @@ impl TaskHostControl {
                         }
                     };
                     config.display_text = description.clone();
-                    config.prompt_blocks = if description.is_empty() {
-                        Vec::new()
-                    } else {
-                        vec![
+                    // The description is the task's text projection. Editing
+                    // it must not discard images, files, or resource links
+                    // that were attached when the task was created.
+                    config
+                        .prompt_blocks
+                        .retain(|block| block.get("type").and_then(Value::as_str) != Some("text"));
+                    if !description.is_empty() {
+                        config.prompt_blocks.insert(
+                            0,
                             serde_json::to_value(PromptInputBlock::Text { text: description })
                                 .expect("text prompt blocks serialize"),
-                        ]
-                    };
+                        );
+                    }
                 }
                 let draft = WorkTaskDraft {
                     folder_id: current.folder_id,
@@ -442,10 +447,19 @@ mod tests {
                 priority: None,
                 config: serde_json::to_value(WorkTaskConfig {
                     display_text: "Initial description".to_string(),
-                    prompt_blocks: vec![serde_json::to_value(PromptInputBlock::Text {
-                        text: "Initial description".to_string(),
-                    })
-                    .unwrap()],
+                    prompt_blocks: vec![
+                        serde_json::to_value(PromptInputBlock::Text {
+                            text: "Initial description".to_string(),
+                        })
+                        .unwrap(),
+                        serde_json::to_value(PromptInputBlock::ResourceLink {
+                            uri: "file:///tmp/evidence.md".to_string(),
+                            name: "evidence.md".to_string(),
+                            mime_type: Some("text/markdown".to_string()),
+                            description: Some("supporting evidence".to_string()),
+                        })
+                        .unwrap(),
+                    ],
                     ..Default::default()
                 })
                 .unwrap(),
@@ -486,6 +500,11 @@ mod tests {
         assert_eq!(stored.title, "Refined title");
         let config: WorkTaskConfig = serde_json::from_value(stored.config).unwrap();
         assert_eq!(config.display_text, "Refined brief");
+        assert_eq!(config.prompt_blocks.len(), 2);
+        assert_eq!(config.prompt_blocks[0]["type"], "text");
+        assert_eq!(config.prompt_blocks[0]["text"], "Refined brief");
+        assert_eq!(config.prompt_blocks[1]["type"], "resource_link");
+        assert_eq!(config.prompt_blocks[1]["name"], "evidence.md");
 
         let claimed = host
             .use_action(

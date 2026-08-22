@@ -522,15 +522,15 @@ pub async fn active_launched_count(
     Ok(count)
 }
 
-/// Tasks needing the user ("等你处理"): awaiting_input + review + failed, over
-/// live folders. Drives the sidebar badge.
+/// Tasks needing the user ("等你处理"): blocked + review on the business
+/// board, over live folders. The engine lifecycle is deliberately irrelevant:
+/// a manual card can need attention without ever launching the engine.
 pub async fn attention_count(conn: &DatabaseConnection) -> Result<u64, DbError> {
     let count = work_task::Entity::find()
         .filter(work_task::Column::DeletedAt.is_null())
-        .filter(work_task::Column::Status.is_in([
-            WorkTaskStatus::AwaitingInput,
-            WorkTaskStatus::Review,
-            WorkTaskStatus::Failed,
+        .filter(work_task::Column::TaskStatus.is_in([
+            WorkTaskBusinessStatus::Blocked,
+            WorkTaskBusinessStatus::Review,
         ]))
         .filter(work_task::Column::ArchivedAt.is_null())
         .inner_join(folder::Entity)
@@ -5146,6 +5146,37 @@ mod tests {
             s3.stage_prompts.get("merge").map(String::as_str),
             Some("Write the message in Chinese.")
         );
+    }
+
+    #[tokio::test]
+    async fn attention_count_uses_the_business_board_status() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-attention-business").await;
+        let task = create(&db.conn, draft(folder_id, "manual blocker"))
+            .await
+            .unwrap();
+
+        assert!(transition_manual_status(
+            &db.conn,
+            task.id,
+            WorkTaskBusinessStatus::Todo,
+            WorkTaskBusinessStatus::Blocked,
+            "user",
+        )
+        .await
+        .unwrap());
+        assert_eq!(attention_count(&db.conn).await.unwrap(), 1);
+
+        assert!(transition_manual_status(
+            &db.conn,
+            task.id,
+            WorkTaskBusinessStatus::Blocked,
+            WorkTaskBusinessStatus::Todo,
+            "user",
+        )
+        .await
+        .unwrap());
+        assert_eq!(attention_count(&db.conn).await.unwrap(), 0);
     }
 
     #[tokio::test]
