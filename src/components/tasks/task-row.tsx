@@ -1,8 +1,15 @@
 "use client"
 
 import { useTranslations } from "next-intl"
-import { CircleAlert } from "lucide-react"
+import { CircleAlert, ListTodo } from "lucide-react"
 import { Button } from "@/components/ui/button"
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu"
 import {
   Tooltip,
   TooltipContent,
@@ -130,137 +137,170 @@ export function TaskRow({
   const hasStat = task.files_changed != null && task.files_changed > 0
 
   return (
-    <div
-      role="button"
-      tabIndex={0}
-      onClick={onOpen}
-      onKeyDown={(e) => {
-        // Only the row's own focus opens the sheet: Enter/Space on a nested
-        // action button bubbles up here, and preventing the default would
-        // swallow that button's activation and open the sheet instead.
-        if (e.target !== e.currentTarget) return
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault()
-          onOpen()
-        }
-      }}
-      className={cn(
-        "group/row relative min-h-[2.875rem] cursor-pointer py-2 text-left transition-colors",
-        TASK_LIST_LINE,
-        "hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
-        attentionSurfaceClass(task),
-        archived && "opacity-60"
-      )}
-    >
-      {/* Leading accent — the board's column marker, turned on its side. It is
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={onOpen}
+          onKeyDown={(e) => {
+            // Only the row's own focus opens the sheet: Enter/Space on a nested
+            // action button bubbles up here, and preventing the default would
+            // swallow that button's activation and open the sheet instead.
+            if (e.target !== e.currentTarget) return
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault()
+              onOpen()
+            }
+          }}
+          className={cn(
+            "group/row relative min-h-[2.875rem] cursor-pointer py-2 text-left transition-colors",
+            TASK_LIST_LINE,
+            "hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+            attentionSurfaceClass(task),
+            archived && "opacity-60"
+          )}
+        >
+          {/* Leading accent — the board's column marker, turned on its side. It is
           what lets the eye group a long list by state before reading a word. */}
-      <span
-        className={cn("absolute inset-y-0 left-0 w-[2px]", statusAccent(task))}
-        aria-hidden="true"
-      />
+          <span
+            className={cn(
+              "absolute inset-y-0 left-0 w-[2px]",
+              statusAccent(task)
+            )}
+            aria-hidden="true"
+          />
 
-      <div className={cn(TASK_LIST_CELLS.status, "flex")}>
-        <StatusChip task={task} className="max-w-full" />
-      </div>
+          <div className={cn(TASK_LIST_CELLS.status, "flex")}>
+            <StatusChip task={task} className="max-w-full" />
+          </div>
 
-      {/* The mark sits in a gutter of its own rather than inline with the
+          {/* The mark sits in a gutter of its own rather than inline with the
           title: a row's second line would otherwise start 20px to the left of
           the first, and one ragged edge inside the cell undoes what the fixed
           columns are for. mt-[0.125rem] centres it on the title line, which is
           where it belongs when a note pushes the block taller. */}
-      <div className={cn(TASK_LIST_CELLS.title, "flex items-start gap-1.5")}>
-        <TaskAgentMarkWithActivity
-          task={task}
-          activity={activity}
-          className="mt-[0.125rem]"
-        />
-        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <div className="flex min-w-0 items-center gap-1.5">
-            <span className="truncate text-[0.8125rem] font-medium leading-snug">
-              {task.title}
-            </span>
-            {/* Inline rather than in a slot of its own: a planned start is
+          <div
+            className={cn(TASK_LIST_CELLS.title, "flex items-start gap-1.5")}
+          >
+            <TaskAgentMarkWithActivity
+              task={task}
+              activity={activity}
+              className="mt-[0.125rem]"
+            />
+            <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+              <div className="flex min-w-0 items-center gap-1.5">
+                <span className="truncate text-[0.8125rem] font-medium leading-snug">
+                  {task.title}
+                </span>
+                {/* Inline rather than in a slot of its own: a planned start is
                 rare, and a dedicated column would cost every row its alignment
                 to serve a handful. Renders nothing when there is no plan. */}
-            <ScheduleChip task={task} />
-            <ExecutionModeChip task={task} />
-            {/* Same reasoning: a queued merge and a deleted worktree are the
+                <ScheduleChip task={task} />
+                <ExecutionModeChip task={task} />
+                {/* Same reasoning: a queued merge and a deleted worktree are the
                 exception, and the row must say so wherever the board card
                 would. */}
-            <MergeQueuedChip task={task} rank={mergeQueueRank} />
-            <WorktreeRemovedChip task={task} />
-          </div>
-          {note ? (
-            <span
-              className={cn(
-                "flex min-w-0 items-center gap-1 text-[0.6875rem] leading-snug",
-                showError ? "text-destructive" : "text-muted-foreground",
-                !showError && live && "italic"
-              )}
-            >
-              {showError ? (
-                <CircleAlert className="size-3 shrink-0" aria-hidden="true" />
+                <MergeQueuedChip task={task} rank={mergeQueueRank} />
+                <WorktreeRemovedChip task={task} />
+              </div>
+              {note ? (
+                <span
+                  className={cn(
+                    "flex min-w-0 items-center gap-1 text-[0.6875rem] leading-snug",
+                    showError ? "text-destructive" : "text-muted-foreground",
+                    !showError && live && "italic"
+                  )}
+                >
+                  {showError ? (
+                    <CircleAlert
+                      className="size-3 shrink-0"
+                      aria-hidden="true"
+                    />
+                  ) : null}
+                  <span className="truncate">{note}</span>
+                </span>
               ) : null}
-              <span className="truncate">{note}</span>
-            </span>
-          ) : null}
-        </div>
-      </div>
+            </div>
+          </div>
 
-      {/* The three meta columns always render their box, empty or not — that is
+          {/* The three meta columns always render their box, empty or not — that is
           what holds the vertical rules when a task has no branch or no diff. */}
-      <div
-        className={cn(
-          TASK_LIST_CELLS.location,
-          "items-center gap-1.5 text-[0.6875rem] text-muted-foreground"
-        )}
-      >
-        {folderName ? <span className="truncate">{folderName}</span> : null}
-        {folderName && task.work_branch ? (
-          <span className="shrink-0 text-muted-foreground/40">/</span>
-        ) : null}
-        {task.work_branch ? (
-          <span className="truncate font-mono text-[0.625rem]">
-            {task.work_branch}
-          </span>
-        ) : null}
-      </div>
-      <div
-        className={cn(
-          TASK_LIST_CELLS.changes,
-          "items-center gap-1 font-mono text-[0.625rem] tabular-nums"
-        )}
-      >
-        {hasStat ? (
-          <>
-            <span className="text-emerald-600 dark:text-emerald-400">
-              +{task.additions ?? 0}
-            </span>
-            <span className="text-destructive">-{task.deletions ?? 0}</span>
-          </>
-        ) : null}
-      </div>
-      <div
-        className={cn(
-          TASK_LIST_CELLS.updated,
-          "items-center text-[0.6875rem] tabular-nums text-muted-foreground"
-        )}
-      >
-        {when}
-      </div>
+          <div
+            className={cn(
+              TASK_LIST_CELLS.location,
+              "items-center gap-1.5 text-[0.6875rem] text-muted-foreground"
+            )}
+          >
+            {folderName ? <span className="truncate">{folderName}</span> : null}
+            {folderName && task.work_branch ? (
+              <span className="shrink-0 text-muted-foreground/40">/</span>
+            ) : null}
+            {task.work_branch ? (
+              <span className="truncate font-mono text-[0.625rem]">
+                {task.work_branch}
+              </span>
+            ) : null}
+          </div>
+          <div
+            className={cn(
+              TASK_LIST_CELLS.changes,
+              "items-center gap-1 font-mono text-[0.625rem] tabular-nums"
+            )}
+          >
+            {hasStat ? (
+              <>
+                <span className="text-emerald-600 dark:text-emerald-400">
+                  +{task.additions ?? 0}
+                </span>
+                <span className="text-destructive">-{task.deletions ?? 0}</span>
+              </>
+            ) : null}
+          </div>
+          <div
+            className={cn(
+              TASK_LIST_CELLS.updated,
+              "items-center text-[0.6875rem] tabular-nums text-muted-foreground"
+            )}
+          >
+            {when}
+          </div>
 
-      <div className={cn(TASK_LIST_CELLS.actions, "flex items-center gap-1")}>
+          <div
+            className={cn(TASK_LIST_CELLS.actions, "flex items-center gap-1")}
+          >
+            {primary ? (
+              <RowIconAction
+                item={primary}
+                variant={needsUser ? "default" : "outline"}
+              />
+            ) : null}
+            {secondaries.map((item) => (
+              <RowIconAction key={item.label} item={item} variant="ghost" />
+            ))}
+          </div>
+        </div>
+      </ContextMenuTrigger>
+      <ContextMenuContent className="min-w-52">
+        <ContextMenuItem onSelect={onOpen}>
+          <ListTodo className="size-4" aria-hidden="true" />
+          {t("detailDescription")}
+        </ContextMenuItem>
+        {(primary || secondaries.length > 0) && <ContextMenuSeparator />}
         {primary ? (
-          <RowIconAction
-            item={primary}
-            variant={needsUser ? "default" : "outline"}
-          />
+          <ContextMenuItem onSelect={primary.onClick}>
+            <primary.icon className="size-4" aria-hidden="true" />
+            {primary.label}
+          </ContextMenuItem>
         ) : null}
         {secondaries.map((item) => (
-          <RowIconAction key={item.label} item={item} variant="ghost" />
+          <ContextMenuItem key={item.label} onSelect={item.onClick}>
+            <item.icon className="size-4" aria-hidden="true" />
+            {item.label}
+          </ContextMenuItem>
         ))}
-      </div>
-    </div>
+      </ContextMenuContent>
+    </ContextMenu>
   )
 }
 

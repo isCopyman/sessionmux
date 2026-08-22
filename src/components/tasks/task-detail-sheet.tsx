@@ -24,6 +24,7 @@ import {
   Clock,
   Coins,
   FileDiff,
+  FolderOpen,
   FolderX,
   GitBranch,
   GitCommitHorizontal,
@@ -377,6 +378,13 @@ export function TaskDetailSheet({
   // The user-authored brief, as typed (the agent receives the block form).
   const promptText = task.config?.display_text?.trim() || null
   const archived = task.archived_at != null
+  const projectPath =
+    allFolders.find((folder) => folder.id === task.folder_id)?.path ?? null
+  const worktreePath =
+    task.worktree_folder_id == null
+      ? null
+      : (allFolders.find((folder) => folder.id === task.worktree_folder_id)
+          ?.path ?? null)
 
   const canEdit =
     task.execution_mode === null || task.execution_mode === "manual"
@@ -1002,6 +1010,39 @@ export function TaskDetailSheet({
                     unbroken across the box. nth-last-child(-n+2) is the dt/dd
                     of the final row, which drops its rule. */}
                 <dl className="grid grid-cols-[auto_1fr] overflow-hidden rounded-xl border border-border text-xs [&>*:nth-last-child(-n+2)]:border-b-0">
+                  <InfoRow label={t("detailTaskId")}>
+                    <span className="font-mono text-[0.6875rem]">
+                      #{task.id}
+                    </span>
+                  </InfoRow>
+                  {projectPath ? (
+                    <InfoRow label={t("detailProjectDirectory")}>
+                      <span
+                        className="inline-flex min-w-0 max-w-full items-center gap-1 font-mono text-[0.6875rem]"
+                        title={projectPath}
+                      >
+                        <FolderOpen
+                          className="size-3 shrink-0 text-muted-foreground"
+                          aria-hidden="true"
+                        />
+                        <span className="truncate">{projectPath}</span>
+                      </span>
+                    </InfoRow>
+                  ) : null}
+                  {worktreePath && worktreePath !== projectPath ? (
+                    <InfoRow label={t("detailWorktreeDirectory")}>
+                      <span
+                        className="inline-flex min-w-0 max-w-full items-center gap-1 font-mono text-[0.6875rem]"
+                        title={worktreePath}
+                      >
+                        <GitBranch
+                          className="size-3 shrink-0 text-muted-foreground"
+                          aria-hidden="true"
+                        />
+                        <span className="truncate">{worktreePath}</span>
+                      </span>
+                    </InfoRow>
+                  ) : null}
                   {task.work_branch ? (
                     <InfoRow label={t("detailBranch")}>
                       <span className="inline-flex min-w-0 max-w-full items-center gap-1 font-mono text-[0.6875rem]">
@@ -1054,6 +1095,9 @@ export function TaskDetailSheet({
                   ) : null}
                   <InfoRow label={t("detailCreated")}>
                     {formatDateTime(task.created_at)}
+                  </InfoRow>
+                  <InfoRow label={t("detailUpdated")}>
+                    {formatDateTime(task.updated_at)}
                   </InfoRow>
                   {task.started_at ? (
                     <InfoRow label={t("detailStarted")}>

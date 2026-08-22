@@ -7,7 +7,7 @@ import {
 } from "@/lib/api"
 import { conversationSetClaudeProfile } from "@/lib/api"
 import type { WorkTask, WorkTaskConfig } from "@/lib/types"
-import { createRegularTaskSessionAndAssign } from "./task-session-launch"
+import { createTaskSessionAndAssign } from "./task-session-launch"
 
 vi.mock("@/lib/api", () => ({
   acpConnect: vi.fn(),
@@ -34,7 +34,7 @@ const config = {
   label_snapshot: null,
 } satisfies WorkTaskConfig
 
-describe("createRegularTaskSessionAndAssign", () => {
+describe("createTaskSessionAndAssign", () => {
   beforeEach(() => {
     vi.mocked(createConversation).mockReset().mockResolvedValue(42)
     vi.mocked(conversationSetClaudeProfile).mockReset().mockResolvedValue({
@@ -72,7 +72,7 @@ describe("createRegularTaskSessionAndAssign", () => {
     })
 
     await expect(
-      createRegularTaskSessionAndAssign({
+      createTaskSessionAndAssign({
         task,
         folderPath: "/repo",
         config,
@@ -95,7 +95,7 @@ describe("createRegularTaskSessionAndAssign", () => {
     vi.mocked(acpConnect).mockRejectedValueOnce(new Error("launch failed"))
 
     await expect(
-      createRegularTaskSessionAndAssign({
+      createTaskSessionAndAssign({
         task,
         folderPath: "/repo",
         config,

@@ -45,7 +45,7 @@
 - [~] **Task / Kanban S2** —— 已把新建任务收敛为纯任务卡（标题、说明、附件、项目），
       不再在建卡时选择或探测 ACP Harness。已有 Session 指派、后端权威 Task PromptQueue、
       单 owner、取消/删除回收、普通 Session 进度回写已实现并通过相关测试及真实 WebView2
-      验证。“新建 Worktree Session 执行”现已变成建卡后的显式动作，并复用普通 Composer
+      验证。“新建 Session 执行”现已变成建卡后的显式动作，并复用普通 Composer
       的 Harness/Profile/Mode/Model/Effort 控件；后端在 ACP 建连前创建稳定
       `conversation_id`，原子冻结启动快照与 claim。已有 Session 指派弹窗也已接入“新建普通
       Session”，复用同一套 Harness/Profile/Mode/Model/Effort 启动面板；普通路径按“稳定
@@ -57,7 +57,11 @@
       Host Control 说明中拆成独立 `codeg-task` Skill；看板补充全部、Agent、需关注三个稳定
       视图，以及按具体负责 Session 筛选。原先混合执行方式和状态的五项横排已撤下；分组、
       列显隐和归档集中进“显示”菜单，七种状态复用 Multica 风格的圆形语义图标。它们都只是
-      同一任务事实源的投影，没有新增第二套看板或状态机。仍待 collaborator。
+      同一任务事实源的投影，没有新增第二套看板或状态机。任务模块只保留一个“新建 Session”
+      动作并使用项目目录；需要 Worktree 时复用标准新建会话入口，再指派已有 Session。Agent
+      同样组合 `session.create → task.assign`，没有任务专属创建工具。卡片/列表右键菜单直接复用
+      同一动作注册表，任务详情显示项目与 Worktree 实际目录。下一独立 UI 批次再把当前全页
+      Route 迁为可分屏的单例 Workbench 内容 Tab；右侧 Sheet 继续承担快速详情。仍待 collaborator。
 
 - [x] **Task 状态列与 Backlog** —— UI 与底层均固定为“想法池 / 待办 / 进行中 / 审核中 /
       已完成 / 已阻塞 / 已取消”七态，列可隐藏但不允许每个项目另造状态机。SQLite 迁移

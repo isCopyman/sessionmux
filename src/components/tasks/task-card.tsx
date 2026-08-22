@@ -10,10 +10,18 @@ import {
   CircleX,
   FolderX,
   GitMerge,
+  ListTodo,
   Loader2,
 } from "lucide-react"
 import { AgentIcon } from "@/components/agent-icon"
 import { Button } from "@/components/ui/button"
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu"
 import { formatRelative } from "@/components/conversations/sidebar-conversation-grouping"
 import { formatScheduleFull, formatScheduleShort } from "@/lib/task-schedule"
 import { cn } from "@/lib/utils"
@@ -504,149 +512,172 @@ export function TaskCard({
   const { primary, secondaries } = buildTaskActions(task, t, handlers)
 
   return (
-    <div
-      role="button"
-      tabIndex={0}
-      onClick={onOpen}
-      onKeyDown={(e) => {
-        // Only the card's own focus opens the sheet: Enter/Space on one of the
-        // footer buttons bubbles up here, and preventing the default would
-        // swallow that button's activation and open the sheet instead.
-        if (e.target !== e.currentTarget) return
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault()
-          onOpen()
-        }
-      }}
-      className={cn(
-        // ws-msg-card: with a workspace background image on, the card goes
-        // translucent like message-stream cards (e.g. the file-edit card).
-        // border-foreground/15, not border-border: a card is white-on-white
-        // here, and the token border all but vanishes on that canvas (the
-        // empty column's dashed outline had to be derived the same way).
-        "group/card flex cursor-pointer flex-col rounded-xl border border-foreground/15 bg-card ws-msg-card p-3 text-left",
-        // Hover is a border colour change only — no lift, no shadow.
-        "transition-colors hover:border-primary",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-        attentionSurfaceClass(task),
-        archived && "opacity-60"
-      )}
-    >
-      <div className="flex items-start justify-between gap-2">
-        {/* mt-[0.125rem] rides the mark on the FIRST line of a title that
+    <ContextMenu>
+      <ContextMenuTrigger asChild>
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={onOpen}
+          onKeyDown={(e) => {
+            // Only the card's own focus opens the sheet: Enter/Space on one of the
+            // footer buttons bubbles up here, and preventing the default would
+            // swallow that button's activation and open the sheet instead.
+            if (e.target !== e.currentTarget) return
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault()
+              onOpen()
+            }
+          }}
+          className={cn(
+            // ws-msg-card: with a workspace background image on, the card goes
+            // translucent like message-stream cards (e.g. the file-edit card).
+            // border-foreground/15, not border-border: a card is white-on-white
+            // here, and the token border all but vanishes on that canvas (the
+            // empty column's dashed outline had to be derived the same way).
+            "group/card flex cursor-pointer flex-col rounded-xl border border-foreground/15 bg-card ws-msg-card p-3 text-left",
+            // Hover is a border colour change only — no lift, no shadow.
+            "transition-colors hover:border-primary",
+            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            attentionSurfaceClass(task),
+            archived && "opacity-60"
+          )}
+        >
+          <div className="flex items-start justify-between gap-2">
+            {/* mt-[0.125rem] rides the mark on the FIRST line of a title that
             wraps — items-start would otherwise hang it off the block's top
             edge, half a line above the text it belongs to. */}
-        <TaskAgentMarkWithActivity
-          task={task}
-          activity={activity}
-          className="mt-[0.125rem]"
-        />
-        <span className="min-w-0 flex-1 break-words text-[0.8125rem] font-medium leading-snug">
-          {task.title}
-        </span>
-        <StatusChip task={task} />
-      </div>
+            <TaskAgentMarkWithActivity
+              task={task}
+              activity={activity}
+              className="mt-[0.125rem]"
+            />
+            <span className="min-w-0 flex-1 break-words text-[0.8125rem] font-medium leading-snug">
+              {task.title}
+            </span>
+            <StatusChip task={task} />
+          </div>
 
-      <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-[0.6875rem] text-muted-foreground">
-        {folderName ? (
-          <span className="max-w-40 truncate">{folderName}</span>
-        ) : null}
-        {folderName && task.work_branch ? (
-          <span className="text-muted-foreground/40">/</span>
-        ) : null}
-        {task.work_branch ? (
-          <span className="truncate font-mono text-[0.625rem]">
-            {task.work_branch}
-          </span>
-        ) : null}
-        {(folderName || task.work_branch) && (stat || when) ? (
-          <span className="text-muted-foreground/40">·</span>
-        ) : null}
-        {stat}
-        {stat && when ? (
-          <span className="text-muted-foreground/40">·</span>
-        ) : null}
-        {when ? <span className="shrink-0">{when}</span> : null}
-        <ExecutionModeChip task={task} />
-        <ScheduleChip task={task} />
-        <MergeQueuedChip task={task} rank={mergeQueueRank} />
-        <PreflightChip task={task} />
-        <WorktreeRemovedChip task={task} />
-        {task.cleanup_state === "failed" ? (
-          <span className="rounded-full bg-amber-500/10 px-1.5 py-0.5 text-[0.625rem] text-amber-600 dark:text-amber-400">
-            {t("badgeCleanupFailed")}
-          </span>
-        ) : null}
-        {/* "Kept" claims the worktree is still there — stay silent when its
+          <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-[0.6875rem] text-muted-foreground">
+            {folderName ? (
+              <span className="max-w-40 truncate">{folderName}</span>
+            ) : null}
+            {folderName && task.work_branch ? (
+              <span className="text-muted-foreground/40">/</span>
+            ) : null}
+            {task.work_branch ? (
+              <span className="truncate font-mono text-[0.625rem]">
+                {task.work_branch}
+              </span>
+            ) : null}
+            {(folderName || task.work_branch) && (stat || when) ? (
+              <span className="text-muted-foreground/40">·</span>
+            ) : null}
+            {stat}
+            {stat && when ? (
+              <span className="text-muted-foreground/40">·</span>
+            ) : null}
+            {when ? <span className="shrink-0">{when}</span> : null}
+            <ExecutionModeChip task={task} />
+            <ScheduleChip task={task} />
+            <MergeQueuedChip task={task} rank={mergeQueueRank} />
+            <PreflightChip task={task} />
+            <WorktreeRemovedChip task={task} />
+            {task.cleanup_state === "failed" ? (
+              <span className="rounded-full bg-amber-500/10 px-1.5 py-0.5 text-[0.625rem] text-amber-600 dark:text-amber-400">
+                {t("badgeCleanupFailed")}
+              </span>
+            ) : null}
+            {/* "Kept" claims the worktree is still there — stay silent when its
             directory is actually gone (the removed chip above speaks then). */}
-        {task.status === "canceled" &&
-        task.worktree_folder_id != null &&
-        task.worktree_missing !== true ? (
-          <span className="rounded-full bg-muted px-1.5 py-0.5 text-[0.625rem]">
-            {t("badgeWorktreeKept")}
-          </span>
-        ) : null}
-      </div>
+            {task.status === "canceled" &&
+            task.worktree_folder_id != null &&
+            task.worktree_missing !== true ? (
+              <span className="rounded-full bg-muted px-1.5 py-0.5 text-[0.625rem]">
+                {t("badgeWorktreeKept")}
+              </span>
+            ) : null}
+          </div>
 
-      {task.last_error &&
-      (task.status === "failed" || task.status === "review") ? (
-        <div className="mt-2 flex items-center gap-1.5 rounded-lg bg-destructive/10 px-2 py-1.5 text-[0.6875rem] text-destructive">
-          <CircleAlert className="size-3.5 shrink-0" aria-hidden="true" />
-          <span className="min-w-0 flex-1 truncate">{task.last_error}</span>
-          <button
-            type="button"
-            className="shrink-0 font-medium hover:underline"
-            onClick={(e) => {
-              e.stopPropagation()
-              onOpen()
-            }}
-          >
-            {t("errorView")}
-          </button>
-        </div>
-      ) : null}
-      {task.status === "review" && task.result_summary ? (
-        <p className="mt-1.5 line-clamp-2 text-[0.6875rem] leading-snug text-muted-foreground">
-          {task.result_summary}
-        </p>
-      ) : null}
-      {live && task.latest_progress ? (
-        <p className="mt-1.5 line-clamp-2 text-[0.6875rem] leading-snug text-muted-foreground italic">
-          {task.latest_progress}
-        </p>
-      ) : null}
+          {task.last_error &&
+          (task.status === "failed" || task.status === "review") ? (
+            <div className="mt-2 flex items-center gap-1.5 rounded-lg bg-destructive/10 px-2 py-1.5 text-[0.6875rem] text-destructive">
+              <CircleAlert className="size-3.5 shrink-0" aria-hidden="true" />
+              <span className="min-w-0 flex-1 truncate">{task.last_error}</span>
+              <button
+                type="button"
+                className="shrink-0 font-medium hover:underline"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onOpen()
+                }}
+              >
+                {t("errorView")}
+              </button>
+            </div>
+          ) : null}
+          {task.status === "review" && task.result_summary ? (
+            <p className="mt-1.5 line-clamp-2 text-[0.6875rem] leading-snug text-muted-foreground">
+              {task.result_summary}
+            </p>
+          ) : null}
+          {live && task.latest_progress ? (
+            <p className="mt-1.5 line-clamp-2 text-[0.6875rem] leading-snug text-muted-foreground italic">
+              {task.latest_progress}
+            </p>
+          ) : null}
 
-      {/* mt-3 / pt-3 = the card's own p-3: the divider clears the content above
+          {/* mt-3 / pt-3 = the card's own p-3: the divider clears the content above
           it by the same 12px the buttons clear the card's left, right and
           bottom edges, so the footer sits on one even inset. */}
-      {primary || secondaries.length > 0 ? (
-        <div className="mt-3 flex items-center gap-1.5 border-t border-border/60 pt-3">
-          {primary ? (
-            <Button
-              type="button"
-              size="xs"
-              onClick={(e) => {
-                // The card itself opens the detail sheet — keep actions local.
-                e.stopPropagation()
-                primary.onClick()
-              }}
-            >
-              <primary.icon className="size-3" aria-hidden="true" />
-              {primary.label}
-            </Button>
-          ) : null}
-          <div className="flex-1" />
-          {/* Secondaries are icon-only and round: they are one-per-status at
+          {primary || secondaries.length > 0 ? (
+            <div className="mt-3 flex items-center gap-1.5 border-t border-border/60 pt-3">
+              {primary ? (
+                <Button
+                  type="button"
+                  size="xs"
+                  onClick={(e) => {
+                    // The card itself opens the detail sheet — keep actions local.
+                    e.stopPropagation()
+                    primary.onClick()
+                  }}
+                >
+                  <primary.icon className="size-3" aria-hidden="true" />
+                  {primary.label}
+                </Button>
+              ) : null}
+              <div className="flex-1" />
+              {/* Secondaries are icon-only and round: they are one-per-status at
               most, so a "…" menu just hid them behind an extra click. The
               session viewer always sorts last, anchoring the corner. They
               fade in on hover (opacity only — the row keeps its height, so
               nothing reflows) and on keyboard focus. */}
-          {secondaries.map((item) => (
-            <CardIconAction key={item.label} item={item} />
-          ))}
+              {secondaries.map((item) => (
+                <CardIconAction key={item.label} item={item} />
+              ))}
+            </div>
+          ) : null}
         </div>
-      ) : null}
-    </div>
+      </ContextMenuTrigger>
+      <ContextMenuContent className="min-w-52">
+        <ContextMenuItem onSelect={onOpen}>
+          <ListTodo className="size-4" aria-hidden="true" />
+          {t("detailDescription")}
+        </ContextMenuItem>
+        {(primary || secondaries.length > 0) && <ContextMenuSeparator />}
+        {primary ? (
+          <ContextMenuItem onSelect={primary.onClick}>
+            <primary.icon className="size-4" aria-hidden="true" />
+            {primary.label}
+          </ContextMenuItem>
+        ) : null}
+        {secondaries.map((item) => (
+          <ContextMenuItem key={item.label} onSelect={item.onClick}>
+            <item.icon className="size-4" aria-hidden="true" />
+            {item.label}
+          </ContextMenuItem>
+        ))}
+      </ContextMenuContent>
+    </ContextMenu>
   )
 }
 

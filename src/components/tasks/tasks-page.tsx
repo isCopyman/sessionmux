@@ -40,7 +40,7 @@ import {
   workTaskMergeUnqueue,
   workTaskRequestReview,
   workTaskSetManualStatus,
-  workTaskStartConfigured,
+  workTaskStart,
   workTaskUpdate,
 } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
@@ -125,8 +125,8 @@ import { TaskSettingsDialog } from "./task-settings-dialog"
 import { OPEN_TASK_SETTINGS_EVENT } from "./tasks-chrome-actions"
 import { TasksSkeleton } from "./tasks-skeleton"
 import { TaskTranscriptDialog } from "./task-transcript-dialog"
-import { TaskSessionLaunchDialog } from "./task-worktree-session-dialog"
-import { createRegularTaskSessionAndAssign } from "./task-session-launch"
+import { TaskSessionLaunchDialog } from "./task-session-launch-dialog"
+import { createTaskSessionAndAssign } from "./task-session-launch"
 import type {
   DbConversationSummary,
   WorkTask,
@@ -407,9 +407,6 @@ export function TasksPage() {
   const [assignOpen, setAssignOpen] = useState(false)
   const [launchTaskId, setLaunchTaskId] = useState<number | null>(null)
   const [launchOpen, setLaunchOpen] = useState(false)
-  const [launchKind, setLaunchKind] = useState<"regular" | "worktree">(
-    "worktree"
-  )
   // Read-only live session viewer ("查看会话") — tracked by id so the dialog
   // header's status chip follows the live row (like the detail sheet).
   const [sessionTaskId, setSessionTaskId] = useState<number | null>(null)
@@ -654,15 +651,8 @@ export function TasksPage() {
     setAssignOpen(true)
   }, [])
 
-  const openWorktreeSession = useCallback((task: WorkTask) => {
+  const openNewSession = useCallback((task: WorkTask) => {
     setLaunchTaskId(task.id)
-    setLaunchKind("worktree")
-    setLaunchOpen(true)
-  }, [])
-
-  const openRegularSession = useCallback((task: WorkTask) => {
-    setLaunchTaskId(task.id)
-    setLaunchKind("regular")
     setLaunchOpen(true)
   }, [])
 
@@ -684,7 +674,13 @@ export function TasksPage() {
     (task: WorkTask): TaskActionHandlers => ({
       onManualStatus: (to) =>
         void act(() => workTaskSetManualStatus(task.id, task.task_status, to)),
-      onStart: () => openWorktreeSession(task),
+      onStart: () => {
+        if (task.execution_mode === "engine") {
+          void act(() => workTaskStart(task.id))
+        } else {
+          openNewSession(task)
+        }
+      },
       onAssignSession: () => openAssignSession(task),
       onCancel: () => openCancel(task),
       onSubmitReview: () => void act(() => workTaskRequestReview(task.id)),
@@ -711,7 +707,7 @@ export function TasksPage() {
       openRestart,
       openSchedule,
       openSession,
-      openWorktreeSession,
+      openNewSession,
     ]
   )
 
@@ -1271,7 +1267,7 @@ export function TasksPage() {
           }}
           onSchedule={openSchedule}
           onAssignSession={openAssignSession}
-          onStartAgent={openWorktreeSession}
+          onStartAgent={openNewSession}
         />
         {/* The queue state comes from the live row (a merge that starts while
           the dialog is open turns "merge" into "queue"), the form from the
@@ -1318,7 +1314,7 @@ export function TasksPage() {
             if (!assignTask) return
             setAssignOpen(false)
             setAssignTaskId(null)
-            openRegularSession(assignTask)
+            openNewSession(assignTask)
           }}
           onSubmit={async (conversationId) => {
             if (!assignTask) return
@@ -1335,7 +1331,6 @@ export function TasksPage() {
             if (!open) setLaunchTaskId(null)
           }}
           task={launchTask}
-          kind={launchKind}
           folderPath={
             launchTask
               ? (allFolders.find((folder) => folder.id === launchTask.folder_id)
@@ -1344,21 +1339,17 @@ export function TasksPage() {
           }
           onSubmit={async (config) => {
             if (!launchTask) return
-            if (launchKind === "worktree") {
-              await workTaskStartConfigured(launchTask.id, config)
-            } else {
-              const folderPath = allFolders.find(
-                (folder) => folder.id === launchTask.folder_id
-              )?.path
-              if (!folderPath) {
-                throw new Error("Task project folder is no longer available")
-              }
-              await createRegularTaskSessionAndAssign({
-                task: launchTask,
-                folderPath,
-                config,
-              })
+            const folderPath = allFolders.find(
+              (folder) => folder.id === launchTask.folder_id
+            )?.path
+            if (!folderPath) {
+              throw new Error("Task project folder is no longer available")
             }
+            await createTaskSessionAndAssign({
+              task: launchTask,
+              folderPath,
+              config,
+            })
             setLaunchOpen(false)
             setLaunchTaskId(null)
             void refetch()

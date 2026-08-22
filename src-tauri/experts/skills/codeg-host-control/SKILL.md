@@ -111,6 +111,10 @@ as a generic Host Control write. Its `task.update`, `task.claim`, and
 `task.assign` actions still use `codeg_help` / `codeg_use`; the separate skill
 explains when those actions belong in the task lifecycle.
 
+Creating a worker for a task is not a second Session API: `codeg-task` composes
+this skill's ordinary `session.create` with `task.assign`. Do not put the task
+brief in both `session.create.initial_prompt` and `task.assign`.
+
 ## Room actions live in `codeg-room`
 
 `room.create`, `room.add_member`, and `room.list` are still Host Control

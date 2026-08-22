@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest"
 
 import enMessages from "@/i18n/messages/en.json"
 import type { WorkTask, WorkTaskConfig } from "@/lib/types"
-import { TaskWorktreeSessionDialog } from "./task-worktree-session-dialog"
+import { TaskSessionLaunchDialog } from "./task-session-launch-dialog"
 
 vi.mock("@/components/chat/agent-selector", () => ({
   AgentSelector: () => <div>Claude Code</div>,
@@ -83,15 +83,12 @@ const task = {
   finished_at: null,
 } satisfies WorkTask
 
-describe("TaskWorktreeSessionDialog", () => {
-  it("keeps Profile in the explicit Session launch snapshot", async () => {
-    const user = userEvent.setup()
-    const onSubmit = vi.fn<(config: WorkTaskConfig) => Promise<void>>(
-      async () => {}
-    )
+describe("TaskSessionLaunchDialog", () => {
+  it("uses one ordinary Session launch path for a neutral task", async () => {
+    const onSubmit = vi.fn(async () => {})
     render(
       <NextIntlClientProvider locale="en" messages={enMessages}>
-        <TaskWorktreeSessionDialog
+        <TaskSessionLaunchDialog
           open
           onOpenChange={() => {}}
           task={task}
@@ -102,10 +99,35 @@ describe("TaskWorktreeSessionDialog", () => {
     )
 
     expect(
-      await screen.findByRole("heading", { name: "Create a Worktree Session" })
+      await screen.findByRole("heading", { name: "Create a Session" })
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "Create a Worktree Session" })
+    ).toBeNull()
+  })
+
+  it("keeps Profile in the explicit Session launch snapshot", async () => {
+    const user = userEvent.setup()
+    const onSubmit = vi.fn<(config: WorkTaskConfig) => Promise<void>>(
+      async () => {}
+    )
+    render(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <TaskSessionLaunchDialog
+          open
+          onOpenChange={() => {}}
+          task={task}
+          folderPath="/repo"
+          onSubmit={onSubmit}
+        />
+      </NextIntlClientProvider>
+    )
+
+    expect(
+      await screen.findByRole("heading", { name: "Create a Session" })
     ).toBeInTheDocument()
     await user.click(screen.getByRole("button", { name: /Profile:/ }))
-    await user.click(screen.getByRole("button", { name: "Create and start" }))
+    await user.click(screen.getByRole("button", { name: "Create and assign" }))
 
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1))
     expect(onSubmit.mock.calls[0][0]).toMatchObject({

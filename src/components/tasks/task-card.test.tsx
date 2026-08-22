@@ -204,6 +204,32 @@ describe("TaskCard running submit-for-review", () => {
 })
 
 describe("TaskCard secondaries", () => {
+  it("exposes the same task actions from the card context menu", async () => {
+    const user = userEvent.setup()
+    const onOpen = vi.fn()
+    const onStart = vi.fn()
+    renderCard(
+      task({
+        status: "todo",
+        task_status: "todo",
+        execution_mode: null,
+        files_changed: null,
+        worktree_folder_id: null,
+        work_branch: null,
+      }),
+      { onOpen, onStart }
+    )
+
+    await user.pointer({
+      keys: "[MouseRight]",
+      target: screen.getByText("Answer the question"),
+    })
+    await user.click(screen.getByRole("menuitem", { name: "New Session" }))
+
+    expect(onStart).toHaveBeenCalledTimes(1)
+    expect(onOpen).not.toHaveBeenCalled()
+  })
+
   it("keeps the session viewer on an archived card", () => {
     // Archiving is exactly when someone wants to reread the session: the
     // "unarchive" primary must not displace the viewer.

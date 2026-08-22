@@ -12,13 +12,16 @@ import {
 } from "@/lib/types"
 
 /**
- * Create one ordinary persistent Session for a neutral task, then assign it.
+ * UI orchestration for the same product operation exposed to Agents as
+ * `session.create` followed by `task.assign`: create one persistent Session,
+ * then bind the neutral task to its stable id. This is not a distinct
+ * Worktree Session type or a task-owned runtime.
  *
  * Identity is allocated before ACP starts. If launch or assignment fails, the
  * Session is intentionally preserved: it is a real user-visible Session that
  * can be repaired or assigned later, never a hidden provisional task runtime.
  */
-export async function createRegularTaskSessionAndAssign(options: {
+export async function createTaskSessionAndAssign(options: {
   task: WorkTask
   folderPath: string
   config: WorkTaskConfig

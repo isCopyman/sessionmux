@@ -141,6 +141,13 @@ beforeEach(() => {
 })
 
 describe("task drawer submit-for-review", () => {
+  it("shows the stable task id and the actual project directory", () => {
+    mount(task())
+    expect(screen.getByText("Task ID")).toBeInTheDocument()
+    expect(screen.getByText("#7")).toBeInTheDocument()
+    expect(screen.getByText("/repo")).toBeInTheDocument()
+  })
+
   it("offers submit-for-review on a running task with a live connection", () => {
     mount(
       task({

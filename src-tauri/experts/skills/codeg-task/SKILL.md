@@ -27,6 +27,13 @@ business state. A task is not a Session, Room, chat transcript, or project file.
   Prompt. Never pass the caller's Session id.
 - `task.assign` does the same for another persistent Session using its stable
   `target_session_id`. Discover the schema and target ID before writing.
+- To delegate a card to a new worker, use the existing Host Control primitives:
+  call `session.create` without `initial_prompt`, keep its returned stable
+  Session ID, then call `task.assign` with that ID. `task.assign` supplies the
+  authoritative task brief, so duplicating it as `initial_prompt` would start
+  the same work twice. A failed assignment does not turn the new Session into a
+  hidden task runtime; it remains an ordinary persistent Session that can be
+  inspected or assigned again.
 - A competing claim is rejected rather than stealing the task. Moving a card
   between board columns is organization only and never starts or wakes an
   Agent.

@@ -88,7 +88,7 @@ vi.mock("./task-transcript-dialog", () => ({
 vi.mock("./task-assign-session-dialog", () => ({
   TaskAssignSessionDialog: () => null,
 }))
-vi.mock("./task-worktree-session-dialog", () => ({
+vi.mock("./task-session-launch-dialog", () => ({
   TaskSessionLaunchDialog: () => null,
 }))
 

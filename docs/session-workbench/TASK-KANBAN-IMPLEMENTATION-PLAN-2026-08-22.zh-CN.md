@@ -230,8 +230,7 @@ Backlog | 待办 | 进行中 | 审核中 | 已完成 | 已阻塞 | 已取消
 [创建并执行 ▾]
   ├── 人工处理
   ├── 指派已有 Session
-  ├── 新建 Session 处理
-  └── 新建 Worktree Session
+  └── 新建 Session 处理
 ```
 
 创建框不默认展开模型/Profile/Worktree 设置。选择 Engine 执行时才展示 Harness、Profile、
@@ -239,9 +238,15 @@ Backlog | 待办 | 进行中 | 审核中 | 已完成 | 已阻塞 | 已取消
 
 这里的边界是产品不变量，不只是界面取舍：Profile 属于 Session 启动身份，不属于 Task。
 因此“保存任务”永远不会顺手启动一个 ACP Harness；“指派已有 Session”也不能借任务卡改写
-该 Session 的 Profile/模型。只有“新建 Session 处理”和“新建 Worktree Session”进入共享的
-Session Launch 配置页，并复用普通新建会话相同的 Harness、Profile、Model、Mode 数据源和
-稳定 `conversation_id` 建连顺序，禁止在任务模块复制第三套选择器或 ACP 探测状态机。
+该 Session 的 Profile/模型。只有“新建 Session 处理”进入共享的 Session Launch 配置页，
+并复用普通新建会话相同的 Harness、Profile、Model、Mode 数据源和稳定 `conversation_id`
+建连顺序，禁止在任务模块复制第三套选择器或 ACP 探测状态机。
+
+任务系统也不拥有单独的 Worktree Session 类型。第一版从任务卡新建时使用任务所属项目目录；
+需要隔离 Worktree 时，用户通过标准新建会话入口创建该 Session，再用“指派已有 Session”绑定
+任务。Agent 端同理只组合两项已有 Host Control 能力：`session.create` 返回稳定 Session ID，
+随后 `task.assign(target_session_id)`；不要把任务正文同时作为 `initial_prompt` 再重复投递。
+UI 不调用 MCP，二者应逐步下沉复用同一个 Codeg Server Session 创建服务。
 
 ### 5.2 卡片
 
@@ -259,8 +264,15 @@ Merge 区域如实表达。
 
 ### 5.3 任务详情
 
-未分配任务提供四种处理方式；Session 任务显示目标、队列位置、投递/运行状态和打开入口；
+未分配任务提供人工开始、指派已有 Session、新建 Session 三种处理方式。Session 任务显示目标、
+队列位置、投递/运行状态和打开入口；
 Engine 任务继续显示 Worktree、Diff、Preflight、Review 和 Merge。
+
+看板是持续工作的内容面，而不是偶尔访问的设置页。当前仍由全页 Workbench Route 承载；下一
+个独立批次应把它迁为单例 Workbench 内容 Tab，使其能和 Session 并排、参与分屏和最大化。
+任务详情第一版继续使用右侧 Sheet 作为快速预览，避免每张卡都生成一个长期 Tab；详情需显示
+Task ID、项目实际目录、可选 Worktree 目录、分支和生命周期，并提供同一动作注册表生成的右键
+菜单。悬浮 Dialog 会遮住看板，不作为默认详情容器。
 
 第一版不提供“只关联但不投递”。它会制造无人负责启动的悬空状态。
 
@@ -420,11 +432,11 @@ Harness / Profile / Model；这些配置只在新建 Session 或 Worktree Sessio
 `conversation_id` 回写任务。Rust 事务/队列测试和真实 Tauri WebView2 的“建卡 → 指派 →
 Session 收到 → 卡片进入进行中”已通过。
 
-该段主链完成时尚未补齐新建 Session / 新建 Worktree Session 的统一启动配置；其后续状态
+该段主链完成时尚未补齐新建 Session 的统一启动配置；其后续状态
 以下面的补充记录为准。collaborator、Session 任务投影及其余恢复边界仍未完成。
 
-**补充实现状态（2026-08-22）**：已完成新 Worktree Session 的显式启动边界。任务创建仍只
-创建中性卡；用户随后选择“新建 Worktree Session 执行”时，才进入复用普通 Composer
+**补充实现状态（2026-08-22）**：已完成新 Session 的显式启动边界。任务创建仍只
+创建中性卡；用户随后选择“新建 Session 执行”时，才进入复用普通 Composer
 组件的 Harness / Claude Profile / Mode / Model / Effort 配置窗口。选择已有 Session 时仍继承
 目标 Session 配置，不在任务卡上重复设置。后端用原子 CAS 同时冻结启动快照并 claim 任务，
 且在调用 ACP `session/new` 之前先创建稳定 Codeg `conversation_id`，避免 Session 启动后再
@@ -435,12 +447,18 @@ Session 收到 → 卡片进入进行中”已通过。
 任务进入受阻/验收时也会被正确看见。
 
 自动测试已覆盖配置快照的原子 claim、Profile 传递、人工/Session 业务状态提醒；真实 Tauri
-WebView2 已验证“只填任务内容建卡 → 卡片保持未分配 → 显式打开新 Worktree Session →
+WebView2 已验证“只填任务内容建卡 → 卡片保持未分配 → 显式打开新 Session →
 出现同一套 Profile/Mode/Model/Effort 控件”，未启动昂贵的真实 Agent 回合，临时任务随后清理。
 
-**补充实现状态（同日）**：已有 Session 指派弹窗现可继续进入“新建普通 Session”。普通与
-Worktree 两条路径复用同一个 Harness / Claude Profile / Mode / Model / Effort 启动面板；普通
-路径先创建稳定 Codeg Session、持久化 Profile，再建立 ACP 连接，Harness ready 后才执行同一
+**交互修正（同日）**：卡片不再把 Worktree 暴露为独立动作或第二种 Session 类型。“新建
+Session 执行”使用项目目录；隔离执行复用标准新建会话的 Worktree 入口，随后指派已有 Session。
+Agent 端使用同一个 `session.create → task.assign` 组合，不新增任务专属创建工具。看板卡和列表行
+新增由 `buildTaskActions` 直接投影的右键菜单，避免按钮与菜单维护两套动作。详情补充稳定 Task
+ID、项目实际目录、可选 Worktree 目录和更新时间。
+
+**补充实现状态（同日）**：已有 Session 指派弹窗现可继续进入“新建 Session”。该路径复用
+Harness / Claude Profile / Mode / Model / Effort 启动面板，先创建稳定 Codeg Session、持久化
+Profile，再建立 ACP 连接，Harness ready 后才执行同一
 `work_task_assign_session` 事务。启动或指派失败时保留已经创建的普通 Session，便于修复和再次
 指派，不生成隐藏的半条 Task Runtime。相关编排测试和真实 Desktop CDP 验证已通过，CDP 临时
 任务已清理；验证未点击最终“创建并指派”，避免启动真实计费回合。
