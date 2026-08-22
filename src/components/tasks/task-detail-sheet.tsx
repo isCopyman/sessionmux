@@ -51,6 +51,7 @@ import {
   workTaskRequestReview,
   workTaskRetry,
   workTaskReturn,
+  workTaskSetManualStatus,
   workTaskStart,
 } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
@@ -72,6 +73,7 @@ import { useShortcutSettings } from "@/hooks/use-shortcut-settings"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
 import { hasNothingToMerge, isMergeQueued } from "./task-acceptance"
 import { StatusChip, statusLabelKey } from "./task-card"
+import { buildTaskActions } from "./task-actions"
 import {
   TaskMessageComposer,
   type TaskMessageComposerHandle,
@@ -371,7 +373,12 @@ export function TaskDetailSheet({
   const promptText = task.config?.display_text?.trim() || null
   const archived = task.archived_at != null
 
-  const canEdit = task.status === "todo" || task.status === "failed"
+  const canEdit =
+    ((task.execution_mode === null || task.execution_mode === "manual") &&
+      task.task_status !== "done" &&
+      task.task_status !== "canceled") ||
+    task.status === "todo" ||
+    task.status === "failed"
 
   // The next-step panel's buttons — ONE list for every status, review
   // included, so the panel never changes shape from one status to the next.
@@ -379,7 +386,9 @@ export function TaskDetailSheet({
   // that advances the task's state. "查看会话" and "编辑" don't advance
   // anything, so they sit in the bottom bar instead.
   const zoneActions: ZoneAction[] = []
-  const isReview = task.status === "review" && !archived
+  const manualWorkflow =
+    task.execution_mode === null || task.execution_mode === "manual"
+  const isReview = !manualWorkflow && task.status === "review" && !archived
   /** Accepted already, waiting for the project's one merge slot. */
   const mergeQueued = isReview && isMergeQueued(task)
   const isRestart =
@@ -401,7 +410,28 @@ export function TaskDetailSheet({
   /** Images / pasted bytes attached to the open box, as their own blocks. */
   const composerBlocks = (): PromptInputBlock[] =>
     composerOpen ? (composerRef.current?.getAttachmentBlocks() ?? []) : []
-  if (isReview) {
+  if (manualWorkflow) {
+    const actions = buildTaskActions(task, t, {
+      onManualStatus: (to) =>
+        run(() => workTaskSetManualStatus(task.id, task.task_status, to)),
+      onStart: () => run(() => workTaskStart(task.id)),
+      onCancel: () => onCancel(task),
+      onSubmitReview: () => run(() => workTaskRequestReview(task.id)),
+      onRetry: () => {},
+      onRequeue: () => {},
+      onViewSession: () => onViewSession(task),
+      onMerge: () => onMerge(task),
+      onUnqueueMerge: () => run(() => workTaskMergeUnqueue(task.id)),
+      onComplete: () => onComplete(task),
+      onArchive: () => run(() => workTaskArchive(task.id, !archived)),
+      onEdit: () => onEdit(task),
+      onSchedule: () => onSchedule(task),
+    })
+    if (actions.primary) {
+      zoneActions.push({ ...actions.primary, filled: true })
+    }
+    zoneActions.push(...actions.secondaries)
+  } else if (isReview) {
     // Already accepted and waiting for the project's merge slot: the merge is
     // decided, so the panel offers the two ways to change that decision —
     // edit the queued merge, or leave the queue. Neither is filled: nothing
@@ -1454,16 +1484,20 @@ const STATUS_KEYS = new Set([
   "done",
   "failed",
   "canceled",
+  "in_progress",
+  "blocked",
 ])
 
 /** Dot tone per status — the same colour language as the board columns. */
 function statusDotClass(status: string): string {
   switch (status) {
     case "running":
+    case "in_progress":
     case "queued":
     case "preparing":
       return "bg-primary"
     case "awaiting_input":
+    case "blocked":
     case "review":
     case "merging":
       return "bg-amber-500"
@@ -1486,7 +1520,7 @@ function statusDotClass(status: string): string {
  */
 function TimelineRow({ event }: { event: WorkTaskEvent }) {
   const t = useTranslations("Tasks")
-  if (event.kind === "status_changed") {
+  if (event.kind === "status_changed" || event.kind === "task_status_changed") {
     return <TimelineStatusHeader event={event} />
   }
   const key =
@@ -1525,7 +1559,11 @@ function TimelineStatusHeader({ event }: { event: WorkTaskEvent }) {
   const to = str("to")
   const known = to != null && STATUS_KEYS.has(to)
   const label = known
-    ? t(statusLabelKey(to as WorkTask["status"]))
+    ? to === "in_progress"
+      ? t("statusRunning")
+      : to === "blocked"
+        ? t("statusBlocked")
+        : t(statusLabelKey(to as WorkTask["status"]))
     : (to ?? t("eventStatusChanged"))
   const note = str("error") ?? str("reason")
   return (

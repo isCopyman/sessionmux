@@ -28,6 +28,7 @@ import type {
   AutomationRun,
   AutomationDraft,
   WorkTask,
+  WorkTaskBusinessStatus,
   WorkTaskChangedFile,
   WorkTaskConfig,
   WorkTaskDraft,
@@ -3705,6 +3706,14 @@ export async function workTaskDelete(
 
 export async function workTaskStart(id: number): Promise<void> {
   return getTransport().call("work_task_start", { id })
+}
+
+export async function workTaskSetManualStatus(
+  id: number,
+  from: WorkTaskBusinessStatus,
+  to: WorkTaskBusinessStatus
+): Promise<void> {
+  return getTransport().call("work_task_set_manual_status", { id, from, to })
 }
 
 /**

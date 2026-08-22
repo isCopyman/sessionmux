@@ -16,6 +16,7 @@ import {
   ScheduleChip,
   statusAccent,
   StatusChip,
+  ExecutionModeChip,
   TaskAgentMarkWithActivity,
   WorktreeRemovedChip,
 } from "./task-card"
@@ -182,6 +183,7 @@ export function TaskRow({
                 rare, and a dedicated column would cost every row its alignment
                 to serve a handful. Renders nothing when there is no plan. */}
             <ScheduleChip task={task} />
+            <ExecutionModeChip task={task} />
             {/* Same reasoning: a queued merge and a deleted worktree are the
                 exception, and the row must say so wherever the board card
                 would. */}

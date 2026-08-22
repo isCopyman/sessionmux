@@ -209,11 +209,15 @@ function TaskEditorBody({
   // payload of both the task draft and a saved template.
   const buildConfig = async (): Promise<WorkTaskConfig> => {
     const displayText = (composerRef.current?.getText() ?? prompt).trim()
+    const hasAttachments = composerRef.current?.hasAttachments() ?? false
     // Prose + inline references + attached images, exactly as a chat send
     // composes them; the engine replays these blocks when the task launches.
-    const blocks = composerRef.current?.getPromptBlocks() ?? [
-      { type: "text", text: displayText },
-    ]
+    const blocks =
+      !displayText && !hasAttachments
+        ? []
+        : (composerRef.current?.getPromptBlocks() ?? [
+            { type: "text", text: displayText },
+          ])
     if (!agentDirty) {
       return {
         prompt_blocks: blocks,
@@ -244,11 +248,7 @@ function TaskEditorBody({
 
   const submit = async () => {
     setError(null)
-    const displayText = (composerRef.current?.getText() ?? prompt).trim()
-    const hasAttachments = composerRef.current?.hasAttachments() ?? false
     if (!title.trim()) return setError(t("errorTitle"))
-    // A brief that is only a screenshot is still a brief.
-    if (!displayText && !hasAttachments) return setError(t("errorPrompt"))
     if (folderId == null) return setError(t("errorFolder"))
     // An unsettled upload has no server-side uri yet, so the stored block would
     // carry nothing for the launch to hydrate from.

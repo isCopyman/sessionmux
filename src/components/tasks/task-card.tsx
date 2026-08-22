@@ -34,6 +34,7 @@ type StatusLabelKey =
   | "statusDone"
   | "statusFailed"
   | "statusCanceled"
+  | "statusBlocked"
 
 export function statusLabelKey(status: WorkTask["status"]): StatusLabelKey {
   switch (status) {
@@ -81,22 +82,33 @@ export function StatusChip({
   className?: string
 }) {
   const t = useTranslations("Tasks")
+  const visualStatus = taskVisualStatus(task)
   // An interrupted failure (restart) reads differently from an agent failure.
   const label =
-    task.status === "failed" && task.failure_reason === "interrupted"
+    visualStatus === "failed" && task.failure_reason === "interrupted"
       ? t("statusInterrupted")
-      : t(statusLabelKey(task.status))
+      : (task.execution_mode === null || task.execution_mode === "manual") &&
+          task.task_status === "blocked"
+        ? t("statusBlocked")
+        : t(statusLabelKey(visualStatus))
 
   let tone: string
   let icon: React.ReactNode = null
-  switch (task.status) {
+  switch (visualStatus) {
     case "queued":
     case "preparing":
     case "running":
-      tone = "gap-1 text-[0.6875rem] text-primary"
-      icon = (
-        <Loader2 className="size-3 shrink-0 animate-spin" aria-hidden="true" />
-      )
+      tone =
+        task.execution_mode !== null && task.execution_mode !== "manual"
+          ? "gap-1 text-[0.6875rem] text-primary"
+          : "text-[0.6875rem] text-primary"
+      icon =
+        task.execution_mode !== null && task.execution_mode !== "manual" ? (
+          <Loader2
+            className="size-3 shrink-0 animate-spin"
+            aria-hidden="true"
+          />
+        ) : null
       break
     case "merging":
       tone = "gap-1 text-[0.6875rem] text-muted-foreground"
@@ -109,12 +121,13 @@ export function StatusChip({
       // `text-amber-600` / `dark:text-amber-400` in tasks-page.tsx).
       tone =
         "gap-1 rounded-full border border-amber-500/45 bg-amber-500/5 px-2 py-1 text-[0.625rem] text-amber-600 dark:border-amber-400/40 dark:text-amber-400"
-      icon = (
-        <span
-          className="size-1.5 shrink-0 animate-pulse rounded-full bg-amber-500"
-          aria-hidden="true"
-        />
-      )
+      icon =
+        task.execution_mode !== null && task.execution_mode !== "manual" ? (
+          <span
+            className="size-1.5 shrink-0 animate-pulse rounded-full bg-amber-500"
+            aria-hidden="true"
+          />
+        ) : null
       break
     case "done":
       tone =
@@ -151,6 +164,43 @@ export function StatusChip({
   )
 }
 
+function taskVisualStatus(task: WorkTask): WorkTask["status"] {
+  if (task.execution_mode !== null && task.execution_mode !== "manual") {
+    return task.status
+  }
+  switch (task.task_status) {
+    case "todo":
+      return "todo"
+    case "in_progress":
+      return "running"
+    case "blocked":
+      return "awaiting_input"
+    case "review":
+      return "review"
+    case "done":
+      return "done"
+    case "canceled":
+      return "canceled"
+  }
+}
+
+export function ExecutionModeChip({ task }: { task: WorkTask }) {
+  const t = useTranslations("Tasks")
+  const label =
+    task.execution_mode === null
+      ? t("executionUnassigned")
+      : task.execution_mode === "manual"
+        ? t("executionManual")
+        : task.execution_mode === "session"
+          ? t("executionSession")
+          : t("executionAgent")
+  return (
+    <span className="rounded-full bg-muted px-1.5 py-0.5 text-[0.625rem] text-muted-foreground">
+      {label}
+    </span>
+  )
+}
+
 /**
  * The list row's leading accent bar — the board's column markers turned on
  * their side, so the two views speak one colour language.
@@ -164,7 +214,7 @@ export function StatusChip({
  */
 export function statusAccent(task: WorkTask): string {
   if (task.archived_at != null) return "bg-muted-foreground/20"
-  switch (task.status) {
+  switch (taskVisualStatus(task)) {
     case "todo":
     case "queued":
       return "bg-muted-foreground/35"
@@ -172,7 +222,9 @@ export function statusAccent(task: WorkTask): string {
     case "running":
       return "bg-primary"
     case "awaiting_input":
-      return "animate-pulse bg-amber-500"
+      return task.execution_mode !== null && task.execution_mode !== "manual"
+        ? "animate-pulse bg-amber-500"
+        : "bg-amber-500"
     case "review":
       return "bg-muted-foreground/35"
     case "merging":
@@ -193,7 +245,7 @@ export function statusAccent(task: WorkTask): string {
  */
 export function attentionSurfaceClass(task: WorkTask): string {
   if (task.archived_at != null) return ""
-  switch (task.status) {
+  switch (taskVisualStatus(task)) {
     case "failed":
       return "border-destructive/50 bg-destructive/5"
     case "awaiting_input":
@@ -510,6 +562,7 @@ export function TaskCard({
           <span className="text-muted-foreground/40">·</span>
         ) : null}
         {when ? <span className="shrink-0">{when}</span> : null}
+        <ExecutionModeChip task={task} />
         <ScheduleChip task={task} />
         <MergeQueuedChip task={task} rank={mergeQueueRank} />
         <PreflightChip task={task} />

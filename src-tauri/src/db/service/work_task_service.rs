@@ -17,9 +17,9 @@
 use chrono::Utc;
 use sea_orm::sea_query::Expr;
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::NotSet, ColumnTrait, ConnectionTrait, DatabaseConnection,
-    EntityTrait, IntoActiveModel, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, Set,
-    TransactionTrait,
+    ActiveModelTrait, ActiveValue::NotSet, ColumnTrait, Condition, ConnectionTrait,
+    DatabaseConnection, EntityTrait, IntoActiveModel, PaginatorTrait, QueryFilter, QueryOrder,
+    QuerySelect, Set, TransactionTrait,
 };
 
 use crate::db::entities::work_task::{
@@ -49,6 +49,17 @@ pub fn status_str(s: WorkTaskStatus) -> &'static str {
         WorkTaskStatus::Done => "done",
         WorkTaskStatus::Failed => "failed",
         WorkTaskStatus::Canceled => "canceled",
+    }
+}
+
+pub fn business_status_str(s: WorkTaskBusinessStatus) -> &'static str {
+    match s {
+        WorkTaskBusinessStatus::Todo => "todo",
+        WorkTaskBusinessStatus::InProgress => "in_progress",
+        WorkTaskBusinessStatus::Blocked => "blocked",
+        WorkTaskBusinessStatus::Review => "review",
+        WorkTaskBusinessStatus::Done => "done",
+        WorkTaskBusinessStatus::Canceled => "canceled",
     }
 }
 
@@ -688,6 +699,114 @@ pub async fn soft_delete(
 }
 
 // ── state machine (all CAS; event in the same transaction) ─────────────────
+
+fn manual_transition_allowed(from: WorkTaskBusinessStatus, to: WorkTaskBusinessStatus) -> bool {
+    use WorkTaskBusinessStatus::*;
+    matches!(
+        (from, to),
+        (Todo, InProgress | Canceled)
+            | (InProgress, Blocked | Review | Done | Canceled)
+            | (Blocked, InProgress | Review | Canceled)
+            | (Review, InProgress | Done | Canceled)
+            | (Done | Canceled, Todo)
+    )
+}
+
+/// Advance a task that is handled by a person rather than the WorkTask engine.
+///
+/// This is deliberately a separate CAS from the engine lifecycle. An
+/// unassigned card becomes `manual` on its first transition; an engine- or
+/// Session-owned card can never be stolen by this path. The event is committed
+/// with the state change so every UI/Agent edit remains auditable.
+pub async fn transition_manual_status(
+    conn: &DatabaseConnection,
+    id: i32,
+    from: WorkTaskBusinessStatus,
+    to: WorkTaskBusinessStatus,
+    actor: &str,
+) -> Result<bool, DbError> {
+    if !manual_transition_allowed(from, to) {
+        return Err(DbError::Validation(format!(
+            "invalid manual task transition: {} -> {}",
+            business_status_str(from),
+            business_status_str(to)
+        )));
+    }
+
+    let now = Utc::now();
+    let txn = conn.begin().await?;
+    let mut update = work_task::Entity::update_many()
+        .col_expr(
+            work_task::Column::TaskStatus,
+            Expr::value(business_status_str(to)),
+        )
+        .col_expr(work_task::Column::ExecutionMode, Expr::value("manual"))
+        .col_expr(work_task::Column::UpdatedAt, Expr::value(now))
+        .filter(work_task::Column::Id.eq(id))
+        .filter(work_task::Column::TaskStatus.eq(from))
+        .filter(
+            Condition::any()
+                .add(work_task::Column::ExecutionMode.is_null())
+                .add(work_task::Column::ExecutionMode.eq(WorkTaskExecutionMode::Manual)),
+        )
+        .filter(work_task::Column::DeletedAt.is_null());
+
+    match to {
+        WorkTaskBusinessStatus::Todo => {
+            update = update
+                .col_expr(
+                    work_task::Column::ArchivedAt,
+                    Expr::value(None::<chrono::DateTime<Utc>>),
+                )
+                .col_expr(
+                    work_task::Column::SettledAt,
+                    Expr::value(None::<chrono::DateTime<Utc>>),
+                )
+                .col_expr(
+                    work_task::Column::FinishedAt,
+                    Expr::value(None::<chrono::DateTime<Utc>>),
+                );
+        }
+        WorkTaskBusinessStatus::InProgress => {
+            update = update
+                .col_expr(work_task::Column::StartedAt, Expr::value(Some(now)))
+                .col_expr(
+                    work_task::Column::SettledAt,
+                    Expr::value(None::<chrono::DateTime<Utc>>),
+                )
+                .col_expr(
+                    work_task::Column::FinishedAt,
+                    Expr::value(None::<chrono::DateTime<Utc>>),
+                );
+        }
+        WorkTaskBusinessStatus::Blocked | WorkTaskBusinessStatus::Review => {
+            update = update.col_expr(work_task::Column::SettledAt, Expr::value(Some(now)));
+        }
+        WorkTaskBusinessStatus::Done | WorkTaskBusinessStatus::Canceled => {
+            update = update.col_expr(work_task::Column::FinishedAt, Expr::value(Some(now)));
+        }
+    }
+
+    let result = update.exec(&txn).await?;
+    if result.rows_affected != 1 {
+        txn.rollback().await?;
+        return Ok(false);
+    }
+    record_event(
+        &txn,
+        id,
+        "task_status_changed",
+        actor,
+        Some(serde_json::json!({
+            "from": business_status_str(from),
+            "to": business_status_str(to),
+            "execution_mode": "manual",
+        })),
+    )
+    .await?;
+    txn.commit().await?;
+    Ok(true)
+}
 
 /// Claim a task for a fresh execution generation: `from` → queued with
 /// `run_seq + 1`, clearing stale failure fields. Returns the NEW run_seq, or
@@ -1977,9 +2096,9 @@ pub async fn set_preflight(
     Ok(true)
 }
 
-/// Archive / unarchive. Only terminal tasks (done / failed / canceled) can be
-/// archived — active ones stay on the board by construction; unarchiving is
-/// status-agnostic. Records the user action.
+/// Archive / unarchive. Engine tasks use their engine-terminal status; manual
+/// and Session tasks use the board's terminal status. Active tasks stay on the
+/// board by construction; unarchiving is status-agnostic.
 pub async fn set_archived(
     conn: &DatabaseConnection,
     id: i32,
@@ -1997,11 +2116,37 @@ pub async fn set_archived(
         .filter(work_task::Column::DeletedAt.is_null());
     if archived {
         update = update
-            .filter(work_task::Column::Status.is_in([
-                WorkTaskStatus::Done,
-                WorkTaskStatus::Failed,
-                WorkTaskStatus::Canceled,
-            ]))
+            .filter(
+                Condition::any()
+                    .add(
+                        Condition::all()
+                            .add(work_task::Column::ExecutionMode.eq(WorkTaskExecutionMode::Engine))
+                            .add(work_task::Column::Status.is_in([
+                                WorkTaskStatus::Done,
+                                WorkTaskStatus::Failed,
+                                WorkTaskStatus::Canceled,
+                            ])),
+                    )
+                    .add(
+                        Condition::all()
+                            .add(
+                                Condition::any()
+                                    .add(work_task::Column::ExecutionMode.is_null())
+                                    .add(
+                                        work_task::Column::ExecutionMode
+                                            .eq(WorkTaskExecutionMode::Manual),
+                                    )
+                                    .add(
+                                        work_task::Column::ExecutionMode
+                                            .eq(WorkTaskExecutionMode::Session),
+                                    ),
+                            )
+                            .add(work_task::Column::TaskStatus.is_in([
+                                WorkTaskBusinessStatus::Done,
+                                WorkTaskBusinessStatus::Canceled,
+                            ])),
+                    ),
+            )
             .filter(work_task::Column::ArchivedAt.is_null());
     } else {
         update = update.filter(work_task::Column::ArchivedAt.is_not_null());
@@ -2465,6 +2610,89 @@ mod tests {
         // The created event landed in the same transaction.
         let events = list_events(&db.conn, t.id, 100).await.unwrap();
         assert_eq!(events[0].kind, "created");
+    }
+
+    #[tokio::test]
+    async fn manual_workflow_claims_neutral_card_and_is_audited() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-manual").await;
+        let task = create(&db.conn, draft(folder_id, "write the release note"))
+            .await
+            .unwrap();
+
+        assert!(transition_manual_status(
+            &db.conn,
+            task.id,
+            WorkTaskBusinessStatus::Todo,
+            WorkTaskBusinessStatus::InProgress,
+            "user",
+        )
+        .await
+        .unwrap());
+        let active = get(&db.conn, task.id).await.unwrap();
+        assert_eq!(active.execution_mode, Some(WorkTaskExecutionMode::Manual));
+        assert_eq!(active.task_status, WorkTaskBusinessStatus::InProgress);
+        assert_eq!(active.status, WorkTaskStatus::Todo);
+
+        assert!(transition_manual_status(
+            &db.conn,
+            task.id,
+            WorkTaskBusinessStatus::InProgress,
+            WorkTaskBusinessStatus::Review,
+            "user",
+        )
+        .await
+        .unwrap());
+        assert!(transition_manual_status(
+            &db.conn,
+            task.id,
+            WorkTaskBusinessStatus::Review,
+            WorkTaskBusinessStatus::Done,
+            "user",
+        )
+        .await
+        .unwrap());
+        assert!(set_archived(&db.conn, task.id, true).await.unwrap());
+
+        let events = list_events(&db.conn, task.id, 100).await.unwrap();
+        let transitions: Vec<_> = events
+            .iter()
+            .filter(|event| event.kind == "task_status_changed")
+            .collect();
+        assert_eq!(transitions.len(), 3);
+        assert_eq!(
+            transitions[0].payload.as_ref().unwrap()["to"],
+            "in_progress"
+        );
+    }
+
+    #[tokio::test]
+    async fn manual_workflow_cannot_steal_engine_task_or_skip_states() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-manual-guard").await;
+        let task = create(&db.conn, draft(folder_id, "engine owned"))
+            .await
+            .unwrap();
+        mark_engine_eligible(&db.conn, task.id).await;
+
+        assert!(!transition_manual_status(
+            &db.conn,
+            task.id,
+            WorkTaskBusinessStatus::Todo,
+            WorkTaskBusinessStatus::InProgress,
+            "user",
+        )
+        .await
+        .unwrap());
+        assert!(transition_manual_status(
+            &db.conn,
+            task.id,
+            WorkTaskBusinessStatus::Todo,
+            WorkTaskBusinessStatus::Done,
+            "user",
+        )
+        .await
+        .is_err());
     }
 
     #[tokio::test]

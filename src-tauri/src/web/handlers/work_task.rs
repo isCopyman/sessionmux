@@ -6,6 +6,7 @@ use serde::Deserialize;
 use crate::app_error::AppCommandError;
 use crate::app_state::AppState;
 use crate::commands::work_task as core;
+use crate::db::entities::work_task::WorkTaskBusinessStatus;
 use crate::models::{
     WorkTaskChangedFile, WorkTaskDraft, WorkTaskEventInfo, WorkTaskFolderSettings, WorkTaskInfo,
     WorkTaskTemplateDraft, WorkTaskTemplateInfo,
@@ -144,6 +145,14 @@ pub struct StartAllParams {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ManualStatusParams {
+    pub id: i32,
+    pub from: WorkTaskBusinessStatus,
+    pub to: WorkTaskBusinessStatus,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ArchiveParams {
     pub id: i32,
     pub archived: bool,
@@ -264,6 +273,22 @@ pub async fn work_task_start(Json(params): Json<IdParams>) -> Result<Json<()>, A
     core::work_task_start_core(params.id)
         .await
         .map_err(AppCommandError::from)?;
+    Ok(Json(()))
+}
+
+pub async fn work_task_set_manual_status(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<ManualStatusParams>,
+) -> Result<Json<()>, AppCommandError> {
+    core::work_task_set_manual_status_core(
+        &state.emitter,
+        &state.db,
+        params.id,
+        params.from,
+        params.to,
+    )
+    .await
+    .map_err(AppCommandError::from)?;
     Ok(Json(()))
 }
 

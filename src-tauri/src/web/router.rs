@@ -1531,6 +1531,10 @@ pub fn build_router(
             post(handlers::work_task::work_task_start),
         )
         .route(
+            "/work_task_set_manual_status",
+            post(handlers::work_task::work_task_set_manual_status),
+        )
+        .route(
             "/work_task_start_all",
             post(handlers::work_task::work_task_start_all),
         )

@@ -2,6 +2,7 @@ import {
   Archive,
   ArchiveRestore,
   Ban,
+  Bot,
   CalendarClock,
   CircleCheck,
   ClipboardCheck,
@@ -24,6 +25,9 @@ export interface TaskActionItem {
 
 /** The per-task callbacks a card or list row wires its actions to. */
 export interface TaskActionHandlers {
+  /** Advance an unassigned/manual task without starting an Agent. */
+  onManualStatus: (to: WorkTask["task_status"]) => void
+  /** Start the WorkTask engine for an unassigned task. */
   onStart: () => void
   onCancel: () => void
   /** Submit a running, idle card for review. The engine rejects it mid-turn. */
@@ -49,6 +53,9 @@ export interface TaskActionHandlers {
 
 type ActionLabelKey =
   | "actionStart"
+  | "actionRunWithAgent"
+  | "actionMarkBlocked"
+  | "actionResume"
   | "actionCancel"
   | "actionSubmitReview"
   | "actionRetry"
@@ -85,6 +92,111 @@ export function buildTaskActions(
       onClick: handlers.onArchive,
     }
   } else {
+    if (task.execution_mode === null || task.execution_mode === "manual") {
+      switch (task.task_status) {
+        case "todo":
+          primary = {
+            icon: Play,
+            label: t("actionStart"),
+            onClick: () => handlers.onManualStatus("in_progress"),
+          }
+          secondaries.push({
+            icon: Bot,
+            label: t("actionRunWithAgent"),
+            onClick: handlers.onStart,
+          })
+          secondaries.push({
+            icon: Pencil,
+            label: t("actionEdit"),
+            onClick: handlers.onEdit,
+          })
+          break
+        case "in_progress":
+          primary = {
+            icon: ClipboardCheck,
+            label: t("actionSubmitReview"),
+            onClick: () => handlers.onManualStatus("review"),
+          }
+          secondaries.push({
+            icon: Ban,
+            label: t("actionMarkBlocked"),
+            onClick: () => handlers.onManualStatus("blocked"),
+          })
+          secondaries.push({
+            icon: CircleCheck,
+            label: t("actionComplete"),
+            onClick: () => handlers.onManualStatus("done"),
+          })
+          break
+        case "blocked":
+          primary = {
+            icon: RotateCw,
+            label: t("actionResume"),
+            onClick: () => handlers.onManualStatus("in_progress"),
+          }
+          secondaries.push({
+            icon: ClipboardCheck,
+            label: t("actionSubmitReview"),
+            onClick: () => handlers.onManualStatus("review"),
+          })
+          secondaries.push({
+            icon: Ban,
+            label: t("actionCancel"),
+            onClick: () => handlers.onManualStatus("canceled"),
+          })
+          break
+        case "review":
+          primary = {
+            icon: CircleCheck,
+            label: t("actionComplete"),
+            onClick: () => handlers.onManualStatus("done"),
+          }
+          secondaries.push({
+            icon: RotateCw,
+            label: t("actionResume"),
+            onClick: () => handlers.onManualStatus("in_progress"),
+          })
+          secondaries.push({
+            icon: Ban,
+            label: t("actionCancel"),
+            onClick: () => handlers.onManualStatus("canceled"),
+          })
+          break
+        case "done":
+          primary = {
+            icon: Archive,
+            label: t("actionArchive"),
+            onClick: handlers.onArchive,
+          }
+          secondaries.push({
+            icon: RotateCw,
+            label: t("actionRequeue"),
+            onClick: () => handlers.onManualStatus("todo"),
+          })
+          break
+        case "canceled":
+          primary = {
+            icon: RotateCw,
+            label: t("actionRequeue"),
+            onClick: () => handlers.onManualStatus("todo"),
+          }
+          secondaries.push({
+            icon: Archive,
+            label: t("actionArchive"),
+            onClick: handlers.onArchive,
+          })
+          break
+      }
+      if (task.conversation_id != null) {
+        secondaries.push({
+          icon: MessageSquareText,
+          label: t("actionViewSession"),
+          onClick: handlers.onViewSession,
+        })
+      }
+      return { primary, secondaries }
+    }
+
     switch (task.status) {
       case "todo":
         primary = {

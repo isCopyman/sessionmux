@@ -7,7 +7,7 @@
 
 use crate::app_error::AppCommandError;
 use crate::commands::folders::{get_folder_core, git_diff_with_branch};
-use crate::db::entities::work_task::WorkTaskStatus;
+use crate::db::entities::work_task::{WorkTaskBusinessStatus, WorkTaskStatus};
 use crate::db::error::DbError;
 use crate::db::service::work_task_service;
 use crate::db::AppDatabase;
@@ -417,6 +417,28 @@ pub async fn work_task_reorder_core(
 
 pub async fn work_task_start_core(id: i32) -> Result<(), DbError> {
     engine()?.start(id).await.map_err(DbError::Validation)
+}
+
+/// Move an unassigned/manual card through the human workflow without starting
+/// an ACP Session or creating a worktree.
+pub async fn work_task_set_manual_status_core(
+    emitter: &EventEmitter,
+    db: &AppDatabase,
+    id: i32,
+    from: WorkTaskBusinessStatus,
+    to: WorkTaskBusinessStatus,
+) -> Result<(), DbError> {
+    if !work_task_service::transition_manual_status(&db.conn, id, from, to, "user").await? {
+        return Err(DbError::Validation(
+            "task changed, was deleted, or is owned by another execution mode".to_string(),
+        ));
+    }
+    emit_event(
+        emitter,
+        WORK_TASK_CHANGED_EVENT,
+        WorkTaskChange::Upsert { id },
+    );
+    Ok(())
 }
 
 /// `folder_id: None` = the global sweep — every folder holding todos.
@@ -843,6 +865,18 @@ pub async fn work_task_delete(
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn work_task_start(id: i32) -> Result<(), DbError> {
     work_task_start_core(id).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn work_task_set_manual_status(
+    app: tauri::AppHandle,
+    db: tauri::State<'_, AppDatabase>,
+    id: i32,
+    from: WorkTaskBusinessStatus,
+    to: WorkTaskBusinessStatus,
+) -> Result<(), DbError> {
+    work_task_set_manual_status_core(&EventEmitter::Tauri(app), &db, id, from, to).await
 }
 
 #[cfg(feature = "tauri-runtime")]

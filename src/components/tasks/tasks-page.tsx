@@ -21,6 +21,7 @@ import {
   workTaskMergeUnqueue,
   workTaskReorder,
   workTaskRequestReview,
+  workTaskSetManualStatus,
   workTaskStart,
   workTaskUpdate,
 } from "@/lib/api"
@@ -478,6 +479,8 @@ export function TasksPage() {
   // One handler set, wired the same way for a board card and a list row.
   const handlersFor = useCallback(
     (task: WorkTask): TaskActionHandlers => ({
+      onManualStatus: (to) =>
+        void act(() => workTaskSetManualStatus(task.id, task.task_status, to)),
       onStart: () => void act(() => workTaskStart(task.id)),
       onCancel: () => openCancel(task),
       onSubmitReview: () => void act(() => workTaskRequestReview(task.id)),
@@ -553,7 +556,12 @@ export function TasksPage() {
   const handleTodoDrag = (info: PanInfo) => {
     pointRef.current = { x: info.point.x, y: info.point.y }
     positionGhost(info.point.x, info.point.y)
-    const over = pointerOverInProgress(info.point.x, info.point.y)
+    // An unassigned card has not answered "human or Agent?" yet. Dragging it
+    // cannot silently make that product decision; the card's two Start actions
+    // do. Reopened manual cards and existing engine cards already have a mode.
+    const over =
+      drag?.task.execution_mode != null &&
+      pointerOverInProgress(info.point.x, info.point.y)
     if (over !== dropArmedRef.current) {
       dropArmedRef.current = over
       setDropArmed(over)
@@ -627,6 +635,7 @@ export function TasksPage() {
       }
       const rect = inProgressColRef.current?.getBoundingClientRect()
       const droppedOnInProgress =
+        task.execution_mode != null &&
         rect != null &&
         info.point.x >= rect.left &&
         info.point.x <= rect.right &&
@@ -637,7 +646,13 @@ export function TasksPage() {
         // The row may have advanced during the drag; the engine would reject
         // the stale start anyway, so don't spend a request and a toast on it.
         const live = tasksRef.current.find((row) => row.id === task.id)
-        if (live?.status === "todo") void act(() => workTaskStart(task.id))
+        if (live?.task_status === "todo") {
+          void act(() =>
+            live.execution_mode === "engine"
+              ? workTaskStart(task.id)
+              : workTaskSetManualStatus(task.id, "todo", "in_progress")
+          )
+        }
         return
       }
       const order = dragOrderRef.current

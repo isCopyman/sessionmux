@@ -52,6 +52,7 @@ function renderRow(
   const noop = () => {}
   const props = {
     onOpen: noop,
+    onManualStatus: noop,
     onStart: noop,
     onCancel: noop,
     onSubmitReview: noop,

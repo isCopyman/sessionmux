@@ -42,6 +42,7 @@ function task(overrides?: Partial<WorkTask>): WorkTask {
 
 function handlers(): TaskActionHandlers {
   return {
+    onManualStatus: vi.fn(),
     onStart: vi.fn(),
     onCancel: vi.fn(),
     onSubmitReview: vi.fn(),
@@ -88,5 +89,50 @@ describe("buildTaskActions submit-for-review", () => {
     expect(secondaries.some((a) => a.label === "actionSubmitReview")).toBe(
       false
     )
+  })
+})
+
+describe("buildTaskActions manual workflow", () => {
+  it("keeps manual start separate from running an Agent", () => {
+    const h = handlers()
+    const { primary, secondaries } = buildTaskActions(
+      task({
+        status: "todo",
+        task_status: "todo",
+        execution_mode: null,
+        conversation_id: null,
+        connection_id: null,
+      }),
+      (key) => key,
+      h
+    )
+    primary?.onClick()
+    expect(h.onManualStatus).toHaveBeenCalledWith("in_progress")
+    const agent = secondaries.find(
+      (action) => action.label === "actionRunWithAgent"
+    )
+    agent?.onClick()
+    expect(h.onStart).toHaveBeenCalledTimes(1)
+  })
+
+  it("never offers engine merge controls for a manual review", () => {
+    const h = handlers()
+    const { primary, secondaries } = buildTaskActions(
+      task({
+        status: "todo",
+        task_status: "review",
+        execution_mode: "manual",
+        conversation_id: null,
+        connection_id: null,
+      }),
+      (key) => key,
+      h
+    )
+    expect(primary?.label).toBe("actionComplete")
+    expect(secondaries.some((action) => action.label === "actionMerge")).toBe(
+      false
+    )
+    primary?.onClick()
+    expect(h.onManualStatus).toHaveBeenCalledWith("done")
   })
 })
