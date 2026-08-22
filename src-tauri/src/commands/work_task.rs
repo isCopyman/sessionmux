@@ -12,8 +12,8 @@ use crate::db::error::DbError;
 use crate::db::service::work_task_service;
 use crate::db::AppDatabase;
 use crate::models::{
-    FollowUpIntent, WorkTaskChangedFile, WorkTaskDraft, WorkTaskEventInfo, WorkTaskFolderSettings,
-    WorkTaskInfo, WorkTaskTemplateDraft, WorkTaskTemplateInfo,
+    FollowUpIntent, WorkTaskChangedFile, WorkTaskConfig, WorkTaskDraft, WorkTaskEventInfo,
+    WorkTaskFolderSettings, WorkTaskInfo, WorkTaskTemplateDraft, WorkTaskTemplateInfo,
 };
 use crate::prompt_queue::PromptQueueHandle;
 use crate::web::event_bridge::{
@@ -448,6 +448,16 @@ pub async fn work_task_reorder_core(
 
 pub async fn work_task_start_core(id: i32) -> Result<(), DbError> {
     engine()?.start(id).await.map_err(DbError::Validation)
+}
+
+pub async fn work_task_start_configured_core(
+    id: i32,
+    config: WorkTaskConfig,
+) -> Result<(), DbError> {
+    engine()?
+        .start_configured(id, config)
+        .await
+        .map_err(DbError::Validation)
 }
 
 /// Move a business-status card through the human workflow. Neutral/manual
@@ -924,6 +934,12 @@ pub async fn work_task_delete(
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn work_task_start(id: i32) -> Result<(), DbError> {
     work_task_start_core(id).await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[cfg_attr(feature = "tauri-runtime", tauri::command)]
+pub async fn work_task_start_configured(id: i32, config: WorkTaskConfig) -> Result<(), DbError> {
+    work_task_start_configured_core(id, config).await
 }
 
 #[cfg(feature = "tauri-runtime")]

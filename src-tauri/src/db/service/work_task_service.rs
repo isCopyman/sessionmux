@@ -1417,7 +1417,23 @@ pub async fn claim_for_run(
     from: WorkTaskStatus,
     actor: &str,
 ) -> Result<Option<i32>, DbError> {
-    claim_inner(conn, id, from, actor, None, false).await
+    claim_inner(conn, id, from, actor, None, None, false).await
+}
+
+/// Atomically freeze an explicit Session-launch selection onto a neutral task
+/// and claim its first Worktree-engine generation. The task editor itself stays
+/// content-only; Harness/Profile/Model/Mode enter only through the deliberate
+/// "new Worktree Session" action, and the config cannot race a scheduler claim.
+pub async fn configure_and_claim_for_run(
+    conn: &DatabaseConnection,
+    id: i32,
+    from: WorkTaskStatus,
+    actor: &str,
+    config: &WorkTaskConfig,
+) -> Result<Option<i32>, DbError> {
+    let config = serde_json::to_string(config)
+        .map_err(|error| DbError::Validation(format!("invalid task launch config: {error}")))?;
+    claim_inner(conn, id, from, actor, None, Some(config), false).await
 }
 
 /// `claim_for_run` for a BULK start ("process all"), which must leave a planned
@@ -1434,7 +1450,7 @@ pub async fn claim_unplanned_for_run(
     from: WorkTaskStatus,
     actor: &str,
 ) -> Result<Option<i32>, DbError> {
-    claim_inner(conn, id, from, actor, None, true).await
+    claim_inner(conn, id, from, actor, None, None, true).await
 }
 
 /// `claim_for_run` plus a `user_action` event written in the SAME transaction
@@ -1454,7 +1470,7 @@ pub async fn claim_for_run_with_action(
     actor: &str,
     action: Option<serde_json::Value>,
 ) -> Result<Option<i32>, DbError> {
-    claim_inner(conn, id, from, actor, action, false).await
+    claim_inner(conn, id, from, actor, action, None, false).await
 }
 
 /// Shared body of every user-driven claim. `only_unplanned` narrows the CAS to
@@ -1467,6 +1483,7 @@ async fn claim_inner(
     from: WorkTaskStatus,
     actor: &str,
     action: Option<serde_json::Value>,
+    config_override: Option<String>,
     only_unplanned: bool,
 ) -> Result<Option<i32>, DbError> {
     let now = Utc::now();
@@ -1512,6 +1529,9 @@ async fn claim_inner(
         .filter(work_task::Column::Id.eq(id))
         .filter(work_task::Column::Status.eq(from))
         .filter(work_task::Column::DeletedAt.is_null());
+    if let Some(config) = config_override {
+        update = update.col_expr(work_task::Column::Config, Expr::value(config));
+    }
     if only_unplanned {
         update = update.filter(work_task::Column::ScheduledAt.is_null());
     }
@@ -3510,6 +3530,69 @@ mod tests {
         assert_eq!(
             get(&db.conn, t.id).await.unwrap().status,
             WorkTaskStatus::Queued
+        );
+    }
+
+    #[tokio::test]
+    async fn configured_claim_freezes_launch_snapshot_atomically() {
+        let db = fresh_in_memory_db().await;
+        let folder_id = seed_folder(&db, "/tmp/wt-configured-claim").await;
+        let task = create(&db.conn, draft(folder_id, "configured"))
+            .await
+            .unwrap();
+        let mut config = WorkTaskConfig {
+            display_text: "do the thing".to_string(),
+            prompt_blocks: vec![serde_json::json!({
+                "type": "text",
+                "text": "do the thing"
+            })],
+            ..Default::default()
+        };
+        config.agent_type = Some("claude_code".to_string());
+        config.mode_id = Some("bypass".to_string());
+        config
+            .config_values
+            .insert("__codeg_profile__".to_string(), "cpa".to_string());
+
+        assert_eq!(
+            configure_and_claim_for_run(&db.conn, task.id, WorkTaskStatus::Todo, "user", &config,)
+                .await
+                .unwrap(),
+            Some(1)
+        );
+        let claimed = get_model(&db.conn, task.id).await.unwrap();
+        assert_eq!(claimed.status, WorkTaskStatus::Queued);
+        assert_eq!(claimed.execution_mode, Some(WorkTaskExecutionMode::Engine));
+        let stored: WorkTaskConfig = serde_json::from_str(&claimed.config).unwrap();
+        assert_eq!(stored.agent_type.as_deref(), Some("claude_code"));
+        assert_eq!(stored.mode_id.as_deref(), Some("bypass"));
+        assert_eq!(
+            stored
+                .config_values
+                .get("__codeg_profile__")
+                .map(String::as_str),
+            Some("cpa")
+        );
+
+        // A stale second launcher cannot overwrite the snapshot after losing
+        // the same todo -> queued compare-and-swap.
+        config
+            .config_values
+            .insert("__codeg_profile__".to_string(), "other".to_string());
+        assert_eq!(
+            configure_and_claim_for_run(&db.conn, task.id, WorkTaskStatus::Todo, "user", &config,)
+                .await
+                .unwrap(),
+            None
+        );
+        let stored: WorkTaskConfig =
+            serde_json::from_str(&get_model(&db.conn, task.id).await.unwrap().config).unwrap();
+        assert_eq!(
+            stored
+                .config_values
+                .get("__codeg_profile__")
+                .map(String::as_str),
+            Some("cpa")
         );
     }
 

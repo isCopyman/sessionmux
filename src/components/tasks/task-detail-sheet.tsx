@@ -52,7 +52,6 @@ import {
   workTaskRetry,
   workTaskReturn,
   workTaskSetManualStatus,
-  workTaskStart,
 } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
 import {
@@ -161,6 +160,8 @@ interface TaskDetailSheetProps {
   onSchedule: (task: WorkTask) => void
   /** Opens the page-owned existing-Session assignment dialog. */
   onAssignSession: (task: WorkTask) => void
+  /** Opens the shared explicit new-Worktree-Session launch dialog. */
+  onStartAgent: (task: WorkTask) => void
 }
 
 /** One button of the sheet's action panel (see below). */
@@ -196,6 +197,7 @@ export function TaskDetailSheet({
   onEdit,
   onSchedule,
   onAssignSession,
+  onStartAgent,
 }: TaskDetailSheetProps) {
   const t = useTranslations("Tasks")
   // The upload-in-flight toast is the conversation composer's own message —
@@ -418,7 +420,7 @@ export function TaskDetailSheet({
     const actions = buildTaskActions(task, t, {
       onManualStatus: (to) =>
         run(() => workTaskSetManualStatus(task.id, task.task_status, to)),
-      onStart: () => run(() => workTaskStart(task.id)),
+      onStart: () => onStartAgent(task),
       onAssignSession: () => onAssignSession(task),
       onCancel: () => onCancel(task),
       onSubmitReview: () => run(() => workTaskRequestReview(task.id)),
@@ -499,7 +501,7 @@ export function TaskDetailSheet({
             icon: Play,
             label: t("actionStart"),
             filled: true,
-            onClick: () => run(() => workTaskStart(task.id)),
+            onClick: () => onStartAgent(task),
           })
           // Starting later is the same decision as starting now, so it sits
           // beside it rather than in the utility bar below.

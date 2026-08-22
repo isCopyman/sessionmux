@@ -160,6 +160,48 @@ describe("TasksViewProvider", () => {
     expect(screen.getByTestId("count").textContent).toBe("1")
   })
 
+  it("counts and notifies manual/session cards from the business status axis", async () => {
+    listMock.mockResolvedValueOnce([
+      { ...sample(1, "todo"), execution_mode: "manual" },
+      { ...sample(2, "todo"), execution_mode: "session" },
+    ])
+    render(
+      <TasksViewProvider>
+        <Probe />
+      </TasksViewProvider>
+    )
+    await waitFor(() =>
+      expect(screen.getByTestId("count").textContent).toBe("2")
+    )
+
+    listMock.mockResolvedValueOnce([
+      {
+        ...sample(1, "todo"),
+        execution_mode: "manual",
+        task_status: "blocked",
+      },
+      {
+        ...sample(2, "todo"),
+        execution_mode: "session",
+        task_status: "review",
+      },
+    ])
+    await act(async () => changedHandler?.())
+
+    await waitFor(() =>
+      expect(screen.getByTestId("attention").textContent).toBe("2")
+    )
+    expect(notifyMock).toHaveBeenCalledTimes(2)
+    expect(notifyMock).toHaveBeenCalledWith(
+      "proj - Codeg",
+      expect.stringContaining("notifyBlocked")
+    )
+    expect(notifyMock).toHaveBeenCalledWith(
+      "proj - Codeg",
+      expect.stringContaining("notifyReview")
+    )
+  })
+
   it("notifies on review/failed flips but never for the initial load", async () => {
     listMock.mockResolvedValueOnce([sample(1, "review"), sample(2, "running")])
     render(

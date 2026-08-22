@@ -76,6 +76,9 @@ vi.mock("./task-transcript-dialog", () => ({
 vi.mock("./task-assign-session-dialog", () => ({
   TaskAssignSessionDialog: () => null,
 }))
+vi.mock("./task-worktree-session-dialog", () => ({
+  TaskWorktreeSessionDialog: () => null,
+}))
 
 function folder(id: number, name: string): FolderDetail {
   return {

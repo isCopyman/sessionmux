@@ -8,8 +8,8 @@ use crate::app_state::AppState;
 use crate::commands::work_task as core;
 use crate::db::entities::work_task::WorkTaskBusinessStatus;
 use crate::models::{
-    WorkTaskChangedFile, WorkTaskDraft, WorkTaskEventInfo, WorkTaskFolderSettings, WorkTaskInfo,
-    WorkTaskTemplateDraft, WorkTaskTemplateInfo,
+    WorkTaskChangedFile, WorkTaskConfig, WorkTaskDraft, WorkTaskEventInfo, WorkTaskFolderSettings,
+    WorkTaskInfo, WorkTaskTemplateDraft, WorkTaskTemplateInfo,
 };
 
 fn default_event_limit() -> u64 {
@@ -27,6 +27,13 @@ pub struct ListParams {
 #[serde(rename_all = "camelCase")]
 pub struct IdParams {
     pub id: i32,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StartConfiguredParams {
+    pub id: i32,
+    pub config: WorkTaskConfig,
 }
 
 #[derive(Deserialize)]
@@ -294,6 +301,15 @@ pub async fn work_task_delete(
 
 pub async fn work_task_start(Json(params): Json<IdParams>) -> Result<Json<()>, AppCommandError> {
     core::work_task_start_core(params.id)
+        .await
+        .map_err(AppCommandError::from)?;
+    Ok(Json(()))
+}
+
+pub async fn work_task_start_configured(
+    Json(params): Json<StartConfiguredParams>,
+) -> Result<Json<()>, AppCommandError> {
+    core::work_task_start_configured_core(params.id, params.config)
         .await
         .map_err(AppCommandError::from)?;
     Ok(Json(()))

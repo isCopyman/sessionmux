@@ -1503,6 +1503,7 @@ mod tauri_app {
                 work_task_commands::work_task_reorder,
                 work_task_commands::work_task_delete,
                 work_task_commands::work_task_start,
+                work_task_commands::work_task_start_configured,
                 work_task_commands::work_task_set_manual_status,
                 work_task_commands::work_task_start_all,
                 work_task_commands::work_task_retry,

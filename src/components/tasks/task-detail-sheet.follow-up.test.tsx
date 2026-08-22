@@ -126,6 +126,7 @@ function mount(row: WorkTask) {
         onEdit={() => {}}
         onSchedule={() => {}}
         onAssignSession={() => {}}
+        onStartAgent={() => {}}
       />
     </NextIntlClientProvider>
   )

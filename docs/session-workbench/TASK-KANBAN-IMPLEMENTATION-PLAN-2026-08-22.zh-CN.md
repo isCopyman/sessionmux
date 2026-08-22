@@ -2,7 +2,8 @@
 
 > 状态：已裁决，分批实施中。S1 的双状态轴、人工车道、标题即可建卡、执行方式徽标和
 > 非 Engine 动作裁剪已经落地；S2 已完成“中性任务卡 → 已有 Session”的可靠指派主链，
-> 新建 Session/Worktree Session、Agent 领取与属性投影仍待实施。本文覆盖
+> 并补齐“中性任务卡 → 新 Worktree Session”的显式启动配置；普通新建 Session、Agent
+> 领取与属性投影仍待实施。本文覆盖
 > `KANBAN-DESIGN-2026-08-21` 中“任务天然等于 Worktree 执行”的旧边界；现有 WorkTask
 > Engine、看板 UI 和多轮生命周期继续保留。
 
@@ -169,6 +170,31 @@ Session 身份和乐观 revision：
 
 状态语义第一版固定为六类，不允许每个项目创建互不兼容的状态机。项目可在以后自定义列显示名
 或隐藏某列，但底层 `task_status` 仍保持稳定，使全局汇总、Agent 工具和自动化可以可靠工作。
+
+### 4.1 为什么界面是四列、底层却是六态
+
+默认看板只保留四列：
+
+```text
+待办 | 进行中 | 等你处理 | 已完成
+```
+
+它们是六个业务状态的稳定投影，而不是完整状态机：
+
+| 看板列 | `task_status` | 含义 |
+| --- | --- | --- |
+| 待办 | `todo` | 已记录、尚未开始，也包含尚未决定执行方式的想法 |
+| 进行中 | `in_progress` | 人或 Session 正在推进 |
+| 等你处理 | `blocked` / `review` | 分别表示受阻和等待人类验收；卡片徽标继续区分两者 |
+| 已完成 | `done` | 已确认完成 |
+
+`canceled` 默认从活动看板隐藏，可由过滤器查看。第一版不再增加 Backlog：`todo` 本身就是“已
+捕获但尚未承诺开始”的池，是否已排期、由谁负责、何时开始分别由执行方式、负责人、计划时间和
+排序表达。如果再加 Backlog，会迫使人和 Agent 在两个都表示“还没开始”的桶之间反复搬卡，
+同时削弱跨项目汇总的一致性。
+
+项目可以保存列隐藏、分组、排序和筛选；不能任意新增状态或改变迁移规则。这样保留足够的视图
+自由度，又不会让 Agent 工具、全局汇总和自动化面对每个项目各自发明的一套状态机。
 
 ## 5. 第一版 UI
 
@@ -373,9 +399,28 @@ Agent”；人工卡和 Engine 卡分别展示自己的合法动作。桌面端�
 `conversation_id` 回写任务。Rust 事务/队列测试和真实 Tauri WebView2 的“建卡 → 指派 →
 Session 收到 → 卡片进入进行中”已通过。
 
-尚未完成：新建 Session / 新建 Worktree Session 的统一 LaunchSpec 与 Profile UI、Agent
-`create_task/assign_task/update_task`、collaborator、Session 属性投影及其余恢复边界。旧的
-“交给 Agent 执行”仍是 WorkTask Engine 兼容入口，不能被误当成已经统一的新 Session 流程。
+该段主链完成时尚未补齐新建 Session / 新建 Worktree Session 的统一启动配置；其后续状态
+以下面的补充记录为准。Agent `create_task/assign_task/update_task`、collaborator、Session
+属性投影及其余恢复边界仍未完成。
+
+**补充实现状态（2026-08-22）**：已完成新 Worktree Session 的显式启动边界。任务创建仍只
+创建中性卡；用户随后选择“新建 Worktree Session 执行”时，才进入复用普通 Composer
+组件的 Harness / Claude Profile / Mode / Model / Effort 配置窗口。选择已有 Session 时仍继承
+目标 Session 配置，不在任务卡上重复设置。后端用原子 CAS 同时冻结启动快照并 claim 任务，
+且在调用 ACP `session/new` 之前先创建稳定 Codeg `conversation_id`，避免 Session 启动后再
+补身份的竞态。Profile 作为 Session 启动配置写入运行环境和持久配置，不再只是一个前端 chip。
+
+同批修正了“等你处理”提醒的事实源：侧栏计数和通知现在读取业务 `task_status` 的
+`blocked/review`，不再误读只属于 Worktree Engine 的 `status`。因此人工任务和普通 Session
+任务进入受阻/验收时也会被正确看见。
+
+自动测试已覆盖配置快照的原子 claim、Profile 传递、人工/Session 业务状态提醒；真实 Tauri
+WebView2 已验证“只填任务内容建卡 → 卡片保持未分配 → 显式打开新 Worktree Session →
+出现同一套 Profile/Mode/Model/Effort 控件”，未启动昂贵的真实 Agent 回合，临时任务随后清理。
+
+仍未完成：普通“新建 Session 并指派”、Agent `create_task/assign_task/update_task`、
+collaborator、Session 属性投影及其余恢复边界。Worktree Engine 继续作为一种明确执行模式，
+不再冒充所有任务的默认创建方式。
 
 ### S3：无项目与 Kanban 拖拽
 

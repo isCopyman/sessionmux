@@ -28,7 +28,7 @@ export interface TaskActionItem {
 export interface TaskActionHandlers {
   /** Advance an unassigned/manual task without starting an Agent. */
   onManualStatus: (to: WorkTask["task_status"]) => void
-  /** Start the WorkTask engine for an unassigned task. */
+  /** Create a new Worktree Session for an unassigned task. */
   onStart: () => void
   /** Assign this card to an existing persistent Session. */
   onAssignSession: () => void

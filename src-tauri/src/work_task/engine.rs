@@ -440,6 +440,45 @@ impl TaskEngine {
         }
     }
 
+    /// Explicitly turn one neutral card into a Worktree-backed Session run.
+    /// The launch snapshot and the todo -> queued claim share one DB update, so
+    /// a scheduler cannot observe a half-configured task between two frontend
+    /// requests.
+    pub async fn start_configured(
+        self: &Arc<Self>,
+        task_id: i32,
+        config: WorkTaskConfig,
+    ) -> Result<(), String> {
+        let task = work_task_service::get_model(&self.db.conn, task_id)
+            .await
+            .map_err(|e| e.to_string())?;
+        let serialized = serde_json::to_string(&config).map_err(|e| e.to_string())?;
+        if !work_task_service::has_runnable_prompt(&serialized) {
+            return Err("task has no Agent instructions yet; edit it before starting".to_string());
+        }
+        if config.agent_type.is_none() {
+            return Err("choose an Agent before creating the Worktree Session".to_string());
+        }
+        self.preflight_folder(task.folder_id).await?;
+        match work_task_service::configure_and_claim_for_run(
+            &self.db.conn,
+            task_id,
+            WorkTaskStatus::Todo,
+            "user",
+            &config,
+        )
+        .await
+        .map_err(|e| e.to_string())?
+        {
+            Some(_) => {
+                self.emit_upsert(task_id);
+                self.pump_folder(task.folder_id).await;
+                Ok(())
+            }
+            None => Err("task is not in todo".to_string()),
+        }
+    }
+
     /// "Start all": claim every todo of the folder, then pump. With no folder
     /// selected this is the global sweep — every folder that holds todos, each
     /// on its own preflight (an invalid folder is skipped, not fatal).
@@ -1026,16 +1065,9 @@ impl TaskEngine {
             }
         };
 
-        let runtime_env = build_session_runtime_env(
-            &self.db,
-            agent_type,
-            resume_session_id.as_deref(),
-            &self.data_dir,
-            task.conversation_id,
-            None,
-        )
-        .await
-        .map_err(|e| e.to_string())?;
+        let explicit_profile = config_values
+            .get(crate::acp::connection::PREFERRED_PROFILE_CONFIG_KEY)
+            .map(String::as_str);
         verify_agent_installed(agent_type)
             .await
             .map_err(|e| e.to_string())?;
@@ -1045,93 +1077,77 @@ impl TaskEngine {
             return Ok(());
         }
 
-        let mut resumed = resume_session_id.is_some();
-        let conn_id = match self
-            .manager
-            .spawn_agent(
+        let (conn_id, conversation_id, resumed) = if let Some(native_id) = resume_session_id {
+            let runtime_env = build_session_runtime_env(
+                &self.db,
                 agent_type,
-                Some(wt.path.clone()),
-                resume_session_id.clone(),
-                runtime_env.clone(),
-                "work_task".to_string(),
-                self.emitter.clone(),
-                mode_id.clone(),
-                config_values.clone(),
+                Some(&native_id),
+                &self.data_dir,
+                task.conversation_id,
+                explicit_profile,
             )
             .await
-        {
-            Ok(id) => id,
-            Err(e) if resumed => {
-                // Resume failed (e.g. the agent lost the session) → fall back
-                // to a fresh session in the same worktree, recorded on the
-                // timeline.
-                tracing::info!("[work_task] resume failed for task {task_id}: {e}; falling back");
-                let _ = work_task_service::record_event(
-                    &self.db.conn,
-                    task_id,
-                    "resume_fallback",
-                    "engine",
-                    Some(serde_json::json!({ "error": e.to_string() })),
+            .map_err(|e| e.to_string())?;
+            match self
+                .manager
+                .spawn_agent(
+                    agent_type,
+                    Some(wt.path.clone()),
+                    Some(native_id),
+                    runtime_env,
+                    "work_task".to_string(),
+                    self.emitter.clone(),
+                    mode_id.clone(),
+                    config_values.clone(),
                 )
-                .await;
-                resumed = false;
-                self.manager
-                    .spawn_agent(
-                        agent_type,
-                        Some(wt.path.clone()),
-                        None,
-                        runtime_env,
-                        "work_task".to_string(),
-                        self.emitter.clone(),
-                        mode_id.clone(),
-                        config_values.clone(),
+                .await
+            {
+                Ok(id) => (
+                    id,
+                    task.conversation_id.expect("resumed implies conversation"),
+                    true,
+                ),
+                Err(e) => {
+                    // Resume failed (e.g. the agent lost the session) → fall back
+                    // to a fresh, already-bound Session in the same worktree.
+                    tracing::info!(
+                        "[work_task] resume failed for task {task_id}: {e}; falling back"
+                    );
+                    let _ = work_task_service::record_event(
+                        &self.db.conn,
+                        task_id,
+                        "resume_fallback",
+                        "engine",
+                        Some(serde_json::json!({ "error": e.to_string() })),
                     )
-                    .await
-                    .map_err(|e| e.to_string())?
+                    .await;
+                    let (connection_id, conversation_id) = self
+                        .spawn_fresh_task_session(
+                            &task,
+                            &wt,
+                            agent_type,
+                            mode_id.clone(),
+                            config_values.clone(),
+                            explicit_profile,
+                        )
+                        .await?;
+                    (connection_id, conversation_id, false)
+                }
             }
-            Err(e) => return Err(e.to_string()),
+        } else {
+            let (connection_id, conversation_id) = self
+                .spawn_fresh_task_session(
+                    &task,
+                    &wt,
+                    agent_type,
+                    mode_id.clone(),
+                    config_values.clone(),
+                    explicit_profile,
+                )
+                .await?;
+            (connection_id, conversation_id, false)
         };
 
-        // Conversation row: reuse when resuming the same session; otherwise a
-        // fresh row (fresh runs and resume fallbacks).
-        let conversation_id = if resumed {
-            task.conversation_id.expect("resumed implies conversation")
-        } else {
-            let title = conversation_title_for_task(&task.title);
-            // The work-task engine spawns this Session without a human at the
-            // composer — same provenance as an automation run.
-            let id = match create_conversation_core_with_source(
-                &self.db.conn,
-                wt.folder_id,
-                agent_type,
-                Some(title),
-                conversation::CREATED_BY_AUTOMATION,
-            )
-            .await
-            {
-                Ok(id) => id,
-                Err(e) => {
-                    let _ = self.manager.disconnect(&conn_id).await;
-                    return Err(e.to_string());
-                }
-            };
-            // The card's name IS this session's identity — freeze it the way a
-            // manual rename would, or the per-turn auto-title backfill replaces
-            // it with whatever the agent's session file parses to (for agents
-            // with no title of their own: the first line of the composed
-            // prompt, e.g. "项目：/Users/…"). Issue #495.
-            //
-            // Strictly before the upsert below: that broadcast is how any
-            // client first learns this id, so locking first makes a backfill on
-            // this row impossible rather than merely unlikely. A failure here
-            // only costs the nice title — never the launch.
-            if let Err(e) = conversation_service::lock_title(&self.db.conn, id).await {
-                tracing::warn!(
-                    "[work_task] task {task_id}: could not lock conversation {id} title: {e}"
-                );
-            }
-            id
-        };
         emit_conversation_upsert(&self.emitter, &self.db.conn, conversation_id).await;
 
         let mut blocks =
@@ -3246,6 +3262,108 @@ impl TaskEngine {
             .ok()
             .flatten()
             .map(|m| m.status)
+    }
+
+    /// Create the persistent Codeg identity before asking ACP to create the
+    /// native Session. Every fresh task launch (including resume fallback)
+    /// therefore uses the same stable binding path as Host Control instead of
+    /// briefly owning an identity-less connection and linking it afterward.
+    #[allow(clippy::too_many_arguments)]
+    async fn spawn_fresh_task_session(
+        &self,
+        task: &crate::db::entities::work_task::Model,
+        wt: &WorktreeRef,
+        agent_type: AgentType,
+        mode_id: Option<String>,
+        config_values: std::collections::BTreeMap<String, String>,
+        explicit_profile: Option<&str>,
+    ) -> Result<(String, i32), String> {
+        let title = conversation_title_for_task(&task.title);
+        let conversation_id = create_conversation_core_with_source(
+            &self.db.conn,
+            wt.folder_id,
+            agent_type,
+            Some(title),
+            conversation::CREATED_BY_AUTOMATION,
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+
+        if let Err(error) = conversation_service::lock_title(&self.db.conn, conversation_id).await {
+            tracing::warn!(
+                "[work_task] task {}: could not lock conversation {} title: {}",
+                task.id,
+                conversation_id,
+                error
+            );
+        }
+        let prepared = async {
+            if let Some(mode) = mode_id.as_deref() {
+                conversation_service::set_selector_mode(&self.db.conn, conversation_id, mode)
+                    .await
+                    .map_err(|error| error.to_string())?;
+            }
+            for (key, value) in &config_values {
+                conversation_service::merge_selector_config_value(
+                    &self.db.conn,
+                    conversation_id,
+                    key,
+                    value,
+                )
+                .await
+                .map_err(|error| error.to_string())?;
+            }
+
+            build_session_runtime_env(
+                &self.db,
+                agent_type,
+                None,
+                &self.data_dir,
+                Some(conversation_id),
+                explicit_profile,
+            )
+            .await
+            .map_err(|error| error.to_string())
+        }
+        .await;
+        let runtime_env = match prepared {
+            Ok(runtime_env) => runtime_env,
+            Err(error) => {
+                // ACP/native creation has not started yet, so this reservation
+                // cannot contain useful transcript state and is safe to hide.
+                let _ = conversation_service::soft_delete(&self.db.conn, conversation_id).await;
+                return Err(error);
+            }
+        };
+        match self
+            .manager
+            .spawn_bound_agent(
+                &self.db,
+                agent_type,
+                wt.path.clone(),
+                runtime_env,
+                "work_task".to_string(),
+                self.emitter.clone(),
+                mode_id,
+                config_values,
+                conversation_id,
+                wt.folder_id,
+            )
+            .await
+        {
+            Ok((connection_id, _native_session_id)) => Ok((connection_id, conversation_id)),
+            Err(failure) => {
+                // Before native creation, the row is a pure local reservation
+                // and can be safely hidden. Once creation may have started,
+                // preserve the row for transcript/native-id recovery.
+                if !failure.native_creation_may_have_started {
+                    let _ = conversation_service::soft_delete(&self.db.conn, conversation_id).await;
+                } else {
+                    emit_conversation_upsert(&self.emitter, &self.db.conn, conversation_id).await;
+                }
+                Err(failure.error.to_string())
+            }
+        }
     }
 
     async fn cancel_conversation(&self, conversation_id: i32) {

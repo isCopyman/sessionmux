@@ -3718,6 +3718,13 @@ export async function workTaskStart(id: number): Promise<void> {
   return getTransport().call("work_task_start", { id })
 }
 
+export async function workTaskStartConfigured(
+  id: number,
+  config: WorkTaskConfig
+): Promise<void> {
+  return getTransport().call("work_task_start_configured", { id, config })
+}
+
 export async function workTaskSetManualStatus(
   id: number,
   from: WorkTaskBusinessStatus,

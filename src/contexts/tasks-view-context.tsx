@@ -24,8 +24,17 @@ import type { WorkTask } from "@/lib/types"
 
 const WORK_TASK_CHANGED_EVENT = "task://changed"
 
-/** Statuses that need the user ("等你处理") — drives the sidebar badge. */
-const ATTENTION_STATUSES = new Set(["awaiting_input", "review", "failed"])
+/** Business statuses that need the user ("等你处理") — the same axis the
+ * board columns use. Engine status only refines the notification wording. */
+const ATTENTION_STATUSES = new Set<WorkTask["task_status"]>([
+  "blocked",
+  "review",
+])
+
+interface PreviousTaskState {
+  taskStatus: WorkTask["task_status"]
+  engineStatus: WorkTask["status"]
+}
 
 interface TasksViewContextValue {
   tasks: WorkTask[]
@@ -83,7 +92,7 @@ export function TasksViewProvider({ children }: { children: ReactNode }) {
   const reqRef = useRef(0)
   // Statuses as of the last successful fetch; null until then, so the first
   // load (pure history) never notifies.
-  const prevStatusRef = useRef<Map<number, WorkTask["status"]> | null>(null)
+  const prevStatusRef = useRef<Map<number, PreviousTaskState> | null>(null)
 
   const refetch = useCallback(async () => {
     const id = ++reqRef.current
@@ -94,7 +103,10 @@ export function TasksViewProvider({ children }: { children: ReactNode }) {
       if (id !== reqRef.current) return
       notifyFlips(prevStatusRef.current, list, tRef.current)
       prevStatusRef.current = new Map(
-        list.map((task) => [task.id, task.status])
+        list.map((task) => [
+          task.id,
+          { taskStatus: task.task_status, engineStatus: task.status },
+        ])
       )
       setTasks(list)
       setLoading(false)
@@ -136,7 +148,7 @@ export function TasksViewProvider({ children }: { children: ReactNode }) {
   const attentionCount = useMemo(
     () =>
       tasks.filter(
-        (t) => ATTENTION_STATUSES.has(t.status) && t.archived_at == null
+        (t) => ATTENTION_STATUSES.has(t.task_status) && t.archived_at == null
       ).length,
     [tasks]
   )
@@ -164,7 +176,11 @@ export function resetAwaitingInputNotifyCooldownForTests(): void {
   lastAwaitingInputNotifyAt.clear()
 }
 
-type NotifyFlipKey = "notifyReview" | "notifyFailed" | "notifyAwaitingInput"
+type NotifyFlipKey =
+  | "notifyReview"
+  | "notifyFailed"
+  | "notifyAwaitingInput"
+  | "notifyBlocked"
 
 /**
  * System notification when a task flips into awaiting_input (blocked on a
@@ -174,20 +190,20 @@ type NotifyFlipKey = "notifyReview" | "notifyFailed" | "notifyAwaitingInput"
  * is visible.
  */
 function notifyFlips(
-  prev: Map<number, WorkTask["status"]> | null,
+  prev: Map<number, PreviousTaskState> | null,
   list: WorkTask[],
   t: (key: NotifyFlipKey, values: { title: string }) => string
 ) {
   if (prev == null) return
   for (const task of list) {
-    if (prev.get(task.id) === task.status) continue
-    if (
-      task.status !== "review" &&
-      task.status !== "failed" &&
-      task.status !== "awaiting_input"
-    ) {
-      continue
-    }
+    const previous = prev.get(task.id)
+    const enteredReview =
+      task.task_status === "review" && previous?.taskStatus !== "review"
+    const enteredBlocked =
+      task.task_status === "blocked" &&
+      (previous?.taskStatus !== "blocked" ||
+        previous?.engineStatus !== task.status)
+    if (!enteredReview && !enteredBlocked) continue
     if (task.archived_at != null) continue
     if (task.status === "awaiting_input") {
       const now = Date.now()
@@ -202,12 +218,13 @@ function notifyFlips(
       .folders.find((f) => f.id === task.folder_id)
     const folderName = folder ? (folder.alias ?? folder.name) : null
     const title = folderName ? `${folderName} - Codeg` : "Codeg"
-    const body =
-      task.status === "review"
-        ? t("notifyReview", { title: task.title })
-        : task.status === "awaiting_input"
-          ? t("notifyAwaitingInput", { title: task.title })
-          : t("notifyFailed", { title: task.title })
+    const body = enteredReview
+      ? t("notifyReview", { title: task.title })
+      : task.status === "awaiting_input"
+        ? t("notifyAwaitingInput", { title: task.title })
+        : task.status === "failed"
+          ? t("notifyFailed", { title: task.title })
+          : t("notifyBlocked", { title: task.title })
     void sendSystemNotification(title, body)
   }
 }

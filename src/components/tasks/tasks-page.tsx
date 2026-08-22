@@ -24,6 +24,7 @@ import {
   workTaskRequestReview,
   workTaskSetManualStatus,
   workTaskStart,
+  workTaskStartConfigured,
   workTaskUpdate,
 } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
@@ -97,6 +98,7 @@ import { TaskSettingsDialog } from "./task-settings-dialog"
 import { OPEN_TASK_SETTINGS_EVENT } from "./tasks-chrome-actions"
 import { TasksSkeleton } from "./tasks-skeleton"
 import { TaskTranscriptDialog } from "./task-transcript-dialog"
+import { TaskWorktreeSessionDialog } from "./task-worktree-session-dialog"
 import type {
   DbConversationSummary,
   WorkTask,
@@ -289,6 +291,8 @@ export function TasksPage() {
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [assignTaskId, setAssignTaskId] = useState<number | null>(null)
   const [assignOpen, setAssignOpen] = useState(false)
+  const [launchTaskId, setLaunchTaskId] = useState<number | null>(null)
+  const [launchOpen, setLaunchOpen] = useState(false)
   // Read-only live session viewer ("查看会话") — tracked by id so the dialog
   // header's status chip follows the live row (like the detail sheet).
   const [sessionTaskId, setSessionTaskId] = useState<number | null>(null)
@@ -428,6 +432,10 @@ export function TasksPage() {
     () => tasks.find((task) => task.id === assignTaskId) ?? null,
     [tasks, assignTaskId]
   )
+  const launchTask = useMemo(
+    () => tasks.find((task) => task.id === launchTaskId) ?? null,
+    [tasks, launchTaskId]
+  )
   const assignableSessions = useMemo<DbConversationSummary[]>(() => {
     if (!assignTask) return []
     const eligibleFolderIds = new Set<number>([assignTask.folder_id])
@@ -508,6 +516,11 @@ export function TasksPage() {
     setAssignOpen(true)
   }, [])
 
+  const openWorktreeSession = useCallback((task: WorkTask) => {
+    setLaunchTaskId(task.id)
+    setLaunchOpen(true)
+  }, [])
+
   const openNewTask = useCallback(() => {
     setEditorTask(null)
     setEditorOpen(true)
@@ -518,7 +531,7 @@ export function TasksPage() {
     (task: WorkTask): TaskActionHandlers => ({
       onManualStatus: (to) =>
         void act(() => workTaskSetManualStatus(task.id, task.task_status, to)),
-      onStart: () => void act(() => workTaskStart(task.id)),
+      onStart: () => openWorktreeSession(task),
       onAssignSession: () => openAssignSession(task),
       onCancel: () => openCancel(task),
       onSubmitReview: () => void act(() => workTaskRequestReview(task.id)),
@@ -545,6 +558,7 @@ export function TasksPage() {
       openRestart,
       openSchedule,
       openSession,
+      openWorktreeSession,
     ]
   )
 
@@ -1157,6 +1171,7 @@ export function TasksPage() {
         }}
         onSchedule={openSchedule}
         onAssignSession={openAssignSession}
+        onStartAgent={openWorktreeSession}
       />
       {/* The queue state comes from the live row (a merge that starts while
           the dialog is open turns "merge" into "queue"), the form from the
@@ -1204,6 +1219,27 @@ export function TasksPage() {
           await workTaskAssignSession(assignTask.id, conversationId)
           setAssignOpen(false)
           setAssignTaskId(null)
+          void refetch()
+        }}
+      />
+      <TaskWorktreeSessionDialog
+        open={launchOpen && launchTask != null}
+        onOpenChange={(open) => {
+          setLaunchOpen(open)
+          if (!open) setLaunchTaskId(null)
+        }}
+        task={launchTask}
+        folderPath={
+          launchTask
+            ? (allFolders.find((folder) => folder.id === launchTask.folder_id)
+                ?.path ?? null)
+            : null
+        }
+        onSubmit={async (config) => {
+          if (!launchTask) return
+          await workTaskStartConfigured(launchTask.id, config)
+          setLaunchOpen(false)
+          setLaunchTaskId(null)
           void refetch()
         }}
       />

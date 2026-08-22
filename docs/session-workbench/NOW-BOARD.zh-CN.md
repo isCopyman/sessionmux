@@ -45,9 +45,17 @@
 - [~] **Task / Kanban S2** —— 已把新建任务收敛为纯任务卡（标题、说明、附件、项目），
       不再在建卡时选择或探测 ACP Harness。已有 Session 指派、后端权威 Task PromptQueue、
       单 owner、取消/删除回收、普通 Session 进度回写已实现并通过相关测试及真实 WebView2
-      验证。下一批是统一“新建 Session / 新建 Worktree Session”启动配置：Profile 属于
-      Session Launch，不属于 Task；必须复用普通会话的稳定 `conversation_id` 与同一套
-      Harness/Profile/Model/Mode 数据源，不能再复制第四套 UI。
+      验证。“新建 Worktree Session 执行”现已变成建卡后的显式动作，并复用普通 Composer
+      的 Harness/Profile/Mode/Model/Effort 控件；后端在 ACP 建连前创建稳定
+      `conversation_id`，原子冻结启动快照与 claim。相关 Rust/前端测试、Desktop CDP
+      “中性建卡 → 显式打开 Worktree Session 配置”已通过，临时数据已清理。仍待普通新建
+      Session 并指派、Agent 创建/领取/修改任务、collaborator 与 Session 属性投影。
+
+- [x] **Task 状态列收敛** —— 默认 UI 保持“待办 / 进行中 / 等你处理 / 已完成”四列，底层
+      固定 `todo / in_progress / blocked / review / done / canceled` 六个业务状态；
+      `blocked/review` 共享一列但用徽标区分，`canceled` 通过过滤查看。不增加 Backlog：
+      `todo` 已经承担“已捕获、尚未开始”的池，承诺度由负责人、计划时间和排序表达。侧栏
+      注意力计数与通知已改读业务状态，所以人工/普通 Session 的受阻与待验收不再漏报。
 
 - [x] **Composer 宽/窄 Profile 选择器统一** —— 窄 Tab 的 master-detail 设置面板只从
       ACP config/mode 构造字段，漏掉 Codeg 自有的 Claude Profile；抽取共享 Profile
