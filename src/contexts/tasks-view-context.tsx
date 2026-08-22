@@ -71,6 +71,17 @@ export function useTasksView() {
   return ctx
 }
 
+/**
+ * Read the always-mounted task projection when this surface happens to live
+ * inside the workspace shell. Shared presentation components (notably the
+ * Session task banner) are also rendered in isolated tests and previews;
+ * those should simply omit the task section instead of inventing a second
+ * fetch path or requiring a fake provider.
+ */
+export function useOptionalTasksView() {
+  return useContext(TasksViewContext)
+}
+
 export function TasksViewProvider({ children }: { children: ReactNode }) {
   const t = useTranslations("Tasks")
   // Latest-ref so `refetch` stays referentially stable across locale changes

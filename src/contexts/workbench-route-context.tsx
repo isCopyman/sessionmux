@@ -57,6 +57,12 @@ export function useWorkbenchRoute() {
   return ctx
 }
 
+/** Optional counterpart for reusable content that can render outside the
+ * workspace shell (dialogs in component tests, previews, and stories). */
+export function useOptionalWorkbenchRoute() {
+  return useContext(WorkbenchRouteContext)
+}
+
 export function WorkbenchRouteProvider({ children }: { children: ReactNode }) {
   const [routeId, setRouteId] = useState<WorkbenchRouteId>("conversations")
 

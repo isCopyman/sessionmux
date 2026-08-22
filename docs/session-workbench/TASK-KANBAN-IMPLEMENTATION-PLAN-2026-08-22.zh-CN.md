@@ -3,7 +3,8 @@
 > 状态：已裁决，分批实施中。S1 的双状态轴、人工车道、标题即可建卡、执行方式徽标和
 > 非 Engine 动作裁剪已经落地；S2 已完成“中性任务卡 → 已有 Session”的可靠指派主链，
 > 并补齐“中性任务卡 → 新普通 Session / 新 Worktree Session”的显式启动配置；Agent
-> 建卡、修改、自领和指派已经落地，collaborator 与 Session 属性投影仍待实施。本文覆盖
+> 建卡、修改、自领和指派已经落地；Session 对话顶部的独立活动任务入口也已落地，
+> collaborator 仍待实施。本文覆盖
 > `KANBAN-DESIGN-2026-08-21` 中“任务天然等于 Worktree 执行”的旧边界；现有 WorkTask
 > Engine、看板 UI 和多轮生命周期继续保留。
 
@@ -245,7 +246,8 @@ Engine 任务继续显示 Worktree、Diff、Preflight、Review 和 Merge。
 
 - 看板视图用于按状态快速推进；列表视图用于密集查看项目、负责人、协作者、来源和最近活动；
 - 全局与项目入口共享视图组件和查询，只改变过滤条件；
-- Session 属性面板显示该 Session 负责和参与的任务，可跳到卡片或看板；
+- Session 对话顶部提供与“往来信件”同级的独立任务入口，显示该 Session 负责和参与的活动
+  任务，可跳到卡片或看板；低频“会话详情”只保留身份、模型、Token 与时间等元数据；
 - Room 可以插入/引用同一张任务卡并显示简洁状态，但不复制任务，也不把 Room 变成第二个任务
   数据库；Room 中的讨论仍留在共享时间线；
 - 任务详情显示主要负责人和协作者，不把多个 Agent 压成一个含混的“已分配”标签。
@@ -388,7 +390,7 @@ Agent”；人工卡和 Engine 卡分别展示自己的合法动作。桌面端�
 - 新建 Session 并指派。
 - Agent `create_task/update_task` 与 revision 冲突保护；
 - 一个 owner + 多 collaborator 的 Assignment 投影；
-- Session 属性面板的“负责 / 参与任务”。
+- Session 独立任务入口的“负责 / 参与任务”。
 
 验收：idle/busy/unloaded/stopped/archived/不可恢复、并发领取和取消竞态均有测试。
 
@@ -402,7 +404,7 @@ Agent”；人工卡和 Engine 卡分别展示自己的合法动作。桌面端�
 Session 收到 → 卡片进入进行中”已通过。
 
 该段主链完成时尚未补齐新建 Session / 新建 Worktree Session 的统一启动配置；其后续状态
-以下面的补充记录为准。collaborator、Session 属性投影及其余恢复边界仍未完成。
+以下面的补充记录为准。collaborator、Session 任务投影及其余恢复边界仍未完成。
 
 **补充实现状态（2026-08-22）**：已完成新 Worktree Session 的显式启动边界。任务创建仍只
 创建中性卡；用户随后选择“新建 Worktree Session 执行”时，才进入复用普通 Composer
@@ -433,8 +435,15 @@ task.assign`：受管 Session 可在领取前整理卡片，也可修改自己�
 事务，竞争者不会偷走同一张卡。Agent 仍不能删除、取消或把卡片直接置为 done；执行后通过
 `task_progress/task_complete` 进入 blocked/review，由人类验收或取消。
 
-仍未完成：collaborator、Session 属性投影及其余恢复边界。Worktree Engine 继续作为一种明确执行模式，
-不再冒充所有任务的默认创建方式。
+**补充实现状态（同日，Session 任务入口）**：Session 的活动责任任务不放在低频“会话详情”
+元数据中，而是在对话顶部提供与“往来信件”同级的独立入口。入口显示活动任务数量和最高优先
+任务，展开后列出当前 Session 负责的未归档、未结束任务；点击使用稳定 Task ID 切到同一任务
+看板并打开精确卡片。已完成、已取消、已归档和其他 Session 的任务不会混入。组件测试、路由
+恢复测试与真实 Desktop CDP 的“指派 → Session 入口出现 → 展开 → 精确卡片”均已通过，临时
+任务已删除。
+
+仍未完成：collaborator 及其余恢复边界。Worktree Engine 继续作为一种明确执行模式，不再冒充
+所有任务的默认创建方式。
 
 ### S3：无项目与 Kanban 拖拽
 

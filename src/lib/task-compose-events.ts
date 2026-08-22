@@ -7,6 +7,7 @@
  */
 
 export const CREATE_TASK_FROM_TEXT_EVENT = "codeg:create-task-from-text"
+export const OPEN_TASK_DETAIL_EVENT = "codeg:open-task-detail"
 
 export interface CreateTaskFromTextDetail {
   /** Message text to seed the task description with. */
@@ -16,6 +17,7 @@ export interface CreateTaskFromTextDetail {
 }
 
 let pendingDraft: CreateTaskFromTextDetail | null = null
+let pendingTaskDetailId: number | null = null
 
 /** Park a draft and nudge a mounted Tasks page (the caller switches routes). */
 export function requestCreateTaskFromText(detail: CreateTaskFromTextDetail) {
@@ -28,4 +30,17 @@ export function consumePendingTaskDraft(): CreateTaskFromTextDetail | null {
   const draft = pendingDraft
   pendingDraft = null
   return draft
+}
+
+/** Park a task selection before switching to the lazily-mounted Tasks page. */
+export function requestOpenTaskDetail(taskId: number) {
+  pendingTaskDetailId = taskId
+  window.dispatchEvent(new CustomEvent(OPEN_TASK_DETAIL_EVENT))
+}
+
+/** One-shot consume — the task page opens the same card, never a copied view. */
+export function consumePendingTaskDetail(): number | null {
+  const taskId = pendingTaskDetailId
+  pendingTaskDetailId = null
+  return taskId
 }

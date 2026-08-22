@@ -29,8 +29,10 @@ import {
 } from "@/lib/api"
 import { toErrorMessage } from "@/lib/app-error"
 import {
+  consumePendingTaskDetail,
   consumePendingTaskDraft,
   CREATE_TASK_FROM_TEXT_EVENT,
+  OPEN_TASK_DETAIL_EVENT,
   type CreateTaskFromTextDetail,
 } from "@/lib/task-compose-events"
 import { getAgentLabel } from "@/lib/custom-agents"
@@ -272,6 +274,19 @@ export function TasksPage() {
       window.removeEventListener(CREATE_TASK_FROM_TEXT_EVENT, consume)
   }, [])
   const [detailTaskId, setDetailTaskId] = useState<number | null>(null)
+
+  // Session details and other projections can point at a task while this route
+  // is unmounted. Consume the parked id on mount; the event is the already-open
+  // fast path. The detail sheet still reads the live row from TasksViewProvider.
+  useEffect(() => {
+    const consume = () => {
+      const taskId = consumePendingTaskDetail()
+      if (taskId != null) setDetailTaskId(taskId)
+    }
+    consume()
+    window.addEventListener(OPEN_TASK_DETAIL_EVENT, consume)
+    return () => window.removeEventListener(OPEN_TASK_DETAIL_EVENT, consume)
+  }, [])
   const [mergeTask, setMergeTask] = useState<WorkTask | null>(null)
   const [mergeOpen, setMergeOpen] = useState(false)
   // The merge dialog's counterpart for a task that changed nothing.

@@ -9,6 +9,10 @@ import type {
   WorkTask,
   WorkTaskStatus,
 } from "@/lib/types"
+import {
+  consumePendingTaskDetail,
+  requestOpenTaskDetail,
+} from "@/lib/task-compose-events"
 import { TasksPage } from "./tasks-page"
 
 const h = vi.hoisted(() => ({
@@ -63,7 +67,15 @@ vi.mock("@/contexts/acp-connections-context", () => ({
 }))
 
 vi.mock("./task-editor-dialog", () => ({ TaskEditorDialog: () => null }))
-vi.mock("./task-detail-sheet", () => ({ TaskDetailSheet: () => null }))
+vi.mock("./task-detail-sheet", () => ({
+  TaskDetailSheet: ({
+    open,
+    task,
+  }: {
+    open: boolean
+    task: WorkTask | null
+  }) => (open ? <div>detail task {task?.id ?? "missing"}</div> : null),
+}))
 vi.mock("./task-merge-dialog", () => ({ TaskMergeDialog: () => null }))
 vi.mock("./task-complete-dialog", () => ({ TaskCompleteDialog: () => null }))
 vi.mock("./task-cancel-dialog", () => ({ TaskCancelDialog: () => null }))
@@ -177,12 +189,20 @@ function headerLabels() {
 }
 
 beforeEach(() => {
+  consumePendingTaskDetail()
   localStorage.clear()
   h.tasks = []
   h.viewMode = "board"
   h.folders = [folder(1, "alpha"), folder(2, "bravo")]
   h.connections.clear()
   h.refetch.mockReset()
+})
+
+it("opens a task detail parked before the Tasks route mounted", () => {
+  h.tasks = [task(9, "todo")]
+  requestOpenTaskDetail(9)
+  renderPage()
+  expect(screen.getByText("detail task 9")).toBeInTheDocument()
 })
 
 describe("TasksPage grouping", () => {

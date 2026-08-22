@@ -64,6 +64,7 @@ import {
   SessionCommunicationBanner,
   SessionPendingContextBar,
 } from "@/components/collaboration/session-communication-banner"
+import { SessionTaskBanner } from "@/components/tasks/session-task-banner"
 import { useCollaborationFeed } from "@/hooks/use-collaboration-feed"
 import { PiProjectTrustBanner } from "@/components/chat/pi-project-trust-banner"
 import { BackgroundTasksChip } from "@/components/chat/background-tasks-chip"
@@ -2126,9 +2127,12 @@ const ConversationTabView = memo(function ConversationTabView({
       topBanner={
         <>
           {hasPersistedConversation ? (
-            <SessionCommunicationBanner
-              conversationId={effectiveConversationId}
-            />
+            <>
+              <SessionCommunicationBanner
+                conversationId={effectiveConversationId}
+              />
+              <SessionTaskBanner conversationId={effectiveConversationId} />
+            </>
           ) : null}
           <SessionConfigStaleBanner
             contextKey={tabId}
