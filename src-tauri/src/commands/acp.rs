@@ -9575,7 +9575,24 @@ pub(crate) async fn acp_update_agent_env_and_refresh(
     data_dir: &Path,
     emitter: &EventEmitter,
 ) -> Result<usize, AcpError> {
+    let before = agent_setting_service::get_by_agent_type(&db.conn, agent_type)
+        .await
+        .map_err(|e| AcpError::protocol(e.to_string()))?;
     acp_update_agent_env_core(agent_type, enabled, env, model_provider_id, db, emitter).await?;
+    let after = agent_setting_service::get_by_agent_type(&db.conn, agent_type)
+        .await
+        .map_err(|e| AcpError::protocol(e.to_string()))?;
+
+    // The agent-level Claude profile is a launch default for future Sessions,
+    // not a live setting inherited by Sessions that already exist. Persist it
+    // through the normal settings row, but do not mark running Claude
+    // connections stale when it is the only changed field. A Session's own
+    // profile switch continues to use conversation_set_claude_profile, which
+    // deliberately marks that one live connection stale.
+    if agent_env_update_is_launch_default_only_or_noop(agent_type, before.as_ref(), after.as_ref())
+    {
+        return Ok(0);
+    }
     Ok(refresh_config_staleness(
         manager,
         db,
@@ -9584,6 +9601,38 @@ pub(crate) async fn acp_update_agent_env_and_refresh(
         ConfigStaleKind::AgentConfig,
     )
     .await)
+}
+
+fn agent_env_update_is_launch_default_only_or_noop(
+    agent_type: AgentType,
+    before: Option<&crate::db::entities::agent_setting::Model>,
+    after: Option<&crate::db::entities::agent_setting::Model>,
+) -> bool {
+    if agent_type != AgentType::ClaudeCode {
+        return false;
+    }
+    let (Some(before), Some(after)) = (before, after) else {
+        return false;
+    };
+    if before.enabled != after.enabled || before.model_provider_id != after.model_provider_id {
+        return false;
+    }
+
+    let parse = |raw: Option<&str>| -> Option<BTreeMap<String, String>> {
+        match raw.map(str::trim).filter(|value| !value.is_empty()) {
+            Some(value) => serde_json::from_str(value).ok(),
+            None => Some(BTreeMap::new()),
+        }
+    };
+    let (Some(mut before_env), Some(mut after_env)) = (
+        parse(before.env_json.as_deref()),
+        parse(after.env_json.as_deref()),
+    ) else {
+        return false;
+    };
+    before_env.remove(crate::commands::claude_profile::CODEG_CLAUDE_PROFILE_ENV_KEY);
+    after_env.remove(crate::commands::claude_profile::CODEG_CLAUDE_PROFILE_ENV_KEY);
+    before_env == after_env
 }
 
 /// `acp_update_agent_preferences_core` followed by a staleness refresh. Shared
@@ -15090,6 +15139,63 @@ wire_api = "chat"
                 "per-conversation --settings overlay path must not flip the agent-level fingerprint"
             );
         });
+    }
+
+    fn agent_setting_with_env(env: serde_json::Value) -> crate::db::entities::agent_setting::Model {
+        let now = chrono::Utc::now();
+        crate::db::entities::agent_setting::Model {
+            id: 1,
+            agent_type: serde_json::to_string(&AgentType::ClaudeCode).unwrap(),
+            registry_id: "claude-code".to_string(),
+            enabled: true,
+            sort_order: 0,
+            installed_version: None,
+            env_json: Some(serde_json::to_string(&env).unwrap()),
+            model_provider_id: None,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    #[test]
+    fn claude_launch_default_change_does_not_stale_existing_sessions() {
+        let before = agent_setting_with_env(serde_json::json!({
+            "ANTHROPIC_BASE_URL": "https://example.test",
+            "CODEG_CLAUDE_PROFILE": "follow-default"
+        }));
+        let after = agent_setting_with_env(serde_json::json!({
+            "ANTHROPIC_BASE_URL": "https://example.test",
+            "CODEG_CLAUDE_PROFILE": "cpa"
+        }));
+
+        assert!(agent_env_update_is_launch_default_only_or_noop(
+            AgentType::ClaudeCode,
+            Some(&before),
+            Some(&after)
+        ));
+    }
+
+    #[test]
+    fn real_claude_runtime_change_still_requires_staleness_refresh() {
+        let before = agent_setting_with_env(serde_json::json!({
+            "ANTHROPIC_BASE_URL": "https://old.example",
+            "CODEG_CLAUDE_PROFILE": "follow-default"
+        }));
+        let after = agent_setting_with_env(serde_json::json!({
+            "ANTHROPIC_BASE_URL": "https://new.example",
+            "CODEG_CLAUDE_PROFILE": "cpa"
+        }));
+
+        assert!(!agent_env_update_is_launch_default_only_or_noop(
+            AgentType::ClaudeCode,
+            Some(&before),
+            Some(&after)
+        ));
+        assert!(!agent_env_update_is_launch_default_only_or_noop(
+            AgentType::Codex,
+            Some(&before),
+            Some(&before)
+        ));
     }
 
     #[test]
