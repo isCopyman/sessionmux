@@ -4738,7 +4738,7 @@
     "scopeUnassigned": "未割り当て",
     "scopeManual": "手動",
     "scopeAgent": "Agent",
-    "scopeAttention": "レビュー待ち",
+    "scopeAttention": "要確認",
     "ownerFilter": "担当セッション",
     "ownerAll": "すべての担当者",
     "viewSwitchToBoard": "ボード表示に切り替え",

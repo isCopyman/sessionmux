@@ -4738,7 +4738,7 @@
     "scopeUnassigned": "Unassigned",
     "scopeManual": "Manual",
     "scopeAgent": "Agent",
-    "scopeAttention": "Needs review",
+    "scopeAttention": "Needs attention",
     "ownerFilter": "Owner Session",
     "ownerAll": "All owners",
     "viewSwitchToBoard": "Switch to board view",

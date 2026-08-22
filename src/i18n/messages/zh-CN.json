@@ -4738,7 +4738,7 @@
     "scopeUnassigned": "未分配",
     "scopeManual": "人工处理",
     "scopeAgent": "Agent 执行",
-    "scopeAttention": "等我审核",
+    "scopeAttention": "需关注",
     "ownerFilter": "负责会话",
     "ownerAll": "全部负责人",
     "viewSwitchToBoard": "切换到看板视图",
