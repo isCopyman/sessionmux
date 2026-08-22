@@ -49,6 +49,9 @@ describe("MessageQueueDisplay", () => {
         queue={[item("later")]}
         pausedReason="cancelled_current_turn"
         onResume={onResume}
+        onPauseManual={() => {}}
+        onReleaseOne={() => {}}
+        manualReleaseItemId={null}
         onRetry={() => {}}
         onReorder={() => {}}
         onEdit={() => {}}
@@ -68,6 +71,9 @@ describe("MessageQueueDisplay", () => {
         queue={[item("mine"), item("auto", "queued", "timer")]}
         pausedReason={null}
         onResume={() => {}}
+        onPauseManual={() => {}}
+        onReleaseOne={() => {}}
+        manualReleaseItemId={null}
         onRetry={() => {}}
         onReorder={() => {}}
         onEdit={() => {}}
@@ -89,6 +95,9 @@ describe("MessageQueueDisplay", () => {
         queue={[item("failed", "paused"), item("sending", "claimed")]}
         pausedReason="mode rejected"
         onResume={() => {}}
+        onPauseManual={() => {}}
+        onReleaseOne={() => {}}
+        manualReleaseItemId={null}
         onRetry={onRetry}
         onReorder={() => {}}
         onEdit={onEdit}
@@ -113,6 +122,9 @@ describe("MessageQueueDisplay", () => {
         queue={[taskItem]}
         pausedReason={null}
         onResume={() => {}}
+        onPauseManual={() => {}}
+        onReleaseOne={() => {}}
+        manualReleaseItemId={null}
         onRetry={() => {}}
         onReorder={() => {}}
         onEdit={() => {}}
@@ -124,5 +136,48 @@ describe("MessageQueueDisplay", () => {
     expect(screen.getByText("sourceTask")).toBeInTheDocument()
     expect(screen.queryByTitle("editItem")).toBeNull()
     expect(screen.queryByTitle("deleteItem")).toBeNull()
+  })
+
+  it("pauses automatic injection and releases only the selected queued item", () => {
+    const onPauseManual = vi.fn()
+    const onReleaseOne = vi.fn()
+    const { rerender } = render(
+      <MessageQueueDisplay
+        queue={[]}
+        pausedReason={null}
+        onPauseManual={onPauseManual}
+        onReleaseOne={onReleaseOne}
+        manualReleaseItemId={null}
+        onResume={() => {}}
+        onRetry={() => {}}
+        onReorder={() => {}}
+        onEdit={() => {}}
+        onDelete={() => {}}
+        editingItemId={null}
+      />
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "pauseManual" }))
+    expect(onPauseManual).toHaveBeenCalledTimes(1)
+
+    rerender(
+      <MessageQueueDisplay
+        queue={[item("first"), item("second")]}
+        pausedReason="manual_review"
+        onPauseManual={onPauseManual}
+        onReleaseOne={onReleaseOne}
+        manualReleaseItemId={null}
+        onResume={() => {}}
+        onRetry={() => {}}
+        onReorder={() => {}}
+        onEdit={() => {}}
+        onDelete={() => {}}
+        editingItemId={null}
+      />
+    )
+    expect(screen.getByText("manualPaused")).toBeInTheDocument()
+    const releaseButtons = screen.getAllByTitle("releaseOne")
+    fireEvent.click(releaseButtons[1])
+    expect(onReleaseOne).toHaveBeenCalledWith("second")
   })
 })

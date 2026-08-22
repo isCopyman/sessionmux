@@ -8,6 +8,8 @@ const api = vi.hoisted(() => ({
   edit: vi.fn(),
   delete: vi.fn(),
   reorder: vi.fn(),
+  pauseManual: vi.fn(),
+  releaseOne: vi.fn(),
   resume: vi.fn(),
   retry: vi.fn(),
 }))
@@ -18,6 +20,8 @@ vi.mock("@/lib/api", () => ({
   editPromptQueueItem: api.edit,
   deletePromptQueueItem: api.delete,
   reorderPromptQueueItems: api.reorder,
+  pausePromptQueueForManualReview: api.pauseManual,
+  releaseOnePromptQueueItem: api.releaseOne,
   resumePromptQueue: api.resume,
   retryPromptQueueItem: api.retry,
 }))
@@ -94,9 +98,9 @@ describe("useMessageQueue backend-authoritative behavior", () => {
     api.get.mockResolvedValue(snapshot(7, 2, [{ id: "a", text: "A" }]))
     const { result } = renderHook(() => useMessageQueue(7))
     await waitFor(() => expect(result.current.hydrated).toBe(true))
-    expect(result.current.queue.map((item) => item.draft.displayText)).toEqual([
-      "A",
-    ])
+    expect(result.current.queue.map((item) => item.draft?.displayText)).toEqual(
+      ["A"]
+    )
 
     act(() => emit(snapshot(7, 3, [{ id: "b", text: "B" }])))
     expect(result.current.revision).toBe(3)
@@ -219,6 +223,31 @@ describe("useMessageQueue backend-authoritative behavior", () => {
     expect(second.result.current.queue.map((item) => item.id)).toEqual(["b"])
     expect(first.result.current.revision).toBe(2)
     expect(second.result.current.revision).toBe(2)
+  })
+
+  it("persists manual review and one-item release against the current revision", async () => {
+    api.get.mockResolvedValue(snapshot(7, 4, [{ id: "a", text: "A" }]))
+    api.pauseManual.mockResolvedValue({
+      ...snapshot(7, 5, [{ id: "a", text: "A" }]),
+      pausedReason: "manual_review",
+    })
+    api.releaseOne.mockResolvedValue({
+      ...snapshot(7, 6, [{ id: "a", text: "A" }]),
+      pausedReason: "manual_review",
+      manualReleaseItemId: "a",
+    })
+    const { result } = renderHook(() => useMessageQueue(7))
+    await waitFor(() => expect(result.current.revision).toBe(4))
+
+    act(() => result.current.pauseManual())
+    await waitFor(() =>
+      expect(result.current.pausedReason).toBe("manual_review")
+    )
+    expect(api.pauseManual).toHaveBeenCalledWith(7, 4)
+
+    act(() => result.current.releaseOne("a"))
+    await waitFor(() => expect(result.current.manualReleaseItemId).toBe("a"))
+    expect(api.releaseOne).toHaveBeenCalledWith(7, "a", 5)
   })
 
   it("does not carry optimistic queue items across a real Session switch", async () => {

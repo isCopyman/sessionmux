@@ -1346,6 +1346,14 @@ pub fn build_router(
             post(handlers::prompt_queue::reorder),
         )
         .route("/prompt_queue_resume", post(handlers::prompt_queue::resume))
+        .route(
+            "/prompt_queue_pause_manual",
+            post(handlers::prompt_queue::pause_manual),
+        )
+        .route(
+            "/prompt_queue_release_one",
+            post(handlers::prompt_queue::release_one),
+        )
         .route("/prompt_queue_retry", post(handlers::prompt_queue::retry))
         .route("/collaboration_send", post(handlers::collaboration::send))
         .route(

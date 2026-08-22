@@ -57,8 +57,11 @@ interface ChatInputProps {
   onQueueEdit?: (id: string) => void
   onQueueDelete?: (id: string) => void
   onQueueRetry?: (id: string) => void
+  onQueuePauseManual?: () => void
+  onQueueReleaseOne?: (id: string) => void
   onQueueResume?: () => void
   queuePausedReason?: string | null
+  queueManualReleaseItemId?: string | null
   editingItemId?: string | null
   editingDraftText?: string | null
   editingDraftBlocks?: PromptInputBlock[] | null
@@ -124,8 +127,11 @@ export const ChatInput = memo(function ChatInput({
   onQueueEdit,
   onQueueDelete,
   onQueueRetry,
+  onQueuePauseManual,
+  onQueueReleaseOne,
   onQueueResume,
   queuePausedReason,
+  queueManualReleaseItemId,
   conversationId,
   editingItemId,
   editingDraftText,
@@ -184,11 +190,12 @@ export const ChatInput = memo(function ChatInput({
     >
       <SessionTimers conversationId={conversationId} />
       {queue &&
-        queue.length > 0 &&
         onQueueReorder &&
         onQueueEdit &&
         onQueueDelete &&
         onQueueRetry &&
+        onQueuePauseManual &&
+        onQueueReleaseOne &&
         onQueueResume && (
           <MessageQueueDisplay
             queue={queue}
@@ -196,8 +203,11 @@ export const ChatInput = memo(function ChatInput({
             onEdit={onQueueEdit}
             onDelete={onQueueDelete}
             onRetry={onQueueRetry}
+            onPauseManual={onQueuePauseManual}
+            onReleaseOne={onQueueReleaseOne}
             onResume={onQueueResume}
             pausedReason={queuePausedReason ?? null}
+            manualReleaseItemId={queueManualReleaseItemId ?? null}
             editingItemId={editingItemId ?? null}
           />
         )}

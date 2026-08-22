@@ -140,6 +140,38 @@ pub async fn resume(
     ))
 }
 
+pub async fn pause_manual(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<ResumeParams>,
+) -> Result<Json<PromptQueueSnapshot>, AppCommandError> {
+    Ok(Json(
+        prompt_queue::prompt_queue_pause_manual_core(
+            &state.db.conn,
+            &state.emitter,
+            params.conversation_id,
+            params.expected_revision,
+        )
+        .await?,
+    ))
+}
+
+pub async fn release_one(
+    Extension(state): Extension<Arc<AppState>>,
+    Json(params): Json<DeleteOrRetryParams>,
+) -> Result<Json<PromptQueueSnapshot>, AppCommandError> {
+    Ok(Json(
+        prompt_queue::prompt_queue_release_one_core(
+            &state.db.conn,
+            &state.emitter,
+            &state.prompt_queue,
+            params.conversation_id,
+            params.id,
+            params.expected_revision,
+        )
+        .await?,
+    ))
+}
+
 pub async fn retry(
     Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<DeleteOrRetryParams>,

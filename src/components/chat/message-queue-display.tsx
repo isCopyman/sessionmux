@@ -6,7 +6,9 @@ import {
   AlertTriangle,
   GripVertical,
   Loader2,
+  PauseCircle,
   Pencil,
+  Play,
   RotateCcw,
   X,
 } from "lucide-react"
@@ -20,8 +22,11 @@ interface MessageQueueDisplayProps {
   onEdit: (id: string) => void
   onDelete: (id: string) => void
   onRetry: (id: string) => void
+  onPauseManual: () => void
+  onReleaseOne: (id: string) => void
   onResume: () => void
   pausedReason: string | null
+  manualReleaseItemId: string | null
   editingItemId: string | null
 }
 
@@ -32,6 +37,9 @@ interface QueueItemProps {
   onEdit: (id: string) => void
   onDelete: (id: string) => void
   onRetry: (id: string) => void
+  onReleaseOne: (id: string) => void
+  manualReview: boolean
+  releasePending: boolean
 }
 
 // Scheduling-class badge for entries the user did not type themselves.
@@ -52,21 +60,25 @@ function QueueItem({
   onEdit,
   onDelete,
   onRetry,
+  onReleaseOne,
+  manualReview,
+  releasePending,
 }: QueueItemProps) {
   const t = useTranslations("Folder.chat.messageQueue")
   const dragControls = useDragControls()
   const isClaimed = item.state === "claimed"
   const isPaused = item.state === "paused"
-  const isHostOwned = item.taskId != null
+  const isHostOwned = item.taskId != null || item.draft == null
+  const canReorder = !isClaimed && item.draft != null
 
   const startDrag = useCallback(
     (event: PointerEvent<HTMLButtonElement>) => {
-      if (isClaimed) return
+      if (!canReorder) return
       event.preventDefault()
       event.stopPropagation()
       dragControls.start(event)
     },
-    [dragControls, isClaimed]
+    [canReorder, dragControls]
   )
 
   return (
@@ -86,11 +98,11 @@ function QueueItem({
         type="button"
         className={cn(
           "shrink-0 touch-none p-0",
-          isClaimed
-            ? "cursor-default opacity-40"
-            : "cursor-grab active:cursor-grabbing"
+          canReorder
+            ? "cursor-grab active:cursor-grabbing"
+            : "cursor-default opacity-40"
         )}
-        disabled={isClaimed}
+        disabled={!canReorder}
         onPointerDown={startDrag}
       >
         <GripVertical className="h-3 w-3 text-muted-foreground/60" />
@@ -104,7 +116,10 @@ function QueueItem({
         </span>
       ) : null}
       <span className="min-w-0 flex-1 truncate text-[10px] text-foreground/80">
-        {item.draft.displayText}
+        {item.draft?.displayText ??
+          (item.source === "user"
+            ? t("addToQueue")
+            : t(SOURCE_LABEL_KEY[item.source]))}
       </span>
       {isClaimed ? (
         <Loader2
@@ -120,6 +135,17 @@ function QueueItem({
           title={t("retryItem")}
         >
           <RotateCcw className="h-2.5 w-2.5" />
+        </button>
+      ) : null}
+      {manualReview && item.state === "queued" ? (
+        <button
+          type="button"
+          onClick={() => onReleaseOne(item.id)}
+          className="shrink-0 rounded-sm p-0.5 text-primary hover:bg-primary/10 disabled:opacity-40"
+          title={t("releaseOne")}
+          disabled={releasePending}
+        >
+          <Play className="h-2.5 w-2.5" />
         </button>
       ) : null}
       {!isHostOwned ? (
@@ -154,12 +180,15 @@ export function MessageQueueDisplay({
   onEdit,
   onDelete,
   onRetry,
+  onPauseManual,
+  onReleaseOne,
   onResume,
   pausedReason,
+  manualReleaseItemId,
   editingItemId,
 }: MessageQueueDisplayProps) {
   const t = useTranslations("Folder.chat.messageQueue")
-  if (queue.length === 0) return null
+  const manualReview = pausedReason === "manual_review"
 
   const displayedPausedReason =
     pausedReason === "cancelled_current_turn"
@@ -170,6 +199,19 @@ export function MessageQueueDisplay({
 
   return (
     <div className="max-h-36 overflow-y-auto pb-1">
+      {!pausedReason ? (
+        <div className="mb-1 flex justify-end">
+          <button
+            type="button"
+            onClick={onPauseManual}
+            className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] text-muted-foreground hover:bg-muted hover:text-foreground"
+            title={t("pauseManualDescription")}
+          >
+            <PauseCircle className="h-3 w-3" />
+            {t("pauseManual")}
+          </button>
+        </div>
+      ) : null}
       {pausedReason ? (
         <div className="mb-1 flex items-center gap-1.5 rounded-md border border-amber-500/30 bg-amber-500/8 px-2 py-1 text-[10px] text-amber-700 dark:text-amber-300">
           <AlertTriangle className="h-3 w-3 shrink-0" />
@@ -177,7 +219,9 @@ export function MessageQueueDisplay({
             className="min-w-0 flex-1 truncate"
             title={displayedPausedReason ?? undefined}
           >
-            {t("paused", { reason: displayedPausedReason ?? "" })}
+            {manualReview
+              ? t("manualPaused")
+              : t("paused", { reason: displayedPausedReason ?? "" })}
           </span>
           {!queue.some((item) => item.state === "paused") ? (
             <button
@@ -190,25 +234,30 @@ export function MessageQueueDisplay({
           ) : null}
         </div>
       ) : null}
-      <Reorder.Group
-        as="div"
-        axis="y"
-        values={queue}
-        onReorder={onReorder}
-        className="flex flex-col gap-0.5"
-      >
-        {queue.map((item, index) => (
-          <QueueItem
-            key={item.id}
-            item={item}
-            index={index}
-            isEditing={editingItemId === item.id}
-            onEdit={onEdit}
-            onDelete={onDelete}
-            onRetry={onRetry}
-          />
-        ))}
-      </Reorder.Group>
+      {queue.length > 0 ? (
+        <Reorder.Group
+          as="div"
+          axis="y"
+          values={queue}
+          onReorder={onReorder}
+          className="flex flex-col gap-0.5"
+        >
+          {queue.map((item, index) => (
+            <QueueItem
+              key={item.id}
+              item={item}
+              index={index}
+              isEditing={editingItemId === item.id}
+              onEdit={onEdit}
+              onDelete={onDelete}
+              onRetry={onRetry}
+              onReleaseOne={onReleaseOne}
+              manualReview={manualReview}
+              releasePending={manualReleaseItemId != null}
+            />
+          ))}
+        </Reorder.Group>
+      ) : null}
     </div>
   )
 }

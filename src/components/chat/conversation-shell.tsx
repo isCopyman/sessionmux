@@ -116,8 +116,11 @@ interface ConversationShellProps {
   onQueueEdit?: (id: string) => void
   onQueueDelete?: (id: string) => void
   onQueueRetry?: (id: string) => void
+  onQueuePauseManual?: () => void
+  onQueueReleaseOne?: (id: string) => void
   onQueueResume?: () => void
   queuePausedReason?: string | null
+  queueManualReleaseItemId?: string | null
   editingItemId?: string | null
   editingDraftText?: string | null
   editingDraftBlocks?: PromptInputBlock[] | null
@@ -189,8 +192,11 @@ export function ConversationShell({
   onQueueEdit,
   onQueueDelete,
   onQueueRetry,
+  onQueuePauseManual,
+  onQueueReleaseOne,
   onQueueResume,
   queuePausedReason,
+  queueManualReleaseItemId,
   editingItemId,
   editingDraftText,
   editingDraftBlocks,
@@ -341,8 +347,11 @@ export function ConversationShell({
               onQueueEdit={onQueueEdit}
               onQueueDelete={onQueueDelete}
               onQueueRetry={onQueueRetry}
+              onQueuePauseManual={onQueuePauseManual}
+              onQueueReleaseOne={onQueueReleaseOne}
               onQueueResume={onQueueResume}
               queuePausedReason={queuePausedReason}
+              queueManualReleaseItemId={queueManualReleaseItemId}
               editingItemId={editingItemId}
               editingDraftText={editingDraftText}
               editingDraftBlocks={editingDraftBlocks}

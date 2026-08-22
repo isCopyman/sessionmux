@@ -725,8 +725,11 @@ const ConversationTabView = memo(function ConversationTabView({
     reorder: mqReorder,
     updateItem: mqUpdateItem,
     retryItem: mqRetryItem,
+    pauseManual: mqPauseManual,
+    releaseOne: mqReleaseOne,
     resume: mqResume,
     pausedReason: mqPausedReason,
+    manualReleaseItemId: mqManualReleaseItemId,
     hydrated: mqHydrated,
     editingItemId: mqEditingItemId,
     startEditing: mqStartEditing,
@@ -1832,7 +1835,7 @@ const ConversationTabView = memo(function ConversationTabView({
   const editingQueueDraftText = useMemo(() => {
     if (!mqEditingItemId) return null
     const item = msgQueue.find((m) => m.id === mqEditingItemId)
-    return item?.draft.displayText ?? null
+    return item?.draft?.displayText ?? null
   }, [mqEditingItemId, msgQueue])
 
   // The editing item's full blocks, so the composer can restore inline badges +
@@ -1840,7 +1843,7 @@ const ConversationTabView = memo(function ConversationTabView({
   const editingQueueDraftBlocks = useMemo(() => {
     if (!mqEditingItemId) return null
     const item = msgQueue.find((m) => m.id === mqEditingItemId)
-    return item?.draft.blocks ?? null
+    return item?.draft?.blocks ?? null
   }, [mqEditingItemId, msgQueue])
 
   const handleQueueEdit = useCallback(
@@ -2236,8 +2239,11 @@ const ConversationTabView = memo(function ConversationTabView({
       onQueueEdit={handleQueueEdit}
       onQueueDelete={mqRemove}
       onQueueRetry={mqRetryItem}
+      onQueuePauseManual={mqPauseManual}
+      onQueueReleaseOne={mqReleaseOne}
       onQueueResume={mqResume}
       queuePausedReason={mqPausedReason}
+      queueManualReleaseItemId={mqManualReleaseItemId}
       editingItemId={mqEditingItemId}
       editingDraftText={editingQueueDraftText}
       editingDraftBlocks={editingQueueDraftBlocks}

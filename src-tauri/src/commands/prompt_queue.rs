@@ -91,6 +91,42 @@ pub async fn prompt_queue_resume_core(
     Ok(snapshot)
 }
 
+pub async fn prompt_queue_pause_manual_core(
+    conn: &sea_orm::DatabaseConnection,
+    emitter: &EventEmitter,
+    conversation_id: i32,
+    expected_revision: i64,
+) -> Result<PromptQueueSnapshot, AppCommandError> {
+    let snapshot = prompt_queue_service::pause_queue_for_manual_review(
+        conn,
+        conversation_id,
+        expected_revision,
+    )
+    .await?;
+    publish(emitter, &snapshot);
+    Ok(snapshot)
+}
+
+pub async fn prompt_queue_release_one_core(
+    conn: &sea_orm::DatabaseConnection,
+    emitter: &EventEmitter,
+    runtime: &PromptQueueHandle,
+    conversation_id: i32,
+    id: String,
+    expected_revision: i64,
+) -> Result<PromptQueueSnapshot, AppCommandError> {
+    let snapshot = prompt_queue_service::release_one_manual_item(
+        conn,
+        conversation_id,
+        &id,
+        expected_revision,
+    )
+    .await?;
+    publish(emitter, &snapshot);
+    runtime.wake(conversation_id);
+    Ok(snapshot)
+}
+
 pub async fn prompt_queue_retry_core(
     conn: &sea_orm::DatabaseConnection,
     emitter: &EventEmitter,
@@ -227,6 +263,44 @@ pub async fn prompt_queue_resume(
         &EventEmitter::Tauri(app),
         &runtime,
         conversation_id,
+        expected_revision,
+    )
+    .await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn prompt_queue_pause_manual(
+    conversation_id: i32,
+    expected_revision: i64,
+    db: tauri::State<'_, AppDatabase>,
+    app: tauri::AppHandle,
+) -> Result<PromptQueueSnapshot, AppCommandError> {
+    prompt_queue_pause_manual_core(
+        &db.conn,
+        &EventEmitter::Tauri(app),
+        conversation_id,
+        expected_revision,
+    )
+    .await
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub async fn prompt_queue_release_one(
+    conversation_id: i32,
+    id: String,
+    expected_revision: i64,
+    db: tauri::State<'_, AppDatabase>,
+    runtime: tauri::State<'_, PromptQueueHandle>,
+    app: tauri::AppHandle,
+) -> Result<PromptQueueSnapshot, AppCommandError> {
+    prompt_queue_release_one_core(
+        &db.conn,
+        &EventEmitter::Tauri(app),
+        &runtime,
+        conversation_id,
+        id,
         expected_revision,
     )
     .await

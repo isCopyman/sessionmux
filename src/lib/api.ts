@@ -2190,6 +2190,28 @@ export async function resumePromptQueue(
   })
 }
 
+export async function pausePromptQueueForManualReview(
+  conversationId: number,
+  expectedRevision: number
+): Promise<PromptQueueSnapshot> {
+  return getTransport().call("prompt_queue_pause_manual", {
+    conversationId,
+    expectedRevision,
+  })
+}
+
+export async function releaseOnePromptQueueItem(
+  conversationId: number,
+  id: string,
+  expectedRevision: number
+): Promise<PromptQueueSnapshot> {
+  return getTransport().call("prompt_queue_release_one", {
+    conversationId,
+    id,
+    expectedRevision,
+  })
+}
+
 export async function retryPromptQueueItem(
   conversationId: number,
   id: string,

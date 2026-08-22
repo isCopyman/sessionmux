@@ -7,6 +7,8 @@ import {
   enqueuePromptQueueItem,
   getPromptQueue,
   reorderPromptQueueItems,
+  pausePromptQueueForManualReview,
+  releaseOnePromptQueueItem,
   resumePromptQueue,
   retryPromptQueueItem,
 } from "@/lib/api"
@@ -22,7 +24,7 @@ import { randomUUID } from "@/lib/utils"
 
 export interface QueuedMessage {
   id: string
-  draft: PromptDraft
+  draft: PromptDraft | null
   taskId: number | null
   modeId: string | null
   state: "queued" | "claimed" | "paused"
@@ -35,12 +37,15 @@ export interface UseMessageQueueReturn {
   queue: QueuedMessage[]
   revision: number
   pausedReason: string | null
+  manualReleaseItemId: string | null
   hydrated: boolean
   enqueue: (draft: PromptDraft, modeId: string | null) => void
   remove: (id: string) => void
   reorder: (items: QueuedMessage[]) => void
   updateItem: (id: string, draft: PromptDraft) => void
   retryItem: (id: string) => void
+  pauseManual: () => void
+  releaseOne: (id: string) => void
   resume: () => void
   getQueueLength: () => number
   editingItemId: string | null
@@ -52,11 +57,10 @@ interface UseMessageQueueOptions {
   onPersistFailure?: (draft: PromptDraft, error: unknown) => void
 }
 
-function fromWire(item: PromptQueueItem): QueuedMessage | null {
-  if (!item.draft) return null
+function fromWire(item: PromptQueueItem): QueuedMessage {
   return {
     id: item.id,
-    draft: item.draft,
+    draft: item.draft ?? null,
     taskId: item.taskId ?? null,
     modeId: item.modeId ?? null,
     state: item.state,
@@ -77,6 +81,9 @@ export function useMessageQueue(
   const [queue, setQueue] = useState<QueuedMessage[]>([])
   const [revision, setRevision] = useState(0)
   const [pausedReason, setPausedReason] = useState<string | null>(null)
+  const [manualReleaseItemId, setManualReleaseItemId] = useState<string | null>(
+    null
+  )
   const [hydrated, setHydrated] = useState(conversationId == null)
   const [editingItemId, setEditingItemId] = useState<string | null>(null)
   const queueRef = useRef<QueuedMessage[]>([])
@@ -107,9 +114,8 @@ export function useMessageQueue(
       revisionRef.current = snapshot.revision
       setRevision(snapshot.revision)
       setPausedReason(snapshot.pausedReason ?? null)
-      const backend = snapshot.items
-        .map(fromWire)
-        .filter((item): item is QueuedMessage => item != null)
+      setManualReleaseItemId(snapshot.manualReleaseItemId ?? null)
+      const backend = snapshot.items.map(fromWire)
       const backendIds = new Set(backend.map((item) => item.id))
       // Keep a just-clicked optimistic append visible until its own request
       // resolves. An older fetch/event cannot erase it; once the request
@@ -150,6 +156,7 @@ export function useMessageQueue(
     /* eslint-disable react-hooks/set-state-in-effect -- intentional identity-bound subscription reset */
     setRevision(0)
     setPausedReason(null)
+    setManualReleaseItemId(null)
     setEditingItemId(null)
     // Preserve only the intentional draft -> persisted Session promotion. A
     // real Session switch must never flash or accidentally promote the old
@@ -199,7 +206,7 @@ export function useMessageQueue(
         conversationId,
         id: item.id,
         clientDedupeId: item.id,
-        draft: item.draft,
+        draft: item.draft!,
         modeId: item.modeId,
       })
         .then((snapshot) => {
@@ -209,7 +216,7 @@ export function useMessageQueue(
         .catch((error) => {
           pendingOptimisticRef.current.delete(item.id)
           console.error("[prompt-queue] promote local item:", error)
-          persistFailureRef.current?.(item.draft, error)
+          persistFailureRef.current?.(item.draft!, error)
           void reload()
         })
     }
@@ -287,7 +294,7 @@ export function useMessageQueue(
       if (activeConversationId == null) return
       void reorderPromptQueueItems(
         activeConversationId,
-        next.map((item) => item.id),
+        next.filter((item) => item.draft != null).map((item) => item.id),
         revisionRef.current
       )
         .then(applySnapshot)
@@ -353,6 +360,38 @@ export function useMessageQueue(
       })
   }, [applySnapshot, reload])
 
+  const pauseManual = useCallback(() => {
+    const activeConversationId = conversationIdRef.current
+    if (activeConversationId == null) return
+    void pausePromptQueueForManualReview(
+      activeConversationId,
+      revisionRef.current
+    )
+      .then(applySnapshot)
+      .catch((error) => {
+        console.error("[prompt-queue] pause manual:", error)
+        void reload()
+      })
+  }, [applySnapshot, reload])
+
+  const releaseOne = useCallback(
+    (id: string) => {
+      const activeConversationId = conversationIdRef.current
+      if (activeConversationId == null) return
+      void releaseOnePromptQueueItem(
+        activeConversationId,
+        id,
+        revisionRef.current
+      )
+        .then(applySnapshot)
+        .catch((error) => {
+          console.error("[prompt-queue] release one:", error)
+          void reload()
+        })
+    },
+    [applySnapshot, reload]
+  )
+
   const getQueueLength = useCallback(() => queueRef.current.length, [])
   const startEditing = useCallback((id: string) => setEditingItemId(id), [])
   const cancelEditing = useCallback(() => setEditingItemId(null), [])
@@ -361,12 +400,15 @@ export function useMessageQueue(
     queue,
     revision,
     pausedReason,
+    manualReleaseItemId,
     hydrated,
     enqueue,
     remove,
     reorder,
     updateItem,
     retryItem,
+    pauseManual,
+    releaseOne,
     resume,
     getQueueLength,
     editingItemId,

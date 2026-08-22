@@ -1456,6 +1456,8 @@ mod tauri_app {
                 prompt_queue_commands::prompt_queue_delete,
                 prompt_queue_commands::prompt_queue_reorder,
                 prompt_queue_commands::prompt_queue_resume,
+                prompt_queue_commands::prompt_queue_pause_manual,
+                prompt_queue_commands::prompt_queue_release_one,
                 prompt_queue_commands::prompt_queue_retry,
                 collaboration_commands::collaboration_send,
                 collaboration_commands::collaboration_interrupt,

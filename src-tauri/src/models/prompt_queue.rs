@@ -116,6 +116,8 @@ pub struct PromptQueueSnapshot {
     pub revision: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub paused_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub manual_release_item_id: Option<String>,
     pub items: Vec<PromptQueueItem>,
 }
 

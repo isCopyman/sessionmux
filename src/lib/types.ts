@@ -1261,6 +1261,7 @@ export interface PromptQueueSnapshot {
   conversationId: number
   revision: number
   pausedReason?: string | null
+  manualReleaseItemId?: string | null
   items: PromptQueueItem[]
 }
 

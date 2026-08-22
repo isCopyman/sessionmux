@@ -44,6 +44,10 @@ pub const CANCELLED_TURN_PAUSE_REASON: &str = "cancelled_current_turn";
 /// stopped this Session's turn / runtime).
 pub const HOST_CANCEL_PAUSE_REASON: &str = "host_control_turn_cancelled";
 pub const HOST_STOP_PAUSE_REASON: &str = "host_control_session_stopped";
+/// User-selected review mode: every source keeps accumulating in the durable
+/// queue, but the dispatcher may only cross the boundary for one explicitly
+/// released item at a time.
+pub const MANUAL_REVIEW_PAUSE_REASON: &str = "manual_review";
 
 /// A hand-typed user message is the freshest statement of intent: it lifts a
 /// stop/cancel freeze so the send actually runs. Collaboration-interrupt
@@ -145,8 +149,8 @@ async fn ensure_conversation<C: ConnectionTrait>(
 async fn ensure_state(txn: &DatabaseTransaction, conversation_id: i32) -> Result<(), DbError> {
     txn.execute(statement(
         "INSERT OR IGNORE INTO conversation_prompt_queue_state \
-         (conversation_id, revision, paused_reason, updated_at) \
-         VALUES (?, 0, NULL, CURRENT_TIMESTAMP)",
+         (conversation_id, revision, paused_reason, manual_release_item_id, updated_at) \
+         VALUES (?, 0, NULL, NULL, CURRENT_TIMESTAMP)",
         vec![conversation_id.into()],
     ))
     .await?;
@@ -156,10 +160,10 @@ async fn ensure_state(txn: &DatabaseTransaction, conversation_id: i32) -> Result
 async fn state_row<C: ConnectionTrait>(
     conn: &C,
     conversation_id: i32,
-) -> Result<(i64, Option<String>), DbError> {
+) -> Result<(i64, Option<String>, Option<String>), DbError> {
     let row = conn
         .query_one(statement(
-            "SELECT revision, paused_reason FROM conversation_prompt_queue_state \
+            "SELECT revision, paused_reason, manual_release_item_id FROM conversation_prompt_queue_state \
              WHERE conversation_id = ?",
             vec![conversation_id.into()],
         ))
@@ -168,8 +172,9 @@ async fn state_row<C: ConnectionTrait>(
         Some(row) => (
             row.try_get("", "revision")?,
             row.try_get("", "paused_reason")?,
+            row.try_get("", "manual_release_item_id")?,
         ),
-        None => (0, None),
+        None => (0, None, None),
     })
 }
 
@@ -178,7 +183,7 @@ async fn verify_revision(
     conversation_id: i32,
     expected_revision: i64,
 ) -> Result<(), DbError> {
-    let (revision, _) = state_row(txn, conversation_id).await?;
+    let (revision, _, _) = state_row(txn, conversation_id).await?;
     if revision != expected_revision {
         return Err(validation(format!(
             "Prompt queue revision conflict: expected {expected_revision}, current {revision}"
@@ -203,7 +208,8 @@ async fn snapshot_on<C: ConnectionTrait>(
     conversation_id: i32,
 ) -> Result<PromptQueueSnapshot, DbError> {
     ensure_conversation(conn, conversation_id).await?;
-    let (revision, paused_reason) = state_row(conn, conversation_id).await?;
+    let (revision, paused_reason, manual_release_item_id) =
+        state_row(conn, conversation_id).await?;
     let rows = conn
         .query_all(statement(
             &format!(
@@ -221,6 +227,7 @@ async fn snapshot_on<C: ConnectionTrait>(
         conversation_id,
         revision,
         paused_reason,
+        manual_release_item_id,
         items,
     })
 }
@@ -446,11 +453,12 @@ pub(crate) async fn enqueue_draft_in_transaction(
     ))
     .await?;
     if input.source == PromptQueueSource::User {
-        let (_, paused_reason) = state_row(txn, input.conversation_id).await?;
+        let (_, paused_reason, _) = state_row(txn, input.conversation_id).await?;
         if paused_reason.as_deref().is_some_and(user_send_clears_pause) {
             txn.execute(statement(
                 "UPDATE conversation_prompt_queue_state \
-                 SET paused_reason = NULL, updated_at = CURRENT_TIMESTAMP \
+                 SET paused_reason = NULL, manual_release_item_id = NULL, \
+                     updated_at = CURRENT_TIMESTAMP \
                  WHERE conversation_id = ?",
                 vec![input.conversation_id.into()],
             ))
@@ -682,9 +690,77 @@ pub async fn pause_queue(
     ensure_state(&txn, conversation_id).await?;
     txn.execute(statement(
         "UPDATE conversation_prompt_queue_state \
-         SET paused_reason = ?, revision = revision + 1, updated_at = CURRENT_TIMESTAMP \
+         SET paused_reason = ?, manual_release_item_id = NULL, \
+             revision = revision + 1, updated_at = CURRENT_TIMESTAMP \
          WHERE conversation_id = ?",
         vec![reason.into(), conversation_id.into()],
+    ))
+    .await?;
+    txn.commit().await?;
+    snapshot_on(conn, conversation_id).await
+}
+
+pub async fn pause_queue_for_manual_review(
+    conn: &DatabaseConnection,
+    conversation_id: i32,
+    expected_revision: i64,
+) -> Result<PromptQueueSnapshot, DbError> {
+    let txn = conn.begin().await?;
+    ensure_conversation(&txn, conversation_id).await?;
+    ensure_state(&txn, conversation_id).await?;
+    verify_revision(&txn, conversation_id, expected_revision).await?;
+    let (_, paused_reason, _) = state_row(&txn, conversation_id).await?;
+    if paused_reason.is_some() {
+        return Err(validation("Prompt queue is already paused"));
+    }
+    txn.execute(statement(
+        "UPDATE conversation_prompt_queue_state \
+         SET paused_reason = ?, manual_release_item_id = NULL, \
+             revision = revision + 1, updated_at = CURRENT_TIMESTAMP \
+         WHERE conversation_id = ?",
+        vec![MANUAL_REVIEW_PAUSE_REASON.into(), conversation_id.into()],
+    ))
+    .await?;
+    txn.commit().await?;
+    snapshot_on(conn, conversation_id).await
+}
+
+pub async fn release_one_manual_item(
+    conn: &DatabaseConnection,
+    conversation_id: i32,
+    id: &str,
+    expected_revision: i64,
+) -> Result<PromptQueueSnapshot, DbError> {
+    let txn = conn.begin().await?;
+    ensure_state(&txn, conversation_id).await?;
+    verify_revision(&txn, conversation_id, expected_revision).await?;
+    let (_, paused_reason, manual_release_item_id) = state_row(&txn, conversation_id).await?;
+    if paused_reason.as_deref() != Some(MANUAL_REVIEW_PAUSE_REASON) {
+        return Err(validation("Prompt queue is not in manual review mode"));
+    }
+    if manual_release_item_id.is_some() {
+        return Err(validation(
+            "Another queued prompt is already being released",
+        ));
+    }
+    let eligible = txn
+        .query_one(statement(
+            "SELECT 1 AS present FROM conversation_prompt_queue_item \
+             WHERE conversation_id = ? AND id = ? AND state = 'queued'",
+            vec![conversation_id.into(), id.into()],
+        ))
+        .await?
+        .is_some();
+    if !eligible {
+        return Err(validation(
+            "Queued prompt is not available for manual release",
+        ));
+    }
+    txn.execute(statement(
+        "UPDATE conversation_prompt_queue_state \
+         SET manual_release_item_id = ?, revision = revision + 1, \
+             updated_at = CURRENT_TIMESTAMP WHERE conversation_id = ?",
+        vec![id.into(), conversation_id.into()],
     ))
     .await?;
     txn.commit().await?;
@@ -722,7 +798,8 @@ pub async fn pause_queue_if_pending(
     ensure_state(&txn, conversation_id).await?;
     txn.execute(statement(
         "UPDATE conversation_prompt_queue_state \
-         SET paused_reason = ?, revision = revision + 1, updated_at = CURRENT_TIMESTAMP \
+         SET paused_reason = ?, manual_release_item_id = NULL, \
+             revision = revision + 1, updated_at = CURRENT_TIMESTAMP \
          WHERE conversation_id = ?",
         vec![reason.into(), conversation_id.into()],
     ))
@@ -739,7 +816,7 @@ pub async fn resume_queue(
     let txn = conn.begin().await?;
     ensure_state(&txn, conversation_id).await?;
     verify_revision(&txn, conversation_id, expected_revision).await?;
-    let (_, paused_reason) = state_row(&txn, conversation_id).await?;
+    let (_, paused_reason, _) = state_row(&txn, conversation_id).await?;
     if paused_reason.as_deref().is_some_and(|reason| {
         reason.starts_with(crate::db::service::collaboration_interrupt_service::PAUSE_REASON_PREFIX)
     }) {
@@ -749,7 +826,8 @@ pub async fn resume_queue(
     }
     txn.execute(statement(
         "UPDATE conversation_prompt_queue_state \
-         SET paused_reason = NULL, revision = revision + 1, updated_at = CURRENT_TIMESTAMP \
+         SET paused_reason = NULL, manual_release_item_id = NULL, \
+             revision = revision + 1, updated_at = CURRENT_TIMESTAMP \
          WHERE conversation_id = ?",
         vec![conversation_id.into()],
     ))
@@ -819,7 +897,8 @@ pub async fn retry_item(
     }
     txn.execute(statement(
         "UPDATE conversation_prompt_queue_state \
-         SET paused_reason = NULL, updated_at = CURRENT_TIMESTAMP \
+         SET paused_reason = NULL, manual_release_item_id = NULL, \
+             updated_at = CURRENT_TIMESTAMP \
          WHERE conversation_id = ?",
         vec![conversation_id.into()],
     ))
@@ -858,6 +937,7 @@ pub(crate) async fn claim_head(
         lease,
         &head_selector,
         OriginFlushKind::ConsecutiveQueuedOrigins,
+        true,
     )
     .await
 }
@@ -887,6 +967,7 @@ pub(crate) async fn claim_first_steerable(
         lease,
         &steer_selector,
         OriginFlushKind::RemainingSteerable,
+        false,
     )
     .await
 }
@@ -1081,11 +1162,15 @@ async fn claim_by_selector(
     lease: Duration,
     head_selector: &str,
     flush_kind: OriginFlushKind,
+    allow_manual_release: bool,
 ) -> Result<Option<(ClaimedPromptQueueItem, PromptQueueSnapshot)>, DbError> {
     let txn = conn.begin().await?;
     ensure_state(&txn, conversation_id).await?;
-    let (_, paused_reason) = state_row(&txn, conversation_id).await?;
-    if paused_reason.is_some() {
+    let (_, paused_reason, manual_release_item_id) = state_row(&txn, conversation_id).await?;
+    let manual_release = paused_reason.as_deref() == Some(MANUAL_REVIEW_PAUSE_REASON)
+        && allow_manual_release
+        && manual_release_item_id.is_some();
+    if paused_reason.is_some() && !manual_release {
         txn.commit().await?;
         return Ok(None);
     }
@@ -1094,13 +1179,18 @@ async fn claim_by_selector(
     // can race this worker, but it cannot observe the same head as claimable
     // after this statement obtains the writer lock. This is the database-side
     // equivalent of Codex Desktop's per-message acquire lock.
+    let (selector, selector_values) =
+        match manual_release_item_id.as_deref().filter(|_| manual_release) {
+            Some(id) => ("SELECT ?", vec![id.into()]),
+            None => (head_selector, vec![conversation_id.into()]),
+        };
     let Some(row) = claim_queue_row(
         &txn,
         conversation_id,
         worker_id,
         expires_at,
-        head_selector,
-        vec![conversation_id.into()],
+        selector,
+        selector_values,
     )
     .await?
     else {
@@ -1132,15 +1222,17 @@ async fn claim_by_selector(
         batched_claim_ids: Vec::new(),
         batched_origin_event_ids: Vec::new(),
     };
-    extend_origin_flush(
-        &txn,
-        &mut claimed,
-        conversation_id,
-        worker_id,
-        expires_at,
-        flush_kind,
-    )
-    .await?;
+    if !manual_release {
+        extend_origin_flush(
+            &txn,
+            &mut claimed,
+            conversation_id,
+            worker_id,
+            expires_at,
+            flush_kind,
+        )
+        .await?;
+    }
     bump_revision(&txn, conversation_id).await?;
     txn.commit().await?;
     let snapshot = snapshot_on(conn, conversation_id).await?;
@@ -1168,9 +1260,11 @@ pub(crate) async fn mark_dispatch_started(
                      updated_at = CURRENT_TIMESTAMP \
                  WHERE id = ? AND conversation_id = ? AND state = 'claimed' \
                    AND claimed_by = ? AND claim_expires_at > ? \
-                   AND NOT EXISTS ( \
+                   AND EXISTS ( \
                        SELECT 1 FROM conversation_prompt_queue_state s \
-                       WHERE s.conversation_id = ? AND s.paused_reason IS NOT NULL \
+                       WHERE s.conversation_id = ? AND (s.paused_reason IS NULL OR ( \
+                           s.paused_reason = ? AND s.manual_release_item_id = ? \
+                       )) \
                    ) AND (? IS NULL OR NOT EXISTS ( \
                        SELECT 1 FROM app_metadata m \
                        WHERE m.key = ? AND m.value = 'false' AND m.deleted_at IS NULL \
@@ -1182,6 +1276,8 @@ pub(crate) async fn mark_dispatch_started(
                     item.claimed_by.clone().into(),
                     now.into(),
                     item.conversation_id.into(),
+                    MANUAL_REVIEW_PAUSE_REASON.into(),
+                    item.id.clone().into(),
                     item.origin_event_id.clone().into(),
                     SESSION_COLLABORATION_ENABLED_KEY.into(),
                 ],
@@ -1191,6 +1287,17 @@ pub(crate) async fn mark_dispatch_started(
             return Ok(false);
         }
     }
+    txn.execute(statement(
+        "UPDATE conversation_prompt_queue_state \
+         SET manual_release_item_id = NULL, updated_at = CURRENT_TIMESTAMP \
+         WHERE conversation_id = ? AND paused_reason = ? AND manual_release_item_id = ?",
+        vec![
+            item.conversation_id.into(),
+            MANUAL_REVIEW_PAUSE_REASON.into(),
+            item.id.clone().into(),
+        ],
+    ))
+    .await?;
     for event_id in item.origin_event_ids() {
         let changed = crate::db::service::collaboration_service::mark_origin_embedding(
             &txn,
@@ -1337,6 +1444,18 @@ pub(crate) async fn release_claim_busy(
         )
         .await?;
     }
+    txn.execute(statement(
+        "UPDATE conversation_prompt_queue_state \
+         SET manual_release_item_id = ?, updated_at = CURRENT_TIMESTAMP \
+         WHERE conversation_id = ? AND paused_reason = ? \
+           AND manual_release_item_id IS NULL",
+        vec![
+            item.id.clone().into(),
+            item.conversation_id.into(),
+            MANUAL_REVIEW_PAUSE_REASON.into(),
+        ],
+    ))
+    .await?;
     bump_revision(&txn, item.conversation_id).await?;
     txn.commit().await?;
     snapshot_on(conn, item.conversation_id).await
@@ -1396,7 +1515,8 @@ pub(crate) async fn pause_dispatch_unknown(
         }
         txn.execute(statement(
             "UPDATE conversation_prompt_queue_state \
-             SET paused_reason = ?, updated_at = CURRENT_TIMESTAMP WHERE conversation_id = ?",
+             SET paused_reason = ?, manual_release_item_id = NULL, \
+                 updated_at = CURRENT_TIMESTAMP WHERE conversation_id = ?",
             vec![UNKNOWN_DISPATCH_REASON.into(), item.conversation_id.into()],
         ))
         .await?;
@@ -1460,7 +1580,8 @@ pub(crate) async fn fail_claim(
     }
     txn.execute(statement(
         "UPDATE conversation_prompt_queue_state \
-         SET paused_reason = ?, updated_at = CURRENT_TIMESTAMP WHERE conversation_id = ?",
+         SET paused_reason = ?, manual_release_item_id = NULL, \
+             updated_at = CURRENT_TIMESTAMP WHERE conversation_id = ?",
         vec![reason.into(), item.conversation_id.into()],
     ))
     .await?;
@@ -1564,7 +1685,8 @@ pub(crate) async fn recover_expired_claims(
         if uncertain.rows_affected() > 0 {
             txn.execute(statement(
                 "UPDATE conversation_prompt_queue_state \
-                 SET paused_reason = ?, updated_at = CURRENT_TIMESTAMP WHERE conversation_id = ?",
+                 SET paused_reason = ?, manual_release_item_id = NULL, \
+                     updated_at = CURRENT_TIMESTAMP WHERE conversation_id = ?",
                 vec![UNKNOWN_DISPATCH_REASON.into(), conversation_id.into()],
             ))
             .await?;
@@ -1605,7 +1727,7 @@ pub(crate) async fn queue_paused_reason(
     conn: &DatabaseConnection,
     conversation_id: i32,
 ) -> Result<Option<String>, DbError> {
-    let (_, paused_reason) = state_row(conn, conversation_id).await?;
+    let (_, paused_reason, _) = state_row(conn, conversation_id).await?;
     Ok(paused_reason.filter(|reason| !reason.is_empty()))
 }
 
@@ -1727,6 +1849,100 @@ mod tests {
         let folder_id = seed_folder(&db, "/tmp/codeg-prompt-queue").await;
         let conversation_id = seed_conversation(&db, folder_id, AgentType::Codex).await;
         (db, conversation_id)
+    }
+
+    #[tokio::test]
+    async fn manual_review_blocks_automatic_claim_and_releases_only_selected_item() {
+        let (db, conversation_id) = seeded_memory().await;
+        enqueue(&db.conn, input(conversation_id, "first", "First"))
+            .await
+            .unwrap();
+        let queued = enqueue(&db.conn, input(conversation_id, "second", "Second"))
+            .await
+            .unwrap();
+
+        let paused = pause_queue_for_manual_review(&db.conn, conversation_id, queued.revision)
+            .await
+            .unwrap();
+        assert_eq!(
+            paused.paused_reason.as_deref(),
+            Some(MANUAL_REVIEW_PAUSE_REASON)
+        );
+        assert!(
+            claim_head(&db.conn, conversation_id, "worker", Duration::seconds(30))
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            claim_first_steerable(&db.conn, conversation_id, "worker", Duration::seconds(30))
+                .await
+                .unwrap()
+                .is_none()
+        );
+
+        let released =
+            release_one_manual_item(&db.conn, conversation_id, "second", paused.revision)
+                .await
+                .unwrap();
+        assert_eq!(released.manual_release_item_id.as_deref(), Some("second"));
+        let (claim, claimed_snapshot) =
+            claim_head(&db.conn, conversation_id, "worker", Duration::seconds(30))
+                .await
+                .unwrap()
+                .unwrap();
+        assert_eq!(claim.id, "second");
+        assert!(claim.batched_claim_ids.is_empty());
+        assert_eq!(
+            claimed_snapshot.paused_reason.as_deref(),
+            Some(MANUAL_REVIEW_PAUSE_REASON)
+        );
+        assert!(
+            mark_dispatch_started(&db.conn, &claim, Duration::seconds(30))
+                .await
+                .unwrap()
+        );
+        let dispatching = snapshot(&db.conn, conversation_id).await.unwrap();
+        assert_eq!(dispatching.manual_release_item_id, None);
+        assert_eq!(
+            dispatching.paused_reason.as_deref(),
+            Some(MANUAL_REVIEW_PAUSE_REASON)
+        );
+        accept_claim(&db.conn, &claim).await.unwrap();
+        assert!(
+            claim_head(&db.conn, conversation_id, "worker", Duration::seconds(30))
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn manual_release_survives_busy_rejection_and_resume_clears_review_mode() {
+        let (db, conversation_id) = seeded_memory().await;
+        let queued = enqueue(&db.conn, input(conversation_id, "first", "First"))
+            .await
+            .unwrap();
+        let paused = pause_queue_for_manual_review(&db.conn, conversation_id, queued.revision)
+            .await
+            .unwrap();
+        release_one_manual_item(&db.conn, conversation_id, "first", paused.revision)
+            .await
+            .unwrap();
+        let (claim, _) = claim_head(&db.conn, conversation_id, "worker", Duration::seconds(30))
+            .await
+            .unwrap()
+            .unwrap();
+        mark_dispatch_started(&db.conn, &claim, Duration::seconds(30))
+            .await
+            .unwrap();
+        let released = release_claim_busy(&db.conn, &claim).await.unwrap();
+        assert_eq!(released.manual_release_item_id.as_deref(), Some("first"));
+        let resumed = resume_queue(&db.conn, conversation_id, released.revision)
+            .await
+            .unwrap();
+        assert_eq!(resumed.paused_reason, None);
+        assert_eq!(resumed.manual_release_item_id, None);
     }
 
     #[tokio::test]

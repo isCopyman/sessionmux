@@ -71,6 +71,7 @@ mod m20260822_000003_work_task_session_assignment;
 mod m20260822_000004_work_task_backlog;
 mod m20260823_000001_work_task_priority;
 mod m20260823_000002_opened_tab_board;
+mod m20260823_000003_prompt_queue_manual_release;
 pub struct Migrator;
 
 #[async_trait::async_trait]
@@ -148,6 +149,7 @@ impl MigratorTrait for Migrator {
             Box::new(m20260822_000004_work_task_backlog::Migration),
             Box::new(m20260823_000001_work_task_priority::Migration),
             Box::new(m20260823_000002_opened_tab_board::Migration),
+            Box::new(m20260823_000003_prompt_queue_manual_release::Migration),
         ]
     }
 }
