@@ -108,6 +108,30 @@ function folder(id: number, name: string): FolderDetail {
   }
 }
 
+function conversation(
+  id: number,
+  title: string,
+  agentType: DbConversationSummary["agent_type"] = "claude_code"
+): DbConversationSummary {
+  return {
+    id,
+    folder_id: 1,
+    title,
+    title_locked: true,
+    agent_type: agentType,
+    status: "idle",
+    kind: "regular",
+    model: null,
+    git_branch: "main",
+    external_id: null,
+    message_count: 1,
+    child_count: 0,
+    created_at: "2026-08-01T00:00:00Z",
+    updated_at: "2026-08-01T00:00:00Z",
+    pinned_at: null,
+  }
+}
+
 function task(
   id: number,
   status: WorkTaskStatus,
@@ -194,6 +218,7 @@ beforeEach(() => {
   h.tasks = []
   h.viewMode = "board"
   h.folders = [folder(1, "alpha"), folder(2, "bravo")]
+  h.conversations = []
   h.connections.clear()
   h.refetch.mockReset()
 })
@@ -286,6 +311,38 @@ describe("TasksPage grouping", () => {
     expectTitleOrder(todo, ["claude-todo", "codex-todo", "no-agent-todo"])
   })
 
+  it("segments by the concrete owner Session", () => {
+    localStorage.setItem("workspace:tasks-board-grouping", "session")
+    h.conversations = [
+      conversation(101, "Research GPT", "codex"),
+      conversation(102, "Writing Claude"),
+    ]
+    h.tasks = [
+      task(1, "running", {
+        title: "collect evidence",
+        conversation_id: 101,
+      }),
+      task(2, "running", {
+        title: "draft prose",
+        conversation_id: 102,
+      }),
+      task(3, "todo", {
+        title: "unowned idea",
+        execution_mode: null,
+      }),
+    ]
+    renderPage()
+
+    expect(
+      within(columnRoot("In progress"))
+        .getAllByTestId("task-group-header")
+        .map((el) => el.textContent)
+    ).toEqual(["Research GPT1", "Writing Claude1"])
+    expect(
+      within(columnRoot("To do")).getByTestId("task-group-header").textContent
+    ).toBe("Ungrouped1")
+  })
+
   it("hides project group headers once a single folder is the filter", async () => {
     localStorage.setItem("workspace:tasks-board-grouping", "folder")
     h.tasks = [
@@ -350,6 +407,80 @@ describe("TasksPage grouping", () => {
     expect(screen.queryByRole("heading", { name: "To do" })).toBeNull()
     expect(screen.getByText("todo-alpha")).toBeInTheDocument()
     expect(screen.getByText("todo-bravo")).toBeInTheDocument()
+  })
+})
+
+describe("TasksPage quick views", () => {
+  it("switches between unassigned, manual, Agent, and attention projections", async () => {
+    h.tasks = [
+      task(1, "todo", { title: "unassigned", execution_mode: null }),
+      task(2, "todo", { title: "manual", execution_mode: "manual" }),
+      task(3, "running", {
+        title: "session work",
+        execution_mode: "session",
+        conversation_id: 101,
+      }),
+      task(4, "review", {
+        title: "review this",
+        execution_mode: "session",
+        conversation_id: 101,
+      }),
+      task(5, "failed", {
+        title: "blocked manual",
+        execution_mode: "manual",
+      }),
+    ]
+    h.conversations = [conversation(101, "Research GPT", "codex")]
+    renderPage()
+
+    await userEvent.click(screen.getByRole("button", { name: "Unassigned" }))
+    expect(screen.getByText("unassigned")).toBeInTheDocument()
+    expect(screen.queryByText("manual")).toBeNull()
+
+    await userEvent.click(screen.getByRole("button", { name: "Manual" }))
+    expect(screen.getByText("manual")).toBeInTheDocument()
+    expect(screen.getByText("blocked manual")).toBeInTheDocument()
+    expect(screen.queryByText("session work")).toBeNull()
+
+    await userEvent.click(screen.getByRole("button", { name: "Agent" }))
+    expect(screen.getByText("session work")).toBeInTheDocument()
+    expect(screen.getByText("review this")).toBeInTheDocument()
+    expect(screen.queryByText("blocked manual")).toBeNull()
+
+    await userEvent.click(screen.getByRole("button", { name: "Needs review" }))
+    expect(screen.getByText("review this")).toBeInTheDocument()
+    expect(screen.getByText("blocked manual")).toBeInTheDocument()
+    expect(screen.queryByText("session work")).toBeNull()
+    expect(localStorage.getItem("workspace:tasks-scope-filter")).toBe(
+      "attention"
+    )
+  })
+
+  it("filters to one concrete owner Session", async () => {
+    h.conversations = [
+      conversation(101, "Research GPT", "codex"),
+      conversation(102, "Writing Claude"),
+    ]
+    h.tasks = [
+      task(1, "running", {
+        title: "research task",
+        execution_mode: "session",
+        conversation_id: 101,
+      }),
+      task(2, "running", {
+        title: "writing task",
+        execution_mode: "session",
+        conversation_id: 102,
+      }),
+    ]
+    renderPage()
+
+    await userEvent.click(
+      screen.getByRole("combobox", { name: "Owner Session" })
+    )
+    await userEvent.click(screen.getByRole("option", { name: "Research GPT" }))
+    expect(screen.getByText("research task")).toBeInTheDocument()
+    expect(screen.queryByText("writing task")).toBeNull()
   })
 })
 

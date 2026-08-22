@@ -52,6 +52,10 @@ const names = new Map<number, string>([
 function opts(folderFilter: number | null = null) {
   return {
     folderNames: names,
+    sessionNames: new Map<number, string>([
+      [21, "Research GPT"],
+      [22, "Writing Claude"],
+    ]),
     folderFilter,
     agentLabel: (agentType: string) =>
       agentType === "claude_code" ? "Claude Code" : agentType,
@@ -72,6 +76,11 @@ describe("groupingShowsHeaders", () => {
   it("always shows agent headers, even with a folder filter", () => {
     expect(groupingShowsHeaders("agent", null)).toBe(true)
     expect(groupingShowsHeaders("agent", 1)).toBe(true)
+  })
+
+  it("always shows Session headers", () => {
+    expect(groupingShowsHeaders("session", null)).toBe(true)
+    expect(groupingShowsHeaders("session", 1)).toBe(true)
   })
 })
 
@@ -143,6 +152,23 @@ describe("segmentTasksForGrouping", () => {
       ["Claude Code", false, [3, 5]],
       ["codex", false, [1, 4]],
       [null, true, [2]],
+    ])
+  })
+
+  it("groups by concrete owner Session rather than Harness", () => {
+    const tasks = [
+      task(1, "running", { conversation_id: 22, agent_type: "claude_code" }),
+      task(2, "running", { conversation_id: 21, agent_type: "claude_code" }),
+      task(3, "todo", { conversation_id: null }),
+      task(4, "running", { conversation_id: 21, agent_type: "codex" }),
+    ]
+    const segs = segmentTasksForGrouping(tasks, "session", opts())
+    expect(
+      segs.map((s) => [s.label, s.ungrouped, s.tasks.map((t) => t.id)])
+    ).toEqual([
+      ["Research GPT", false, [2, 4]],
+      ["Writing Claude", false, [1]],
+      [null, true, [3]],
     ])
   })
 })

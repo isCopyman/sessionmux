@@ -15,6 +15,7 @@ export interface TaskBoardSegment {
 
 export interface SegmentTasksOptions {
   folderNames: ReadonlyMap<number, string>
+  sessionNames: ReadonlyMap<number, string>
   /** When grouping by project and a single folder is already the page
    *  filter, the column collapses to one unlabeled segment — no extra
    *  header over a filter the user just chose. */
@@ -90,6 +91,19 @@ function placeTask(
     const name = opts.folderNames.get(task.folder_id) ?? null
     if (name) {
       return { key: `folder:${task.folder_id}`, label: name, ungrouped: false }
+    }
+    return { key: UNGROUPED_KEY, label: null, ungrouped: true }
+  }
+
+  if (grouping === "session") {
+    const id = task.conversation_id
+    const name = id == null ? null : (opts.sessionNames.get(id) ?? null)
+    if (id != null) {
+      return {
+        key: `session:${id}`,
+        label: name ?? `Session #${id}`,
+        ungrouped: false,
+      }
     }
     return { key: UNGROUPED_KEY, label: null, ungrouped: true }
   }

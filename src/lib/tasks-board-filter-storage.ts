@@ -4,6 +4,8 @@ const BOARD_FILTER_KEY = "workspace:tasks-board-filter"
 const VIEW_MODE_KEY = "workspace:tasks-view-mode"
 const STATUS_FILTER_KEY = "workspace:tasks-status-filter"
 const GROUPING_KEY = "workspace:tasks-board-grouping"
+const SCOPE_FILTER_KEY = "workspace:tasks-scope-filter"
+const OWNER_FILTER_KEY = "workspace:tasks-owner-filter"
 
 export const TASKS_STATUS_GROUPS = [
   "backlog",
@@ -27,9 +29,23 @@ export const DEFAULT_TASKS_BOARD_FILTER: TasksBoardFilter = {
 
 export type TasksViewMode = "board" | "list"
 export const DEFAULT_TASKS_VIEW_MODE: TasksViewMode = "board"
-export const TASKS_BOARD_GROUPINGS = ["none", "folder", "agent"] as const
+export const TASKS_BOARD_GROUPINGS = [
+  "none",
+  "folder",
+  "session",
+  "agent",
+] as const
 export type TasksBoardGrouping = (typeof TASKS_BOARD_GROUPINGS)[number]
 export const DEFAULT_TASKS_BOARD_GROUPING: TasksBoardGrouping = "none"
+export const TASKS_SCOPES = [
+  "all",
+  "unassigned",
+  "manual",
+  "agent",
+  "attention",
+] as const
+export type TasksScope = (typeof TASKS_SCOPES)[number]
+export const DEFAULT_TASKS_SCOPE: TasksScope = "all"
 
 export function loadTasksBoardFilter(): TasksBoardFilter {
   if (typeof window === "undefined") return DEFAULT_TASKS_BOARD_FILTER
@@ -110,5 +126,42 @@ export function saveTasksBoardGrouping(grouping: TasksBoardGrouping): void {
   if (typeof window === "undefined") return
   try {
     localStorage.setItem(GROUPING_KEY, grouping)
+  } catch {}
+}
+
+export function loadTasksScope(): TasksScope {
+  if (typeof window === "undefined") return DEFAULT_TASKS_SCOPE
+  try {
+    const raw = localStorage.getItem(SCOPE_FILTER_KEY)
+    return TASKS_SCOPES.find((scope) => scope === raw) ?? DEFAULT_TASKS_SCOPE
+  } catch {
+    return DEFAULT_TASKS_SCOPE
+  }
+}
+
+export function saveTasksScope(scope: TasksScope): void {
+  if (typeof window === "undefined") return
+  try {
+    localStorage.setItem(SCOPE_FILTER_KEY, scope)
+  } catch {}
+}
+
+export function loadTasksOwnerFilter(): number | null {
+  if (typeof window === "undefined") return null
+  try {
+    const raw = localStorage.getItem(OWNER_FILTER_KEY)
+    if (raw == null) return null
+    const value = Number(raw)
+    return Number.isSafeInteger(value) && value > 0 ? value : null
+  } catch {
+    return null
+  }
+}
+
+export function saveTasksOwnerFilter(conversationId: number | null): void {
+  if (typeof window === "undefined") return
+  try {
+    if (conversationId == null) localStorage.removeItem(OWNER_FILTER_KEY)
+    else localStorage.setItem(OWNER_FILTER_KEY, String(conversationId))
   } catch {}
 }

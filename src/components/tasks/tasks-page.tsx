@@ -42,12 +42,18 @@ import {
   DEFAULT_TASKS_BOARD_FILTER,
   loadTasksBoardFilter,
   loadTasksBoardGrouping,
+  loadTasksOwnerFilter,
+  loadTasksScope,
   loadTasksStatusFilter,
   saveTasksBoardFilter,
   saveTasksBoardGrouping,
+  saveTasksOwnerFilter,
+  saveTasksScope,
   saveTasksStatusFilter,
   TASKS_BOARD_GROUPINGS,
+  TASKS_SCOPES,
   type TasksBoardGrouping,
+  type TasksScope,
 } from "@/lib/tasks-board-filter-storage"
 import { WorkbenchPageTitle } from "@/components/workbench/workbench-page-title"
 import { FolderSelect } from "@/components/shared/folder-select"
@@ -76,6 +82,7 @@ import {
   type BoardColumnId,
 } from "./board-columns"
 import { groupingShowsHeaders, segmentTasksForGrouping } from "./board-grouping"
+import { filterTasksByScope } from "./task-scope"
 import {
   connectionKeysForTask,
   taskActivityDot,
@@ -140,8 +147,17 @@ const ALL_STATUSES = "__all__"
 const GROUPING_LABEL_KEYS = {
   none: "groupByNone",
   folder: "groupByFolder",
+  session: "groupBySession",
   agent: "groupByAgent",
 } as const satisfies Record<TasksBoardGrouping, string>
+
+const SCOPE_LABEL_KEYS = {
+  all: "scopeAll",
+  unassigned: "scopeUnassigned",
+  manual: "scopeManual",
+  agent: "scopeAgent",
+  attention: "scopeAttention",
+} as const satisfies Record<TasksScope, string>
 
 /** The cards inside a column. gap-4 — the same gutter the columns keep from
  *  each other and from the window edge — so a card is inset by 1rem on all
@@ -205,6 +221,17 @@ export function TasksPage() {
     for (const f of folders) map.set(f.id, f.alias ?? f.name)
     return map
   }, [folders])
+  const conversationNames = useMemo(() => {
+    const map = new Map<number, string>()
+    for (const conversation of conversations) {
+      map.set(
+        conversation.id,
+        conversation.title?.trim() ||
+          `${getAgentLabel(conversation.agent_type)} #${conversation.id}`
+      )
+    }
+    return map
+  }, [conversations])
 
   const [selectedFolderFilter, setFolderFilter] = useState<number | null>(null)
   // A folder can leave the workspace (closed, or removed) while it is the active
@@ -244,6 +271,13 @@ export function TasksPage() {
   useEffect(() => {
     saveTasksBoardGrouping(grouping)
   }, [grouping])
+  const [scope, setScope] = useState<TasksScope>(loadTasksScope)
+  useEffect(() => {
+    saveTasksScope(scope)
+  }, [scope])
+  const [selectedOwnerFilter, setOwnerFilter] = useState<number | null>(
+    loadTasksOwnerFilter
+  )
   // A drop acts on the LIVE row, not the snapshot the drag started from: the
   // provider refetches throughout a drag, and the engine's auto-processor can
   // claim a pending task while it is in the air.
@@ -341,13 +375,39 @@ export function TasksPage() {
     return () => window.removeEventListener(OPEN_TASK_SETTINGS_EVENT, open)
   }, [])
 
-  const visibleTasks = useMemo(
+  const folderScopedTasks = useMemo(
     () =>
       folderFilter == null
         ? tasks
         : tasks.filter((task) => task.folder_id === folderFilter),
     [tasks, folderFilter]
   )
+  const ownerOptions = useMemo(() => {
+    const ids = new Set<number>()
+    for (const task of folderScopedTasks) {
+      if (task.conversation_id != null) ids.add(task.conversation_id)
+    }
+    return [...ids]
+      .map((id) => ({
+        id,
+        label: conversationNames.get(id) ?? `Session #${id}`,
+      }))
+      .sort((a, b) => a.label.localeCompare(b.label))
+  }, [folderScopedTasks, conversationNames])
+  const ownerFilter =
+    selectedOwnerFilter != null &&
+    !ownerOptions.some((option) => option.id === selectedOwnerFilter)
+      ? null
+      : selectedOwnerFilter
+  useEffect(() => {
+    saveTasksOwnerFilter(ownerFilter)
+  }, [ownerFilter])
+  const visibleTasks = useMemo(() => {
+    const scoped = filterTasksByScope(folderScopedTasks, scope)
+    return ownerFilter == null
+      ? scoped
+      : scoped.filter((task) => task.conversation_id === ownerFilter)
+  }, [folderScopedTasks, scope, ownerFilter])
   const columns = useMemo(
     () => groupTasksByColumn(visibleTasks, boardFilter.showArchived),
     [visibleTasks, boardFilter]
@@ -363,8 +423,13 @@ export function TasksPage() {
 
   const showGroupHeaders = groupingShowsHeaders(grouping, folderFilter)
   const groupingOpts = useMemo(
-    () => ({ folderNames, folderFilter, agentLabel: getAgentLabel }),
-    [folderNames, folderFilter]
+    () => ({
+      folderNames,
+      sessionNames: conversationNames,
+      folderFilter,
+      agentLabel: getAgentLabel,
+    }),
+    [folderNames, conversationNames, folderFilter]
   )
   const columnSegments = useMemo(
     () => ({
@@ -699,6 +764,31 @@ export function TasksPage() {
               onSelectAll={() => setFolderFilter(null)}
             />
 
+            <div
+              className="flex items-center rounded-full bg-muted/70 p-0.5"
+              role="group"
+              aria-label={t("scopeFilter")}
+            >
+              {TASKS_SCOPES.map((item) => (
+                <Button
+                  key={item}
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  aria-pressed={scope === item}
+                  className={cn(
+                    "h-7 rounded-full px-2.5 text-[0.75rem] font-medium",
+                    scope === item
+                      ? "bg-background text-foreground shadow-sm hover:bg-background"
+                      : "text-muted-foreground hover:text-foreground"
+                  )}
+                  onClick={() => setScope(item)}
+                >
+                  {t(SCOPE_LABEL_KEYS[item])}
+                </Button>
+              ))}
+            </div>
+
             {/* Same pill treatment as the folder select so the left cluster reads
               as one family of controls (the settings entry lives in the chrome
               strip next to the page title). */}
@@ -803,6 +893,37 @@ export function TasksPage() {
                 ))}
               </SelectContent>
             </Select>
+
+            {ownerOptions.length > 0 ? (
+              <Select
+                value={
+                  ownerFilter == null ? "__all_owners__" : String(ownerFilter)
+                }
+                onValueChange={(value) =>
+                  setOwnerFilter(
+                    value === "__all_owners__" ? null : Number(value)
+                  )
+                }
+              >
+                <SelectTrigger
+                  size="sm"
+                  aria-label={t("ownerFilter")}
+                  className="h-8 w-auto max-w-48 gap-1.5 rounded-full border-transparent bg-muted/70 px-3 text-[0.8125rem] font-medium shadow-none ws-msg-chip hover:bg-muted"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__all_owners__">
+                    {t("ownerAll")}
+                  </SelectItem>
+                  {ownerOptions.map((option) => (
+                    <SelectItem key={option.id} value={String(option.id)}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            ) : null}
 
             {/* Status filter — list-only: the board already sorts by status into
               its seven columns, so there is nothing there for it to narrow.

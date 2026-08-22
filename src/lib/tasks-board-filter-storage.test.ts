@@ -2,10 +2,14 @@ import { beforeEach, describe, expect, it } from "vitest"
 import {
   loadTasksBoardFilter,
   loadTasksBoardGrouping,
+  loadTasksOwnerFilter,
+  loadTasksScope,
   loadTasksStatusFilter,
   loadTasksViewMode,
   saveTasksBoardFilter,
   saveTasksBoardGrouping,
+  saveTasksOwnerFilter,
+  saveTasksScope,
   saveTasksStatusFilter,
   saveTasksViewMode,
 } from "./tasks-board-filter-storage"
@@ -14,6 +18,8 @@ const BOARD_FILTER_KEY = "workspace:tasks-board-filter"
 const VIEW_MODE_KEY = "workspace:tasks-view-mode"
 const STATUS_FILTER_KEY = "workspace:tasks-status-filter"
 const GROUPING_KEY = "workspace:tasks-board-grouping"
+const SCOPE_FILTER_KEY = "workspace:tasks-scope-filter"
+const OWNER_FILTER_KEY = "workspace:tasks-owner-filter"
 
 beforeEach(() => {
   localStorage.clear()
@@ -96,6 +102,8 @@ describe("tasks board grouping storage", () => {
     expect(loadTasksBoardGrouping()).toBe("none")
     saveTasksBoardGrouping("folder")
     expect(loadTasksBoardGrouping()).toBe("folder")
+    saveTasksBoardGrouping("session")
+    expect(loadTasksBoardGrouping()).toBe("session")
     saveTasksBoardGrouping("agent")
     expect(loadTasksBoardGrouping()).toBe("agent")
     saveTasksBoardGrouping("none")
@@ -107,5 +115,37 @@ describe("tasks board grouping storage", () => {
     expect(loadTasksBoardGrouping()).toBe("none")
     localStorage.setItem(GROUPING_KEY, "room")
     expect(loadTasksBoardGrouping()).toBe("none")
+  })
+})
+
+describe("tasks quick scope storage", () => {
+  it("round-trips a scope and defaults to all", () => {
+    expect(loadTasksScope()).toBe("all")
+    saveTasksScope("unassigned")
+    expect(loadTasksScope()).toBe("unassigned")
+    saveTasksScope("attention")
+    expect(loadTasksScope()).toBe("attention")
+  })
+
+  it("falls back to all on a stale scope", () => {
+    localStorage.setItem(SCOPE_FILTER_KEY, "members")
+    expect(loadTasksScope()).toBe("all")
+  })
+})
+
+describe("tasks owner filter storage", () => {
+  it("round-trips a stable Session id and clears it", () => {
+    expect(loadTasksOwnerFilter()).toBeNull()
+    saveTasksOwnerFilter(42)
+    expect(loadTasksOwnerFilter()).toBe(42)
+    saveTasksOwnerFilter(null)
+    expect(localStorage.getItem(OWNER_FILTER_KEY)).toBeNull()
+  })
+
+  it("ignores invalid ids", () => {
+    localStorage.setItem(OWNER_FILTER_KEY, "0")
+    expect(loadTasksOwnerFilter()).toBeNull()
+    localStorage.setItem(OWNER_FILTER_KEY, "not-a-session")
+    expect(loadTasksOwnerFilter()).toBeNull()
   })
 })
