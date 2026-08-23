@@ -12,6 +12,7 @@ import {
 } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
@@ -55,6 +56,10 @@ function isGitHubAccount(account: GitHubAccount): boolean {
   return url.includes("github.com")
 }
 
+function accountInitial(username: string): string {
+  return Array.from(username.trim())[0]?.toUpperCase() ?? "?"
+}
+
 // ---------------------------------------------------------------------------
 // Shared account row component
 // ---------------------------------------------------------------------------
@@ -76,18 +81,14 @@ function AccountRow({
 }) {
   return (
     <div className="flex items-center gap-3 rounded-lg border bg-muted/10 px-3 py-2.5">
-      {account.avatar_url ? (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img
-          src={account.avatar_url}
-          alt={account.username}
-          className="h-8 w-8 rounded-full"
-        />
-      ) : (
-        <div className="h-8 w-8 rounded-full bg-muted flex items-center justify-center text-xs font-medium">
-          {account.username[0]?.toUpperCase()}
-        </div>
-      )}
+      <Avatar>
+        {account.avatar_url && (
+          <AvatarImage src={account.avatar_url} alt={account.username} />
+        )}
+        <AvatarFallback className="text-xs font-medium">
+          {accountInitial(account.username)}
+        </AvatarFallback>
+      </Avatar>
 
       <div className="flex-1 min-w-0 space-y-1">
         <div className="flex items-center gap-2">
