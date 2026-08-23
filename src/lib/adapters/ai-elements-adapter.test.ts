@@ -399,11 +399,12 @@ describe("groupGoalRuns", () => {
     // turn or a reloaded conversation must NOT shimmer the capsule forever.
     const out = groupGoalRuns([poll("create_goal"), text], false)
 
-    expect(out).toHaveLength(1)
+    expect(out).toHaveLength(2)
     const goalRun = goalRunOf(out[0])
     expect(goalRun.end).toBeNull()
-    expect(goalRun.items).toEqual([text])
+    expect(goalRun.items).toEqual([])
     expect(goalRun.isRunning).toBe(false)
+    expect(out[1]).toEqual(text)
   })
 
   it("does not mutate a reopened unfinished goal run when closing across turns", () => {
@@ -463,10 +464,56 @@ describe("groupGoalRuns", () => {
       isRunning: true,
     }
 
-    const out = groupGoalRuns([firstRun, repeatedRun, nextText])
+    const out = groupGoalRuns([firstRun, repeatedRun, nextText], true)
 
     expect(out).toHaveLength(1)
     expect(goalRunOf(out[0]).items).toEqual([firstText, nextText])
+  })
+
+  it("lifts every trailing answer part from a settled unfinished goal", () => {
+    const reasoning: AdaptedContentPart = {
+      type: "reasoning",
+      content: "thinking",
+      isStreaming: false,
+    }
+    const proposedPlan: AdaptedContentPart = {
+      type: "proposed-plan",
+      markdown: "## Plan",
+      isStreaming: false,
+    }
+    const generatedImage: AdaptedContentPart = {
+      type: "generated-image",
+      revisedPrompt: null,
+      image: null,
+      status: "completed",
+    }
+
+    const out = groupGoalRuns(
+      [poll("create_goal"), reasoning, text, proposedPlan, generatedImage],
+      false
+    )
+
+    expect(out.map((part) => part.type)).toEqual([
+      "goal-run",
+      "text",
+      "proposed-plan",
+      "generated-image",
+    ])
+    expect(goalRunOf(out[0]).items).toEqual([reasoning])
+  })
+
+  it("keeps mid-run prose before later process output inside the goal", () => {
+    const note: AdaptedContentPart = { type: "text", text: "checking" }
+    const out = groupGoalRuns(
+      [poll("create_goal"), note, poll("exec_command")],
+      false
+    )
+
+    expect(out).toHaveLength(1)
+    expect(goalRunOf(out[0]).items.map((part) => part.type)).toEqual([
+      "text",
+      "tool-call",
+    ])
   })
 
   it("closes an active cross-turn goal when the next turn already has a completed goal run", () => {

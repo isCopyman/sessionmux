@@ -5,6 +5,10 @@ import { describe, expect, it } from "vitest"
 
 import { GoalRunPart, GoalToolCallPart } from "./goal-tool-call"
 import { GoalControlProvider } from "./goal-control-context"
+import type {
+  AdaptedContentPart,
+  AdaptedGoalRunPart,
+} from "@/lib/adapters/ai-elements-adapter"
 import enMessages from "@/i18n/messages/en.json"
 import zhMessages from "@/i18n/messages/zh-CN.json"
 
@@ -19,6 +23,25 @@ function renderWithIntl(
     </NextIntlClientProvider>
   )
 }
+
+function runningGoal(items: AdaptedContentPart[]): AdaptedGoalRunPart {
+  return {
+    type: "goal-run",
+    start: {
+      type: "tool-call",
+      toolCallId: "call-create-goal",
+      toolName: "create_goal",
+      input: JSON.stringify({ objective: "Analyze README file" }),
+      state: "output-available",
+    },
+    end: null,
+    items,
+    isRunning: true,
+  }
+}
+
+const renderTextPart = (part: AdaptedContentPart, key: string) =>
+  part.type === "text" ? <div key={key}>{part.text}</div> : null
 
 describe("GoalToolCallPart", () => {
   it("renders Codex goal completion as a compact goal card", () => {
@@ -85,11 +108,48 @@ describe("GoalToolCallPart", () => {
     expect(runningTitle).toHaveClass("text-transparent")
     expect(screen.queryByText("Goal active")).not.toBeInTheDocument()
     expect(button.querySelectorAll("svg")).toHaveLength(1)
+    expect(screen.getByText("Reading README.md")).toBeInTheDocument()
+  })
+
+  it("opens when streamed body content arrives without a remount", () => {
+    const { rerender } = renderWithIntl(
+      <GoalRunPart part={runningGoal([])} renderPart={renderTextPart} />
+    )
     expect(screen.queryByText("Reading README.md")).not.toBeInTheDocument()
 
+    rerender(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <GoalRunPart
+          part={runningGoal([{ type: "text", text: "Reading README.md" }])}
+          renderPart={renderTextPart}
+        />
+      </NextIntlClientProvider>
+    )
+    expect(screen.getByText("Reading README.md")).toBeInTheDocument()
+  })
+
+  it("keeps an explicit manual collapse across later updates", () => {
+    const { rerender } = renderWithIntl(
+      <GoalRunPart
+        part={runningGoal([{ type: "text", text: "Reading README.md" }])}
+        renderPart={renderTextPart}
+      />
+    )
     fireEvent.click(screen.getByRole("button"))
 
-    expect(screen.getByText("Reading README.md")).toBeInTheDocument()
+    rerender(
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <GoalRunPart
+          part={runningGoal([
+            { type: "text", text: "Reading README.md" },
+            { type: "text", text: "Reading CLAUDE.md" },
+          ])}
+          renderPart={renderTextPart}
+        />
+      </NextIntlClientProvider>
+    )
+    expect(screen.queryByText("Reading README.md")).not.toBeInTheDocument()
+    expect(screen.queryByText("Reading CLAUDE.md")).not.toBeInTheDocument()
   })
 
   it("shows active status for wrapper-prefixed create_goal names", () => {

@@ -238,7 +238,11 @@ function GoalCard({
     Boolean(startPart.errorText) ||
     endPart?.state === "output-error" ||
     Boolean(endPart?.errorText)
-  const [bodyOpen, setBodyOpen] = useState(isError)
+  // A goal card mounts before its streamed body arrives. Derive the default
+  // from live data instead of freezing the empty mount state, while preserving
+  // an explicit user toggle across later updates.
+  const [userOpen, setUserOpen] = useState<boolean | null>(null)
+  const bodyOpen = userOpen ?? (isError || (isRunning && items.length > 0))
   const goal = useMemo(
     () => parseGoal(startPart, endPart),
     [startPart, endPart]
@@ -282,7 +286,7 @@ function GoalCard({
     RESUMABLE_GOAL_STATUSES.has(normalizedStatus)
 
   return (
-    <Collapsible open={bodyOpen} onOpenChange={setBodyOpen} className="w-full">
+    <Collapsible open={bodyOpen} onOpenChange={setUserOpen} className="w-full">
       <CollapsibleTrigger
         className={cn(
           "group inline-flex max-w-full items-center gap-1.5 rounded-full px-3.5 py-2 text-xs font-medium transition-colors",

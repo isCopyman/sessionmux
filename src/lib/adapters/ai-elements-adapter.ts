@@ -1469,6 +1469,26 @@ function mergeGoalObjectiveHints(
   return Array.from(merged).sort((a, b) => b.length - a.length)
 }
 
+const GOAL_ANSWER_PART_TYPES: ReadonlySet<AdaptedContentPart["type"]> = new Set(
+  ["text", "proposed-plan", "generated-image"]
+)
+
+/**
+ * Keep process output inside the Goal capsule, but lift the final answer after
+ * the last process part so a settled, collapsed unfinished Goal cannot hide it.
+ */
+function splitTrailingGoalAnswer(items: AdaptedContentPart[]): {
+  body: AdaptedContentPart[]
+  trailing: AdaptedContentPart[]
+} {
+  let end = items.length
+  while (end > 0 && GOAL_ANSWER_PART_TYPES.has(items[end - 1]!.type)) {
+    end -= 1
+  }
+  if (end === items.length) return { body: items, trailing: [] }
+  return { body: items.slice(0, end), trailing: items.slice(end) }
+}
+
 /**
  * Wrap a Codex `/goal` lifecycle into one card-style part:
  * `create_goal` starts the run, every intervening adapted part becomes card
@@ -1509,15 +1529,19 @@ export function groupGoalRuns(
 
   const flushActive = () => {
     if (!active) return
+    const { body, trailing } = isStreaming
+      ? { body: active.items, trailing: [] }
+      : splitTrailingGoalAnswer(active.items)
     result.push({
       type: "goal-run",
       start: active.start,
       end: null,
-      items: [...active.items],
+      items: [...body],
       // Unfinished run: shimmer only while the turn is live. A stopped or
       // reloaded goal (codex never emits a closing update_goal) settles static.
       isRunning: isStreaming,
     })
+    result.push(...trailing)
     active = null
   }
 
