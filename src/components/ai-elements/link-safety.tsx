@@ -212,7 +212,7 @@ function shouldLetStreamdownOpenExternalUrl(rawUrl: string): boolean {
   // them via a synthetic anchor click — streamdown's `window.open(_, "_blank")`
   // would otherwise leave a blank tab behind.
   if (OS_HANDLER_PROTOCOLS.has(protocol)) return false
-  return isWebOpenerEnvironment()
+  return !isDesktop()
 }
 
 /**
