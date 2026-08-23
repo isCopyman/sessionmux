@@ -86,11 +86,9 @@ pub async fn update_system_proxy_settings(
     Extension(state): Extension<Arc<AppState>>,
     Json(params): Json<UpdateProxySettingsParams>,
 ) -> Result<Json<SystemProxySettings>, AppCommandError> {
-    let settings = params.settings;
     let db = &state.db;
 
-    // TODO: call normalize_proxy_settings once it is made pub(crate) in
-    // commands/system_settings.rs. For now the frontend validates the URL.
+    let settings = settings_commands::normalize_proxy_settings(params.settings)?;
     let serialized = serde_json::to_string(&settings).map_err(|e| {
         AppCommandError::invalid_input("Failed to serialize proxy settings")
             .with_detail(e.to_string())

@@ -12,26 +12,67 @@ const PROXY_ENV_KEYS: [&str; 6] = [
     "all_proxy",
 ];
 
-pub fn apply_system_proxy_settings(settings: &SystemProxySettings) -> Result<(), AppCommandError> {
-    if settings.enabled {
-        let proxy_url = settings
-            .proxy_url
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| {
-                AppCommandError::configuration_missing(
-                    "Proxy URL is required when proxy is enabled",
-                )
-            })?;
+fn names_a_host(url: &reqwest::Url) -> bool {
+    url.host_str().is_some_and(|host| !host.is_empty())
+}
 
-        for key in PROXY_ENV_KEYS {
-            unsafe {
-                std::env::set_var(key, proxy_url);
+fn needs_http_prefix(value: &str) -> bool {
+    if value.contains("://") {
+        return false;
+    }
+    !reqwest::Url::parse(value).is_ok_and(|url| names_a_host(&url))
+}
+
+/// Normalize the abbreviated `host:port` form accepted by the settings UI into
+/// a URL that Node/npm and every spawned Harness can parse consistently.
+pub(crate) fn normalize_proxy_url(raw: &str) -> Result<String, AppCommandError> {
+    let trimmed = raw.trim();
+    let normalized = if needs_http_prefix(trimmed) {
+        format!("http://{trimmed}")
+    } else {
+        trimmed.to_string()
+    };
+
+    let parsed = reqwest::Url::parse(&normalized).map_err(|error| {
+        AppCommandError::configuration_invalid("Invalid proxy URL").with_detail(error.to_string())
+    })?;
+    if !names_a_host(&parsed) {
+        return Err(AppCommandError::configuration_invalid("Invalid proxy URL")
+            .with_detail("a proxy address must include a host"));
+    }
+    reqwest::Proxy::all(&normalized).map_err(|error| {
+        AppCommandError::configuration_invalid("Invalid proxy URL").with_detail(error.to_string())
+    })?;
+    Ok(normalized)
+}
+
+pub(crate) fn proxy_env_value(
+    settings: &SystemProxySettings,
+) -> Result<Option<String>, AppCommandError> {
+    if !settings.enabled {
+        return Ok(None);
+    }
+    let value = settings
+        .proxy_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            AppCommandError::configuration_missing("Proxy URL is required when proxy is enabled")
+        })?;
+    normalize_proxy_url(value).map(Some)
+}
+
+pub fn apply_system_proxy_settings(settings: &SystemProxySettings) -> Result<(), AppCommandError> {
+    match proxy_env_value(settings)? {
+        Some(proxy_url) => {
+            for key in PROXY_ENV_KEYS {
+                unsafe {
+                    std::env::set_var(key, &proxy_url);
+                }
             }
         }
-    } else {
-        clear_proxy_env();
+        None => clear_proxy_env(),
     }
 
     Ok(())

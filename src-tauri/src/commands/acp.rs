@@ -7619,6 +7619,28 @@ pub(crate) fn load_agent_local_config_json(agent_type: AgentType) -> Option<Stri
     serde_json::to_string_pretty(&parsed).ok()
 }
 
+fn patch_addition(patch: &serde_json::Value) -> Option<serde_json::Value> {
+    let Some(patch_obj) = patch.as_object() else {
+        return Some(patch.clone());
+    };
+
+    let mut kept = serde_json::Map::new();
+    for (key, value) in patch_obj {
+        if value.is_null() {
+            continue;
+        }
+        if let Some(value) = patch_addition(value) {
+            kept.insert(key.clone(), value);
+        }
+    }
+
+    if kept.is_empty() && !patch_obj.is_empty() {
+        None
+    } else {
+        Some(serde_json::Value::Object(kept))
+    }
+}
+
 fn merge_json_values(base: &mut serde_json::Value, patch: &serde_json::Value) {
     if let (Some(base_obj), Some(patch_obj)) = (base.as_object_mut(), patch.as_object()) {
         for (key, patch_value) in patch_obj {
@@ -7630,14 +7652,17 @@ fn merge_json_values(base: &mut serde_json::Value, patch: &serde_json::Value) {
             match base_obj.get_mut(key) {
                 Some(base_value) => merge_json_values(base_value, patch_value),
                 None => {
-                    base_obj.insert(key.clone(), patch_value.clone());
+                    if let Some(value) = patch_addition(patch_value) {
+                        base_obj.insert(key.clone(), value);
+                    }
                 }
             }
         }
         return;
     }
 
-    *base = patch.clone();
+    *base =
+        patch_addition(patch).unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new()));
 }
 
 fn persist_agent_local_config_json(
@@ -8331,8 +8356,23 @@ struct AgentRuntimeConfig {
     api_key: Option<String>,
     #[serde(default)]
     model: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_env_strings")]
     env: BTreeMap<String, String>,
+}
+
+fn deserialize_env_strings<'de, D>(deserializer: D) -> Result<BTreeMap<String, String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let raw =
+        <BTreeMap<String, serde_json::Value> as serde::Deserialize>::deserialize(deserializer)?;
+    Ok(raw
+        .into_iter()
+        .filter_map(|(key, value)| match value {
+            serde_json::Value::String(value) => Some((key, value)),
+            _ => None,
+        })
+        .collect())
 }
 
 fn trim_non_empty(value: Option<String>) -> Option<String> {
@@ -15082,6 +15122,40 @@ wire_api = "chat"
             env.get("ANTHROPIC_MODEL").and_then(|v| v.as_str()),
             Some("keep-me")
         );
+    }
+
+    #[test]
+    fn merge_json_values_does_not_materialize_removals_under_a_missing_parent() {
+        let mut base = serde_json::json!({});
+        let patch = serde_json::json!({
+            "env": {
+                "REMOVE_ME": null,
+                "KEEP_ME": "value"
+            },
+            "empty_removal": {
+                "REMOVE_ME": null
+            }
+        });
+
+        merge_json_values(&mut base, &patch);
+
+        assert_eq!(base, serde_json::json!({ "env": { "KEEP_ME": "value" } }));
+    }
+
+    #[test]
+    fn agent_runtime_config_ignores_non_string_environment_values() {
+        let config: AgentRuntimeConfig = serde_json::from_value(serde_json::json!({
+            "env": {
+                "STRING": "kept",
+                "NUMBER": 42,
+                "BOOL": true,
+                "NULL": null
+            }
+        }))
+        .expect("runtime config remains readable");
+
+        assert_eq!(config.env.get("STRING").map(String::as_str), Some("kept"));
+        assert_eq!(config.env.len(), 1);
     }
 
     #[test]

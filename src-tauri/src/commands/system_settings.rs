@@ -15,7 +15,6 @@ use crate::models::{
     AvailableTerminalShells, SystemLanguageSettings, SystemProxySettings, SystemTerminalSettings,
     TerminalShellOption,
 };
-#[cfg(feature = "tauri-runtime")]
 use crate::network::proxy;
 #[cfg(feature = "tauri-runtime")]
 use crate::preferences;
@@ -30,7 +29,7 @@ pub(crate) const TERMINAL_SETTINGS_UPDATED_EVENT: &str = "app://terminal-setting
 pub(crate) const TERMINAL_SHELL_OPTION_SYSTEM: &str = "system";
 pub(crate) const TERMINAL_SHELL_OPTION_CUSTOM: &str = "custom";
 
-fn normalize_proxy_settings(
+pub(crate) fn normalize_proxy_settings(
     settings: SystemProxySettings,
 ) -> Result<SystemProxySettings, AppCommandError> {
     if !settings.enabled {
@@ -56,13 +55,9 @@ fn normalize_proxy_settings(
             AppCommandError::configuration_missing("Proxy URL is required when proxy is enabled")
         })?;
 
-    reqwest::Proxy::all(proxy_url).map_err(|e| {
-        AppCommandError::configuration_invalid("Invalid proxy URL").with_detail(e.to_string())
-    })?;
-
     Ok(SystemProxySettings {
         enabled: true,
-        proxy_url: Some(proxy_url.to_string()),
+        proxy_url: Some(proxy::normalize_proxy_url(proxy_url)?),
     })
 }
 
@@ -382,6 +377,34 @@ mod tests {
     use super::*;
     use crate::db::test_helpers::fresh_in_memory_db;
     use crate::web::event_bridge::EventEmitter;
+
+    #[test]
+    fn proxy_settings_accept_abbreviated_host_and_port() {
+        let normalized = normalize_proxy_settings(SystemProxySettings {
+            enabled: true,
+            proxy_url: Some(" 127.0.0.1:7890 ".to_string()),
+        })
+        .expect("abbreviated proxy address");
+
+        assert_eq!(
+            normalized.proxy_url.as_deref(),
+            Some("http://127.0.0.1:7890")
+        );
+    }
+
+    #[test]
+    fn proxy_settings_preserve_explicit_proxy_schemes() {
+        let normalized = normalize_proxy_settings(SystemProxySettings {
+            enabled: true,
+            proxy_url: Some("socks5://localhost:1080".to_string()),
+        })
+        .expect("explicit proxy scheme");
+
+        assert_eq!(
+            normalized.proxy_url.as_deref(),
+            Some("socks5://localhost:1080")
+        );
+    }
 
     #[tokio::test]
     async fn terminal_shell_setting_persists_and_updates_live_runtime() {
