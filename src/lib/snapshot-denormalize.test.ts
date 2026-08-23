@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import { denormalizeSnapshot } from "@/lib/snapshot-denormalize"
-import type { LiveSessionSnapshot } from "@/lib/types"
+import type { LiveSessionSnapshot, ToolCallState } from "@/lib/types"
 
 function baseSnapshot(
   overrides: Partial<LiveSessionSnapshot> = {}
@@ -108,5 +108,50 @@ describe("denormalizeSnapshot — last_error", () => {
     expect(patch.lastError).toBeNull()
     expect(patch.lastErrorCode).toBeNull()
     expect(patch.status).toBe("connected")
+  })
+})
+
+describe("denormalizeSnapshot — tagged tool output", () => {
+  function hydrateTool(output: ToolCallState["output"]) {
+    return denormalizeSnapshot(
+      baseSnapshot({
+        live_message: {
+          id: "lm-tool",
+          role: "assistant",
+          started_at: "2026-08-23T00:00:00Z",
+          content: [{ kind: "tool_call_ref", tool_call_id: "tc-1" }],
+        },
+        active_tool_calls: [
+          {
+            id: "tc-1",
+            kind: "execute",
+            label: "Tool",
+            status: "completed",
+            input: null,
+            output,
+            content: null,
+            locations: null,
+            meta: null,
+          },
+        ],
+      })
+    ).liveMessage?.content[0]
+  }
+
+  it("hydrates JSON output as its payload rather than the tagged wrapper", () => {
+    const block = hydrateTool({ kind: "json", value: { answer: 42 } })
+    expect(block).toMatchObject({
+      type: "tool_call",
+      info: { raw_output_chunks: ['{"answer":42}'] },
+    })
+  })
+
+  it("preserves empty text and error output", () => {
+    expect(hydrateTool({ kind: "text", content: "" })).toMatchObject({
+      info: { raw_output_chunks: [""] },
+    })
+    expect(hydrateTool({ kind: "error", message: "boom" })).toMatchObject({
+      info: { raw_output_chunks: ['{"error":"boom"}'] },
+    })
   })
 })

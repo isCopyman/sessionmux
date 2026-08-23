@@ -221,15 +221,26 @@ function denormalizeBlock(
   }
 }
 
+function toolOutputRawText(output: ToolCallState["output"]): string | null {
+  if (output == null) return null
+  switch (output.kind) {
+    case "text":
+      return output.content
+    case "json":
+      return JSON.stringify(output.value)
+    case "error":
+      return JSON.stringify({ error: output.message })
+  }
+}
+
 function toolStateToInfo(tc: ToolCallState): ToolCallInfo {
   // Backend's structured output is collapsed into a single raw chunk for
   // hydration. Chunk history isn't recoverable from the snapshot — the
   // frontend's per-chunk delta tracking will resume from subsequent events.
   const outputChunks: string[] = []
   let outputBytes = 0
-  if (tc.output) {
-    const serialized =
-      typeof tc.output === "string" ? tc.output : JSON.stringify(tc.output)
+  const serialized = toolOutputRawText(tc.output)
+  if (serialized != null) {
     outputChunks.push(serialized)
     outputBytes = serialized.length
   }
