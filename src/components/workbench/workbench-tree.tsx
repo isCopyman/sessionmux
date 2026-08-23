@@ -13,7 +13,6 @@ import {
   ChevronRight,
   Copy,
   Loader2,
-  ListTodo,
   MoreHorizontal,
   PanelsTopLeft,
   Pencil,
@@ -21,15 +20,10 @@ import {
   PinOff,
   Plus,
   Trash2,
-  Users,
   X,
 } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
-import { AgentIcon } from "@/components/agent-icon"
-import { CollaborationUnreadBadge } from "@/components/collaboration/collaboration-unread-badge"
-import { ConversationStatusDot } from "@/components/conversations/conversation-status-dot"
-
 import { Button } from "@/components/ui/button"
 import {
   Dialog,
@@ -103,6 +97,7 @@ import {
   type WorkbenchActivityTab,
   type WorkbenchConnectionSnapshot,
 } from "./workbench-activity"
+import { WorkbenchContentRow } from "./workbench-content-row"
 
 type EditorState =
   | { mode: "create" }
@@ -974,79 +969,24 @@ export function WorkbenchTree() {
                       return (
                         <ContextMenu key={session.key}>
                           <ContextMenuTrigger asChild>
-                            <button
-                              type="button"
-                              data-workbench-id={item.id}
-                              data-workbench-session
-                              data-focused-session={
-                                selected ? "true" : undefined
-                              }
-                              data-conversation-id={
-                                session.conversationId ?? undefined
-                              }
-                              data-room-id={session.roomId}
-                              data-board-scope={session.boardScope}
+                            <WorkbenchContentRow
+                              kind={session.kind}
                               title={session.title}
-                              aria-current={selected ? "page" : undefined}
-                              className={cn(
-                                "flex h-7 w-full min-w-0 items-center gap-1.5 rounded-md pe-2 ps-8 text-start text-xs",
-                                "hover:bg-sidebar-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
-                                selected &&
-                                  "bg-primary/8 text-primary ring-1 ring-inset ring-primary/30"
-                              )}
+                              agentType={session.agentType}
+                              selected={selected}
+                              workbenchId={item.id}
+                              conversationId={session.conversationId}
+                              roomId={session.roomId}
+                              boardScope={session.boardScope}
+                              status={session.status}
+                              activity={sessionActivity}
+                              unreadCount={session.room?.unreadCount ?? 0}
+                              workingLabel={t("sessionWorking")}
+                              attentionLabel={t("sessionConnectionError")}
                               onClick={() =>
                                 void focusSession(item.id, session)
                               }
-                            >
-                              <span
-                                aria-hidden
-                                className="relative flex h-3.5 w-3.5 shrink-0 items-center justify-center"
-                              >
-                                {session.kind === "room" ? (
-                                  <Users className="h-3 w-3" />
-                                ) : session.kind === "board" ? (
-                                  <ListTodo className="h-3 w-3" />
-                                ) : (
-                                  <AgentIcon
-                                    agentType={session.agentType}
-                                    className="h-3 w-3"
-                                  />
-                                )}
-                                {sessionActivity === "busy" ? (
-                                  <span
-                                    title={t("sessionWorking")}
-                                    className={cn(
-                                      "absolute -top-0.5 -left-0.5 h-1.5 w-1.5 rounded-full",
-                                      "bg-primary animate-pulse ring-1 ring-sidebar"
-                                    )}
-                                  />
-                                ) : sessionActivity === "attention" ? (
-                                  <span
-                                    title={t("sessionConnectionError")}
-                                    className={cn(
-                                      "absolute -top-0.5 -left-0.5 h-1.5 w-1.5 rounded-full",
-                                      "bg-destructive ring-1 ring-sidebar"
-                                    )}
-                                  />
-                                ) : null}
-                                {session.status ? (
-                                  <ConversationStatusDot
-                                    status={session.status}
-                                    size="sm"
-                                    className="absolute -bottom-0.5 -right-0.5 ring-1 ring-sidebar"
-                                  />
-                                ) : null}
-                              </span>
-                              <span className="min-w-0 flex-1 truncate">
-                                {session.title}
-                              </span>
-                              {session.kind === "room" ? (
-                                <CollaborationUnreadBadge
-                                  count={session.room?.unreadCount ?? 0}
-                                  className="ms-auto"
-                                />
-                              ) : null}
-                            </button>
+                            />
                           </ContextMenuTrigger>
                           <ContextMenuContent>
                             <ContextMenuItem
