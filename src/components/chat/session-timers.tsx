@@ -37,8 +37,10 @@ import type { SessionTimer } from "@/lib/types"
  */
 export function SessionTimers({
   conversationId,
+  className,
 }: {
   conversationId?: number | null
+  className?: string
 }) {
   const t = useTranslations("Folder.chat.sessionTimers")
   const { timers, create, update, resetDelay, remove } =
@@ -102,7 +104,7 @@ export function SessionTimers({
     : t("title")
 
   return (
-    <div className="pb-1">
+    <div className={cn("min-w-0", className)}>
       <button
         type="button"
         onClick={() => setOpen((value) => !value)}

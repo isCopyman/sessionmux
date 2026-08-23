@@ -188,7 +188,6 @@ export const ChatInput = memo(function ChatInput({
         if (event.pointerType !== "mouse") event.stopPropagation()
       }}
     >
-      <SessionTimers conversationId={conversationId} />
       {queue &&
         onQueueReorder &&
         onQueueEdit &&
@@ -198,6 +197,7 @@ export const ChatInput = memo(function ChatInput({
         onQueueReleaseOne &&
         onQueueResume && (
           <MessageQueueDisplay
+            leadingControl={<SessionTimers conversationId={conversationId} />}
             queue={queue}
             onReorder={onQueueReorder}
             onEdit={onQueueEdit}
@@ -211,6 +211,9 @@ export const ChatInput = memo(function ChatInput({
             editingItemId={editingItemId ?? null}
           />
         )}
+      {!queue && (
+        <SessionTimers conversationId={conversationId} className="mb-1" />
+      )}
       <MessageInput
         onSend={onSend}
         promptCapabilities={promptCapabilities}

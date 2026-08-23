@@ -2971,7 +2971,7 @@
         "deleteItem": "删除",
         "retryItem": "重试",
         "resumeQueue": "继续发送",
-        "pauseManual": "手动处理",
+        "pauseManual": "暂停自动发送",
         "pauseManualDescription": "暂停这个会话的自动注入；新消息继续排队",
         "manualPaused": "已暂停自动注入，可逐条发送或恢复自动发送",
         "releaseOne": "只发送这一条",

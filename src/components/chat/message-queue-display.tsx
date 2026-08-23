@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, type PointerEvent } from "react"
+import { useCallback, type PointerEvent, type ReactNode } from "react"
 import { Reorder, useDragControls } from "motion/react"
 import {
   AlertTriangle,
@@ -17,6 +17,7 @@ import { cn } from "@/lib/utils"
 import type { QueuedMessage } from "@/hooks/use-message-queue"
 
 interface MessageQueueDisplayProps {
+  leadingControl?: ReactNode
   queue: QueuedMessage[]
   onReorder: (items: QueuedMessage[]) => void
   onEdit: (id: string) => void
@@ -175,6 +176,7 @@ function QueueItem({
 }
 
 export function MessageQueueDisplay({
+  leadingControl,
   queue,
   onReorder,
   onEdit,
@@ -198,18 +200,21 @@ export function MessageQueueDisplay({
         : pausedReason
 
   return (
-    <div className="max-h-36 overflow-y-auto pb-1">
-      {!pausedReason ? (
-        <div className="mb-1 flex justify-end">
-          <button
-            type="button"
-            onClick={onPauseManual}
-            className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] text-muted-foreground hover:bg-muted hover:text-foreground"
-            title={t("pauseManualDescription")}
-          >
-            <PauseCircle className="h-3 w-3" />
-            {t("pauseManual")}
-          </button>
+    <div className="pb-1">
+      {leadingControl || !pausedReason ? (
+        <div className="mb-1 flex min-h-6 items-center justify-between gap-2 px-0.5">
+          <div className="min-w-0">{leadingControl}</div>
+          {!pausedReason ? (
+            <button
+              type="button"
+              onClick={onPauseManual}
+              className="flex shrink-0 items-center gap-1 rounded-md border border-transparent px-1.5 py-1 text-[10px] leading-none text-muted-foreground transition-colors hover:border-border/70 hover:bg-muted hover:text-foreground"
+              title={t("pauseManualDescription")}
+            >
+              <PauseCircle className="h-3 w-3" />
+              {t("pauseManual")}
+            </button>
+          ) : null}
         </div>
       ) : null}
       {pausedReason ? (
@@ -240,7 +245,7 @@ export function MessageQueueDisplay({
           axis="y"
           values={queue}
           onReorder={onReorder}
-          className="flex flex-col gap-0.5"
+          className="flex max-h-32 flex-col gap-0.5 overflow-y-auto"
         >
           {queue.map((item, index) => (
             <QueueItem
