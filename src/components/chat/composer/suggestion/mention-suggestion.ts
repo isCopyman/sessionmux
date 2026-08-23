@@ -15,6 +15,7 @@ import {
   type MentionGateCall,
   type MentionGateEvent,
 } from "./ime-suggestion-gate"
+import { findMentionMatch } from "./mention-match"
 
 /** Live render state the plugin pushes to React while the `@` panel is open. */
 export interface MentionRenderState {
@@ -167,6 +168,7 @@ export const MentionSuggestion = Extension.create<MentionSuggestionOptions>({
         editor,
         char: "@",
         allowSpaces: false,
+        findSuggestionMatch: findMentionMatch,
         items: () => [],
         command: () => {},
         allow: ({ state, isActive }) =>

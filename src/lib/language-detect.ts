@@ -212,6 +212,13 @@ export function isOfficePreviewable(path: string | null | undefined): boolean {
   return ext === "docx" || ext === "xlsx" || ext === "pptx"
 }
 
+/** Microsoft Office and WPS owner sidecars inherit the real document extension. */
+export function isOfficeOwnerFile(path: string | null | undefined): boolean {
+  if (!path) return false
+  const basename = path.split(/[\\/]/).pop() ?? ""
+  return basename.startsWith("~$")
+}
+
 /**
  * True when any segment of `path` is dot-prefixed — the conventional marker
  * for a hidden or machine-owned file: LibreOffice's `.~lock.report.docx#`,

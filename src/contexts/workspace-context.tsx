@@ -40,6 +40,7 @@ import {
   isHiddenPath,
   isHtmlPreviewable,
   isImageFile,
+  isOfficeOwnerFile,
   isOfficePreviewable,
   languageFromPath,
 } from "@/lib/language-detect"
@@ -1300,6 +1301,7 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
         // open a tab for one nor spawn its `officecli watch` process; a user
         // who wants one can still open it by hand from the file tree.
         if (isHiddenPath(changed)) continue
+        if (isOfficeOwnerFile(changed)) continue
         const abs = joinRootRel(streamRoot, changed)
         if (autoOpened.has(abs) || openPaths.has(abs)) continue
         autoOpened.add(abs)

@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest"
 
-import { isHiddenPath, languageFromPath } from "./language-detect"
+import {
+  isHiddenPath,
+  isOfficeOwnerFile,
+  languageFromPath,
+} from "./language-detect"
 
 describe("languageFromPath", () => {
   // The original implementation was a 13-case switch. These cases lock that
@@ -225,5 +229,27 @@ describe("isHiddenPath", () => {
     expect(isHiddenPath("")).toBe(false)
     expect(isHiddenPath(null)).toBe(false)
     expect(isHiddenPath(undefined)).toBe(false)
+  })
+})
+
+describe("isOfficeOwnerFile", () => {
+  it.each([
+    "~$report.docx",
+    "docs/~$budget.xlsx",
+    "docs\\~$deck.pptx",
+    "C:\\Users\\me\\~$report.docx",
+    "~$notes.txt",
+  ])("recognizes %s", (path) => {
+    expect(isOfficeOwnerFile(path)).toBe(true)
+  })
+
+  it.each([
+    "report.docx",
+    "~report.docx",
+    "report~$copy.docx",
+    "~$drafts/report.docx",
+    ".~lock.report.docx#",
+  ])("keeps %s", (path) => {
+    expect(isOfficeOwnerFile(path)).toBe(false)
   })
 })
